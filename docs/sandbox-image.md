@@ -1,0 +1,111 @@
+# Sandbox image (bring your own container)
+
+A compute **backend** decides _where_ a kernel runs (`docker`, `kubernetes`,
+`modal`, `coreweave`). The **sandbox image** decides _what_ runs inside it — the
+Python version, system libraries, and pre-installed packages your notebooks get.
+
+You bring your own image. Set it once per deployment:
+
+```bash
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+```
+
+Every container-based backend reads this same variable. (`local` runs `uv` on the
+host and needs no image; `e2b` uses an E2B template instead — see
+[Compute](./compute.md).)
+
+## The contract
+
+marimohub copies the notebook into the image and launches the kernel itself,
+reusing the image's pre-installed environment. With cwd `/workspace/notebooks`:
+
+```sh
+uv sync --inexact --no-compile-bytecode   # add the notebook's deps to the base env (skipped when it declares none)
+uv run --no-sync marimo edit notebook.py --headless --no-token --host 0.0.0.0 --port 2718
+```
+
+So your image must provide:
+
+1. **`uv` on `PATH`** — the launch command is `uv sync` + `uv run …`.
+2. **marimo + your common libraries pre-installed** into the project environment
+   (`UV_PROJECT_ENVIRONMENT`, also activated as `VIRTUAL_ENV`), at a **pinned**
+   marimo version. This is what makes the base case start instantly — no per-launch
+   install.
+3. **A POSIX shell (`sh`) + coreutils** — `base64`, `mkdir`, `rm`, `cat`, `true`.
+   marimohub transfers notebook files and probes reachability with these.
+4. **`git`** — only if notebooks use git checkouts, but cheap to include.
+5. **A writable working directory** (`/workspace/notebooks`) **and a writable
+   `UV_PROJECT_ENVIRONMENT`**, so `uv sync --inexact` can add a notebook's extra
+   deps. If your image's non-root user can't write `/workspace`, set
+   `MARIMOHUB_COMPUTE_WORKDIR` to a directory it can.
+6. **PyPI egress at runtime** for notebooks that use libraries beyond the
+   pre-installed base.
+
+No marimo entrypoint or `CMD` is required — marimohub supplies the launch command.
+
+> **Don't set `UV_COMPILE_BYTECODE` in your image.** Compile bytecode at build with
+> the `--compile-bytecode` flag (fast imports for the pre-installed base). The
+> startup sync passes `--no-compile-bytecode` to skip the ~5s of compiling freshly
+> added deps on the launch path — and uv errors if both the env var and the flag
+> are set.
+
+## Why pre-install (not just cache)
+
+`uv sync` builds a notebook's environment at startup. Even with a warm download
+cache, materializing marimo + its recommended extras (~70 packages) into a fresh
+venv takes a few seconds — paid on every kernel. Instead, **pre-install** marimo
+and your common libraries into the image's project environment. Then
+`uv sync --inexact` only needs to add a notebook's _extra_ deps (and keeps the
+base), so the common case is a near-instant no-op.
+
+Pin marimo to a specific version so it's consistent and never silently upgrades;
+bump it deliberately. Encode the Python + marimo version in the image tag (e.g.
+`py3.13-marimo0.23.10`) so each image is traceable.
+
+## Build your own
+
+The [`examples/sandbox-image/`](https://github.com/marimo-team/marimohub/tree/main/examples/sandbox-image)
+directory is a ready-to-fork starting point. marimo is pinned via the
+`MARIMO_VERSION` build arg and installed alongside the libraries in
+`warm/pyproject.toml` into `/opt/venv`:
+
+```dockerfile
+FROM python:3.13-slim
+ARG MARIMO_VERSION=0.23.10
+ENV MARIMO_VERSION=${MARIMO_VERSION}
+COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /usr/local/bin/
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv UV_LINK_MODE=copy
+# Skip marimo's PyPI version ping, and continuously snapshot the notebook to
+# __marimo__/notebook.html so the host captures it on teardown.
+ENV MARIMO_SKIP_UPDATE_CHECK=1 _MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD=[html]
+RUN useradd -m appuser && mkdir -p /workspace/notebooks && chown -R appuser:appuser /workspace
+COPY warm/pyproject.toml /tmp/base/pyproject.toml
+RUN cd /tmp/base && uv add --compile-bytecode "marimo[recommended]==${MARIMO_VERSION}" \
+ && uv cache clean && rm -rf /tmp/base && chown -R appuser:appuser /opt/venv
+ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH
+USER appuser
+WORKDIR /workspace/notebooks
+```
+
+Build with a version-stamped tag, push, and point `MARIMOHUB_COMPUTE_IMAGE` at it:
+
+```sh
+docker build --build-arg MARIMO_VERSION=0.23.10 \
+  -t ghcr.io/orgname/marimo-sandbox:py3.13-marimo0.23.10 examples/sandbox-image
+docker push ghcr.io/orgname/marimo-sandbox:py3.13-marimo0.23.10
+```
+
+To upgrade marimo, bump `MARIMO_VERSION` and rebuild. To change the pre-installed
+libraries, edit `warm/pyproject.toml`; add system libraries with extra
+`apt-get install` lines.
+
+## Private registries
+
+| Backend    | How to authenticate the pull                                                                   |
+| ---------- | ---------------------------------------------------------------------------------------------- |
+| Kubernetes | Create an image pull secret; set `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET` to its name. |
+| Docker     | `docker login` on the server's Docker daemon — its credentials pull the image.                 |
+| Modal      | Configure registry credentials in Modal; pass the image reference.                             |
+| CoreWeave  | Configure registry credentials in CoreWeave; pass the image reference.                         |

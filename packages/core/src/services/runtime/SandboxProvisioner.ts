@@ -1,0 +1,508 @@
+import type { Bucket } from '../../ports/bucket';
+import { MARIMO_PORT } from '../../constants';
+import { UnavailableError } from '../../errors';
+import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
+import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
+import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
+import { paths } from '../../paths';
+import type { SandboxInstance, SandboxProcess, SandboxProvider } from '../../ports/sandbox';
+import { Stopwatch } from '../../timing';
+import type { Timings } from '../../timing';
+import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
+import { buildMarimoLaunch } from './marimoLaunch';
+import type { NotebookService } from '../content/NotebookService';
+import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
+import { shellQuote } from './shell';
+
+/**
+ * How long to wait for marimo to bind its port. Generous because a cold sandbox
+ * may build its uv venv from scratch (e.g. the `uv-sandbox` launch strategy
+ * resolves + downloads the notebook's deps on first boot). See marimoLaunch.ts.
+ */
+const MARIMO_PORT_TIMEOUT_MS = 120_000; // 2 minutes
+/**
+ * Default sandbox working directory. Override per-deployment via the `workdir`
+ * option (config: MARIMOHUB_COMPUTE_WORKDIR) when the sandbox image's user can't
+ * write here — e.g. the marimo OSS image runs as a non-root user with no
+ * `/workspace`, so writes there fail with a permission/file-IO error.
+ */
+const DEFAULT_WORKDIR = '/workspace';
+
+export interface BucketConfig {
+	/** Storage bucket name, or a provider-managed bucket handle when `endpoint` is omitted. */
+	name: string;
+	/** S3 endpoint; optional — omit for providers that mount a bucket without one. */
+	endpoint?: string;
+	credentials?: {
+		accessKeyId: string;
+		secretAccessKey: string;
+	};
+}
+
+export interface ProvisionOptions {
+	sandboxId: SandboxId;
+	projectId: ProjectId;
+	notebookId: NotebookId;
+	hostname: string;
+	bucket: BucketConfig;
+	/** Storage bucket handle for fallback file copy. */
+	bucketHandle?: Bucket;
+	/**
+	 * Working directory inside the sandbox (cwd for marimo; notebook files land in
+	 * `<workdir>/notebooks`). Must be writable by the sandbox image's user.
+	 * Defaults to `/workspace`.
+	 */
+	workdir?: string;
+	/**
+	 * Optional base URL marimo loads its frontend assets from (passed as
+	 * `--asset-url`). Lets the kernel serve its UI from a CDN instead of bundling
+	 * assets in the sandbox image — e.g.
+	 * `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist`.
+	 * Config: MARIMOHUB_COMPUTE_ASSET_URL. Omit to use the image's bundled assets.
+	 */
+	assetUrl?: string;
+	/**
+	 * Path prefix marimo serves under (`--base-url`), set in `proxy` exposure mode
+	 * (e.g. `/proxy/<token>`) so the kernel's asset/websocket URLs resolve beneath
+	 * the proxied prefix. Omit in `subdomain` mode (the kernel serves at root).
+	 */
+	baseUrl?: string;
+	/**
+	 * CoreWeave-native filesystem snapshot id to restore the sandbox FROM, when the
+	 * provider supports it (see `FilesystemSnapshots`). Ignored by every other
+	 * backend. The route reads it off the notebook's `fs_snapshot.json` pointer.
+	 */
+	restoreFilesystemSnapshotId?: string;
+	/**
+	 * Environment + files to inject into the sandbox BEFORE the kernel starts — the
+	 * assembled output of the workload-identity broker (federated S3 creds) and/or
+	 * the secrets provider. The provisioner stays vendor-agnostic: it only sets env
+	 * + writes files; it never mints tokens or reads secrets. Never logged.
+	 */
+	sessionEnv?: {
+		vars?: Record<string, string>;
+		files?: { path: string; content: string }[];
+	};
+	/** Workspace-relative notebook file marimo should open. Defaults to `notebook.py`. */
+	entryNotebook?: string;
+	/** How to load the cached workspace into the sandbox. Defaults to mount-or-copy. */
+	workspaceLoadMode?: WorkspaceLoadMode;
+	/**
+	 * Bucket prefix to load the workspace from. Defaults to the notebook's mutable
+	 * `workspace/` mirror; synced sources pass their current immutable
+	 * `versions/{vid}/workspace/` prefix instead.
+	 */
+	workspacePrefix?: string;
+}
+
+export interface ProvisionResult {
+	sandbox: SandboxInstance;
+	url: string;
+	/** Whether files were loaded via manual copy (true) or bucket mount (false) */
+	usedFallback: boolean;
+	/** Per-phase ms: create, reachable, files, setup, start, waitport, expose. */
+	timings: Timings;
+}
+
+/**
+ * Wrap a low-level compute/SDK failure in an UnavailableError (→ HTTP 503) with a
+ * message that is informative but safe to show a client: the step that failed plus
+ * the error class and any vendor status code (duck-typed, no SDK import). Secrets
+ * (credentials, bucket contents, request bodies) are never part of these fields.
+ * The full error — stack, cause, transport metadata — is preserved as `cause` for
+ * the server-side structured log.
+ */
+function provisionFailure(step: string, err: unknown): UnavailableError {
+	const e = err as { name?: string; message?: string; code?: string; transportCode?: string };
+	const parts = [`Failed to start sandbox while ${step}`];
+	if (e?.name) parts.push(e.name);
+	// gRPC status (e.g. INTERNAL, UNAVAILABLE) or SDK code — operational, not sensitive.
+	const code = e?.transportCode ?? e?.code;
+	if (code) parts.push(`[${code}]`);
+	if (e?.message) parts.push(`- ${e.message}`);
+	const wrapped = new UnavailableError(parts.join(' '));
+	(wrapped as { cause?: unknown }).cause = err;
+	return wrapped;
+}
+
+export interface WorkspaceLoadContext {
+	sandbox: SandboxInstance;
+	projectId: ProjectId;
+	notebookId: NotebookId;
+	bucket: BucketConfig;
+	bucketHandle?: Bucket;
+	mountPath: string;
+	workspacePrefix: string;
+}
+
+export interface WorkspaceLoadStrategy {
+	load(ctx: WorkspaceLoadContext): Promise<boolean>;
+}
+
+export interface WorkspaceLoadStrategies {
+	copyOnly: WorkspaceLoadStrategy;
+	mountOrCopy: WorkspaceLoadStrategy;
+}
+
+class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
+	async load({
+		sandbox,
+		bucketHandle,
+		workspacePrefix,
+		mountPath,
+	}: WorkspaceLoadContext): Promise<boolean> {
+		if (!bucketHandle) {
+			throw provisionFailure(
+				'restoring the notebook workspace into the sandbox',
+				new Error('bucket handle is required for copy-only workspace loading'),
+			);
+		}
+		try {
+			await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath);
+			return true;
+		} catch (err) {
+			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
+		}
+	}
+}
+
+class MountOrCopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
+	constructor(private copyFallback: WorkspaceLoadStrategy) {}
+
+	async load(ctx: WorkspaceLoadContext): Promise<boolean> {
+		try {
+			await ctx.sandbox.mountBucket({
+				bucketName: ctx.bucket.name,
+				endpoint: ctx.bucket.endpoint,
+				mountPath: ctx.mountPath,
+				prefix: ctx.workspacePrefix,
+				credentials: ctx.bucket.credentials,
+			});
+			return false;
+		} catch (err) {
+			if (!ctx.bucketHandle) {
+				throw provisionFailure('mounting the notebook workspace into the sandbox', err);
+			}
+			return this.copyFallback.load(ctx);
+		}
+	}
+}
+
+export function createWorkspaceLoadStrategies(): WorkspaceLoadStrategies {
+	const copyOnly = new CopyWorkspaceLoadStrategy();
+	return { copyOnly, mountOrCopy: new MountOrCopyWorkspaceLoadStrategy(copyOnly) };
+}
+
+export class SandboxProvisioner {
+	constructor(
+		private provider: SandboxProvider,
+		private workspaceLoadStrategies: WorkspaceLoadStrategies = createWorkspaceLoadStrategies(),
+	) {}
+
+	async provision(options: ProvisionOptions): Promise<ProvisionResult> {
+		// A restored sandbox boots from the snapshot image; the workspace load below
+		// still refreshes the code from the bucket cache.
+		const createStart = Date.now();
+		const sandbox = createOrRestoreSandbox(
+			this.provider,
+			options.sandboxId,
+			options.restoreFilesystemSnapshotId,
+		);
+		const createMs = Date.now() - createStart;
+		try {
+			const result = await this.provisionInto(sandbox, options);
+			result.timings.create = createMs;
+			return result;
+		} catch (err) {
+			// Provisioning failed partway — destroy any partial sandbox before
+			// rethrowing so a half-started kernel/mount doesn't linger and bill. The
+			// caller's saga never compensates the step that threw, so cleanup of the
+			// resource this method created is this method's responsibility.
+			try {
+				await sandbox.destroy();
+			} catch {
+				// Best-effort: the sandbox may not have been created.
+			}
+			throw err;
+		}
+	}
+
+	private async provisionInto(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+	): Promise<ProvisionResult> {
+		const nb = paths.project(options.projectId).notebook(options.notebookId);
+		const workdir = options.workdir ?? DEFAULT_WORKDIR;
+		const mountPath = `${workdir}/notebooks`;
+		const sw = new Stopwatch();
+
+		await this.ensureReachable(sandbox, sw);
+		const usedFallback = await this.loadWorkspace(
+			sandbox,
+			options,
+			mountPath,
+			options.workspacePrefix ?? nb.workspacePrefix,
+			sw,
+		);
+		await this.injectSessionEnv(sandbox, options, sw);
+		await this.startMarimoKernel(sandbox, options, mountPath, sw);
+		const url = await this.exposeKernel(sandbox, options, sw);
+
+		return { sandbox, url, usedFallback, timings: sw.timings };
+	}
+
+	private async ensureReachable(sandbox: SandboxInstance, sw: Stopwatch): Promise<void> {
+		try {
+			await sw.time('reachable', () => sandbox.exec('true'));
+		} catch (err) {
+			throw new UnavailableError(
+				`Sandbox container is not available. Is Docker running? ` +
+					`(${err instanceof Error ? err.message : String(err)})`,
+			);
+		}
+	}
+
+	private async loadWorkspace(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		mountPath: string,
+		workspacePrefix: string,
+		sw: Stopwatch,
+	): Promise<boolean> {
+		using _files = sw.span('files');
+		const strategy =
+			options.workspaceLoadMode === 'copy-only'
+				? this.workspaceLoadStrategies.copyOnly
+				: this.workspaceLoadStrategies.mountOrCopy;
+		return await strategy.load({
+			sandbox,
+			projectId: options.projectId,
+			notebookId: options.notebookId,
+			bucket: options.bucket,
+			bucketHandle: options.bucketHandle,
+			mountPath,
+			workspacePrefix,
+		});
+	}
+
+	private async injectSessionEnv(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		sw: Stopwatch,
+	): Promise<void> {
+		if (!options.sessionEnv) return;
+		using _inject = sw.span('inject');
+		try {
+			for (const f of options.sessionEnv.files ?? []) {
+				await sandbox.writeFile(f.path, f.content);
+			}
+			const vars = options.sessionEnv.vars;
+			if (vars && Object.keys(vars).length > 0) {
+				await sandbox.setEnvVars(vars);
+			}
+		} catch (err) {
+			throw provisionFailure('injecting session credentials', err);
+		}
+	}
+
+	private async startMarimoKernel(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		mountPath: string,
+		sw: Stopwatch,
+	): Promise<void> {
+		const launch = buildMarimoLaunch({
+			notebookFile: options.entryNotebook ?? 'notebook.py',
+			port: MARIMO_PORT,
+			host: '0.0.0.0',
+			assetUrl: options.assetUrl,
+			baseUrl: options.baseUrl,
+		});
+		let process: SandboxProcess | undefined;
+		try {
+			// cwd is the loaded workspace so marimo resolves relative imports and files
+			// beside the notebook. exec takes no cwd, so setup commands cd in first.
+			await sw.time('setup', async () => {
+				for (const cmd of launch.setup) {
+					const res = await sandbox.exec(`cd ${shellQuote(mountPath)} && ${cmd}`);
+					if (!res.success) {
+						throw new Error(`marimo launch setup failed (${cmd}): ${res.stderr || res.stdout}`);
+					}
+				}
+			});
+			const proc = await sw.time('start', () =>
+				sandbox.startProcess(launch.start, { cwd: mountPath }),
+			);
+			process = proc;
+			// `waitport` is where a slow kernel env (install/build) shows up.
+			await sw.time('waitport', () =>
+				proc.waitForPort(MARIMO_PORT, { timeout: MARIMO_PORT_TIMEOUT_MS }),
+			);
+		} catch (err) {
+			// Surface the kernel's own output so a startup crash isn't an opaque
+			// "exited before ready". Best-effort.
+			let kernelLogs = '';
+			if (process) {
+				try {
+					const { stdout, stderr } = await process.getLogs();
+					kernelLogs = [stdout, stderr]
+						.filter((s) => s.trim())
+						.join('\n')
+						.trim();
+				} catch {
+					// getLogs can fail once the process/sandbox is gone — ignore.
+				}
+			}
+			throw provisionFailure(
+				kernelLogs
+					? `starting the marimo kernel; kernel output:\n${kernelLogs}`
+					: 'starting the marimo kernel',
+				err,
+			);
+		}
+	}
+
+	private async exposeKernel(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		sw: Stopwatch,
+	): Promise<string> {
+		try {
+			const { url } = await sw.time('expose', () =>
+				sandbox.exposePort(MARIMO_PORT, {
+					hostname: options.hostname,
+					token: options.sandboxId,
+				}),
+			);
+			return url;
+		} catch (err) {
+			throw provisionFailure('exposing the kernel port', err);
+		}
+	}
+
+	/**
+	 * Save a live session's notebook back to the bucket WITHOUT tearing it down —
+	 * the periodic-snapshot primitive, and the save half of `teardown`. Reads the
+	 * session artifacts back, cuts a version via `commitSession` (which dedupes
+	 * unchanged content, so an idle notebook never accretes spurious versions), and
+	 * — unless `includeWorkspace` is false — mirrors the runtime workspace per
+	 * `persistWorkspace`. The periodic snapshotter passes `includeWorkspace: false`:
+	 * a full workspace re-upload every interval is too expensive, so the mirror is
+	 * only refreshed at teardown, as before.
+	 *
+	 * Returns false when the session is ephemeral (`persistEdits: false` — a
+	 * viewer's throwaway sandbox) or the notebook's source is remote/git-backed
+	 * (owned by its sync path — session edits are never persisted). Throws when
+	 * the source policy cannot be read (committing without it could clobber a
+	 * synced source), or when
+	 * a save step fails; a commit failure does not skip the workspace capture
+	 * (matching the old teardown's independent best-effort steps).
+	 */
+	async captureSession(
+		sandbox: SandboxInstance,
+		notebooks: NotebookService,
+		bucket: Bucket,
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		actor: UserId,
+		persistWorkspace: 'source' | 'workspace',
+		workdir: string = DEFAULT_WORKDIR,
+		opts?: { includeWorkspace?: boolean; persistEdits?: boolean },
+	): Promise<boolean> {
+		if (opts?.persistEdits === false) return false;
+		const { source } = await notebooks.getNotebook(projectId, notebookId);
+		if (!workspaceSourcePolicy(source).persistSessionEdits) return false;
+
+		const mountPath = `${workdir}/notebooks`;
+		let commitError: Error | undefined;
+		try {
+			const artifacts = await readSessionArtifacts(sandbox, mountPath);
+			await notebooks.commitSession(projectId, notebookId, artifacts, actor);
+		} catch (err) {
+			commitError = err instanceof Error ? err : new Error(String(err));
+		}
+		if (opts?.includeWorkspace !== false) {
+			try {
+				await captureWorkspace(sandbox, bucket, projectId, notebookId, mountPath, persistWorkspace);
+			} catch (err) {
+				// A workspace failure would otherwise mask the commit failure — surface both.
+				if (commitError) {
+					console.error(`commitSession failed for notebook ${notebookId}:`, commitError);
+				}
+				throw err;
+			}
+		}
+		if (commitError) throw commitError;
+		return true;
+	}
+
+	/**
+	 * Tear down a session: read the notebook back, cut a version carrying the
+	 * session's edits and any HTML/session snapshots marimo produced, capture the
+	 * runtime workspace, capture a filesystem snapshot (when the backend supports
+	 * it), then destroy the sandbox.
+	 *
+	 * The read-back is unconditional for local notebooks: interactive edits still
+	 * need an immutable version, even when the sandbox wrote through a mounted
+	 * bucket. `NotebookService.commitSession` owns the source files
+	 * (`workspace/notebook.py` + `workspace/pyproject.toml`) and the immutable
+	 * `versions/{vid}/` record; `captureWorkspace` excludes those, so there is no
+	 * double-write. All capture steps are best-effort — failures are logged but
+	 * never block sandbox destruction, since a lingering sandbox is the more
+	 * expensive failure.
+	 *
+	 * `persistWorkspace` controls runtime-file persistence: `source` captures only
+	 * the source files (via `commitSession`); `workspace` also mirrors the rest of
+	 * the working dir into `workspace/`.
+	 */
+	async teardown(
+		sandbox: SandboxInstance,
+		notebooks: NotebookService,
+		bucket: Bucket,
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		actor: UserId,
+		persistWorkspace: 'source' | 'workspace',
+		workdir: string = DEFAULT_WORKDIR,
+		opts?: { persistEdits?: boolean },
+	): Promise<void> {
+		// `captureSession` owns the persistence checks: false = an ephemeral session
+		// or a synced/remote source, whose edits (and filesystem snapshot) are never
+		// persisted from a session — destroy only.
+		let persisted = true;
+		try {
+			persisted = await this.captureSession(
+				sandbox,
+				notebooks,
+				bucket,
+				projectId,
+				notebookId,
+				actor,
+				persistWorkspace,
+				workdir,
+				{ persistEdits: opts?.persistEdits },
+			);
+		} catch (err) {
+			// Non-fatal: still destroy the sandbox so it does not linger and bill.
+			console.error(`captureSession failed during teardown for notebook ${notebookId}:`, err);
+		}
+		if (persisted) {
+			// Snapshot before destroy, once the session state above is final. Both are
+			// sandbox RPCs: a transient gRPC stream reset here must not reject teardown,
+			// and destroy must run regardless so the sandbox cannot linger and bill.
+			try {
+				await captureFilesystemSnapshot(this.provider, notebooks, sandbox, projectId, notebookId);
+			} catch (err) {
+				console.error(
+					`captureFilesystemSnapshot failed during teardown for notebook ${notebookId}:`,
+					err,
+				);
+			}
+		}
+		try {
+			await sandbox.destroy();
+		} catch (err) {
+			console.error(`sandbox.destroy failed during teardown for notebook ${notebookId}:`, err);
+		}
+	}
+}

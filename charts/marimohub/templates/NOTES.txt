@@ -1,0 +1,32 @@
+marimohub {{ .Values.image.tag | default .Chart.AppVersion }} deployed as release {{ .Release.Name }} (namespace {{ .Release.Namespace }}).
+
+Image:  {{ include "marimohub.image" . }}
+Secret: {{ include "marimohub.secretName" . }}{{ if .Values.secrets.existingSecret }} (existing){{ else if .Values.secrets.data }} (chart-managed){{ else }} (NOT FOUND — create it, see below){{ end }}
+
+Check rollout:
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "marimohub.fullname" . }}
+
+{{- if and (not .Values.secrets.existingSecret) (not .Values.secrets.data) }}
+
+WARNING: no secrets were provided. Create a Secret named "{{ include "marimohub.secretName" . }}"
+with the required MARIMOHUB_* secret vars (see apps/server/.env.example), e.g.:
+
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ include "marimohub.secretName" . }} \
+    --from-literal=MARIMOHUB_AUTH_SESSION_SECRET=... \
+    --from-literal=MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=... \
+    --from-literal=MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=...
+
+Then roll the pods:
+  kubectl -n {{ .Release.Namespace }} rollout restart deployment/{{ include "marimohub.fullname" . }}
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+App URL: https://{{ .Values.ingress.host }}
+Point your DNS at the ingress controller's external address and ensure the OIDC
+redirect URI (MARIMOHUB_AUTH_OIDC_REDIRECT_URI) matches this host.
+{{- end }}
+
+To upgrade to a newer release:
+  helm upgrade {{ .Release.Name }} oci://ghcr.io/marimo-team/charts/marimohub \
+    --version <NEW_VERSION> -n {{ .Release.Namespace }} -f values.yaml

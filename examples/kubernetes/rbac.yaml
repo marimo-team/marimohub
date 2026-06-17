@@ -1,0 +1,51 @@
+# RBAC for the marimohub `kubernetes` compute backend.
+#
+# The control plane runs in the `marimohub` namespace and creates one kernel
+# Pod + Service + Ingress per session in the `marimo-kernels` namespace. This
+# grants its ServiceAccount exactly those permissions in that namespace — and
+# nothing cluster-wide.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: marimo-kernels
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: marimohub
+  namespace: marimohub
+---
+# Scoped to the kernel namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: marimohub-kernel-manager
+  namespace: marimo-kernels
+rules:
+  - apiGroups: ['']
+    resources: ['pods', 'services']
+    verbs: ['create', 'get', 'list', 'watch', 'delete']
+  - apiGroups: ['']
+    resources: ['pods/exec']
+    verbs: ['create', 'get']
+  - apiGroups: ['']
+    resources: ['pods/log']
+    verbs: ['get']
+  - apiGroups: ['networking.k8s.io']
+    resources: ['ingresses']
+    verbs: ['create', 'get', 'list', 'watch', 'delete']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: marimohub-kernel-manager
+  namespace: marimo-kernels
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: marimohub-kernel-manager
+subjects:
+  - kind: ServiceAccount
+    name: marimohub
+    namespace: marimohub

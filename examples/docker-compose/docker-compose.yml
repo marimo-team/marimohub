@@ -1,0 +1,76 @@
+# marimohub quickstart: S3 (MinIO) + the Node control plane.
+#
+# This is the "config-driven, common case" path. It boots storage + auth + API
+# + compute end-to-end on a laptop. Compute uses the `local` backend: marimo
+# kernels run as subprocesses inside the server container (uv fetches Python +
+# marimo on first launch) and are served on the published 2718-2723 range.
+#
+#   docker compose -f examples/docker-compose/docker-compose.yml up --build
+#   open http://localhost:3000
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio-data:/data
+
+  createbucket:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do echo 'waiting for minio'; sleep 1; done;
+      mc mb -p local/orgname-marimohub;
+      exit 0;
+      "
+
+  server:
+    build:
+      context: ../..
+      dockerfile: apps/server/Dockerfile
+      args:
+        # Bundle `uv` so the `local` compute backend can spawn marimo kernels.
+        INSTALL_UV: 'true'
+    # Wait until the bucket actually exists, not just until the container starts —
+    # the server runs a storage write-check at boot and exits if it fails.
+    depends_on:
+      createbucket:
+        condition: service_completed_successfully
+    ports:
+      - '3000:3000'
+      # Published kernel ports (must match MARIMOHUB_COMPUTE_LOCAL_PORTS). Bound to
+      # 127.0.0.1 so kernels are reachable only from this machine.
+      - '127.0.0.1:2718-2723:2718-2723'
+    environment:
+      MARIMOHUB_STORAGE_BACKEND: s3
+      MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+      MARIMOHUB_STORAGE_S3_ENDPOINT: http://minio:9000
+      MARIMOHUB_STORAGE_S3_REGION: us-east-1
+      MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: minioadmin
+      MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: minioadmin
+      MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: 'true'
+      # Run marimo kernels as subprocesses inside this container. uv fetches
+      # Python + marimo on the first launch (cached in the uv-cache volume).
+      MARIMOHUB_COMPUTE_BACKEND: local
+      MARIMOHUB_COMPUTE_LOCAL_HOST: localhost # what the browser connects to
+      MARIMOHUB_COMPUTE_LOCAL_BIND_HOST: 0.0.0.0 # reachable through published ports
+      MARIMOHUB_COMPUTE_LOCAL_PORTS: 2718-2723 # must match the published range above
+      UV_CACHE_DIR: /uv-cache
+      UV_PYTHON_INSTALL_DIR: /uv-cache/python
+      MARIMOHUB_AUTH_BACKEND: dev
+      MARIMOHUB_AUTH_DEV_EMAIL: dev@localhost
+      MARIMOHUB_RUN_MAINTENANCE: 'true'
+      PORT: '3000'
+    volumes:
+      - uv-cache:/uv-cache
+
+volumes:
+  minio-data:
+  uv-cache:

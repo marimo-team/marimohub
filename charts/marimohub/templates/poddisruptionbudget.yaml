@@ -1,0 +1,14 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "marimohub.fullname" . }}
+  labels:
+    {{- include "marimohub.labels" . | nindent 4 }}
+spec:
+  {{- toYaml .Values.podDisruptionBudget.spec | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "marimohub.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+{{- end }}

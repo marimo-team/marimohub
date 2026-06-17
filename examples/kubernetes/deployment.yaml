@@ -1,0 +1,76 @@
+# marimohub control plane (API + maintenance) for the `kubernetes` compute backend.
+#
+# Replace `image:` with YOUR server image — one that has had
+# `@kubernetes/client-node` added to it (a bring-your-own runtime dependency).
+# All MARIMOHUB_* config (storage / compute / auth) comes from the
+# `marimohub-config` Secret via envFrom.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: marimohub-api
+  namespace: marimohub
+  labels: { app: marimohub, component: api }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: marimohub, component: api }
+  template:
+    metadata:
+      labels: { app: marimohub, component: api }
+    spec:
+      serviceAccountName: marimohub # bound to the kernel-namespace Role (rbac.yaml)
+      containers:
+        - name: marimohub
+          image: ghcr.io/orgname/marimohub-server:latest # must include @kubernetes/client-node
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: marimohub-config
+          env:
+            - name: PORT
+              value: '3000'
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+          livenessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+---
+# Single-replica maintenance loop (session expiry + kernel-Pod reconciliation).
+# Run on EXACTLY one replica.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: marimohub-maintenance
+  namespace: marimohub
+  labels: { app: marimohub, component: maintenance }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: marimohub, component: maintenance }
+  template:
+    metadata:
+      labels: { app: marimohub, component: maintenance }
+    spec:
+      serviceAccountName: marimohub
+      containers:
+        - name: marimohub
+          image: ghcr.io/orgname/marimohub-server:latest
+          envFrom:
+            - secretRef:
+                name: marimohub-config
+          env:
+            - name: MARIMOHUB_RUN_MAINTENANCE
+              value: 'true'
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: marimohub-api
+  namespace: marimohub
+  labels: { app: marimohub }
+spec:
+  selector: { app: marimohub, component: api }
+  ports:
+    - port: 80
+      targetPort: 3000

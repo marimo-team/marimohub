@@ -1,0 +1,7 @@
+{
+	"extends": "@marimo-hub/tsconfig/library.json",
+	"compilerOptions": {
+		"types": ["node", "@cloudflare/workers-types", "@marimo-hub/tsconfig/ts-reset"]
+	},
+	"include": ["src"]
+}

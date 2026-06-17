@@ -1,0 +1,74 @@
+import { describe, it, expect } from 'vitest';
+import { WorkloadIdentityIssuer } from '@marimo-hub/core';
+import { CoreWeaveWifBroker } from '@marimo-hub/credentials-coreweave';
+import { makeWif } from './wif';
+
+// A placeholder PKCS8 PEM. `WorkloadIdentityIssuer` imports the key lazily (only
+// when it signs), so construction never parses this — it just has to look like a
+// PEM to clear `makeWif`'s format check.
+const FAKE_PEM = '-----BEGIN PRIVATE KEY-----\nQUJD\n-----END PRIVATE KEY-----';
+
+const fullEnv = {
+	MARIMOHUB_WIF_SIGNING_KEY: FAKE_PEM,
+	MARIMOHUB_WIF_KID: 'kid-1',
+	MARIMOHUB_WIF_ISSUER_URL: 'https://hub.example.com/',
+	MARIMOHUB_WIF_AUDIENCE: 'sts.coreweave',
+	MARIMOHUB_WIF_BROKER: 'coreweave',
+	MARIMOHUB_WIF_COREWEAVE_EXCHANGE_URL: 'https://exchange.coreweave',
+};
+
+describe('makeWif enablement', () => {
+	it('returns an empty config when no WIF vars are set (disabled)', () => {
+		expect(makeWif({})).toEqual({});
+	});
+
+	it('throws listing the missing vars when partially configured', () => {
+		expect(() => makeWif({ MARIMOHUB_WIF_BROKER: 'coreweave' })).toThrow(/partially configured/);
+		expect(() => makeWif({ MARIMOHUB_WIF_BROKER: 'coreweave' })).toThrow(
+			/MARIMOHUB_WIF_SIGNING_KEY/,
+		);
+	});
+});
+
+describe('makeWif signing key', () => {
+	it('rejects a signing key that is not a PEM', () => {
+		expect(() => makeWif({ ...fullEnv, MARIMOHUB_WIF_SIGNING_KEY: 'not-a-key' })).toThrow(
+			/PKCS8 PEM/,
+		);
+	});
+
+	it('accepts a single-line base64-encoded PEM', () => {
+		const { wif } = makeWif({ ...fullEnv, MARIMOHUB_WIF_SIGNING_KEY: btoa(FAKE_PEM) });
+		expect(wif?.issuer).toBeInstanceOf(WorkloadIdentityIssuer);
+	});
+});
+
+describe('makeWif wiring', () => {
+	it('builds the issuer, canonical issuer URL, and coreweave federation target', () => {
+		const { wif } = makeWif({
+			...fullEnv,
+			MARIMOHUB_WIF_STORAGE_ENDPOINT: 'https://cwobject.com',
+			MARIMOHUB_WIF_STORAGE_REGION: 'us-east-1',
+		});
+		expect(wif?.issuer).toBeInstanceOf(WorkloadIdentityIssuer);
+		// Trailing slash stripped so `iss`/`jwks_uri` are canonical.
+		expect(wif?.issuerUrl).toBe('https://hub.example.com');
+		expect(wif?.target.audience).toBe('sts.coreweave');
+		expect(wif?.target.broker).toBeInstanceOf(CoreWeaveWifBroker);
+		expect(wif?.target.storage).toEqual({
+			endpoint: 'https://cwobject.com',
+			region: 'us-east-1',
+		});
+	});
+
+	it('throws on an unknown broker', () => {
+		expect(() => makeWif({ ...fullEnv, MARIMOHUB_WIF_BROKER: 'azure' })).toThrow(
+			/Unknown MARIMOHUB_WIF_BROKER/,
+		);
+	});
+
+	it('requires the coreweave exchange url', () => {
+		const { MARIMOHUB_WIF_COREWEAVE_EXCHANGE_URL: _omit, ...env } = fullEnv;
+		expect(() => makeWif(env)).toThrow(/MARIMOHUB_WIF_COREWEAVE_EXCHANGE_URL/);
+	});
+});

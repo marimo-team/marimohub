@@ -1,0 +1,20 @@
+{
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"display": "@marimo-hub base",
+	"compilerOptions": {
+		"target": "esnext",
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"moduleDetection": "force",
+		"lib": ["esnext", "dom"],
+		"types": ["node", "@marimo-hub/tsconfig/ts-reset"],
+		"resolveJsonModule": true,
+		"isolatedModules": true,
+		"verbatimModuleSyntax": false,
+		"allowImportingTsExtensions": true,
+		"esModuleInterop": true,
+		"strict": true,
+		"noEmit": true,
+		"skipLibCheck": true
+	}
+}

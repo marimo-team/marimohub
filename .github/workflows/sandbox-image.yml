@@ -1,0 +1,35 @@
+name: Sandbox image
+
+# Acceptance tests for the example per-kernel sandbox image (the container set as
+# MARIMOHUB_COMPUTE_IMAGE). Builds examples/sandbox-image, then asserts the
+# contract marimohub relies on — tools present, a marimo kernel serves on 2718 via
+# the real launch flow, the warm uv cache makes startup a cache hit, --convert
+# opens non-marimo files, and a bare `docker run` works. Also triggers when the
+# launch command (marimoLaunch.ts) changes, since the image must stay compatible.
+#
+# The canonical marimo-team image (deployment/sandbox) is gitignored, so it can't
+# run in CI — it's validated locally with the same script via `make sandbox-smoke`.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/sandbox-image/**'
+      - 'packages/core/src/services/marimoLaunch.ts'
+      - '.github/workflows/sandbox-image.yml'
+  pull_request:
+    paths:
+      - 'examples/sandbox-image/**'
+      - 'packages/core/src/services/marimoLaunch.ts'
+      - '.github/workflows/sandbox-image.yml'
+
+jobs:
+  acceptance:
+    name: Build & acceptance test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # docker (with buildx) and curl are preinstalled on ubuntu-latest runners,
+      # so the script needs no extra setup. It builds the context and runs every
+      # check against the image.
+      - name: Build image and run acceptance tests
+        run: examples/sandbox-image/acceptance-test.sh marimo-sandbox:ci examples/sandbox-image

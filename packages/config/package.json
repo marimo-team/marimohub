@@ -1,0 +1,45 @@
+{
+	"name": "@marimo-hub/config",
+	"version": "0.0.0",
+	"private": true,
+	"files": [
+		"dist"
+	],
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./spec": "./src/spec.ts",
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "vp pack",
+		"test": "vp test",
+		"check": "vp check",
+		"docs:generate": "UPDATE_CONFIG_DOCS=1 vp test configDocs",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@marimo-hub/api": "workspace:*",
+		"@marimo-hub/auth-dev": "workspace:*",
+		"@marimo-hub/auth-oidc": "workspace:*",
+		"@marimo-hub/compute-coreweave": "workspace:*",
+		"@marimo-hub/compute-docker": "workspace:*",
+		"@marimo-hub/compute-e2b": "workspace:*",
+		"@marimo-hub/compute-kubernetes": "workspace:*",
+		"@marimo-hub/compute-local": "workspace:*",
+		"@marimo-hub/compute-modal": "workspace:*",
+		"@marimo-hub/core": "workspace:*",
+		"@marimo-hub/credentials-coreweave": "workspace:*",
+		"@marimo-hub/secrets-aws": "workspace:*",
+		"@marimo-hub/storage-gcs": "workspace:*",
+		"@marimo-hub/storage-s3": "workspace:*",
+		"hono": "catalog:"
+	},
+	"devDependencies": {
+		"@marimo-hub/tsconfig": "workspace:*",
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}

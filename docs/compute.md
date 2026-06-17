@@ -1,0 +1,95 @@
+# Compute
+
+Compute is where each notebook's Python kernel runs. The web UI connects to an
+on-demand sandbox created by the selected compute backend.
+
+Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
+[Configuration -> Compute](./configuration.md#compute).
+
+## Choose a backend
+
+| Backend    | Selector     | Use for                                     |
+| ---------- | ------------ | ------------------------------------------- |
+| CoreWeave  | `coreweave`  | Production on CoreWeave Sandboxes           |
+| Modal      | `modal`      | Production serverless sandboxes             |
+| E2B        | `e2b`        | Managed code sandboxes                      |
+| Kubernetes | `kubernetes` | Pods in your own cluster                    |
+| Docker     | `docker`     | Single-host container per kernel            |
+| Local      | `local`      | Local development with `uv run marimo edit` |
+| Cloudflare | `cloudflare` | Workers entrypoint with Containers binding  |
+| None       | `none`       | Browse notebooks without runnable kernels   |
+
+## Shared settings
+
+Most production backends need a sandbox image and a public hostname for kernel
+traffic:
+
+```bash
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net
+MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
+```
+
+`MARIMOHUB_COMPUTE_IMAGE` is the per-kernel container you bring. See
+[Sandbox image](./sandbox-image.md) for the contract and a pre-warmed example.
+
+`MARIMOHUB_SANDBOX_EXPOSURE` controls how kernels reach the browser:
+
+- `subdomain` (default): kernels are served from an isolated kernel domain.
+- `proxy`: kernel traffic is forwarded through the app origin.
+
+See [Security -> Kernel exposure](./security.md#kernel-exposure) for the trust
+model.
+
+## Configure it
+
+### CoreWeave
+
+<!--@include: ./setup/compute/coreweave.md-->
+
+### Modal
+
+<!--@include: ./setup/compute/modal.md-->
+
+### E2B
+
+<!--@include: ./setup/compute/e2b.md-->
+
+### Kubernetes
+
+<!--@include: ./setup/compute/kubernetes.md-->
+
+### Docker
+
+<!--@include: ./setup/compute/docker.md-->
+
+### Local (dev)
+
+<!--@include: ./setup/compute/local.md-->
+
+### None
+
+<!--@include: ./setup/compute/none.md-->
+
+## Validate it
+
+After deploy:
+
+1. Create or open a notebook.
+2. Start a kernel session.
+3. Confirm the notebook connects in the browser.
+4. Stop the session.
+5. Confirm the session disappears from active sessions after the configured
+   timeout or cleanup pass.
+
+## Production cautions
+
+- Use an isolated sandbox hostname for `subdomain` mode.
+- Set resource limits and idle timeouts before inviting real users.
+- Use `none` only when users should browse notebooks without running kernels.
+- Keep the sandbox image patched. It is part of the runtime security boundary.
+
+## Troubleshooting
+
+See [Troubleshooting -> Kernels won't start](./troubleshooting.md#kernels-wont-start)
+and [Sandbox image](./sandbox-image.md).

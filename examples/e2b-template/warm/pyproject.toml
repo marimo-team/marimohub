@@ -1,0 +1,29 @@
+# Libraries pre-installed into /opt/venv so a notebook using them starts with no
+# install. marimo is added separately, pinned to $MARIMO_VERSION, by template.mjs.
+# Mirrors examples/sandbox-image/warm/pyproject.toml.
+[project]
+name = "marimo-sandbox-warm"
+version = "0.0.0"
+requires-python = ">=3.13"
+dependencies = [
+	"polars",
+	"narwhals",
+	"numpy",
+	"pandas",
+	"pyarrow",
+	"duckdb",
+	"altair",
+	"matplotlib",
+	"plotly",
+	"anywidget",
+	"moutils",
+	"scikit-learn",
+	"scipy",
+	"requests",
+	"httpx",
+	"openpyxl",
+	"sqlglot",
+]
+
+[tool.uv]
+package = false
