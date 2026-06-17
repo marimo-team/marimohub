@@ -1,0 +1,4 @@
+{
+	"extends": "@marimo-hub/tsconfig/base.json",
+	"include": ["tests", "playwright.config.ts"]
+}

@@ -1,0 +1,12 @@
+# Popular libraries pre-installed into the image's project env (/opt/venv) at build
+# time. marimo itself is added separately, pinned to $MARIMO_VERSION, by the
+# Dockerfile. Edit this list to change what's pre-installed.
+[project]
+name = "marimo-sandbox-warm"
+version = "0.0.0"
+requires-python = ">=3.13"
+dependencies = ["polars", "narwhals", "numpy", "pandas", "pyarrow", "altair", "duckdb"]
+
+# Not a package — just the dependency set to pre-install; nothing to build.
+[tool.uv]
+package = false

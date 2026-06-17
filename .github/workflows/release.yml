@@ -1,0 +1,148 @@
+name: Release
+
+# Triggered by a semver tag, normally pushed by release-tag.yml when a
+# "release: X.Y.Z" PR is merged (see development_docs/releasing.md).
+# This publishes the container image and the Helm chart to GHCR, with the
+# chart version, chart appVersion, and image tag all pinned to the git tag,
+# plus a GitHub release with a changelog generated from the commits since the
+# previous tag. An end-user upgrades with:
+#   helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
+#     --version 1.4.2 -n marimohub -f values.yaml
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions: {}
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/marimohub
+  CHART_REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
+
+jobs:
+  image:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Derive version and build time
+        id: v
+        # Strip the leading "v" from the tag -> semver used for image + chart.
+        # The `v*.*.*` trigger is a glob, not a semver check, and the version is
+        # reused in shell steps, so reject anything but digits and dots. Build
+        # time comes from the tagged commit: head_commit is null for annotated
+        # tag pushes.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag: $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE }}
+          # v1.4.2 -> tags 1.4.2, 1.4, 1, latest, plus the commit SHA.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,format=short
+            type=raw,value=latest
+
+      - name: Build & push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            MARIMOHUB_VERSION=${{ steps.v.outputs.version }}
+            MARIMOHUB_IMAGE=${{ env.IMAGE }}:${{ steps.v.outputs.version }}
+            MARIMOHUB_BUILD_TIME=${{ steps.v.outputs.build_time }}
+
+  chart:
+    name: Package & push Helm chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: image
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+
+      - name: Derive version
+        id: v
+        # Same validation as the image job: the tag glob is not a semver check.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag: $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR (Helm OCI)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN"
+
+      - name: Lint
+        run: helm lint charts/marimohub
+
+      - name: Package
+        # Pin chart version AND appVersion to the released tag so a chart version
+        # uniquely identifies an image. Defaulting image.tag to appVersion in the
+        # chart means end-users get the matching image for free.
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          helm package charts/marimohub \
+            --version "$VERSION" \
+            --app-version "$VERSION"
+
+      - name: Push
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: helm push "marimohub-$VERSION.tgz" "$CHART_REGISTRY"
+
+  release-notes:
+    name: Publish GitHub release notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # changelogithub diffs against the previous tag, so it needs full history.
+          fetch-depth: 0
+
+      - name: Generate changelog and create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx changelogithub@14.0.0

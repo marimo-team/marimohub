@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: marimohub
+  labels: { app: marimohub }
+spec:
+  # The API tier is stateless (all state in object storage + compute) → scale freely.
+  replicas: 2
+  selector:
+    matchLabels: { app: marimohub }
+  template:
+    metadata:
+      labels: { app: marimohub }
+    spec:
+      containers:
+        - name: marimohub
+          image: ghcr.io/orgname/marimohub:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef: { name: marimohub-config }
+            - secretRef: { name: marimohub-secrets }
+          env:
+            # Run the session-maintenance cron on a single replica only.
+            - name: MARIMOHUB_RUN_MAINTENANCE
+              value: 'false'
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: '100m', memory: '256Mi' }
+            limits: { cpu: '500m', memory: '512Mi' }
+---
+# A single-replica deployment that owns the maintenance cron.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: marimohub-maintenance
+  labels: { app: marimohub-maintenance }
+spec:
+  replicas: 1
+  # Recreate (not the default RollingUpdate, which can surge to 2 pods): the
+  # reaper must be a singleton. The bucket-CAS lease in the app is the
+  # defense-in-depth backstop if this is ever misconfigured. See docs/operations.md.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: marimohub-maintenance }
+  template:
+    metadata:
+      labels: { app: marimohub-maintenance }
+    spec:
+      containers:
+        - name: marimohub
+          image: ghcr.io/orgname/marimohub:latest
+          envFrom:
+            - configMapRef: { name: marimohub-config }
+            - secretRef: { name: marimohub-secrets }
+          env:
+            - name: MARIMOHUB_RUN_MAINTENANCE
+              value: 'true'

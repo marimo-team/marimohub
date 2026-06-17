@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: marimohub
+  annotations:
+    # cert-manager example; adjust to your ingress controller.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+    - hosts: [hub.example.com]
+      secretName: marimohub-tls
+  rules:
+    - host: hub.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: marimohub
+                port: { number: 80 }

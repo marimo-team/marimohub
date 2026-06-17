@@ -1,0 +1,30 @@
+{
+	"name": "@coreweave/cwsandbox",
+	"version": "0.0.0",
+	"description": "TypeScript SDK for CoreWeave Sandbox (vendored — see UPSTREAM.md).",
+	"license": "BSD-3-Clause",
+	"author": "CoreWeave, Inc.",
+	"type": "module",
+	"sideEffects": false,
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		},
+		"./node": {
+			"types": "./dist/node/index.d.ts",
+			"import": "./dist/node/index.js",
+			"default": "./dist/node/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"dependencies": {
+		"@grpc/grpc-js": "^1.14.4",
+		"@protobuf-ts/grpc-transport": "^2.11.1",
+		"@protobuf-ts/runtime": "^2.11.1",
+		"@protobuf-ts/runtime-rpc": "^2.11.1"
+	}
+}

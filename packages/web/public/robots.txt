@@ -1,0 +1,3 @@
+# marimohub is a private/internal deployment — disallow all crawling & indexing.
+User-agent: *
+Disallow: /

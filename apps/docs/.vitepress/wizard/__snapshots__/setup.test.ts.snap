@@ -1,0 +1,119 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`setup snippets > renders auth/oidc with all four enterprise provider sub-sections 1`] = `
+"<p>App-native OpenID Connect — the production backend. marimohub discovers the
+provider's endpoints automatically from the issuer's
+<code>/.well-known/openid-configuration</code>, so you only supply an issuer, client
+credentials, and a redirect URI.</p>
+<pre><code class="language-bash">MARIMOHUB_AUTH_BACKEND=oidc
+MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=…
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=…
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_SESSION_SECRET=…            # signs the session cookie (HS256, ≥32 bytes)
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com  # REQUIRED allowlist (verified email); \`*\` allows all
+# MARIMOHUB_AUTH_OIDC_AUDIENCE=…           # optional: expected ID-token audience (the client id is enforced anyway)
+</code></pre>
+<p>The <strong>redirect URI</strong> is always <code>https://&lt;your-host&gt;/api/auth/callback</code>. Register
+it with your provider exactly as you set it here, or login fails with a
+<code>redirect_uri_mismatch</code> error. <code>ALLOWED_EMAIL_DOMAINS</code> is <strong>required</strong> —
+marimohub is an internal tool, so it fails closed rather than admitting every
+account the IdP authenticates; list your domains or set <code>*</code> to allow all.</p>
+<p>Generate a session secret with <code>openssl rand -base64 32</code>.</p>
+<h3>Google</h3>
+<ol>
+<li>In the <a href="https://console.cloud.google.com/apis/credentials">Google Cloud Console</a>,
+open <strong>APIs &amp; Services → Credentials</strong>.</li>
+<li><strong>Create Credentials → OAuth client ID</strong>, application type <strong>Web application</strong>.</li>
+<li>Under <strong>Authorized redirect URIs</strong>, add <code>https://hub.example.com/api/auth/callback</code>
+(and <code>http://localhost:3000/api/auth/callback</code> for local testing).</li>
+<li>Copy the <strong>Client ID</strong> and <strong>Client secret</strong>.</li>
+</ol>
+<pre><code class="language-bash">MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.google.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=…apps.googleusercontent.com
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=…
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com   # a single domain is also sent to Google as the \`hd\` hint
+</code></pre>
+<p>See <a href="https://developers.google.com/identity/openid-connect/openid-connect">Google's OpenID Connect docs</a>.</p>
+<h3>Microsoft Entra ID</h3>
+<ol>
+<li>In the <a href="https://entra.microsoft.com">Entra admin center</a> (or Azure Portal),
+go to <strong>App registrations → New registration</strong>.</li>
+<li>Set a <strong>Web</strong> redirect URI of <code>https://hub.example.com/api/auth/callback</code>.</li>
+<li>From <strong>Overview</strong>, copy the <strong>Application (client) ID</strong> and <strong>Directory
+(tenant) ID</strong>; under <strong>Certificates &amp; secrets</strong>, create a <strong>client secret</strong>.</li>
+</ol>
+<pre><code class="language-bash"># tenant-scoped issuer (use \`organizations\` or \`common\` for multi-tenant)
+MARIMOHUB_AUTH_OIDC_ISSUER=https://login.microsoftonline.com/&lt;tenant-id&gt;/v2.0
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=&lt;application-client-id&gt;
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=…
+</code></pre>
+<p>See <a href="https://learn.microsoft.com/en-us/entra/identity-platform/v2-protocols-oidc">Microsoft's OIDC docs</a>.</p>
+<h3>Okta</h3>
+<ol>
+<li>In the Okta Admin Console, open <strong>Applications → Create App Integration</strong>.</li>
+<li>Choose <strong>OIDC - OpenID Connect</strong> and <strong>Web Application</strong>.</li>
+<li>Add <code>https://hub.example.com/api/auth/callback</code> as a <strong>Sign-in redirect URI</strong>.</li>
+<li>Copy the <strong>Client ID</strong> and <strong>Client secret</strong> from the app's <strong>General</strong> tab.</li>
+</ol>
+<pre><code class="language-bash">MARIMOHUB_AUTH_OIDC_ISSUER=https://&lt;your-org&gt;.okta.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=…
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=…
+</code></pre>
+<p>If you use an Okta authorization server, the issuer is
+<code>https://&lt;your-org&gt;.okta.com/oauth2/&lt;server-id&gt;</code>. See
+<a href="https://developer.okta.com/docs/concepts/oauth-openid/">Okta's OIDC docs</a>.</p>
+<h3>Auth0</h3>
+<ol>
+<li>In the <a href="https://manage.auth0.com">Auth0 Dashboard</a>, open <strong>Applications →
+Create Application</strong> and pick <strong>Regular Web Application</strong>.</li>
+<li>Under <strong>Settings → Allowed Callback URLs</strong>, add
+<code>https://hub.example.com/api/auth/callback</code>.</li>
+<li>Copy the <strong>Domain</strong>, <strong>Client ID</strong>, and <strong>Client Secret</strong> from <strong>Settings</strong>.</li>
+</ol>
+<pre><code class="language-bash"># note the trailing slash on the issuer
+MARIMOHUB_AUTH_OIDC_ISSUER=https://&lt;tenant&gt;.auth0.com/
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=…
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=…
+</code></pre>
+<p>See <a href="https://auth0.com/docs/authenticate/protocols/openid-connect-protocol">Auth0's OIDC docs</a>.</p>
+"
+`;
+
+exports[`setup snippets > renders storage/s3 including the CoreWeave CAIOS sub-section 1`] = `
+"<p>Works with any S3-compatible store (AWS S3, MinIO, Tigris, Ceph, CoreWeave
+CAIOS, or Cloudflare R2 via its S3 endpoint).</p>
+<ol>
+<li><strong>Create a bucket</strong> for marimohub.</li>
+<li><strong>Get credentials</strong> with read/write on that bucket (an access key + secret),
+or rely on the instance/SDK default credential chain on AWS.</li>
+<li><strong>Set the env:</strong></li>
+</ol>
+<pre><code class="language-bash">MARIMOHUB_STORAGE_BACKEND=s3
+MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com  # omit for AWS
+MARIMOHUB_STORAGE_S3_REGION=us-east-1
+MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=…       # secret — or use the SDK default chain
+MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=…   # secret
+</code></pre>
+<div class="custom-block warning"><p class="custom-block-title">Your store must support conditional writes</p>
+<p>marimohub uses S3 <code>If-Match</code> to update notebooks safely and refuses to start on
+a store that doesn't honor it. AWS S3, R2, Tigris, CoreWeave CAIOS, and recent
+MinIO all qualify; very old MinIO/Ceph builds may not.</p>
+</div>
+<div class="custom-block tip"><p class="custom-block-title">MinIO / Ceph need path-style addressing</p>
+<p>Set <code>MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true</code> for MinIO and Ceph, or requests
+to the bucket will fail to resolve.</p>
+</div>
+<h3>CoreWeave CAIOS</h3>
+<p>CAIOS (CoreWeave AI Object Storage) is CoreWeave's S3-compatible store and the
+storage half of the reference <a href="/deploying/cks">CKS deployment</a>. Use the <code>s3</code>
+backend and point the endpoint at CAIOS:</p>
+<pre><code class="language-bash">MARIMOHUB_STORAGE_BACKEND=s3
+MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_S3_ENDPOINT=https://cwobject.com
+MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=…         # CAIOS access key (secret)
+MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=…     # CAIOS secret key (secret)
+</code></pre>
+"
+`;

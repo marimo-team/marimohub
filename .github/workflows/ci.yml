@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Supersede in-flight runs on new pushes to the same PR; let main runs finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # Installs Vite+/Node, caches deps, and runs a frozen `vp install` wrapped in
+      # Socket Firewall (sfw). SHA-pinned so a moved tag can't change what runs.
+      - uses: voidzero-dev/setup-vp@2dec1e33f4ab2c6d5bce1b0c4607961bb1a3f7a1 # v1
+        with:
+          version: 0.1.24
+          node-version: 22
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+      - run: vp check
+      - run: vp run -r test
+      - run: vp run -r build

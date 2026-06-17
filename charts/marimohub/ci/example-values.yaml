@@ -1,0 +1,35 @@
+# Example end-user values. Copy, fill in, and deploy with:
+#   helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
+#     --version <VERSION> -n marimohub --create-namespace -f my-values.yaml
+#
+# Secrets are NOT in here — create them out-of-band and reference via
+# secrets.existingSecret (see README).
+
+ingress:
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: hub.acme.example.com
+
+config:
+  MARIMOHUB_STORAGE_BACKEND: s3
+  MARIMOHUB_STORAGE_S3_BUCKET: acme-marimohub
+  MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
+  MARIMOHUB_STORAGE_S3_REGION: us-east-1
+  MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: "false"
+  MARIMOHUB_COMPUTE_BACKEND: modal
+  MARIMOHUB_COMPUTE_IMAGE: ghcr.io/marimo-team/marimohub-sandbox:latest
+  # modal serves kernels on its own tunnel URLs, so no MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME.
+  # For ingress backends (kubernetes/coreweave) in the default `subdomain` exposure,
+  # set it to a domain SEPARATE from the app host (e.g. sandboxes.acme.example.net).
+  MARIMOHUB_AUTH_BACKEND: oidc
+  MARIMOHUB_AUTH_OIDC_ISSUER: https://acme.okta.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: marimohub
+  MARIMOHUB_AUTH_OIDC_AUDIENCE: marimohub
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.acme.example.com/api/auth/callback
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: acme.example.com
+  PORT: "3000"
+
+secrets:
+  # Recommended: create this Secret yourself (see README) and reference it.
+  existingSecret: marimohub-secrets

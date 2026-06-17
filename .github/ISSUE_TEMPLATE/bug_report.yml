@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible problem in marimohub.
+title: '[Bug]: '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include secrets, private hostnames, or vulnerability details.
+        For suspected vulnerabilities, follow SECURITY.md instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest steps that reproduce the problem.
+      placeholder: |
+        1. Configure ...
+        2. Run ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Storage
+        - Compute
+        - Auth
+        - API
+        - Web UI
+        - Deployment
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include deployment target, relevant backends, Node/pnpm versions, and commit or image tag.
+      placeholder: |
+        Deployment: Kubernetes
+        Storage: S3
+        Compute: Modal
+        Auth: OIDC
+        Commit/image:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste only redacted logs. Remove tokens, cookies, keys, emails, and private URLs.
+      render: text

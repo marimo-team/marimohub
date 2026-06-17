@@ -1,0 +1,26 @@
+{
+	"name": "@marimo-hub/server",
+	"version": "0.0.0",
+	"private": true,
+	"license": "Apache-2.0",
+	"type": "module",
+	"scripts": {
+		"start": "node dist/index.mjs",
+		"test": "vp test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@hono/node-server": "catalog:",
+		"@marimo-hub/api": "workspace:*",
+		"@marimo-hub/config": "workspace:*",
+		"@marimo-hub/core": "workspace:*",
+		"hono": "catalog:"
+	},
+	"devDependencies": {
+		"@marimo-hub/tsconfig": "workspace:*",
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}

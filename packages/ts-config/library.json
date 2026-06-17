@@ -1,0 +1,8 @@
+{
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"display": "@marimo-hub library",
+	"extends": "./base.json",
+	"compilerOptions": {
+		"declaration": true
+	}
+}
