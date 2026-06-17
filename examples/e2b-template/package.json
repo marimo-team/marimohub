@@ -1,0 +1,13 @@
+{
+	"name": "@marimo-hub/example-e2b-template",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Example E2B kernel template (marimo + uv) for the E2B compute backend",
+	"type": "module",
+	"scripts": {
+		"build:template": "node build.prod.mjs"
+	},
+	"dependencies": {
+		"e2b": "2.30.6"
+	}
+}

@@ -1,0 +1,119 @@
+# Single-tenant: one release is one isolated MarimoHub. Fill in `config`
+# (non-secret) and `secrets` from apps/server/.env.example, then set `ingress.host`.
+
+image:
+  repository: ghcr.io/marimo-team/marimohub
+  # Empty => use the chart's appVersion, so --version pins chart and image together.
+  tag: ''
+  pullPolicy: IfNotPresent
+
+# Pull secrets for a private image; the public GHCR image needs none.
+imagePullSecrets: []
+#  - name: ghcr-credentials
+
+nameOverride: ''
+fullnameOverride: ''
+
+# The API tier is stateless, so it scales freely.
+replicaCount: 2
+
+# Singleton session reaper. Exactly one must run; the chart pins it to one
+# replica + Recreate. Don't scale it.
+maintenance:
+  enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+
+# Non-secret MARIMOHUB_* config → ConfigMap, consumed via envFrom. Every key
+# becomes an env var. Empty by default so nothing leaks; set your own (see
+# ci/example-values.yaml for a full set, apps/server/.env.example for the surface):
+#   MARIMOHUB_STORAGE_BACKEND, MARIMOHUB_STORAGE_S3_BUCKET/ENDPOINT/REGION,
+#   MARIMOHUB_COMPUTE_BACKEND/IMAGE/SANDBOX_HOSTNAME, MARIMOHUB_AUTH_BACKEND,
+#   MARIMOHUB_AUTH_OIDC_ISSUER/CLIENT_ID/AUDIENCE/REDIRECT_URI,
+#   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS, PORT.
+# Sandbox exposure (how kernels reach the browser), agnostic of the compute backend:
+#   MARIMOHUB_SANDBOX_EXPOSURE: subdomain (default) | proxy
+#   # `proxy` forwards kernel traffic through the app (authenticated, per-session
+#   # authorized) but serves untrusted code same-origin — trusted clusters only:
+#   MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED: "true"   # required to enable proxy mode
+#   MARIMOHUB_APP_BASE_URL: https://hub.example.com # optional; else derived per-request
+config: {}
+
+# Secret MARIMOHUB_* values, either:
+#   1. existingSecret: a Secret you create yourself (recommended — keeps secrets
+#      out of your values file and `helm get values`), or
+#   2. data: literals the chart turns into a Secret (dev only).
+secrets:
+  existingSecret: ''
+  data: {}
+  #  MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
+  #  MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
+  #  MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
+  #  MARIMOHUB_AUTH_SESSION_SECRET: ""        # signs the session cookie
+  #  MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: ""
+  #  MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: ""
+
+# Extra env vars appended to both deployments (after the envFrom sources).
+extraEnv: []
+#  - name: MARIMOHUB_DEFAULT_ROLE
+#    value: editor
+
+containerPort: 3000
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: ''
+  annotations: {}
+  #  cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: hub.example.com
+  tls:
+    enabled: true
+    secretName: marimohub-tls
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { cpu: 500m, memory: 512Mi }
+
+# Hardened defaults: non-root (uid/gid 1000), read-only rootfs, no caps.
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# Spread API replicas across nodes so one node failure isn't a full outage.
+# Soft (ScheduleAnyway) so a constrained pool can't make a replica unschedulable.
+# The chart injects the API pod selector — entries here are just the knobs.
+# Set to [] to disable.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+
+# Keep an API replica up during voluntary disruptions (node drain, upgrade).
+# maxUnavailable:1 is safe across replica counts (with 1 replica it still lets a
+# drain proceed; with >=2 it keeps at least one serving).
+podDisruptionBudget:
+  enabled: true
+  spec:
+    maxUnavailable: 1
+
+# Scheduling — empty for portability; set per cluster if needed.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+podLabels: {}

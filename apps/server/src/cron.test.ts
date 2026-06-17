@@ -1,0 +1,266 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
+import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
+import type * as CoreModule from '@marimo-hub/core';
+import type { MemoryBucket } from '@marimo-hub/core/testing';
+import {
+	MaintenanceLock,
+	Millis,
+	paths,
+	reapFilesystemSnapshots,
+	SessionLifecycleService,
+} from '@marimo-hub/core';
+import type { SweepResult } from '@marimo-hub/core';
+import { startMaintenance, startSessionLifecycle } from './cron';
+import { WideEventMetrics } from './metrics';
+
+vi.mock('@marimo-hub/core', async (importOriginal) => {
+	const actual = await importOriginal<typeof CoreModule>();
+	return { ...actual, reapFilesystemSnapshots: vi.fn(actual.reapFilesystemSnapshots) };
+});
+
+const FIVE_MINUTES_MS = 5 * 60 * 1000;
+
+/** Flush the initial (non-timer) `void run()` call, whose awaits are microtasks. */
+async function flushRun() {
+	await vi.advanceTimersByTimeAsync(0);
+}
+
+function parseLoggedEvents(logSpy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] {
+	return logSpy.mock.calls.map(
+		(call: unknown[]) => JSON.parse(call[0] as string) as Record<string, unknown>,
+	);
+}
+
+describe('startMaintenance', () => {
+	let bucket: MemoryBucket;
+	let deps: ApiDeps;
+	let metrics: WideEventMetrics;
+	let stop: () => void;
+	let logSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		bucket = await createInitializedBucket();
+		deps = makeTestDeps(bucket);
+		metrics = new WideEventMetrics();
+		logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		stop?.();
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	it('emits exactly one maintenance_cycle wide event per run', async () => {
+		metrics.increment('sessions_created');
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+
+		const events = parseLoggedEvents(logSpy);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			event: 'maintenance_cycle',
+			sessions_expired: 0,
+			projects_swept: 0,
+			notebooks_swept: 0,
+			'counter.sessions_created': 1,
+		});
+	});
+
+	it('sweeps projects before notebooks (a deleted project reclaims its own notebooks)', async () => {
+		const projectsSpy = vi.spyOn(deps.services.projects, 'sweepDeletedProjects');
+		const notebooksSpy = vi.spyOn(deps.services.notebooks, 'sweepDeletedNotebooks');
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+
+		expect(projectsSpy).toHaveBeenCalledOnce();
+		expect(notebooksSpy).toHaveBeenCalledOnce();
+		expect(projectsSpy.mock.invocationCallOrder[0]).toBeLessThan(
+			notebooksSpy.mock.invocationCallOrder[0],
+		);
+	});
+
+	it('contains a cycle failure and keeps the interval alive for the next cycle', async () => {
+		const expireStale = vi.spyOn(deps.services.sessions, 'expireStale');
+		expireStale.mockRejectedValueOnce(new Error('bucket unavailable'));
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+
+		let events = parseLoggedEvents(logSpy);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({ event: 'maintenance_failed', error: 'bucket unavailable' });
+
+		logSpy.mockClear();
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+
+		events = parseLoggedEvents(logSpy);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({ event: 'maintenance_cycle' });
+		expect(expireStale).toHaveBeenCalledTimes(2);
+	});
+
+	it('releases the lock after a failed cycle so the next cycle is not blocked', async () => {
+		vi.spyOn(deps.services.sessions, 'expireStale').mockRejectedValueOnce(new Error('boom'));
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		logSpy.mockClear();
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+
+		const events = parseLoggedEvents(logSpy);
+		// Reaching `maintenance_cycle` (not `maintenance_skipped_not_leader`) proves
+		// the failed cycle's `finally` released the lease.
+		expect(events.map((e) => e.event)).toEqual(['maintenance_cycle']);
+	});
+
+	it('skips the cycle quietly when this replica is not the lease holder', async () => {
+		vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(false);
+		const expireStale = vi.spyOn(deps.services.sessions, 'expireStale');
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+
+		expect(expireStale).not.toHaveBeenCalled();
+		const events = parseLoggedEvents(logSpy);
+		expect(events).toEqual([expect.objectContaining({ event: 'maintenance_skipped_not_leader' })]);
+	});
+
+	it('forwards orphaned notebook snapshots to reapFilesystemSnapshots', async () => {
+		const orphaned = [{ snapshot_id: 'snap-1', captured_at: new Date().toISOString() }];
+		vi.spyOn(deps.services.notebooks, 'sweepDeletedNotebooks').mockResolvedValue({
+			purged: 1,
+			orphanedSnapshots: orphaned,
+		});
+		vi.mocked(reapFilesystemSnapshots).mockResolvedValueOnce(1);
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+
+		expect(reapFilesystemSnapshots).toHaveBeenCalledWith(deps.compute, orphaned);
+		const events = parseLoggedEvents(logSpy);
+		expect(events[0]).toMatchObject({ notebooks_swept: 1, snapshots_reaped: 1 });
+	});
+});
+
+const SESSION_SWEEP_INTERVAL_MS = Millis.seconds(60);
+
+const ZERO_SWEEP: SweepResult = {
+	snapshotted: 0,
+	extended: 0,
+	reapedExpired: 0,
+	reapedIdle: 0,
+	reclaimed: 0,
+};
+
+function makeSessionLifetime(
+	overrides: Partial<SessionLifetimeConfig> = {},
+): SessionLifetimeConfig {
+	return {
+		maxLifetimeMs: Millis.hours(4),
+		idleTimeoutMs: Millis.minutes(30),
+		snapshotIntervalMs: Millis.minutes(2),
+		extensionMs: Millis.minutes(30),
+		connectionAware: false,
+		sweepIntervalMs: SESSION_SWEEP_INTERVAL_MS,
+		...overrides,
+	};
+}
+
+describe('startSessionLifecycle', () => {
+	let bucket: MemoryBucket;
+	let deps: ApiDeps;
+	let stop: (() => void) | undefined;
+	let logSpy: ReturnType<typeof vi.spyOn>;
+	let sweepSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		bucket = await createInitializedBucket();
+		const base = makeTestDeps(bucket);
+		deps = { ...base, sandbox: { ...base.sandbox, sessionLifetime: makeSessionLifetime() } };
+		logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+		sweepSpy = vi.spyOn(SessionLifecycleService.prototype, 'sweep').mockResolvedValue(ZERO_SWEEP);
+	});
+
+	afterEach(() => {
+		stop?.();
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	it('is disabled (no interval) when sandbox.sessionLifetime is unset', async () => {
+		const disabledDeps = makeTestDeps(bucket);
+		const handle = startSessionLifecycle(disabledDeps);
+		expect(handle).toBeUndefined();
+
+		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS * 3);
+		expect(sweepSpy).not.toHaveBeenCalled();
+	});
+
+	it('leases its own key, separate from the maintenance lock', async () => {
+		const putSpy = vi.spyOn(bucket, 'put');
+		stop = startSessionLifecycle(deps);
+		await flushRun();
+
+		expect(sweepSpy).toHaveBeenCalledOnce();
+		expect(putSpy.mock.calls.some(([key]) => key === paths.sessionLifecycleLock)).toBe(true);
+	});
+
+	it('guards against overlap: a hung sweep is not re-entered on the next tick', async () => {
+		let resolveSweep!: (r: SweepResult) => void;
+		sweepSpy.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveSweep = resolve;
+				}),
+		);
+
+		stop = startSessionLifecycle(deps);
+		await flushRun();
+		expect(sweepSpy).toHaveBeenCalledTimes(1);
+
+		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS * 2);
+		expect(sweepSpy).toHaveBeenCalledTimes(1); // still hung — the overlap guard held
+
+		resolveSweep(ZERO_SWEEP);
+		await flushRun();
+		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS);
+		expect(sweepSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it('contains a sweep failure and releases the lease for the next tick', async () => {
+		const releaseSpy = vi.spyOn(MaintenanceLock.prototype, 'release');
+		sweepSpy.mockRejectedValueOnce(new Error('boom'));
+
+		stop = startSessionLifecycle(deps);
+		await flushRun();
+
+		const events = parseLoggedEvents(logSpy);
+		expect(events).toEqual([
+			expect.objectContaining({ event: 'session_lifecycle_failed', error: 'boom' }),
+		]);
+		expect(releaseSpy).toHaveBeenCalledOnce();
+
+		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS);
+		expect(sweepSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it('logs session_lifecycle_sweep only when the result is non-zero', async () => {
+		stop = startSessionLifecycle(deps);
+		await flushRun();
+		expect(parseLoggedEvents(logSpy)).toEqual([]);
+
+		logSpy.mockClear();
+		sweepSpy.mockResolvedValueOnce({ ...ZERO_SWEEP, reapedExpired: 1 });
+		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS);
+
+		const events = parseLoggedEvents(logSpy);
+		expect(events).toEqual([
+			expect.objectContaining({ event: 'session_lifecycle_sweep', reapedExpired: 1 }),
+		]);
+	});
+});

@@ -1,0 +1,208 @@
+import { Millis, Seconds } from '@marimo-hub/core';
+import type { SandboxProvider } from '@marimo-hub/core';
+import { LocalCompute } from '@marimo-hub/compute-local';
+import { ModalCompute } from '@marimo-hub/compute-modal';
+import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
+import { DockerCompute } from '@marimo-hub/compute-docker';
+import { E2bCompute } from '@marimo-hub/compute-e2b';
+import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
+import { parseBool, parseIntEnv, parseList, requiredVar } from './env';
+import type { Env } from './env';
+import { ConfigError } from './errors';
+
+/** Parse a `"start-end"` port range (e.g. `2718-2723`); undefined if unset. */
+function parsePortRange(value: string | undefined): { start: number; end: number } | undefined {
+	if (!value) return undefined;
+	const m = value.match(/^(\d+)-(\d+)$/);
+	if (!m)
+		throw new ConfigError(
+			`Invalid MARIMOHUB_COMPUTE_LOCAL_PORTS: ${value} (expected "start-end")`,
+			{
+				variable: 'MARIMOHUB_COMPUTE_LOCAL_PORTS',
+				remediation: 'Use a numeric range like 2718-2723.',
+			},
+		);
+	return { start: Number(m[1]), end: Number(m[2]) };
+}
+
+const computeVar = (env: Env, key: string, backend: string) =>
+	requiredVar(env, key, {
+		remediation: `Required for the ${backend} compute backend.`,
+		docs: 'docs/configuration.md#compute',
+	});
+
+export interface ComputeOptions {
+	/**
+	 * The marimohub-owned session TTL (seconds) the record-driven lifecycle sweep
+	 * enforces with a graceful save + teardown. Providers with a hard lifetime cap
+	 * (CoreWeave, E2B) default that cap to 2× this — an orphan backstop only — and
+	 * reject an explicit cap below it.
+	 */
+	sessionMaxLifetimeSeconds?: Seconds;
+}
+
+/**
+ * Resolve a provider's hard sandbox-lifetime cap. Unset → 2× the session TTL, so
+ * the provider only ever kills sandboxes the lifecycle sweep has lost track of.
+ * An explicit value below the session TTL is a misconfiguration that would
+ * SIGKILL active sessions (losing edits) before marimohub can save them — throw.
+ */
+export function resolveLifetimeBackstop(
+	env: Env,
+	key: string,
+	sessionMaxLifetimeSeconds?: Seconds,
+): Seconds | undefined {
+	const explicit = parseIntEnv(env, key);
+	if (explicit === undefined) {
+		return sessionMaxLifetimeSeconds ? Seconds.of(sessionMaxLifetimeSeconds * 2) : undefined;
+	}
+	if (sessionMaxLifetimeSeconds && explicit < sessionMaxLifetimeSeconds) {
+		throw new ConfigError(
+			`${key} (${explicit}) must be >= the session TTL ` +
+				`(MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS = ${sessionMaxLifetimeSeconds}): a smaller ` +
+				`provider cap hard-kills the sandbox (SIGKILL, no save) before marimohub can tear it ` +
+				`down gracefully.`,
+			{
+				variable: key,
+				remediation: 'Leave it unset to default to 2× the session TTL.',
+				docs: 'docs/configuration.md#compute',
+			},
+		);
+	}
+	return Seconds.of(explicit);
+}
+
+export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
+	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'modal';
+	switch (backend) {
+		case 'modal':
+			return new ModalCompute({
+				tokenId: computeVar(env, 'MARIMOHUB_COMPUTE_MODAL_TOKEN_ID', 'modal'),
+				tokenSecret: computeVar(env, 'MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET', 'modal'),
+				image: computeVar(env, 'MARIMOHUB_COMPUTE_IMAGE', 'modal'),
+				// App name scopes reconciler enumeration (listActive) to sandboxes this
+				// deployment owns, so it never reaps co-tenant sandboxes in the workspace.
+				appName: env.MARIMOHUB_COMPUTE_MODAL_APP_NAME,
+				idleTimeout: env.MARIMOHUB_COMPUTE_IDLE_TIMEOUT,
+			});
+		case 'coreweave':
+			// CoreWeave Sandboxes via the vendored @coreweave/cwsandbox SDK (Node gRPC).
+			// A marimo-capable image (marimo + uv + python) should be supplied via
+			// MARIMOHUB_COMPUTE_IMAGE; the kernel is reached at its public-ingress URL,
+			// whose hostname scheme is CoreWeave backend/profile specific — set
+			// MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (and, if needed, a HOSTNAME_TEMPLATE).
+			return new CoreWeaveCompute({
+				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', 'coreweave'),
+				baseUrl: env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL,
+				image: env.MARIMOHUB_COMPUTE_IMAGE,
+				ownerTag: env.MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG,
+				hostnameTemplate: env.MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE,
+				// Profile + exposure modes are CoreWeave-side concepts; the profile names
+				// the exposure levels (`ingressMode`) and egress modes a sandbox selects.
+				// Defaults (`public`/`internet`) match the canonical CoreWeave profile.
+				profileNames: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_PROFILE),
+				ingressMode: env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE,
+				egressMode: env.MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE,
+				maxLifetimeSeconds: resolveLifetimeBackstop(
+					env,
+					'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',
+					opts?.sessionMaxLifetimeSeconds,
+				),
+				// Off by default; do NOT enable alongside MARIMOHUB_PERSIST_WORKSPACE=workspace,
+				// which would double-persist the same state.
+				filesystemSnapshot: parseBool(env, 'MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT'),
+			});
+		case 'docker':
+			// Each kernel runs in a container on a Docker daemon (local socket or a
+			// remote DOCKER_HOST), reached directly at http://<host>:<published-port>.
+			// Good for single-host self-hosting; `proxy()` is a no-op like local.
+			return new DockerCompute({
+				image: env.MARIMOHUB_COMPUTE_IMAGE,
+				host: env.MARIMOHUB_COMPUTE_DOCKER_HOST,
+				bindHost: env.MARIMOHUB_COMPUTE_DOCKER_BIND_HOST,
+				network: env.MARIMOHUB_COMPUTE_DOCKER_NETWORK,
+			});
+		case 'e2b':
+			// E2B sandboxes (e2b.dev): per-session sandbox with a public per-port URL
+			// (https://<port>-<id>.e2b.app). The `e2b` SDK is an optional, bring-your-own
+			// dependency — install it and bake it into the image to use this backend.
+			// MARIMOHUB_COMPUTE_E2B_TEMPLATE is an E2B template (with marimo + uv), NOT a
+			// container image; it falls back to MARIMOHUB_COMPUTE_IMAGE for convenience.
+			return new E2bCompute({
+				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_E2B_API_KEY', 'e2b'),
+				template: env.MARIMOHUB_COMPUTE_E2B_TEMPLATE ?? env.MARIMOHUB_COMPUTE_IMAGE,
+				domain: env.MARIMOHUB_COMPUTE_E2B_DOMAIN,
+				ownerTag: env.MARIMOHUB_COMPUTE_E2B_OWNER_TAG,
+				maxLifetimeSeconds: resolveLifetimeBackstop(
+					env,
+					'MARIMOHUB_COMPUTE_E2B_MAX_LIFETIME_SECONDS',
+					opts?.sessionMaxLifetimeSeconds,
+				),
+			});
+		case 'local':
+			// Dev backend: spawns `uv run marimo edit` as a host subprocess and
+			// serves the kernel at http://<host>:<port> for the browser to iframe.
+			// Requires `uv` + Python on the host; not for shared/production use.
+			// In Docker, set BIND_HOST=0.0.0.0 + PORTS to a published range.
+			return new LocalCompute({
+				host: env.MARIMOHUB_COMPUTE_LOCAL_HOST,
+				bindHost: env.MARIMOHUB_COMPUTE_LOCAL_BIND_HOST,
+				ports: parsePortRange(env.MARIMOHUB_COMPUTE_LOCAL_PORTS),
+			});
+		case 'kubernetes': {
+			// Native Kubernetes: one keep-alive Pod + Service + Ingress per session,
+			// created via @kubernetes/client-node and exec'd into to run marimo. The
+			// kernel is reached directly at its `{id}.{host}` Ingress host, so set
+			// MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME and provide an ingress class + a
+			// wildcard-cert TLS secret. `proxy()` is a no-op like local/coreweave.
+			const resources = {
+				cpu: env.MARIMOHUB_COMPUTE_KUBERNETES_CPU,
+				memory: env.MARIMOHUB_COMPUTE_KUBERNETES_MEMORY,
+				gpu: env.MARIMOHUB_COMPUTE_KUBERNETES_GPU,
+			};
+			const hasResources = resources.cpu || resources.memory || resources.gpu;
+			const podReadySeconds = parseIntEnv(
+				env,
+				'MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS',
+			);
+			return new KubernetesCompute({
+				namespace: env.MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE,
+				image: env.MARIMOHUB_COMPUTE_IMAGE,
+				hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
+				hostnameTemplate: env.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE,
+				ingressClassName: env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
+				tlsSecretName: env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
+				serviceAccountName: env.MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT,
+				imagePullSecret: env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET,
+				resources: hasResources ? resources : undefined,
+				podReadyTimeout:
+					podReadySeconds === undefined ? undefined : Millis.seconds(podReadySeconds),
+			});
+		}
+		case 'cloudflare':
+			throw new ConfigError(
+				'MARIMOHUB_COMPUTE_BACKEND=cloudflare requires a Workers Durable Object binding; wire it in examples/cloudflare-worker.',
+				{ variable: 'MARIMOHUB_COMPUTE_BACKEND' },
+			);
+		case 'none':
+		case 'noop':
+			// No compute: storage/auth/API work and notebooks are browsable, but
+			// provisioning a kernel session fails. Useful for local dev without Modal.
+			return {
+				create() {
+					throw new Error(
+						'No compute backend configured (MARIMOHUB_COMPUTE_BACKEND=none). Set it to "modal" to run kernels.',
+					);
+				},
+				async proxy() {
+					return null;
+				},
+			};
+		default:
+			throw new ConfigError(`Unknown MARIMOHUB_COMPUTE_BACKEND: ${backend}`, {
+				variable: 'MARIMOHUB_COMPUTE_BACKEND',
+				remediation: 'Supported backends: modal, coreweave, docker, e2b, local, kubernetes, none.',
+				docs: 'docs/configuration.md#compute',
+			});
+	}
+}

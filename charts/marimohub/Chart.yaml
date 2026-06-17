@@ -1,0 +1,18 @@
+apiVersion: v2
+name: marimohub
+description: |
+  MarimoHub — self-hostable hub for marimo notebooks. Single-tenant: one Helm
+  release is one isolated MarimoHub instance backed by your own object storage,
+  compute, and identity provider.
+type: application
+# Chart version. Bumped per release by the release workflow (set to the git tag).
+version: 0.1.0
+# Application version = the marimohub image tag this chart defaults to. The
+# release workflow overrides this with the released git tag (e.g. 1.4.2).
+appVersion: "0.1.0"
+home: https://github.com/marimo-team/marimohub
+sources:
+  - https://github.com/marimo-team/marimohub
+maintainers:
+  - name: marimo
+    url: https://marimo.io

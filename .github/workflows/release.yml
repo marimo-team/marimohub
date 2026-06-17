@@ -1,0 +1,102 @@
+name: Release
+
+# Cut a release by pushing a semver tag, e.g.:
+#   git tag v1.4.2 && git push origin v1.4.2
+# This publishes BOTH the container image and the Helm chart to GHCR, with the
+# chart version, chart appVersion, and image tag all pinned to the git tag. An
+# end-user then upgrades with:
+#   helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
+#     --version 1.4.2 -n marimohub -f values.yaml
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/marimohub
+  CHART_REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
+
+jobs:
+  image:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version
+        id: v
+        # Strip the leading "v" from the tag -> semver used for image + chart.
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # v1.4.2 -> tags 1.4.2, 1.4, 1, latest, plus the commit SHA.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,format=short
+            type=raw,value=latest
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            MARIMOHUB_VERSION=${{ steps.v.outputs.version }}
+            MARIMOHUB_IMAGE=${{ env.IMAGE }}:${{ steps.v.outputs.version }}
+            MARIMOHUB_BUILD_TIME=${{ github.event.head_commit.timestamp }}
+
+  chart:
+    name: Package & push Helm chart
+    runs-on: ubuntu-latest
+    needs: image
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Derive version
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR (Helm OCI)
+        run: helm registry login ghcr.io -u ${{ github.actor }} --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Lint
+        run: helm lint charts/marimohub
+
+      - name: Package
+        # Pin chart version AND appVersion to the released tag so a chart version
+        # uniquely identifies an image. Defaulting image.tag to appVersion in the
+        # chart means end-users get the matching image for free.
+        run: |
+          helm package charts/marimohub \
+            --version "${{ steps.v.outputs.version }}" \
+            --app-version "${{ steps.v.outputs.version }}"
+
+      - name: Push
+        run: helm push "marimohub-${{ steps.v.outputs.version }}.tgz" "${{ env.CHART_REGISTRY }}"

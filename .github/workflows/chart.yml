@@ -1,0 +1,45 @@
+name: Chart
+
+# Lint and validate the Helm chart. Scoped to chart + workflow changes so it
+# stays off unrelated PRs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'charts/**'
+      - '.github/workflows/chart.yml'
+  pull_request:
+    paths:
+      - 'charts/**'
+      - '.github/workflows/chart.yml'
+
+jobs:
+  lint:
+    name: Lint & validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: helm lint
+        run: helm lint --strict charts/marimohub
+
+      - name: Install kubeconform
+        run: |
+          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+      # Render with the defaults and with the example values, then validate the
+      # manifests against the upstream Kubernetes JSON schemas. Treats a missing
+      # schema (none of our kinds are CRDs) as an error.
+      - name: Render & validate manifests
+        run: |
+          for values in "" "-f charts/marimohub/ci/example-values.yaml"; do
+            echo "::group::helm template ${values:-(defaults)}"
+            helm template test charts/marimohub $values \
+              | kubeconform -strict -summary -verbose \
+                  -kubernetes-version 1.29.0 \
+                  -schema-location default
+            echo "::endgroup::"
+          done
