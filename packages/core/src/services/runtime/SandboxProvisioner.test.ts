@@ -1,0 +1,865 @@
+import { describe, it, expect, vi } from 'vitest';
+import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
+import { paths } from '../../paths';
+import {
+	ACTOR,
+	EXPOSED_URL,
+	fakeComputeFrom,
+	makeFakeSandbox,
+	makeFsSandbox,
+	makeLocalSource,
+	MemoryBucket,
+	setupTestEnv,
+} from '../../testing';
+import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type { NotebookService } from '../content/NotebookService';
+import { SandboxProvisioner } from './SandboxProvisioner';
+import type { BucketConfig, WorkspaceLoadStrategies } from './SandboxProvisioner';
+
+const MOUNT_PATH = '/workspace/notebooks';
+
+const bucketConfig: BucketConfig = {
+	name: 'test-bucket',
+	endpoint: 'https://r2.example',
+};
+
+/**
+ * A fake provider that ALSO implements the optional `FilesystemSnapshots`
+ * capability, recording restore-creates, captures, and snapshot deletes so the
+ * snapshot-on-teardown / restore-on-provision paths can be asserted.
+ */
+function makeSnapshotCompute(
+	instance: SandboxInstance,
+	opts: { captureId?: string; failCapture?: boolean } = {},
+): SandboxProvider &
+	FilesystemSnapshots & {
+		createdFrom: { id: string; snapshotId: string }[];
+		deleted: string[];
+	} {
+	const createdFrom: { id: string; snapshotId: string }[] = [];
+	const deleted: string[] = [];
+	return {
+		filesystemSnapshotsEnabled: true,
+		create: () => instance,
+		proxy: async () => null,
+		createFromSnapshot(id, snapshotId) {
+			createdFrom.push({ id, snapshotId });
+			return instance;
+		},
+		async captureSnapshot() {
+			if (opts.failCapture) throw new Error('snapshot api down');
+			return { snapshotId: opts.captureId ?? 'snap_new', sizeBytes: 123 };
+		},
+		async deleteSnapshot(snapshotId) {
+			deleted.push(snapshotId);
+		},
+		createdFrom,
+		deleted,
+	};
+}
+
+describe('SandboxProvisioner', () => {
+	const projectId = createProjectId();
+	const notebookId = createNotebookId();
+	const sandboxId = createSandboxId();
+
+	describe('provision', () => {
+		it('happy path with mount: usedFallback false, returns exposed url, starts marimo on port 2718', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+			});
+
+			expect(result.usedFallback).toBe(false);
+			expect(result.url).toBe(EXPOSED_URL);
+			expect(result.sandbox).toBe(instance);
+
+			expect(calls.exec).toContain('true');
+			// Bucket was mounted (no fallback file copy).
+			expect(calls.mountBucket).toHaveLength(1);
+			expect(calls.writeFile).toHaveLength(0);
+
+			expect(calls.startProcess).toHaveLength(1);
+			expect(calls.startProcess[0].cmd).toContain('marimo edit');
+			expect(calls.startProcess[0].cmd).toContain('2718');
+			expect(calls.waitForPort).toEqual([2718]);
+			expect(calls.exposePort[0].port).toBe(2718);
+			expect(calls.exposePort[0].options.token).toBe(sandboxId);
+
+			// No asset-url arg unless configured.
+			expect(calls.startProcess[0].cmd).not.toContain('--asset-url');
+			// Binds all interfaces so the external ingress can reach the kernel.
+			expect(calls.startProcess[0].cmd).toContain('--host 0.0.0.0');
+		});
+
+		it('accepts sessionEnv as a promise, injecting it once resolved', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: Promise.resolve({
+					vars: { A: '1' },
+					files: [{ path: '/creds', content: 'hi' }],
+				}),
+			});
+
+			expect(calls.writeFile).toContainEqual({ path: '/creds', content: 'hi' });
+			expect(calls.setEnvVars).toContainEqual({ A: '1' });
+		});
+
+		it('forwards the resolved base image to provider.create', async () => {
+			const { instance } = makeFakeSandbox();
+			const compute = fakeComputeFrom(instance);
+			const provisioner = new SandboxProvisioner(compute);
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				image: 'ghcr.io/marimo/custom:1',
+			});
+
+			expect(compute.lastCreateOptions).toEqual({ reuse: false, image: 'ghcr.io/marimo/custom:1' });
+		});
+
+		it('destroys the sandbox when a sessionEnv promise rejects (fail-closed creds)', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					sessionEnv: Promise.reject(new Error('secret_resolution_failed')),
+				}),
+			).rejects.toThrow('secret_resolution_failed');
+
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('merges adapter-drained timings onto the result as reachable_*', async () => {
+			const { instance } = makeFakeSandbox();
+			// Simulate CoreWeave surfacing its lazy create/find split (hidden in `reachable`).
+			instance.drainTimings = () => ({ create: 42, find: 7 });
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+			});
+
+			expect(result.timings.reachable_create).toBe(42);
+			expect(result.timings.reachable_find).toBe(7);
+		});
+
+		it('passes --asset-url when assetUrl is set', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const assetUrl = 'https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist';
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				assetUrl,
+			});
+
+			expect(calls.startProcess[0].cmd).toContain(`--asset-url="${assetUrl}"`);
+		});
+
+		it('injects sessionEnv (files + env) BEFORE starting the kernel', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: {
+					vars: { AWS_ACCESS_KEY_ID: 'CWAK', AWS_ENDPOINT_URL_S3: 'https://cwobject.com' },
+					files: [{ path: '/var/run/marimohub/wif-token', content: 'eyJ.jwt.sig' }],
+				},
+			});
+
+			expect(calls.setEnvVars).toEqual([
+				{ AWS_ACCESS_KEY_ID: 'CWAK', AWS_ENDPOINT_URL_S3: 'https://cwobject.com' },
+			]);
+			expect(calls.writeFile).toEqual([
+				{ path: '/var/run/marimohub/wif-token', content: 'eyJ.jwt.sig' },
+			]);
+			// Env + token file must land before the kernel process starts.
+			expect(calls.sequence).toEqual(['writeFiles', 'setEnvVars', 'startProcess']);
+		});
+
+		it('does not call setEnvVars/writeFile when sessionEnv is omitted', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+			});
+
+			expect(calls.setEnvVars).toHaveLength(0);
+			expect(calls.writeFile).toHaveLength(0);
+			expect(calls.sequence).toEqual(['startProcess']);
+		});
+
+		it('fallback path: mountBucket throws -> usedFallback true, restoreWorkspace copies the workspace in', async () => {
+			const { instance, calls } = makeFakeSandbox({ failMount: true });
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			// Seed the bucket handle so the fallback copy has a workspace to restore.
+			const bucketHandle = new MemoryBucket();
+			const nb = paths.project(projectId).notebook(notebookId);
+			await bucketHandle.put(nb.code, 'import marimo as mo');
+			await bucketHandle.put(nb.deps, '[project]\nname = "nb"');
+
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+			});
+
+			expect(result.usedFallback).toBe(true);
+			expect(result.url).toBe(EXPOSED_URL);
+
+			// Fallback restored both workspace files into the mount path, in one batched
+			// write of raw bytes (no per-file base64/temp-file dance).
+			const restored = calls.writeFiles.flat().map((f) => f.path);
+			expect(restored).toContain(`${MOUNT_PATH}/notebook.py`);
+			expect(restored).toContain(`${MOUNT_PATH}/pyproject.toml`);
+			// marimo still started after the fallback copy.
+			expect(calls.startProcess).toHaveLength(1);
+		});
+
+		it('mount failure without a bucket handle rejects instead of starting an empty workspace', async () => {
+			const { instance, calls } = makeFakeSandbox({ failMount: true });
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				}),
+			).rejects.toThrow(/mounting the notebook workspace/i);
+
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('copy-only mode skips mount and launches the configured entry notebook', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const bucketHandle = new MemoryBucket();
+			const nb = paths.project(projectId).notebook(notebookId);
+			await bucketHandle.put(nb.workspaceFile('apps/my_app.py'), 'import marimo as mo');
+
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				entryNotebook: 'apps/my_app.py',
+				workspaceLoadMode: 'copy-only',
+			});
+
+			expect(result.usedFallback).toBe(true);
+			expect(calls.mountBucket).toHaveLength(0);
+			expect(calls.writeFiles.flat().some((f) => f.path.endsWith('apps/my_app.py'))).toBe(true);
+			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/my_app.py'");
+		});
+
+		it('uses the injected workspace loader selected by workspaceLoadMode', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const selected: string[] = [];
+			const loaders: WorkspaceLoadStrategies = {
+				copyOnly: {
+					async load(ctx) {
+						selected.push(`copy:${ctx.projectId}:${ctx.notebookId}`);
+						return true;
+					},
+				},
+				mountOrCopy: {
+					async load() {
+						selected.push('mount');
+						return false;
+					},
+				},
+			};
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance), loaders);
+
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				workspaceLoadMode: 'copy-only',
+			});
+
+			expect(result.usedFallback).toBe(true);
+			expect(selected).toEqual([`copy:${projectId}:${notebookId}`]);
+			expect(calls.mountBucket).toHaveLength(0);
+			expect(calls.startProcess).toHaveLength(1);
+		});
+
+		it('unreachable sandbox: exec("true") throws -> provision rejects with "not available"', async () => {
+			const { instance, calls } = makeFakeSandbox({ failExec: 'true' });
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				}),
+			).rejects.toThrow(/not available/i);
+
+			// Never got past the reachability check.
+			expect(calls.mountBucket).toHaveLength(0);
+			expect(calls.startProcess).toHaveLength(0);
+		});
+	});
+
+	describe('teardown', () => {
+		it('reads the notebook back, cuts a version with HTML + session snapshots, then destroys', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const created = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'NB', description: 'd', code: 'print(1)' },
+				ACTOR,
+			);
+			const nb = paths.project(project.id).notebook(created.id);
+
+			const { instance, calls } = makeFakeSandbox({
+				files: {
+					[`${MOUNT_PATH}/notebook.py`]: 'print(2)  # edited',
+					[`${MOUNT_PATH}/pyproject.toml`]: '[project]\nname = "edited"',
+					[`${MOUNT_PATH}/__marimo__/notebook.html`]: '<html>output</html>',
+					[`${MOUNT_PATH}/__marimo__/session/notebook.py.json`]: '{"version":"1"}',
+				},
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.teardown(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				created.id,
+				ACTOR,
+				'source',
+			);
+
+			// Read all four artifacts (code, deps, the two __marimo__ snapshots) back.
+			expect(calls.readFile).toContain(`${MOUNT_PATH}/notebook.py`);
+			expect(calls.readFile).toContain(`${MOUNT_PATH}/__marimo__/notebook.html`);
+			expect(calls.readFile).toContain(`${MOUNT_PATH}/__marimo__/session/notebook.py.json`);
+
+			expect(await (await env.bucket.get(nb.code))?.text()).toBe('print(2)  # edited');
+
+			// A new version was cut (initial + this one) and source points at it.
+			expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(2);
+			const source = await (await env.bucket.get(nb.source))!.json<any>();
+			const ver = nb.version(source.current_version_id);
+
+			// HTML + session snapshots landed in that version's folder, with descriptors.
+			expect(await (await env.bucket.get(ver.html))?.text()).toBe('<html>output</html>');
+			expect(await (await env.bucket.get(ver.session))?.text()).toBe('{"version":"1"}');
+			const verMeta = await (await env.bucket.get(ver.meta))!.json<any>();
+			expect(verMeta.html_snapshot.size_bytes).toBeGreaterThan(0);
+			expect(verMeta.session_snapshot.size_bytes).toBeGreaterThan(0);
+
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('with no edited files read back, cuts no version but still destroys', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const created = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'NB', description: 'd', code: 'print(1)' },
+				ACTOR,
+			);
+			const { instance, calls } = makeFakeSandbox(); // sandbox reports no files
+
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			await provisioner.teardown(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				created.id,
+				ACTOR,
+				'source',
+			);
+
+			// Nothing read back → no new version, but the sandbox is still destroyed.
+			expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(1);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('still destroys the sandbox when commitSession throws (best-effort)', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			// A NotebookService whose commit fails must not block teardown.
+			const failingNotebooks = {
+				getNotebook: async () => ({ source: makeLocalSource() }),
+				commitSession: async () => {
+					throw new Error('commit boom');
+				},
+			} as unknown as NotebookService;
+
+			await provisioner.teardown(
+				instance,
+				failingNotebooks,
+				new MemoryBucket(),
+				projectId,
+				notebookId,
+				ACTOR,
+				'source',
+			);
+
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('persistEdits: false destroys without reading back, committing, or snapshotting', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const created = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'NB', description: 'd', code: 'print(1)' },
+				ACTOR,
+			);
+			const { instance, calls } = makeFakeSandbox({
+				files: {
+					[`${MOUNT_PATH}/notebook.py`]: 'print(2)  # viewer edit',
+					[`${MOUNT_PATH}/__marimo__/notebook.html`]: '<html>output</html>',
+				},
+			});
+			const compute = makeSnapshotCompute(instance, { captureId: 'snap_new' });
+			const provisioner = new SandboxProvisioner(compute);
+
+			await provisioner.teardown(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				created.id,
+				ACTOR,
+				'workspace',
+				undefined,
+				{ persistEdits: false },
+			);
+
+			expect(calls.readFile).toHaveLength(0);
+			expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(1);
+			expect(await env.notebooks.getFsSnapshot(project.id, created.id)).toBeNull();
+			expect(calls.destroy).toBe(1);
+		});
+
+		it("workspace mode: captures runtime files into the notebook's workspace, then destroys", async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const created = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'NB', description: 'd', code: 'print(1)' },
+				ACTOR,
+			);
+			const nb = paths.project(project.id).notebook(created.id);
+
+			// A working dir with source files plus a generated runtime file.
+			const { instance, calls } = makeFsSandbox({
+				files: {
+					'notebook.py': 'print(2)',
+					'pyproject.toml': '[project]',
+					'data/cars.csv': 'a,b\n1,2\n',
+				},
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.teardown(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				created.id,
+				ACTOR,
+				'workspace',
+			);
+
+			// Runtime file persisted under workspace/; source stays out of it (commitSession owns it).
+			expect(await (await env.bucket.get(nb.workspaceFile('data/cars.csv')))?.text()).toBe(
+				'a,b\n1,2\n',
+			);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('still destroys the sandbox when captureWorkspace throws (best-effort)', async () => {
+			const { instance: base, calls } = makeFakeSandbox();
+			// Fail only the capture listing (no includeHidden); readSessionArtifacts passes
+			// includeHidden:true and is left to succeed.
+			const instance = {
+				...base,
+				listFiles: async (path: string, options?: { includeHidden?: boolean }) => {
+					if (options?.includeHidden) return { success: true, files: [] };
+					throw new Error('list boom');
+				},
+			} as unknown as SandboxInstance;
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.teardown(
+				instance,
+				{
+					getNotebook: async () => ({ source: makeLocalSource() }),
+					commitSession: async () => null,
+				} as unknown as NotebookService,
+				new MemoryBucket(),
+				projectId,
+				notebookId,
+				ACTOR,
+				'workspace',
+			);
+
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('GitHub teardown destroys without reading back or persisting edits', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const { meta } = await env.notebooks.synced.create(
+				project.id,
+				{
+					title: 'GitHub NB',
+					description: 'd',
+					repo: 'org/repo',
+					branch: 'main',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+			await env.notebooks.synced.sync(project.id, meta.id, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				commit: 'abc123',
+				files: [{ path: 'app.py', bytes: new TextEncoder().encode('print("cached")') }],
+			});
+			const { instance, calls } = makeFakeSandbox({
+				files: { [`${MOUNT_PATH}/app.py`]: 'print("edited")' },
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.teardown(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				meta.id,
+				ACTOR,
+				'workspace',
+			);
+
+			expect(calls.readFile).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+			expect(await env.notebooks.getNotebookContent(project.id, meta.id)).toBe('print("cached")');
+			expect(await env.notebooks.listVersions(project.id, meta.id)).toHaveLength(1);
+		});
+	});
+
+	describe('captureSession', () => {
+		it('saves the session edits as a version WITHOUT destroying the sandbox', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const created = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'NB', description: 'd', code: 'print(1)' },
+				ACTOR,
+			);
+			const { instance, calls } = makeFakeSandbox({
+				files: { [`${MOUNT_PATH}/notebook.py`]: 'print(2)  # edited' },
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			const saved = await provisioner.captureSession(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				created.id,
+				ACTOR,
+				'source',
+			);
+
+			expect(saved).toBe(true);
+			expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(2);
+			expect(calls.destroy).toBe(0);
+		});
+
+		it('does not cut a new version when the content is unchanged (dedupe)', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const created = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'NB', description: 'd', code: 'print(1)' },
+				ACTOR,
+			);
+			const { instance } = makeFakeSandbox({
+				files: { [`${MOUNT_PATH}/notebook.py`]: 'print(2)  # edited' },
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const capture = () =>
+				provisioner.captureSession(
+					instance,
+					env.notebooks,
+					env.bucket,
+					project.id,
+					created.id,
+					ACTOR,
+					'source',
+				);
+
+			await capture();
+			await capture(); // same content read back again
+
+			expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(2);
+		});
+
+		it('returns false for a synced source (session edits are never persisted)', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const { meta } = await env.notebooks.synced.create(
+				project.id,
+				{
+					title: 'GitHub NB',
+					description: 'd',
+					repo: 'org/repo',
+					branch: 'main',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+			const { instance, calls } = makeFakeSandbox({
+				files: { [`${MOUNT_PATH}/app.py`]: 'print("edited")' },
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			const saved = await provisioner.captureSession(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				meta.id,
+				ACTOR,
+				'workspace',
+			);
+
+			expect(saved).toBe(false);
+			expect(calls.readFile).toHaveLength(0);
+			expect(calls.destroy).toBe(0);
+		});
+
+		it('persistEdits: false returns false without touching the sandbox or the bucket', async () => {
+			const { instance, calls } = makeFakeSandbox({
+				files: { [`${MOUNT_PATH}/notebook.py`]: 'print(2)' },
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const notebooks = { getNotebook: vi.fn() } as unknown as NotebookService;
+
+			const saved = await provisioner.captureSession(
+				instance,
+				notebooks,
+				new MemoryBucket(),
+				projectId,
+				notebookId,
+				ACTOR,
+				'workspace',
+				undefined,
+				{ persistEdits: false },
+			);
+
+			expect(saved).toBe(false);
+			expect(notebooks.getNotebook).not.toHaveBeenCalled();
+			expect(calls.readFile).toHaveLength(0);
+		});
+
+		it('rethrows a commit failure (after the workspace capture) so callers retry', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const failingNotebooks = {
+				getNotebook: async () => ({ source: makeLocalSource() }),
+				commitSession: async () => {
+					throw new Error('commit boom');
+				},
+			} as unknown as NotebookService;
+
+			await expect(
+				provisioner.captureSession(
+					instance,
+					failingNotebooks,
+					new MemoryBucket(),
+					projectId,
+					notebookId,
+					ACTOR,
+					'source',
+				),
+			).rejects.toThrow('commit boom');
+			expect(calls.destroy).toBe(0);
+		});
+
+		it('rethrows when the source policy cannot be read (never commit blind)', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const commitSession = vi.fn();
+			const failingNotebooks = {
+				getNotebook: async () => {
+					throw new Error('metadata unavailable');
+				},
+				commitSession,
+			} as unknown as NotebookService;
+
+			await expect(
+				provisioner.captureSession(
+					instance,
+					failingNotebooks,
+					new MemoryBucket(),
+					projectId,
+					notebookId,
+					ACTOR,
+					'source',
+				),
+			).rejects.toThrow('metadata unavailable');
+			expect(commitSession).not.toHaveBeenCalled();
+			expect(calls.destroy).toBe(0);
+		});
+
+		it('includeWorkspace: false saves the source but never touches the workspace mirror', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const created = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'NB', description: 'd', code: 'print(1)' },
+				ACTOR,
+			);
+			const nb = paths.project(project.id).notebook(created.id);
+			const { instance } = makeFsSandbox({
+				files: {
+					'notebook.py': 'print(2)',
+					'data/cars.csv': 'a,b\n1,2\n',
+				},
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			const saved = await provisioner.captureSession(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				created.id,
+				ACTOR,
+				'workspace',
+				undefined,
+				{ includeWorkspace: false },
+			);
+
+			expect(saved).toBe(true);
+			expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(2);
+			expect(await env.bucket.get(nb.workspaceFile('data/cars.csv'))).toBeNull();
+		});
+	});
+
+	// Integration: the provisioner delegates to the filesystemSnapshots module at the
+	// two lifecycle moments (the module's own logic is unit-tested separately).
+	describe('filesystem snapshots (delegation)', () => {
+		it('teardown captures a snapshot, writes the pointer, and GCs the previous one', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const created = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'NB', description: 'd', code: 'print(1)' },
+				ACTOR,
+			);
+			// A previous snapshot that latest-wins GC should delete.
+			await env.notebooks.setFsSnapshot(project.id, created.id, {
+				snapshot_id: 'snap_old',
+				captured_at: '2020-01-01T00:00:00.000Z',
+			});
+
+			const { instance, calls } = makeFakeSandbox();
+			const compute = makeSnapshotCompute(instance, { captureId: 'snap_new' });
+			const provisioner = new SandboxProvisioner(compute);
+
+			await provisioner.teardown(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				created.id,
+				ACTOR,
+				'source',
+			);
+
+			const fs = await env.notebooks.getFsSnapshot(project.id, created.id);
+			expect(fs?.snapshot_id).toBe('snap_new');
+			expect(fs?.size_bytes).toBe(123);
+			expect(compute.deleted).toEqual(['snap_old']); // previous reclaimed
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('provision restores via createFromSnapshot when a snapshot id is given', async () => {
+			const { instance } = makeFakeSandbox();
+			const compute = makeSnapshotCompute(instance);
+			const provisioner = new SandboxProvisioner(compute);
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				restoreFilesystemSnapshotId: 'snap_x',
+			});
+
+			expect(compute.createdFrom).toEqual([{ id: sandboxId, snapshotId: 'snap_x' }]);
+		});
+	});
+});

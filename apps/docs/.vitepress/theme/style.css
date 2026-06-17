@@ -1,0 +1,61 @@
+/* marimohub teal brand theme. */
+
+:root {
+	--vp-c-brand-1: #0f766e;
+	--vp-c-brand-2: #0d9488;
+	--vp-c-brand-3: #14b8a6;
+	--vp-c-brand-soft: rgba(20, 184, 166, 0.14);
+
+	--vp-button-brand-bg: var(--vp-c-brand-3);
+	--vp-button-brand-hover-bg: var(--vp-c-brand-2);
+	--vp-button-brand-active-bg: var(--vp-c-brand-1);
+	--vp-button-brand-border: transparent;
+	--vp-button-brand-hover-border: transparent;
+}
+
+.dark {
+	--vp-c-brand-1: #5eead4;
+	--vp-c-brand-2: #2dd4bf;
+	--vp-c-brand-3: #14b8a6;
+	--vp-c-brand-soft: rgba(45, 212, 191, 0.16);
+}
+
+:root {
+	--vp-home-hero-name-color: transparent;
+	--vp-home-hero-name-background: -webkit-linear-gradient(120deg, #2dd4bf 30%, #0d9488);
+
+	--vp-home-hero-image-background-image: linear-gradient(-45deg, #14b8a6 40%, #5eead4 90%);
+	--vp-home-hero-image-filter: blur(44px);
+}
+
+@media (min-width: 640px) {
+	:root {
+		--vp-home-hero-image-filter: blur(56px);
+	}
+}
+
+@media (min-width: 960px) {
+	:root {
+		--vp-home-hero-image-filter: blur(68px);
+	}
+}
+
+/* The configurator on the landing page — wider than a doc column for breathing room. */
+.home-wizard {
+	max-width: 1152px;
+	margin: 4rem auto 5rem;
+	padding: 0 24px;
+}
+
+.home-wizard h2 {
+	margin: 0 0 0.5rem;
+	border-top: none;
+	padding-top: 0;
+	font-size: 1.6rem;
+	letter-spacing: -0.02em;
+}
+
+.home-wizard > p {
+	margin: 0 0 0.5rem;
+	color: var(--vp-c-text-2);
+}

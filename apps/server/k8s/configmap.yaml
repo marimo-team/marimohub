@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: marimohub-config
+data:
+  # Non-secret MARIMOHUB_* configuration (secrets live in the Secret).
+  MARIMOHUB_STORAGE_BACKEND: 's3'
+  MARIMOHUB_STORAGE_S3_BUCKET: 'orgname-marimohub'
+  MARIMOHUB_STORAGE_S3_ENDPOINT: 'https://s3.us-east-1.amazonaws.com'
+  MARIMOHUB_STORAGE_S3_REGION: 'us-east-1'
+  MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: 'false'
+  MARIMOHUB_COMPUTE_BACKEND: 'modal'
+  MARIMOHUB_COMPUTE_IMAGE: 'ghcr.io/orgname/marimohub-sandbox:latest'
+  MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'hub.example.com'
+  MARIMOHUB_COMPUTE_IDLE_TIMEOUT: '20m'
+  MARIMOHUB_AUTH_BACKEND: 'oidc'
+  MARIMOHUB_AUTH_OIDC_ISSUER: 'https://accounts.example.com'
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: 'marimohub'
+  MARIMOHUB_AUTH_OIDC_AUDIENCE: 'marimohub'
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback'
+  PORT: '3000'

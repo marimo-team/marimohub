@@ -1,0 +1,105 @@
+import { describe, it, expect, vi } from 'vitest';
+import { AwsSecretsManagerResolver } from './index';
+import type { GetSecretValueResult, SecretFetcher } from './index';
+
+const SECRET = 'sk-live-do-not-log';
+
+function resolver(fetch: SecretFetcher, cacheTtlMs = 0, now?: () => number) {
+	return new AwsSecretsManagerResolver({ fetch, cacheTtlMs, now });
+}
+
+const ref = (locator: string) => ({ backend: 'aws-sm', locator });
+
+describe('AwsSecretsManagerResolver', () => {
+	it('returns a plain string secret verbatim', async () => {
+		const r = resolver(async () => ({ SecretString: SECRET }));
+		expect(await r.resolve(ref('prod/openai'))).toBe(SECRET);
+	});
+
+	it('selects a JSON field with #key', async () => {
+		const r = resolver(async () => ({ SecretString: JSON.stringify({ OPENAI_API_KEY: SECRET }) }));
+		expect(await r.resolve(ref('prod/ai#OPENAI_API_KEY'))).toBe(SECRET);
+	});
+
+	it('splits on the last # so an ARN with none is intact', async () => {
+		const seen: string[] = [];
+		const r = resolver(async (id) => {
+			seen.push(id);
+			return { SecretString: JSON.stringify({ k: 'v' }) };
+		});
+		await r.resolve(ref('arn:aws:secretsmanager:us-east-1:1234:secret:prod/ai-AbCdEf#k'));
+		expect(seen[0]).toBe('arn:aws:secretsmanager:us-east-1:1234:secret:prod/ai-AbCdEf');
+	});
+
+	it('stringifies a non-string JSON field', async () => {
+		const r = resolver(async () => ({ SecretString: JSON.stringify({ port: 5432 }) }));
+		expect(await r.resolve(ref('db#port'))).toBe('5432');
+	});
+
+	it('throws (naming the id, not the value) when the JSON key is missing', async () => {
+		const r = resolver(async () => ({ SecretString: JSON.stringify({ other: SECRET }) }));
+		await expect(r.resolve(ref('db#missing'))).rejects.toThrow(/db.*missing/);
+		await expect(r.resolve(ref('db#missing'))).rejects.not.toThrow(new RegExp(SECRET));
+	});
+
+	it('throws when the secret is not JSON but a key was requested', async () => {
+		const r = resolver(async () => ({ SecretString: 'not json' }));
+		await expect(r.resolve(ref('db#k'))).rejects.toThrow(/not JSON/);
+	});
+
+	it('does not resolve an inherited prototype property as a JSON key', async () => {
+		const r = resolver(async () => ({ SecretString: JSON.stringify({ real: 'v' }) }));
+		await expect(r.resolve(ref('db#__proto__'))).rejects.toThrow(/no JSON key/);
+		await expect(r.resolve(ref('db#toString'))).rejects.toThrow(/no JSON key/);
+	});
+
+	it('throws "binary" for a binary-only secret', async () => {
+		const r = resolver(async () => ({ SecretBinary: new Uint8Array([1, 2, 3]) }));
+		await expect(r.resolve(ref('bin'))).rejects.toThrow(/binary/);
+	});
+
+	it('maps a not-found/access-denied error without leaking the value', async () => {
+		const err = Object.assign(new Error('secret value here should never surface'), {
+			name: 'ResourceNotFoundException',
+		});
+		const r = resolver(async () => {
+			throw err;
+		});
+		await expect(r.resolve(ref('gone'))).rejects.toThrow(/ResourceNotFoundException/);
+		await expect(r.resolve(ref('gone'))).rejects.not.toThrow(/should never surface/);
+	});
+
+	it('caches within the TTL and refetches after it', async () => {
+		let clock = 1000;
+		const fetch = vi.fn(async () => ({ SecretString: SECRET }));
+		const r = resolver(fetch, 100, () => clock);
+
+		await r.resolve(ref('k'));
+		await r.resolve(ref('k'));
+		expect(fetch).toHaveBeenCalledTimes(1); // served from cache
+
+		clock += 200; // past TTL
+		await r.resolve(ref('k'));
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it('shares one fetch across sibling #keys of the same secret (cache by id)', async () => {
+		const fetch = vi.fn(async () => ({ SecretString: JSON.stringify({ A: '1', B: '2' }) }));
+		const r = resolver(fetch, 100, () => 1000);
+
+		expect(await r.resolve(ref('bundle#A'))).toBe('1');
+		expect(await r.resolve(ref('bundle#B'))).toBe('2');
+		expect(await r.resolve(ref('bundle'))).toBe(JSON.stringify({ A: '1', B: '2' }));
+		expect(fetch).toHaveBeenCalledTimes(1); // one GetSecretValue for all three
+	});
+
+	it('does not cache when TTL is 0 (default)', async () => {
+		const fetch = vi.fn<() => Promise<GetSecretValueResult>>(async () => ({
+			SecretString: SECRET,
+		}));
+		const r = resolver(fetch);
+		await r.resolve(ref('k'));
+		await r.resolve(ref('k'));
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+});

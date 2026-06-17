@@ -1,0 +1,23 @@
+{
+	"name": "@marimo-hub/example-library-composition",
+	"version": "0.0.0",
+	"private": true,
+	"license": "Apache-2.0",
+	"type": "module",
+	"scripts": {
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@hono/node-server": "catalog:",
+		"@marimo-hub/api": "workspace:*",
+		"@marimo-hub/auth-dev": "workspace:*",
+		"@marimo-hub/compute-modal": "workspace:*",
+		"@marimo-hub/core": "workspace:*",
+		"@marimo-hub/storage-s3": "workspace:*"
+	},
+	"devDependencies": {
+		"@marimo-hub/tsconfig": "workspace:*",
+		"@types/node": "catalog:",
+		"typescript": "catalog:"
+	}
+}

@@ -1,0 +1,38 @@
+node_modules
+dist
+coverage
+*.log
+.DS_Store
+.wrangler
+.vite
+.vite-hooks
+*.tsbuildinfo
+.context
+pnpm-debug.log*
+
+# Playwright e2e artifacts
+apps/e2e/playwright-report/
+apps/e2e/test-results/
+
+# Local environment files (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Claude Code tooling artifacts
+.agents/
+.claude/
+skills-lock.json
+
+# Local-only planning docs (keep local, do not commit)
+plans/
+
+# Local-only deployment working folder (k8s manifests, secrets — do not commit)
+deployment/
+
+# Vendored prebuilt SDK output must be committed (overrides the global `dist` rule above)
+!vendor/cwsandbox/dist/
+
+# VitePress (dist is covered by the `dist` rule above)
+**/.vitepress/cache/
+**/.vitepress/.temp/

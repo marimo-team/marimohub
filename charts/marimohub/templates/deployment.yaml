@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "marimohub.fullname" . }}
+  labels:
+    {{- include "marimohub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "marimohub.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    {{- include "marimohub.podTemplate" (dict "root" . "maintenance" false) | nindent 4 }}
+{{- if .Values.maintenance.enabled }}
+---
+# Single-replica deployment that owns the session-maintenance cron (the reaper).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "marimohub.fullname" . }}-maintenance
+  labels:
+    {{- include "marimohub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+spec:
+  replicas: 1
+  # Recreate (not RollingUpdate, which surges to 2): the reaper must be a
+  # singleton. The bucket-CAS lease in the app is the defense-in-depth backstop.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "marimohub.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: maintenance
+  template:
+    {{- include "marimohub.podTemplate" (dict "root" . "maintenance" true) | nindent 4 }}
+{{- end }}

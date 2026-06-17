@@ -1,0 +1,8 @@
+{
+	"extends": "@marimo-hub/tsconfig/base.json",
+	"compilerOptions": {
+		"lib": ["esnext"],
+		"types": ["@cloudflare/workers-types", "@marimo-hub/tsconfig/ts-reset"]
+	},
+	"include": ["src", "env.d.ts"]
+}
