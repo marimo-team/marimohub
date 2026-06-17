@@ -1,0 +1,72 @@
+import { describe, expect, it } from 'vitest';
+import type { NotebookId, ProjectId, SessionId, SnapshotId, VersionId } from './ids';
+import { paths } from './paths';
+
+const pid = 'proj_01HXY11111ABCDEFGHJKMN' as ProjectId;
+const nid = 'nb_01HXYZ22222PQRSTUVWXYZ' as NotebookId;
+const vid = 'ver_01HXYZ33333RSTUVWXYZAB' as VersionId;
+const sid = 'snap_01HXYZ9ABCDEFGHJKMNPQ' as SnapshotId;
+const sessId = 'sess_01HXYZ44444CDEFGHJKMNP' as SessionId;
+
+describe('paths', () => {
+	it('system paths', () => {
+		expect(paths.catalog).toMatchInlineSnapshot(`"_system/catalog.json"`);
+		expect(paths.sessionsPrefix).toMatchInlineSnapshot(`"_system/sessions/"`);
+		expect(paths.snapshot(sid)).toMatchInlineSnapshot(
+			`"_system/snapshots/snap_01HXYZ9ABCDEFGHJKMNPQ.json"`,
+		);
+		expect(paths.session(sessId)).toMatchInlineSnapshot(
+			`"_system/sessions/sess_01HXYZ44444CDEFGHJKMNP.json"`,
+		);
+		expect(paths.eventsForDate('2025-03-05')).toMatchInlineSnapshot(`"_system/events/2025-03-05/"`);
+		expect(paths.event('2025-03-05', '01HXYZ9ABCDEFGHJKMNPQRSTVW')).toMatchInlineSnapshot(
+			`"_system/events/2025-03-05/01HXYZ9ABCDEFGHJKMNPQRSTVW.json"`,
+		);
+	});
+
+	it('project paths', () => {
+		const proj = paths.project(pid);
+		expect(proj.meta).toMatchInlineSnapshot(`"projects/proj_01HXY11111ABCDEFGHJKMN/project.json"`);
+	});
+
+	it('notebook paths', () => {
+		const nb = paths.project(pid).notebook(nid);
+		expect(nb).toMatchInlineSnapshot(`
+			{
+			  "base": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ",
+			  "code": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/notebook/notebook.py",
+			  "deps": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/notebook/pyproject.toml",
+			  "meta": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/meta.json",
+			  "prefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/notebook/",
+			  "readme": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/README.md",
+			  "source": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/notebook/source.json",
+			  "version": [Function],
+			}
+		`);
+	});
+
+	it('version paths', () => {
+		const ver = paths.project(pid).notebook(nid).version(vid);
+		expect(ver).toMatchInlineSnapshot(`
+			{
+			  "code": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/notebook/versions/ver_01HXYZ33333RSTUVWXYZAB/notebook.py",
+			  "deps": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/notebook/versions/ver_01HXYZ33333RSTUVWXYZAB/pyproject.toml",
+			  "meta": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/notebook/versions/ver_01HXYZ33333RSTUVWXYZAB/version.json",
+			}
+		`);
+	});
+
+	it('composability — intermediate objects are reusable', () => {
+		const proj = paths.project(pid);
+		const nb1 = proj.notebook('nb_01AAAA00000000000000000000' as NotebookId);
+		const nb2 = proj.notebook('nb_01BBBB00000000000000000000' as NotebookId);
+
+		expect(nb1.code).not.toBe(nb2.code);
+		expect(nb1.code).toContain('nb_01AAAA');
+		expect(nb2.code).toContain('nb_01BBBB');
+
+		const v1 = nb1.version('ver_01AAAA00000000000000000000' as VersionId);
+		const v2 = nb1.version('ver_01BBBB00000000000000000000' as VersionId);
+		expect(v1.code).not.toBe(v2.code);
+	});
+});

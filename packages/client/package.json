@@ -1,0 +1,25 @@
+{
+	"name": "@marimo-hub/client",
+	"version": "0.0.0",
+	"private": true,
+	"files": [
+		"dist"
+	],
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./schema": "./src/schema.ts",
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "vp pack",
+		"check": "vp check",
+		"generate": "openapi-typescript ../api/openapi.yaml -o ./src/schema.ts && vp fmt src/schema.ts"
+	},
+	"devDependencies": {
+		"@types/node": "catalog:",
+		"openapi-typescript": "^7.4.0",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:"
+	}
+}

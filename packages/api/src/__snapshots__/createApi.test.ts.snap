@@ -1,0 +1,83 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`createApi onError mapping > maps domain errors to response envelopes 1`] = `
+[
+  {
+    "body": {
+      "error": {
+        "code": "NOT_FOUND",
+        "message": "NotFoundError",
+      },
+      "success": false,
+    },
+    "status": 404,
+    "thrown": "NotFoundError",
+  },
+  {
+    "body": {
+      "error": {
+        "code": "FORBIDDEN",
+        "message": "ForbiddenError",
+      },
+      "success": false,
+    },
+    "status": 403,
+    "thrown": "ForbiddenError",
+  },
+  {
+    "body": {
+      "error": {
+        "code": "CONFLICT",
+        "message": "ConflictError",
+      },
+      "success": false,
+    },
+    "status": 409,
+    "thrown": "ConflictError",
+  },
+  {
+    "body": {
+      "error": {
+        "code": "PRECONDITION_FAILED",
+        "message": "PreconditionFailedError",
+      },
+      "success": false,
+    },
+    "status": 412,
+    "thrown": "PreconditionFailedError",
+  },
+  {
+    "body": {
+      "error": {
+        "code": "NOT_INITIALIZED",
+        "message": "NotInitializedError",
+      },
+      "success": false,
+    },
+    "status": 409,
+    "thrown": "NotInitializedError",
+  },
+  {
+    "body": {
+      "error": {
+        "code": "SERVICE_UNAVAILABLE",
+        "message": "UnavailableError",
+      },
+      "success": false,
+    },
+    "status": 503,
+    "thrown": "UnavailableError",
+  },
+  {
+    "body": {
+      "error": {
+        "code": "INTERNAL_ERROR",
+        "message": "Internal server error",
+      },
+      "success": false,
+    },
+    "status": 500,
+    "thrown": "Error",
+  },
+]
+`;

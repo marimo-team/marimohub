@@ -1,0 +1,24 @@
+{
+	"name": "@marimo-hub/example-cloudflare-worker",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"cf-typegen": "wrangler types"
+	},
+	"dependencies": {
+		"@cloudflare/sandbox": "^0.7.1",
+		"@marimo-hub/api": "workspace:*",
+		"@marimo-hub/auth-cloudflare-access": "workspace:*",
+		"@marimo-hub/auth-dev": "workspace:*",
+		"@marimo-hub/compute-cloudflare": "workspace:*",
+		"@marimo-hub/core": "workspace:*",
+		"@marimo-hub/storage-r2": "workspace:*"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20260305.1",
+		"typescript": "catalog:"
+	}
+}

@@ -1,0 +1,37 @@
+{
+	"name": "@marimo-hub/web",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vp dev",
+		"build": "vp build",
+		"preview": "vp preview"
+	},
+	"dependencies": {
+		"@marimo-hub/client": "workspace:*",
+		"@tailwindcss/vite": "catalog:",
+		"@tanstack/react-query": "^5.90.21",
+		"class-variance-authority": "catalog:",
+		"clsx": "catalog:",
+		"lucide-react": "catalog:",
+		"react": "^19.1.1",
+		"react-aria-components": "^1.16.0",
+		"react-dom": "^19.1.1",
+		"react-router-dom": "^7.11.0",
+		"sonner": "catalog:",
+		"tailwind-merge": "catalog:",
+		"tailwindcss": "catalog:",
+		"tailwindcss-react-aria-components": "catalog:",
+		"tw-animate-css": "catalog:"
+	},
+	"devDependencies": {
+		"@tanstack/react-query-devtools": "^5.91.3",
+		"@types/react": "^19.1.10",
+		"@types/react-dom": "^19.1.7",
+		"@vitejs/plugin-react-swc": "^4.0.0",
+		"typescript": "catalog:",
+		"vite": "catalog:",
+		"vite-plus": "catalog:"
+	}
+}

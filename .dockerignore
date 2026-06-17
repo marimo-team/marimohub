@@ -1,0 +1,21 @@
+# Keep the build context small and avoid copying host artifacts into the image.
+# pnpm refuses to remove a foreign node_modules without a TTY, so it must not be copied.
+**/node_modules
+**/dist
+**/.vite
+**/.vite-hooks
+**/*.tsbuildinfo
+.git
+.wrangler
+.context
+
+# Never bake local env files / secrets into the image.
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Tooling artifacts
+.agents/
+.claude/
+*.log
+.DS_Store

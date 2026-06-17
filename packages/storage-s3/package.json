@@ -1,0 +1,28 @@
+{
+	"name": "@marimo-hub/storage-s3",
+	"version": "0.0.0",
+	"private": true,
+	"files": [
+		"dist"
+	],
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "vp pack",
+		"test": "vp test",
+		"check": "vp check"
+	},
+	"dependencies": {
+		"@aws-sdk/client-s3": "^3.700.0",
+		"@marimo-hub/core": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}

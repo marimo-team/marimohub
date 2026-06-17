@@ -1,0 +1,23 @@
+{
+	"name": "marimohub",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "pnpm --filter @marimo-hub/server build && concurrently -k -n build,server,web -c blue,green,magenta \"pnpm --filter @marimo-hub/server exec vp pack --watch\" \"MARIMOHUB_STORAGE_BACKEND=memory MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true MARIMOHUB_COMPUTE_BACKEND=local MARIMOHUB_AUTH_BACKEND=dev node --watch apps/server/dist/index.mjs\" \"pnpm --filter @marimo-hub/web dev\"",
+		"ready": "vp fmt && vp lint && vp run -r test && vp run -r build",
+		"check": "vp check",
+		"typecheck": "vp check",
+		"test": "vp run -r test",
+		"build": "vp run -r build",
+		"prepare": "vp config"
+	},
+	"devDependencies": {
+		"concurrently": "catalog:",
+		"vite-plus": "catalog:"
+	},
+	"engines": {
+		"node": ">=22.12.0"
+	},
+	"packageManager": "pnpm@10.20.0"
+}
