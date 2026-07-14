@@ -100,3 +100,4 @@ jobs:
 
       - name: Push
         run: helm push "marimohub-${{ steps.v.outputs.version }}.tgz" "${{ env.CHART_REGISTRY }}"
+permissions: {}
