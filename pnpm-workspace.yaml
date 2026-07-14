@@ -54,8 +54,9 @@ minimumReleaseAge: 20160
 # we don't control that ships lockstep releases often fresher than the cooldown,
 # which would otherwise wedge `pnpm install`.
 minimumReleaseAgeExclude:
-  - '@algolia/*'
+  - "@algolia/*"
   - algoliasearch
+  - "@marimo-team/*"
 
 overrides:
   vite: 'catalog:'
@@ -69,3 +70,7 @@ peerDependencyRules:
   allowedVersions:
     vite: '*'
     vitest: '*'
+verifyDepsBeforeRun: install
+blockExoticSubdeps: true
+trustPolicy: no-downgrade
+onlyBuiltDependencies: []
