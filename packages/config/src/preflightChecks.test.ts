@@ -200,3 +200,55 @@ describe('wif check', () => {
 		expect(report.fatal).toBe(true);
 	});
 });
+
+describe('compute.object-storage-wif check', () => {
+	const osEnv: Env = {
+		MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+		MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS: 'org-data',
+		MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'k',
+	} as Env;
+	const gateway = (body: unknown, status = 200) =>
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(body), { status }));
+
+	it('skipped without the coreweave backend or a bucket list', async () => {
+		expect((await run({}, makeDeps())).by('compute.object-storage-wif')?.status).toBe('skipped');
+		const { by } = await run({ MARIMOHUB_COMPUTE_BACKEND: 'coreweave' } as Env, makeDeps());
+		expect(by('compute.object-storage-wif')?.status).toBe('skipped');
+	});
+
+	it('ok when the gateway has an enabled config covering the buckets', async () => {
+		const spy = gateway({ enabled: true, allowedBuckets: ['org-data'] });
+		const { by } = await run(osEnv, makeDeps());
+		expect(by('compute.object-storage-wif')?.status).toBe('ok');
+		expect(spy).toHaveBeenCalledWith(
+			'https://api.cwsandbox.com/v1beta2/object-storage/wif-config',
+			expect.objectContaining({ headers: { Authorization: 'Bearer k' } }),
+		);
+	});
+
+	it('warn when no config is registered (404)', async () => {
+		gateway({}, 404);
+		const { report, by } = await run(osEnv, makeDeps());
+		expect(by('compute.object-storage-wif')?.status).toBe('warn');
+		expect(by('compute.object-storage-wif')?.message).toContain('CWSANDBOX_RESOURCE_NOT_FOUND');
+		expect(report.fatal).toBe(false);
+	});
+
+	it('warn when a configured bucket is missing from a non-empty allowlist', async () => {
+		gateway({ enabled: true, allowedBuckets: ['other'] });
+		const { by } = await run(osEnv, makeDeps());
+		expect(by('compute.object-storage-wif')?.message).toContain('org-data');
+	});
+
+	it('ok with an empty allowlist (allows all buckets)', async () => {
+		gateway({ enabled: true, allowedBuckets: [] });
+		expect((await run(osEnv, makeDeps())).by('compute.object-storage-wif')?.status).toBe('ok');
+	});
+
+	it('warn (never fail) when the probe itself errors', async () => {
+		vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network down'));
+		const { report, by } = await run(osEnv, makeDeps());
+		expect(by('compute.object-storage-wif')?.status).toBe('warn');
+		expect(report.fatal).toBe(false);
+	});
+});

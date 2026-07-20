@@ -196,8 +196,13 @@ MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION=us-east-04a
 CoreWeave documents `http://cwlota.com` (LOTA) as the accelerated in-cluster
 endpoint — since sandboxes run on CoreWeave infrastructure, try it as the
 endpoint once the org setup is live. CAIOS requires virtual-hosted addressing
-with either endpoint (boto3 handles this; the AWS CLI needs
-`aws configure set s3.addressing_style virtual`).
+with either endpoint. boto3 does **not** infer this for a custom endpoint (it
+defaults to path style, and botocore has no env var to change it), so the hub
+writes `~/.aws/config` with `addressing_style = virtual` into each fresh
+sandbox when the bucket list is set — plain `boto3.client("s3")` and the AWS
+CLI then work as-is. Images that ship their own `~/.aws/config` are left
+untouched; clients that bypass the config file (e.g. obstore) must request
+virtual-hosted addressing explicitly.
 
 Setting the bucket list on the `coreweave` backend disables Manual WIF
 (logged as `wif_disabled_sandbox_native_storage`): the hub's static

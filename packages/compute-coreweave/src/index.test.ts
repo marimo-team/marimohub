@@ -299,6 +299,45 @@ describe('CoreWeaveCompute', () => {
 			await makeCompute(world).create(SANDBOX_ID).exec('true');
 			expect(world.created[0].objectStorageAccess).toBeUndefined();
 		});
+
+		it('bootstraps the AWS config for virtual-hosted addressing on fresh create', async () => {
+			const world = makeWorld();
+			await makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] })
+				.create(SANDBOX_ID)
+				.exec('true');
+			const calls = world.registry.get('cw-1')!.fake.runCalls;
+			expect(calls[0][2]).toContain('addressing_style = virtual');
+			expect(calls[0][2]).toContain('AWS_ENDPOINT_URL_S3');
+			expect(calls).toHaveLength(2); // bootstrap, then the exec
+		});
+
+		it('skips the AWS config bootstrap without buckets and on reconnect', async () => {
+			const world = makeWorld();
+			const compute = makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] });
+			await compute.create(SANDBOX_ID).exec('true');
+			await compute.create(SANDBOX_ID).exec('true'); // reconnects to cw-1
+			const bootstraps = world.registry
+				.get('cw-1')!
+				.fake.runCalls.filter((c) => c[2].includes('addressing_style'));
+			expect(bootstraps).toHaveLength(1);
+
+			const bare = makeWorld();
+			await makeCompute(bare).create(SANDBOX_ID).exec('true');
+			expect(bare.registry.get('cw-1')!.fake.runCalls).toHaveLength(1);
+		});
+
+		it('survives a failing AWS config bootstrap', async () => {
+			const world = makeWorld({
+				runImpl: async (command) => {
+					if (command[2].includes('addressing_style')) throw new Error('exec transport lost');
+					return procResult();
+				},
+			});
+			const result = await makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] })
+				.create(SANDBOX_ID)
+				.exec('true');
+			expect(result.success).toBe(true);
+		});
 	});
 
 	describe('re-resolved instance', () => {
