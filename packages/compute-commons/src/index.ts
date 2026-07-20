@@ -39,6 +39,19 @@ export function withEnvPrefix(cmd: string, env: Record<string, string>): string 
 	return prefix + cmd;
 }
 
+/**
+ * Drop `undefined` values so optional config can be collected in one literal
+ * instead of a per-key conditional-spread chain (`...(x ? { k: x } : {})`).
+ */
+export function removeUndefined<V>(
+	obj: Readonly<Record<string, V | undefined>>,
+): Record<string, V> {
+	return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Record<
+		string,
+		V
+	>;
+}
+
 export interface GitCloneOptions {
 	/** Branch to check out (`--branch <branch>`). */
 	branch?: string;

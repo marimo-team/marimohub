@@ -91,7 +91,79 @@ They are minted once per session and **not refreshed** — after ~1 hour they
 expire. Restart the session to renew.
 :::
 
-## Example: CoreWeave Object Storage
+## Example: CoreWeave Object Storage (Automatic)
+
+On the `coreweave` compute backend, the Sandbox platform vends CAIOS
+credentials itself: created with `object_storage_access`, a sandbox gets a
+per-sandbox OIDC token from the Sandbox Gateway and a credential-vending
+sidecar that exchanges it for temporary S3 credentials. The hub never signs or
+exchanges anything.
+
+|                 | Automatic                           | Manual (hub-minted)                  |
+| --------------- | ----------------------------------- | ------------------------------------ |
+| Compute backend | `coreweave` only                    | any                                  |
+| Credentials     | auto-refresh for the sandbox's life | minted once per session, expire ~1h  |
+| Scope           | one bucket list for the deployment  | per project, via access policy       |
+| Hub setup       | none — no signing key or JWKS       | signing key + `MARIMOHUB_WIF_*` vars |
+
+This is the Sandbox analogue of CoreWeave's
+[Pod Identity Webhook](https://docs.coreweave.com/security/tutorials/cks-object-storage-authentication/automatic)
+for CKS pods. The webhook itself keys off a ServiceAccount annotation, so it
+applies only where you control the ServiceAccount — the `kubernetes` compute
+backend (`MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT`) or the hub's own
+Deployment — never to Sandbox-runner pods.
+
+### One-time setup (operator)
+
+1. **Create an OIDC Workload Federation config** —
+   [Administration → API Access → OIDC](https://console.coreweave.com/organization/iam/workload-federation/oidc) —
+   with **Issuer URL** `https://oidc.cwsandbox.com` (the Sandbox Gateway's OIDC
+   issuer; discovery + JWKS live at
+   `https://oidc.cwsandbox.com/.well-known/openid-configuration`). Note the
+   resulting WIF config id.
+2. **Register the config with the Sandbox Gateway** (idempotent upsert; scoped
+   to your org by the API key):
+
+   ```sh
+   curl -X PUT https://api.cwsandbox.com/v1beta2/object-storage/wif-config \
+     -H "Authorization: Bearer $CWSANDBOX_API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "wifConfigId": "<WIF-CONFIG-ID>",
+       "allowedBuckets": ["my-org-data"],
+       "maxPermission": "OBJECT_STORAGE_PERMISSION_READ_WRITE"
+     }'
+   ```
+
+   An empty `allowedBuckets` allows all buckets; `maxPermission` caps every
+   sandbox grant. Without this config, sandbox creates that request
+   `object_storage_access` fail with `CWSANDBOX_RESOURCE_NOT_FOUND`.
+
+### Hub configuration (Automatic)
+
+```sh
+MARIMOHUB_COMPUTE_BACKEND=coreweave
+MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS=my-org-data
+# Optional: read | read-write (default read-write, capped by maxPermission).
+MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION=read-write
+# Optional: injected as AWS_ENDPOINT_URL_S3 / AWS_REGION so plain SDK clients
+# target CAIOS without per-call configuration.
+MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_ENDPOINT=https://cwobject.com
+MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION=us-east-04a
+```
+
+CoreWeave documents `http://cwlota.com` (LOTA) as the accelerated in-cluster
+endpoint — since sandboxes run on CoreWeave infrastructure, try it as the
+endpoint once the org setup is live. CAIOS requires virtual-hosted addressing
+with either endpoint (boto3 handles this; the AWS CLI needs
+`aws configure set s3.addressing_style virtual`).
+
+Setting the bucket list on the `coreweave` backend disables Manual WIF
+(logged as `wif_disabled_sandbox_native_storage`): the hub's static
+`AWS_ACCESS_KEY_ID` env would take precedence over the sidecar in the AWS
+credential chain and stop refresh.
+
+## Example: CoreWeave Object Storage (Manual)
 
 Give notebooks read/write access to a CoreWeave AI Object Storage (CAIOS)
 bucket — e.g. `my-org-data` — using CoreWeave's

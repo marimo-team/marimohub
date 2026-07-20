@@ -258,6 +258,47 @@ describe('CoreWeaveCompute', () => {
 			await makeCompute(world).create(SANDBOX_ID, { image: 'override-image' }).exec('true');
 			expect(world.created[0].containerImage).toBe('override-image');
 		});
+
+		it('passes objectStorageAccess and endpoint env when buckets are configured', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				objectStorageBuckets: ['org-data', 'org-models'],
+				objectStorageEndpoint: 'https://cwobject.com',
+				objectStorageRegion: 'us-east-04a',
+			})
+				.create(SANDBOX_ID)
+				.exec('true');
+			const opts = world.created[0];
+			expect(opts.objectStorageAccess).toEqual({
+				buckets: ['org-data', 'org-models'],
+				permission: 'read-write',
+			});
+			expect(opts.environmentVariables).toEqual({
+				AWS_ENDPOINT_URL_S3: 'https://cwobject.com',
+				AWS_REGION: 'us-east-04a',
+			});
+		});
+
+		it('honors a read-only objectStoragePermission and omits env when unset', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				objectStorageBuckets: ['org-data'],
+				objectStoragePermission: 'read',
+			})
+				.create(SANDBOX_ID)
+				.exec('true');
+			const opts = world.created[0];
+			expect(opts.objectStorageAccess).toEqual({ buckets: ['org-data'], permission: 'read' });
+			expect(opts.environmentVariables).toBeUndefined();
+		});
+
+		it('omits objectStorageAccess when no buckets are configured', async () => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID).exec('true');
+			expect(world.created[0].objectStorageAccess).toBeUndefined();
+		});
 	});
 
 	describe('re-resolved instance', () => {

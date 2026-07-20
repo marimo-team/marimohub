@@ -8,6 +8,10 @@ export type SandboxAnnotations = Readonly<Record<string, string>>;
 export type SandboxId = string;
 export type SandboxTag = string;
 export type SandboxStatus = "pending" | "creating" | "running" | "paused" | "terminating" | "completed" | "failed" | "terminated" | "unspecified";
+export interface SandboxObjectStorageAccess {
+    readonly buckets: readonly string[];
+    readonly permission: "read" | "read-write";
+}
 export type WaitTargetStatus = "completed" | "paused" | "running";
 export interface WaitOptions extends RequestOptions {
     readonly intervalMs?: number;
@@ -20,6 +24,7 @@ export interface SandboxRunOptions extends RequestOptions {
     readonly maxLifetimeSeconds?: Seconds;
     readonly mountedFiles?: MountedFiles;
     readonly network?: NetworkOptions;
+    readonly objectStorageAccess?: SandboxObjectStorageAccess;
     readonly ports?: readonly PortInput[];
     readonly profileIds?: readonly string[];
     readonly profileNames?: readonly string[];

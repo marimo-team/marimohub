@@ -3,6 +3,7 @@ import type { CredentialBroker, FederationTarget } from '@marimo-hub/core';
 import { AwsStsWifBroker } from '@marimo-hub/credentials-aws';
 import { CoreWeaveWifBroker } from '@marimo-hub/credentials-coreweave';
 import type { ApiDeps } from '@marimo-hub/api';
+import { usesSandboxNativeObjectStorage } from './compute';
 import { required } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -46,6 +47,23 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 		'MARIMOHUB_WIF_BROKER',
 	] as const;
 	if (!requiredKeys.some((k) => env[k])) return {}; // WIF disabled.
+
+	// Sandbox-native CAIOS auth wins over hub-minted WIF: the hub's static
+	// `AWS_ACCESS_KEY_ID` env would shadow the sidecar's auto-refreshing creds in
+	// the AWS credential chain, so injecting both silently breaks refresh.
+	if (usesSandboxNativeObjectStorage(env)) {
+		console.warn(
+			JSON.stringify({
+				ts: new Date().toISOString(),
+				event: 'wif_disabled_sandbox_native_storage',
+				message:
+					'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS is set; hub-minted WIF is disabled ' +
+					'so its static AWS_* env cannot shadow the sandbox credential-vending sidecar. ' +
+					'Unset the WIF env vars (or the bucket list) to silence this warning.',
+			}),
+		);
+		return {};
+	}
 
 	const missing = requiredKeys.filter((k) => !env[k]);
 	if (missing.length > 0) {

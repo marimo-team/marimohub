@@ -5,6 +5,7 @@ import {
 	iterableToStream,
 	parseFindFilesOutput,
 	pollUntilReady,
+	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
 } from './index';
@@ -58,6 +59,13 @@ describe('withEnvPrefix', () => {
 
 	it('shell-quotes env values (injection-safe)', () => {
 		expect(withEnvPrefix('run', { TOKEN: "a'b" })).toBe("export TOKEN='a'\\''b'; run");
+	});
+});
+
+describe('removeUndefined', () => {
+	it('drops undefined values and keeps the rest (including falsy ones)', () => {
+		expect(removeUndefined({ a: '1', b: undefined, c: '' })).toEqual({ a: '1', c: '' });
+		expect(removeUndefined({})).toEqual({});
 	});
 });
 

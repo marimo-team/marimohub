@@ -3,7 +3,12 @@ import { Seconds } from '@marimo-hub/core';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { DockerCompute } from '@marimo-hub/compute-docker';
-import { makeCompute, resolveLifetimeBackstop, resolveSandboxImages } from './compute';
+import {
+	makeCompute,
+	resolveLifetimeBackstop,
+	resolveSandboxImages,
+	usesSandboxNativeObjectStorage,
+} from './compute';
 import { ConfigError } from './errors';
 
 /** Peek at a provider's private constructor config (test-only). */
@@ -18,20 +23,19 @@ const configOf = (provider: unknown) =>
  */
 
 const modalEnv = {
+	MARIMOHUB_COMPUTE_BACKEND: 'modal',
 	MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: 'tid',
 	MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: 'tsecret',
 	MARIMOHUB_COMPUTE_IMAGE: 'img',
 };
 
 describe('makeCompute backend selection', () => {
-	it('defaults to the modal backend', () => {
-		expect(makeCompute(modalEnv)).toBeInstanceOf(ModalCompute);
+	it('requires an explicit backend (no default)', () => {
+		expect(() => makeCompute({})).toThrow(/MARIMOHUB_COMPUTE_BACKEND/);
 	});
 
-	it('selects modal explicitly', () => {
-		expect(makeCompute({ ...modalEnv, MARIMOHUB_COMPUTE_BACKEND: 'modal' })).toBeInstanceOf(
-			ModalCompute,
-		);
+	it('selects modal', () => {
+		expect(makeCompute(modalEnv)).toBeInstanceOf(ModalCompute);
 	});
 
 	it('selects docker', () => {
@@ -64,8 +68,10 @@ describe('makeCompute fail-fast', () => {
 		);
 	});
 
-	it('requires the modal token id on the default path', () => {
-		expect(() => makeCompute({})).toThrow(/MARIMOHUB_COMPUTE_MODAL_TOKEN_ID/);
+	it('requires the modal token id', () => {
+		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'modal' })).toThrow(
+			/MARIMOHUB_COMPUTE_MODAL_TOKEN_ID/,
+		);
 	});
 
 	it('requires the e2b api key before constructing the adapter', () => {
@@ -79,15 +85,41 @@ describe('makeCompute fail-fast', () => {
 			/MARIMOHUB_COMPUTE_COREWEAVE_API_KEY/,
 		);
 	});
+
+	it('rejects an unknown coreweave object-storage permission', () => {
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+				MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS: 'org-data',
+				MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION: 'write-only',
+			}),
+		).toThrow(/OBJECT_STORAGE_PERMISSION/);
+	});
+});
+
+describe('usesSandboxNativeObjectStorage', () => {
+	it('is true only for the coreweave backend with a non-empty bucket list', () => {
+		const buckets = { MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS: 'org-data' };
+		expect(
+			usesSandboxNativeObjectStorage({ MARIMOHUB_COMPUTE_BACKEND: 'coreweave', ...buckets }),
+		).toBe(true);
+		expect(usesSandboxNativeObjectStorage({ MARIMOHUB_COMPUTE_BACKEND: 'coreweave' })).toBe(false);
+		expect(usesSandboxNativeObjectStorage({ MARIMOHUB_COMPUTE_BACKEND: 'modal', ...buckets })).toBe(
+			false,
+		);
+		expect(usesSandboxNativeObjectStorage(buckets)).toBe(false);
+	});
 });
 
 describe('sandbox image list', () => {
 	it('resolveSandboxImages parses MARIMOHUB_COMPUTE_IMAGE as a comma-separated list', () => {
-		expect(resolveSandboxImages({ MARIMOHUB_COMPUTE_IMAGE: 'img-a, img-b,img-c' })).toEqual([
-			'img-a',
-			'img-b',
-			'img-c',
-		]);
+		expect(
+			resolveSandboxImages({
+				MARIMOHUB_COMPUTE_BACKEND: 'modal',
+				MARIMOHUB_COMPUTE_IMAGE: 'img-a, img-b,img-c',
+			}),
+		).toEqual(['img-a', 'img-b', 'img-c']);
 		expect(resolveSandboxImages({})).toEqual([]);
 	});
 

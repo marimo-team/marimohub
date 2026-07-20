@@ -14,6 +14,20 @@ Only the prebuilt output is committed:
   are public-npm, pure-JS, and install normally).
 - `LICENSE-BSD-3-Clause.txt` — upstream license (BSD-3-Clause).
 
+## Local patches
+
+Re-apply after any vendor refresh (and retire once upstream exposes the option):
+
+- **`objectStorageAccess` on `SandboxRunOptions`** — upstream's generated proto
+  already carries `StartSandboxRequest.object_storage_access` (Gateway mints a
+  per-sandbox OIDC token; Runner injects a credential-vending sidecar with
+  temporary S3 creds), but the public run options don't expose it. Patched:
+  - `dist/public/sandbox.d.ts` — `SandboxObjectStorageAccess` type +
+    `objectStorageAccess?` on `SandboxRunOptions`.
+  - `dist/index.d.ts`, `dist/types.d.ts` — re-export `SandboxObjectStorageAccess`.
+  - `dist/chunk-*.js` (`toProtoStartMetadata`) — map the option to the proto field
+    (`permission`: `'read'` → 1, `'read-write'` → 2).
+
 ## Source
 
 - Repo: `github.com/coreweave/cwsandbox-client-js`

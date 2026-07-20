@@ -111,7 +111,7 @@ function checkIsolation(env: Env, deps: ApiDeps): CheckOutcome {
 
 function checkSandboxConfig(env: Env, deps: ApiDeps): CheckOutcome {
 	const mode = deps.sandbox.exposure?.mode ?? 'subdomain';
-	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'modal';
+	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset';
 	const issues: string[] = [];
 	if (
 		mode === 'subdomain' &&
@@ -154,7 +154,7 @@ async function checkWif(deps: ApiDeps): Promise<CheckOutcome> {
 }
 
 async function checkCompute(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
-	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'modal';
+	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset';
 	// Optional, duck-typed: adapters may expose a cheap reachability probe. We never
 	// invent a heavy vendor call here — if none is exposed, credentials are validated
 	// lazily on the first session.

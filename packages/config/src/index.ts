@@ -293,7 +293,8 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 			node: process.version,
 			backends: {
 				storage: env.MARIMOHUB_STORAGE_BACKEND ?? 's3',
-				compute: env.MARIMOHUB_COMPUTE_BACKEND ?? 'modal',
+				// Always set: makeCompute above threw if it was missing.
+				compute: env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset',
 				auth: env.MARIMOHUB_AUTH_BACKEND ?? 'unset',
 			},
 		},

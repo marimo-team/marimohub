@@ -270,6 +270,35 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: '28800',
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS',
+						name: 'CoreWeave object-storage buckets',
+						description:
+							'Comma-separated CAIOS bucket names every sandbox gets automatic, auto-refreshing credentials for (vended in-sandbox by a CoreWeave sidecar). Requires the org wif-config on the Sandbox Gateway; creates fail with NOT_FOUND without it. Setting this disables hub-minted WIF. See docs/workload-identity-federation.md, "CoreWeave Object Storage (Automatic)".',
+						example: 'my-org-data,my-org-models',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION',
+						name: 'CoreWeave object-storage permission',
+						description:
+							'Access level for the buckets above: `read` or `read-write`. Capped by the org WIF config `max_permission`.',
+						default: 'read-write',
+						example: 'read',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_ENDPOINT',
+						name: 'CoreWeave object-storage endpoint',
+						description:
+							'S3 endpoint injected into sandboxes as `AWS_ENDPOINT_URL_S3` (only when buckets are set) so plain SDK clients target CAIOS without per-call configuration.',
+						example: 'https://cwobject.com',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION',
+						name: 'CoreWeave object-storage region',
+						description:
+							'Region injected into sandboxes as `AWS_REGION` (only when buckets are set).',
+						example: 'us-east-04a',
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT',
 						name: 'CoreWeave filesystem snapshots',
 						description:

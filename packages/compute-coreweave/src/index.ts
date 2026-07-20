@@ -53,6 +53,7 @@ import {
 	iterableToStream,
 	parseFindFilesOutput,
 	pollUntilReady,
+	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
@@ -124,6 +125,24 @@ export interface CoreWeaveConfig {
 	 * exposing the snapshot API (see `vendor/cwsandbox/UPSTREAM.md`).
 	 */
 	filesystemSnapshot?: boolean;
+	/**
+	 * CAIOS buckets every sandbox gets automatic credentials for: the Gateway
+	 * mints a per-sandbox OIDC token and the runner injects a credential-vending
+	 * sidecar with auto-refreshing S3 creds. Requires the org's wif-config on the
+	 * Sandbox Gateway (creates fail with NOT_FOUND without it). The config layer
+	 * disables hub-minted WIF when this is set — static `AWS_*` env would shadow
+	 * the sidecar in the AWS credential chain.
+	 */
+	objectStorageBuckets?: readonly string[];
+	/** Access level for `objectStorageBuckets`. Default `read-write`. */
+	objectStoragePermission?: 'read' | 'read-write';
+	/**
+	 * When `objectStorageBuckets` is set: S3 endpoint/region injected as real
+	 * container env at create (`AWS_ENDPOINT_URL_S3`/`AWS_REGION`) so plain SDK
+	 * clients target CAIOS. Omit if the vending sidecar already provides them.
+	 */
+	objectStorageEndpoint?: string;
+	objectStorageRegion?: string;
 }
 
 /**
@@ -245,7 +264,28 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			...(this.config.maxLifetimeSeconds
 				? { maxLifetimeSeconds: this.config.maxLifetimeSeconds }
 				: {}),
+			...this.objectStorageOptions(),
 			waitUntilRunning: true,
+		};
+	}
+
+	/** Sandbox-native CAIOS access + the endpoint env plain SDK clients need. */
+	private objectStorageOptions(): Pick<
+		SandboxRunOptions,
+		'objectStorageAccess' | 'environmentVariables'
+	> {
+		const buckets = this.config.objectStorageBuckets;
+		if (!buckets?.length) return {};
+		const env = removeUndefined({
+			AWS_ENDPOINT_URL_S3: this.config.objectStorageEndpoint,
+			AWS_REGION: this.config.objectStorageRegion,
+		});
+		return {
+			objectStorageAccess: {
+				buckets,
+				permission: this.config.objectStoragePermission ?? 'read-write',
+			},
+			...(Object.keys(env).length > 0 ? { environmentVariables: env } : {}),
 		};
 	}
 
