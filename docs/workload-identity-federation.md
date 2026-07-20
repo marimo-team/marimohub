@@ -121,7 +121,47 @@ Deployment — never to Sandbox-runner pods.
    issuer; discovery + JWKS live at
    `https://oidc.cwsandbox.com/.well-known/openid-configuration`). Note the
    resulting WIF config id.
-2. **Register the config with the Sandbox Gateway** (idempotent upsert; scoped
+2. **Create an object-storage access policy for the gateway issuer** —
+   [Object Storage → Access Policies](https://console.coreweave.com/object-storage/access-policies),
+   or `POST https://api.coreweave.com/v1/cwobject/access-policy` with the
+   policy wrapped as `{"policy": …}`. CoreWeave authorizes each exchange
+   against the principal it derives from the token, `role/<issuer>:<sub>`;
+   the `sub` is per-sandbox, so both statements use the prefix form
+   `role/https://oidc.cwsandbox.com*` (the same matching rules as Manual WIF
+   apply: a bare `role/<issuer>` or slash form does **not** match).
+
+   <details>
+   <summary>Example policy — mint + one bucket grant</summary>
+
+   ```json
+   {
+   	"name": "sandbox-native-wif",
+   	"version": "v1alpha1",
+   	"statements": [
+   		{
+   			"name": "authn",
+   			"effect": "Allow",
+   			"actions": ["cwobject:CreateAccessKeyOIDC"],
+   			"resources": ["*"],
+   			"principals": ["role/https://oidc.cwsandbox.com*"]
+   		},
+   		{
+   			"name": "bucket-access",
+   			"effect": "Allow",
+   			"actions": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+   			"resources": ["my-org-data", "my-org-data/*"],
+   			"principals": ["role/https://oidc.cwsandbox.com*"]
+   		}
+   	]
+   }
+   ```
+
+   </details>
+
+   Without this policy the token validates but the exchange is refused, and
+   SDK calls inside the sandbox fail with `403 permission denied` from the
+   `container-role` credential provider.
+3. **Register the config with the Sandbox Gateway** (idempotent upsert; scoped
    to your org by the API key):
 
    ```sh
