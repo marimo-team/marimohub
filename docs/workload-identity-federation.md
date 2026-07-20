@@ -161,6 +161,7 @@ Deployment — never to Sandbox-runner pods.
    Without this policy the token validates but the exchange is refused, and
    SDK calls inside the sandbox fail with `403 permission denied` from the
    `container-role` credential provider.
+
 3. **Register the config with the Sandbox Gateway** (idempotent upsert; scoped
    to your org by the API key):
 
