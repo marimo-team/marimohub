@@ -146,3 +146,51 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx changelogithub@14.0.0
+
+  notify:
+    name: Notify Slack
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Report the overall outcome once every release job has finished.
+    needs: [image, chart, release-notes]
+    if: always()
+    steps:
+      - name: Notify Slack - Release Success
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "✅ Release completed successfully for marimohub ${{ github.ref_name }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *Release successful*\n\n*Repository:* marimohub\n*Version:* ${{ github.ref_name }}\n*Image:* `${{ env.IMAGE }}:${{ github.ref_name }}`\n*Release:* <https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}|View release>"
+                  }
+                }
+              ]
+            }
+
+      - name: Notify Slack - Release Failed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "❌ Release failed for marimohub ${{ github.ref_name }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *Release failed*\n\n*Repository:* marimohub\n*Version:* ${{ github.ref_name }}\n*Commit:* <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>\n*Triggered by:* ${{ github.actor }}\n*Workflow:* <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+                  }
+                }
+              ]
+            }
