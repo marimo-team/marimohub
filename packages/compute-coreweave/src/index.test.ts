@@ -258,6 +258,86 @@ describe('CoreWeaveCompute', () => {
 			await makeCompute(world).create(SANDBOX_ID, { image: 'override-image' }).exec('true');
 			expect(world.created[0].containerImage).toBe('override-image');
 		});
+
+		it('passes objectStorageAccess and endpoint env when buckets are configured', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				objectStorageBuckets: ['org-data', 'org-models'],
+				objectStorageEndpoint: 'https://cwobject.com',
+				objectStorageRegion: 'us-east-04a',
+			})
+				.create(SANDBOX_ID)
+				.exec('true');
+			const opts = world.created[0];
+			expect(opts.objectStorageAccess).toEqual({
+				buckets: ['org-data', 'org-models'],
+				permission: 'read-write',
+			});
+			expect(opts.environmentVariables).toEqual({
+				AWS_ENDPOINT_URL_S3: 'https://cwobject.com',
+				AWS_REGION: 'us-east-04a',
+			});
+		});
+
+		it('honors a read-only objectStoragePermission and omits env when unset', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				objectStorageBuckets: ['org-data'],
+				objectStoragePermission: 'read',
+			})
+				.create(SANDBOX_ID)
+				.exec('true');
+			const opts = world.created[0];
+			expect(opts.objectStorageAccess).toEqual({ buckets: ['org-data'], permission: 'read' });
+			expect(opts.environmentVariables).toBeUndefined();
+		});
+
+		it('omits objectStorageAccess when no buckets are configured', async () => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID).exec('true');
+			expect(world.created[0].objectStorageAccess).toBeUndefined();
+		});
+
+		it('bootstraps the AWS config for virtual-hosted addressing on fresh create', async () => {
+			const world = makeWorld();
+			await makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] })
+				.create(SANDBOX_ID)
+				.exec('true');
+			const calls = world.registry.get('cw-1')!.fake.runCalls;
+			expect(calls[0][2]).toContain('addressing_style = virtual');
+			expect(calls[0][2]).toContain('AWS_ENDPOINT_URL_S3');
+			expect(calls).toHaveLength(2); // bootstrap, then the exec
+		});
+
+		it('skips the AWS config bootstrap without buckets and on reconnect', async () => {
+			const world = makeWorld();
+			const compute = makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] });
+			await compute.create(SANDBOX_ID).exec('true');
+			await compute.create(SANDBOX_ID).exec('true'); // reconnects to cw-1
+			const bootstraps = world.registry
+				.get('cw-1')!
+				.fake.runCalls.filter((c) => c[2].includes('addressing_style'));
+			expect(bootstraps).toHaveLength(1);
+
+			const bare = makeWorld();
+			await makeCompute(bare).create(SANDBOX_ID).exec('true');
+			expect(bare.registry.get('cw-1')!.fake.runCalls).toHaveLength(1);
+		});
+
+		it('survives a failing AWS config bootstrap', async () => {
+			const world = makeWorld({
+				runImpl: async (command) => {
+					if (command[2].includes('addressing_style')) throw new Error('exec transport lost');
+					return procResult();
+				},
+			});
+			const result = await makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] })
+				.create(SANDBOX_ID)
+				.exec('true');
+			expect(result.success).toBe(true);
+		});
 	});
 
 	describe('re-resolved instance', () => {

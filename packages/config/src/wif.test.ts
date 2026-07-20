@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { WorkloadIdentityIssuer } from '@marimo-hub/core';
 import { AwsStsWifBroker } from '@marimo-hub/credentials-aws';
 import { CoreWeaveWifBroker } from '@marimo-hub/credentials-coreweave';
@@ -28,6 +28,32 @@ describe('makeWif enablement', () => {
 		expect(() => makeWif({ MARIMOHUB_WIF_BROKER: 'coreweave' })).toThrow(
 			/MARIMOHUB_WIF_SIGNING_KEY/,
 		);
+	});
+
+	it('disables hub WIF (with a warning) when sandbox-native CAIOS auth is on', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			const result = makeWif({
+				...fullEnv,
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS: 'org-data',
+			});
+			expect(result).toEqual({});
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining('wif_disabled_sandbox_native_storage'),
+			);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('keeps hub WIF when the bucket list is set but the backend is not coreweave', () => {
+		const { wif } = makeWif({
+			...fullEnv,
+			MARIMOHUB_COMPUTE_BACKEND: 'modal',
+			MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS: 'org-data',
+		});
+		expect(wif).toBeDefined();
 	});
 });
 

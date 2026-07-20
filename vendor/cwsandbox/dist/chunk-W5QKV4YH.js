@@ -4843,6 +4843,12 @@ function toProtoStartMetadata(request) {
     environmentVariables: { ...request.environmentVariables },
     maxLifetimeSeconds: request.maxLifetimeSeconds ?? 0,
     maxTimeoutSeconds: timeoutMsToSeconds(request.timeoutMs),
+    ...request.objectStorageAccess === void 0 ? {} : {
+      objectStorageAccess: {
+        buckets: [...request.objectStorageAccess.buckets],
+        permission: request.objectStorageAccess.permission === "read" ? 1 : 2
+      }
+    },
     podAnnotations: { ...request.annotations },
     tags: [...request.tags ?? []]
   };

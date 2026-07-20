@@ -80,8 +80,8 @@ export function resolveLifetimeBackstop(
  * backends with no image concept (local/none/noop).
  */
 export function resolveSandboxImages(env: Env): string[] {
-	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'modal';
-	switch (backend) {
+	switch (env.MARIMOHUB_COMPUTE_BACKEND) {
+		case undefined:
 		case 'local':
 		case 'none':
 		case 'noop':
@@ -97,8 +97,33 @@ export function resolveSandboxImages(env: Env): string[] {
 	}
 }
 
+/**
+ * True when the coreweave backend vends per-sandbox CAIOS creds itself
+ * (sandbox-native WIF via `object_storage_access`). `makeWif` consults this:
+ * hub-minted static `AWS_*` env would shadow the sidecar's auto-refreshing
+ * creds in the AWS credential chain, so the two are mutually exclusive.
+ */
+export function usesSandboxNativeObjectStorage(env: Env): boolean {
+	return (
+		env.MARIMOHUB_COMPUTE_BACKEND === 'coreweave' &&
+		parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS) !== undefined
+	);
+}
+
+function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefined {
+	const raw = env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION;
+	if (raw === undefined || raw === 'read' || raw === 'read-write') return raw;
+	throw new ConfigError(
+		`Invalid MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION: ${raw} (expected read or read-write)`,
+		{ variable: 'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION' },
+	);
+}
+
 export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
-	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'modal';
+	const backend = requiredVar(env, 'MARIMOHUB_COMPUTE_BACKEND', {
+		remediation: 'Set it to one of: modal, coreweave, kubernetes, docker, e2b, local, none.',
+		docs: 'docs/configuration.md',
+	});
 	// Each provider is constructed with the DEFAULT image (first of the list); a
 	// notebook's non-default choice rides in per-create via CreateSandboxOptions.
 	const defaultImage = parseList(env.MARIMOHUB_COMPUTE_IMAGE)?.[0];
@@ -149,6 +174,10 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				// Off by default; do NOT enable alongside MARIMOHUB_PERSIST_WORKSPACE=workspace,
 				// which would double-persist the same state.
 				filesystemSnapshot: parseBool(env, 'MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT'),
+				objectStorageBuckets: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS),
+				objectStoragePermission: parseObjectStoragePermission(env),
+				objectStorageEndpoint: env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_ENDPOINT,
+				objectStorageRegion: env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION,
 			});
 		case 'docker':
 			// Each kernel runs in a container on a Docker daemon (local socket or a

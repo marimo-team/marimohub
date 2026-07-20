@@ -53,6 +53,7 @@ import {
 	iterableToStream,
 	parseFindFilesOutput,
 	pollUntilReady,
+	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
@@ -124,6 +125,27 @@ export interface CoreWeaveConfig {
 	 * exposing the snapshot API (see `vendor/cwsandbox/UPSTREAM.md`).
 	 */
 	filesystemSnapshot?: boolean;
+	/**
+	 * CAIOS buckets every sandbox gets automatic credentials for: the Gateway
+	 * mints a per-sandbox OIDC token and the runner injects a credential-vending
+	 * sidecar with auto-refreshing S3 creds. Requires the org's wif-config on the
+	 * Sandbox Gateway (creates fail with NOT_FOUND without it). The config layer
+	 * disables hub-minted WIF when this is set — static `AWS_*` env would shadow
+	 * the sidecar in the AWS credential chain.
+	 */
+	objectStorageBuckets?: readonly string[];
+	/** Access level for `objectStorageBuckets`. Default `read-write`. */
+	objectStoragePermission?: 'read' | 'read-write';
+	/**
+	 * When `objectStorageBuckets` is set: S3 endpoint/region injected as real
+	 * container env at create (`AWS_ENDPOINT_URL_S3`/`AWS_REGION`) so plain SDK
+	 * clients target CAIOS. Omit if the vending sidecar already provides them.
+	 * TODO: the CoreWeave runner injects `AWS_ENDPOINT_URL_S3=http://cwlota.com`
+	 * itself and clobbers this value (observed 2026-07; `AWS_REGION` survives) —
+	 * decide whether to drop this option or fight for precedence.
+	 */
+	objectStorageEndpoint?: string;
+	objectStorageRegion?: string;
 }
 
 /**
@@ -200,6 +222,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		this.sandbox = existing
 			? await this.client.fromId(existing.sandboxId)
 			: await this.client.create(this.createOptions());
+		if (!existing && this.config.objectStorageBuckets?.length) {
+			await this.bootstrapAwsConfig(this.sandbox);
+		}
 		const t2 = Date.now();
 		this.lastEnsureTimings = { create: t2 - t1, find: t1 - t0 };
 		console.warn(
@@ -245,8 +270,56 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			...(this.config.maxLifetimeSeconds
 				? { maxLifetimeSeconds: this.config.maxLifetimeSeconds }
 				: {}),
+			...this.objectStorageOptions(),
 			waitUntilRunning: true,
 		};
+	}
+
+	/** Sandbox-native CAIOS access + the endpoint env plain SDK clients need. */
+	private objectStorageOptions(): Pick<
+		SandboxRunOptions,
+		'objectStorageAccess' | 'environmentVariables'
+	> {
+		const buckets = this.config.objectStorageBuckets;
+		if (!buckets?.length) return {};
+		const env = removeUndefined({
+			AWS_ENDPOINT_URL_S3: this.config.objectStorageEndpoint,
+			AWS_REGION: this.config.objectStorageRegion,
+		});
+		return {
+			objectStorageAccess: {
+				buckets,
+				permission: this.config.objectStoragePermission ?? 'read-write',
+			},
+			...(Object.keys(env).length > 0 ? { environmentVariables: env } : {}),
+		};
+	}
+
+	/**
+	 * CAIOS rejects path-style requests, and boto3 defaults to path style for a
+	 * custom endpoint with no env var to change it — only the AWS config file
+	 * works. Written once per fresh create (any POSIX-shell image, per the
+	 * sandbox contract); skipped when the image already ships an AWS config.
+	 * Best-effort: a failure only costs plain-client ergonomics, not the kernel.
+	 */
+	private async bootstrapAwsConfig(sandbox: CoreWeaveSandbox): Promise<void> {
+		const cmd =
+			'if [ -n "${AWS_ENDPOINT_URL_S3:-}" ] && [ ! -e "$HOME/.aws/config" ]; then' +
+			' mkdir -p "$HOME/.aws" &&' +
+			' printf \'[default]\\ns3 =\\n    addressing_style = virtual\\n\' > "$HOME/.aws/config";' +
+			' fi';
+		try {
+			await sandbox.commands.run(['sh', '-lc', cmd]);
+		} catch (err) {
+			console.warn(
+				JSON.stringify({
+					ts: new Date().toISOString(),
+					event: 'aws_config_bootstrap_failed',
+					sandbox_id: this.id,
+					error: String(err),
+				}),
+			);
+		}
 	}
 
 	/** Prefix accumulated env vars onto a shell command (the SDK has no per-command env). */

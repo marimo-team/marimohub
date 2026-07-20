@@ -21,11 +21,20 @@ import { checkSandboxHostIsolation } from './hostIsolation';
 
 const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+async function fetchWithTimeout(
+	url: string,
+	timeoutMs: number,
+	init?: RequestInit,
+): Promise<Response> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		return await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal });
+		return await fetch(url, {
+			method: 'GET',
+			redirect: 'follow',
+			...init,
+			signal: controller.signal,
+		});
 	} finally {
 		clearTimeout(timer);
 	}
@@ -111,7 +120,7 @@ function checkIsolation(env: Env, deps: ApiDeps): CheckOutcome {
 
 function checkSandboxConfig(env: Env, deps: ApiDeps): CheckOutcome {
 	const mode = deps.sandbox.exposure?.mode ?? 'subdomain';
-	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'modal';
+	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset';
 	const issues: string[] = [];
 	if (
 		mode === 'subdomain' &&
@@ -154,7 +163,7 @@ async function checkWif(deps: ApiDeps): Promise<CheckOutcome> {
 }
 
 async function checkCompute(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
-	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'modal';
+	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset';
 	// Optional, duck-typed: adapters may expose a cheap reachability probe. We never
 	// invent a heavy vendor call here — if none is exposed, credentials are validated
 	// lazily on the first session.
@@ -171,6 +180,68 @@ async function checkCompute(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
 			message: `${backend} compute unreachable: ${errMsg(err)}`,
 			remediation: 'Check the compute backend credentials and endpoint.',
 		};
+	}
+}
+
+/**
+ * Sandbox-native object storage needs a WIF config registered with the Sandbox
+ * Gateway; without one, every create that requests object storage fails with
+ * CWSANDBOX_RESOURCE_NOT_FOUND. Never above `warn`: the hub serves fine
+ * without it, and the deep-health endpoint must not 503 over an auxiliary
+ * feature.
+ */
+async function checkObjectStorageWif(env: Env): Promise<CheckOutcome> {
+	const buckets = env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS;
+	if (env.MARIMOHUB_COMPUTE_BACKEND !== 'coreweave' || !buckets) {
+		return { status: 'skipped', message: 'sandbox-native object storage not configured' };
+	}
+	const base = (env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL ?? 'https://api.cwsandbox.com').replace(
+		/\/+$/,
+		'',
+	);
+	const url = `${base}/v1beta2/object-storage/wif-config`;
+	try {
+		const res = await fetchWithTimeout(url, 2500, {
+			headers: { Authorization: `Bearer ${env.MARIMOHUB_COMPUTE_COREWEAVE_API_KEY ?? ''}` },
+		});
+		if (res.status === 404) {
+			return {
+				status: 'warn',
+				message:
+					'no WIF config registered with the Sandbox Gateway — sandbox creates that request object storage will fail (CWSANDBOX_RESOURCE_NOT_FOUND)',
+				remediation:
+					'PUT /v1beta2/object-storage/wif-config; see docs/workload-identity-federation.md (Automatic).',
+			};
+		}
+		if (!res.ok) {
+			return { status: 'warn', message: `gateway WIF config probe returned ${res.status}` };
+		}
+		const body = (await res.json()) as { enabled?: boolean; allowedBuckets?: string[] };
+		if (body.enabled === false) {
+			return {
+				status: 'warn',
+				message: 'the gateway WIF config exists but is disabled',
+				remediation: 'Re-enable it via PUT /v1beta2/object-storage/wif-config.',
+			};
+		}
+		const allowed = body.allowedBuckets ?? [];
+		const denied =
+			allowed.length > 0
+				? buckets
+						.split(',')
+						.map((b) => b.trim())
+						.filter((b) => b && !allowed.includes(b))
+				: [];
+		if (denied.length > 0) {
+			return {
+				status: 'warn',
+				message: `bucket(s) missing from the gateway allowlist: ${denied.join(', ')}`,
+				remediation: 'Add them to allowedBuckets (an empty allowlist allows all buckets).',
+			};
+		}
+		return { status: 'ok', message: 'gateway WIF config registered and enabled' };
+	} catch (err) {
+		return { status: 'warn', message: `gateway WIF config probe failed: ${errMsg(err)}` };
 	}
 }
 
@@ -212,6 +283,7 @@ export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] 
 		{ name: 'sandbox.isolation', run: async () => checkIsolation(env, deps) },
 		{ name: 'sandbox.config', run: async () => checkSandboxConfig(env, deps) },
 		{ name: 'compute', run: () => checkCompute(env, deps) },
+		{ name: 'compute.object-storage-wif', run: () => checkObjectStorageWif(env) },
 	];
 	if (deps.wif) checks.push({ name: 'wif', run: () => checkWif(deps) });
 	if (deps.ai) checks.push({ name: 'ai.upstream', run: () => checkAi(deps) });
