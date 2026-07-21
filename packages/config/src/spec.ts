@@ -246,8 +246,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_PROFILE',
 						name: 'CoreWeave profile names',
-						description: 'Comma-separated CoreWeave profile names selecting exposure levels.',
-						example: 'public,internet',
+						description:
+							"Comma-separated CoreWeave sandbox profile name(s) applied at create (the `profile_name` of a runner binding). Omit to use the runner's default profile.",
+						example: 'marimohub',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE',
