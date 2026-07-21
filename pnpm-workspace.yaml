@@ -38,6 +38,7 @@ catalog:
   ulidx: ^2.4.1
   vite: npm:@voidzero-dev/vite-plus-core@0.1.24
   vite-plus: 0.1.24
+  vitepress-plugin-llms: ^1.13.2
   vitest: npm:@voidzero-dev/vite-plus-test@0.1.24
   yaml: ^2.8.0
   zod: ^4.3.6
