@@ -33,6 +33,10 @@ describe('buildWandbMetadata', () => {
 		expect(Object.keys(metadata).some((k) => k.toLowerCase() === 'authorization')).toBe(false);
 	});
 
+	it('rejects a missing or whitespace-only API key up front', () => {
+		expect(() => buildWandbMetadata({ apiKey: '  ' })).toThrow(/missing or blank/);
+	});
+
 	it('trims values and drops whitespace-only entity/project', () => {
 		const metadata = buildWandbMetadata({
 			apiKey: 'wb-key\n',
@@ -49,6 +53,11 @@ describe('serviceAddressResolver', () => {
 	it('builds a plain-HTTP URL from the sandbox serviceAddress', async () => {
 		const resolve = serviceAddressResolver(async () => ({ serviceAddress: '166.19.118.62' }));
 		expect(await resolve('cw-1', 2718)).toBe('http://166.19.118.62:2718');
+	});
+
+	it('brackets IPv6 addresses', async () => {
+		const resolve = serviceAddressResolver(async () => ({ serviceAddress: '2001:db8::1' }));
+		expect(await resolve('cw-1', 2718)).toBe('http://[2001:db8::1]:2718');
 	});
 
 	it('throws when no serviceAddress is assigned', async () => {

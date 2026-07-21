@@ -10,6 +10,7 @@
 MARIMOHUB_COMPUTE_BACKEND=wandb
 MARIMOHUB_COMPUTE_WANDB_API_KEY=…               # secret
 MARIMOHUB_COMPUTE_WANDB_ENTITY=my-team          # optional
+MARIMOHUB_COMPUTE_WANDB_PROJECT=my-project      # optional
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 ```
 

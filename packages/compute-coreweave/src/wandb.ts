@@ -60,10 +60,14 @@ export function buildWandbMetadata(
 	// Trim like the upstream wrapper: a stray trailing newline (a common
 	// secret-file artifact) is an illegal gRPC metadata value that fails
 	// cryptically at the first call.
+	const apiKey = config.apiKey.trim();
+	if (!apiKey) {
+		throw new Error('W&B API key is missing or blank');
+	}
 	const entity = config.entity?.trim();
 	const project = config.project?.trim();
 	return {
-		'x-wandb-api-key': config.apiKey.trim(),
+		'x-wandb-api-key': apiKey,
 		...(entity ? { 'x-entity-id': entity } : {}),
 		...(project ? { 'x-project-name': project } : {}),
 		'x-cwsandbox-client-version': VENDORED_SDK_VERSION,
@@ -89,7 +93,9 @@ export function serviceAddressResolver(
 				`W&B sandbox ${sandboxId} has no serviceAddress (public ingress not assigned yet?)`,
 			);
 		}
-		return `http://${serviceAddress}:${port}`;
+		// Bracket IPv6 literals; the gateway returns bare addresses.
+		const host = serviceAddress.includes(':') ? `[${serviceAddress}]` : serviceAddress;
+		return `http://${host}:${port}`;
 	};
 }
 
