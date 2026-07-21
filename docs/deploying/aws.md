@@ -38,7 +38,7 @@ terminate TLS with ACM.
 
 ## Validate
 
-1. Check the ALB target health and `/healthz`.
+1. Check the ALB target health and `/api/health`.
 2. Confirm the task or pod uses the intended IAM role.
 3. Create and save a notebook.
 4. Restart the app task or pod.

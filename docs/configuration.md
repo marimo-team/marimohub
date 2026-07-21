@@ -92,7 +92,7 @@ CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK.
 | `MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL` | Override the CoreWeave Sandbox API base URL. | — | `https://api.cwsandbox.com (SDK default)` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG` | Tag applied to owned sandboxes for discovery and cleanup. | — | `marimohub` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | Template for the public kernel URL. Substitutes `{sandboxId}`, `{port}`, `{host}`, `{token}`. | — | `https://{sandboxId}-{port}.{host}` | — |
-| `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE` | Comma-separated CoreWeave profile names selecting exposure levels. | — | — | `public,internet` |
+| `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE` | Comma-separated CoreWeave sandbox profile name(s) applied at create (the `profile_name` of a runner binding). Omit to use the runner's default profile. | — | — | `marimohub` |
 | `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE` | Network ingress mode (backend/profile specific). | — | `public` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE` | Network egress mode (backend/profile specific). | — | `internet` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS` | Hard provider-side sandbox lifetime cap (SIGKILL, no save) — an orphan backstop behind the graceful session lifetime (`MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`). Must be >= the session lifetime; leave unset to default to 2x it. | — | `2x MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS` | `28800` |
