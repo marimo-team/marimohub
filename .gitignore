@@ -36,3 +36,6 @@ deployment/
 # VitePress (dist is covered by the `dist` rule above)
 **/.vitepress/cache/
 **/.vitepress/.temp/
+
+# Vercel CLI link metadata (docs deploy to the marimohub-docs Vercel project)
+.vercel

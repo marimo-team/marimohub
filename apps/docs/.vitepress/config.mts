@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitepress';
+import llmstxt from 'vitepress-plugin-llms';
 
 const REPO = 'https://github.com/marimo-team/marimohub';
+const SITE = 'https://marimohub.docs.marimo.io';
 
 // Content lives in the repo-root docs/ folder; this package is just the site tooling.
 export default defineConfig({
@@ -10,6 +12,22 @@ export default defineConfig({
 	srcDir: '../../docs',
 	cleanUrls: true,
 	lastUpdated: true,
+	sitemap: { hostname: SITE },
+
+	vite: {
+		plugins: [
+			// Emits llms.txt, llms-full.txt, and a raw-markdown twin next to every page.
+			llmstxt({
+				domain: SITE,
+				// Keep the home page twin (it has real content below the hero), but drop
+				// it from llms.txt where its missing h1 would list it as "Untitled".
+				excludeIndexPage: false,
+				ignoreFilesPerOutput: { llmsTxt: ['index.md'] },
+				// Mirrors srcExclude: setup/** are partials @include-d into the port pages.
+				ignoreFiles: ['README.md', 'setup/**'],
+			}),
+		],
+	},
 
 	head: [
 		['meta', { name: 'theme-color', content: '#14b8a6' }],
