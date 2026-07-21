@@ -65,10 +65,10 @@ and [Managed Authentication](https://docs.coreweave.com/products/cks/auth-access
 A new cluster has no compute until you add Node Pools. Create two, from the
 cluster's **Node Pools** tab (**Create Node Pool**):
 
-| Pool                 | Runs                                        | Sizing                       |
-| -------------------- | ------------------------------------------- | ---------------------------- |
-| `marimohub-prod`     | The hub (API + maintenance deployments)     | CPU instance, autoscale 1–2  |
-| `marimohub-sandboxes`| Notebook kernels (sandbox pods)             | CPU instance, autoscale to your expected concurrent-kernel load |
+| Pool                  | Runs                                    | Sizing                                                          |
+| --------------------- | --------------------------------------- | --------------------------------------------------------------- |
+| `marimohub-prod`      | The hub (API + maintenance deployments) | CPU instance, autoscale 1–2                                     |
+| `marimohub-sandboxes` | Notebook kernels (sandbox pods)         | CPU instance, autoscale to your expected concurrent-kernel load |
 
 Two pools keep bursty, untrusted kernel workloads from competing with (or being
 scheduled next to) the hub itself, and let each pool scale on its own signal.
