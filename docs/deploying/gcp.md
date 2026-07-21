@@ -50,7 +50,7 @@ always-on replica.
 
 ## Validate
 
-1. Check service health and `/healthz`.
+1. Check service health and `/api/health`.
 2. Confirm the service account can read and write objects in the GCS bucket.
 3. Create and save a notebook.
 4. Restart the app service.

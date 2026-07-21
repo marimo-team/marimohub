@@ -16,7 +16,7 @@ background maintenance.
 
 After deploy, validate the same core flow on every platform:
 
-1. Check `/healthz`.
+1. Check `/api/health`.
 2. Sign in through the configured auth backend.
 3. Create a project and notebook.
 4. Start a kernel.

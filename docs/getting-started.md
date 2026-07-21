@@ -62,7 +62,7 @@ Choose the guide closest to your platform:
 - [GCP](./deploying/gcp.md)
 - [Cloudflare](./deploying/cloudflare.md)
 
-After deploy, check `/healthz`, sign in through your auth backend, create a test
+After deploy, check `/api/health`, sign in through your auth backend, create a test
 project, start a kernel, and confirm a saved notebook survives a restart.
 
 For production operation, read [Security](./security.md),

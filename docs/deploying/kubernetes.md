@@ -73,7 +73,7 @@ variable.
 
 ## Validate
 
-1. Check API Deployment readiness and `/healthz`.
+1. Check API Deployment readiness and `/api/health`.
 2. Create a notebook and start a kernel.
 3. Confirm the kernel Pod, Service, and Ingress appear in the kernel namespace.
 4. Confirm `https://<id>.<hostname>` resolves and serves the kernel.
