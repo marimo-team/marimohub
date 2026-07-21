@@ -23,7 +23,6 @@
  * the hostname-template machinery (verified live 2026-07-21).
  */
 import { SandboxClient } from '@coreweave/cwsandbox';
-import type { SandboxId as CwSandboxId } from '@coreweave/cwsandbox';
 import { DEFAULT_BASE_URL, GrpcSandboxTransport } from '@coreweave/cwsandbox/node';
 import { CoreWeaveCompute } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
