@@ -3,6 +3,7 @@ import { Seconds } from '@marimo-hub/core';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { DockerCompute } from '@marimo-hub/compute-docker';
+import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
 import {
 	makeCompute,
 	resolveLifetimeBackstop,
@@ -46,6 +47,16 @@ describe('makeCompute backend selection', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'local' })).toBeInstanceOf(LocalCompute);
 	});
 
+	it('selects wandb (the CoreWeave adapter behind the W&B gateway)', () => {
+		expect(
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'wandb',
+				MARIMOHUB_COMPUTE_WANDB_API_KEY: 'wb-key',
+				MARIMOHUB_COMPUTE_IMAGE: 'img',
+			}),
+		).toBeInstanceOf(CoreWeaveCompute);
+	});
+
 	it.each(['none', 'noop'])('returns a no-op provider for %s', (backend) => {
 		const provider = makeCompute({ MARIMOHUB_COMPUTE_BACKEND: backend });
 		expect(() => provider.create('sb-x' as never)).toThrow(/No compute backend configured/);
@@ -86,6 +97,12 @@ describe('makeCompute fail-fast', () => {
 		);
 	});
 
+	it('requires the wandb api key before constructing the adapter', () => {
+		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'wandb' })).toThrow(
+			/MARIMOHUB_COMPUTE_WANDB_API_KEY/,
+		);
+	});
+
 	it('rejects an unknown coreweave object-storage permission', () => {
 		expect(() =>
 			makeCompute({
@@ -109,6 +126,15 @@ describe('usesSandboxNativeObjectStorage', () => {
 			false,
 		);
 		expect(usesSandboxNativeObjectStorage(buckets)).toBe(false);
+	});
+
+	it('stays false for wandb (CAIOS vending is unconfirmed through the W&B gateway)', () => {
+		expect(
+			usesSandboxNativeObjectStorage({
+				MARIMOHUB_COMPUTE_BACKEND: 'wandb',
+				MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS: 'org-data',
+			}),
+		).toBe(false);
 	});
 });
 
@@ -207,6 +233,19 @@ describe('provider lifetime backstop', () => {
 					MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
 					MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
 					MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS: '3600',
+				},
+				{ sessionMaxLifetimeSeconds: Seconds.of(14400) },
+			),
+		).toThrow(/must be >= the session TTL/);
+	});
+
+	it('fails fast through makeCompute for a wandb cap below the session TTL', () => {
+		expect(() =>
+			makeCompute(
+				{
+					MARIMOHUB_COMPUTE_BACKEND: 'wandb',
+					MARIMOHUB_COMPUTE_WANDB_API_KEY: 'wb-key',
+					MARIMOHUB_COMPUTE_WANDB_MAX_LIFETIME_SECONDS: '3600',
 				},
 				{ sessionMaxLifetimeSeconds: Seconds.of(14400) },
 			),

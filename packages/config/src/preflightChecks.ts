@@ -124,7 +124,7 @@ function checkSandboxConfig(env: Env, deps: ApiDeps): CheckOutcome {
 	const issues: string[] = [];
 	if (
 		mode === 'subdomain' &&
-		(backend === 'coreweave' || backend === 'kubernetes') &&
+		['coreweave', 'kubernetes'].includes(backend) &&
 		!deps.sandbox.hostname
 	) {
 		issues.push(

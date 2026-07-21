@@ -310,6 +310,53 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				],
 			},
 			{
+				name: 'W&B Sandboxes',
+				selectorValue: 'wandb',
+				description:
+					'CoreWeave Sandboxes via the W&B (Weights & Biases) gateway — the `coreweave` backend authenticated with a W&B API key. Kernel URLs are resolved automatically: the managed runner assigns each sandbox a public IP served over plain HTTP, so no sandbox hostname is needed. Profile/placement overrides, GPU requests, egress overrides, and CAIOS vending are not available through the gateway; use hub-minted WIF (docs/workload-identity-federation.md) for bucket access.',
+				vars: [
+					{
+						id: 'MARIMOHUB_COMPUTE_WANDB_API_KEY',
+						name: 'W&B API key',
+						description: 'W&B API key (from wandb.ai user settings).',
+						required: true,
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_WANDB_ENTITY',
+						name: 'W&B entity',
+						description: 'W&B entity (team or user) sandboxes are attributed to.',
+						example: 'my-team',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_WANDB_PROJECT',
+						name: 'W&B project',
+						description: 'W&B project sandboxes are attributed to.',
+						example: 'sandbox',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_WANDB_BASE_URL',
+						name: 'W&B sandbox gateway URL',
+						description: 'Override the sandbox gateway URL.',
+						default: 'https://api.cwsandbox.com',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_WANDB_OWNER_TAG',
+						name: 'W&B owner tag',
+						description: 'Tag applied to owned sandboxes for discovery and cleanup.',
+						default: 'marimohub',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_WANDB_MAX_LIFETIME_SECONDS',
+						name: 'W&B max lifetime (seconds)',
+						description:
+							'Hard provider-side sandbox lifetime cap (SIGKILL, no save) — an orphan backstop behind the graceful session lifetime (`MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`). Must be >= the session lifetime; leave unset to default to 2x it.',
+						default: '2x MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',
+						example: '28800',
+					},
+				],
+			},
+			{
 				name: 'Modal',
 				selectorValue: 'modal',
 				description: 'Modal sandboxes.',

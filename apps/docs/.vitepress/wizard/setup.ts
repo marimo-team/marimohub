@@ -31,6 +31,7 @@ const DOC_HREFS: Record<string, string> = {
 	'storage/gcs': '/storage#google-cloud-storage',
 	'storage/memory': '/storage#memory-dev-tests',
 	'compute/coreweave': '/compute#coreweave',
+	'compute/wandb': '/compute#w-b',
 	'compute/modal': '/compute#modal',
 	'compute/e2b': '/compute#e2b',
 	'compute/kubernetes': '/compute#kubernetes',

@@ -3,12 +3,22 @@ import type { SandboxProvider } from '@marimo-hub/core';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
+import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';
 import { DockerCompute } from '@marimo-hub/compute-docker';
 import { E2bCompute } from '@marimo-hub/compute-e2b';
 import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
 import { parseBool, parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
+import { CONFIG_SPEC } from './spec';
+
+/** The selectable compute backends, from the spec (the docs/wizard source of truth). */
+const COMPUTE_BACKENDS = (
+	CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? []
+)
+	.map((b) => b.selectorValue)
+	.filter(Boolean)
+	.join(', ');
 
 /** Parse a `"start-end"` port range (e.g. `2718-2723`); undefined if unset. */
 function parsePortRange(value: string | undefined): { start: number; end: number } | undefined {
@@ -121,7 +131,7 @@ function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefin
 
 export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 	const backend = requiredVar(env, 'MARIMOHUB_COMPUTE_BACKEND', {
-		remediation: 'Set it to one of: modal, coreweave, kubernetes, docker, e2b, local, none.',
+		remediation: `Set it to one of: ${COMPUTE_BACKENDS}.`,
 		docs: 'docs/configuration.md',
 	});
 	// Each provider is constructed with the DEFAULT image (first of the list); a
@@ -178,6 +188,27 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				objectStoragePermission: parseObjectStoragePermission(env),
 				objectStorageEndpoint: env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_ENDPOINT,
 				objectStorageRegion: env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION,
+			});
+		case 'wandb':
+			// CoreWeave Sandboxes via the W&B gateway — the same adapter and endpoint as
+			// `coreweave`, authenticated with a W&B API key (gRPC metadata) instead of a
+			// CoreWeave key. The option surface is deliberately restricted: the gateway
+			// does not support profile/placement overrides, GPU requests, or non-default
+			// egress modes, and CAIOS vending is unconfirmed through it (use hub-minted
+			// WIF for bucket access). Kernel URLs need no hostname config: the managed
+			// runner assigns each sandbox a public IP the adapter resolves at expose time.
+			return createWandbCompute({
+				apiKey: computeVar(env, 'MARIMOHUB_COMPUTE_WANDB_API_KEY', 'wandb'),
+				entity: env.MARIMOHUB_COMPUTE_WANDB_ENTITY,
+				project: env.MARIMOHUB_COMPUTE_WANDB_PROJECT,
+				baseUrl: env.MARIMOHUB_COMPUTE_WANDB_BASE_URL,
+				image: defaultImage,
+				ownerTag: env.MARIMOHUB_COMPUTE_WANDB_OWNER_TAG,
+				maxLifetimeSeconds: resolveLifetimeBackstop(
+					env,
+					'MARIMOHUB_COMPUTE_WANDB_MAX_LIFETIME_SECONDS',
+					opts?.sessionMaxLifetimeSeconds,
+				),
 			});
 		case 'docker':
 			// Each kernel runs in a container on a Docker daemon (local socket or a
@@ -268,7 +299,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 		default:
 			throw new ConfigError(`Unknown MARIMOHUB_COMPUTE_BACKEND: ${backend}`, {
 				variable: 'MARIMOHUB_COMPUTE_BACKEND',
-				remediation: 'Supported backends: modal, coreweave, docker, e2b, local, kubernetes, none.',
+				remediation: `Supported backends: ${COMPUTE_BACKENDS}.`,
 				docs: 'docs/configuration.md#compute',
 			});
 	}

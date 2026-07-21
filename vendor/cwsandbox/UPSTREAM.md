@@ -18,6 +18,15 @@ Only the prebuilt output is committed:
 
 Re-apply after any vendor refresh (and retire once upstream exposes the option):
 
+- **`serviceAddress` on `GetSandboxResult`** — upstream's `SandboxMetadata` type
+  already declares `serviceAddress` (the runner-assigned external address of the
+  sandbox's exposed service; the W&B gateway sets it to a per-sandbox public IP),
+  and the generated proto carries it, but this pinned build's `get` mapper drops
+  it. Patched (needed by `@marimo-hub/compute-coreweave`'s wandb URL resolver):
+  - `dist/public/sandbox.d.ts` — `serviceAddress?` on `GetSandboxResult`.
+  - `dist/chunk-*.js` (`GrpcSandboxTransport.get`) — pass
+    `response.serviceAddress` through when non-empty.
+
 - **`objectStorageAccess` on `SandboxRunOptions`** — upstream's generated proto
   already carries `StartSandboxRequest.object_storage_access` (Gateway mints a
   per-sandbox OIDC token; Runner injects a credential-vending sidecar with

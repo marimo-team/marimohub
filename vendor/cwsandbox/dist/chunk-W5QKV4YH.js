@@ -7314,7 +7314,8 @@ var GrpcSandboxTransport = class {
     );
     return {
       sandboxId: response.sandboxId,
-      status: toSdkSandboxStatus(response.sandboxStatus)
+      status: toSdkSandboxStatus(response.sandboxStatus),
+      ...response.serviceAddress ? { serviceAddress: response.serviceAddress } : {}
     };
   }
   async list(options) {
