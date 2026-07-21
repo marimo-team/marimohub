@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { useRoute } from 'vitepress';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { mdUrlForPath } from '../mdUrl';
 
 const route = useRoute();
 const root = ref<HTMLElement | null>(null);
+const toggle = ref<HTMLElement | null>(null);
+const menu = ref<HTMLElement | null>(null);
 const open = ref(false);
 const copied = ref(false);
 
@@ -29,8 +31,13 @@ async function fetchMarkdown(): Promise<string | null> {
 
 async function copyText(text: string): Promise<void> {
 	if (navigator.clipboard && window.isSecureContext) {
-		await navigator.clipboard.writeText(text);
-		return;
+		try {
+			await navigator.clipboard.writeText(text);
+			return;
+		} catch {
+			// The user gesture can expire during the twin fetch (notably Safari),
+			// rejecting the write — the textarea path below doesn't need one.
+		}
 	}
 	const textarea = document.createElement('textarea');
 	textarea.value = text;
@@ -43,8 +50,11 @@ async function copyText(text: string): Promise<void> {
 }
 
 async function copyMarkdown(): Promise<void> {
-	const markdown = (await fetchMarkdown()) ?? document.querySelector('.vp-doc')?.textContent ?? '';
-	await copyText(markdown);
+	const markdown = await fetchMarkdown();
+	if (markdown == null) {
+		console.warn(`[docs] raw markdown unavailable at ${mdPath.value}; copying rendered text`);
+	}
+	await copyText(markdown ?? document.querySelector('.vp-doc')?.textContent ?? '');
 	copied.value = true;
 	setTimeout(() => {
 		copied.value = false;
@@ -58,12 +68,53 @@ function openIn(base: string): void {
 	open.value = false;
 }
 
+function menuItems(): HTMLButtonElement[] {
+	return Array.from(menu.value?.querySelectorAll('button') ?? []);
+}
+
+async function toggleMenu(): Promise<void> {
+	open.value = !open.value;
+	if (open.value) {
+		await nextTick();
+		menuItems()[0]?.focus();
+	}
+}
+
+function onMenuKeydown(event: KeyboardEvent): void {
+	const items = menuItems();
+	const current = items.indexOf(document.activeElement as HTMLButtonElement);
+	switch (event.key) {
+		case 'ArrowDown':
+			event.preventDefault();
+			items[(current + 1) % items.length]?.focus();
+			break;
+		case 'ArrowUp':
+			event.preventDefault();
+			items[(current - 1 + items.length) % items.length]?.focus();
+			break;
+		case 'Home':
+			event.preventDefault();
+			items[0]?.focus();
+			break;
+		case 'End':
+			event.preventDefault();
+			items[items.length - 1]?.focus();
+			break;
+		case 'Tab':
+			open.value = false;
+			break;
+	}
+}
+
 function onDocumentClick(event: MouseEvent): void {
 	if (root.value && !root.value.contains(event.target as Node)) open.value = false;
 }
 
 function onKeydown(event: KeyboardEvent): void {
-	if (event.key === 'Escape') open.value = false;
+	if (event.key === 'Escape' && open.value) {
+		open.value = false;
+		toggle.value?.focus();
+	}
 }
 
 onMounted(() => {
@@ -80,11 +131,12 @@ onBeforeUnmount(() => {
 <template>
 	<div ref="root" class="page-actions">
 		<button
+			ref="toggle"
 			type="button"
 			class="page-actions-toggle"
 			aria-haspopup="menu"
 			:aria-expanded="open"
-			@click="open = !open"
+			@click="toggleMenu"
 		>
 			<svg
 				viewBox="0 0 24 24"
@@ -109,7 +161,7 @@ onBeforeUnmount(() => {
 			</svg>
 		</button>
 
-		<div v-if="open" class="page-actions-menu" role="menu">
+		<div v-if="open" ref="menu" class="page-actions-menu" role="menu" @keydown="onMenuKeydown">
 			<button type="button" role="menuitem" class="page-actions-item" @click="copyMarkdown">
 				<svg
 					viewBox="0 0 24 24"
@@ -228,8 +280,13 @@ onBeforeUnmount(() => {
 	transition: background-color 0.25s;
 }
 
-.page-actions-item:hover {
+.page-actions-item:hover,
+.page-actions-item:focus-visible {
 	background-color: var(--vp-c-default-soft);
+}
+
+.page-actions-item:focus-visible {
+	outline: 1px solid var(--vp-c-brand-1);
 }
 
 .page-actions-item svg {
