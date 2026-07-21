@@ -115,9 +115,7 @@ export function createWandbCompute(
 	return new CoreWeaveCompute(
 		{
 			...coreweave,
-			resolveExposedUrl: serviceAddressResolver((sandboxId) =>
-				transport.get({ sandboxId }),
-			),
+			resolveExposedUrl: serviceAddressResolver((sandboxId) => transport.get({ sandboxId })),
 		},
 		// Same controlled cast as `CoreWeaveCompute.getClient()`: the SDK client
 		// exposes the CoreWeaveClient surface at runtime. Eager construction is
