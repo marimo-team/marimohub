@@ -85,8 +85,12 @@ const DEFAULT_OWNER_TAG = 'marimohub';
 const ID_TAG_PREFIX = 'mh-sbx-';
 
 export interface CoreWeaveConfig {
-	/** CoreWeave Sandbox API key (`CWSANDBOX_API_KEY`). */
-	apiKey: string;
+	/**
+	 * CoreWeave Sandbox API key (`CWSANDBOX_API_KEY`). Optional only when a
+	 * pre-authenticated client is injected (the W&B gateway path in `wandb.ts`
+	 * authenticates via gRPC metadata instead).
+	 */
+	apiKey?: string;
 	/** API base URL (`CWSANDBOX_BASE_URL`); defaults to the SDK's production endpoint. */
 	baseUrl?: string;
 	/** Container image with marimo + uv + python. Defaults to the SDK's `python:3.11`. */
@@ -111,6 +115,13 @@ export interface CoreWeaveConfig {
 	 * `hostname` the provisioner passes (`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`).
 	 */
 	hostnameTemplate?: string;
+	/**
+	 * Resolve the public kernel URL for a sandbox at expose time, for runners
+	 * that assign per-sandbox addresses instead of a static hostname scheme
+	 * (the W&B gateway vends a per-sandbox public IP). Wins over
+	 * `hostnameTemplate` when set.
+	 */
+	resolveExposedUrl?: (sandboxId: string, port: number) => Promise<string>;
 	/** Optional CPU/memory request (and limit) for each sandbox. */
 	resources?: ResourceOptions;
 	/**
@@ -459,10 +470,13 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {
-		// The SDK has no ingress-URL accessor; construct the public URL from a template
-		// (the kernel port was declared `public` at create). Integration surface — the
-		// exact ingress hostname scheme is CoreWeave backend/profile specific.
 		const sandbox = await this.ensure();
+		if (this.config.resolveExposedUrl) {
+			return { url: await this.config.resolveExposedUrl(sandbox.sandboxId, port) };
+		}
+		// Without a resolver, construct the public URL from a template (the kernel
+		// port was declared `public` at create). Integration surface — the exact
+		// ingress hostname scheme is CoreWeave backend/profile specific.
 		const template = this.config.hostnameTemplate ?? 'https://{sandboxId}-{port}.{host}';
 		const url = template
 			.replaceAll('{sandboxId}', sandbox.sandboxId)
@@ -508,6 +522,11 @@ export class CoreWeaveCompute implements SandboxProvider {
 
 	private getClient(): CoreWeaveClient {
 		if (!this.client) {
+			if (!this.config.apiKey) {
+				throw new Error(
+					'CoreWeaveCompute requires either an apiKey in its config or an injected client',
+				);
+			}
 			// The real SDK client exposes the CoreWeaveClient surface at runtime; one
 			// controlled cast at the construction boundary avoids overload-variance
 			// friction between the SDK's broad signatures and our narrow seam.

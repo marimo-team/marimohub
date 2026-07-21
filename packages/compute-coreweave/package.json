@@ -9,6 +9,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./wandb": "./src/wandb.ts",
 		"./package.json": "./package.json"
 	},
 	"scripts": {

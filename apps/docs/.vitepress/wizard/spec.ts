@@ -57,6 +57,7 @@ const ICONS: Record<string, string> = {
 	// compute
 	modal: '🚀',
 	coreweave: '🧶',
+	wandb: '🪄',
 	docker: '🐳',
 	e2b: '📦',
 	kubernetes: '☸️',
@@ -231,6 +232,18 @@ export const COMPUTE_WIRING: Record<string, BackendWiring> = {
 			[
 				`new CoreWeaveCompute({`,
 				`\tapiKey: ${env('MARIMOHUB_COMPUTE_COREWEAVE_API_KEY', true)},`,
+				`\timage: ${env('MARIMOHUB_COMPUTE_IMAGE')},`,
+				`})`,
+			].join('\n'),
+	},
+	wandb: {
+		imports: [`import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';`],
+		rhs: (r) =>
+			[
+				`createWandbCompute({`,
+				`\tapiKey: ${env('MARIMOHUB_COMPUTE_WANDB_API_KEY', true)},`,
+				`\tentity: ${lit('MARIMOHUB_COMPUTE_WANDB_ENTITY', r)},`,
+				`\tproject: ${lit('MARIMOHUB_COMPUTE_WANDB_PROJECT', r)},`,
 				`\timage: ${env('MARIMOHUB_COMPUTE_IMAGE')},`,
 				`})`,
 			].join('\n'),

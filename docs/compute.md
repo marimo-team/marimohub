@@ -11,6 +11,7 @@ Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
 | Backend    | Selector     | Use for                                     |
 | ---------- | ------------ | ------------------------------------------- |
 | CoreWeave  | `coreweave`  | Production on CoreWeave Sandboxes           |
+| W&B        | `wandb`      | CoreWeave Sandboxes via your W&B account    |
 | Modal      | `modal`      | Production serverless sandboxes             |
 | E2B        | `e2b`        | Managed code sandboxes                      |
 | Kubernetes | `kubernetes` | Pods in your own cluster                    |
@@ -49,6 +50,10 @@ model.
 ### CoreWeave
 
 <!--@include: ./setup/compute/coreweave.md-->
+
+### W&B
+
+<!--@include: ./setup/compute/wandb.md-->
 
 ### Modal
 

@@ -71,5 +71,7 @@ export interface StartSandboxResult {
 export interface GetSandboxResult {
     readonly sandboxId: SandboxId;
     readonly status: SandboxStatus;
+    /** External address of the sandbox's exposed service, when the runner assigns one (e.g. the W&B gateway's per-sandbox public IP). */
+    readonly serviceAddress?: string;
 }
 //# sourceMappingURL=sandbox.d.ts.map

@@ -64,7 +64,7 @@ _No environment variables to set here._
 
 ## Compute
 
-Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `modal`, `docker`, `e2b`, `kubernetes`, `local`, `none`.
+Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `wandb`, `modal`, `docker`, `e2b`, `kubernetes`, `local`, `none`.
 
 Where notebook kernels run. The shared variables apply across compute backends.
 
@@ -101,6 +101,21 @@ CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK.
 | `MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_ENDPOINT` | S3 endpoint injected into sandboxes as `AWS_ENDPOINT_URL_S3` (only when buckets are set) so plain SDK clients target CAIOS without per-call configuration. | — | — | `https://cwobject.com` |
 | `MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION` | Region injected into sandboxes as `AWS_REGION` (only when buckets are set). | — | — | `us-east-04a` |
 | `MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT` | Capture the whole sandbox filesystem (venv, packages, caches) as a native snapshot on teardown and restore it on the next session — full-state fidelity and fast cold-start. Off by default. NOT recommended alongside `MARIMOHUB_PERSIST_WORKSPACE=workspace`: the two double-persist state and waste storage. | — | `false` | `true` |
+
+### W&B Sandboxes
+
+`MARIMOHUB_COMPUTE_BACKEND=wandb`
+
+CoreWeave Sandboxes via the W&B (Weights & Biases) gateway — the `coreweave` backend authenticated with a W&B API key. Kernel URLs are resolved automatically: the managed runner assigns each sandbox a public IP served over plain HTTP, so no sandbox hostname is needed. Profile/placement overrides, GPU requests, egress overrides, and CAIOS vending are not available through the gateway; use hub-minted WIF (docs/workload-identity-federation.md) for bucket access.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_COMPUTE_WANDB_API_KEY` 🔒 | W&B API key (from wandb.ai user settings). | Yes | — | — |
+| `MARIMOHUB_COMPUTE_WANDB_ENTITY` | W&B entity (team or user) sandboxes are attributed to. | — | — | `my-team` |
+| `MARIMOHUB_COMPUTE_WANDB_PROJECT` | W&B project sandboxes are attributed to. | — | — | `sandbox` |
+| `MARIMOHUB_COMPUTE_WANDB_BASE_URL` | Override the sandbox gateway URL. | — | `https://api.cwsandbox.com` | — |
+| `MARIMOHUB_COMPUTE_WANDB_OWNER_TAG` | Tag applied to owned sandboxes for discovery and cleanup. | — | `marimohub` | — |
+| `MARIMOHUB_COMPUTE_WANDB_MAX_LIFETIME_SECONDS` | Hard provider-side sandbox lifetime cap (SIGKILL, no save) — an orphan backstop behind the graceful session lifetime (`MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`). Must be >= the session lifetime; leave unset to default to 2x it. | — | `2x MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS` | `28800` |
 
 ### Modal
 

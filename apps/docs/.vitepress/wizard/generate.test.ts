@@ -36,6 +36,13 @@ const CASES: Record<string, WizardSelection> = {
 		ai: 'none',
 		options: { MARIMOHUB_COMPUTE_IMAGE: 'ghcr.io/acme/marimo-sandbox:v1' },
 	},
+	's3 + wandb + oidc': {
+		storage: 's3',
+		compute: 'wandb',
+		auth: 'oidc',
+		ai: 'none',
+		values: { MARIMOHUB_COMPUTE_WANDB_ENTITY: 'my-team' },
+	},
 	's3 + docker + dev': { storage: 's3', compute: 'docker', auth: 'dev', ai: 'none' },
 	's3 + e2b + oidc': { storage: 's3', compute: 'e2b', auth: 'oidc', ai: 'none' },
 	's3 + none + dev': { storage: 's3', compute: 'none', auth: 'dev', ai: 'none' },
