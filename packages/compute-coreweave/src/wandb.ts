@@ -116,7 +116,7 @@ export function createWandbCompute(
 		{
 			...coreweave,
 			resolveExposedUrl: serviceAddressResolver((sandboxId) =>
-				transport.get({ sandboxId: sandboxId }),
+				transport.get({ sandboxId }),
 			),
 		},
 		// Same controlled cast as `CoreWeaveCompute.getClient()`: the SDK client
