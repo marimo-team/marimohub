@@ -5,6 +5,13 @@ import { defineConfig } from 'vite-plus';
 export default defineConfig({
 	staged: {
 		'*': 'vp check --fix',
+		// docs/configuration.md and the deployment-wizard snapshots are generated
+		// from the config registry (packages/config/src/spec.ts) — fail the commit
+		// when they drift instead of finding out in CI.
+		'packages/config/src/**':
+			"bash -c 'pnpm --filter @marimo-hub/config test && pnpm --filter @marimo-hub/docs test'",
+		'docs/configuration.md': "bash -c 'pnpm --filter @marimo-hub/config test'",
+		'apps/docs/.vitepress/wizard/**': "bash -c 'pnpm --filter @marimo-hub/docs test'",
 	},
 	fmt: {
 		useTabs: true,
