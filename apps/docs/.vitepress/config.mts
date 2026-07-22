@@ -30,6 +30,7 @@ export default defineConfig({
 	},
 
 	head: [
+		['link', { rel: 'icon', type: 'image/png', href: '/marimo-logo.png' }],
 		['meta', { name: 'theme-color', content: '#14b8a6' }],
 		['meta', { property: 'og:title', content: 'marimohub' }],
 		[
@@ -37,6 +38,28 @@ export default defineConfig({
 			{
 				property: 'og:description',
 				content: 'Self-hostable, provider-agnostic platform for marimo notebooks.',
+			},
+		],
+		[
+			'script',
+			{
+				async: 'true',
+				src: 'https://widget.kapa.ai/kapa-widget.bundle.js',
+				'data-website-id': 'a8d33c2e-7970-4f77-a09b-ea606a0f41c7',
+				'data-project-name': 'marimohub',
+				'data-project-color': '#0d9488',
+				'data-project-logo': '/marimo-logo.png',
+				// Follow the site's dark-mode toggle (VitePress sets .dark on <html>).
+				'data-color-scheme-selector': '.dark',
+				'data-font-family': "'Inter', ui-sans-serif, system-ui, sans-serif",
+				// Match --vp-c-bg / --vp-c-bg-soft so the modal blends with the site.
+				'data-surface-color-dark': '#1b1b1f',
+				'data-surface-elevated-color-dark': '#202127',
+				'data-example-questions':
+					'How do I deploy marimohub with Helm?,What storage backends are supported?,How do I configure authentication?,How do sandboxes run notebooks?',
+				'data-chat-disclaimer':
+					'Answers are AI-generated from the [marimohub docs](https://marimohub.docs.marimo.io) and may contain mistakes — verify anything important.',
+				'data-kapa-branding-hidden': 'true',
 			},
 		],
 	],
