@@ -125,10 +125,21 @@ Deployment — never to Sandbox-runner pods.
    [Object Storage → Access Policies](https://console.coreweave.com/object-storage/access-policies),
    or `POST https://api.coreweave.com/v1/cwobject/access-policy` with the
    policy wrapped as `{"policy": …}`. CoreWeave authorizes each exchange
-   against the principal it derives from the token, `role/<issuer>:<sub>`;
-   the `sub` is per-sandbox, so both statements use the prefix form
-   `role/https://oidc.cwsandbox.com*` (the same matching rules as Manual WIF
-   apply: a bare `role/<issuer>` or slash form does **not** match).
+   against the principal it derives from the token, `role/<issuer>:<sub>`.
+   The token's `sub` is `user:<user-id>` — the identity that owns the API key
+   the hub starts sandboxes with (`MARIMOHUB_COMPUTE_COREWEAVE_API_KEY`) — so
+   every sandbox the hub launches maps to one exact principal:
+   `role/https://oidc.cwsandbox.com:user:<USER-ID>`. Use that exact form in
+   both statements. Find the user id in the console (the API key's owner), or
+   decode a running sandbox's token
+   (`/var/run/secrets/sandbox/storage-token/osa-token`).
+
+   Because the principal is the API key's owner, rotating the hub to a key
+   owned by someone else changes the `sub` and the policy silently stops
+   matching (sandboxes still start; S3 calls fail with `403`) — mint the
+   hub's key from a dedicated service account. The gateway's token claims are
+   not in CoreWeave's public docs; if an exchange is refused, decode the
+   token and check its `sub` against the policy principal.
 
    <details>
    <summary>Example policy — mint + one bucket grant</summary>
@@ -143,14 +154,14 @@ Deployment — never to Sandbox-runner pods.
    			"effect": "Allow",
    			"actions": ["cwobject:CreateAccessKeyOIDC"],
    			"resources": ["*"],
-   			"principals": ["role/https://oidc.cwsandbox.com*"]
+   			"principals": ["role/https://oidc.cwsandbox.com:user:<USER-ID>"]
    		},
    		{
    			"name": "bucket-access",
    			"effect": "Allow",
    			"actions": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
    			"resources": ["my-org-data", "my-org-data/*"],
-   			"principals": ["role/https://oidc.cwsandbox.com*"]
+   			"principals": ["role/https://oidc.cwsandbox.com:user:<USER-ID>"]
    		}
    	]
    }
