@@ -12,9 +12,9 @@ Every marimohub configuration variable, grouped by category and backend. Each ca
 
 ## Storage
 
-Selected by `MARIMOHUB_STORAGE_BACKEND` (default `s3`); one of `s3`, `gcs`, `memory`, `r2`.
+Selected by `MARIMOHUB_STORAGE_BACKEND` (default `s3`); one of `s3`, `gcs`, `fs`, `memory`, `r2`.
 
-Where all notebooks and state are stored. `s3` is the only durable backend for self-hosted servers; `r2` is Workers-only and `memory` is for dev/tests.
+Where all notebooks and state are stored. `s3` and `gcs` are the durable backends for self-hosted servers; `fs` is durable on a single node; `r2` is Workers-only and `memory` is for dev/tests.
 
 ### S3 / S3-compatible
 
@@ -43,6 +43,16 @@ Native GCS via its JSON API; uses object generations for the atomic conditional 
 | `MARIMOHUB_STORAGE_GCS_SA_KEY` 🔒 | Service-account key JSON (the file contents). Minted into short-lived access tokens. Provide this OR a static access token. | — | — | — |
 | `MARIMOHUB_STORAGE_GCS_ACCESS_TOKEN` 🔒 | Static OAuth2 access token, as an alternative to a service-account key (e.g. when an external process supplies tokens). | — | — | — |
 | `MARIMOHUB_STORAGE_GCS_API_ENDPOINT` | Override the JSON API base URL — e.g. to target a fake-gcs-server emulator. | — | `https://storage.googleapis.com` | `https://storage.googleapis.com` |
+
+### Filesystem
+
+`MARIMOHUB_STORAGE_BACKEND=fs`
+
+Local-disk object store rooted at a host directory. Durable (as durable as the disk), zero external dependencies — for single-replica self-hosting. Conditional writes are enforced per-process, so never point two hub replicas at one directory.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_STORAGE_FS_ROOT` | Host directory that holds all hub state. Created if missing; must stay on a single filesystem (writes rely on atomic renames). | Yes | — | `/var/lib/marimohub/storage` |
 
 ### Memory (dev/tests only)
 

@@ -688,6 +688,9 @@ importers:
       '@marimo-hub/secrets-aws':
         specifier: workspace:*
         version: link:../secrets-aws
+      '@marimo-hub/storage-fs':
+        specifier: workspace:*
+        version: link:../storage-fs
       '@marimo-hub/storage-gcs':
         specifier: workspace:*
         version: link:../storage-gcs
@@ -803,6 +806,28 @@ importers:
       '@aws-sdk/client-secrets-manager':
         specifier: 'catalog:'
         version: 3.1076.0
+      '@marimo-hub/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@marimo-hub/tsconfig':
+        specifier: workspace:*
+        version: link:../ts-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.9.3
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vite-plus:
+        specifier: 'catalog:'
+        version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
+      vitest:
+        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
+
+  packages/storage-fs:
+    dependencies:
       '@marimo-hub/core':
         specifier: workspace:*
         version: link:../core

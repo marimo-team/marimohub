@@ -63,6 +63,23 @@ describe('storage check', () => {
 	it('skipped when the bucket exposes no probe', async () => {
 		expect((await run({}, makeDeps())).by('storage')?.status).toBe('skipped');
 	});
+
+	it('warn (non-fatal) when the store only enforces CAS per-process', async () => {
+		const deps = makeDeps({
+			bucket: { verifyConditionalWrites: async () => {}, casScope: 'process' } as never,
+		});
+		const { report, by } = await run({ MARIMOHUB_STORAGE_BACKEND: 'fs' }, deps);
+		expect(by('storage')?.status).toBe('warn');
+		expect(by('storage')?.fatal).toBeUndefined();
+		expect(report.fatal).toBe(false);
+	});
+
+	it('ok when the store enforces CAS globally', async () => {
+		const deps = makeDeps({
+			bucket: { verifyConditionalWrites: async () => {}, casScope: 'global' } as never,
+		});
+		expect((await run({}, deps)).by('storage')?.status).toBe('ok');
+	});
 });
 
 describe('auth.oidc-discovery check', () => {

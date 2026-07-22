@@ -42,12 +42,25 @@ async function fetchWithTimeout(
 
 async function checkStorage(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
 	const backend = env.MARIMOHUB_STORAGE_BACKEND ?? 's3';
-	const bucket = deps.bucket as { verifyConditionalWrites?: () => Promise<void> };
+	const bucket = deps.bucket as {
+		verifyConditionalWrites?: () => Promise<void>;
+		casScope?: 'process' | 'global';
+	};
 	if (typeof bucket.verifyConditionalWrites !== 'function') {
 		return { status: 'skipped', message: `${backend} backend: no conditional-write probe` };
 	}
 	try {
 		await bucket.verifyConditionalWrites();
+		if (bucket.casScope === 'process') {
+			return {
+				status: 'warn',
+				message:
+					`${backend} storage enforces conditional writes within this process only — ` +
+					'concurrent hub replicas sharing the same storage can lose catalog updates',
+				remediation:
+					'Run a single hub replica against this storage, or use s3/gcs for multi-replica deployments.',
+			};
+		}
 		return { status: 'ok', message: `${backend} reachable and honors conditional writes` };
 	} catch (err) {
 		const message = errMsg(err);

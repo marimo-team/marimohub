@@ -53,6 +53,7 @@ const ICONS: Record<string, string> = {
 	// storage
 	s3: '🪣',
 	gcs: '☁️',
+	fs: '📁',
 	memory: '🧪',
 	// compute
 	modal: '🚀',
@@ -206,6 +207,11 @@ export const STORAGE_WIRING: Record<string, BackendWiring> = {
 				`\taccessToken: ${env('MARIMOHUB_STORAGE_GCS_ACCESS_TOKEN')},`,
 				`})`,
 			].join('\n'),
+	},
+	fs: {
+		imports: [`import { FsStorage } from '@marimo-hub/storage-fs';`],
+		rhs: () =>
+			[`new FsStorage({`, `\troot: ${env('MARIMOHUB_STORAGE_FS_ROOT', true)},`, `})`].join('\n'),
 	},
 	memory: {
 		imports: [`import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';`],

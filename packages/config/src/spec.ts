@@ -53,7 +53,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		selector: 'MARIMOHUB_STORAGE_BACKEND',
 		selectorDefault: 's3',
 		description:
-			'Where all notebooks and state are stored. `s3` is the only durable backend for self-hosted servers; `r2` is Workers-only and `memory` is for dev/tests.',
+			'Where all notebooks and state are stored. `s3` and `gcs` are the durable backends for self-hosted servers; `fs` is durable on a single node; `r2` is Workers-only and `memory` is for dev/tests.',
 		backends: [
 			{
 				name: 'S3 / S3-compatible',
@@ -138,6 +138,22 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Override the JSON API base URL — e.g. to target a fake-gcs-server emulator.',
 						example: 'https://storage.googleapis.com',
 						default: 'https://storage.googleapis.com',
+					},
+				],
+			},
+			{
+				name: 'Filesystem',
+				selectorValue: 'fs',
+				description:
+					'Local-disk object store rooted at a host directory. Durable (as durable as the disk), zero external dependencies — for single-replica self-hosting. Conditional writes are enforced per-process, so never point two hub replicas at one directory.',
+				vars: [
+					{
+						id: 'MARIMOHUB_STORAGE_FS_ROOT',
+						name: 'Filesystem storage root',
+						description:
+							'Host directory that holds all hub state. Created if missing; must stay on a single filesystem (writes rely on atomic renames).',
+						example: '/var/lib/marimohub/storage',
+						required: true,
 					},
 				],
 			},
