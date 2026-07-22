@@ -7,6 +7,8 @@ background maintenance.
 
 - [Helm](./helm.md) — install/upgrade any cluster from the published, versioned
   `marimohub` chart (single-tenant).
+- [Single instance](./single-instance.md) — one Linux box (cloud VM or on-prem)
+  with `fs` storage + `docker` compute; no object store, no cluster.
 - [CoreWeave (CKS)](./cks.md) — CAIOS + CoreWeave Sandboxes + OIDC.
 - [Kubernetes](./kubernetes.md) — any cluster (EKS/GKE/AKS/self-managed) with native
   Pod kernels via the `kubernetes` compute backend.

@@ -148,6 +148,7 @@ export default defineConfig({
 				collapsed: false,
 				items: [
 					{ text: 'Helm', link: '/deploying/helm' },
+					{ text: 'Single instance', link: '/deploying/single-instance' },
 					{ text: 'CoreWeave (CKS)', link: '/deploying/cks' },
 					{ text: 'Kubernetes', link: '/deploying/kubernetes' },
 					{ text: 'GCP', link: '/deploying/gcp' },

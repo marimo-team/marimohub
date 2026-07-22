@@ -15,9 +15,11 @@ MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1    # set 0.0.0.0 to expose external
 
 ::: tip Simplest self-hosted option
 A container per kernel on one box — no cloud account, no cluster. Good for a
-single VM or on-prem host. See
+single VM or on-prem host: see
+[Deploying on a single instance](/deploying/single-instance) for the full
+recipe, or
 [`examples/docker-compose`](https://github.com/marimo-team/marimohub/tree/main/examples/docker-compose)
-for a ready-to-run server + storage stack.
+for a ready-to-run local stack.
 :::
 
 ::: warning Single host only
