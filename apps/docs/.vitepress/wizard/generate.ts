@@ -200,6 +200,14 @@ export function validateSelection(sel: WizardSelection): SelectionWarning[] {
 				'The in-memory store loses all data on restart. Use s3 or gcs for anything you keep.',
 		});
 	}
+	if (sel.storage === 'fs') {
+		warnings.push({
+			level: 'warning',
+			title: 'Filesystem storage is single-replica',
+			message:
+				'Conditional writes are enforced within one server process — run exactly one replica, and in containers mount a persistent volume at the storage root. Use s3 or gcs for multi-replica deployments.',
+		});
+	}
 	if (sel.compute === 'local') {
 		warnings.push({
 			level: 'warning',

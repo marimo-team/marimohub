@@ -29,6 +29,13 @@ const CASES: Record<string, WizardSelection> = {
 		auth: 'dev',
 		ai: 'none',
 	},
+	'fs + docker + oidc (single-box)': {
+		storage: 'fs',
+		compute: 'docker',
+		auth: 'oidc',
+		ai: 'none',
+		values: { MARIMOHUB_STORAGE_FS_ROOT: '/var/lib/marimohub/storage' },
+	},
 	's3 + coreweave + oidc, custom image': {
 		storage: 's3',
 		compute: 'coreweave',
@@ -81,6 +88,10 @@ describe('validateSelection', () => {
 	it('flags dev auth, volatile storage, and unisolated/absent compute', () => {
 		expect(validateSelection(CASES['memory + local + dev (all-local)'])).toMatchSnapshot();
 		expect(validateSelection(CASES['s3 + none + dev'])).toMatchSnapshot();
+	});
+
+	it('flags single-replica fs storage', () => {
+		expect(validateSelection(CASES['fs + docker + oidc (single-box)'])).toMatchSnapshot();
 	});
 
 	it('is silent for a safe production combo', () => {

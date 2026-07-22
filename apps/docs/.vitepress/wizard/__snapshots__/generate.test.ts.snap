@@ -157,6 +157,144 @@ const app = createApi({
 });"
 `;
 
+exports[`config -> code generators > fs + docker + oidc (single-box) > .env 1`] = `
+"# --- Storage ---
+MARIMOHUB_STORAGE_BACKEND=fs
+MARIMOHUB_STORAGE_FS_ROOT=/var/lib/marimohub/storage
+
+# --- Compute ---
+MARIMOHUB_COMPUTE_BACKEND=docker
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
+MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
+MARIMOHUB_COMPUTE_WORKDIR=/workspace
+MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_DOCKER_HOST=localhost
+MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1
+MARIMOHUB_COMPUTE_DOCKER_NETWORK=marimohub
+
+# --- Auth ---
+MARIMOHUB_AUTH_BACKEND=oidc
+MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_SESSION_SECRET=  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com,example.org
+
+# --- Managed AI ---
+MARIMOHUB_AI_BACKEND=none
+
+# --- Options ---
+MARIMOHUB_PERSIST_WORKSPACE=source"
+`;
+
+exports[`config -> code generators > fs + docker + oidc (single-box) > compose 1`] = `
+"services:
+  marimohub:
+    image: ghcr.io/marimo-team/marimohub:latest
+    ports:
+      - '3000:3000'
+    environment:
+      MARIMOHUB_STORAGE_BACKEND: fs
+      MARIMOHUB_STORAGE_FS_ROOT: /var/lib/marimohub/storage
+      MARIMOHUB_COMPUTE_BACKEND: docker
+      MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+      MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
+      MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+      MARIMOHUB_COMPUTE_WORKDIR: /workspace
+      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
+      MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
+      MARIMOHUB_COMPUTE_DOCKER_NETWORK: marimohub
+      MARIMOHUB_AUTH_BACKEND: oidc
+      MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_SESSION_SECRET: ""
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+      MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_PERSIST_WORKSPACE: source"
+`;
+
+exports[`config -> code generators > fs + docker + oidc (single-box) > helm 1`] = `
+"# Non-secret MARIMOHUB_* config -> ConfigMap.
+config:
+  MARIMOHUB_STORAGE_BACKEND: fs
+  MARIMOHUB_STORAGE_FS_ROOT: /var/lib/marimohub/storage
+  MARIMOHUB_COMPUTE_BACKEND: docker
+  MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+  MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
+  MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+  MARIMOHUB_COMPUTE_WORKDIR: /workspace
+  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_DOCKER_HOST: localhost
+  MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
+  MARIMOHUB_COMPUTE_DOCKER_NETWORK: marimohub
+  MARIMOHUB_AUTH_BACKEND: oidc
+  MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+  MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_PERSIST_WORKSPACE: source
+
+# Secret values -> Secret (prefer secrets.existingSecret in production).
+secrets:
+  data:
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
+    MARIMOHUB_AUTH_SESSION_SECRET: """
+`;
+
+exports[`config -> code generators > fs + docker + oidc (single-box) > library 1`] = `
+"import { createApi } from '@marimo-hub/api';
+import { createServices } from '@marimo-hub/core';
+import { FsStorage } from '@marimo-hub/storage-fs';
+import { DockerCompute } from '@marimo-hub/compute-docker';
+import { createOidcAuth } from '@marimo-hub/auth-oidc';
+
+const bucket = new FsStorage({
+	root: process.env.MARIMOHUB_STORAGE_FS_ROOT!,
+});
+
+const compute = new DockerCompute({
+	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
+	host: "localhost",
+	bindHost: "127.0.0.1",
+});
+
+const { authenticator, routes: authRoutes } = createOidcAuth({
+	issuer: process.env.MARIMOHUB_AUTH_OIDC_ISSUER!,
+	clientId: process.env.MARIMOHUB_AUTH_OIDC_CLIENT_ID!,
+	clientSecret: process.env.MARIMOHUB_AUTH_OIDC_CLIENT_SECRET!,
+	redirectUri: process.env.MARIMOHUB_AUTH_OIDC_REDIRECT_URI!,
+	sessionSecret: process.env.MARIMOHUB_AUTH_SESSION_SECRET!,
+	allowedEmailDomains: (process.env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS ?? '').split(','),
+});
+
+const app = createApi({
+	services: createServices(bucket),
+	bucket,
+	compute,
+	authenticator,
+	authRoutes,
+	sandbox: {
+		bucket: {
+			name: process.env.MARIMOHUB_STORAGE_S3_BUCKET ?? '',
+			endpoint: process.env.MARIMOHUB_STORAGE_S3_ENDPOINT ?? '',
+		},
+		hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
+		workdir: process.env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
+		persistWorkspace: "source",
+	},
+	policy: {},
+});"
+`;
+
 exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=gcs
@@ -1617,6 +1755,16 @@ exports[`validateSelection > flags dev auth, volatile storage, and unisolated/ab
     "level": "info",
     "message": "Notebooks are browsable, but kernels will not start until you choose a compute backend.",
     "title": "No compute backend",
+  },
+]
+`;
+
+exports[`validateSelection > flags single-replica fs storage 1`] = `
+[
+  {
+    "level": "warning",
+    "message": "Conditional writes are enforced within one server process — run exactly one replica, and in containers mount a persistent volume at the storage root. Use s3 or gcs for multi-replica deployments.",
+    "title": "Filesystem storage is single-replica",
   },
 ]
 `;

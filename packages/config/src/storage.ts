@@ -4,6 +4,7 @@ import type { Bucket, BucketConfig } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { S3Storage } from '@marimo-hub/storage-s3';
 import { GcsStorage } from '@marimo-hub/storage-gcs';
+import { FsStorage } from '@marimo-hub/storage-fs';
 import { parseBool, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -45,6 +46,21 @@ export function makeStorage(env: Env): Bucket {
 				serviceAccountKey: env.MARIMOHUB_STORAGE_GCS_SA_KEY,
 				accessToken: env.MARIMOHUB_STORAGE_GCS_ACCESS_TOKEN,
 			});
+		case 'fs': {
+			const root = requiredVar(env, 'MARIMOHUB_STORAGE_FS_ROOT', {
+				remediation:
+					'Set it to a writable host directory that will hold all hub state (e.g. /var/lib/marimohub/storage).',
+				docs: 'docs/configuration.md#storage',
+			});
+			try {
+				return new FsStorage({ root });
+			} catch (err) {
+				throw new ConfigError(
+					`Could not initialize the filesystem storage root "${root}": ${err instanceof Error ? err.message : String(err)}`,
+					{ variable: 'MARIMOHUB_STORAGE_FS_ROOT', docs: 'docs/configuration.md#storage' },
+				);
+			}
+		}
 		case 'memory':
 			// The in-memory bucket is NON-DURABLE — all state is lost on restart. It
 			// exists for local dev and tests only. Refuse it unless the operator
@@ -54,7 +70,7 @@ export function makeStorage(env: Env): Bucket {
 				throw new ConfigError(
 					'MARIMOHUB_STORAGE_BACKEND=memory is non-durable (all state is lost on restart) and is for ' +
 						'local dev/tests only. Set MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true to use it, or choose a ' +
-						'durable backend (s3).',
+						'durable backend (s3, gcs, fs).',
 					{
 						variable: 'MARIMOHUB_ALLOW_EPHEMERAL_STORAGE',
 						docs: 'docs/configuration.md#storage',
@@ -70,7 +86,7 @@ export function makeStorage(env: Env): Bucket {
 		default:
 			throw new ConfigError(`Unknown MARIMOHUB_STORAGE_BACKEND: ${backend}`, {
 				variable: 'MARIMOHUB_STORAGE_BACKEND',
-				remediation: 'Supported backends: s3, gcs, memory (dev), r2 (Workers).',
+				remediation: 'Supported backends: s3, gcs, fs, memory (dev), r2 (Workers).',
 				docs: 'docs/configuration.md#storage',
 			});
 	}

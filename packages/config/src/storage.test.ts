@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { describe, it, expect, afterAll } from 'vitest';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { S3Storage } from '@marimo-hub/storage-s3';
 import { GcsStorage } from '@marimo-hub/storage-gcs';
+import { FsStorage } from '@marimo-hub/storage-fs';
 import { makeStorage, makeSandboxBucketConfig } from './storage';
 import { ConfigError } from './errors';
 
@@ -24,6 +28,39 @@ describe('makeStorage backend selection', () => {
 		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'gcs' })).toThrow(
 			/MARIMOHUB_STORAGE_GCS_BUCKET/,
 		);
+	});
+
+	const tmpRoots: string[] = [];
+	afterAll(() => {
+		for (const root of tmpRoots) rmSync(root, { recursive: true, force: true });
+	});
+	const tmpRoot = () => {
+		const root = mkdtempSync(path.join(os.tmpdir(), 'marimohub-fs-config-'));
+		tmpRoots.push(root);
+		return root;
+	};
+
+	it('builds an FsStorage for the fs backend without an ephemeral gate', () => {
+		expect(
+			makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'fs', MARIMOHUB_STORAGE_FS_ROOT: tmpRoot() }),
+		).toBeInstanceOf(FsStorage);
+	});
+
+	it('requires the fs root', () => {
+		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'fs' })).toThrow(
+			/MARIMOHUB_STORAGE_FS_ROOT/,
+		);
+	});
+
+	it('wraps an unusable fs root in a ConfigError', () => {
+		const file = path.join(tmpRoot(), 'a-file');
+		writeFileSync(file, '');
+		expect(() =>
+			makeStorage({
+				MARIMOHUB_STORAGE_BACKEND: 'fs',
+				MARIMOHUB_STORAGE_FS_ROOT: path.join(file, 'nested'),
+			}),
+		).toThrow(/filesystem storage root/);
 	});
 
 	it('refuses the non-durable memory backend unless explicitly allowed', () => {
