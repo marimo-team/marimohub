@@ -27,4 +27,6 @@ multi-replica deployments.
 
 Pairs naturally with the `local` or `docker` compute backends on the same
 machine. Sandboxes can't reach the directory as an S3 bucket, so notebook file
-sync uses the hub-mediated fallback copy — which those backends already do.
+sync uses the hub-mediated fallback copy — which those backends already do. For
+the full one-box recipe, see
+[Deploying on a single instance](/deploying/single-instance).

@@ -32,6 +32,7 @@ Every deployment picks storage, compute, and auth.
 ## Deploy
 
 - [Helm](./deploying/helm.md)
+- [Single instance](./deploying/single-instance.md)
 - [CoreWeave (CKS)](./deploying/cks.md)
 - [Kubernetes](./deploying/kubernetes.md)
 - [AWS](./deploying/aws.md)
