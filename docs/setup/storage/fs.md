@@ -12,6 +12,11 @@ The directory is created if missing, and objects appear in it as plain files
 on a single filesystem/volume — writes rely on atomic renames, which don't work
 across mount points.
 
+When the server runs in a container, the root path is inside the container:
+mount a persistent volume at it (a Docker bind mount / named volume, or a PVC
+on Kubernetes) that the server's user can write, or the data disappears with
+the container.
+
 ::: warning Single replica only
 Conditional writes (the compare-and-swap that protects concurrent notebook
 edits) are enforced within one server process. Never run two hub replicas

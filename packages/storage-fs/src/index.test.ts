@@ -1,14 +1,21 @@
-import { mkdtempSync, symlinkSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { PreconditionFailedError } from '@marimo-hub/core';
 import { bucketContract } from '@marimo-hub/core/testing/contract';
 import { FsStorage } from './index';
 
+const tmpRoots: string[] = [];
+afterAll(() => {
+	for (const root of tmpRoots) rmSync(root, { recursive: true, force: true });
+});
+
 function makeRoot(): string {
-	return mkdtempSync(path.join(os.tmpdir(), 'marimohub-fs-'));
+	const root = mkdtempSync(path.join(os.tmpdir(), 'marimohub-fs-'));
+	tmpRoots.push(root);
+	return root;
 }
 
 bucketContract('FsStorage', () => new FsStorage({ root: makeRoot() }));
@@ -98,6 +105,34 @@ describe('FsStorage', () => {
 			await expect(
 				b.put('proj/n.json', '{"v":3}', { onlyIfEtagMatches: put.etag }),
 			).rejects.toBeInstanceOf(PreconditionFailedError);
+		});
+
+		it('CAS race across two instances in one process has exactly one winner', async () => {
+			const root = makeRoot();
+			const a = new FsStorage({ root });
+			const b = new FsStorage({ root });
+			const seed = await a.put('shared.json', '0');
+
+			const results = await Promise.allSettled(
+				Array.from({ length: 10 }, (_, i) =>
+					(i % 2 === 0 ? a : b).put('shared.json', String(i + 1), {
+						onlyIfEtagMatches: seed.etag,
+					}),
+				),
+			);
+			expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+			for (const r of results) {
+				if (r.status === 'rejected') expect(r.reason).toBeInstanceOf(PreconditionFailedError);
+			}
+		});
+
+		it('onlyIfEtagMatches with an empty etag never writes unconditionally', async () => {
+			const bucket = new FsStorage({ root: makeRoot() });
+			await bucket.put('guarded.json', 'original');
+			await expect(
+				bucket.put('guarded.json', 'clobbered', { onlyIfEtagMatches: '' }),
+			).rejects.toBeInstanceOf(PreconditionFailedError);
+			expect(await (await bucket.get('guarded.json'))!.text()).toBe('original');
 		});
 
 		it('onlyIfNotExists loses across two instances sharing a root', async () => {

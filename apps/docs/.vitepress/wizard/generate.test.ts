@@ -90,6 +90,10 @@ describe('validateSelection', () => {
 		expect(validateSelection(CASES['s3 + none + dev'])).toMatchSnapshot();
 	});
 
+	it('flags single-replica fs storage', () => {
+		expect(validateSelection(CASES['fs + docker + oidc (single-box)'])).toMatchSnapshot();
+	});
+
 	it('is silent for a safe production combo', () => {
 		expect(validateSelection(CASES['default-prod (s3 + modal + oidc)'])).toEqual([]);
 	});

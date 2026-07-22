@@ -3,9 +3,12 @@
  *
  * Keys map 1:1 to relative paths under the root, so operators can browse the
  * tree directly. Traversal is blocked by key validation plus a resolved-path
- * containment check, and reads open with O_NOFOLLOW so a symlink inside the
- * root cannot leak content from outside it. Writes stage into a reserved
- * `.tmp/` dir and rename into place — atomic on a single filesystem.
+ * containment check, and reads refuse a symlink as the final path component
+ * (O_NOFOLLOW). Intermediate directories are the operator's own layout: the
+ * API only ever creates real directories, so a symlinked subdirectory can only
+ * come from the operator (e.g. a mounted volume) and is followed. Writes stage
+ * into a reserved `.tmp/` dir (fsync, then rename into place — atomic on a
+ * single filesystem).
  *
  * ETags are the sha-256 of the content, so they survive restarts (the catalog
  * compare-and-swap depends on that). `onlyIfNotExists` (hard link) is atomic
@@ -46,6 +49,13 @@ const TMP_DIR = '.tmp';
  */
 const NOT_FOUND_CODES = new Set(['ENOENT', 'ENOTDIR', 'EISDIR', 'ELOOP', 'EMLINK']);
 
+/**
+ * put() serialization shared by every instance in this process, keyed by
+ * root + key — two FsStorage instances on one root must contend for the same
+ * lock or `casScope: 'process'` would silently be instance-scoped.
+ */
+const putLocks = new Map<string, Promise<void>>();
+
 function errCode(err: unknown): string | undefined {
 	return err instanceof Error && 'code' in err
 		? String((err as { code?: unknown }).code)
@@ -75,13 +85,14 @@ export class FsStorage implements Bucket {
 	readonly casScope = 'process' as const;
 
 	private readonly root: string;
+	/** `root` with a trailing separator (already present when root is `/`). */
+	private readonly rootPrefix: string;
 	private readonly tmpDir: string;
-	/** Per-key promise chains serializing put()s — the in-process CAS mutex. */
-	private readonly locks = new Map<string, Promise<void>>();
 
 	constructor(config: FsStorageConfig) {
 		mkdirSync(config.root, { recursive: true });
 		this.root = realpathSync(config.root);
+		this.rootPrefix = this.root.endsWith(path.sep) ? this.root : this.root + path.sep;
 		this.tmpDir = path.join(this.root, TMP_DIR);
 		mkdirSync(this.tmpDir, { recursive: true });
 	}
@@ -90,7 +101,7 @@ export class FsStorage implements Bucket {
 		assertValidKey(key);
 		const abs = path.resolve(this.root, key);
 		// assertValidKey already guarantees containment; defense in depth.
-		if (!abs.startsWith(this.root + path.sep)) {
+		if (!abs.startsWith(this.rootPrefix)) {
 			throw new Error(`Bucket key escapes the storage root: "${key}"`);
 		}
 		return abs;
@@ -136,15 +147,16 @@ export class FsStorage implements Bucket {
 	}
 
 	private withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-		const prev = this.locks.get(key) ?? Promise.resolve();
+		const lockKey = `${this.root}\0${key}`;
+		const prev = putLocks.get(lockKey) ?? Promise.resolve();
 		const run = prev.then(fn, fn);
 		const chain = run.then(
 			() => {},
 			() => {},
 		);
-		this.locks.set(key, chain);
+		putLocks.set(lockKey, chain);
 		void chain.then(() => {
-			if (this.locks.get(key) === chain) this.locks.delete(key);
+			if (putLocks.get(lockKey) === chain) putLocks.delete(lockKey);
 		});
 		return run;
 	}
@@ -155,15 +167,23 @@ export class FsStorage implements Bucket {
 		options?: BucketPutOptions,
 	): Promise<BucketObject> {
 		const filePath = this.resolvePath(key);
-		if (options?.onlyIfEtagMatches && options?.onlyIfNotExists) {
+		if (options?.onlyIfEtagMatches !== undefined && options?.onlyIfNotExists) {
 			throw new Error('onlyIfEtagMatches and onlyIfNotExists are mutually exclusive');
 		}
 		return this.withKeyLock(key, async () => {
 			const body = typeof value === 'string' ? new TextEncoder().encode(value) : value;
 			const etag = sha256hex(body);
 			const tmp = path.join(this.tmpDir, randomUUID());
-			await fsp.writeFile(tmp, body);
 			try {
+				const handle = await fsp.open(tmp, 'wx');
+				try {
+					await handle.writeFile(body);
+					// Flush to disk before the rename publishes the file, so a crash
+					// can't leave a renamed-but-empty object behind.
+					await handle.sync();
+				} finally {
+					await handle.close();
+				}
 				// rename/link preserve mtime, so stat the staged file for `uploaded`.
 				const uploaded = (await fsp.stat(tmp)).mtime;
 				await fsp.mkdir(path.dirname(filePath), { recursive: true });
@@ -176,7 +196,7 @@ export class FsStorage implements Bucket {
 						}
 						throw err;
 					}
-				} else if (options?.onlyIfEtagMatches) {
+				} else if (options?.onlyIfEtagMatches !== undefined) {
 					const current = await this.readObject(key);
 					if (!current || sha256hex(current.body) !== options.onlyIfEtagMatches) {
 						throw new PreconditionFailedError(`ETag mismatch for key "${key}"`);
@@ -205,7 +225,7 @@ export class FsStorage implements Bucket {
 			// Best-effort prune of now-empty parent dirs, stopping at the root.
 			for (
 				let dir = path.dirname(filePath);
-				dir.startsWith(this.root + path.sep);
+				dir.startsWith(this.rootPrefix);
 				dir = path.dirname(dir)
 			) {
 				try {
@@ -291,7 +311,8 @@ export class FsStorage implements Bucket {
 	 * rejected, and concurrent CAS puts from one base etag yield at most one winner.
 	 */
 	async verifyConditionalWrites(): Promise<void> {
-		const probeKey = '_system/.cas-probe';
+		// Unique per run so the probe can never clobber a real object.
+		const probeKey = `_system/.cas-probe-${randomUUID()}`;
 
 		await this.put(probeKey, 'v1');
 		let rejected = false;
