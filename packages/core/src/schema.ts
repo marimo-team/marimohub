@@ -6,7 +6,16 @@ import {
 	SESSION_STATUSES,
 	SOURCE_TYPES,
 } from './constants';
-import { ProjectId, NotebookId, SnapshotId, VersionId, SessionId, SandboxId, UserId } from './ids';
+import {
+	ProjectId,
+	NotebookId,
+	SnapshotId,
+	VersionId,
+	SessionId,
+	SandboxId,
+	TokenId,
+	UserId,
+} from './ids';
 
 // --- Schema versioning ---
 //
@@ -71,6 +80,7 @@ export const SnapshotIdSchema = z.string().refine(SnapshotId.is);
 export const VersionIdSchema = z.string().refine(VersionId.is);
 export const SessionIdSchema = z.string().refine(SessionId.is);
 export const SandboxIdSchema = z.string().refine(SandboxId.is);
+export const TokenIdSchema = z.string().refine(TokenId.is);
 // User ids (`author`/`owner`/`user_id`/`actor` foreign keys) are the opaque auth
 // `sub`. UserId.is only checks non-empty, so this brands without imposing a
 // format the identity provider doesn't guarantee.
@@ -472,6 +482,50 @@ export const IdentitySchema = z.object({
 });
 
 export type Identity = z.infer<typeof IdentitySchema>;
+
+// --- Personal access token ---
+//
+// A machine credential acting as its issuing user (CI, scripts, the CLI). Only
+// the SHA-256 of the secret is stored. A mutable per-token object (the coarse
+// `last_used_at` refresh rewrites it), so it carries no `schema_version`.
+//
+// `looseObject` for the same rolling-deploy reason as the snapshot schemas: the
+// `last_used_at` touch reads-modifies-writes the whole record, so a strict parse
+// would strip fields a newer replica added and silently downgrade the object.
+// The API projection (`toResponse` in routes/tokens.ts) is an explicit pick, so
+// preserved unknown keys never leak into a response.
+export const TokenSchema = z.looseObject({
+	id: TokenIdSchema,
+	user_id: UserIdSchema,
+	name: z.string(),
+	/** Lowercase-hex SHA-256 of the token secret. Never leaves the server. */
+	hash: z.string(),
+	created_at: z.iso.datetime(),
+	expires_at: z.iso.datetime().optional(),
+	/** Daily-coalesced usage marker (last-writer-wins, like the identity directory). */
+	last_used_at: z.iso.datetime().optional(),
+});
+
+export type Token = z.infer<typeof TokenSchema>;
+
+// Explicit Pick (not Omit): the schema is loose, so `Token` carries an index
+// signature; `Omit` would collapse the named keys under it (and preserved
+// unknown fields must never leak into a response anyway — same reasoning as
+// `toPublicProjectEntry`). The one field to hide is `hash`.
+export type PublicToken = Pick<
+	Token,
+	'id' | 'user_id' | 'name' | 'created_at' | 'expires_at' | 'last_used_at'
+>;
+export function toPublicToken(token: Token): PublicToken {
+	return {
+		id: token.id,
+		user_id: token.user_id,
+		name: token.name,
+		created_at: token.created_at,
+		...(token.expires_at !== undefined ? { expires_at: token.expires_at } : {}),
+		...(token.last_used_at !== undefined ? { last_used_at: token.last_used_at } : {}),
+	};
+}
 
 // --- Event ---
 

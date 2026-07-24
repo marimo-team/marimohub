@@ -70,6 +70,8 @@ s3-bucket/
 │   │   └── {session-id}.json               ← active kernel sessions
 │   ├── identities/
 │   │   └── {user-id}.json                  ← user display identity (mutable, last-writer-wins)
+│   ├── tokens/
+│   │   └── {token-id}.json                 ← personal access token record (mutable, last-writer-wins)
 │   ├── logs/
 │   │   └── {YYYY-MM-DD}.log                ← append-only, rolled daily
 │   └── events/
@@ -113,6 +115,7 @@ s3-bucket/
 | `_system/snapshots/{id}.json`                                  | JSON     | Immutable index snapshot. Lists all projects and notebooks with metadata. Written once, never modified.                                                                                                                                                                                                                                                                                                                                |
 | `_system/sessions/{pid}/{sid}.json`                            | JSON     | Live session record, partitioned by project so a project-scoped read lists only `_system/sessions/{pid}/`. Created on notebook open, updated by heartbeat, cleaned up on close or TTL expiry.                                                                                                                                                                                                                                          |
 | `_system/identities/{user-id}.json`                            | JSON     | User display identity (`{ id, email, name }`). Upserted on each authenticated request; mutable, last-writer-wins. Resolves opaque `author`/`user_id` ids to a person.                                                                                                                                                                                                                                                                  |
+| `_system/tokens/{token-id}.json`                               | JSON     | Personal access token record (`{ id, user_id, name, hash, … }`) keyed by the ULID embedded in the presented `mhub_pat_` bearer, so verification is a single GET. Stores only the SHA-256 of the secret. Mutable, last-writer-wins (coarse `last_used_at` refresh); revocation deletes the object. See §4.11.                                                                                                                           |
 | `_system/logs/{YYYY-MM-DD}.log`                                | Text     | Human-readable application log. One file per day. For ops debugging only.                                                                                                                                                                                                                                                                                                                                                              |
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                  | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                           |
 | `_system/idempotency/{digest}.json`                            | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                           |
@@ -360,6 +363,27 @@ The identity directory maps a stable user id — the auth `sub`, which is what e
 
 **Write volume.** The upsert runs in the auth middleware on every `/api/v1/*` request, but is **write-coalesced**: the service keeps a per-process `id → {email,name}` signature cache and skips the PUT when the incoming identity is unchanged since this process last wrote it (`IdentityService.upsert`, `packages/core/src/services/identity/IdentityService.ts`). So steady-state cost is ~one PUT per user per process lifetime (plus one whenever their email/name actually changes), not one per request. The upsert is best-effort — a failure is logged and never blocks the request.
 
+### 4.11 `_system/tokens/{token-id}.json`
+
+A personal access token record — the machine-credential counterpart of a session cookie. A token acts as its issuing user (`user_id` resolves through the identity directory and inherits the user's memberships), so no authz changes hang off this object.
+
+```json
+// _system/tokens/01HXY0S6GWMBASVAG3PZ7Y2K5T.json
+{
+	"id": "01HXY0S6GWMBASVAG3PZ7Y2K5T",
+	"user_id": "user_abc123",
+	"name": "ci-deploy",
+	"hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+	"created_at": "2026-07-24T14:30:00Z",
+	"expires_at": "2026-10-22T14:30:00Z",
+	"last_used_at": "2026-07-24T15:00:00Z"
+}
+```
+
+**Why keyed by token id.** The presented bearer is `mhub_pat_<tokenId>_<secret>`, so verification is a **single GET** by the embedded ULID — no scan and, critically, no mutable index object that would need its own CAS discipline. `hash` is the SHA-256 of the secret; the plaintext is returned once at creation and never stored. Per-user listing is a prefix scan of `_system/tokens/` (fine at the 20-per-user cap).
+
+**Mutability & write semantics.** Creation is a plain PUT to a fresh, unique token-id key. The only rewrite is the `last_used_at` refresh, and it is **conditional** — an `If-Match` on the ETag read at load time — so a token revoked (deleted) between load and the touch is not resurrected by a stale write; the touch is also coalesced to once per UTC day, keeping the request hot path read-only. Revocation is a plain DELETE. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag.
+
 ---
 
 ## 5. ID Scheme
@@ -591,7 +615,7 @@ Schema migrations are a first-class concern because there is no database to run 
 | `_system/events/**`                          | Never migrated — event records are immutable history. New event shapes get a bumped `schema_version` field. Consumers must handle multiple versions.                                                                                                                              |
 | `catalog.json`                               | Migrated in-place as part of the first write after a Worker deploy that bumps catalog schema version. Uses a strict `version` literal, so — unlike the objects above — it is **not** forward-tolerant.                                                                            |
 
-> **No `schema_version` by design:** the mutable, last-writer-wins records — sessions (`_system/sessions/**`), identities (`_system/identities/**`), and `fs_snapshot.json` — carry no `schema_version`. They are rewritten on every write or reaped shortly after creation, so they never need a migration; a shape change is absorbed with optional fields + defaults on read. API response bodies are likewise unversioned per-object — the contract is versioned at the route level (`/api/v1`).
+> **No `schema_version` by design:** the mutable, last-writer-wins records — sessions (`_system/sessions/**`), identities (`_system/identities/**`), tokens (`_system/tokens/**`), and `fs_snapshot.json` — carry no `schema_version`. They are rewritten on every write or reaped shortly after creation, so they never need a migration; a shape change is absorbed with optional fields + defaults on read. API response bodies are likewise unversioned per-object — the contract is versioned at the route level (`/api/v1`).
 
 ### Migration Worker pseudocode
 

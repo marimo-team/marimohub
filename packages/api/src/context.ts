@@ -255,6 +255,13 @@ export type HonoEnv = {
 	Variables: {
 		deps: ApiDeps;
 		user: AuthUser;
+		/**
+		 * How the request authenticated, decided once in the authN middleware:
+		 * `pat` (a personal access token) or `session` (cookie/SSO). Routes that
+		 * must be session-only (token management) gate on this instead of re-parsing
+		 * the Authorization header — two independent parses eventually disagree.
+		 */
+		authMethod: 'pat' | 'session';
 		/** Per-request correlation id set by the `hono/request-id` middleware. */
 		requestId: string;
 	};

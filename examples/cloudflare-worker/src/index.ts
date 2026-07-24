@@ -7,7 +7,12 @@
  */
 import { createApi } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
-import { createServices, MaintenanceLock, ReconciliationService } from '@marimo-hub/core';
+import {
+	composeAuthenticators,
+	createServices,
+	MaintenanceLock,
+	ReconciliationService,
+} from '@marimo-hub/core';
 import { CloudflareAccessAuthenticator } from '@marimo-hub/auth-cloudflare-access';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
 import { CloudflareSandboxProvider, ContainerProxy, Sandbox } from '@marimo-hub/compute-cloudflare';
@@ -76,11 +81,14 @@ function buildDeps(request: Request, env: Env): ApiDeps {
 				}
 			: undefined;
 
+	const services = createServices(bucket);
 	return {
-		services: createServices(bucket),
+		services,
 		bucket,
 		compute: new CloudflareSandboxProvider(env.SANDBOX, { useTunnel }),
-		authenticator,
+		// Personal access tokens (`Authorization: Bearer mhub_pat_…`) work on every
+		// deployment; other requests resolve through the adapter selected above.
+		authenticator: composeAuthenticators(services.tokens, authenticator),
 		ai,
 		sandbox: {
 			// Default: credential-less R2 binding mount (no endpoint/secrets) — the

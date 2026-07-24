@@ -1,4 +1,12 @@
-import type { NotebookId, ProjectId, SessionId, SnapshotId, UserId, VersionId } from './ids';
+import type {
+	NotebookId,
+	ProjectId,
+	SessionId,
+	SnapshotId,
+	TokenId,
+	UserId,
+	VersionId,
+} from './ids';
 
 export interface VersionPaths {
 	code: string;
@@ -106,6 +114,10 @@ export const paths = {
 	sessionsForProject: (projectId: ProjectId) => `_system/sessions/${projectId}/`,
 	identity: (userId: UserId) => `_system/identities/${encodeURIComponent(userId)}.json`,
 	identitiesPrefix: '_system/identities/',
+	// One mutable record per personal access token, keyed by the id embedded in
+	// the presented token so verification is a single GET (no index object).
+	token: (tokenId: TokenId) => `_system/tokens/${tokenId}.json`,
+	tokensPrefix: '_system/tokens/',
 	eventsPrefix: '_system/events/',
 	eventsForDate: (date: string) => `_system/events/${date}/`,
 	event: (date: string, id: string) => `_system/events/${date}/${id}.json`,

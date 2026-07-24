@@ -27,6 +27,8 @@ import type {
 	ServerVersion,
 	Session,
 	SecretEntry,
+	ApiToken,
+	ApiTokenCreated,
 } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
@@ -45,6 +47,44 @@ export function useUserQuery() {
 		queryFn: () => apiFetch<User>('/api/v1/me'),
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
+	});
+}
+
+// Personal access tokens (self-service, on the account menu)
+
+/** The caller's API tokens, newest first — metadata only, never a secret. */
+export function useApiTokensQuery(enabled = true) {
+	return useQuery({
+		queryKey: userKeys.tokens(),
+		queryFn: () => apiFetch<ApiToken[]>('/api/v1/me/tokens'),
+		enabled,
+	});
+}
+
+/** Mint a token. The response's `token` is shown once and never retrievable again. */
+export function useCreateApiToken() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (body: { name: string; expires_in_days?: number }) =>
+			apiFetch<ApiTokenCreated>('/api/v1/me/tokens', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+			}),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: userKeys.tokens() });
+		},
+	});
+}
+
+export function useRevokeApiToken() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (tokenId: string) =>
+			apiFetch<void>(`/api/v1/me/tokens/${tokenId}`, { method: 'DELETE' }),
+		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: userKeys.tokens() });
+		},
 	});
 }
 

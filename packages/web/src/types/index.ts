@@ -19,6 +19,8 @@ import type {
 	Session as ClientSession,
 	SecretEntry as ClientSecretEntry,
 	ResolvedUser as ClientResolvedUser,
+	ApiToken as ClientApiToken,
+	ApiTokenCreated as ClientApiTokenCreated,
 	ApiResponse as ClientApiResponse,
 	ApiError as ClientApiError,
 } from '@marimo-hub/client';
@@ -50,6 +52,10 @@ export type Session = ClientSession;
 export type SecretEntry = ClientSecretEntry;
 /** A resolved user identity ({ id, email, name }) from `GET /api/v1/users`. */
 export type ResolvedUser = ClientResolvedUser;
+/** A personal access token's metadata (never the secret). */
+export type ApiToken = ClientApiToken;
+/** The token-create response: metadata plus the one-time plaintext `token`. */
+export type ApiTokenCreated = ClientApiTokenCreated;
 export type ApiResponse<T> = ClientApiResponse<T>;
 export type ApiError = ClientApiError;
 
