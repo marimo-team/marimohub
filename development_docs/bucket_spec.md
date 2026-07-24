@@ -382,7 +382,7 @@ A personal access token record — the machine-credential counterpart of a sessi
 
 **Why keyed by token id.** The presented bearer is `mhub_pat_<tokenId>_<secret>`, so verification is a **single GET** by the embedded ULID — no scan and, critically, no mutable index object that would need its own CAS discipline. `hash` is the SHA-256 of the secret; the plaintext is returned once at creation and never stored. Per-user listing is a prefix scan of `_system/tokens/` (fine at the 20-per-user cap).
 
-**Mutability & write semantics.** Like an identity record: mutable, last-writer-wins, no conditional PUT. The only rewrite is the `last_used_at` refresh, coalesced to once per UTC day so the request hot path stays read-only. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag; revocation deletes the object.
+**Mutability & write semantics.** Creation is a plain PUT to a fresh, unique token-id key. The only rewrite is the `last_used_at` refresh, and it is **conditional** — an `If-Match` on the ETag read at load time — so a token revoked (deleted) between load and the touch is not resurrected by a stale write; the touch is also coalesced to once per UTC day, keeping the request hot path read-only. Revocation is a plain DELETE. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag.
 
 ---
 

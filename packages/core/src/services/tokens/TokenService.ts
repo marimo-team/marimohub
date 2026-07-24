@@ -1,4 +1,4 @@
-import type { Bucket } from '../../ports/bucket';
+import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { NotFoundError, ResourceExhaustedError } from '../../errors';
@@ -69,6 +69,27 @@ export async function hashPatSecret(secret: string): Promise<string> {
 	return toHex(new Uint8Array(digest));
 }
 
+/**
+ * Parse a stored token object, tolerating BOTH non-JSON bytes and schema drift —
+ * a single corrupt record must never take down verify/list/revoke (it just reads
+ * as an invalid credential). Returns null on any failure.
+ */
+async function parseTokenBody(obj: BucketObjectBody): Promise<Token | null> {
+	let raw: unknown;
+	try {
+		raw = await obj.json();
+	} catch {
+		return null;
+	}
+	const parsed = TokenSchema.safeParse(raw);
+	return parsed.success ? parsed.data : null;
+}
+
+/** Whether a token is still live at `nowMs` (a missing expiry never expires). */
+function isLive(token: { expires_at?: string }, nowMs: number): boolean {
+	return token.expires_at === undefined || new Date(token.expires_at).getTime() > nowMs;
+}
+
 export interface CreateTokenInput {
 	name: string;
 	/** Days until expiry; omitted = the token never expires. */
@@ -108,10 +129,13 @@ export class TokenService {
 	) {}
 
 	async create(input: CreateTokenInput, userId: UserId): Promise<CreatedToken> {
-		// Best-effort cap: concurrent mints can each read a below-limit count and
-		// race past it (no CAS on a fresh key). It's an abuse guard, not a quota.
-		const existing = await this.list(userId);
-		if (existing.length >= TokenService.MAX_TOKENS_PER_USER) {
+		const nowMs = Date.now();
+		// The cap counts only LIVE tokens — an expired record still lists (as
+		// metadata) but must not block minting a replacement. Best-effort: concurrent
+		// mints can each read a below-limit count and race past it (no CAS on a fresh
+		// key). It's an abuse guard, not a quota.
+		const live = (await this.list(userId)).filter((t) => isLive(t, nowMs));
+		if (live.length >= TokenService.MAX_TOKENS_PER_USER) {
 			throw new ResourceExhaustedError(
 				`Token limit reached (${TokenService.MAX_TOKENS_PER_USER} per user) — revoke an unused token first`,
 			);
@@ -119,7 +143,7 @@ export class TokenService {
 
 		const id = createTokenId();
 		const secret = generateSecret();
-		const now = new Date();
+		const now = new Date(nowMs);
 		const record: Token = {
 			id,
 			user_id: userId,
@@ -150,10 +174,7 @@ export class TokenService {
 		const keys = await listAllKeys(this.bucket, paths.tokensPrefix);
 		const records = await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
 			const obj = await this.bucket.get(key);
-			if (!obj) return null;
-			// Tolerate a corrupt record: it must not take down the whole list.
-			const parsed = TokenSchema.safeParse(await obj.json());
-			return parsed.success ? parsed.data : null;
+			return obj ? parseTokenBody(obj) : null;
 		});
 		return records
 			.filter((r): r is Token => r?.user_id === userId)
@@ -168,11 +189,10 @@ export class TokenService {
 	 */
 	async revoke(userId: UserId, tokenId: TokenId): Promise<void> {
 		const obj = await this.bucket.get(paths.token(tokenId));
-		// safeParse (like `list`): a corrupt record can't prove ownership, and it
-		// already fails `verify`, so treat it as not-found rather than 500ing a
-		// security-relevant "make it stop working" call.
-		const parsed = obj ? TokenSchema.safeParse(await obj.json()) : null;
-		const record = parsed?.success ? parsed.data : null;
+		// A corrupt record can't prove ownership and already fails `verify`, so treat
+		// it as not-found rather than 500ing a security-relevant "make it stop
+		// working" call.
+		const record = obj ? await parseTokenBody(obj) : null;
 		if (!record || record.user_id !== userId) {
 			throw new NotFoundError(`Token ${tokenId} not found`);
 		}
@@ -224,9 +244,8 @@ export class TokenService {
 			this.cache.delete(tokenId);
 			return null;
 		}
-		const parsed = TokenSchema.safeParse(await obj.json());
-		if (!parsed.success) return null;
-		const record = parsed.data;
+		const record = await parseTokenBody(obj);
+		if (!record) return null;
 
 		// Resolve `{email, name}` through the identity directory — every issuer has
 		// signed in at least once, which recorded them. Fail closed if it's gone.

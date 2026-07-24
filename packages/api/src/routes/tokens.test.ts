@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { composeAuthenticators } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
-import { createApi } from '../createApi';
+import { createApi, generateOpenApiDocument } from '../createApi';
 import {
 	createInitializedBucket,
 	createTestApi,
@@ -61,6 +61,18 @@ describe('Token routes', () => {
 
 	it('rejects an over-long name (422)', async () => {
 		await expectError(await request('POST', '/me/tokens', { name: 'x'.repeat(101) }), 422);
+	});
+
+	it('rejects a whitespace-only name (422)', async () => {
+		await expectError(await request('POST', '/me/tokens', { name: '   ' }), 422);
+	});
+
+	it('trims surrounding whitespace from the name', async () => {
+		const data = await expectOk<TokenMeta>(
+			await request('POST', '/me/tokens', { name: '  ci-deploy  ' }),
+			201,
+		);
+		expect(data.name).toBe('ci-deploy');
 	});
 
 	it.each([
@@ -136,6 +148,18 @@ describe('Token routes', () => {
 			429,
 			'RESOURCE_EXHAUSTED',
 		);
+	});
+
+	it('advertises only cookieAuth (not bearerAuth) for the token-management routes', () => {
+		// A PAT is rejected on these routes (403), so a generated client must never
+		// offer bearerAuth here — the operation-level override enforces that.
+		const doc = generateOpenApiDocument() as {
+			paths: Record<string, Record<string, { security?: unknown }>>;
+		};
+		const collection = doc.paths['/api/v1/me/tokens'];
+		expect(collection.post.security).toEqual([{ cookieAuth: [] }]);
+		expect(collection.get.security).toEqual([{ cookieAuth: [] }]);
+		expect(doc.paths['/api/v1/me/tokens/{tokenId}'].delete.security).toEqual([{ cookieAuth: [] }]);
 	});
 
 	it('emits token.created / token.revoked audit events', async () => {

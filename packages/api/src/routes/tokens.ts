@@ -31,7 +31,9 @@ const TokenCreatedResponseSchema = TokenResponseSchema.extend({
 }).openapi('ApiTokenCreated');
 
 const CreateTokenBodySchema = z.object({
-	name: z.string().min(1).max(100).openapi({ example: 'ci-deploy' }),
+	// Trim first so a whitespace-only name fails the non-empty check (mirrors the
+	// UI) and the stored name has no leading/trailing padding.
+	name: z.string().trim().min(1).max(100).openapi({ example: 'ci-deploy' }),
 	expires_in_days: z.number().int().min(1).max(3650).optional().openapi({
 		description: 'Days until expiry; omit for a non-expiring token.',
 		example: 90,
@@ -48,6 +50,12 @@ const TokenIdParam = z.object({
 
 // --- Route definitions ---
 
+// Token management is session-only: a PAT is rejected with 403 (see
+// assertSessionAuthenticated). Override the global disjunctive security so the
+// generated OpenAPI advertises ONLY cookieAuth for these routes — a client must
+// not pick a bearer token it can't use here.
+const SESSION_ONLY_SECURITY = [{ cookieAuth: [] }];
+
 const createToken = createRoute({
 	method: 'post',
 	path: '/me/tokens',
@@ -57,6 +65,7 @@ const createToken = createRoute({
 		'Mint a machine credential that acts as the calling user (CI, scripts, the CLI): send it as ' +
 		'`Authorization: Bearer mhub_pat_…`. The plaintext token is returned once, in this response, ' +
 		'and never again. Requires session (SSO) auth — a token cannot mint tokens.',
+	security: SESSION_ONLY_SECURITY,
 	request: { body: jsonBody(CreateTokenBodySchema) },
 	responses: {
 		201: jsonContent(
@@ -74,6 +83,7 @@ const listTokens = createRoute({
 	tags: ['Auth'],
 	summary: "List the caller's personal access tokens",
 	description: 'Metadata only — the secret is never retrievable after creation.',
+	security: SESSION_ONLY_SECURITY,
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: z.array(TokenResponseSchema) }),
@@ -92,6 +102,7 @@ const revokeToken = createRoute({
 	description:
 		'Deletes the token; API requests using it fail within the verification-cache TTL ' +
 		'(~30 seconds) on other replicas, immediately on this one.',
+	security: SESSION_ONLY_SECURITY,
 	request: { params: TokenIdParam },
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'Token revoked'),

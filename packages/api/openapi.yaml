@@ -3725,6 +3725,8 @@ paths:
         scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The
         plaintext token is returned once, in this response, and never again.
         Requires session (SSO) auth — a token cannot mint tokens.'
+      security: &a1
+        - cookieAuth: []
       requestBody:
         required: true
         content:
@@ -3813,6 +3815,7 @@ paths:
         - Auth
       summary: List the caller's personal access tokens
       description: Metadata only — the secret is never retrievable after creation.
+      security: *a1
       responses:
         '200':
           description: Tokens, newest first
@@ -3872,6 +3875,7 @@ paths:
       description: Deletes the token; API requests using it fail within the
         verification-cache TTL (~30 seconds) on other replicas, immediately on
         this one.
+      security: *a1
       parameters:
         - schema:
             type: string

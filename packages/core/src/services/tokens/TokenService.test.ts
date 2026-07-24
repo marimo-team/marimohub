@@ -93,6 +93,22 @@ describe('TokenService', () => {
 			await tokens.revoke(OWNER, TokenId.parse(created[0].record.id));
 			await expect(tokens.create({ name: 'now-fits' }, OWNER)).resolves.toBeTruthy();
 		});
+
+		it('does not count expired tokens toward the cap', async () => {
+			// Fill the cap with short-lived tokens...
+			for (let i = 0; i < TokenService.MAX_TOKENS_PER_USER; i++) {
+				await tokens.create({ name: `t${i}`, expiresInDays: 1 }, OWNER);
+			}
+			await expect(tokens.create({ name: 'blocked' }, OWNER)).rejects.toThrow(
+				ResourceExhaustedError,
+			);
+
+			// ...then let them all expire: minting a replacement must succeed even
+			// though the 20 expired records still exist (and still list).
+			advanceTime(2 * 24 * 60 * 60 * 1000);
+			await expect(tokens.create({ name: 'fits-now' }, OWNER)).resolves.toBeTruthy();
+			expect((await tokens.list(OWNER)).length).toBe(TokenService.MAX_TOKENS_PER_USER + 1);
+		});
 	});
 
 	describe('list', () => {
@@ -119,6 +135,14 @@ describe('TokenService', () => {
 			const listed = await tokens.list(OWNER);
 			expect(listed.map((t) => t.name)).toEqual(['good']);
 			expect(listed.map((t) => t.id)).toEqual([good.record.id]);
+		});
+
+		it('tolerates a non-JSON record instead of failing the whole list', async () => {
+			await tokens.create({ name: 'good' }, OWNER);
+			await bucket.put(paths.token(TokenId.parse('2'.repeat(26))), 'this is not json{{');
+
+			const listed = await tokens.list(OWNER);
+			expect(listed.map((t) => t.name)).toEqual(['good']);
 		});
 	});
 
@@ -162,6 +186,37 @@ describe('TokenService', () => {
 			// Overwrite with JSON that no longer matches the Token schema.
 			await bucket.put(paths.token(TokenId.parse(record.id)), JSON.stringify({ id: record.id }));
 			expect(await tokens.verify(token)).toBeNull();
+		});
+
+		it('returns null (does not throw) for a non-JSON stored record', async () => {
+			const { token, record } = await tokens.create({ name: 'ci' }, OWNER);
+			await bucket.put(paths.token(TokenId.parse(record.id)), 'not json at all');
+			await expect(tokens.verify(token)).resolves.toBeNull();
+		});
+
+		it('preserves unknown stored fields when it rewrites last_used_at', async () => {
+			// Forward-compat: an older replica touching last_used_at must not strip a
+			// field a newer replica added (TokenSchema is a looseObject).
+			const { token, record } = await tokens.create({ name: 'ci' }, OWNER);
+			const key = paths.token(TokenId.parse(record.id));
+			const stored = (await (await bucket.get(key))!.json()) as Record<string, unknown>;
+			await bucket.put(
+				key,
+				JSON.stringify({
+					...stored,
+					future_field: 'keep-me',
+					last_used_at: '2000-01-01T00:00:00.000Z',
+				}),
+			);
+
+			expect(await tokens.verify(token)).toBeTruthy(); // triggers a touch rewrite
+
+			const after = (await (await bucket.get(key))!.json()) as {
+				future_field?: string;
+				last_used_at?: string;
+			};
+			expect(after.future_field).toBe('keep-me'); // unknown key survived
+			expect(after.last_used_at).not.toBe('2000-01-01T00:00:00.000Z'); // and it did rewrite
 		});
 
 		it('rejects a revoked token immediately in the same process', async () => {
@@ -261,6 +316,12 @@ describe('TokenService', () => {
 		it('404s (not 500) on a schema-corrupt record', async () => {
 			const id = TokenId.parse('2'.repeat(26));
 			await bucket.put(paths.token(id), JSON.stringify({ id: 'nope' }));
+			await expect(tokens.revoke(OWNER, id)).rejects.toThrow(NotFoundError);
+		});
+
+		it('404s (not 500) on a non-JSON record', async () => {
+			const id = TokenId.parse('3'.repeat(26));
+			await bucket.put(paths.token(id), 'definitely not json');
 			await expect(tokens.revoke(OWNER, id)).rejects.toThrow(NotFoundError);
 		});
 	});

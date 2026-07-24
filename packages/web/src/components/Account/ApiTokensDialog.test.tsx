@@ -102,6 +102,21 @@ describe('ApiTokensDialog', () => {
 		expect(screen.getAllByText(/never used/)).toHaveLength(1);
 	});
 
+	it('shows remaining time for a future expiry and elapsed time for a past one', async () => {
+		const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+		const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+		setup([
+			tokenMeta({ id: '01HXY0S6GWMBASVAG3PZ7Y2K5V', name: 'live', expires_at: future }),
+			tokenMeta({ name: 'dead', expires_at: past }),
+		]);
+
+		await screen.findAllByTestId('token-row');
+		// The fix: a future deadline shows a real remaining span, not "just now".
+		expect(screen.getByText(/expires in \d+[dhm]/)).toBeInTheDocument();
+		expect(screen.queryByText(/expires just now/)).not.toBeInTheDocument();
+		expect(screen.getByText(/expired 3d ago/)).toBeInTheDocument();
+	});
+
 	it('creates a token and shows the plaintext once with a copy-now warning', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup([]);

@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import { AlertTriangle, Check, Copy, Plus, Trash2 } from 'lucide-react';
 import { Button, ConfirmDialog, DialogModal, IconButton, TextField } from '@/components/ui';
 import { useApiTokensQuery, useCreateApiToken, useRevokeApiToken } from '@/api/hooks';
-import { formatRelative } from '@/lib/time';
+import { formatDuration, formatRelative } from '@/lib/time';
 import type { ApiToken, ApiTokenCreated } from '@/types';
 
 export interface ApiTokensDialogProps {
@@ -40,9 +40,16 @@ function CopyTokenField({ value }: { value: string }) {
 	);
 }
 
-/** "expires <in 30 days>" / "expired <3 days ago>" from the ISO deadline. */
-function expiryLabel(iso: string): string {
-	return `${iso <= new Date().toISOString() ? 'expired' : 'expires'} ${formatRelative(iso)}`;
+/**
+ * "expires in 30d" / "expired 3d ago" from the ISO deadline. A future deadline
+ * needs the remaining span (`formatRelative` flattens all future times to "just
+ * now"); a past one reads naturally as a relative phrase.
+ */
+function expiryLabel(iso: string, now: number = Date.now()): string {
+	const deadline = new Date(iso).getTime();
+	if (Number.isNaN(deadline)) return '';
+	if (deadline <= now) return `expired ${formatRelative(iso, now)}`;
+	return `expires in ${formatDuration(new Date(now).toISOString(), deadline)}`;
 }
 
 /**
