@@ -238,7 +238,9 @@ describe('LocalCompute security & limits', () => {
 			);
 		} finally {
 			await sb.destroy();
-			srv.close();
+			// close() is fire-and-forget (returns the server, not a promise); await the
+			// actual close so the port is freed before teardown to avoid cross-test flakes.
+			await new Promise<void>((resolve) => srv.close(() => resolve()));
 		}
 	});
 

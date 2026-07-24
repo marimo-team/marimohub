@@ -1441,16 +1441,24 @@ describe('NotebookService', () => {
 				return realGet(key);
 			});
 
-			const result = await notebooks.commitSession(
-				projectId,
-				created.id,
-				{ code: 'v1', html: '<html>x</html>' },
-				ACTOR,
-			);
-			spy.mockRestore();
+			let result: Awaited<ReturnType<typeof notebooks.commitSession>>;
+			try {
+				result = await notebooks.commitSession(
+					projectId,
+					created.id,
+					{ code: 'v1', html: '<html>x</html>' },
+					ACTOR,
+				);
+			} finally {
+				// Restore in finally so a failed assertion/throw can't leak the forced-null
+				// get spy into later tests.
+				spy.mockRestore();
+			}
 
 			expect(result).not.toBeNull();
 			expect(result!.newVersion).toBe(false);
+			// The whole attach was skipped, so no orphan html sidecar was left behind.
+			expect(await bucket.get(ver.html)).toBeNull();
 		});
 
 		it('skips the descriptor attach entirely when version.json is missing', async () => {

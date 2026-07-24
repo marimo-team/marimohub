@@ -224,6 +224,8 @@ describe('createK8sClient', () => {
 	it('streams a Uint8Array stdin as raw bytes to the pod (objectMode:false)', async () => {
 		const client = createK8sClient({ namespace: 'kernels' });
 		const received: Buffer[] = [];
+		let objectMode: boolean | undefined;
+		let everyChunkWasRawBytes = true;
 		k8sMock.exec.mockImplementation(
 			async (
 				_namespace: string,
@@ -237,7 +239,13 @@ describe('createK8sClient', () => {
 				statusCallback: (status: unknown) => void,
 			) => {
 				const socket = new EventEmitter();
-				stdin?.on('data', (chunk) => received.push(Buffer.from(chunk)));
+				objectMode = stdin?.readableObjectMode;
+				stdin?.on('data', (chunk) => {
+					// In object mode the whole Uint8Array would arrive as one non-Buffer
+					// object chunk; a byte stream delivers Buffer chunks.
+					if (!Buffer.isBuffer(chunk)) everyChunkWasRawBytes = false;
+					received.push(Buffer.from(chunk));
+				});
 				stdin?.on('end', () => {
 					statusCallback({ status: 'Success' });
 					setTimeout(() => socket.emit('close'), 0);
@@ -248,11 +256,19 @@ describe('createK8sClient', () => {
 
 		const bytes = new Uint8Array([0xff, 0x00, 0x80, 0x7f]);
 		const res = await client.exec('pod-1', ['sh', '-lc', 'cat'], bytes);
+		expect(objectMode).toBe(false);
+		expect(everyChunkWasRawBytes).toBe(true);
 		expect(Array.from(Buffer.concat(received))).toEqual([0xff, 0x00, 0x80, 0x7f]);
 		expect(res.exitCode).toBe(0);
 	});
 
-	it('defaults a Failure status with a missing/non-numeric ExitCode to exit code 1', async () => {
+	it.each([
+		['a missing ExitCode cause', { status: 'Failure' }],
+		[
+			'a non-numeric ExitCode cause',
+			{ status: 'Failure', details: { causes: [{ reason: 'ExitCode', message: 'boom' }] } },
+		],
+	])('defaults a Failure status with %s to exit code 1', async (_label, status) => {
 		const client = createK8sClient({ namespace: 'kernels' });
 		k8sMock.exec.mockImplementation(
 			async (
@@ -267,7 +283,7 @@ describe('createK8sClient', () => {
 				statusCallback: (status: unknown) => void,
 			) => {
 				stdin?.resume();
-				statusCallback({ status: 'Failure' }); // no details.causes → ExitCode unknown
+				statusCallback(status);
 				const socket = new EventEmitter();
 				setTimeout(() => socket.emit('close'), 0);
 				return socket;

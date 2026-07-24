@@ -1,10 +1,16 @@
 import type { Env } from './env';
 
 export interface SandboxHostIsolation {
-	/** False only when both hosts are known AND they share an origin/parent domain. */
+	/** False when the hosts share an origin/parent domain OR isolation can't be verified. */
 	isolated: boolean;
 	sandboxHost?: string;
 	appHost?: string;
+	/**
+	 * Present only when `isolated` is false, so the caller can word the error:
+	 * `shared-origin` (hosts overlap) vs `unverifiable-redirect` (the redirect is
+	 * set but yields no usable app host).
+	 */
+	reason?: 'shared-origin' | 'unverifiable-redirect';
 }
 
 /**
@@ -28,12 +34,18 @@ export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
 	try {
 		appHost = new URL(redirect).hostname.toLowerCase();
 	} catch {
-		// A redirect WAS configured but is unparseable, so the app host is unknown
-		// and isolation can't be verified. Fail closed — a bad redirect must not
-		// silently green-light a potentially same-origin untrusted kernel.
-		return { isolated: false, sandboxHost };
+		appHost = '';
 	}
+	// A redirect WAS configured but yields no usable app host — either unparseable,
+	// or a hostless scheme like `mailto:` (empty hostname). Isolation can't be
+	// verified, so fail closed: a bad redirect must not silently green-light a
+	// potentially same-origin untrusted kernel.
+	if (!appHost) return { isolated: false, sandboxHost, reason: 'unverifiable-redirect' };
+
 	const sameOrigin = sandboxHost === appHost;
 	const sharesParent = sandboxHost.endsWith(`.${appHost}`) || appHost.endsWith(`.${sandboxHost}`);
-	return { isolated: !(sameOrigin || sharesParent), sandboxHost, appHost };
+	if (sameOrigin || sharesParent) {
+		return { isolated: false, sandboxHost, appHost, reason: 'shared-origin' };
+	}
+	return { isolated: true, sandboxHost, appHost };
 }

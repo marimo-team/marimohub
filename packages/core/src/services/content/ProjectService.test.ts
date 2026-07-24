@@ -313,6 +313,9 @@ describe('ProjectService', () => {
 				projects.updateProject(created.id, { name: 'X' }, ACTOR, 'stale-version-token'),
 			).rejects.toThrow(PreconditionFailedError);
 
+			// The rejection must be a no-op: the stored project is untouched.
+			expect((await projects.getProject(created.id)).name).toBe('P');
+
 			// The matching version is accepted, proving the guard checks the token
 			// rather than rejecting every precondition.
 			const ok = await projects.updateProject(created.id, { name: 'X' }, ACTOR, created.updated_at);
@@ -432,25 +435,6 @@ describe('ProjectService', () => {
 			expect(await listAllKeys(bucket, survivorPrefix)).toEqual(survivorKeysBefore);
 			expect((await projects.listProjects()).map((p) => p.id)).toContain(survivor.id);
 			expect(await notebooks.getNotebookContent(survivor.id, survivorNb.id)).toBe('s1');
-		});
-
-		// Skipped: the NaN branch in the sweep filter is unreachable. updated_at is
-		// typed z.iso.datetime(), so a garbage value throws in getCurrentSnapshot's
-		// parseStored before the sweep runs — it exercises the schema guard, not a
-		// ProjectService defect.
-		it.skip('still purges a soft-deleted project whose updated_at is unparseable', async () => {
-			const doomed = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
-			await projects.deleteProject(doomed.id, ACTOR);
-
-			await catalog.updateProjectEntry('test.corrupt', ACTOR, doomed.id, () => ({
-				updated_at: 'not-a-real-date',
-			}));
-
-			expect(await projects.sweepDeletedProjects(0)).toBe(1);
-			expect(await listAllKeys(bucket, `projects/${doomed.id}/`)).toEqual([]);
-			expect((await catalog.getCurrentSnapshot()).projects.map((p) => p.id)).not.toContain(
-				doomed.id,
-			);
 		});
 	});
 });

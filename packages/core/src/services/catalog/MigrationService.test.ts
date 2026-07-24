@@ -149,6 +149,21 @@ describe('MigrationService (prototype, unwired)', () => {
 		}
 	});
 
+	it('skips a JSON-valid but non-object record (e.g. null) without aborting', async () => {
+		const validKeys = await seedMeta(2);
+		// Valid JSON, but `null` — reading `.schema_version` off it would throw.
+		const badKey = paths.project(createProjectId()).notebook(createNotebookId()).meta;
+		await bucket.put(badKey, 'null');
+
+		const result = await migrations.runMigration(1, 2, 'meta', exampleMigrateV1toV2);
+
+		expect(result.migrated).toBe(2);
+		expect(result.skipped).toBe(1);
+		for (const key of validKeys) {
+			expect((await (await bucket.get(key))!.json<any>()).schema_version).toBe(2);
+		}
+	});
+
 	it('resumes across multiple cursor pages', async () => {
 		const small = new SmallPageBucket(2);
 		const svc = new MigrationService(small);

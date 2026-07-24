@@ -1,8 +1,10 @@
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
+import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
+import { listAllKeys } from '../catalog/storage';
 import type { SessionService } from './SessionService';
 
 /**
@@ -129,27 +131,75 @@ export class ReconciliationService {
 			}
 		}
 
+		// Ids for which we hold (or just wrote) a first-seen marker this pass, so the
+		// stale ones (reaped / recorded / vanished) can be pruned below.
+		const pendingUndated = new Set<string>();
+
 		for (const sandbox of active) {
 			if (recordedSandboxIds.has(sandbox.id)) continue; // owned by a record above
 
 			// Rule 3 — a live sandbox with no record at all is an invisible orphan that
 			// leaks billable compute forever. Reap it once past the grace window.
-			// Without a creation timestamp we can't prove the sandbox is old enough to be
-			// a leaked orphan (vs. an in-flight provision the record just hasn't caught up
-			// to), so the grace window applies and we leave it for a later sweep.
-			if (!sandbox.createdAt) continue;
-			const ageMs = now - new Date(sandbox.createdAt).getTime();
+			let ageMs: number;
+			if (sandbox.createdAt) {
+				ageMs = now - new Date(sandbox.createdAt).getTime();
+			} else {
+				// The provider gave no creation timestamp, so we can't tell an in-flight
+				// provision (record not yet visible) from a leaked orphan on a single
+				// snapshot. Anchor the grace to a durable first-seen marker so it's left
+				// alone at first sighting but still reaped a bounded time later — never
+				// leaking forever, never reaped on sight.
+				const firstSeen = await this.firstSeenOrphan(sandbox.id, now);
+				pendingUndated.add(sandbox.id);
+				ageMs = now - firstSeen;
+			}
 			if (ageMs < orphanGraceMs) continue;
 
 			try {
 				await this.compute.create(sandbox.id).destroy();
 				orphansReaped++;
 				orphanSandboxIds.push(sandbox.id);
+				pendingUndated.delete(sandbox.id);
+				await this.bucket.delete(paths.reconcileOrphan(sandbox.id)).catch(() => {});
 			} catch {
 				// Best-effort: a later sweep will retry.
 			}
 		}
 
+		await this.pruneOrphanMarkers(pendingUndated);
+
 		return { skipped: false, reclaimed, markedDead, orphansReaped, orphanSandboxIds };
+	}
+
+	/**
+	 * First-seen epoch (ms) for a timestamp-less orphan: read the durable marker, or
+	 * create it at `now` on first sighting. A corrupt/absent marker resets to `now`,
+	 * so the worst case is one extra grace window — never an unbounded leak.
+	 */
+	private async firstSeenOrphan(sandboxId: string, now: number): Promise<number> {
+		const key = paths.reconcileOrphan(sandboxId);
+		const existing = await this.bucket.get(key);
+		if (existing) {
+			try {
+				const { first_seen } = await existing.json<{ first_seen: number }>();
+				if (typeof first_seen === 'number' && Number.isFinite(first_seen)) return first_seen;
+			} catch {
+				// Corrupt marker — fall through and rewrite it below.
+			}
+		}
+		await this.bucket.put(key, JSON.stringify({ first_seen: now })).catch(() => {});
+		return now;
+	}
+
+	/** Drop first-seen markers for orphans that are no longer pending (reaped, recorded, or gone). */
+	private async pruneOrphanMarkers(keep: ReadonlySet<string>): Promise<void> {
+		const keys = await listAllKeys(this.bucket, paths.reconcileOrphansPrefix).catch(() => []);
+		const stale = keys.filter((k) => {
+			const id = decodeURIComponent(
+				k.slice(paths.reconcileOrphansPrefix.length).replace(/\.json$/, ''),
+			);
+			return !keep.has(id);
+		});
+		if (stale.length > 0) await this.bucket.delete(stale).catch(() => {});
 	}
 }

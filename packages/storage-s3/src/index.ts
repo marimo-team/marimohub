@@ -163,6 +163,11 @@ export class S3Storage implements Bucket {
 
 	async delete(key: string | string[]): Promise<void> {
 		if (Array.isArray(key)) {
+			// A batch delete returns HTTP 200 even when individual keys fail; the per-key
+			// failures come back in Errors[]. Collect them across ALL chunks (never abort
+			// early — one inaccessible object must not block retention cleanup for the
+			// rest) and reject only once every batch has been attempted.
+			const errors: { Key?: string; Code?: string; Message?: string }[] = [];
 			for (const batch of chunk(key, 1000)) {
 				if (batch.length === 0) continue;
 				const res = await this.client.send(
@@ -171,16 +176,14 @@ export class S3Storage implements Bucket {
 						Delete: { Objects: batch.map((Key) => ({ Key })) },
 					}),
 				);
-				// A batch delete returns HTTP 200 even when individual keys fail; the
-				// per-key failures come back in Errors[]. Don't report a partial failure
-				// as a clean delete — a swallowed AccessDenied leaves the object behind.
-				if (res.Errors && res.Errors.length > 0) {
-					const first = res.Errors[0];
-					throw new Error(
-						`S3 batch delete failed for ${res.Errors.length} object(s): ` +
-							`${first.Key} — ${first.Code}: ${first.Message}`,
-					);
-				}
+				if (res.Errors && res.Errors.length > 0) errors.push(...res.Errors);
+			}
+			if (errors.length > 0) {
+				const first = errors[0];
+				throw new Error(
+					`S3 batch delete failed for ${errors.length} object(s): ` +
+						`${first.Key} — ${first.Code}: ${first.Message}`,
+				);
 			}
 			return;
 		}

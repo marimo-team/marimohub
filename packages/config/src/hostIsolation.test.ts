@@ -31,5 +31,17 @@ describe('checkSandboxHostIsolation', () => {
 			MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'not-a-valid-url',
 		});
 		expect(result.isolated).toBe(false);
+		expect(result.reason).toBe('unverifiable-redirect');
+	});
+
+	// A hostless-but-parseable scheme (e.g. mailto:) yields an empty hostname, which
+	// must be treated as unverifiable too — not silently isolated.
+	it('fails closed when the redirect parses but yields no host (mailto:)', () => {
+		const result = checkSandboxHostIsolation({
+			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'hub.example.com',
+			MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'mailto:admin@example.com',
+		});
+		expect(result.isolated).toBe(false);
+		expect(result.reason).toBe('unverifiable-redirect');
 	});
 });

@@ -451,10 +451,13 @@ describe('createE2bClient', () => {
 		await expect(handle.kill()).resolves.toBeUndefined();
 	});
 
-	it('defaultLoadSdk throws a clear install error when the e2b SDK is not installed', async () => {
-		// No injected loader → the default runtime import('e2b') fails (SDK unbundled).
-		const client = createE2bClient(baseConfig);
-		await expect(client.create({})).rejects.toThrow(/requires the 'e2b' SDK/);
+	it('surfaces a loadSdk failure (e.g. the e2b SDK is not installed)', async () => {
+		// Inject a deterministic failing loader instead of relying on `e2b` being absent
+		// from the environment, and assert the failure reaches the caller.
+		const client = createE2bClient(baseConfig, async () => {
+			throw new Error("Cannot find package 'e2b'");
+		});
+		await expect(client.create({})).rejects.toThrow(/Cannot find package 'e2b'/);
 	});
 
 	it('surfaces CommandExitError-like SDK failures as command results', async () => {

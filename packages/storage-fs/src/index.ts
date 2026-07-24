@@ -124,9 +124,22 @@ export class FsStorage implements Bucket {
 			// O_NOFOLLOW only guards the final component; an intermediate symlinked
 			// directory can still escape the root. Re-resolve the real path and treat
 			// anything outside the root as absent, so a link can't exfiltrate a file
-			// from elsewhere on the host.
-			const real = await fsp.realpath(filePath);
-			if (real !== this.root && !real.startsWith(this.rootPrefix)) return null;
+			// from elsewhere on the host. Tie the check to the OPEN fd's inode (compare
+			// dev+ino) so a symlink swapped in between open() and realpath() can't make
+			// an external fd pass the containment check.
+			let real: string;
+			let realStat: Awaited<ReturnType<typeof fsp.stat>>;
+			try {
+				real = await fsp.realpath(filePath);
+				if (real !== this.root && !real.startsWith(this.rootPrefix)) return null;
+				realStat = await fsp.stat(real);
+			} catch (err) {
+				// The path vanished (or a segment did) after open — treat as absent so
+				// list()'s concurrent-delete behavior stays intact.
+				if (NOT_FOUND_CODES.has(errCode(err) ?? '')) return null;
+				throw err;
+			}
+			if (realStat.ino !== stat.ino || realStat.dev !== stat.dev) return null;
 			return { body: await handle.readFile(), uploaded: stat.mtime };
 		} finally {
 			await handle.close();

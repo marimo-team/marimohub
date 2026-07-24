@@ -81,12 +81,18 @@ export class MigrationService {
 				const body = await this.bucket.get(obj.key);
 				if (!body) continue;
 
-				// A single corrupt/unparseable object must not abort the whole run and
-				// strand its valid siblings unmigrated. Count it as skipped (logged) and
-				// move on; a re-run after the object is repaired will pick it up.
+				// A single corrupt object must not abort the whole run and strand its
+				// valid siblings unmigrated. Count it as skipped (logged) and move on; a
+				// re-run after the object is repaired will pick it up. This covers both
+				// unparseable JSON and JSON that isn't a non-null object (e.g. `null`,
+				// which would otherwise throw on the schema_version read below).
 				let data: Migratable;
 				try {
-					data = (await body.json()) as Migratable;
+					const parsed = await body.json();
+					if (parsed === null || typeof parsed !== 'object') {
+						throw new Error('not a JSON object');
+					}
+					data = parsed as Migratable;
 				} catch (err) {
 					console.warn(`runMigration: skipping unreadable object ${obj.key}: ${String(err)}`);
 					result.skipped++;

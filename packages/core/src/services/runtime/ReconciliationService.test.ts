@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import type { SandboxId } from '../../ids';
+import { paths } from '../../paths';
 import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import { ACTOR, makeLocalSource, MemoryBucket, RecordingCompute } from '../../testing';
 import { CatalogService } from '../catalog/CatalogService';
@@ -157,6 +158,25 @@ describe('ReconciliationService', () => {
 
 		expect(result.orphansReaped).toBe(0);
 		expect(compute.destroyed).toEqual([]);
+		// First sighting is recorded durably so the grace is anchored, not forgotten.
+		expect(await bucket.get(paths.reconcileOrphan(inflightId))).not.toBeNull();
+	});
+
+	it('Rule 3: reaps a timestamp-less orphan once its first-seen marker exceeds the grace', async () => {
+		compute.active = [{ id: inflightId }]; // no createdAt
+		// A prior sighting old enough that the grace has since elapsed — the leak is
+		// bounded, not indefinite.
+		await bucket.put(
+			paths.reconcileOrphan(inflightId),
+			JSON.stringify({ first_seen: Date.now() - 60_000 }),
+		);
+
+		const result = await reconciler.reconcile({ orphanGraceMs: 1_000 });
+
+		expect(result.orphansReaped).toBe(1);
+		expect(compute.destroyed).toEqual([inflightId]);
+		// The marker is cleaned up after the orphan is reaped.
+		expect(await bucket.get(paths.reconcileOrphan(inflightId))).toBeNull();
 	});
 
 	it('Rule 1: force-destroys and still counts reclaimed when teardown throws', async () => {

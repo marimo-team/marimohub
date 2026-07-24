@@ -617,8 +617,15 @@ export class NotebookService {
 					);
 				} catch (err) {
 					// version.json deleted between the read above and the CAS write
-					// (e.g. concurrent notebook purge) — skip, matching the read-first check.
+					// (e.g. concurrent notebook purge). Best-effort remove the sidecars we
+					// just wrote so we don't leak untracked artifacts no descriptor points
+					// at — matching the read-first "skip the whole attach" contract.
 					if (!(err instanceof NotFoundError)) throw err;
+					const orphans = [
+						input.html !== undefined ? ver.html : undefined,
+						input.session !== undefined ? ver.session : undefined,
+					].filter((k): k is string => k !== undefined);
+					if (orphans.length > 0) await this.bucket.delete(orphans).catch(() => {});
 				}
 			}
 		}

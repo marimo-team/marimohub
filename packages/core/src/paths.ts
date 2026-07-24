@@ -123,6 +123,15 @@ export const paths = {
 	event: (date: string, id: string) => `_system/events/${date}/${id}.json`,
 	idempotencyPrefix: '_system/idempotency/',
 	idempotencyKey: (digest: string) => `_system/idempotency/${digest}.json`,
+	/**
+	 * First-seen marker for a recordless sandbox the compute provider reports
+	 * without a `createdAt`. Written once when the reconciler first observes such an
+	 * orphan and deleted when it is reaped or vanishes — an append-only bound on how
+	 * long a timestamp-less orphan can leak (see ReconciliationService Rule 3).
+	 */
+	reconcileOrphansPrefix: '_system/reconcile/orphans/',
+	reconcileOrphan: (sandboxId: string) =>
+		`_system/reconcile/orphans/${encodeURIComponent(sandboxId)}.json`,
 	/** Advisory lease guarding the single-writer maintenance sweep (see MaintenanceLock). */
 	maintenanceLock: '_system/_maintenance.lock',
 	/** Advisory lease for the session-lifecycle sweep — its own key, so the two loops

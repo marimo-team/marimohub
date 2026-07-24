@@ -180,13 +180,19 @@ function parsePersistWorkspace(env: Env): 'source' | 'workspace' {
  * the hosts so neither is a dotted suffix of the other.
  */
 function assertSandboxHostIsolated(env: Env): void {
-	const { isolated, sandboxHost, appHost } = checkSandboxHostIsolation(env);
+	const { isolated, sandboxHost, appHost, reason } = checkSandboxHostIsolation(env);
 	if (isolated) return;
+	const detail =
+		reason === 'unverifiable-redirect'
+			? `MARIMOHUB_AUTH_OIDC_REDIRECT_URI does not yield a usable app host, so isolation of ` +
+				`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) cannot be verified. Set a valid ` +
+				`absolute http(s) redirect URI.`
+			: `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) shares an origin/parent domain with the ` +
+				`app host (${appHost}).`;
 	throw new ConfigError(
-		`MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME (${sandboxHost}) shares an origin/parent domain with the ` +
-			`app host (${appHost}). Notebook kernels run untrusted code and must be isolated on a separate ` +
-			`domain (e.g. sandboxes.example.net) so a malicious notebook cannot escape the iframe sandbox ` +
-			`into the control plane or set cookies on the shared domain.`,
+		`${detail} Notebook kernels run untrusted code and must be isolated on a separate domain ` +
+			`(e.g. sandboxes.example.net) so a malicious notebook cannot escape the iframe sandbox into ` +
+			`the control plane or set cookies on the shared domain.`,
 		{
 			variable: 'MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME',
 			remediation: 'Serve kernels from a separate domain (e.g. sandboxes.example.net).',

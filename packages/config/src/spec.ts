@@ -86,7 +86,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID',
 						name: 'S3 access key id',
 						description:
-							'Access key id. Both key id and secret must be set together, otherwise the SDK default credential chain is used.',
+							'Access key id. Set both key id and secret together to use static credentials, or neither to use the SDK default credential chain. Setting only one is rejected at startup.',
 						secret: true,
 					},
 					{

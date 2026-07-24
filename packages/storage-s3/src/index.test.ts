@@ -382,6 +382,27 @@ describe('S3Storage list truncation and delete edge cases', () => {
 		const s3 = new S3Storage(CFG);
 		await expect(s3.delete(['k/1', 'k/2'])).rejects.toThrow();
 	});
+
+	it('attempts every batch before rejecting, even when an early batch has an error', async () => {
+		let deleteCalls = 0;
+		vi.spyOn(S3Client.prototype, 'send').mockImplementation(
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			async (command: any) => {
+				if (command.constructor.name === 'DeleteObjectsCommand') {
+					deleteCalls++;
+					// The first batch has a failing key; the second must still be attempted.
+					return deleteCalls === 1
+						? { Deleted: [], Errors: [{ Key: 'k/0', Code: 'AccessDenied' }] }
+						: ({ Deleted: [], Errors: [] } as never);
+				}
+				return {} as never;
+			},
+		);
+		// 1500 keys → two 1000-max batches.
+		const keys = Array.from({ length: 1500 }, (_, i) => `k/${i}`);
+		await expect(new S3Storage(CFG).delete(keys)).rejects.toThrow(/AccessDenied/);
+		expect(deleteCalls).toBe(2);
+	});
 });
 
 describe('S3Storage.verifyConditionalWrites', () => {

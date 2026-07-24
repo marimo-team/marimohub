@@ -118,8 +118,11 @@ describe('DockerCompute', () => {
 		expect(write).toBeDefined();
 		// The bytes ride stdin verbatim…
 		expect(write!.stdin).toBe(big);
-		// …and never appear on the argv (which stays tiny regardless of payload size).
-		expect(write!.args.join(' ').length).toBeLessThan(big.length);
+		// …and the argv is the fixed redirect command with no payload interpolated:
+		// the last arg is exactly `cat > <path>` and none of the payload bytes (the
+		// repeated 0x41 'A') appear anywhere in the argv.
+		expect(write!.args.at(-1)).toBe("cat > '/workspace/big.bin'");
+		expect(write!.args.join(' ')).not.toContain('AAAAAAAAAA');
 	});
 
 	it('writeFiles shell-quotes a file path containing a single quote', async () => {
@@ -231,8 +234,18 @@ describe('DockerCompute', () => {
 		expect(rm!.args).toEqual(['rm', '-f', '-v', NAME]);
 	});
 
-	it('destroy is idempotent when called twice', async () => {
-		const { runner, calls } = fakeRunner(defaultHandler);
+	it('destroy is idempotent when called twice (even if the second rm fails)', async () => {
+		let rmCount = 0;
+		const { runner, calls } = fakeRunner((args) => {
+			if (args[0] === 'rm') {
+				rmCount++;
+				// The second removal fails (container already gone); destroy must swallow it.
+				return rmCount >= 2
+					? { stdout: '', stderr: 'No such container', exitCode: 1 }
+					: { stdout: '', stderr: '', exitCode: 0 };
+			}
+			return defaultHandler(args);
+		});
 		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
 		await sb.destroy();
 		await expect(sb.destroy()).resolves.toBeUndefined();
