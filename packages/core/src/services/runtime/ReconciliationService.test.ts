@@ -179,6 +179,26 @@ describe('ReconciliationService', () => {
 		expect(await bucket.get(paths.reconcileOrphan(inflightId))).toBeNull();
 	});
 
+	it('Rule 3: resets a future-dated marker so a bad clock cannot defer reaping forever', async () => {
+		compute.active = [{ id: inflightId }]; // no createdAt
+		// A marker dated in the future (clock skew / tampering) would otherwise push
+		// the grace out indefinitely.
+		await bucket.put(
+			paths.reconcileOrphan(inflightId),
+			JSON.stringify({ first_seen: Date.now() + 3_600_000 }),
+		);
+
+		const result = await reconciler.reconcile({ orphanGraceMs: 1_000 });
+
+		// Not reaped on sight, but the marker is rewritten to a non-future time so a
+		// later sweep will reap it within one grace window.
+		expect(result.orphansReaped).toBe(0);
+		const marker = await (await bucket.get(paths.reconcileOrphan(inflightId)))!.json<{
+			first_seen: number;
+		}>();
+		expect(marker.first_seen).toBeLessThanOrEqual(Date.now());
+	});
+
 	it('Rule 1: force-destroys and still counts reclaimed when teardown throws', async () => {
 		const session = await createSession(terminalId);
 		await sessions.terminate(projectId, session.session_id);

@@ -1,6 +1,7 @@
 import type {
 	NotebookId,
 	ProjectId,
+	SandboxId,
 	SessionId,
 	SnapshotId,
 	TokenId,
@@ -130,7 +131,7 @@ export const paths = {
 	 * long a timestamp-less orphan can leak (see ReconciliationService Rule 3).
 	 */
 	reconcileOrphansPrefix: '_system/reconcile/orphans/',
-	reconcileOrphan: (sandboxId: string) =>
+	reconcileOrphan: (sandboxId: SandboxId) =>
 		`_system/reconcile/orphans/${encodeURIComponent(sandboxId)}.json`,
 	/** Advisory lease guarding the single-writer maintenance sweep (see MaintenanceLock). */
 	maintenanceLock: '_system/_maintenance.lock',

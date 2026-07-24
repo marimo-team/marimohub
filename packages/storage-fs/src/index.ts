@@ -122,11 +122,16 @@ export class FsStorage implements Bucket {
 			const stat = await handle.stat();
 			if (!stat.isFile()) return null;
 			// O_NOFOLLOW only guards the final component; an intermediate symlinked
-			// directory can still escape the root. Re-resolve the real path and treat
-			// anything outside the root as absent, so a link can't exfiltrate a file
-			// from elsewhere on the host. Tie the check to the OPEN fd's inode (compare
-			// dev+ino) so a symlink swapped in between open() and realpath() can't make
-			// an external fd pass the containment check.
+			// directory can still escape the root. Re-resolve the real path, refuse
+			// anything outside the root, and require the opened fd to still be that same
+			// inode (dev+ino) — so a static escaping symlink reads as absent.
+			//
+			// Threat model: this is defense-in-depth against a MISCONFIGURED tree (e.g.
+			// an operator-mounted symlink escaping the root), NOT a race-free guarantee.
+			// Node exposes no beneath-resolving open (openat2/RESOLVE_BENEATH), so an
+			// attacker able to swap symlinks inside the root *concurrently* could still
+			// win the open→realpath→stat window — but such an attacker already has write
+			// access to the hub's private storage tree and has fully compromised it.
 			let real: string;
 			let realStat: Awaited<ReturnType<typeof fsp.stat>>;
 			try {

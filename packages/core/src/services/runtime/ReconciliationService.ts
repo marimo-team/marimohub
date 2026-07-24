@@ -1,5 +1,6 @@
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
+import type { SandboxId } from '../../ids';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
 import type { NotebookService } from '../content/NotebookService';
@@ -173,16 +174,20 @@ export class ReconciliationService {
 
 	/**
 	 * First-seen epoch (ms) for a timestamp-less orphan: read the durable marker, or
-	 * create it at `now` on first sighting. A corrupt/absent marker resets to `now`,
-	 * so the worst case is one extra grace window — never an unbounded leak.
+	 * create it at `now` on first sighting. A marker that is absent, corrupt, or dated
+	 * in the FUTURE (clock skew / tampering — which would otherwise defer reaping
+	 * indefinitely) resets to `now`, so the worst case is one extra grace window —
+	 * never an unbounded leak.
 	 */
-	private async firstSeenOrphan(sandboxId: string, now: number): Promise<number> {
+	private async firstSeenOrphan(sandboxId: SandboxId, now: number): Promise<number> {
 		const key = paths.reconcileOrphan(sandboxId);
 		const existing = await this.bucket.get(key);
 		if (existing) {
 			try {
 				const { first_seen } = await existing.json<{ first_seen: number }>();
-				if (typeof first_seen === 'number' && Number.isFinite(first_seen)) return first_seen;
+				if (typeof first_seen === 'number' && Number.isFinite(first_seen) && first_seen <= now) {
+					return first_seen;
+				}
 			} catch {
 				// Corrupt marker — fall through and rewrite it below.
 			}
