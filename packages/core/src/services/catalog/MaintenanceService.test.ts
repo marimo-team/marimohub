@@ -91,6 +91,46 @@ describe('MaintenanceService', () => {
 			expect(await maintenance.expireSnapshots({ retentionMs: 0, keepLast: 20 })).toBe(0);
 		});
 
+		it('does not delete anything when catalog.json is corrupt', async () => {
+			const old1 = createSnapshotId();
+			const old2 = createSnapshotId();
+			await putSnapshotAt(old1, 0);
+			await putSnapshotAt(old2, 0);
+			await bucket.put(paths.catalog, JSON.stringify({ not: 'a catalog' }));
+			const delSpy = vi.spyOn(bucket, 'delete');
+
+			clock.set(500 * DAY_MS);
+			// The corrupt catalog means current/previous can't be identified, so
+			// nothing may be deleted (else the live pointer could be orphaned).
+			await maintenance.expireSnapshots({ retentionMs: 0, keepLast: 0 }).catch(() => {});
+
+			expect(delSpy).not.toHaveBeenCalled();
+			expect(await bucket.get(paths.snapshot(old1))).not.toBeNull();
+			expect(await bucket.get(paths.snapshot(old2))).not.toBeNull();
+		});
+
+		it('protects current/previous even when outside keepLast AND older than retention', async () => {
+			const previous = createSnapshotId();
+			const current = createSnapshotId();
+			const newer1 = createSnapshotId();
+			const newer2 = createSnapshotId();
+			// current/previous are the OLDEST — outside a keepLast floor and past retention.
+			await putSnapshotAt(previous, 0);
+			await putSnapshotAt(current, 1 * DAY_MS);
+			await putSnapshotAt(newer1, 10 * DAY_MS);
+			await putSnapshotAt(newer2, 11 * DAY_MS);
+			await bucket.put(
+				paths.catalog,
+				JSON.stringify({ ...makeCatalog(current), previous_snapshot_id: previous }),
+			);
+
+			clock.set(500 * DAY_MS);
+			await maintenance.expireSnapshots({ retentionMs: 90 * DAY_MS, keepLast: 2 });
+
+			expect(await bucket.get(paths.snapshot(current))).not.toBeNull();
+			expect(await bucket.get(paths.snapshot(previous))).not.toBeNull();
+		});
+
 		it('emits snapshot count/size gauges', async () => {
 			const gauge = vi.fn();
 			const svc = new MaintenanceService(bucket, { increment: vi.fn(), gauge });
@@ -122,6 +162,32 @@ describe('MaintenanceService', () => {
 
 		it('returns 0 when there are no events', async () => {
 			expect(await maintenance.pruneEvents()).toBe(0);
+		});
+
+		it('skips a non-date folder under the events prefix', async () => {
+			clock.set(Date.parse('2025-06-17T00:00:00.000Z'));
+			await bucket.put(paths.event('2020-01-01', 'e1'), '{}'); // old day → pruned
+			await bucket.put('_system/events/not-a-date/x.json', '{}'); // not a date folder
+
+			const deleted = await maintenance.pruneEvents({ retentionMs: 90 * DAY_MS });
+
+			expect(deleted).toBe(1); // only the old day folder
+			expect(await bucket.get('_system/events/not-a-date/x.json')).not.toBeNull();
+		});
+
+		it('keeps a day folder whose end is exactly at the retention boundary', async () => {
+			// Choose `now` so cutoff (now - retention) lands exactly on the day's end.
+			// The documented rule keeps a day "until the end predates the cutoff"; at
+			// end === cutoff the end does not predate, so the folder must survive.
+			const retentionMs = 90 * DAY_MS;
+			const dayEnd = Date.parse('2020-01-02T00:00:00.000Z');
+			clock.set(dayEnd + retentionMs); // cutoff === dayEnd
+			await bucket.put(paths.event('2020-01-01', 'e1'), '{}');
+
+			const deleted = await maintenance.pruneEvents({ retentionMs });
+
+			expect(deleted).toBe(0);
+			expect(await bucket.get(paths.event('2020-01-01', 'e1'))).not.toBeNull();
 		});
 	});
 });

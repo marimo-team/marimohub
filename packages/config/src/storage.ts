@@ -22,6 +22,20 @@ export function makeStorage(env: Env): Bucket {
 	const backend = env.MARIMOHUB_STORAGE_BACKEND ?? 's3';
 	switch (backend) {
 		case 's3':
+			// Static creds are all-or-nothing. If only one half is set, silently
+			// dropping it (and falling back to the ambient AWS chain — a different
+			// identity) is a misconfiguration that fails in confusing ways at runtime.
+			// Fail closed at boot instead.
+			if (
+				Boolean(env.MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID) !==
+				Boolean(env.MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY)
+			) {
+				throw new ConfigError(
+					'Partial S3 credentials: set BOTH MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID and ' +
+						'MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY, or neither (to use the ambient AWS credential chain).',
+					{ variable: 'MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID', docs: 'docs/configuration.md#storage' },
+				);
+			}
 			return new S3Storage({
 				bucket: requiredVar(env, 'MARIMOHUB_STORAGE_S3_BUCKET', {
 					remediation:

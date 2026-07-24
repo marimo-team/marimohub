@@ -48,6 +48,30 @@ describe('IdempotencyService', () => {
 		expect(await svc.lookup('u1:POST /projects', 'fresh')).toEqual({ data: { id: 'fresh' } });
 	});
 
+	it('lookup returns null when the stored record scope does not match (hash-collision guard)', async () => {
+		const bucket = new MemoryBucket();
+		const svc = new IdempotencyService(bucket);
+		await svc.record('u1:POST /projects', 'k1', { id: 'proj-1' });
+
+		// Tamper the stored record's scope in place, simulating a digest collision
+		// where a record for a different scope lands at the same object key.
+		const { objects } = await bucket.list({ prefix: paths.idempotencyPrefix });
+		const key = objects[0].key;
+		const record = await (await bucket.get(key))!.json<any>();
+		await bucket.put(key, JSON.stringify({ ...record, scope: 'u2:POST /other' }));
+
+		expect(await svc.lookup('u1:POST /projects', 'k1')).toBeNull();
+	});
+
+	it('record rethrows a non-PreconditionFailed error from put', async () => {
+		const bucket = new MemoryBucket();
+		const boom = new Error('put boom');
+		vi.spyOn(bucket, 'put').mockRejectedValue(boom);
+		const svc = new IdempotencyService(bucket);
+
+		await expect(svc.record('u1:POST /projects', 'k1', { id: 'x' })).rejects.toBe(boom);
+	});
+
 	it('prune writes under the _system/idempotency/ prefix', async () => {
 		const bucket = new MemoryBucket();
 		await new IdempotencyService(bucket).record('u1:POST /projects', 'k1', { id: 'proj-1' });

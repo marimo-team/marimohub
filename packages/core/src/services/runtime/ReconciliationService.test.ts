@@ -145,4 +145,64 @@ describe('ReconciliationService', () => {
 		expect(result.orphansReaped).toBe(0);
 		expect(compute.destroyed).toEqual([]);
 	});
+
+	it('Rule 3: applies the grace window to an orphan with no createdAt', async () => {
+		// Provisioning writes the record before creating the sandbox, so a brand-new
+		// sandbox the provider has not yet timestamped is an in-flight provision, not
+		// a leak. With unknown age we cannot prove it is older than the grace window,
+		// so it must be left alone — not reaped on sight.
+		compute.active = [{ id: inflightId }];
+
+		const result = await reconciler.reconcile({ orphanGraceMs: 1_000 });
+
+		expect(result.orphansReaped).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+	});
+
+	it('Rule 1: force-destroys and still counts reclaimed when teardown throws', async () => {
+		const session = await createSession(terminalId);
+		await sessions.terminate(projectId, session.session_id);
+		compute.active = [{ id: terminalId }];
+
+		// Save-on-reap can reject (bucket/sandbox RPC failure); the reconciler must
+		// still guarantee the sandbox dies and count it reclaimed.
+		const provisioner = (
+			reconciler as unknown as { provisioner: { teardown: () => Promise<void> } }
+		).provisioner;
+		vi.spyOn(provisioner, 'teardown').mockRejectedValue(new Error('teardown boom'));
+
+		const result = await reconciler.reconcile();
+
+		expect(result.reclaimed).toBe(1);
+		expect(compute.destroyed).toEqual([terminalId]);
+	});
+
+	it('Rule 1: reclaims a lingering sandbox behind a terminating record', async () => {
+		const session = await createSession(goneId);
+		await sessions.heartbeat(projectId, session.session_id); // -> running
+		await sessions.beginTerminating(projectId, session.session_id); // -> terminating
+		// Teardown stalled/crashed: the sandbox is still live and billing while the
+		// record sits in `terminating`. The provider-truth net must destroy it.
+		compute.active = [{ id: goneId }];
+
+		const result = await reconciler.reconcile();
+
+		expect(result.reclaimed).toBe(1);
+		expect(compute.destroyed).toEqual([goneId]);
+	});
+
+	it('Rule 2 does not misfire on a terminating record whose sandbox vanished', async () => {
+		const session = await createSession(healthyId);
+		await sessions.heartbeat(projectId, session.session_id); // -> running
+		await sessions.beginTerminating(projectId, session.session_id); // -> terminating
+		compute.active = []; // sandbox already gone
+
+		const result = await reconciler.reconcile();
+
+		// An explicit stop must not be downgraded to `failed`.
+		expect(result.markedDead).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+		const stored = await sessions.getSession(projectId, session.session_id);
+		expect(stored.status).toBe('terminating');
+	});
 });

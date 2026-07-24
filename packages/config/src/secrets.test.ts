@@ -46,4 +46,25 @@ describe('makeSecrets', () => {
 		const { secrets } = makeSecrets({ MARIMOHUB_SECRETS_BACKEND: 'bucket' }, bucket);
 		expect(secrets).toBeDefined();
 	});
+
+	it('enables aws-sm via the flag even with no region', () => {
+		const { secrets } = makeSecrets(
+			{ MARIMOHUB_SECRETS_BACKEND: 'bucket', MARIMOHUB_SECRETS_AWS: 'true' },
+			bucket,
+		);
+		expect(secrets).toBeDefined();
+	});
+
+	it('rejects a non-integer aws cache TTL', () => {
+		expect(() =>
+			makeSecrets(
+				{
+					MARIMOHUB_SECRETS_BACKEND: 'bucket',
+					MARIMOHUB_SECRETS_AWS_REGION: 'us-east-1',
+					MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS: '1.5',
+				},
+				bucket,
+			),
+		).toThrow(/MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS/);
+	});
 });

@@ -3,7 +3,6 @@ import { Millis } from '../../duration';
 import type { SandboxProvider } from '../../ports/sandbox';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import { isTerminal } from './sessionState';
 import type { SessionService } from './SessionService';
 
 /**
@@ -88,11 +87,13 @@ export class ReconciliationService {
 			const sandboxId = session.sandbox_id;
 			if (!sandboxId) continue;
 
-			const terminal = isTerminal(session.status);
 			const isLive = session.status === 'running' || session.status === 'starting';
 
-			if (terminal && activeIds.has(sandboxId)) {
-				// Rule 1 — terminal record, sandbox still alive (and billing). Save edits
+			if (!isLive && activeIds.has(sandboxId)) {
+				// Rule 1 — record is terminal OR mid-teardown (`terminating`) but the
+				// sandbox is still alive (and billing). A `terminating` record whose
+				// teardown never finished would otherwise leak the sandbox forever, since
+				// it is neither live (Rule 2) nor an unrecorded orphan (Rule 3). Save edits
 				// back when reachable, then guarantee the sandbox dies.
 				const sandbox = this.compute.create(sandboxId);
 				try {
@@ -133,10 +134,12 @@ export class ReconciliationService {
 
 			// Rule 3 — a live sandbox with no record at all is an invisible orphan that
 			// leaks billable compute forever. Reap it once past the grace window.
-			if (sandbox.createdAt) {
-				const ageMs = now - new Date(sandbox.createdAt).getTime();
-				if (ageMs < orphanGraceMs) continue;
-			}
+			// Without a creation timestamp we can't prove the sandbox is old enough to be
+			// a leaked orphan (vs. an in-flight provision the record just hasn't caught up
+			// to), so the grace window applies and we leave it for a later sweep.
+			if (!sandbox.createdAt) continue;
+			const ageMs = now - new Date(sandbox.createdAt).getTime();
+			if (ageMs < orphanGraceMs) continue;
 
 			try {
 				await this.compute.create(sandbox.id).destroy();

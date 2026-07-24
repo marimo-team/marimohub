@@ -41,6 +41,12 @@ describe('withCasRetry', () => {
 		await expect(withCasRetry(attempt, { backoffMs: () => 0 })).rejects.toBeInstanceOf(TypeError);
 		expect(attempt).toHaveBeenCalledTimes(1);
 	});
+
+	it('throws ConflictError immediately when retries is 0 (attempt never runs)', async () => {
+		const attempt = vi.fn();
+		await expect(withCasRetry(attempt, { retries: 0 })).rejects.toBeInstanceOf(ConflictError);
+		expect(attempt).not.toHaveBeenCalled();
+	});
 });
 
 describe('mutateObject', () => {
@@ -70,6 +76,46 @@ describe('mutateObject', () => {
 				notFound: () => new NotFoundError('nope'),
 			}),
 		).rejects.toBeInstanceOf(NotFoundError);
+	});
+
+	it('throws the default NotFoundError when no notFound option is given', async () => {
+		const bucket = new MemoryBucket();
+		await expect(mutateObject(bucket, 'missing', parse, (c) => c)).rejects.toBeInstanceOf(
+			NotFoundError,
+		);
+	});
+
+	it('exhausts retries and throws ConflictError under perpetual conflict', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('k', JSON.stringify({ n: 1 }));
+		vi.spyOn(bucket, 'put').mockRejectedValue(new PreconditionFailedError('always'));
+
+		await expect(
+			mutateObject(bucket, 'k', parse, (cur) => ({ n: cur.n + 1 }), {
+				retries: 3,
+				backoffMs: () => 0,
+			}),
+		).rejects.toBeInstanceOf(ConflictError);
+	});
+
+	it('propagates a parse error without retrying', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('k', JSON.stringify({ n: 1 }));
+		const getSpy = vi.spyOn(bucket, 'get');
+		const boom = new Error('parse boom');
+
+		await expect(
+			mutateObject(
+				bucket,
+				'k',
+				() => {
+					throw boom;
+				},
+				(c) => c,
+				{ backoffMs: () => 0 },
+			),
+		).rejects.toBe(boom);
+		expect(getSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it('CAS: a racing write makes apply re-run against the fresh value', async () => {

@@ -292,6 +292,96 @@ describe('S3Storage error classification', () => {
 		const s3 = new S3Storage(CFG);
 		await expect(s3.get('k')).rejects.toThrow('AccessDenied');
 	});
+
+	it('propagates a non-NotFound error from head rather than returning null', async () => {
+		vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(
+			Object.assign(new Error('AccessDenied'), {
+				name: 'AccessDenied',
+				$metadata: { httpStatusCode: 403 },
+			}),
+		);
+		const s3 = new S3Storage(CFG);
+		await expect(s3.head('k')).rejects.toThrow('AccessDenied');
+	});
+
+	it('treats a status-404 error with a non-NoSuchKey name as not-found (get and head)', async () => {
+		vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(
+			Object.assign(new Error('SomethingWeird'), {
+				name: 'SomethingWeird',
+				$metadata: { httpStatusCode: 404 },
+			}),
+		);
+		const s3 = new S3Storage(CFG);
+		expect(await s3.get('k')).toBeNull();
+		expect(await s3.head('k')).toBeNull();
+	});
+
+	it('maps a status-412 error with a non-PreconditionFailed name to PreconditionFailedError', async () => {
+		vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(
+			Object.assign(new Error('SomeOtherName'), {
+				name: 'SomeOtherName',
+				$metadata: { httpStatusCode: 412 },
+			}),
+		);
+		const s3 = new S3Storage(CFG);
+		await expect(s3.put('k', 'v', { onlyIfEtagMatches: 'x' })).rejects.toBeInstanceOf(
+			PreconditionFailedError,
+		);
+	});
+});
+
+describe('S3Storage list truncation and delete edge cases', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('maps IsTruncated/NextContinuationToken and clears the cursor when not truncated', async () => {
+		const spy = vi.spyOn(S3Client.prototype, 'send');
+
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		spy.mockResolvedValueOnce({
+			Contents: [],
+			IsTruncated: true,
+			NextContinuationToken: 'next-tok',
+		} as any);
+		const truncated = await new S3Storage(CFG).list();
+		expect(truncated.truncated).toBe(true);
+		expect(truncated.cursor).toBe('next-tok');
+
+		// A store that returns a token but reports IsTruncated=false must not leak a cursor.
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		spy.mockResolvedValueOnce({
+			Contents: [],
+			IsTruncated: false,
+			NextContinuationToken: 'leftover',
+		} as any);
+		const done = await new S3Storage(CFG).list();
+		expect(done.truncated).toBe(false);
+		expect(done.cursor).toBeUndefined();
+	});
+
+	it('sends no command for an empty key array delete', async () => {
+		const spy = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({} as never);
+		await new S3Storage(CFG).delete([]);
+		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it('surfaces per-object errors in a DeleteObjects batch response (HTTP 200 with Errors[])', async () => {
+		// The real S3 batch delete returns HTTP 200 with a per-key Errors[] array; a
+		// key that failed (e.g. AccessDenied) must not be silently reported as deleted.
+		vi.spyOn(S3Client.prototype, 'send').mockImplementation(
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			async (command: any) => {
+				if (command.constructor.name === 'DeleteObjectsCommand') {
+					return {
+						Deleted: [],
+						Errors: [{ Key: 'k/1', Code: 'AccessDenied', Message: 'Access Denied' }],
+					} as never;
+				}
+				return {} as never;
+			},
+		);
+		const s3 = new S3Storage(CFG);
+		await expect(s3.delete(['k/1', 'k/2'])).rejects.toThrow();
+	});
 });
 
 describe('S3Storage.verifyConditionalWrites', () => {

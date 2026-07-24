@@ -87,6 +87,28 @@ describe('makeStorage backend selection', () => {
 			/Unknown MARIMOHUB_STORAGE_BACKEND/,
 		);
 	});
+
+	// `env.MARIMOHUB_STORAGE_BACKEND ?? 's3'` only coalesces null/undefined, so an
+	// explicit empty string is NOT treated as unset — it falls through to the
+	// unknown-backend error rather than defaulting to s3.
+	it('rejects an empty-string backend (does not default to s3)', () => {
+		expect(() =>
+			makeStorage({ MARIMOHUB_STORAGE_BACKEND: '', MARIMOHUB_STORAGE_S3_BUCKET: 'b' }),
+		).toThrow(/Unknown MARIMOHUB_STORAGE_BACKEND/);
+	});
+
+	// A partially-configured static credential (key id without the matching secret)
+	// is an operator mistake: it should fail closed like the secrets-aws all-or-
+	// nothing check, not silently drop the credential and fall back to the ambient
+	// AWS provider chain (a different, possibly unintended identity).
+	it('rejects partial S3 static credentials (key id without secret)', () => {
+		expect(() =>
+			makeStorage({
+				MARIMOHUB_STORAGE_S3_BUCKET: 'b',
+				MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: 'akid',
+			}),
+		).toThrow();
+	});
 });
 
 describe('makeSandboxBucketConfig', () => {

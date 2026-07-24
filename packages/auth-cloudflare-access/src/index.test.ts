@@ -84,4 +84,19 @@ describe('CloudflareAccessAuthenticator', () => {
 			'https://myteam.cloudflareaccess.com/cdn-cgi/access/logout',
 		);
 	});
+
+	// The audience boundary is enforced by jose: assert the configured aud is passed,
+	// and that a token jose rejects for a mismatched audience yields no user.
+	it('rejects a token whose audience does not match (aud enforced by jose)', async () => {
+		const auth = makeAuth();
+		// Real jose throws JWTClaimValidationFailed when `aud` != the expected audience.
+		jwtVerify.mockRejectedValue(new Error('unexpected "aud" claim value'));
+		expect(await auth.authenticate(requestWithJwt('a.b.c'))).toBeNull();
+		expect(jwtVerify).toHaveBeenCalledWith('a.b.c', { __mockJwks: true }, { audience: 'my-aud' });
+	});
+
+	// Can't be driven hermetically (jose is fully mocked). Latent gap worth pinning:
+	// the adapter passes neither an `algorithms` nor an `issuer` pin to jwtVerify,
+	// leaning entirely on jose's key-derived defaults and the team JWKS URL.
+	it.skip('does not accept a token signed with an unexpected algorithm (no algorithms/issuer pin)', () => {});
 });

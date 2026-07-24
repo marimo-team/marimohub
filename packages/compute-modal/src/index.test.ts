@@ -210,6 +210,15 @@ describe('ModalCompute', () => {
 			expect(String(url)).toBe(`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/tunnels`);
 			expect(parseBody(init?.body as string).port).toBe(2718);
 		});
+
+		it('rejects when the tunnels response is missing a url', async () => {
+			// A parseable kernel URL is part of the exposePort contract; a tunnels
+			// response with no `url` must not slip through as `{ url: undefined }`.
+			mockFetch.mockResolvedValueOnce(mockOkResponse({}));
+			await expect(
+				makeCompute().create(SANDBOX_ID).exposePort(2718, { hostname: 'ignored' }),
+			).rejects.toThrow();
+		});
 	});
 
 	describe('create().destroy()', () => {
@@ -296,6 +305,29 @@ describe('ModalCompute', () => {
 			);
 		});
 
+		it('writeFiles throws when the parent mkdir exec fails', async () => {
+			mockFetch.mockResolvedValueOnce(
+				mockOkResponse({ exit_code: 1, stdout: '', stderr: 'permission denied' }),
+			);
+			await expect(
+				makeCompute()
+					.create(SANDBOX_ID)
+					.writeFiles([{ path: '/d/f.txt', content: 'x' }]),
+			).rejects.toThrow(/writeFiles mkdir failed.*permission denied/);
+		});
+
+		it('writeFiles throws when the in-sandbox base64 decode exec fails', async () => {
+			mockFetch
+				.mockResolvedValueOnce(mockOkResponse({ exit_code: 0, stdout: '', stderr: '' })) // mkdir
+				.mockResolvedValueOnce(mockOkResponse({})) // files/write (tmp)
+				.mockResolvedValueOnce(mockOkResponse({ exit_code: 1, stdout: '', stderr: 'bad base64' })); // decode
+			await expect(
+				makeCompute()
+					.create(SANDBOX_ID)
+					.writeFiles([{ path: '/f.bin', content: new Uint8Array([1, 2, 3]) }]),
+			).rejects.toThrow(/writeFile \/f\.bin failed.*bad base64/);
+		});
+
 		it('listFiles returns files, defaulting a missing array to []', async () => {
 			mockFetch.mockResolvedValueOnce(mockOkResponse({}));
 			expect(await makeCompute().create(SANDBOX_ID).listFiles('/')).toEqual({
@@ -333,6 +365,39 @@ describe('ModalCompute', () => {
 
 		it('proxy returns null (Modal kernels are reached directly)', async () => {
 			expect(await makeCompute().proxy(new Request('https://x/'))).toBeNull();
+		});
+	});
+
+	describe('request behaviour', () => {
+		it('exec opts out of the control-plane timeout (no abort signal), unlike short calls', async () => {
+			mockFetch.mockResolvedValue(mockOkResponse({ exit_code: 0, stdout: '', stderr: '' }));
+			await makeCompute().create(SANDBOX_ID).exec('slow-cmd');
+			const execInit = mockFetch.mock.calls.at(-1)![1];
+			expect(execInit?.signal == null).toBe(true);
+
+			mockFetch.mockReset();
+			mockFetch.mockResolvedValue(mockOkResponse({}));
+			await makeCompute().create(SANDBOX_ID).setEnvVars({ A: '1' });
+			const envInit = mockFetch.mock.calls.at(-1)![1];
+			expect(envInit?.signal).toBeInstanceOf(AbortSignal);
+		});
+
+		it('does not retry a non-idempotent exec POST on a 5xx', async () => {
+			mockFetch.mockResolvedValue(mockErrorResponse(500));
+			await expect(makeCompute().create(SANDBOX_ID).exec('cmd')).rejects.toThrow(/Modal API/);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('passes a network-level (non-response) error through, not wrapped as a Modal API failure', async () => {
+			mockFetch.mockRejectedValue(new TypeError('network down'));
+			const err: unknown = await makeCompute()
+				.create(SANDBOX_ID)
+				.exec('cmd')
+				.catch((e: unknown) => e);
+			// toModalError only builds the `Modal API … failed: <status>` shape for a
+			// FetchError with a response; a bare network error passes through untouched.
+			expect(err).toBeInstanceOf(Error);
+			expect(String((err as Error).message)).not.toContain('Modal API');
 		});
 	});
 

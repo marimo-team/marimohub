@@ -81,7 +81,17 @@ export class MigrationService {
 				const body = await this.bucket.get(obj.key);
 				if (!body) continue;
 
-				const data = (await body.json()) as Migratable;
+				// A single corrupt/unparseable object must not abort the whole run and
+				// strand its valid siblings unmigrated. Count it as skipped (logged) and
+				// move on; a re-run after the object is repaired will pick it up.
+				let data: Migratable;
+				try {
+					data = (await body.json()) as Migratable;
+				} catch (err) {
+					console.warn(`runMigration: skipping unreadable object ${obj.key}: ${String(err)}`);
+					result.skipped++;
+					continue;
+				}
 
 				// Idempotency guard: only objects still at fromVersion are migrated.
 				// Re-running after a partial run skips everything already at toVersion.

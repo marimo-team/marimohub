@@ -84,4 +84,51 @@ describe('apiFetch', () => {
 		expect(err.code).toBe('PARSE_ERROR');
 		expect(err.message).toContain('502');
 	});
+
+	it('throws NETWORK_ERROR when fetch rejects (no HTTP response)', async () => {
+		stubFetch(async () => {
+			throw new Error('Failed to fetch');
+		});
+		await expect(apiFetch('/api/projects')).rejects.toMatchObject({
+			name: 'ApiRequestError',
+			code: 'NETWORK_ERROR',
+		});
+	});
+
+	it('throws NETWORK_ERROR on a timeout (retry:0, aborts the request)', async () => {
+		// Never resolves on its own; rejects only when ofetch aborts on the timeout.
+		stubFetch(
+			(_input?: unknown, init?: RequestInit) =>
+				new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener('abort', () =>
+						reject(new DOMException('The operation was aborted', 'AbortError')),
+					);
+				}),
+		);
+		await expect(apiFetch('/api/projects', { timeout: 5 })).rejects.toMatchObject({
+			code: 'NETWORK_ERROR',
+		});
+	});
+
+	it.each([null, [1, 2], 'plain', 42])(
+		'throws PARSE_ERROR for a valid-JSON body that is not an envelope object (%o)',
+		async (body) => {
+			stubFetch(async () => jsonResponse(body));
+			const err = (await apiFetch('/api/projects').catch((e) => e)) as ApiRequestError;
+			expect(err).toBeInstanceOf(ApiRequestError);
+			expect(err.code).toBe('PARSE_ERROR');
+		},
+	);
+
+	it('honors the envelope over the HTTP status (a 2xx { success:false } still throws)', async () => {
+		stubFetch(async () =>
+			jsonResponse({ success: false, error: { code: 'CONFLICT', message: 'stale' } }, 200),
+		);
+		await expect(apiFetch('/api/projects')).rejects.toMatchObject({ code: 'CONFLICT' });
+	});
+
+	it('returns undefined data when success is true but data is absent', async () => {
+		stubFetch(async () => jsonResponse({ success: true }));
+		expect(await apiFetch('/api/projects')).toBeUndefined();
+	});
 });

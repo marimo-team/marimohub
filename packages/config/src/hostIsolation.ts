@@ -10,8 +10,10 @@ export interface SandboxHostIsolation {
 /**
  * Pure check (no throw) reused by the wiring guard (index.ts) and the preflight
  * report. Returns `isolated: true` when there's nothing to compare (no sandbox
- * host, or no app host to derive from the OIDC redirect) — the wiring guard only
- * applies in `subdomain` mode, so a missing signal can't weaken `proxy` mode.
+ * host, or no redirect at all to derive an app host from) — the wiring guard only
+ * applies in `subdomain` mode, so a missing signal can't weaken `proxy` mode. But
+ * a redirect that IS set yet unparseable fails closed (`isolated: false`): the app
+ * host is then unknowable and isolation can't be verified.
  *
  * Why this matters: notebook kernels run untrusted user code. If they share an
  * origin/parent domain with the control plane, a malicious notebook can escape the
@@ -26,7 +28,10 @@ export function checkSandboxHostIsolation(env: Env): SandboxHostIsolation {
 	try {
 		appHost = new URL(redirect).hostname.toLowerCase();
 	} catch {
-		return { isolated: true, sandboxHost };
+		// A redirect WAS configured but is unparseable, so the app host is unknown
+		// and isolation can't be verified. Fail closed — a bad redirect must not
+		// silently green-light a potentially same-origin untrusted kernel.
+		return { isolated: false, sandboxHost };
 	}
 	const sameOrigin = sandboxHost === appHost;
 	const sharesParent = sandboxHost.endsWith(`.${appHost}`) || appHost.endsWith(`.${sandboxHost}`);

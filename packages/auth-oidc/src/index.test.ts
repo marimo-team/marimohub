@@ -479,4 +479,103 @@ describe('OIDC authenticate (cookie session)', () => {
 		const auth = makeAuthenticator();
 		expect(await auth.authenticate(new Request('http://x'))).toBeNull();
 	});
+
+	// An unsigned alg:none token must never authenticate. The adapter passes no
+	// `algorithms` pin, so this relies on jose restricting a symmetric key to HS*.
+	it('rejects an unsigned alg:none session cookie', async () => {
+		const auth = makeAuthenticator();
+		const b64url = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+		const header = b64url({ alg: 'none', typ: 'JWT' });
+		const payload = b64url({
+			sub: 'user-1',
+			email: 'attacker@example.com',
+			exp: Math.floor(Date.now() / 1000) + 3600,
+		});
+		// alg:none carries an empty signature segment.
+		const unsigned = `${header}.${payload}.`;
+		expect(await auth.authenticate(requestWithCookie(unsigned))).toBeNull();
+	});
+});
+
+describe('OIDC callback integrity (security)', () => {
+	/** Mint a transaction cookie the way `/api/auth/login` does, with a chosen secret. */
+	async function signTxn(opts: { secret: string; verifier?: string; state?: string }) {
+		const secret = new TextEncoder().encode(opts.secret);
+		return new SignJWT({
+			verifier: opts.verifier ?? 'verifier-1',
+			state: opts.state ?? 'state-1',
+			nonce: 'nonce-1',
+		})
+			.setProtectedHeader({ alg: 'HS256' })
+			.setIssuedAt()
+			.setExpirationTime('10m')
+			.sign(secret);
+	}
+
+	// CSRF/PKCE integrity: a txn cookie forged/signed with a foreign secret must not
+	// be trusted — its verifier+state would let an attacker complete another user's
+	// authorization-code exchange.
+	it('redirects session_expired when the txn cookie is signed with a different secret', async () => {
+		const { routes } = makeOidc();
+		const forgedTxn = await signTxn({ secret: 'a-totally-different-secret-32-bytes!!' });
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: `${TXN_COOKIE}=${forgedTxn}` },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe('/?auth_error=session_expired');
+		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+	});
+
+	it('fails auth_failed when the ID token has a sub but no email', async () => {
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({ sub: 'user-1', email_verified: true });
+		const { routes } = makeOidc();
+		const txn = await beginOidcTransaction(routes);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
+		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+	});
+
+	it('fails auth_failed when the ID token email is a non-string', async () => {
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 12345,
+			email_verified: true,
+		});
+		const { routes } = makeOidc();
+		const txn = await beginOidcTransaction(routes);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
+		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+	});
+});
+
+describe('OIDC login discovery failure', () => {
+	it('returns 500 OIDC_ERROR when the discovered AS has no authorization_endpoint', async () => {
+		oauthMock.processDiscoveryResponse.mockReturnValue({
+			issuer: 'https://issuer.example.com',
+			token_endpoint: 'https://issuer.example.com/token',
+			jwks_uri: 'https://issuer.example.com/jwks',
+			// authorization_endpoint intentionally omitted
+		});
+		const { routes } = makeOidc();
+
+		const res = await routes.request('/api/auth/login');
+
+		expect(res.status).toBe(500);
+		const body = (await res.json()) as { success: boolean; error: { code: string } };
+		expect(body.success).toBe(false);
+		expect(body.error.code).toBe('OIDC_ERROR');
+	});
 });

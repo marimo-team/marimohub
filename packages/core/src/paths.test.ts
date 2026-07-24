@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { NotebookId, ProjectId, SessionId, SnapshotId, VersionId } from './ids';
+import type { NotebookId, ProjectId, SessionId, SnapshotId, UserId, VersionId } from './ids';
 import { paths } from './paths';
 
 const pid = 'proj_01HXY11111ABCDEFGHJKMN' as ProjectId;
@@ -64,6 +64,21 @@ describe('paths', () => {
 			  "workspacePrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/workspace/",
 			}
 		`);
+	});
+
+	it('secret() encodes a name so a "/" or ".." segment cannot escape the secrets prefix', () => {
+		const proj = paths.project(pid);
+		const key = proj.secret('../../etc/passwd');
+		expect(key.startsWith(proj.secretsPrefix)).toBe(true);
+		// The path separators are percent-encoded, so the name stays a single object
+		// under `secrets/` and cannot traverse into a parent directory.
+		expect(key.slice(proj.secretsPrefix.length)).not.toContain('/');
+	});
+
+	it('identity() encodes a user id so a "/" or ".." segment cannot escape the identities prefix', () => {
+		const key = paths.identity('../../evil' as UserId);
+		expect(key.startsWith(paths.identitiesPrefix)).toBe(true);
+		expect(key.slice(paths.identitiesPrefix.length)).not.toContain('/');
 	});
 
 	it('composability — intermediate objects are reusable', () => {

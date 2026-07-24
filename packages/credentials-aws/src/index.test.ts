@@ -195,4 +195,54 @@ describe('AwsStsWifBroker', () => {
 			/not a URL/,
 		);
 	});
+
+	// Retry invariant (avoid double-minting): only 429/503/504 are retried; a 500/502
+	// may mean the mint partially succeeded, so it must NOT be replayed.
+	it.each([500, 502])('does not retry a %d (mint may have partially succeeded)', async (status) => {
+		const fetchFn = stubFetch(() => jsonResponse({ Error: { Code: 'InternalError' } }, status));
+		const broker = new AwsStsWifBroker({ roleArn: ROLE_ARN });
+		await exchangeError(broker, fakeJwt({ sub: 'proj-x1' }));
+		expect(fetchFn).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([429, 503])('retries a %d then exhausts to an error', async (status) => {
+		const fetchFn = stubFetch(() => jsonResponse({ Error: { Code: 'Throttling' } }, status));
+		const broker = new AwsStsWifBroker({ roleArn: ROLE_ARN });
+		const message = await exchangeError(broker, fakeJwt({ sub: 'proj-x1' }));
+		// retry: 2 → the original call plus two retries.
+		expect(fetchFn).toHaveBeenCalledTimes(3);
+		expect(message).toContain(`HTTP ${status}`);
+	});
+
+	it('surfaces a bare failure on a network error without leaking the JWT', async () => {
+		stubFetch(() => {
+			throw new Error('ECONNRESET tunnel closed');
+		});
+		const broker = new AwsStsWifBroker({ roleArn: ROLE_ARN });
+		const secretJwt = fakeJwt({ sub: 'proj-super-secret' });
+		const message = await exchangeError(broker, secretJwt);
+		expect(message).toContain('STS credential exchange failed');
+		expect(message).not.toContain(secretJwt);
+	});
+
+	it.each(['12345678901', '1234567890123'])('rejects a non-12-digit account id (%s)', (account) => {
+		expect(
+			() => new AwsStsWifBroker({ roleArn: `arn:aws:iam::${account}:role/marimohub-wif` }),
+		).toThrow(/MARIMOHUB_WIF_AWS_ROLE_ARN/);
+	});
+
+	it.each(['aws-cn', 'aws-us-gov'])('accepts the %s partition', (partition) => {
+		expect(
+			() =>
+				new AwsStsWifBroker({ roleArn: `arn:${partition}:iam::123456789012:role/marimohub-wif` }),
+		).not.toThrow();
+	});
+
+	it('rejects a success body whose Expiration is neither number nor string', async () => {
+		stubFetch(() => jsonResponse(stsSuccess(true as unknown as number)));
+		const broker = new AwsStsWifBroker({ roleArn: ROLE_ARN });
+		const message = await exchangeError(broker, fakeJwt({ sub: 'proj-x1' }));
+		expect(message).toContain('unexpected response shape');
+		expect(message).toContain('Expiration');
+	});
 });

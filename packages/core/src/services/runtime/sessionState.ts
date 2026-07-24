@@ -37,7 +37,9 @@ const machine = createStateMachine<SessionStatus, SessionEvent>({
 		running: { heartbeat: 'running', terminate: 'terminating', fail: 'failed', expire: 'expired' },
 		// A stop wins over a still-resolving provision; once terminating, only the
 		// teardown's `terminated` (or an `expire` fallback if teardown hangs) applies.
-		terminating: { terminated: 'terminated', expire: 'terminated', fail: 'failed' },
+		// A `fail` must NOT downgrade it — mirrors SessionService.markFailed, which
+		// refuses to fail a terminating session.
+		terminating: { terminated: 'terminated', expire: 'terminated' },
 		terminated: {},
 		failed: {},
 		expired: {},

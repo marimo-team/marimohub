@@ -168,6 +168,14 @@ describe('KubernetesCompute', () => {
 				/entered terminal phase Failed/,
 			);
 		});
+
+		it('times out when the Pod stays Pending (never reaches Running)', async () => {
+			const world = makeWorld({ phase: 'Pending' });
+			const compute = makeCompute(world, { ...baseConfig, podReadyTimeout: Millis.of(30) });
+			await expect(compute.create(SANDBOX_ID).exec('true')).rejects.toThrow(
+				/timed out waiting for pod .* to reach Running/,
+			);
+		});
 	});
 
 	describe('writeFile() / readFile()', () => {
@@ -205,6 +213,19 @@ describe('KubernetesCompute', () => {
 				.readFile('/workspace/notebooks/missing.py');
 
 			expect(res).toEqual({ success: false, content: '' });
+		});
+
+		it('writeFile streams a large file via stdin, never into the exec argv (ARG_MAX)', async () => {
+			const world = makeWorld();
+			const big = new Uint8Array(1024 * 1024).fill(65);
+			await makeCompute(world)
+				.create(SANDBOX_ID)
+				.writeFiles([{ path: '/workspace/big.bin', content: big }]);
+			const call = world.execCalls.at(-1)!;
+			// The bytes ride stdin verbatim…
+			expect(call.stdin).toBe(big);
+			// …and the argv (mkdir && cat > path) never carries them.
+			expect(shCmd(call).length).toBeLessThan(big.length);
 		});
 
 		it('writeFile throws when the in-pod write command fails', async () => {

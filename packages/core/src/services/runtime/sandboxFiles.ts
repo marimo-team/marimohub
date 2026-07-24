@@ -5,6 +5,7 @@ import { paths } from '../../paths';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { MAX_ARTIFACT_BYTES, MAX_WORKSPACE_FILE_BYTES } from '../../constants';
 import { shellQuote } from './shell';
+import { isSafeWorkspacePath } from '../../integrations/remoteWorkspace';
 import { listAllKeys, listAllObjects } from '../catalog/storage';
 import type { CommitSessionInput } from '../content/NotebookService';
 
@@ -121,6 +122,13 @@ export async function restoreWorkspace(
 	for (const obj of objects) {
 		const rel = obj.key.slice(sourcePrefix.length);
 		if (!rel) continue;
+		// A poisoned key (e.g. from a compromised/synced source) whose relative path
+		// carries `..`/absolute/backslash segments would escape workingDir once
+		// concatenated. Skip it — the sandbox working dir is a hard boundary.
+		if (!isSafeWorkspacePath(rel)) {
+			console.warn(`restoreWorkspace: unsafe workspace path; skipping ${rel}`);
+			continue;
+		}
 		if (obj.size > MAX_WORKSPACE_FILE_BYTES) {
 			console.warn(
 				`restoreWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded; skipping ${rel} (${obj.size} bytes)`,

@@ -50,4 +50,11 @@ describe('sessionState', () => {
 		expect(nextStatus('terminating', 'running')).toBeNull();
 		expect(nextStatus('terminating', 'heartbeat')).toBeNull();
 	});
+
+	it('does not downgrade a terminating session to failed (an explicit stop wins)', () => {
+		// Mirrors SessionService.markFailed, which refuses to fail a `terminating`
+		// session, and the state-table comment: once terminating, only `terminated`
+		// (or the `expire` teardown-hang fallback) applies.
+		expect(nextStatus('terminating', 'fail')).toBeNull();
+	});
 });

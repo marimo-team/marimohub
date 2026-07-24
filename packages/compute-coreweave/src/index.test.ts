@@ -544,6 +544,91 @@ describe('CoreWeaveCompute', () => {
 		});
 	});
 
+	describe('gateway failures & orphan cleanup', () => {
+		it('create propagates a gateway create rejection (e.g. org wif-config NOT_FOUND)', async () => {
+			const client: CoreWeaveClient = {
+				create: async () => {
+					throw new Error('NOT_FOUND: org wif-config not configured');
+				},
+				fromId: async () => {
+					throw new Error('unused');
+				},
+				list: async () => ({ sandboxes: [] }),
+				delete: async () => {},
+			};
+			await expect(
+				new CoreWeaveCompute(baseConfig, client).create(SANDBOX_ID).exec('true'),
+			).rejects.toThrow(/NOT_FOUND/);
+		});
+
+		it('writeFiles sends a large file via files.write and never places its bytes in an exec argv (ARG_MAX)', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			const big = new Uint8Array(1024 * 1024).fill(7);
+
+			await inst.writeFiles([{ path: '/w/big.bin', content: big }]);
+
+			const fake = [...world.registry.values()][0].fake;
+			// The bytes ride the SDK write API verbatim…
+			expect(fake.batchWrites.at(-1)![0].content).toBe(big);
+			// …and no exec argv (only the small mkdir) carries them.
+			for (const call of fake.runCalls) {
+				expect(call[2].length).toBeLessThan(big.length);
+			}
+		});
+
+		it('exposePort rejects when resolveExposedUrl throws', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world, {
+				...baseConfig,
+				resolveExposedUrl: async () => {
+					throw new Error('gateway ip unavailable');
+				},
+			}).create(SANDBOX_ID);
+			await inst.exec('true');
+			await expect(inst.exposePort(2718, { hostname: 'h' })).rejects.toThrow(
+				/gateway ip unavailable/,
+			);
+		});
+
+		it('destroy deletes every sandbox tagged with our id (no orphan)', async () => {
+			const world = makeWorld();
+			const compute = makeCompute(world);
+			// Two fresh provisions create two sandboxes carrying the same id tag.
+			await compute.create(SANDBOX_ID, { reuse: false }).exec('true'); // cw-1
+			await compute.create(SANDBOX_ID, { reuse: false }).exec('true'); // cw-2
+			expect(world.created).toHaveLength(2);
+
+			// A re-resolved instance (no cached handle) must delete BOTH.
+			await compute.create(SANDBOX_ID).destroy();
+			expect(world.deleted).toEqual(expect.arrayContaining(['cw-1', 'cw-2']));
+		});
+
+		it('destroy rethrows a non-NotFound delete error', async () => {
+			const client: CoreWeaveClient = {
+				create: async () => ({
+					sandboxId: 'cw-x',
+					commands: { run: async () => procResult(), start: async () => fakeProcess() },
+					files: { readText: async () => '', write: async () => {} },
+					delete: async () => {
+						throw new Error('gRPC unavailable');
+					},
+				}),
+				fromId: async (id) => ({
+					sandboxId: id,
+					commands: { run: async () => procResult(), start: async () => fakeProcess() },
+					files: { readText: async () => '', write: async () => {} },
+					delete: async () => {},
+				}),
+				list: async () => ({ sandboxes: [] }),
+				delete: async () => {},
+			};
+			const inst = new CoreWeaveCompute(baseConfig, client).create(SANDBOX_ID);
+			await inst.exec('true'); // caches the cw-x handle
+			await expect(inst.destroy()).rejects.toThrow(/gRPC unavailable/);
+		});
+	});
+
 	describe('reconnect / dead-status handling', () => {
 		const bareSandbox = (sandboxId: string) => ({
 			sandboxId,

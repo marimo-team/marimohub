@@ -220,7 +220,11 @@ export async function mapWithConcurrency<T, R>(
 			results[i] = await fn(items[i]);
 		}
 	};
-	await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+	// Floor the pool at 1 so a caller passing 0 (or a negative) still drains every
+	// item serially rather than silently processing nothing — every adapter's
+	// writeFiles rides this, and a no-op there would drop files with no error.
+	const pool = Math.max(1, Math.min(concurrency, items.length));
+	await Promise.all(Array.from({ length: pool }, worker));
 	return results;
 }
 

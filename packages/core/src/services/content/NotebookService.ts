@@ -687,7 +687,14 @@ export class NotebookService {
 		notebookId: NotebookId,
 		versionId: string,
 	): Promise<{ version: Version; code: string }> {
-		const vid = VersionId.parse(versionId);
+		// A malformed id is a client mistake, not a server fault: map the bare parse
+		// Error to a domain 404 so the API renders a 4xx instead of a raw 500.
+		let vid: VersionId;
+		try {
+			vid = VersionId.parse(versionId);
+		} catch {
+			throw new NotFoundError(`Version ${versionId} not found`);
+		}
 		const { source } = await this.getNotebook(projectId, notebookId);
 		const ver = paths.project(projectId).notebook(notebookId).version(vid);
 		const entryNotebook = remoteWorkspaceEntry(source);

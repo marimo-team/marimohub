@@ -144,7 +144,9 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	// Companion roster for pending email invites (lowercased). Unlike a missing
 	// `member_ids`, a missing `member_emails` does NOT trigger the project.json
 	// fallback — see canSeeProjectEntry for why it fails closed instead.
-	member_emails: z.array(z.string()).optional(),
+	// Lowercased on parse so authz matching against a lowercased subject email holds
+	// regardless of the case an invite was stored in.
+	member_emails: z.array(z.string().transform((e) => e.toLowerCase())).optional(),
 });
 
 export type SnapshotProjectEntry = z.infer<typeof SnapshotProjectEntrySchema>;

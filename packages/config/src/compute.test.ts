@@ -4,6 +4,7 @@ import { ModalCompute } from '@marimo-hub/compute-modal';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { DockerCompute } from '@marimo-hub/compute-docker';
 import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
+import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
 import {
 	makeCompute,
 	resolveLifetimeBackstop,
@@ -82,6 +83,32 @@ describe('makeCompute fail-fast', () => {
 	it('requires the modal token id', () => {
 		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'modal' })).toThrow(
 			/MARIMOHUB_COMPUTE_MODAL_TOKEN_ID/,
+		);
+	});
+
+	it('requires the modal token secret', () => {
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'modal',
+				MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: 'tid',
+				MARIMOHUB_COMPUTE_IMAGE: 'img',
+			}),
+		).toThrow(/MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET/);
+	});
+
+	it('requires a modal image', () => {
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'modal',
+				MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: 'tid',
+				MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: 'tsecret',
+			}),
+		).toThrow(/MARIMOHUB_COMPUTE_IMAGE/);
+	});
+
+	it('selects kubernetes', () => {
+		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'kubernetes' })).toBeInstanceOf(
+			KubernetesCompute,
 		);
 	});
 

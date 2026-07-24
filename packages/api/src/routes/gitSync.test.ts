@@ -122,6 +122,21 @@ describe('Git sync routes', () => {
 		expect(content.code).toBe('print("synced")');
 	});
 
+	it("rejects a valid sync token used against a DIFFERENT notebook's path (401 IDOR)", async () => {
+		// Two independently-synced notebooks, each with its own per-notebook token.
+		const a = await createSyncedNotebook();
+		const b = await createSyncedNotebook();
+		expect(a.notebookId).not.toBe(b.notebookId);
+
+		// A's token presented on B's path must not authenticate (tokens are scoped
+		// per-notebook, so one notebook's token can't push to another's workspace).
+		await expectError(
+			await syncRequest({ notebookId: b.notebookId, headers: requiredHeaders(a.syncToken) }),
+			401,
+			'UNAUTHORIZED',
+		);
+	});
+
 	it('rejects a request missing a required header, naming it (400)', async () => {
 		const { notebookId, syncToken } = await createSyncedNotebook();
 		const headers = requiredHeaders(syncToken);

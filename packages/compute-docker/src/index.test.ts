@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core';
 import { expectListFilesResult } from '@marimo-hub/core/testing';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
-import { DockerCompute } from './index';
+import { DockerCompute, spawnDockerRunner } from './index';
 import type { DockerRunner, DockerRunResult } from './index';
 
 /**
@@ -107,6 +107,31 @@ describe('DockerCompute', () => {
 		);
 	});
 
+	it('writeFiles streams a large payload via stdin, never in the argv (ARG_MAX)', async () => {
+		const { runner, calls } = fakeRunner(defaultHandler);
+		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
+
+		const big = new Uint8Array(1024 * 1024).fill(65); // 1 MiB
+		await sb.writeFiles([{ path: '/workspace/big.bin', content: big }]);
+
+		const write = calls.find((c) => c.args.includes('-i') && c.args.join(' ').includes('cat >'));
+		expect(write).toBeDefined();
+		// The bytes ride stdin verbatim…
+		expect(write!.stdin).toBe(big);
+		// …and never appear on the argv (which stays tiny regardless of payload size).
+		expect(write!.args.join(' ').length).toBeLessThan(big.length);
+	});
+
+	it('writeFiles shell-quotes a file path containing a single quote', async () => {
+		const { runner, calls } = fakeRunner(defaultHandler);
+		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
+
+		await sb.writeFiles([{ path: "/workspace/it's a file.py", content: 'x' }]);
+
+		const write = calls.find((c) => c.args.includes('-i') && c.args.join(' ').includes('cat >'));
+		expect(write!.args.at(-1)).toBe("cat > '/workspace/it'\\''s a file.py'");
+	});
+
 	it('writeFiles throws when the stdin write fails', async () => {
 		const { runner } = fakeRunner((args) => {
 			const base = defaultHandler(args);
@@ -204,6 +229,49 @@ describe('DockerCompute', () => {
 		await sb.destroy();
 		const rm = calls.find((c) => c.args[0] === 'rm');
 		expect(rm!.args).toEqual(['rm', '-f', '-v', NAME]);
+	});
+
+	it('destroy is idempotent when called twice', async () => {
+		const { runner, calls } = fakeRunner(defaultHandler);
+		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
+		await sb.destroy();
+		await expect(sb.destroy()).resolves.toBeUndefined();
+		expect(calls.filter((c) => c.args[0] === 'rm')).toHaveLength(2);
+	});
+
+	it('startProcess throws when the container create (docker run) fails', async () => {
+		const { runner } = fakeRunner((args) => {
+			if (args[0] === 'inspect') return { stdout: 'false', stderr: '', exitCode: 1 };
+			if (args[0] === 'run') return { stdout: '', stderr: 'no such image', exitCode: 125 };
+			return;
+		});
+		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
+		await expect(sb.startProcess('uv run marimo edit')).rejects.toThrow(
+			/docker run failed.*no such image/,
+		);
+	});
+
+	it('startProcess throws when the detached launch fails', async () => {
+		const { runner } = fakeRunner((args) => {
+			const base = defaultHandler(args);
+			if (base) return base;
+			// The `exec -d` detached launch fails; ordinary execs still succeed.
+			if (args[0] === 'exec' && args.includes('-d')) {
+				return { stdout: '', stderr: 'exec denied', exitCode: 1 };
+			}
+			return;
+		});
+		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
+		await expect(sb.startProcess('uv run marimo edit')).rejects.toThrow(
+			/startProcess failed.*exec denied/,
+		);
+	});
+
+	it('spawnDockerRunner maps a missing docker binary to exitCode 127 with stderr', async () => {
+		const runner = spawnDockerRunner('marimohub-no-such-docker-binary-xyz');
+		const res = await runner.run(['ps']);
+		expect(res.exitCode).toBe(127);
+		expect(res.stderr).toBeTruthy();
 	});
 
 	it('listActive: parses container names into sandbox ids', async () => {

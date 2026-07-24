@@ -237,6 +237,47 @@ describe('Session routes', () => {
 		expect(stillThere.status).toBe('starting');
 	});
 
+	it('GET /sessions/{sid} 404s for a session under a DIFFERENT notebook in the same project', async () => {
+		// A second notebook in the SAME project, with its own session.
+		const otherNb = await createServices(bucket).notebooks.createNotebook(
+			pid,
+			{ title: 'NB2', description: 'd', code: 'import marimo as mo' },
+			ACTOR,
+		);
+		const otherSession = await createServices(bucket).sessions.createSession({
+			notebook_id: otherNb.id,
+			project_id: pid,
+			user_id: ACTOR,
+		});
+
+		// Fetch it through the FIRST notebook's path — project-scoped lookup finds it,
+		// but the notebook_id mismatch must keep it out of scope (404).
+		await expectError(
+			await owner('GET', sessionsPath(`/${otherSession.session_id}`)),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('POST /sessions/{sid}/heartbeat 404s for a session under a DIFFERENT notebook', async () => {
+		const otherNb = await createServices(bucket).notebooks.createNotebook(
+			pid,
+			{ title: 'NB2', description: 'd', code: 'import marimo as mo' },
+			ACTOR,
+		);
+		const otherSession = await createServices(bucket).sessions.createSession({
+			notebook_id: otherNb.id,
+			project_id: pid,
+			user_id: ACTOR,
+		});
+
+		await expectError(
+			await owner('POST', sessionsPath(`/${otherSession.session_id}/heartbeat`)),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
 	it('POST /sessions/{sid}/heartbeat as a non-member returns 403', async () => {
 		const sid = await startSession();
 		await expectError(await stranger('POST', sessionsPath(`/${sid}/heartbeat`)), 403, 'FORBIDDEN');

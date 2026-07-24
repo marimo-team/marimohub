@@ -230,7 +230,15 @@ export class SessionService {
 		const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
 			const body = await this.bucket.get(obj.key);
 			if (!body) return SKIP;
-			const session = SessionSchema.parse(await body.json());
+			// A single corrupt/legacy record must not abort a deployment-wide scan
+			// (listing, reuse, reaper). Skip it (logged) so the good records survive.
+			let session: Session;
+			try {
+				session = SessionSchema.parse(await body.json());
+			} catch (err) {
+				console.warn(`scanPrefix: skipping unreadable session ${obj.key}: ${String(err)}`);
+				return SKIP;
+			}
 			return handle(session, obj, body.etag);
 		});
 		return scanned.filter((r): r is Awaited<T> => r !== SKIP);

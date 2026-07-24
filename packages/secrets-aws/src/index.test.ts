@@ -102,4 +102,49 @@ describe('AwsSecretsManagerResolver', () => {
 		await r.resolve(ref('k'));
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
+
+	it('does not memoize a failed fetch (a later attempt can still succeed)', async () => {
+		let calls = 0;
+		const fetch = vi.fn(async () => {
+			calls += 1;
+			if (calls === 1) throw Object.assign(new Error('flaky'), { name: 'ThrottlingException' });
+			return { SecretString: SECRET };
+		});
+		const r = resolver(fetch, 1000, () => 1000);
+
+		await expect(r.resolve(ref('k'))).rejects.toThrow(/ThrottlingException/);
+		expect(await r.resolve(ref('k'))).toBe(SECRET);
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it('serves a stale value within the TTL after the underlying secret rotates', async () => {
+		let current = 'v1';
+		const fetch = vi.fn(async () => ({ SecretString: current }));
+		const r = resolver(fetch, 100, () => 1000);
+
+		expect(await r.resolve(ref('k'))).toBe('v1');
+		current = 'v2'; // rotate underneath, still within TTL
+		expect(await r.resolve(ref('k'))).toBe('v1');
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects a locator with a trailing # (empty json key)', async () => {
+		const r = resolver(async () => ({ SecretString: JSON.stringify({ k: 'v' }) }));
+		await expect(r.resolve(ref('db#'))).rejects.toThrow(/no JSON key/);
+	});
+
+	it('passes an empty-string locator through to the fetcher (no validation)', async () => {
+		const seen: string[] = [];
+		const r = resolver(async (id) => {
+			seen.push(id);
+			return { SecretString: SECRET };
+		});
+		expect(await r.resolve(ref(''))).toBe(SECRET);
+		expect(seen[0]).toBe('');
+	});
+
+	it('stringifies a null JSON field value', async () => {
+		const r = resolver(async () => ({ SecretString: JSON.stringify({ k: null }) }));
+		expect(await r.resolve(ref('db#k'))).toBe('null');
+	});
 });

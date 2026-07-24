@@ -1,13 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { HTTPException } from 'hono/http-exception';
 import {
 	ConflictError,
+	createServices,
 	ForbiddenError,
 	NotFoundError,
 	NotInitializedError,
 	PreconditionFailedError,
 	UnavailableError,
 } from '@marimo-hub/core';
-import { createTestApi } from './testing';
+import { createInitializedBucket, createTestApi, expectPage } from './testing';
 
 // Each row drives exactly one branch of the real `createApi` onError handler.
 // The message is the class name so the snapshot stays readable and deterministic.
@@ -38,5 +40,30 @@ describe('createApi onError mapping', () => {
 			table.push({ thrown: c.name, status: res.status, body: await res.json() });
 		}
 		expect(table).toMatchSnapshot();
+	});
+
+	// A thrown HTTPException carries its own Response; onError must honor it rather
+	// than swallowing it into a generic 500.
+	it('honors a thrown HTTPException instead of masking it as a 500', async () => {
+		const { app } = createTestApi();
+		app.get('/_throw', () => {
+			throw new HTTPException(418, { message: "I'm a teapot" });
+		});
+		const res = await app.request('/_throw');
+		expect(res.status).toBe(418);
+		expect(await res.text()).toContain('teapot');
+	});
+});
+
+describe('createApi identity refresh is best-effort', () => {
+	it('serves an authenticated request even when identities.upsert throws', async () => {
+		const bucket = await createInitializedBucket();
+		const services = createServices(bucket);
+		// The best-effort identity-directory refresh must never 500 a request.
+		vi.spyOn(services.identities, 'upsert').mockRejectedValue(new Error('directory down'));
+
+		const { request } = createTestApi({ bucket, deps: { services } });
+		const res = await request('GET', '/projects');
+		expect(await expectPage(res)).toEqual([]);
 	});
 });

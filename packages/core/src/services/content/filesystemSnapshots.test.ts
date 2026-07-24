@@ -210,6 +210,28 @@ describe('filesystemSnapshots', () => {
 			expect((await env.notebooks.getFsSnapshot(project.id, nb.id))?.snapshot_id).toBe('snap_old');
 			expect(provider.deleted).toEqual([]);
 		});
+
+		it('swallows a setFsSnapshot bucket failure without throwing or GCing', async () => {
+			const { instance } = makeFakeSandbox();
+			const provider = snapshotProvider(instance, { captureId: 'snap_new' });
+			// The capture succeeds but persisting the new pointer blows up.
+			const notebooks = {
+				setFsSnapshot: async () => {
+					throw new Error('bucket write failed');
+				},
+			} as unknown as NotebookService;
+			await expect(
+				captureFilesystemSnapshot(
+					provider,
+					notebooks,
+					instance,
+					createProjectId(),
+					createNotebookId(),
+				),
+			).resolves.toBeUndefined();
+			// The GC delete must not run when the pointer write never landed.
+			expect(provider.deleted).toEqual([]);
+		});
 	});
 
 	describe('reapFilesystemSnapshots', () => {
@@ -221,6 +243,32 @@ describe('filesystemSnapshots', () => {
 			]);
 			expect(reaped).toBe(2);
 			expect(provider.deleted).toEqual(['a', 'b']);
+		});
+
+		it('continues past a failing deleteSnapshot and reaps the rest', async () => {
+			const { instance } = makeFakeSandbox();
+			const deleted: string[] = [];
+			const provider: SandboxProvider & FilesystemSnapshots = {
+				filesystemSnapshotsEnabled: true,
+				create: () => instance,
+				proxy: async () => null,
+				createFromSnapshot: () => instance,
+				async captureSnapshot() {
+					return { snapshotId: 'x', sizeBytes: 0 };
+				},
+				async deleteSnapshot(id) {
+					if (id === 'bad') throw new Error('delete failed');
+					deleted.push(id);
+				},
+			};
+			// The failing id is FIRST: if the loop did not swallow-and-continue, 'good'
+			// would never be deleted.
+			const reaped = await reapFilesystemSnapshots(provider, [
+				{ snapshot_id: 'bad', captured_at: '2020-01-01T00:00:00.000Z' },
+				{ snapshot_id: 'good', captured_at: '2020-01-02T00:00:00.000Z' },
+			]);
+			expect(reaped).toBe(1);
+			expect(deleted).toEqual(['good']);
 		});
 
 		it('reaps nothing on a provider without the capability', async () => {

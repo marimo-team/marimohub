@@ -107,4 +107,52 @@ describe('CoreWeaveWifBroker', () => {
 	it('fails fast when given a non-URL', () => {
 		expect(() => new CoreWeaveWifBroker({ exchangeUrl: 'not-a-url' })).toThrow(/not a URL/);
 	});
+
+	// Retry invariant (avoid orphaning a credential): only 429/503/504 are retried;
+	// a 500/502 may mean the mint partially succeeded and must NOT be replayed.
+	it.each([500, 502])('does not retry a %d (mint may have partially succeeded)', async (status) => {
+		const fetchFn = stubFetch(() => jsonResponse({ message: 'internal' }, status));
+		const broker = new CoreWeaveWifBroker({ exchangeUrl: EXCHANGE_URL });
+		await exchangeError(broker, 'jwt');
+		expect(fetchFn).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([429, 503])('retries a %d then exhausts to an error', async (status) => {
+		const fetchFn = stubFetch(() => jsonResponse({ message: 'throttled' }, status));
+		const broker = new CoreWeaveWifBroker({ exchangeUrl: EXCHANGE_URL });
+		const message = await exchangeError(broker, 'jwt');
+		expect(fetchFn).toHaveBeenCalledTimes(3);
+		expect(message).toContain(`HTTP ${status}`);
+	});
+
+	it('surfaces a bare failure on a network timeout without leaking the JWT', async () => {
+		stubFetch(() => {
+			throw new Error('network timeout after 10000ms');
+		});
+		const broker = new CoreWeaveWifBroker({ exchangeUrl: EXCHANGE_URL });
+		const secretJwt = 'eyJ.super-secret-jwt.sig';
+		const message = await exchangeError(broker, secretJwt);
+		expect(message).toContain('CAIOS credential exchange failed');
+		expect(message).not.toContain(secretJwt);
+	});
+
+	it('accepts a legitimate custom exchange host', () => {
+		expect(
+			() =>
+				new CoreWeaveWifBroker({
+					exchangeUrl: 'https://api.coreweave.com/v1/cwobject/temporary-credentials/oidc/org',
+				}),
+		).not.toThrow();
+	});
+
+	// The issuer-host guard is an EXACT hostname match, so a host that merely embeds
+	// the issuer label (a different, non-issuer host) is allowed through.
+	it('allows a host that only embeds the issuer label (guard is exact-match)', () => {
+		expect(
+			() =>
+				new CoreWeaveWifBroker({
+					exchangeUrl: 'https://oidc.cks.coreweave.com.attacker.test/v1/exchange',
+				}),
+		).not.toThrow();
+	});
 });

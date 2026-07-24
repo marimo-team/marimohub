@@ -48,4 +48,13 @@ describe('ProxyExposure', () => {
 		const token = await signProxyToken(ctx.projectId, ctx.sessionId, SECRET);
 		expect(result.clientUrl).toBe(`https://hub.example.com/proxy/${token}/`);
 	});
+
+	it('collapses multiple trailing slashes on the app base url (no `//proxy`)', async () => {
+		const result = await exposure.finalize('http://kernel:2718', {
+			...ctx,
+			appBaseUrl: 'https://hub.example.com//',
+		});
+		const token = await signProxyToken(ctx.projectId, ctx.sessionId, SECRET);
+		expect(result.clientUrl).toBe(`https://hub.example.com/proxy/${token}/`);
+	});
 });

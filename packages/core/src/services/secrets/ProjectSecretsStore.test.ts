@@ -3,6 +3,7 @@ import { ValidationError } from '../../errors';
 import { createProjectId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import type { ManagedSecretCodec, SecretResolver } from '../../ports/secrets';
+import { paths } from '../../paths';
 import { ACTOR, MemoryBucket } from '../../testing';
 import { ProjectSecretsStore } from './ProjectSecretsStore';
 
@@ -247,5 +248,78 @@ describe('ProjectSecretsStore', () => {
 		expect(JSON.stringify(list)).not.toContain('hunter2');
 
 		expect(await store.resolve(pid)).toEqual({ DB_PASSWORD: 'hunter2' });
+	});
+
+	it('fails closed when an expanded key collides with a RESERVED env var name', async () => {
+		const store = new ProjectSecretsStore({
+			bucket,
+			resolvers: [stubResolver({ bundle: JSON.stringify({ PATH: '/evil/bin' }) })],
+		});
+		await store.put(
+			pid,
+			'APP',
+			{ kind: 'reference', ref: { backend: 'stub', locator: 'bundle', expand: 'json' } },
+			ACTOR,
+		);
+		// A fan-out that materialized PATH would let a secret shadow the sandbox's PATH.
+		await expect(store.resolve(pid)).rejects.toThrow(ValidationError);
+	});
+
+	it.each([
+		['a JSON array', JSON.stringify([1, 2])],
+		['a JSON primitive', '42'],
+	])('fails closed when an expand payload is %s (not an object)', async (_label, payload) => {
+		const store = new ProjectSecretsStore({
+			bucket,
+			resolvers: [stubResolver({ bad: payload })],
+		});
+		await store.put(
+			pid,
+			'APP',
+			{ kind: 'reference', ref: { backend: 'stub', locator: 'bad', expand: 'json' } },
+			ACTOR,
+		);
+		await expect(store.resolve(pid)).rejects.toThrow(/APP/);
+	});
+
+	it('binds a managed envelope to its object path — decrypt at a different key fails', async () => {
+		// A codec that authenticates the object path (path-as-AAD): decrypt throws
+		// unless it is handed the exact path the envelope was encrypted under. A real
+		// AEAD codec behaves this way, so this proves the store threads `path` through
+		// both encrypt and decrypt (defeating a cut-and-paste of one secret's
+		// ciphertext into another secret's key).
+		const aadCodec: ManagedSecretCodec = {
+			encrypt: async (plaintext, ctx) => ({
+				kek_id: 'test',
+				alg: 'A256GCM',
+				iv: 'aXY=',
+				ciphertext: btoa(`${ctx.path} ${plaintext}`),
+			}),
+			decrypt: async (envelope, ctx) => {
+				const [boundPath, ...rest] = atob(envelope.ciphertext).split(' ');
+				if (boundPath !== ctx.path) throw new Error('AAD mismatch: envelope moved to a new key');
+				return rest.join(' ');
+			},
+		};
+		const store = new ProjectSecretsStore({ bucket, managed: aadCodec });
+		await store.put(pid, 'DB_PASSWORD', { kind: 'managed', value: 'hunter2' }, ACTOR);
+
+		// Relocate the stored envelope under a DIFFERENT secret's object key.
+		const src = paths.project(pid).secret('DB_PASSWORD');
+		const dst = paths.project(pid).secret('MOVED_PASSWORD');
+		const body = await bucket.get(src);
+		const raw = JSON.parse(await body!.text()) as Record<string, unknown>;
+		await bucket.put(dst, JSON.stringify({ ...raw, name: 'MOVED_PASSWORD' }));
+		await bucket.delete(src);
+
+		await expect(store.resolve(pid)).rejects.toThrow(/AAD mismatch/);
+	});
+
+	it('rejects a managed secret it can no longer decrypt (codec dropped)', async () => {
+		const withCodec = new ProjectSecretsStore({ bucket, managed: fakeCodec });
+		await withCodec.put(pid, 'DB_PASSWORD', { kind: 'managed', value: 'hunter2' }, ACTOR);
+
+		const withoutCodec = new ProjectSecretsStore({ bucket });
+		await expect(withoutCodec.resolve(pid)).rejects.toThrow(/DB_PASSWORD/);
 	});
 });

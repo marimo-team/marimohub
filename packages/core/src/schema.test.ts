@@ -8,11 +8,13 @@ import {
 } from './ids';
 import { z } from 'zod';
 import {
+	CatalogSchema,
 	EventSchema,
 	NotebookIdSchema,
 	parseStored,
 	ProjectIdSchema,
 	ProjectMemberSchema,
+	ProjectSchema,
 	SessionIdSchema,
 	SnapshotIdSchema,
 	SnapshotProjectEntrySchema,
@@ -22,7 +24,14 @@ import {
 	toPublicNotebookEntry,
 	toPublicProjectEntry,
 } from './schema';
-import { makeSnapshotNotebookEntry, makeSnapshotProjectEntry, ACTOR, NOW } from './testing';
+import {
+	makeCatalog,
+	makeProject,
+	makeSnapshotNotebookEntry,
+	makeSnapshotProjectEntry,
+	ACTOR,
+	NOW,
+} from './testing';
 
 describe('parseStored', () => {
 	const schema = z.object({ a: z.number() });
@@ -237,11 +246,50 @@ describe('ProjectMemberSchema', () => {
 	});
 });
 
+describe('CatalogSchema', () => {
+	it('parses a well-formed v1 catalog', () => {
+		const catalog = makeCatalog(createSnapshotId());
+		expect(CatalogSchema.parse(catalog).version).toBe(1);
+	});
+
+	it('rejects a catalog whose version is not 1 (strict literal, not forward-tolerant)', () => {
+		const catalog = { ...makeCatalog(createSnapshotId()), version: 2 };
+		expect(CatalogSchema.safeParse(catalog).success).toBe(false);
+	});
+});
+
+describe('status defaulting', () => {
+	it('SnapshotProjectEntrySchema defaults status to "active" when omitted', () => {
+		const entry: Record<string, unknown> = {
+			...makeSnapshotProjectEntry({ id: createProjectId() }),
+		};
+		delete entry.status;
+		expect(SnapshotProjectEntrySchema.parse(entry).status).toBe('active');
+	});
+
+	it('ProjectSchema defaults status to "active" when omitted', () => {
+		const project: Record<string, unknown> = { ...makeProject() };
+		delete project.status;
+		expect(ProjectSchema.parse(project).status).toBe('active');
+	});
+});
+
 describe('SnapshotProjectEntrySchema (rolling-deploy tolerance)', () => {
 	it('preserves unknown entry fields across a parse round-trip', () => {
 		const entry = { ...makeSnapshotProjectEntry({ id: createProjectId() }), future_field: 'kept' };
 		const parsed = SnapshotProjectEntrySchema.parse(entry);
 		expect((parsed as Record<string, unknown>).future_field).toBe('kept');
+	});
+
+	// authz compares member_emails against subject.email.toLowerCase(), so the schema
+	// must lowercase on parse or a mixed-case invite email would never match.
+	it('lowercases member_emails on parse (so authz email matching holds)', () => {
+		const entry = {
+			...makeSnapshotProjectEntry({ id: createProjectId() }),
+			member_emails: ['Alice@Example.COM'],
+		};
+		const parsed = SnapshotProjectEntrySchema.parse(entry);
+		expect(parsed.member_emails).toEqual(['alice@example.com']);
 	});
 
 	it('toPublicProjectEntry never leaks preserved unknown fields', () => {
