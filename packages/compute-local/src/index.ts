@@ -180,9 +180,24 @@ class LocalSandboxInstance implements SandboxInstance {
 		this.ports = opts.ports;
 	}
 
-	/** Map an absolute sandbox path (e.g. /workspace/...) under this sandbox root. */
+	/**
+	 * Resolve an absolute sandbox path (e.g. /workspace/...) under this sandbox
+	 * root, or `null` if it would escape the root. path.join normalizes, so a `..`
+	 * in a notebook-controlled path could otherwise read/write anywhere the server
+	 * user can.
+	 */
+	private resolveContained(p: string): string | null {
+		const abs = path.join(this.root, p);
+		const rootPrefix = this.root.endsWith(path.sep) ? this.root : this.root + path.sep;
+		if (abs !== this.root && !abs.startsWith(rootPrefix)) return null;
+		return abs;
+	}
+
+	/** Map a sandbox path under the root, throwing if it escapes. */
 	private mapPath(p: string): string {
-		return path.join(this.root, p);
+		const abs = this.resolveContained(p);
+		if (abs === null) throw new Error(`sandbox path escapes the sandbox root: ${p}`);
+		return abs;
 	}
 
 	/** Rewrite `/workspace` references in a shell command to the real root. */
@@ -264,7 +279,11 @@ class LocalSandboxInstance implements SandboxInstance {
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
 		// Local writes are cheap (no round-trip), so a plain bounded loop is enough.
 		await mapWithConcurrency(files, WRITE_CONCURRENCY, async (f) => {
-			const abs = this.mapPath(f.path);
+			const abs = this.resolveContained(f.path);
+			if (abs === null) {
+				console.warn(`writeFiles: skipping path outside sandbox root: ${f.path}`);
+				return;
+			}
 			await mkdir(path.dirname(abs), { recursive: true });
 			// `encoding` applies to string content only; bytes are written verbatim.
 			await writeFile(abs, f.content, typeof f.content === 'string' ? 'utf-8' : null);

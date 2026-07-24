@@ -119,6 +119,36 @@ describe('authorizeProxyRequest', () => {
 		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(ACTOR));
 		expect(d).toMatchObject({ kind: 'reject', status: 410 });
 	});
+
+	it('rejects 404 when the token references a session that does not exist', async () => {
+		// A validly-signed token for a session id that was never created.
+		const ghost = 'sess-0000000000000000';
+		const ghostToken = await signProxyToken(pid, ghost as never, SECRET);
+		const d = await authorizeProxyRequest(req(`/proxy/${ghostToken}/`), deps(ACTOR));
+		expect(d).toMatchObject({ kind: 'reject', status: 404 });
+	});
+
+	it('rejects 503 when a running session has no sandbox_origin_url', async () => {
+		// A running session provisioned under a different exposure mode records no
+		// origin — it is authorized but not reachable via the proxy.
+		const services = createServices(bucket);
+		const notebook = await services.notebooks.createNotebook(
+			pid,
+			{ title: 'NB2', description: 'd', code: 'import marimo as mo' },
+			ACTOR,
+		);
+		const session = await services.sessions.createSession({
+			notebook_id: notebook.id,
+			project_id: pid,
+			user_id: ACTOR,
+		});
+		// setRunning WITHOUT an origin url (5th arg omitted).
+		await services.sessions.setRunning(pid, session.session_id, '/proxy/x/', false);
+		const noOriginToken = await signProxyToken(pid, session.session_id as never, SECRET);
+
+		const d = await authorizeProxyRequest(req(`/proxy/${noOriginToken}/`), deps(ACTOR));
+		expect(d).toMatchObject({ kind: 'reject', status: 503 });
+	});
 });
 
 describe('forwardHttp', () => {

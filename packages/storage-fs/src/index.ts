@@ -4,10 +4,10 @@
  * Keys map 1:1 to relative paths under the root, so operators can browse the
  * tree directly. Traversal is blocked by key validation plus a resolved-path
  * containment check, and reads refuse a symlink as the final path component
- * (O_NOFOLLOW). Intermediate directories are the operator's own layout: the
- * API only ever creates real directories, so a symlinked subdirectory can only
- * come from the operator (e.g. a mounted volume) and is followed. Writes stage
- * into a reserved `.tmp/` dir (fsync, then rename into place — atomic on a
+ * (O_NOFOLLOW). Reads additionally re-resolve the real path and refuse anything
+ * that escapes the root through an intermediate symlinked directory — a link
+ * pointing outside the root reads as absent, not as the external file. Writes
+ * stage into a reserved `.tmp/` dir (fsync, then rename into place — atomic on a
  * single filesystem).
  *
  * ETags are the sha-256 of the content, so they survive restarts (the catalog
@@ -44,10 +44,12 @@ const TMP_DIR = '.tmp';
 
 /**
  * open() failures that mean "no object at this key": missing file, a file
- * where a directory was expected (ENOTDIR), a directory itself (EISDIR), or a
- * symlink refused by O_NOFOLLOW (ELOOP on linux, EMLINK on darwin).
+ * where a directory was expected (ENOTDIR), a directory itself (EISDIR), a
+ * symlink refused by O_NOFOLLOW (ELOOP on linux, EMLINK on darwin), or a key
+ * segment longer than the filesystem name limit (ENAMETOOLONG — no such object
+ * could ever exist, so treat it as absent rather than surfacing a raw errno).
  */
-const NOT_FOUND_CODES = new Set(['ENOENT', 'ENOTDIR', 'EISDIR', 'ELOOP', 'EMLINK']);
+const NOT_FOUND_CODES = new Set(['ENOENT', 'ENOTDIR', 'EISDIR', 'ELOOP', 'EMLINK', 'ENAMETOOLONG']);
 
 /**
  * put() serialization shared by every instance in this process, keyed by
@@ -119,6 +121,30 @@ export class FsStorage implements Bucket {
 		try {
 			const stat = await handle.stat();
 			if (!stat.isFile()) return null;
+			// O_NOFOLLOW only guards the final component; an intermediate symlinked
+			// directory can still escape the root. Re-resolve the real path, refuse
+			// anything outside the root, and require the opened fd to still be that same
+			// inode (dev+ino) — so a static escaping symlink reads as absent.
+			//
+			// Threat model: this is defense-in-depth against a MISCONFIGURED tree (e.g.
+			// an operator-mounted symlink escaping the root), NOT a race-free guarantee.
+			// Node exposes no beneath-resolving open (openat2/RESOLVE_BENEATH), so an
+			// attacker able to swap symlinks inside the root *concurrently* could still
+			// win the open→realpath→stat window — but such an attacker already has write
+			// access to the hub's private storage tree and has fully compromised it.
+			let real: string;
+			let realStat: Awaited<ReturnType<typeof fsp.stat>>;
+			try {
+				real = await fsp.realpath(filePath);
+				if (real !== this.root && !real.startsWith(this.rootPrefix)) return null;
+				realStat = await fsp.stat(real);
+			} catch (err) {
+				// The path vanished (or a segment did) after open — treat as absent so
+				// list()'s concurrent-delete behavior stays intact.
+				if (NOT_FOUND_CODES.has(errCode(err) ?? '')) return null;
+				throw err;
+			}
+			if (realStat.ino !== stat.ino || realStat.dev !== stat.dev) return null;
 			return { body: await handle.readFile(), uploaded: stat.mtime };
 		} finally {
 			await handle.close();
@@ -219,7 +245,16 @@ export class FsStorage implements Bucket {
 			try {
 				await fsp.unlink(filePath);
 			} catch (err) {
-				if (errCode(err) === 'ENOENT' || errCode(err) === 'ENOTDIR') continue;
+				const code = errCode(err);
+				if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+				// A key that resolves to a directory holds no object (get/head return
+				// null), so deleting it is an idempotent no-op rather than a raw
+				// EISDIR (linux) / EPERM (darwin). Only skip when it really is a dir —
+				// a genuine permission fault on a file must still surface.
+				if (code === 'EISDIR' || code === 'EPERM') {
+					const st = await fsp.lstat(filePath).catch(() => null);
+					if (!st || st.isDirectory()) continue;
+				}
 				throw err;
 			}
 			// Best-effort prune of now-empty parent dirs, stopping at the root.

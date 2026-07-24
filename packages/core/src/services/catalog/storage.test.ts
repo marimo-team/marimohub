@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MemoryBucket } from '../../testing';
 import type { BucketListOptions } from '../../ports/bucket';
-import { listAllKeys, listAllObjects } from './storage';
+import { deleteByPrefix, listAllKeys, listAllObjects } from './storage';
 
 /**
  * MemoryBucket pages at `limit` (default 1000). These helpers never pass a
@@ -92,5 +92,26 @@ describe('listAllKeys', () => {
 
 		const got = await listAllKeys(bucket, 'projects/p/');
 		expect(got.sort()).toEqual([...keys].sort());
+	});
+});
+
+describe('deleteByPrefix', () => {
+	it('deletes every key under the prefix and returns the count', async () => {
+		const bucket = new MemoryBucket();
+		await seed(bucket, ['p/a', 'p/b', 'p/c', 'other/x']);
+
+		const count = await deleteByPrefix(bucket, 'p/');
+
+		expect(count).toBe(3);
+		expect(await listAllKeys(bucket, 'p/')).toEqual([]);
+		expect(await listAllKeys(bucket, 'other/')).toEqual(['other/x']);
+	});
+
+	it('no-ops (returns 0, never calls bucket.delete) for an empty prefix', async () => {
+		const bucket = new MemoryBucket();
+		const delSpy = vi.spyOn(bucket, 'delete');
+
+		expect(await deleteByPrefix(bucket, 'nothing/')).toBe(0);
+		expect(delSpy).not.toHaveBeenCalled();
 	});
 });

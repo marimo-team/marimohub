@@ -277,6 +277,11 @@ class ModalSandboxInstance implements SandboxInstance {
 		// Modal returns a public tunnel URL for the exposed port — used directly by
 		// the client, so the API's proxy() is a no-op for this backend.
 		const res = await this.modal<{ url: string }>(`/v1/sandboxes/${this.id}/tunnels`, { port });
+		// A parseable absolute URL is part of the exposePort contract; never let a
+		// malformed tunnels response slip through as `{ url: undefined }`.
+		if (!res.url || typeof res.url !== 'string') {
+			throw new Error(`Modal tunnels response for sandbox ${this.id} is missing a url`);
+		}
 		return { url: res.url };
 	}
 

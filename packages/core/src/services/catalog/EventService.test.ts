@@ -1,7 +1,18 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { MemoryBucket, uid } from '../../testing';
+import type { BucketListOptions } from '../../ports/bucket';
 import { paths } from '../../paths';
 import { EventService } from './EventService';
+
+/** Forces a tiny list page so getEvents' cursor loop spans multiple pages. */
+class SmallPageBucket extends MemoryBucket {
+	constructor(private readonly pageSize: number) {
+		super();
+	}
+	override list(options?: BucketListOptions) {
+		return super.list({ ...options, limit: options?.limit ?? this.pageSize });
+	}
+}
 
 describe('EventService', () => {
 	let bucket: MemoryBucket;
@@ -78,6 +89,27 @@ describe('EventService', () => {
 			const evts = await events.getEvents('2025-03-05');
 			expect(evts).toHaveLength(3);
 			expect(evts.map((e) => e.event)).toEqual(['a', 'b', 'c']);
+		});
+
+		it('skips a corrupt event object rather than throwing', async () => {
+			await events.append({ event: 'a', actor: uid('x') });
+			await events.append({ event: 'b', actor: uid('y') });
+			// A corrupt object under the same day prefix (sorts after the ULID keys).
+			await bucket.put(paths.event('2025-03-05', 'zzz-corrupt'), 'not-json{');
+
+			const evts = await events.getEvents('2025-03-05');
+			expect(evts.map((e) => e.event).sort()).toEqual(['a', 'b']);
+		});
+
+		it('pages across multiple truncated list pages', async () => {
+			const small = new SmallPageBucket(2);
+			const svc = new EventService(small);
+			for (let i = 0; i < 5; i++) {
+				await svc.append({ event: `e${i}`, actor: uid('a') });
+			}
+
+			const evts = await svc.getEvents('2025-03-05');
+			expect(evts).toHaveLength(5);
 		});
 	});
 

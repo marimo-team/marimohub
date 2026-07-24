@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryBucket, useFakeClock } from '../../testing';
+import { PreconditionFailedError } from '../../errors';
 import { paths } from '../../paths';
 import { MaintenanceLock } from './MaintenanceLock';
 
@@ -55,5 +56,39 @@ describe('MaintenanceLock', () => {
 		await lock.release('B'); // not the holder
 		expect(await bucket.get(paths.maintenanceLock)).not.toBeNull();
 		expect(await lock.acquire('B', 10_000)).toBe(false); // A still holds it
+	});
+
+	it('steals a lock whose stored record is malformed', async () => {
+		await bucket.put(paths.maintenanceLock, 'not-json');
+
+		expect(await lock.acquire('A', 1000)).toBe(true);
+		const stored = await bucket.get(paths.maintenanceLock);
+		expect((await stored!.json<{ holder: string }>()).holder).toBe('A');
+	});
+
+	it('returns false when it loses the CAS on a contended steal', async () => {
+		expect(await lock.acquire('A', 1000)).toBe(true);
+		clock.set(2000); // A's lease expired → eligible to steal
+
+		const originalPut = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, opts) => {
+			// Another writer wins the steal first: the conditional CAS fails.
+			if (opts?.onlyIfEtagMatches) throw new PreconditionFailedError('lost the steal');
+			return originalPut(key, value, opts);
+		});
+
+		expect(await lock.acquire('B', 1000)).toBe(false);
+	});
+
+	it('release does not delete a lease another holder stole after a TTL overrun', async () => {
+		expect(await lock.acquire('A', 1000)).toBe(true);
+		clock.set(2000); // A overran its TTL
+		expect(await lock.acquire('B', 10_000)).toBe(true); // B steals the expired lease
+
+		await lock.release('A'); // must not delete B's freshly-acquired lease
+
+		const stored = await bucket.get(paths.maintenanceLock);
+		expect(stored).not.toBeNull();
+		expect((await stored!.json<{ holder: string }>()).holder).toBe('B');
 	});
 });

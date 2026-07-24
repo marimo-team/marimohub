@@ -4,11 +4,13 @@ import {
 	createProjectId,
 	createSandboxId,
 	createSessionId,
+	createVersionId,
 	NotebookId,
 	ProjectId,
 	SandboxId,
 	SessionId,
 	SnapshotId,
+	UserId,
 	VersionId,
 } from './ids';
 import type { IdBrand } from './ids';
@@ -111,5 +113,27 @@ describe('VersionId namespace', () => {
 		const valid = VersionId.create();
 		expect(VersionId.parse(valid)).toBe(valid);
 		expect(() => VersionId.parse('ver_lowercase')).toThrow('VersionId');
+	});
+
+	it('createVersionId sorts monotonically for ids minted within the same millisecond', () => {
+		// The monotonic factory guarantees strictly-increasing (lexicographic) ids even
+		// under a frozen clock — version pruning treats the largest id as newest.
+		const ids = Array.from({ length: 50 }, () => createVersionId());
+		const sorted = [...ids].sort();
+		expect(ids).toEqual(sorted);
+		expect(new Set(ids).size).toBe(ids.length);
+	});
+});
+
+describe('UserId (opaque brand)', () => {
+	it('rejects the empty string', () => {
+		expect(UserId.is('')).toBe(false);
+		expect(() => UserId.assert('')).toThrow('UserId');
+		expect(() => UserId.parse('')).toThrow('UserId');
+	});
+
+	it('accepts a non-empty opaque sub like "system"', () => {
+		expect(UserId.is('system')).toBe(true);
+		expect(UserId.parse('system')).toBe('system');
 	});
 });

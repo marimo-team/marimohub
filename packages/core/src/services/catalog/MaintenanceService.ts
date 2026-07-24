@@ -109,8 +109,9 @@ export class MaintenanceService {
 			const dateStr = dayPrefix.slice(paths.eventsPrefix.length).replace(/\/$/, '');
 			const dayStart = Date.parse(`${dateStr}T00:00:00.000Z`);
 			if (Number.isNaN(dayStart)) continue; // not a date folder — leave it alone
-			// Keep the whole day until the end of that day predates the cutoff.
-			if (dayStart + DAY_MS > cutoff) continue;
+			// Keep the whole day until the end of that day predates the cutoff. "Predates"
+			// is strictly-before, so a day whose end lands exactly on the cutoff is kept.
+			if (dayStart + DAY_MS >= cutoff) continue;
 
 			const dayObjects = await listAllObjects(this.bucket, dayPrefix);
 			if (dayObjects.length === 0) continue;

@@ -212,6 +212,35 @@ describe('E2bCompute', () => {
 		).rejects.toThrow();
 	});
 
+	it('writeFiles sends a Uint8Array subarray as its own byte range only', async () => {
+		const fake = new FakeE2b();
+		const backing = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+		const view = backing.subarray(2, 5); // bytes [2,3,4]
+		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+		await sb.writeFiles([{ path: '/a.bin', content: view }]);
+		const stored = [...fake.sandboxes.values()][0].files.get('/a.bin') as unknown as ArrayBuffer;
+		expect(stored.byteLength).toBe(3);
+		expect([...new Uint8Array(stored)]).toEqual([2, 3, 4]);
+	});
+
+	it('batches bytes via files.write (ArrayBuffer), never a shell argv (ARG_MAX)', async () => {
+		const fake = new FakeE2b();
+		const big = new Uint8Array(1024 * 1024);
+		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+		await sb.writeFiles([{ path: '/big.bin', content: big }]);
+		// Bytes go over the files API — no exec/command is used to write them.
+		expect(fake.runCalls).toEqual([]);
+		const stored = [...fake.sandboxes.values()][0].files.get('/big.bin') as unknown as ArrayBuffer;
+		expect(stored.byteLength).toBe(big.length);
+	});
+
+	it('destroy resolves as a no-op when no handle and no matching sandbox exist', async () => {
+		const fake = new FakeE2b();
+		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+		await expect(sb.destroy()).resolves.toBeUndefined();
+		expect([...fake.sandboxes.values()].some((s) => s.killed)).toBe(false);
+	});
+
 	it('destroy kills the sandbox', async () => {
 		const fake = new FakeE2b();
 		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
@@ -375,6 +404,62 @@ describe('E2bCompute', () => {
 });
 
 describe('createE2bClient', () => {
+	it('threads apiKey (and domain) into every SDK call', async () => {
+		const handle = {
+			sandboxId: 'e2b-1',
+			commands: { run: vi.fn(), kill: vi.fn() },
+			files: { write: vi.fn(), read: vi.fn() },
+			getHost: vi.fn(),
+			kill: vi.fn(),
+		};
+		const create = vi.fn(async () => handle);
+		const connect = vi.fn(async () => handle);
+		const list = vi.fn(() => []);
+		const sdk: E2bSdk = { Sandbox: { create, connect, list } };
+		const client = createE2bClient(
+			{ apiKey: 'my-key', template: 'tpl', domain: 'e2b.internal' },
+			async () => sdk,
+		);
+
+		await client.create({});
+		await client.connect('e2b-1');
+		await client.list();
+
+		expect(create).toHaveBeenCalledWith(expect.anything(), {
+			apiKey: 'my-key',
+			domain: 'e2b.internal',
+		});
+		expect(connect).toHaveBeenCalledWith('e2b-1', { apiKey: 'my-key', domain: 'e2b.internal' });
+		expect(list).toHaveBeenCalledWith({ apiKey: 'my-key', domain: 'e2b.internal' });
+	});
+
+	it('runBackground does not throw when the SDK exposes no commands.kill', async () => {
+		const sdk: E2bSdk = {
+			Sandbox: {
+				connect: vi.fn(async () => ({
+					sandboxId: 'e2b-1',
+					commands: { run: vi.fn(async () => ({ pid: 'p1' })) }, // no kill
+					files: { write: vi.fn(), read: vi.fn() },
+					getHost: vi.fn(),
+					kill: vi.fn(),
+				})),
+			},
+		};
+		const client = createE2bClient(baseConfig, async () => sdk);
+		const sb = await client.connect('e2b-1');
+		const handle = await sb.commands.runBackground('sleep 1');
+		await expect(handle.kill()).resolves.toBeUndefined();
+	});
+
+	it('surfaces a loadSdk failure (e.g. the e2b SDK is not installed)', async () => {
+		// Inject a deterministic failing loader instead of relying on `e2b` being absent
+		// from the environment, and assert the failure reaches the caller.
+		const client = createE2bClient(baseConfig, async () => {
+			throw new Error("Cannot find package 'e2b'");
+		});
+		await expect(client.create({})).rejects.toThrow(/Cannot find package 'e2b'/);
+	});
+
 	it('surfaces CommandExitError-like SDK failures as command results', async () => {
 		const sdk: E2bSdk = {
 			Sandbox: {

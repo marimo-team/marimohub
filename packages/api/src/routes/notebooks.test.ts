@@ -521,6 +521,28 @@ describe('Notebook routes', () => {
 		await expectError(await request('GET', nb('/nb-0000000000000000/workspace.zip')), 404);
 	});
 
+	it('GET /{nid}/workspace.zip 404s for a malformed (path-traversal-shaped) notebook id', async () => {
+		// `bad..id` fails NotebookId.is → NotFound, never reaching a store read.
+		await expectError(await request('GET', nb('/bad..id/workspace.zip')), 404, 'NOT_FOUND');
+	});
+
+	it('GET /{nid} (and /content, /html) 404s for a notebook in a DIFFERENT project', async () => {
+		// Notebook lives in `projectId`; a second project the caller also owns does not.
+		const created = await expectOk<any>(
+			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),
+			201,
+		);
+		const other = await createServices(bucket).projects.createProject(
+			{ name: 'Other', description: 'd' },
+			ACTOR,
+		);
+		const foreign = (path: string) => `/projects/${other.id}/notebooks/${created.id}${path}`;
+
+		await expectError(await request('GET', foreign('')), 404, 'NOT_FOUND');
+		await expectError(await request('GET', foreign('/content')), 404, 'NOT_FOUND');
+		await expectError(await request('GET', foreign('/html')), 404, 'NOT_FOUND');
+	});
+
 	it('GET /{nid}/versions/{vid} returns specific version', async () => {
 		const created = await expectOk<any>(
 			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),

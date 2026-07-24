@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+	assertVersionMatch,
+	BadRequestError,
 	ConflictError,
 	ForbiddenError,
 	NotFoundError,
@@ -7,6 +9,7 @@ import {
 	PreconditionFailedError,
 	ResourceExhaustedError,
 	UnavailableError,
+	ValidationError,
 } from './errors';
 
 // The HTTP status carried by each domain error is load-bearing: `packages/api`
@@ -65,5 +68,33 @@ describe('domain errors', () => {
 			throw new Err();
 		}).toThrow(Error);
 		expect(typeof new Err().stack).toBe('string');
+	});
+
+	it('BadRequestError carries 400 / BAD_REQUEST and its name', () => {
+		const e = new BadRequestError();
+		expect(e.status).toBe(400);
+		expect(e.code).toBe('BAD_REQUEST');
+		expect(e.name).toBe('BadRequestError');
+	});
+
+	it('ValidationError carries 422 / VALIDATION_ERROR and its name', () => {
+		const e = new ValidationError();
+		expect(e.status).toBe(422);
+		expect(e.code).toBe('VALIDATION_ERROR');
+		expect(e.name).toBe('ValidationError');
+	});
+});
+
+describe('assertVersionMatch', () => {
+	it('is a no-op when the caller sent no precondition (expected undefined)', () => {
+		expect(() => assertVersionMatch('etag-1', undefined)).not.toThrow();
+	});
+
+	it('passes when expected matches current', () => {
+		expect(() => assertVersionMatch('etag-1', 'etag-1')).not.toThrow();
+	});
+
+	it('throws PreconditionFailedError on a stale precondition', () => {
+		expect(() => assertVersionMatch('etag-2', 'etag-1')).toThrow(PreconditionFailedError);
 	});
 });

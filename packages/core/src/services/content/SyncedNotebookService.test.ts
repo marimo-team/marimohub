@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ACTOR, setupTestEnv } from '../../testing';
 import type { ProjectId } from '../../ids';
+import { noopMetrics } from '../../ports/metrics';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
+import { SyncedNotebookService } from './SyncedNotebookService';
 import type { CreateSyncedNotebookInput } from '../../integrations/syncedSource';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -16,6 +18,16 @@ const CREATE_INPUT: CreateSyncedNotebookInput = {
 	entry_notebook: 'app.py',
 	root_path: '',
 };
+
+function syncInput(commit: string) {
+	return {
+		repo: 'owner/repo',
+		branch: 'main',
+		root_path: '',
+		commit,
+		files: [{ path: 'app.py', bytes: enc('import marimo') }],
+	};
+}
 
 describe('SyncedNotebookService', () => {
 	let notebooks: NotebookService;
@@ -78,16 +90,6 @@ describe('SyncedNotebookService', () => {
 	});
 
 	describe('sync', () => {
-		function syncInput(commit: string) {
-			return {
-				repo: 'owner/repo',
-				branch: 'main',
-				root_path: '',
-				commit,
-				files: [{ path: 'app.py', bytes: enc('import marimo') }],
-			};
-		}
-
 		it('advances the source to a new version and flips status to active', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 
@@ -126,6 +128,75 @@ describe('SyncedNotebookService', () => {
 					repo: 'other/repo',
 				}),
 			).rejects.toThrow();
+		});
+
+		// A stale-source push whose commit was already claimed by a concurrent push
+		// must lose its CAS and skip, leaving the winner's version as the pointer —
+		// its own freshly-written version is a harmless orphan.
+		it('leaves the concurrent winner in place when a push already claimed the commit', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const pid = project.id;
+			const { meta } = await env.notebooks.synced.create(pid, CREATE_INPUT, ACTOR);
+
+			// First push claims commit A; capture that source as the "stale" read.
+			await env.notebooks.synced.sync(pid, meta.id, syncInput('commit-aaaa'));
+			const stale = await env.notebooks.getNotebook(pid, meta.id);
+
+			// A concurrent push claims commit B and advances the pointer to its version.
+			await env.notebooks.synced.sync(pid, meta.id, syncInput('commit-bbbb'));
+			const winner = await env.notebooks.getNotebook(pid, meta.id);
+			const winnerVersionId =
+				winner.source.type === 'git' ? winner.source.current_version_id : null;
+
+			const versionsBefore = await env.notebooks.listVersions(pid, meta.id);
+
+			// Our push also targets commit B, but started from the stale (commit-A) source.
+			// Its CAS re-reads the pointer (now commit B) and must no-op rather than clobber.
+			const racing = new SyncedNotebookService(env.bucket, env.catalog, noopMetrics, {
+				getNotebook: async () => ({ meta: stale.meta, source: stale.source }),
+				pruneVersions: async () => {},
+			});
+			await expect(racing.sync(pid, meta.id, syncInput('commit-bbbb'))).resolves.toBeDefined();
+
+			const after = await env.notebooks.getNotebook(pid, meta.id);
+			expect(after.source.type).toBe('git');
+			if (after.source.type === 'git') {
+				expect(after.source.commit).toBe('commit-bbbb');
+				expect(after.source.current_version_id).toBe(winnerVersionId);
+			}
+			// The losing push's version is left behind as a harmless orphan.
+			const versionsAfter = await env.notebooks.listVersions(pid, meta.id);
+			expect(versionsAfter.length).toBe(versionsBefore.length + 1);
+		});
+	});
+
+	describe('non-synced (local) notebooks', () => {
+		async function createLocal() {
+			return notebooks.createNotebook(
+				projectId,
+				{ title: 'Local', description: 'd', code: 'import marimo' },
+				ACTOR,
+			);
+		}
+
+		it('rotateToken rejects a local (non-git) notebook', async () => {
+			const local = await createLocal();
+			await expect(notebooks.synced.rotateToken(projectId, local.id)).rejects.toThrow();
+		});
+
+		it('sync rejects a local (non-git) notebook', async () => {
+			const local = await createLocal();
+			await expect(
+				notebooks.synced.sync(projectId, local.id, syncInput('commit-aaaa')),
+			).rejects.toThrow();
+		});
+
+		it('verifyToken returns false when no sync-token sidecar exists', async () => {
+			const local = await createLocal();
+			expect(await notebooks.synced.verifyToken(projectId, local.id, 'mhsync_anything')).toBe(
+				false,
+			);
 		});
 	});
 });

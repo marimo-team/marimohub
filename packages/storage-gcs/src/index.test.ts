@@ -442,6 +442,104 @@ describe('GcsStorage auth and request mapping', () => {
 	});
 });
 
+describe('GcsStorage error propagation and edge cases', () => {
+	it('percent-encodes slashes in the object key path segment', async () => {
+		let seenUrl = '';
+		const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+			seenUrl = String(input);
+			return new Response('payload', {
+				status: 200,
+				headers: { 'x-goog-generation': '7', 'content-length': '7' },
+			});
+		});
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		await bucket.get('dir/nb.py');
+		expect(seenUrl).toContain('/o/dir%2Fnb.py');
+	});
+
+	it('list reports truncated=false and no cursor when nextPageToken is absent', async () => {
+		const fetchImpl = vi.fn(async () =>
+			json({
+				items: [{ name: 'a', generation: '1', size: '1', updated: '2025-03-05T14:00:00.000Z' }],
+			}),
+		);
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		const res = await bucket.list();
+		expect(res.truncated).toBe(false);
+		expect(res.cursor).toBeUndefined();
+	});
+
+	it('get falls back to bodyBytes.length when content-length is missing', async () => {
+		const fetchImpl = vi.fn(
+			async () => new Response('payload!', { status: 200, headers: { 'x-goog-generation': '9' } }),
+		);
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		const body = await bucket.get('k');
+		expect(body?.size).toBe(8);
+	});
+
+	it('put sends ifGenerationMatch=0 for onlyIfNotExists', async () => {
+		let seenUrl: URL | undefined;
+		const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+			seenUrl = new URL(String(input));
+			return json({ name: 'k', generation: '10', size: '1', updated: '2025-03-05T14:00:00.000Z' });
+		});
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		await bucket.put('k', 'v', { onlyIfNotExists: true });
+		expect(seenUrl?.searchParams.get('ifGenerationMatch')).toBe('0');
+	});
+
+	it('put coerces a bogus etag to generation 1 for ifGenerationMatch', async () => {
+		let seenUrl: URL | undefined;
+		const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+			seenUrl = new URL(String(input));
+			return json({ name: 'k', generation: '11', size: '1', updated: '2025-03-05T14:00:00.000Z' });
+		});
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		await bucket.put('k', 'v', { onlyIfEtagMatches: 'not-a-number' });
+		expect(seenUrl?.searchParams.get('ifGenerationMatch')).toBe('1');
+	});
+
+	it('does not retry an upload on a transient network error', async () => {
+		let calls = 0;
+		const fetchImpl = vi.fn(async () => {
+			calls += 1;
+			throw Object.assign(new Error('network down'), { name: 'FetchError' });
+		});
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		await expect(bucket.put('k', 'v')).rejects.toThrow();
+		expect(calls).toBe(1);
+	});
+
+	it('get throws on a 500 response', async () => {
+		const fetchImpl = vi.fn(async () => new Response('boom', { status: 500 }));
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		await expect(bucket.get('k')).rejects.toThrow(/GCS get failed/);
+	});
+
+	it('head throws on a 403 response', async () => {
+		const fetchImpl = vi.fn(async () => new Response('denied', { status: 403 }));
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		await expect(bucket.head('k')).rejects.toThrow(/GCS head failed/);
+	});
+
+	it('list throws on a 500 response', async () => {
+		const fetchImpl = vi.fn(async () => new Response('boom', { status: 500 }));
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		await expect(bucket.list()).rejects.toThrow(/GCS list failed/);
+	});
+
+	it('delete throws on a non-404 error', async () => {
+		const fetchImpl = vi.fn(async () => new Response('denied', { status: 403 }));
+		const bucket = new GcsStorage({ bucket: 'test', accessToken: 't', fetchImpl });
+		await expect(bucket.delete('k')).rejects.toThrow(/GCS delete failed/);
+	});
+
+	// SKIP: the adapter reads the whole body via `res.arrayBuffer()` in get(), so
+	// "does not buffer an unbounded body" is not expressible against this code.
+	it.skip('get does not buffer an unbounded object body into memory', () => {});
+});
+
 describe('GcsStorage conditional-write verification', () => {
 	it('passes against a store that enforces ifGenerationMatch atomically', async () => {
 		const bucket = new GcsStorage({ bucket: 'test', fetchImpl: makeFakeGcsFetch() });

@@ -198,6 +198,103 @@ describe('createK8sClient', () => {
 		]);
 	});
 
+	it('rethrows a 403 RBAC-forbidden pod create (only 409 is tolerated)', async () => {
+		k8sMock.core.createNamespacedPod.mockRejectedValueOnce({ code: 403 });
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: '',
+				image: 'kernel-image',
+				port: 2718,
+				namespace: 'kernels',
+			}),
+		).rejects.toMatchObject({ code: 403 });
+	});
+
+	it('rethrows a non-404 delete error (e.g. 403)', async () => {
+		k8sMock.net.deleteNamespacedIngress.mockRejectedValueOnce({ code: 403 });
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(client.delete('mh-sb')).rejects.toMatchObject({ code: 403 });
+	});
+
+	it('streams a Uint8Array stdin as raw bytes to the pod (objectMode:false)', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		const received: Buffer[] = [];
+		let objectMode: boolean | undefined;
+		let everyChunkWasRawBytes = true;
+		k8sMock.exec.mockImplementation(
+			async (
+				_namespace: string,
+				_name: string,
+				_container: string,
+				_command: string[],
+				_stdout: Writable,
+				_stderr: Writable,
+				stdin: Readable | null,
+				_tty: boolean,
+				statusCallback: (status: unknown) => void,
+			) => {
+				const socket = new EventEmitter();
+				objectMode = stdin?.readableObjectMode;
+				stdin?.on('data', (chunk) => {
+					// In object mode the whole Uint8Array would arrive as one non-Buffer
+					// object chunk; a byte stream delivers Buffer chunks.
+					if (!Buffer.isBuffer(chunk)) everyChunkWasRawBytes = false;
+					received.push(Buffer.from(chunk));
+				});
+				stdin?.on('end', () => {
+					statusCallback({ status: 'Success' });
+					setTimeout(() => socket.emit('close'), 0);
+				});
+				return socket;
+			},
+		);
+
+		const bytes = new Uint8Array([0xff, 0x00, 0x80, 0x7f]);
+		const res = await client.exec('pod-1', ['sh', '-lc', 'cat'], bytes);
+		expect(objectMode).toBe(false);
+		expect(everyChunkWasRawBytes).toBe(true);
+		expect(Array.from(Buffer.concat(received))).toEqual([0xff, 0x00, 0x80, 0x7f]);
+		expect(res.exitCode).toBe(0);
+	});
+
+	it.each([
+		['a missing ExitCode cause', { status: 'Failure' }],
+		[
+			'a non-numeric ExitCode cause',
+			{ status: 'Failure', details: { causes: [{ reason: 'ExitCode', message: 'boom' }] } },
+		],
+	])('defaults a Failure status with %s to exit code 1', async (_label, status) => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		k8sMock.exec.mockImplementation(
+			async (
+				_namespace: string,
+				_name: string,
+				_container: string,
+				_command: string[],
+				_stdout: Writable,
+				_stderr: Writable,
+				stdin: Readable | null,
+				_tty: boolean,
+				statusCallback: (status: unknown) => void,
+			) => {
+				stdin?.resume();
+				statusCallback(status);
+				const socket = new EventEmitter();
+				setTimeout(() => socket.emit('close'), 0);
+				return socket;
+			},
+		);
+
+		await expect(client.exec('pod-1', ['sh', '-lc', 'cmd'])).resolves.toMatchObject({
+			exitCode: 1,
+		});
+	});
+
 	it('deletes ingress, service, and pod while tolerating 404s', async () => {
 		k8sMock.net.deleteNamespacedIngress.mockRejectedValueOnce({ code: 404 });
 		const client = createK8sClient({ namespace: 'kernels' });

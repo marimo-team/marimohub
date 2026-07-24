@@ -1,3 +1,6 @@
+import { access, rm } from 'node:fs/promises';
+import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import type { SandboxId } from '@marimo-hub/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -198,6 +201,63 @@ describe('LocalCompute process lifecycle', () => {
 		} finally {
 			await sb.destroy();
 		}
+	});
+});
+
+describe('LocalCompute security & limits', () => {
+	it('writeFiles must not allow path traversal outside the sandbox root', async () => {
+		// The sandbox root sits one level under os.tmpdir(), so a single `..` in the
+		// write path escapes it (mapPath is a bare path.join with no containment check).
+		const rand = Math.random().toString(36).slice(2, 10);
+		const escaped = path.join(os.tmpdir(), `mh-traversal-${rand}.txt`);
+		const sb = newSandbox();
+		try {
+			await sb.writeFiles([{ path: `/../mh-traversal-${rand}.txt`, content: 'pwned' }]);
+			// Secure behaviour: the traversal must NOT have written outside the root.
+			await expect(access(escaped)).rejects.toThrow();
+		} finally {
+			await rm(escaped, { force: true });
+		}
+	});
+
+	it('startProcess throws when the configured port range is exhausted', async () => {
+		// Occupy a single-port range so allocatePort scans it and finds nothing free.
+		const srv = net.createServer();
+		const port = await new Promise<number>((resolve) => {
+			srv.listen(0, '127.0.0.1', () => {
+				const addr = srv.address();
+				resolve(typeof addr === 'object' && addr ? addr.port : 0);
+			});
+		});
+		const ranged = new LocalCompute({ ports: { start: port, end: port } });
+		const id = `sb-exhaust-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
+		const sb = ranged.create(id);
+		try {
+			await expect(sb.startProcess(SERVER_CMD, { cwd: '/workspace' })).rejects.toThrow(
+				/no free port/,
+			);
+		} finally {
+			await sb.destroy();
+			// close() is fire-and-forget (returns the server, not a promise); await the
+			// actual close so the port is freed before teardown to avoid cross-test flakes.
+			await new Promise<void>((resolve) => srv.close(() => resolve()));
+		}
+	});
+
+	it('destroy is idempotent when called twice and after never starting', async () => {
+		const id = `sb-idempotent-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
+		const sb = compute.create(id);
+		await expect(sb.destroy()).resolves.toBeUndefined();
+		await expect(sb.destroy()).resolves.toBeUndefined();
+	});
+
+	it('exposePort ignores the app-provided hostname (kernel host is the configured host)', async () => {
+		// Documents that the local backend serves the kernel on its own host and does
+		// NOT honour the hostname passed for cross-origin isolation (dev-only backend).
+		const sb = newSandbox();
+		const { url } = await sb.exposePort(2718, { hostname: 'kernels.example.com' });
+		expect(url).not.toContain('kernels.example.com');
+		expect(url.startsWith('http://localhost:')).toBe(true);
 	});
 });
 

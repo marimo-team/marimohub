@@ -463,4 +463,67 @@ describe('createFromEnv session lifetime', () => {
 			createFromEnv({ ...baseEnv, MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS: '0' }),
 		).toThrow(/MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS/);
 	});
+
+	it.each([
+		'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS',
+		'MARIMOHUB_SESSION_LIFETIME_EXTENSION_SECONDS',
+		'MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS',
+	])('rejects a zero %s (only the snapshot interval may be 0)', (key) => {
+		expect(() => createFromEnv({ ...baseEnv, [key]: '0' })).toThrow(new RegExp(key));
+	});
+
+	it.each([
+		'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS',
+		'MARIMOHUB_SESSION_LIFETIME_EXTENSION_SECONDS',
+		'MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS',
+	])('rejects a negative %s', (key) => {
+		expect(() => createFromEnv({ ...baseEnv, [key]: '-1' })).toThrow(new RegExp(key));
+	});
+});
+
+describe('createFromEnv concurrent-session cap', () => {
+	const baseEnv = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'dev',
+	};
+
+	it('defaults to 10 when unset', () => {
+		expect(createFromEnv({ ...baseEnv }).policy.maxConcurrentSessionsPerUser).toBe(10);
+	});
+
+	it('treats 0 as unlimited (undefined)', () => {
+		expect(
+			createFromEnv({ ...baseEnv, MARIMOHUB_MAX_SESSIONS_PER_USER: '0' }).policy
+				.maxConcurrentSessionsPerUser,
+		).toBeUndefined();
+	});
+
+	it.each(['-1', '2.5', 'abc'])('rejects the invalid cap %o', (raw) => {
+		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_MAX_SESSIONS_PER_USER: raw })).toThrow(
+			/MARIMOHUB_MAX_SESSIONS_PER_USER/,
+		);
+	});
+});
+
+describe('createFromEnv allowed origins', () => {
+	const baseEnv = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'dev',
+	};
+
+	it('parses MARIMOHUB_ALLOWED_ORIGINS into a trimmed list', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_ALLOWED_ORIGINS: 'https://a.example.com, https://b.example.com',
+		});
+		expect(deps.policy.allowedOrigins).toEqual(['https://a.example.com', 'https://b.example.com']);
+	});
+
+	it('leaves allowed origins undefined when unset', () => {
+		expect(createFromEnv({ ...baseEnv }).policy.allowedOrigins).toBeUndefined();
+	});
 });

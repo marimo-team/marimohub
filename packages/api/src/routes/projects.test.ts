@@ -91,6 +91,17 @@ describe('Project routes', () => {
 		expect(await expectPage(await request('GET', '/projects'))).toHaveLength(0);
 	});
 
+	it('GET /projects/{pid} 404s for a soft-deleted project', async () => {
+		const created = await expectOk<any>(
+			await request('POST', '/projects', { name: 'Doomed', description: 'd' }),
+			201,
+		);
+		await expectOk(await request('DELETE', `/projects/${created.id}`));
+
+		// The bytes linger until GC, but a soft-deleted project reads as gone.
+		await expectError(await request('GET', `/projects/${created.id}`), 404, 'NOT_FOUND');
+	});
+
 	it('PUT/DELETE return 403 for a non-member', async () => {
 		const created = await expectOk<any>(
 			await request('POST', '/projects', { name: 'Owned', description: 'd' }),

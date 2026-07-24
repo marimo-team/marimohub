@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+	base64Encode,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	iterableToStream,
+	mapWithConcurrency,
 	parseFindFilesOutput,
 	pollUntilReady,
 	removeUndefined,
@@ -162,6 +164,20 @@ describe('parseFindFilesOutput', () => {
 			absolutePath: '/workspace/has\ttab.py',
 		});
 	});
+
+	it('passes an absolute path outside rootPath through unchanged as relativePath', () => {
+		// A row whose path is NOT under rootPath keeps its absolute path as the
+		// relativePath (no accidental prefix-stripping of an unrelated dir).
+		expect(parseFindFilesOutput('f\t3\t/etc/passwd\n', '/workspace')).toEqual([
+			{
+				name: 'passwd',
+				absolutePath: '/etc/passwd',
+				relativePath: '/etc/passwd',
+				type: 'file',
+				size: 3,
+			},
+		]);
+	});
 });
 
 async function* gen(values: string[], opts: { throwAt?: number } = {}) {
@@ -275,5 +291,82 @@ describe('pollUntilReady', () => {
 			),
 		).rejects.toThrow('process exited');
 		expect(calls).toBe(1);
+	});
+
+	it('throws without ever probing when timeoutMs is 0', async () => {
+		let calls = 0;
+		await expect(
+			pollUntilReady(
+				() => {
+					calls += 1;
+					return true;
+				},
+				{ timeoutMs: 0 },
+			),
+		).rejects.toThrow(/timed out after 0ms/);
+		expect(calls).toBe(0);
+	});
+});
+
+describe('mapWithConcurrency', () => {
+	it('never runs more than `concurrency` fns in flight', async () => {
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const items = Array.from({ length: 20 }, (_, i) => i);
+		await mapWithConcurrency(items, 3, async (n) => {
+			inFlight += 1;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			await new Promise((resolve) => setTimeout(resolve, 1));
+			inFlight -= 1;
+			return n;
+		});
+		expect(maxInFlight).toBe(3);
+	});
+
+	it('preserves result order despite out-of-order completion', async () => {
+		const items = [30, 5, 20, 1];
+		const results = await mapWithConcurrency(items, 4, async (ms) => {
+			await new Promise((resolve) => setTimeout(resolve, ms));
+			return ms;
+		});
+		expect(results).toEqual([30, 5, 20, 1]);
+	});
+
+	it('rejects when an item fn rejects', async () => {
+		await expect(
+			mapWithConcurrency([1, 2, 3], 2, async (n) => {
+				if (n === 2) throw new Error('item boom');
+				return n;
+			}),
+		).rejects.toThrow('item boom');
+	});
+
+	it('processes every item even when concurrency is 0 (no silent data loss)', async () => {
+		// A misconfigured concurrency of 0 must not silently write nothing — an
+		// adapter routing writeFiles through this would drop every file.
+		const seen: number[] = [];
+		const results = await mapWithConcurrency([1, 2, 3], 0, async (n) => {
+			seen.push(n);
+			return n * 2;
+		});
+		expect(seen.sort((a, b) => a - b)).toEqual([1, 2, 3]);
+		expect(results).toEqual([2, 4, 6]);
+	});
+});
+
+describe('base64Encode', () => {
+	it('encodes a payload larger than the 0x8000 chunk boundary', () => {
+		const bytes = new Uint8Array(0x8000 * 2 + 123);
+		for (let i = 0; i < bytes.length; i++) bytes[i] = i % 256;
+		const decoded = atob(base64Encode(bytes));
+		expect(decoded.length).toBe(bytes.length);
+		for (let i = 0; i < bytes.length; i++) {
+			expect(decoded.charCodeAt(i)).toBe(bytes[i]);
+		}
+	});
+
+	it('round-trips arbitrary bytes including a NUL and high bytes', () => {
+		const bytes = new Uint8Array([0x00, 0xff, 0xfe, 0x80, 0x7f]);
+		expect(base64Encode(bytes)).toBe(btoa('\x00\xff\xfe\x80\x7f'));
 	});
 });

@@ -37,4 +37,31 @@ describe('makeAi', () => {
 	it('does not validate the TTL when the AI backend is disabled', () => {
 		expect(makeAi({ MARIMOHUB_AI_TOKEN_TTL_SECONDS: '0' })).toEqual({});
 	});
+
+	it('throws when the backend is enabled but MARIMOHUB_AUTH_SESSION_SECRET is unset', () => {
+		const { MARIMOHUB_AUTH_SESSION_SECRET: _omit, ...env } = aiEnv;
+		expect(() => makeAi(env)).toThrow(/MARIMOHUB_AUTH_SESSION_SECRET/);
+	});
+
+	it('rejects an unknown MARIMOHUB_AI_BACKEND', () => {
+		expect(() => makeAi({ ...aiEnv, MARIMOHUB_AI_BACKEND: 'anthropic' })).toThrow(
+			/Unknown MARIMOHUB_AI_BACKEND/,
+		);
+	});
+
+	it.each([
+		'MARIMOHUB_AI_UPSTREAM_BASE_URL',
+		'MARIMOHUB_AI_UPSTREAM_API_KEY',
+		'MARIMOHUB_AI_MODEL',
+	])('requires %s', (key) => {
+		const env: Record<string, string | undefined> = { ...aiEnv };
+		delete env[key];
+		expect(() => makeAi(env)).toThrow(new RegExp(key));
+	});
+
+	it('rejects a non-integer MARIMOHUB_AI_MAX_TOKENS', () => {
+		expect(() => makeAi({ ...aiEnv, MARIMOHUB_AI_MAX_TOKENS: '1.5' })).toThrow(
+			/MARIMOHUB_AI_MAX_TOKENS/,
+		);
+	});
 });

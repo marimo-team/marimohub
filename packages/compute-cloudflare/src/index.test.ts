@@ -75,6 +75,39 @@ describe('CloudflareSandboxProvider', () => {
 			expect(fakeSandbox.exec).toHaveBeenCalledWith('echo ok');
 			expect(result).toEqual({ success: true, stdout: 'ok', stderr: '' });
 		});
+
+		it('surfaces success:false from the SDK exec result', async () => {
+			fakeSandbox.exec.mockResolvedValueOnce({ success: false, stdout: '', stderr: 'boom' });
+			const res = await makeProvider().create(SANDBOX_ID).exec('bad');
+			expect(res).toEqual({ success: false, stdout: '', stderr: 'boom' });
+		});
+	});
+
+	describe('instance.writeFiles() bytes', () => {
+		it('base64-armors non-string bytes via writeFile({encoding:base64}), never an inline argv (ARG_MAX)', async () => {
+			fakeSandbox.writeFile.mockClear();
+			fakeSandbox.writeFile.mockResolvedValueOnce(undefined);
+			const big = new Uint8Array(512 * 1024);
+			for (let i = 0; i < big.length; i++) big[i] = i % 256;
+
+			await makeProvider()
+				.create(SANDBOX_ID)
+				.writeFiles([{ path: '/f.bin', content: big }]);
+
+			const [path, armored, opts] = fakeSandbox.writeFile.mock.calls.at(-1)!;
+			expect(path).toBe('/f.bin');
+			expect(opts).toEqual({ encoding: 'base64' });
+			// The payload is base64 TEXT that decodes back to the original bytes.
+			expect(typeof armored).toBe('string');
+			expect(atob(armored as string).length).toBe(big.length);
+		});
+
+		it('destroy is idempotent (each call delegates to the SDK)', async () => {
+			fakeSandbox.destroy.mockResolvedValue(undefined);
+			const instance = makeProvider().create(SANDBOX_ID);
+			await instance.destroy();
+			await expect(instance.destroy()).resolves.toBeUndefined();
+		});
 	});
 
 	describe('instance.exposePort()', () => {
@@ -114,6 +147,46 @@ describe('CloudflareSandboxProvider', () => {
 					expect.objectContaining({ method: 'GET' }),
 				);
 				expect(result).toEqual({ url: 'https://random-words.trycloudflare.com' });
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
+		it('stops polling and returns at the cap when the tunnel URL never resolves', async () => {
+			fakeSandbox.tunnels.get.mockResolvedValueOnce({ url: 'https://never.trycloudflare.com' });
+			const instance = new CloudflareSandboxProvider(fakeNamespace, { useTunnel: true }).create(
+				SANDBOX_ID,
+			);
+			const fetchSpy = vi.fn().mockRejectedValue(new Error('ENOTFOUND'));
+			vi.stubGlobal('fetch', fetchSpy);
+			// Jump Date.now past the readiness cap after the first probe so the poll
+			// terminates without a real 10s wait.
+			const now = vi.spyOn(Date, 'now');
+			now.mockReturnValueOnce(0).mockReturnValue(1_000_000);
+			try {
+				const result = await instance.exposePort(8080, { hostname: 'ignored' });
+				expect(fetchSpy).toHaveBeenCalledTimes(1);
+				expect(result).toEqual({ url: 'https://never.trycloudflare.com' });
+			} finally {
+				now.mockRestore();
+				vi.unstubAllGlobals();
+			}
+		});
+
+		it('keeps polling while the probe returns 5xx, then returns on success', async () => {
+			fakeSandbox.tunnels.get.mockResolvedValueOnce({ url: 'https://slow.trycloudflare.com' });
+			const instance = new CloudflareSandboxProvider(fakeNamespace, { useTunnel: true }).create(
+				SANDBOX_ID,
+			);
+			const fetchSpy = vi
+				.fn()
+				.mockResolvedValueOnce({ status: 503 })
+				.mockResolvedValueOnce({ status: 200 });
+			vi.stubGlobal('fetch', fetchSpy);
+			try {
+				const result = await instance.exposePort(8080, { hostname: 'ignored' });
+				expect(fetchSpy).toHaveBeenCalledTimes(2);
+				expect(result).toEqual({ url: 'https://slow.trycloudflare.com' });
 			} finally {
 				vi.unstubAllGlobals();
 			}

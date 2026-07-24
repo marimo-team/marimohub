@@ -617,8 +617,15 @@ export class NotebookService {
 					);
 				} catch (err) {
 					// version.json deleted between the read above and the CAS write
-					// (e.g. concurrent notebook purge) — skip, matching the read-first check.
+					// (e.g. concurrent notebook purge). Best-effort remove the sidecars we
+					// just wrote so we don't leak untracked artifacts no descriptor points
+					// at — matching the read-first "skip the whole attach" contract.
 					if (!(err instanceof NotFoundError)) throw err;
+					const orphans = [
+						input.html !== undefined ? ver.html : undefined,
+						input.session !== undefined ? ver.session : undefined,
+					].filter((k): k is string => k !== undefined);
+					if (orphans.length > 0) await this.bucket.delete(orphans).catch(() => {});
 				}
 			}
 		}
@@ -687,7 +694,14 @@ export class NotebookService {
 		notebookId: NotebookId,
 		versionId: string,
 	): Promise<{ version: Version; code: string }> {
-		const vid = VersionId.parse(versionId);
+		// A malformed id is a client mistake, not a server fault: map the bare parse
+		// Error to a domain 404 so the API renders a 4xx instead of a raw 500.
+		let vid: VersionId;
+		try {
+			vid = VersionId.parse(versionId);
+		} catch {
+			throw new NotFoundError(`Version ${versionId} not found`);
+		}
 		const { source } = await this.getNotebook(projectId, notebookId);
 		const ver = paths.project(projectId).notebook(notebookId).version(vid);
 		const entryNotebook = remoteWorkspaceEntry(source);

@@ -63,6 +63,40 @@ describe('POST /api/ai/v1/chat/completions', () => {
 		expect(res.status).toBe(404);
 	});
 
+	it('returns 400 for an invalid JSON body (valid token)', async () => {
+		const headers: Record<string, string> = {
+			'content-type': 'application/json',
+			authorization: `Bearer ${await token()}`,
+		};
+		const res = await app().request('/api/ai/v1/chat/completions', {
+			method: 'POST',
+			headers,
+			body: '{ this is not json',
+		});
+		expect(res.status).toBe(400);
+		const json = (await res.json()) as { error: { type: string } };
+		expect(json.error.type).toBe('invalid_request_error');
+	});
+
+	it('returns 502 when the upstream provider is unreachable', async () => {
+		vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+		const res = await post(await token(), { model: 'm', messages: [] });
+		expect(res.status).toBe(502);
+		const json = (await res.json()) as { error: { type: string } };
+		expect(json.error.type).toBe('api_error');
+	});
+
+	it('rejects a well-formed but expired session token with 401', async () => {
+		// Mint the token as if issued 2h ago (default TTL is 1h) so it is already expired.
+		const expired = await mintAiSessionToken(
+			SECRET,
+			{ projectId: 'proj-1', notebookId: 'nb-1', sessionId: 'sess-1', userId: 'u-1' },
+			{ now: () => Date.now() - 2 * 60 * 60 * 1000 },
+		);
+		const res = await post(expired, { model: 'm', messages: [] });
+		expect(res.status).toBe(401);
+	});
+
 	it('forwards to the upstream with the real key and streams back', async () => {
 		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
 			new Response('data: {"x":1}\n\ndata: [DONE]\n\n', {

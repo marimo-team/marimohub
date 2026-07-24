@@ -30,4 +30,23 @@ describe('assertValidSecretName', () => {
 	it.each(['MARIMO_FOO', 'MARIMOHUB_ANYTHING'])('rejects reserved prefix %o', (name) => {
 		expect(() => assertValidSecretName(name)).toThrow(ValidationError);
 	});
+
+	// A newline-bearing name that slipped through would let an attacker inject a
+	// second `KEY=value` line when the env is materialized as text.
+	it.each(['FOO\n', 'FOO\nBAR', '\nFOO'])('rejects a name with a newline %o', (name) => {
+		expect(() => assertValidSecretName(name)).toThrow(ValidationError);
+	});
+
+	it.each(['IFS', 'ENV', 'DYLD_INSERT_LIBRARIES', 'PYTHONPATH', 'AWS_SECRET_ACCESS_KEY'])(
+		'rejects the reserved injection/credential name %o',
+		(name) => {
+			expect(() => assertValidSecretName(name)).toThrow(ValidationError);
+		},
+	);
+
+	// RESERVED_PREFIXES uses startsWith, so the bare token and no-underscore
+	// variants must be caught too (not just `MARIMO_...`).
+	it.each(['MARIMO', 'MARIMOS'])('rejects the bare/glued reserved prefix %o', (name) => {
+		expect(() => assertValidSecretName(name)).toThrow(ValidationError);
+	});
 });

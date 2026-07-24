@@ -1,4 +1,13 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -261,5 +270,84 @@ describe('FsStorage', () => {
 			await bucket.verifyConditionalWrites();
 			expect((await bucket.list()).objects).toEqual([]);
 		});
+	});
+});
+
+describe('FsStorage negative / edge cases', () => {
+	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+	it('does not follow an intermediate symlink dir that escapes the root', async () => {
+		const parent = makeRoot();
+		const root = path.join(parent, 'store');
+		const external = path.join(parent, 'external');
+		mkdirSync(external);
+		writeFileSync(path.join(external, 'passwd'), 'root:x:0:0');
+
+		const bucket = new FsStorage({ root });
+		// An intermediate symlink dir (proj -> /external) escapes the root; O_NOFOLLOW
+		// only guards the final path component, and containment is a lexical prefix
+		// check, so this must not leak the external file.
+		symlinkSync(external, path.join(root, 'proj'));
+
+		expect(await bucket.get('proj/passwd')).toBeNull();
+		expect(await bucket.head('proj/passwd')).toBeNull();
+	});
+
+	it('rejects put when both onlyIfEtagMatches and onlyIfNotExists are supplied', async () => {
+		const bucket = new FsStorage({ root: makeRoot() });
+		await expect(
+			bucket.put('k', 'v', { onlyIfEtagMatches: 'x', onlyIfNotExists: true }),
+		).rejects.toThrow(/mutually exclusive/);
+	});
+
+	it('get and head return null for a key that resolves to a directory', async () => {
+		const bucket = new FsStorage({ root: makeRoot() });
+		await bucket.put('dir/child.txt', 'x');
+		expect(await bucket.get('dir')).toBeNull();
+		expect(await bucket.head('dir')).toBeNull();
+	});
+
+	it('delete is a no-op for a key that resolves to a directory', async () => {
+		const bucket = new FsStorage({ root: makeRoot() });
+		await bucket.put('dir/child.txt', 'x');
+		// The key has no object (get('dir') is null), so delete must be idempotent
+		// like a missing key rather than surfacing a raw EISDIR/EPERM.
+		await expect(bucket.delete('dir')).resolves.toBeUndefined();
+	});
+
+	it.skipIf(isRoot)('put surfaces EACCES on an unwritable staging dir', async () => {
+		const root = makeRoot();
+		const bucket = new FsStorage({ root });
+		chmodSync(path.join(root, '.tmp'), 0o500);
+		try {
+			await expect(bucket.put('x.txt', 'data')).rejects.toThrow();
+		} finally {
+			chmodSync(path.join(root, '.tmp'), 0o700);
+		}
+	});
+
+	it('get returns null (not a raw ENAMETOOLONG) for an over-long key segment', async () => {
+		const bucket = new FsStorage({ root: makeRoot() });
+		const longKey = 'a'.repeat(300);
+		expect(await bucket.get(longKey)).toBeNull();
+	});
+
+	it('constructor fails cleanly when the root points at an existing regular file', () => {
+		const parent = makeRoot();
+		const file = path.join(parent, 'not-a-dir');
+		writeFileSync(file, 'x');
+		expect(() => new FsStorage({ root: file })).toThrow();
+	});
+
+	it('list returns empty for an empty root and for a non-matching prefix', async () => {
+		const bucket = new FsStorage({ root: makeRoot() });
+		const empty = await bucket.list();
+		expect(empty.objects).toEqual([]);
+		expect(empty.truncated).toBe(false);
+
+		await bucket.put('a/1', 'x');
+		const none = await bucket.list({ prefix: 'zzz/' });
+		expect(none.objects).toEqual([]);
+		expect(none.truncated).toBe(false);
 	});
 });

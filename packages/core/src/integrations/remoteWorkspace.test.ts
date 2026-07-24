@@ -78,4 +78,20 @@ describe('remote workspace helpers', () => {
 			]),
 		).toThrow(BadRequestError);
 	});
+
+	it('isSafeWorkspacePath rejects a null byte, a backslash, and a single-dot segment', () => {
+		expect(isSafeWorkspacePath('data/\0.csv')).toBe(false);
+		expect(isSafeWorkspacePath('data\\cars.csv')).toBe(false);
+		expect(isSafeWorkspacePath('data/./cars.csv')).toBe(false);
+		expect(isSafeWorkspacePath('.')).toBe(false);
+	});
+
+	it('normalizeEntryNotebook rejects a non-.py path', () => {
+		expect(() => normalizeEntryNotebook('apps/main.txt')).toThrow(BadRequestError);
+		expect(() => normalizeEntryNotebook('apps/main')).toThrow(BadRequestError);
+	});
+
+	it('toSyncedWorkspaceFileMap rejects an empty archive', () => {
+		expect(() => toSyncedWorkspaceFileMap([])).toThrow(BadRequestError);
+	});
 });

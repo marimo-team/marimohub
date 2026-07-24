@@ -457,3 +457,79 @@ describe('readSessionArtifacts', () => {
 		warn.mockRestore();
 	});
 });
+
+describe('sandboxFiles security', () => {
+	it('restoreWorkspace never writes outside workingDir when a bucket key contains ".."', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		// A poisoned object key (e.g. from a compromised/synced source) that would
+		// resolve to a path above the working dir if concatenated naively.
+		await bucket.put(`${nb.workspacePrefix}../../etc/pwned.txt`, 'owned');
+		await bucket.put(nb.workspaceFile('safe.txt'), 'ok');
+		const { instance, calls } = makeFsSandbox();
+
+		await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT);
+
+		// Every written path MUST stay under the working dir — no `..` escape.
+		for (const batch of calls.writeFiles) {
+			for (const f of batch) {
+				expect(f.path.startsWith(`${MOUNT}/`)).toBe(true);
+				expect(f.path).not.toContain('/../');
+			}
+		}
+		// The mkdir prep must likewise not create a directory above the working dir.
+		for (const cmd of calls.exec) {
+			if (cmd.startsWith('mkdir -p ')) expect(cmd).not.toContain('/../');
+		}
+	});
+
+	it('captureWorkspace shell-safely handles a filename with shell metacharacters', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		// `$(id)` would execute if the filename were interpolated unquoted into `sh -lc`.
+		const { instance } = makeFsSandbox({ files: { '$(id).csv': 'a,b\n1,2\n' } });
+
+		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		const stored = await bucket.get(nb.workspaceFile('$(id).csv'));
+		expect(decode(await stored!.bytes())).toBe('a,b\n1,2\n');
+	});
+
+	it('restoreWorkspace retries a transient writeFiles fault, then succeeds', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('a.txt'), 'hi');
+		const { instance: base, fs } = makeFsSandbox();
+		let attempts = 0;
+		const instance = {
+			...base,
+			writeFiles: async (files: Parameters<typeof base.writeFiles>[0]) => {
+				attempts++;
+				if (attempts < 2) throw new Error('ECONNRESET');
+				return base.writeFiles(files);
+			},
+		} as unknown as typeof base;
+
+		await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT);
+
+		expect(attempts).toBe(2);
+		expect(decode(fs.get('a.txt')!)).toBe('hi');
+	});
+
+	it('restoreWorkspace throws after exhausting write attempts', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('a.txt'), 'hi');
+		const { instance: base } = makeFsSandbox();
+		const instance = {
+			...base,
+			writeFiles: async () => {
+				throw new Error('ECONNRESET');
+			},
+		} as unknown as typeof base;
+
+		await expect(restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT)).rejects.toThrow(
+			'ECONNRESET',
+		);
+	});
+});

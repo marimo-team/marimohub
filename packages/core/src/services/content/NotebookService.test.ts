@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { MemoryBucket } from '../../testing';
-import { BadRequestError, NotFoundError } from '../../errors';
+import { BadRequestError, DomainError, NotFoundError, PreconditionFailedError } from '../../errors';
 import { createNotebookId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
@@ -486,6 +486,45 @@ describe('NotebookService', () => {
 	});
 
 	describe('updateNotebook', () => {
+		it('rejects a stale expectedVersion with PreconditionFailedError', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+
+			await expect(
+				notebooks.updateNotebook(
+					projectId,
+					created.id,
+					{ title: 'New' },
+					ACTOR,
+					'2000-01-01T00:00:00.000Z',
+				),
+			).rejects.toThrow(PreconditionFailedError);
+		});
+
+		it('rejects code/deps changes on a git-backed notebook', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{
+					title: 'Git NB',
+					description: 'from repo',
+					repo: 'org/repo',
+					branch: 'main',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+
+			await expect(
+				notebooks.updateNotebook(projectId, meta.id, { code: 'hacked' }, ACTOR),
+			).rejects.toThrow(BadRequestError);
+			await expect(
+				notebooks.updateNotebook(projectId, meta.id, { deps: 'hacked' }, ACTOR),
+			).rejects.toThrow(BadRequestError);
+		});
+
 		it('updates metadata without creating a version when no code change', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
@@ -751,7 +790,86 @@ describe('NotebookService', () => {
 		});
 	});
 
+	describe('restoreVersion', () => {
+		it('rejects a non-local (git) notebook with BadRequestError', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{
+					title: 'Git NB',
+					description: 'from repo',
+					repo: 'org/repo',
+					branch: 'main',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+
+			await expect(
+				notebooks.restoreVersion(projectId, meta.id, createVersionId(), ACTOR),
+			).rejects.toThrow(BadRequestError);
+		});
+
+		it('throws NotFoundError when the version folder does not exist', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+
+			await expect(
+				notebooks.restoreVersion(projectId, created.id, createVersionId(), ACTOR),
+			).rejects.toThrow(NotFoundError);
+		});
+
+		it('cuts a new version carrying the restored code, leaving history intact', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const original = (await notebooks.listVersions(projectId, created.id))[0];
+
+			await notebooks.updateNotebook(
+				projectId,
+				created.id,
+				{ code: 'v2', message: 'second' },
+				ACTOR,
+			);
+
+			// Restore the ORIGINAL version: a restore is another save, so it cuts a NEW
+			// version carrying v1 rather than rewinding history.
+			await notebooks.restoreVersion(projectId, created.id, original.version_id, ACTOR);
+
+			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe('v1');
+			const versions = await notebooks.listVersions(projectId, created.id);
+			expect(versions).toHaveLength(3);
+			// The original version is still present — history was preserved.
+			expect(versions.map((v) => v.version_id)).toContain(original.version_id);
+			// The restore version chains onto the most recent (v2) version.
+			const restore = versions.find((v) => v.message === `Restore version ${original.version_id}`);
+			expect(restore).toBeDefined();
+			expect(restore!.version_id).not.toBe(original.version_id);
+		});
+	});
+
 	describe('deleteNotebook', () => {
+		it('rejects a stale expectedVersion with PreconditionFailedError', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'code' },
+				ACTOR,
+			);
+
+			await expect(
+				notebooks.deleteNotebook(projectId, created.id, ACTOR, '2000-01-01T00:00:00.000Z'),
+			).rejects.toThrow(PreconditionFailedError);
+
+			// The stale precondition must abort the delete: the notebook is still active.
+			const snap = await catalog.getCurrentSnapshot();
+			const proj = snap.projects.find((p) => p.id === projectId)!;
+			expect(proj.notebooks[0].status).toBe('active');
+		});
+
 		it('soft-deletes — sets status to deleted in snapshot and meta', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
@@ -849,6 +967,20 @@ describe('NotebookService', () => {
 
 			expect(version.message).toBe('Initial version');
 			expect(code).toBe('v1');
+		});
+
+		it('getVersion maps a malformed version id to a domain error, not a raw 500', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'c' },
+				ACTOR,
+			);
+
+			// A malformed version id is a client mistake: it must surface as a 4xx domain
+			// error (400/404), never a raw parse Error that the API renders as a 500.
+			await expect(
+				notebooks.getVersion(projectId, created.id, 'not-a-valid-version-id'),
+			).rejects.toBeInstanceOf(DomainError);
 		});
 
 		it('getVersion throws NotFoundError for missing version', async () => {
@@ -1277,6 +1409,87 @@ describe('NotebookService', () => {
 			const version = (await (await bucket.get(ver.meta))!.json()) as any;
 			expect(version.html_snapshot.size_bytes).toBe(new TextEncoder().encode(html).length);
 			expect(version.html_snapshot.size_bytes).toBeGreaterThan(html.length);
+		});
+
+		it('swallows a NotFoundError when version.json is deleted mid-CAS', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const before = await notebooks.getNotebook(projectId, created.id);
+			const currentVid = (before.source as { current_version_id: string }).current_version_id;
+			const ver = paths
+				.project(projectId)
+				.notebook(created.id)
+				.version(currentVid as any);
+
+			// Unchanged code + a fresh html snapshot takes the "attach to existing version"
+			// path. The existence check reads version.json (present); then between that
+			// read and the CAS re-read (inside mutateObject), a concurrent purge deletes
+			// version.json. mutateObject throws NotFoundError, which commitSession must
+			// swallow rather than surface.
+			const realGet = bucket.get.bind(bucket);
+			let metaGets = 0;
+			const spy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === ver.meta) {
+					metaGets++;
+					// First read (existence check) returns the object; the CAS re-read sees
+					// it deleted.
+					if (metaGets >= 2) return null;
+				}
+				return realGet(key);
+			});
+
+			let result: Awaited<ReturnType<typeof notebooks.commitSession>>;
+			try {
+				result = await notebooks.commitSession(
+					projectId,
+					created.id,
+					{ code: 'v1', html: '<html>x</html>' },
+					ACTOR,
+				);
+			} finally {
+				// Restore in finally so a failed assertion/throw can't leak the forced-null
+				// get spy into later tests.
+				spy.mockRestore();
+			}
+
+			expect(result).not.toBeNull();
+			expect(result!.newVersion).toBe(false);
+			// The whole attach was skipped, so no orphan html sidecar was left behind.
+			expect(await bucket.get(ver.html)).toBeNull();
+		});
+
+		it('skips the descriptor attach entirely when version.json is missing', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const before = await notebooks.getNotebook(projectId, created.id);
+			const currentVid = (before.source as { current_version_id: string }).current_version_id;
+			const ver = paths
+				.project(projectId)
+				.notebook(created.id)
+				.version(currentVid as any);
+
+			// Drop the current version's version.json (keep its code so the session reads
+			// as unchanged). With no version.json to record a descriptor against, the
+			// attach is skipped — no sidecar html is written that we could never track.
+			await bucket.delete(ver.meta);
+
+			const result = await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'v1', html: '<html>x</html>' },
+				ACTOR,
+			);
+
+			expect(result).not.toBeNull();
+			expect(result!.newVersion).toBe(false);
+			// The sidecar html was NOT written because the descriptor could not be recorded.
+			expect(await bucket.get(ver.html)).toBeNull();
 		});
 	});
 

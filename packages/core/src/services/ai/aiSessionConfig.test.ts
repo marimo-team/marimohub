@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Seconds } from '../../duration';
+import { toBase64Url, utf8ToBase64Url } from '../../internal/base64url';
+import { hmacSha256 } from '../../internal/hmac';
 import {
 	aiConfigToSessionEnv,
 	buildMarimoAiToml,
@@ -10,6 +12,16 @@ import {
 import type { AiTokenClaims } from './aiSessionConfig';
 
 const SECRET = 'test-session-secret';
+
+/** Mint an HS256 token over an arbitrary payload, signed with `secret`. */
+async function mintRaw(secret: string, payload: Record<string, unknown>): Promise<string> {
+	const header = { alg: 'HS256', typ: 'JWT' };
+	const signingInput = `${utf8ToBase64Url(JSON.stringify(header))}.${utf8ToBase64Url(
+		JSON.stringify(payload),
+	)}`;
+	const sig = await hmacSha256(secret, signingInput);
+	return `${signingInput}.${toBase64Url(sig)}`;
+}
 const CLAIMS: AiTokenClaims = {
 	projectId: 'proj-1',
 	notebookId: 'nb-1',
@@ -46,6 +58,24 @@ describe('buildMarimoAiToml', () => {
 		const toml = buildMarimoAiToml({ baseUrl: 'u', apiKey: 'k', model: 'm' });
 		expect(toml).not.toContain('max_tokens');
 		expect(toml).not.toContain('rules');
+	});
+
+	it('emits enabled = false when enabled is false (does not silently force-enable)', () => {
+		const toml = buildMarimoAiToml({ baseUrl: 'u', apiKey: 'k', model: 'm', enabled: false });
+		expect(toml).toContain('enabled = false');
+		expect(toml).not.toContain('enabled = true');
+	});
+
+	it('escapes newline, carriage-return, and tab in rules (no TOML string break-out)', () => {
+		const toml = buildMarimoAiToml({
+			baseUrl: 'u',
+			apiKey: 'k',
+			model: 'm',
+			rules: 'line1\nline2\rline3\tcol',
+		});
+		expect(toml).toContain('rules = "line1\\nline2\\rline3\\tcol"');
+		// The raw control chars must NOT appear inside the emitted rules string.
+		expect(toml).not.toContain('line1\nline2');
 	});
 });
 
@@ -91,5 +121,39 @@ describe('AI session token', () => {
 		});
 		const later = () => start + 61_000;
 		expect(await verifyAiSessionToken(SECRET, token, later)).toBeNull();
+	});
+
+	it('rejects a well-formed, correctly-signed token that is missing exp', async () => {
+		const token = await mintRaw(SECRET, {
+			sub: 'sess-1',
+			project_id: 'proj-1',
+			notebook_id: 'nb-1',
+			user_id: 'user-1',
+			iat: 1_000_000_000,
+			// exp deliberately omitted — an unexpiring token must be rejected.
+		});
+		expect(await verifyAiSessionToken(SECRET, token)).toBeNull();
+	});
+
+	it('rejects a correctly-signed token missing a required claim (project_id)', async () => {
+		const token = await mintRaw(SECRET, {
+			sub: 'sess-1',
+			notebook_id: 'nb-1',
+			user_id: 'user-1',
+			iat: 1_000_000_000,
+			exp: 9_999_999_999,
+		});
+		expect(await verifyAiSessionToken(SECRET, token)).toBeNull();
+	});
+
+	it('treats exp exactly equal to now as still valid (boundary)', async () => {
+		const start = 1_000_000_000_000;
+		const token = await mintAiSessionToken(SECRET, CLAIMS, {
+			ttlSeconds: Seconds.of(60),
+			now: () => start,
+		});
+		// now (in seconds) === exp: the token expires strictly after this instant.
+		const atExpiry = () => start + 60_000;
+		expect(await verifyAiSessionToken(SECRET, token, atExpiry)).toEqual(CLAIMS);
 	});
 });

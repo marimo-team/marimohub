@@ -356,6 +356,29 @@ describe('SandboxProvisioner', () => {
 			expect(calls.mountBucket).toHaveLength(0);
 			expect(calls.startProcess).toHaveLength(0);
 		});
+
+		it('rethrows the original provisioning error when the cleanup destroy also throws', async () => {
+			const { instance: base } = makeFakeSandbox({ failExec: 'true' });
+			// Provisioning fails at reachability; the compensating destroy then also
+			// throws. The caller must see the original failure, not the destroy error.
+			const instance = {
+				...base,
+				destroy: async () => {
+					throw new Error('destroy boom');
+				},
+			} as unknown as SandboxInstance;
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				}),
+			).rejects.toThrow(/not available/i);
+		});
 	});
 
 	describe('teardown', () => {
@@ -558,6 +581,34 @@ describe('SandboxProvisioner', () => {
 				notebookId,
 				ACTOR,
 				'workspace',
+			);
+
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('still destroys the sandbox when captureFilesystemSnapshot fails (best-effort)', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const created = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'NB', description: 'd', code: 'print(1)' },
+				ACTOR,
+			);
+			const { instance, calls } = makeFakeSandbox({
+				files: { [`${MOUNT_PATH}/notebook.py`]: 'print(2)  # edited' },
+			});
+			// The snapshot capture API is down; teardown must swallow it and still destroy.
+			const compute = makeSnapshotCompute(instance, { failCapture: true });
+			const provisioner = new SandboxProvisioner(compute);
+
+			await provisioner.teardown(
+				instance,
+				env.notebooks,
+				env.bucket,
+				project.id,
+				created.id,
+				ACTOR,
+				'source',
 			);
 
 			expect(calls.destroy).toBe(1);
@@ -770,6 +821,53 @@ describe('SandboxProvisioner', () => {
 			).rejects.toThrow('metadata unavailable');
 			expect(commitSession).not.toHaveBeenCalled();
 			expect(calls.destroy).toBe(0);
+		});
+
+		it('throws the workspace error and logs the commit error when both reject', async () => {
+			const { instance: base, calls } = makeFakeSandbox();
+			// Fail the workspace capture (listFiles without includeHidden); the commit
+			// (readSessionArtifacts passes includeHidden:true) is failed via commitSession.
+			const instance = {
+				...base,
+				listFiles: async (_path: string, options?: { includeHidden?: boolean }) => {
+					if (options?.includeHidden) return { success: true, files: [] };
+					throw new Error('workspace list boom');
+				},
+			} as unknown as SandboxInstance;
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const failingNotebooks = {
+				getNotebook: async () => ({ source: makeLocalSource() }),
+				commitSession: async () => {
+					throw new Error('commit boom');
+				},
+			} as unknown as NotebookService;
+			const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			// The workspace error is surfaced to the caller...
+			await expect(
+				provisioner.captureSession(
+					instance,
+					failingNotebooks,
+					new MemoryBucket(),
+					projectId,
+					notebookId,
+					ACTOR,
+					'workspace',
+				),
+			).rejects.toThrow('workspace list boom');
+
+			// ...and the otherwise-masked commit failure is logged, not dropped.
+			expect(
+				errorSpy.mock.calls.some(
+					([msg, err]) =>
+						typeof msg === 'string' &&
+						msg.includes('commitSession failed') &&
+						err instanceof Error &&
+						err.message === 'commit boom',
+				),
+			).toBe(true);
+			expect(calls.destroy).toBe(0);
+			errorSpy.mockRestore();
 		});
 
 		it('includeWorkspace: false saves the source but never touches the workspace mirror', async () => {

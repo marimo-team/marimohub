@@ -43,7 +43,15 @@ export class EventService {
 				BUCKET_SCAN_CONCURRENCY,
 				async (obj) => {
 					const body = await this.bucket.get(obj.key);
-					return body ? EventSchema.parse(await body.json()) : undefined;
+					if (!body) return;
+					// One corrupt/legacy event object must not make the whole day's audit
+					// log unreadable — skip it (logged) rather than throwing.
+					try {
+						return EventSchema.parse(await body.json());
+					} catch (err) {
+						console.warn(`getEvents: skipping unreadable event ${obj.key}: ${String(err)}`);
+						return;
+					}
 				},
 			);
 			for (const event of page) {

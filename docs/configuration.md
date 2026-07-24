@@ -27,7 +27,7 @@ Any S3-compatible store: CoreWeave CAIOS, AWS S3, MinIO, Tigris, Ceph, or Cloudf
 | `MARIMOHUB_STORAGE_S3_BUCKET` | Name of the bucket that backs the hub. | Yes | — | `orgname-marimohub` |
 | `MARIMOHUB_STORAGE_S3_ENDPOINT` | Custom endpoint for non-AWS providers (MinIO, Tigris, Ceph, R2-via-S3). Omit for AWS. | — | — | `https://s3.us-east-1.amazonaws.com` |
 | `MARIMOHUB_STORAGE_S3_REGION` | AWS region for the bucket. | — | `auto (SDK default)` | `us-east-1` |
-| `MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID` 🔒 | Access key id. Both key id and secret must be set together, otherwise the SDK default credential chain is used. | — | — | — |
+| `MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID` 🔒 | Access key id. Set both key id and secret together to use static credentials, or neither to use the SDK default credential chain. Setting only one is rejected at startup. | — | — | — |
 | `MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY` 🔒 | Secret access key (paired with the access key id above). | — | — | — |
 | `MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE` | Use path-style bucket addressing (required by MinIO/Ceph). | — | `false` | `true` |
 

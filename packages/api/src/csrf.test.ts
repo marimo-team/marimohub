@@ -72,4 +72,34 @@ describe('CSRF / Origin guard', () => {
 		});
 		expect(res.status).not.toBe(403);
 	});
+
+	it('allows a cross-origin request from a policy.allowedOrigins origin (both signals)', async () => {
+		const allowedApp = createTestApi({
+			deps: { policy: { allowedOrigins: ['https://trusted.example.com'] } },
+		}).app;
+		const res = await allowedApp.request('/api/v1/projects', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Origin: 'https://trusted.example.com',
+				// Both the Sec-Fetch-Site cross-site branch and the Origin/Host branch
+				// must clear via the allowlist.
+				'Sec-Fetch-Site': 'cross-site',
+				Host: 'hub.example.com',
+			},
+			body: JSON.stringify({ name: 'P', description: 'd' }),
+		});
+		expect(res.status).not.toBe(403);
+	});
+
+	it('rejects a state-changing request with a malformed/unparseable Origin (403)', async () => {
+		// `garbage` is not a parseable URL → no host derived → not same-origin, not
+		// allowlisted → rejected.
+		const res = await post({
+			headers: { 'Content-Type': 'application/json', Origin: 'garbage', Host: 'localhost' },
+			body: JSON.stringify({ name: 'x', description: 'y' }),
+		});
+		expect(res.status).toBe(403);
+		expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+	});
 });

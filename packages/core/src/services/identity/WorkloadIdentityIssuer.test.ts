@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Seconds } from '../../duration';
-import { fromBase64Url } from '../../internal/base64url';
+import { fromBase64Url, utf8ToBase64Url } from '../../internal/base64url';
 import { WorkloadIdentityIssuer } from './WorkloadIdentityIssuer';
 
 const RS256_ALG = { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' } as const;
@@ -88,6 +88,46 @@ describe('WorkloadIdentityIssuer', () => {
 		expect(payload.iss).toBe(claims.iss);
 		expect(payload.sub).toBe(claims.sub);
 		expect(payload.custom).toBe('ok');
+	});
+
+	it('does not let extraClaims override the computed iat/nbf/exp', async () => {
+		const { pem } = await generatePkcs8Pem();
+		const fixedNow = 1_700_000_000_000;
+		const issuer = new WorkloadIdentityIssuer(pem, 'kid-1', () => fixedNow);
+		const iat = Math.floor(fixedNow / 1000);
+		const jwt = await issuer.mint({
+			...claims,
+			// An attacker-supplied far-future exp / zeroed nbf must be ignored.
+			extraClaims: { iat: 1, nbf: 0, exp: 9_999_999_999 },
+		});
+		const payload = decodeSegment(jwt.split('.')[1]);
+		expect(payload.iat).toBe(iat);
+		expect(payload.nbf).toBe(iat - 60);
+		expect(payload.exp).toBe(iat + 3600);
+	});
+
+	it('rejects a tampered token: a mutated claim invalidates the RS256 signature', async () => {
+		const { pem } = await generatePkcs8Pem();
+		const issuer = new WorkloadIdentityIssuer(pem, 'kid-1');
+		const jwt = await issuer.mint(claims);
+		const [headerB64, payloadB64, sigB64] = jwt.split('.');
+
+		// Escalate the subject, keeping the original signature.
+		const payload = decodeSegment(payloadB64);
+		payload.sub = 'attacker-controlled';
+		const forgedPayloadB64 = utf8ToBase64Url(JSON.stringify(payload));
+		const forged = `${headerB64}.${forgedPayloadB64}.${sigB64}`;
+
+		const { keys } = await issuer.jwks();
+		const pub = await crypto.subtle.importKey('jwk', { ...keys[0] }, RS256_ALG, false, ['verify']);
+		const [h, p, s] = forged.split('.');
+		const ok = await crypto.subtle.verify(
+			RS256_ALG,
+			pub,
+			fromBase64Url(s) as unknown as ArrayBuffer,
+			new TextEncoder().encode(`${h}.${p}`),
+		);
+		expect(ok).toBe(false);
 	});
 
 	it('publishes a public-only JWKS (no private material)', async () => {

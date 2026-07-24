@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ACTOR, makeCatalog, makeSnapshot, MemoryBucket, setupTestEnv } from '../../testing';
 import { ConflictError, NotInitializedError, PreconditionFailedError } from '../../errors';
+import { createSnapshotId } from '../../ids';
 import { paths } from '../../paths';
 import { noopMetrics } from '../../ports/metrics';
 import { EventSchema, SnapshotSchema } from '../../schema';
@@ -75,6 +76,18 @@ describe('CatalogService', () => {
 			const snaps = await bucket.list({ prefix: '_system/snapshots/' });
 			expect(snaps.objects.length).toBeLessThanOrEqual(2);
 		});
+
+		it('propagates a non-precondition error from the create-if-absent put', async () => {
+			const originalPut = bucket.put.bind(bucket);
+			bucket.put = async (key, value, opts) => {
+				if (key === paths.catalog && opts?.onlyIfNotExists) {
+					throw new Error('catalog put boom');
+				}
+				return originalPut(key, value, opts);
+			};
+
+			await expect(catalog.initialize(ACTOR)).rejects.toThrow('catalog put boom');
+		});
 	});
 
 	describe('getCurrentSnapshot', () => {
@@ -90,6 +103,16 @@ describe('CatalogService', () => {
 			const init = await catalog.initialize(ACTOR);
 			const current = await catalog.getCurrentSnapshot();
 			expect(current.snapshot_id).toBe(init.snapshot_id);
+		});
+
+		it('throws NotInitializedError when the catalog points at a missing snapshot', async () => {
+			await bucket.put(paths.catalog, JSON.stringify(makeCatalog(createSnapshotId())));
+			await expect(catalog.getCurrentSnapshot()).rejects.toBeInstanceOf(NotInitializedError);
+		});
+
+		it('throws a corrupted-object error on malformed catalog JSON', async () => {
+			await bucket.put(paths.catalog, JSON.stringify({ bad: true }));
+			await expect(catalog.getCurrentSnapshot()).rejects.toThrow(/Corrupted stored object/);
 		});
 	});
 
@@ -165,6 +188,104 @@ describe('CatalogService', () => {
 			};
 
 			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(ConflictError);
+		});
+
+		it('deletes the orphan snapshot it wrote when the CAS swap loses the race', async () => {
+			const snapshotPuts: string[] = [];
+			let raced = false;
+			const originalPut = bucket.put.bind(bucket);
+			bucket.put = async (key, value, opts) => {
+				if (key.startsWith(paths.snapshotsPrefix)) snapshotPuts.push(key);
+				if (key === paths.catalog && opts?.onlyIfEtagMatches && !raced) {
+					raced = true;
+					// Bump the catalog ETag so the retry re-reads and can commit.
+					const current = await bucket.get(paths.catalog);
+					await originalPut(key, await current!.text());
+					throw new PreconditionFailedError('simulated race');
+				}
+				return originalPut(key, value, opts);
+			};
+
+			await catalog.mutateSnapshot('test', ACTOR, (s) => s);
+
+			// The losing attempt's orphan + the winning commit.
+			expect(snapshotPuts).toHaveLength(2);
+			// The orphan was cleaned up; the committed snapshot remains.
+			expect(await bucket.get(snapshotPuts[0])).toBeNull();
+			expect(await bucket.get(snapshotPuts[1])).not.toBeNull();
+		});
+
+		it('propagates immediately (no retry, no orphan) when the snapshot put fails', async () => {
+			const increment = vi.fn();
+			const svc = new CatalogService(bucket, { increment, gauge: vi.fn() });
+			const before = (await bucket.list({ prefix: paths.snapshotsPrefix })).objects.length;
+
+			const originalPut = bucket.put.bind(bucket);
+			bucket.put = async (key, value, opts) => {
+				if (key.startsWith(paths.snapshotsPrefix)) throw new Error('snapshot put boom');
+				return originalPut(key, value, opts);
+			};
+
+			await expect(svc.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(
+				'snapshot put boom',
+			);
+
+			// A non-precondition error is not retried.
+			expect(increment.mock.calls.filter(([n]) => n === 'catalog.cas.attempt')).toHaveLength(1);
+			// Nothing was written (the failed put left no orphan).
+			expect((await bucket.list({ prefix: paths.snapshotsPrefix })).objects.length).toBe(before);
+		});
+
+		it('does not retry and writes nothing when mutateFn throws', async () => {
+			const increment = vi.fn();
+			const svc = new CatalogService(bucket, { increment, gauge: vi.fn() });
+			const before = (await bucket.list({ prefix: paths.snapshotsPrefix })).objects.length;
+
+			const boom = new Error('mutate boom');
+			await expect(
+				svc.mutateSnapshot('test', ACTOR, () => {
+					throw boom;
+				}),
+			).rejects.toBe(boom);
+
+			expect(increment.mock.calls.filter(([n]) => n === 'catalog.cas.attempt')).toHaveLength(1);
+			expect((await bucket.list({ prefix: paths.snapshotsPrefix })).objects.length).toBe(before);
+		});
+
+		it('throws NotInitializedError without retrying when the snapshot pointer dangles', async () => {
+			const increment = vi.fn();
+			const svc = new CatalogService(bucket, { increment, gauge: vi.fn() });
+			const current = await svc.getCurrentSnapshot();
+			// Leave the catalog pointing at a snapshot that no longer exists.
+			await bucket.delete(paths.snapshot(current.snapshot_id));
+
+			await expect(svc.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toBeInstanceOf(
+				NotInitializedError,
+			);
+			expect(increment.mock.calls.filter(([n]) => n === 'catalog.cas.attempt')).toHaveLength(1);
+		});
+
+		it('throws a corrupted-object error on malformed catalog JSON', async () => {
+			await bucket.put(paths.catalog, JSON.stringify({ not: 'a catalog' }));
+			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(
+				/Corrupted stored object/,
+			);
+		});
+
+		it('throws a corrupted-object error on a malformed snapshot object', async () => {
+			const current = await catalog.getCurrentSnapshot();
+			await bucket.put(paths.snapshot(current.snapshot_id), JSON.stringify({ nope: true }));
+			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(
+				/Corrupted stored object/,
+			);
+		});
+
+		it('ignores a mutateFn-lowered schema_version (stamps the read version)', async () => {
+			const result = await catalog.mutateSnapshot('test', ACTOR, (s) => ({
+				...s,
+				schema_version: 0 as unknown as 1,
+			}));
+			expect(result.schema_version).toBe(1);
 		});
 	});
 

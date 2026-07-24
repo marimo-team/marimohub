@@ -55,6 +55,51 @@ describe('Secrets routes', () => {
 		expect(JSON.stringify(list)).not.toContain('value');
 	});
 
+	it('stores a managed secret without ever returning or auditing its value', async () => {
+		const pid = await createProject();
+		const SECRET_VALUE = 'sk-super-secret-managed-value';
+
+		// A managed codec (encrypted-in-bucket) so `kind: 'managed'` is accepted.
+		const codec = {
+			encrypt: async (plaintext: string) => ({
+				kek_id: 'test',
+				alg: 'A256GCM' as const,
+				iv: 'aXY=',
+				ciphertext: Buffer.from(plaintext).toString('base64'),
+			}),
+			decrypt: async (env: { ciphertext: string }) =>
+				Buffer.from(env.ciphertext, 'base64').toString('utf8'),
+		};
+		const managedReq = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: {
+				secrets: new ProjectSecretsStore({ bucket, resolvers: [stubResolver], managed: codec }),
+			},
+		}).request;
+
+		const put = await expectOk<Record<string, unknown>>(
+			await managedReq('PUT', `/projects/${pid}/secrets/MANAGED_KEY`, {
+				kind: 'managed',
+				value: SECRET_VALUE,
+			}),
+		);
+		// The PUT response is metadata only — never the value.
+		expect(put).toMatchObject({ name: 'MANAGED_KEY', kind: 'managed' });
+		expect(JSON.stringify(put)).not.toContain(SECRET_VALUE);
+
+		// Neither does the list.
+		const list = await expectOk<any[]>(await request('GET', `/projects/${pid}/secrets`));
+		expect(list).toHaveLength(1);
+		expect(list[0]).toMatchObject({ name: 'MANAGED_KEY', kind: 'managed' });
+		expect(JSON.stringify(list)).not.toContain(SECRET_VALUE);
+
+		// Nor the audit trail.
+		const events = await expectOk<any[]>(await request('GET', `/projects/${pid}/events`));
+		expect(events.map((e) => e.event)).toContain('secret.put');
+		expect(JSON.stringify(events)).not.toContain(SECRET_VALUE);
+	});
+
 	it('rejects an unknown backend (422) and a bad name (422)', async () => {
 		const pid = await createProject();
 		await expectError(

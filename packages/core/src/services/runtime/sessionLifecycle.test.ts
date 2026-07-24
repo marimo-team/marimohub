@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { paths } from '../../paths';
 import type { SandboxInstance } from '../../ports/sandbox';
@@ -58,6 +58,12 @@ describe('SessionLifecycleService', () => {
 		sandboxCalls = fake.calls;
 		compute = fakeComputeFrom(fake.instance);
 		probe = vi.fn(async () => 0);
+	});
+
+	afterEach(() => {
+		// Restore prototype spies (e.g. SandboxProvisioner.teardown) so a per-test
+		// mock never leaks into a sibling; beforeEach re-establishes the fixtures.
+		vi.restoreAllMocks();
 	});
 
 	const makeService = (overrides: Partial<SessionLifecycleConfig> = {}) =>
@@ -161,6 +167,22 @@ describe('SessionLifecycleService', () => {
 			expect(probe).not.toHaveBeenCalled();
 			expect(result.reapedExpired).toBe(1);
 			expect(sandboxCalls.destroy).toBe(1);
+		});
+
+		it('force-destroys and still marks terminated when live teardown throws', async () => {
+			// A save that throws must never leave the sandbox running and billing: the
+			// catch force-destroys, and the record is still stamped terminated.
+			const teardownSpy = vi
+				.spyOn(SandboxProvisioner.prototype, 'teardown')
+				.mockRejectedValue(new Error('save failed'));
+			const s = await putSession({ expires_at: iso(-1000), last_snapshot_at: iso(0) });
+
+			const result = await makeService().sweep(now);
+
+			expect(teardownSpy).toHaveBeenCalled();
+			expect(result.reapedExpired).toBe(1);
+			expect(sandboxCalls.destroy).toBe(1); // force-destroy in the catch
+			expect((await getStored(s)).status).toBe('terminated');
 		});
 	});
 

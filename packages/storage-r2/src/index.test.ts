@@ -193,3 +193,90 @@ describe('R2BucketAdapter CAS error mapping', () => {
 		);
 	});
 });
+
+describe('R2BucketAdapter list / put forwarding', () => {
+	function makeR2Object2(key: string): R2Object {
+		return {
+			key,
+			etag: 'e',
+			size: 1,
+			uploaded: new Date(),
+		} as unknown as R2Object;
+	}
+
+	it('surfaces a cursor only when the result is truncated', async () => {
+		let toReturn: unknown;
+		const r2 = {
+			list: async () => toReturn,
+		} as unknown as R2Bucket;
+		const adapter = new R2BucketAdapter(r2);
+
+		toReturn = { objects: [], truncated: false, cursor: 'leftover', delimitedPrefixes: [] };
+		expect((await adapter.list()).cursor).toBeUndefined();
+
+		toReturn = { objects: [], truncated: true, cursor: 'more', delimitedPrefixes: [] };
+		const truncated = await adapter.list();
+		expect(truncated.truncated).toBe(true);
+		expect(truncated.cursor).toBe('more');
+	});
+
+	it('forwards prefix/delimiter/cursor/limit/startAfter to r2.list', async () => {
+		let seen: R2ListOptions | undefined;
+		const r2 = {
+			list: async (opts?: R2ListOptions) => {
+				seen = opts;
+				return { objects: [], truncated: false, delimitedPrefixes: [] };
+			},
+		} as unknown as R2Bucket;
+		const adapter = new R2BucketAdapter(r2);
+
+		await adapter.list({
+			prefix: 'p/',
+			delimiter: '/',
+			cursor: 'tok',
+			limit: 42,
+			startAfter: 'p/0',
+		});
+
+		expect(seen).toMatchObject({
+			prefix: 'p/',
+			delimiter: '/',
+			cursor: 'tok',
+			limit: 42,
+			startAfter: 'p/0',
+		});
+	});
+
+	it('passes through delimitedPrefixes from r2.list', async () => {
+		const r2 = {
+			list: async () => ({
+				objects: [makeR2Object2('a/1')],
+				truncated: false,
+				delimitedPrefixes: ['a/', 'b/'],
+			}),
+		} as unknown as R2Bucket;
+		const adapter = new R2BucketAdapter(r2);
+
+		const res = await adapter.list({ delimiter: '/' });
+		expect(res.delimitedPrefixes).toEqual(['a/', 'b/']);
+	});
+
+	it('forwards httpMetadata and customMetadata to r2.put', async () => {
+		let seen: R2PutOptions | undefined;
+		const r2 = {
+			put: async (key: string, _value: unknown, opts?: R2PutOptions) => {
+				seen = opts;
+				return makeR2Object2(key);
+			},
+		} as unknown as R2Bucket;
+		const adapter = new R2BucketAdapter(r2);
+
+		await adapter.put('k', 'v', {
+			httpMetadata: { contentType: 'text/x-python' },
+			customMetadata: { source: 'git' },
+		});
+
+		expect(seen?.httpMetadata).toEqual({ contentType: 'text/x-python' });
+		expect(seen?.customMetadata).toEqual({ source: 'git' });
+	});
+});

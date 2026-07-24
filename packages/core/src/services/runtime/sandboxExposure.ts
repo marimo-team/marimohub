@@ -10,9 +10,9 @@ import type {
 } from '../../ports/sandboxExposure';
 import { signProxyToken } from './proxyToken';
 
-/** Strip a single trailing slash so we can join path segments cleanly. */
+/** Strip any trailing slashes so we can join path segments cleanly (no `//proxy`). */
 function trimTrailingSlash(s: string): string {
-	return s.endsWith('/') ? s.slice(0, -1) : s;
+	return s.replace(/\/+$/, '');
 }
 
 /**

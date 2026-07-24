@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { NotFoundError } from '../../errors';
+import { NotFoundError, PreconditionFailedError } from '../../errors';
 import { UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { ACTOR, setupTestEnv } from '../../testing';
@@ -150,6 +150,21 @@ describe('ProjectService', () => {
 			const list = await projects.listProjects({ subject: STRANGER, defaultRole: null });
 			expect(list.map((e) => e.id)).toEqual([p.id]);
 		});
+
+		it('hides the project from a stranger via the project.json deny fallback', async () => {
+			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			// Simulate an old snapshot entry (no denormalized roster) so visibility is
+			// indeterminate from the snapshot and must fall back to project.json.
+			await catalog.updateProjectEntry('test.strip', ACTOR, p.id, () => ({
+				member_ids: undefined,
+			}));
+			expect((await catalog.getCurrentSnapshot()).projects[0].member_ids).toBeUndefined();
+
+			// The stranger is neither owner nor a member, so the deny branch of
+			// canSeeProject hides the project entirely.
+			const list = await projects.listProjects({ subject: STRANGER, defaultRole: null });
+			expect(list).toEqual([]);
+		});
 	});
 
 	describe('membership', () => {
@@ -289,6 +304,23 @@ describe('ProjectService', () => {
 				projects.updateProject('proj_01HXY00000000000000000000' as ProjectId, { name: 'X' }, ACTOR),
 			).rejects.toThrow(NotFoundError);
 		});
+
+		it('rejects a stale expectedVersion with PreconditionFailedError (If-Match)', async () => {
+			const created = await projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+
+			// A precondition that no longer matches the resource's current version.
+			await expect(
+				projects.updateProject(created.id, { name: 'X' }, ACTOR, 'stale-version-token'),
+			).rejects.toThrow(PreconditionFailedError);
+
+			// The rejection must be a no-op: the stored project is untouched.
+			expect((await projects.getProject(created.id)).name).toBe('P');
+
+			// The matching version is accepted, proving the guard checks the token
+			// rather than rejecting every precondition.
+			const ok = await projects.updateProject(created.id, { name: 'X' }, ACTOR, created.updated_at);
+			expect(ok.name).toBe('X');
+		});
 	});
 
 	describe('deleteProject (soft-delete)', () => {
@@ -323,6 +355,17 @@ describe('ProjectService', () => {
 			await expect(
 				projects.deleteProject('proj_01HXY00000000000000000000' as ProjectId, ACTOR),
 			).rejects.toThrow(NotFoundError);
+		});
+
+		it('rejects a stale expectedVersion with PreconditionFailedError (If-Match)', async () => {
+			const created = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
+
+			await expect(
+				projects.deleteProject(created.id, ACTOR, 'stale-version-token'),
+			).rejects.toThrow(PreconditionFailedError);
+
+			// The project was NOT deleted: a failed precondition must be a no-op.
+			expect((await projects.getProject(created.id)).status).toBe('active');
 		});
 	});
 

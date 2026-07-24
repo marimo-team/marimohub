@@ -11,6 +11,7 @@ import {
 } from '../../testing';
 import { createNotebookId, createProjectId } from '../../ids';
 import type { SessionId } from '../../ids';
+import { paths } from '../../paths';
 import { SessionService } from './SessionService';
 
 describe('SessionService', () => {
@@ -460,6 +461,24 @@ describe('SessionService', () => {
 			const list = await sessions.listSessions();
 			expect(list).toEqual([]);
 		});
+
+		it('does not let one corrupt session record abort the whole scan', async () => {
+			const valid = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+
+			// A garbage record under the sessions prefix (e.g. a partial/legacy write)
+			// must not blow up a deployment-wide scan — the good record should survive.
+			await bucket.put(
+				`${paths.sessionsForProject(projectId)}corrupt.json`,
+				JSON.stringify({ session_id: 'not-a-valid-id', status: 'bogus' }),
+			);
+
+			const list = await sessions.listSessions();
+			expect(list.map((s) => s.session_id)).toEqual([valid.session_id]);
+		});
 	});
 
 	describe('listActiveByProject', () => {
@@ -573,6 +592,35 @@ describe('SessionService', () => {
 			expect(await sessions.findReusable(projectId, notebookId, ACTOR)).toBeUndefined();
 			expect(await sessions.findReusable(projectId, createNotebookId(), ACTOR)).toBeUndefined();
 		});
+
+		it('does not reuse a wedged starting session past the provision window', async () => {
+			await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+
+			// The provision never resolved (still `starting`) and the window elapsed —
+			// reusing it would attach a client to a dead provision forever.
+			advanceTime(6 * 60 * 1000); // past HEARTBEAT_TTL_MS (5m)
+			const found = await sessions.findReusable(projectId, notebookId, ACTOR);
+			restoreClock();
+
+			expect(found).toBeUndefined();
+		});
+
+		it('does not reuse a running session that has no sandbox_url', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			// A heartbeat promotes starting → running WITHOUT stamping a sandbox_url;
+			// there is no live kernel to reconnect to, so it must not be reused.
+			await sessions.heartbeat(projectId, created.session_id);
+
+			expect(await sessions.findReusable(projectId, notebookId, ACTOR)).toBeUndefined();
+		});
 	});
 
 	describe('expireStale', () => {
@@ -629,6 +677,41 @@ describe('SessionService', () => {
 			}
 
 			restoreClock();
+		});
+
+		it('skips a session whose ETag changed between scan and conditional PUT', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			await sessions.setRunning(projectId, created.session_id, 'https://sandbox.example');
+			const running = await sessions.getSession(projectId, created.session_id);
+
+			advanceTime(6 * 60 * 1000); // heartbeat now stale → reaper wants to expire it
+
+			// Sneak a concurrent transition in *between* the reaper's scan (which captured
+			// the old ETag) and its conditional PUT. That other write wins; the reaper's
+			// stale-ETag PUT must fail its precondition and be skipped, not clobbered.
+			const realPut = bucket.put.bind(bucket);
+			let raced = false;
+			const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, opts) => {
+				if (opts?.onlyIfEtagMatches && !raced) {
+					raced = true;
+					await realPut(key, JSON.stringify({ ...running, status: 'terminated' }));
+				}
+				return realPut(key, value, opts);
+			});
+
+			const expired = await sessions.expireStale();
+
+			putSpy.mockRestore();
+			restoreClock();
+
+			// The concurrent terminate must stand; the reaper must not have expired it.
+			expect(expired).toBe(0);
+			const stored = await sessions.getSession(projectId, created.session_id);
+			expect(stored.status).toBe('terminated');
 		});
 	});
 
