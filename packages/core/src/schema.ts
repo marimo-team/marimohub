@@ -6,7 +6,16 @@ import {
 	SESSION_STATUSES,
 	SOURCE_TYPES,
 } from './constants';
-import { ProjectId, NotebookId, SnapshotId, VersionId, SessionId, SandboxId, UserId } from './ids';
+import {
+	ProjectId,
+	NotebookId,
+	SnapshotId,
+	VersionId,
+	SessionId,
+	SandboxId,
+	TokenId,
+	UserId,
+} from './ids';
 
 // --- Schema versioning ---
 //
@@ -71,6 +80,7 @@ export const SnapshotIdSchema = z.string().refine(SnapshotId.is);
 export const VersionIdSchema = z.string().refine(VersionId.is);
 export const SessionIdSchema = z.string().refine(SessionId.is);
 export const SandboxIdSchema = z.string().refine(SandboxId.is);
+export const TokenIdSchema = z.string().refine(TokenId.is);
 // User ids (`author`/`owner`/`user_id`/`actor` foreign keys) are the opaque auth
 // `sub`. UserId.is only checks non-empty, so this brands without imposing a
 // format the identity provider doesn't guarantee.
@@ -472,6 +482,32 @@ export const IdentitySchema = z.object({
 });
 
 export type Identity = z.infer<typeof IdentitySchema>;
+
+// --- Personal access token ---
+//
+// A machine credential acting as its issuing user (CI, scripts, the CLI). Only
+// the SHA-256 of the secret is stored. Like Identity, this is a mutable
+// last-writer-wins per-token object (the coarse `last_used_at` refresh
+// rewrites it), so it carries no `schema_version`.
+export const TokenSchema = z.object({
+	id: TokenIdSchema,
+	user_id: UserIdSchema,
+	name: z.string(),
+	/** Lowercase-hex SHA-256 of the token secret. Never leaves the server. */
+	hash: z.string(),
+	created_at: z.iso.datetime(),
+	expires_at: z.iso.datetime().optional(),
+	/** Daily-coalesced usage marker (last-writer-wins, like the identity directory). */
+	last_used_at: z.iso.datetime().optional(),
+});
+
+export type Token = z.infer<typeof TokenSchema>;
+
+export type PublicToken = Omit<Token, 'hash'>;
+export function toPublicToken(token: Token): PublicToken {
+	const { hash: _hash, ...rest } = token;
+	return rest;
+}
 
 // --- Event ---
 

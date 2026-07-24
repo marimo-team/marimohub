@@ -95,6 +95,17 @@ export function bucketContract(name: string, makeBucket: () => Bucket | Promise<
 			).rejects.toBeInstanceOf(PreconditionFailedError);
 		});
 
+		// A conditional put against an ABSENT key must fail, never create. This is
+		// the invariant TokenService.touch relies on to avoid resurrecting a token
+		// deleted (revoked) between load and the last_used_at write — an adapter that
+		// treated a missing object as "matches" would silently reintroduce that bug.
+		it('conditional put throws PreconditionFailedError on an absent key (no create)', async () => {
+			await expect(
+				bucket.put('cas-absent.json', 'x', { onlyIfEtagMatches: 'any-etag' }),
+			).rejects.toBeInstanceOf(PreconditionFailedError);
+			expect(await bucket.get('cas-absent.json')).toBeNull();
+		});
+
 		it('create-if-absent put succeeds when the key is absent', async () => {
 			const put = await bucket.put('cia.json', '1', { onlyIfNotExists: true });
 			expect(put.etag).toBeTruthy();

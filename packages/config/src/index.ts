@@ -13,6 +13,7 @@
  * examples/cloudflare-worker rather than here.
  */
 import {
+	composeAuthenticators,
 	createServices,
 	Millis,
 	ProxyExposure,
@@ -245,8 +246,9 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 	const { authenticator, authRoutes } = makeAuth(env);
 	const sessionLifetime = parseSessionLifetime(env);
 	const sandboxImages = resolveSandboxImages(env);
+	const services = createServices(bucket, metrics);
 	const deps: ApiDeps = {
-		services: createServices(bucket, metrics),
+		services,
 		bucket,
 		// The provider-side lifetime cap (CoreWeave/E2B) defaults to 2× the session
 		// TTL: an orphan backstop only, so the record-driven sweep always gets to
@@ -254,7 +256,9 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 		compute: makeCompute(env, {
 			sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		}),
-		authenticator,
+		// Personal access tokens ride on every deployment: a `mhub_pat_` bearer
+		// resolves through the TokenService, everything else through the SSO adapter.
+		authenticator: composeAuthenticators(services.tokens, authenticator),
 		authRoutes,
 		sandbox: {
 			bucket: makeSandboxBucketConfig(env),

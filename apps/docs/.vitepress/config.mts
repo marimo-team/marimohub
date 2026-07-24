@@ -113,6 +113,7 @@ export default defineConfig({
 				items: [
 					{ text: 'Configuration', link: '/configuration' },
 					{ text: 'API & client', link: '/api' },
+					{ text: 'API tokens', link: '/api-tokens' },
 					{ text: 'How it works', link: '/architecture' },
 				],
 			},
@@ -169,6 +170,7 @@ export default defineConfig({
 				items: [
 					{ text: 'Configuration', link: '/configuration' },
 					{ text: 'API & client', link: '/api' },
+					{ text: 'API tokens', link: '/api-tokens' },
 					{ text: 'How it works', link: '/architecture' },
 				],
 			},

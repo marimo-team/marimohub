@@ -35,6 +35,10 @@ export type NotebookVersion = components['schemas']['NotebookVersion'];
 export type DeploymentInfo = components['schemas']['DeploymentInfo'];
 /** A resolved user identity ({ id, email, name }) from `GET /api/v1/users`. */
 export type ResolvedUser = components['schemas']['User'];
+/** A personal access token's metadata (never the secret). */
+export type ApiToken = components['schemas']['ApiToken'];
+/** The create response: metadata plus the one-time plaintext `token`. */
+export type ApiTokenCreated = components['schemas']['ApiTokenCreated'];
 
 export interface ApiError {
 	code: string;

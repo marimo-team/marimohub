@@ -44,6 +44,32 @@ describe('createFromEnv auth backend selection', () => {
 			/Unknown MARIMOHUB_AUTH_BACKEND/,
 		);
 	});
+
+	it('wraps the SSO adapter with personal-access-token support', async () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_AUTH_DEV_USER_ID: 'alice',
+			MARIMOHUB_AUTH_DEV_EMAIL: 'alice@example.com',
+		});
+		// A PAT resolves through the TokenService — issue one against the same
+		// bucket the deps were wired over.
+		const alice = (await deps.authenticator.authenticate(new Request('http://x')))!;
+		await deps.services.identities.upsert(alice);
+		const { token } = await deps.services.tokens.create({ name: 'ci' }, alice.id);
+
+		const viaPat = await deps.authenticator.authenticate(
+			new Request('http://x', { headers: { authorization: `Bearer ${token}` } }),
+		);
+		expect(viaPat?.id).toBe('alice');
+
+		// An invalid PAT is rejected outright — never a fall-through to the SSO
+		// adapter (which here would happily authenticate anyone).
+		const viaBadPat = await deps.authenticator.authenticate(
+			new Request('http://x', { headers: { authorization: 'Bearer mhub_pat_bogus' } }),
+		);
+		expect(viaBadPat).toBeNull();
+	});
 });
 
 describe('createFromEnv oidc email-domain allowlist', () => {

@@ -14,7 +14,9 @@ Every `/api/v1/*` response uses one envelope:
 { "success": false, "error": { "code": "FORBIDDEN", "message": "…" } }
 ```
 
-Authentication is via the session cookie issued by your [auth](/auth) backend.
+Authentication is via the session cookie issued by your [auth](/auth) backend,
+or a [personal access token](/api-tokens) sent as `Authorization: Bearer …`
+(for CI, scripts, and the CLI).
 Reads are open to any authenticated user; writes are role-gated (see
 [Security → Authorization](/security#authorization-roles)). The one read
 exception is the audit log, which requires project `admin`.

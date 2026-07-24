@@ -5,6 +5,7 @@ export const userKeys = {
 	// the caller's ordering.
 	resolve: (ids: readonly string[]) => [...userKeys.all, 'resolve', ids] as const,
 	search: (query: string) => [...userKeys.all, 'search', query] as const,
+	tokens: () => [...userKeys.all, 'tokens'] as const,
 };
 
 export const projectKeys = {

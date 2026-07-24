@@ -1,14 +1,17 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
-import { ChevronDown, Copy, Moon, Sun } from 'lucide-react';
+import { ChevronDown, Copy, KeyRound, Moon, Sun } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { Brand } from '@/components/ui';
+import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
 
 export function Header() {
 	const { user, signOut } = useAuth();
 	const { theme, toggleTheme } = useTheme();
+	const [tokensOpen, setTokensOpen] = useState(false);
 
 	return (
 		<header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-md max-md:px-3">
@@ -51,7 +54,7 @@ export function Header() {
 									else if (key === 'copy-id') {
 										void navigator.clipboard.writeText(user.id);
 										toast.success('User id copied');
-									}
+									} else if (key === 'api-tokens') setTokensOpen(true);
 								}}
 							>
 								<MenuItem
@@ -72,6 +75,13 @@ export function Header() {
 									<Copy className="size-3.5" />
 									Copy user id
 								</MenuItem>
+								<MenuItem
+									id="api-tokens"
+									className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors focus:bg-muted max-md:min-h-11"
+								>
+									<KeyRound className="size-3.5" />
+									API tokens
+								</MenuItem>
 								<Separator className="h-px bg-border" />
 								<MenuItem
 									id="signout"
@@ -84,6 +94,8 @@ export function Header() {
 					</MenuTrigger>
 				)}
 			</div>
+
+			<ApiTokensDialog isOpen={tokensOpen} onClose={() => setTokensOpen(false)} />
 		</header>
 	);
 }

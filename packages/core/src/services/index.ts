@@ -11,6 +11,7 @@ import { MaintenanceService } from './catalog/MaintenanceService';
 import { NotebookService } from './content/NotebookService';
 import { ProjectService } from './content/ProjectService';
 import { SessionService } from './runtime/SessionService';
+import { TokenService } from './tokens/TokenService';
 
 export { CatalogService } from './catalog/CatalogService';
 export { EventService } from './catalog/EventService';
@@ -34,6 +35,16 @@ export type {
 	SessionLifecycleConfig,
 	SweepResult,
 } from './runtime/sessionLifecycle';
+export {
+	bearerToken,
+	hashPatSecret,
+	isPatRequest,
+	isPersonalAccessToken,
+	PAT_PREFIX,
+	TokenService,
+} from './tokens/TokenService';
+export type { CreatedToken, CreateTokenInput } from './tokens/TokenService';
+export { composeAuthenticators } from './tokens/composeAuthenticators';
 export { listAllKeys } from './catalog/storage';
 export { mutateObject, withCasRetry, type CasRetryOptions } from './catalog/cas';
 export { createWorkspaceLoadStrategies, SandboxProvisioner } from './runtime/SandboxProvisioner';
@@ -101,9 +112,20 @@ export function createServices(bucket: Bucket, metrics: Metrics = noopMetrics) {
 	const notebooks = new NotebookService(bucket, catalog, metrics);
 	const sessions = new SessionService(bucket, metrics);
 	const identities = new IdentityService(bucket);
+	const tokens = new TokenService(bucket, identities);
 	const maintenance = new MaintenanceService(bucket, metrics);
 	const idempotency = new IdempotencyService(bucket);
-	return { catalog, events, projects, notebooks, sessions, identities, maintenance, idempotency };
+	return {
+		catalog,
+		events,
+		projects,
+		notebooks,
+		sessions,
+		identities,
+		tokens,
+		maintenance,
+		idempotency,
+	};
 }
 
 /**

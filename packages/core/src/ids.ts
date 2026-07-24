@@ -12,6 +12,7 @@ export type NotebookId = string & { __brand: 'NotebookId' };
 export type SnapshotId = string & { __brand: 'SnapshotId' };
 export type VersionId = string & { __brand: 'VersionId' };
 export type SessionId = string & { __brand: 'SessionId' };
+export type TokenId = string & { __brand: 'TokenId' };
 
 // A user id is the opaque auth `sub` (OIDC / Cloudflare Access / dev). We do not
 // mint or format it, so unlike the ids above it is a *nominal* brand only — it
@@ -49,6 +50,10 @@ function randomBody(): string {
 // keeps the newest N versions by treating the lexicographically-largest ids as
 // newest, so non-monotonic ids would make pruning (and its tests) flaky.
 const nextVersionUlid = monotonicFactory();
+
+// Token ids are bare ULIDs (no `tok_` prefix): they ride inside the PAT string
+// (`mhub_pat_<tokenId>_<secret>`), where `_` is the field separator.
+const nextTokenUlid = monotonicFactory();
 
 // --- Id namespaces (guard / assert / parse / create) ---
 //
@@ -123,6 +128,7 @@ export const SessionId = defineId<SessionId>(
 	/^sess-[0-9a-z]{16}$/,
 	() => `sess-${randomBody()}`,
 );
+export const TokenId = defineId<TokenId>('TokenId', /^[0-9A-Z]{26}$/, () => nextTokenUlid());
 
 // A brand with no format/generator — `is` only checks "non-empty string". Used
 // for opaque provider ids (see UserId). `parse` brands a trusted value (e.g. an
@@ -166,6 +172,7 @@ export const createNotebookId = NotebookId.create;
 export const createSnapshotId = SnapshotId.create;
 export const createVersionId = VersionId.create;
 export const createSessionId = SessionId.create;
+export const createTokenId = TokenId.create;
 
 // Event object keys use a monotonic ULID so that, even when many events are
 // written within the same millisecond, the keys still sort in append order.

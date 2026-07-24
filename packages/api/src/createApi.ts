@@ -5,6 +5,7 @@ import { requestId } from 'hono/request-id';
 import {
 	DomainError,
 	ensureInitialized,
+	isPatRequest,
 	MAX_REQUEST_BYTES,
 	probeKernelLiveness,
 	SubdomainExposure,
@@ -19,6 +20,7 @@ import projectsApp from './routes/projects';
 import secretsApp from './routes/secrets';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
+import tokensApp from './routes/tokens';
 import usersApp from './routes/users';
 import { createOidcDiscovery } from './oidcDiscovery';
 import { sandboxProxyMiddleware } from './sandboxProxy';
@@ -39,9 +41,10 @@ const OPENAPI_DOC = {
 		{ name: 'Users', description: 'User identity resolution' },
 		{ name: 'System', description: 'Deployment metadata' },
 	],
-	// Every documented `/api/v1/*` route sits behind the cookie-auth guard, so the
-	// requirement is global (the scheme itself is registered on the app below).
-	security: [{ cookieAuth: [] }],
+	// Every documented `/api/v1/*` route sits behind the authN guard, satisfiable
+	// by either the session cookie or a personal access token (the schemes are
+	// registered on the app below), so the requirement is global and disjunctive.
+	security: [{ cookieAuth: [] }, { bearerAuth: [] }] as Record<string, string[]>[],
 };
 
 /** The versioned API mount. Health and auth routes live outside it, unversioned. */
@@ -251,6 +254,11 @@ export function createApi(rawDeps: ApiDeps) {
 			return fail(c, 'UNAUTHORIZED', 'Authentication required', 401);
 		}
 		c.set('user', user);
+		// A PAT-shaped bearer is resolved ONLY by the token path (see
+		// composeAuthenticators), so its presence is an exact signal for "this
+		// request authenticated with a PAT". Decided here, once, and read by the
+		// token-management guard — never re-parsed downstream.
+		c.set('authMethod', isPatRequest(c.req.raw) ? 'pat' : 'session');
 
 		// Refresh this user's identity-directory record so opaque ids (author /
 		// session user_id) resolve to a name+email at read time. Best-effort and
@@ -303,6 +311,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, sessionsApp);
 	app.route(API_PREFIX, secretsApp);
 	app.route(API_PREFIX, usersApp);
+	app.route(API_PREFIX, tokensApp);
 
 	// Declare the cookie-session auth scheme the global `security` requirement
 	// (OPENAPI_DOC) points at, so generated clients know the API is authenticated.
@@ -311,6 +320,13 @@ export function createApi(rawDeps: ApiDeps) {
 		in: 'cookie',
 		name: 'mh_session',
 		description: 'Session cookie minted by the OIDC login flow; browsers attach it automatically.',
+	});
+	app.openAPIRegistry.registerComponent('securitySchemes', 'bearerAuth', {
+		type: 'http',
+		scheme: 'bearer',
+		description:
+			'Personal access token (`mhub_pat_…`) minted at POST /api/v1/me/tokens, for CI/CLI/' +
+			'service callers. Acts as the issuing user; cannot manage tokens.',
 	});
 
 	// OpenAPI spec.
