@@ -1,4 +1,28 @@
 {
 	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
-	"extends": ["local>marimo-team/.github:renovate-config", "config:recommended", "schedule:monthly"]
+	"extends": [
+		"local>marimo-team/.github:renovate-config",
+		"config:recommended",
+		"schedule:monthly"
+	],
+	"timezone": "America/New_York",
+	"customManagers": [
+		{
+			"customType": "regex",
+			"managerFilePatterns": ["/^images\\/marimo-sandbox\\/Dockerfile$/"],
+			"matchStrings": ["ARG MARIMO_VERSION=(?<currentValue>\\S+)"],
+			"depNameTemplate": "marimo",
+			"datasourceTemplate": "pypi",
+			"versioningTemplate": "pep440"
+		}
+	],
+	"packageRules": [
+		{
+			"description": "Check the sandbox image for marimo updates daily",
+			"matchDatasources": ["pypi"],
+			"matchPackageNames": ["marimo"],
+			"matchFileNames": ["images/marimo-sandbox/Dockerfile"],
+			"schedule": ["* 0-4 * * *"]
+		}
+	]
 }
