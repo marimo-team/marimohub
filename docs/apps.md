@@ -12,12 +12,16 @@ workflow is untouched: an app runs alongside edit sessions, in its own sandbox.
   the same session; there is no per-user copy. The project page shows who
   started it, how long it has been up, and an approximate count of connected
   users.
-- **Apps serve a snapshot.** The app loads the notebook's latest saved version
+- **Apps serve a point-in-time copy.** The app loads the notebook's saved state
   at start and never writes anything back — no version, no snapshot, no
-  workspace change. Interacting with an app cannot modify the notebook.
+  workspace change. Interacting with an app cannot modify the notebook. One
+  caveat: while an edit session is live, "saved state" includes whatever the
+  editor has autosaved since the last version, so an app started mid-edit can
+  serve work in progress. Start apps against idle notebooks to get exactly the
+  latest version.
 - **Editing does not update a running app.** When the notebook changes after
   the app started, the hub marks the app **stale** and offers **Restart**.
-  Restarting replaces the sandbox with one serving the latest saved version and
+  Restarting replaces the sandbox with one serving the current saved state and
   disconnects everyone currently using the app — in-progress input state is
   lost, so the hub asks for confirmation and never restarts automatically.
 - **Apps stay up while in use.** Open app tabs keep the session alive; once
