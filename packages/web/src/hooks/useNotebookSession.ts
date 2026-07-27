@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch, ApiRequestError } from '@/api/client';
 import { notebookSessionsPath, useStartSession, useStopSession } from '@/api/hooks';
+import { fetchItems, isNotFoundError, projectPath } from '@/api/request';
+import { useGeneration } from '@/hooks/useGeneration';
 import { useInterval } from '@/hooks/useInterval';
 import type { Session } from '@/types';
 
@@ -23,6 +25,10 @@ export interface SessionError {
 	message: string;
 	/** The API error code (e.g. `FORBIDDEN`), when the failure was an API error. */
 	code?: string;
+}
+
+function toSessionError(err: Error): SessionError {
+	return { message: err.message, code: err instanceof ApiRequestError ? err.code : undefined };
 }
 
 /** Why a watched session stopped being renderable — see `ended` below. */
@@ -88,16 +94,16 @@ export function useNotebookSession(
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
 	const startedRef = useRef(false);
-	// Bumped by every start/stop/restart. Async work started under an older
-	// generation must not write state: `useInterval` clears only the timer and an
-	// in-flight `apiFetch` has no abort hook, so a poll issued before a restart
-	// still lands afterwards — re-arming the dying session, or failing the fresh
-	// one. A counter rather than a session-id comparison so it also holds for
-	// handlers entered while `sessionRef` still points at the old session.
-	const genRef = useRef(0);
-	const nextGeneration = useCallback(() => {
-		genRef.current += 1;
-		return genRef.current;
+	// Bumped by every start/stop/restart: a poll issued before one still lands
+	// afterwards, re-arming the dying session or failing the fresh one.
+	const generation = useGeneration();
+
+	// The state and the ref must move together: the ref is what handlers entered
+	// under an older render read, so a `setSession` without it re-arms a session
+	// the user has already left behind.
+	const commitSession = useCallback((next: Session | null) => {
+		sessionRef.current = next;
+		setSession(next);
 	}, []);
 
 	// The server withholds `sandbox_url` from a caller who may no longer reach the
@@ -105,54 +111,47 @@ export function useNotebookSession(
 	// shape satisfies neither `isRunning` nor `isProvisioning` — keeping it would
 	// leave the page rendering nothing at all.
 	const concludeAccessLost = useCallback(() => {
-		setSession(null);
-		sessionRef.current = null;
+		commitSession(null);
 		if (mode === 'app') setEnded('access_lost');
 		else setError({ message: 'You no longer have access to this session.', code: 'FORBIDDEN' });
-	}, [mode]);
+	}, [mode, commitSession]);
 
 	const start = useCallback(() => {
-		const gen = nextGeneration();
+		const gen = generation.bump();
 		setError(null);
 		setEnded(null);
 		startSession.mutate(undefined, {
 			onSuccess: (data) => {
-				if (genRef.current !== gen) return;
+				if (!generation.isCurrent(gen)) return;
 				if (data.status === 'running' && !data.sandbox_url) {
 					concludeAccessLost();
 					return;
 				}
-				setSession(data);
-				sessionRef.current = data;
+				commitSession(data);
 			},
 			onError: (err) => {
-				if (genRef.current !== gen) return;
-				setError({
-					message: err.message,
-					code: err instanceof ApiRequestError ? err.code : undefined,
-				});
+				if (!generation.isCurrent(gen)) return;
+				setError(toSessionError(err));
 			},
 		});
-	}, [startSession, concludeAccessLost, nextGeneration]);
+	}, [startSession, concludeAccessLost, commitSession, generation]);
 
 	const stop = useCallback(() => {
 		const s = sessionRef.current;
 		if (s) {
-			nextGeneration();
+			generation.bump();
 			stopSession.mutate(s.session_id);
-			sessionRef.current = null;
-			setSession(null);
+			commitSession(null);
 		}
-	}, [stopSession, nextGeneration]);
+	}, [stopSession, commitSession, generation]);
 
 	const restart = useCallback(() => {
 		const s = sessionRef.current;
-		const gen = nextGeneration();
+		const gen = generation.bump();
 		setError(null);
 		setEnded(null);
 		if (s) {
-			sessionRef.current = null;
-			setSession(null);
+			commitSession(null);
 			setRestarting(true);
 			// Await the stop before starting: the create must not attach to the
 			// still-terminating sandbox it is meant to replace. A failed stop must
@@ -161,29 +160,26 @@ export function useNotebookSession(
 			// that did nothing.
 			stopSession.mutate(s.session_id, {
 				onSuccess: () => {
-					if (genRef.current !== gen) return;
+					if (!generation.isCurrent(gen)) return;
 					setRestarting(false);
 					start();
 				},
 				onError: (err) => {
-					if (genRef.current !== gen) return;
+					if (!generation.isCurrent(gen)) return;
 					setRestarting(false);
 					// Already gone (stopped/reaped underneath us): the restart intent
 					// still holds, so start fresh.
-					if (err instanceof ApiRequestError && err.code === 'NOT_FOUND') {
+					if (isNotFoundError(err)) {
 						start();
 						return;
 					}
-					setError({
-						message: err.message,
-						code: err instanceof ApiRequestError ? err.code : undefined,
-					});
+					setError(toSessionError(err));
 				},
 			});
 		} else {
 			start();
 		}
-	}, [stopSession, start, nextGeneration]);
+	}, [stopSession, start, commitSession, generation]);
 
 	// Start once, on the first enabled render (guarded so strict-mode's
 	// double-invoke doesn't provision two sandboxes).
@@ -197,6 +193,33 @@ export function useNotebookSession(
 	const startFailedMessage =
 		mode === 'app' ? 'The app failed to start.' : 'The kernel failed to start.';
 
+	const failStart = useCallback(
+		(code?: string) => {
+			setError({ message: startFailedMessage, ...(code ? { code } : {}) });
+			commitSession(null);
+		},
+		[startFailedMessage, commitSession],
+	);
+
+	/**
+	 * Re-read the watched session under a staleness guard. A 404 means the record
+	 * is gone — a terminal answer, so it gets its own branch; every other failure
+	 * is transient and the next tick retries.
+	 */
+	const pollSession = useCallback(
+		(sessionId: string, onNext: (next: Session) => void, onGone: () => void) => {
+			const gen = generation.current();
+			apiFetch<Session>(`${sessionsPath}/${sessionId}`)
+				.then((next) => {
+					if (generation.isCurrent(gen)) onNext(next);
+				})
+				.catch((err: unknown) => {
+					if (generation.isCurrent(gen) && isNotFoundError(err)) onGone();
+				});
+		},
+		[sessionsPath, generation],
+	);
+
 	// A start that reuses an in-flight `starting` session (a concurrent refresh was
 	// already provisioning) returns before the kernel is up. Poll until it is
 	// `running` (connect) or terminal (surface an error). Normal starts return
@@ -204,33 +227,20 @@ export function useNotebookSession(
 	useInterval(
 		() => {
 			if (session?.status !== 'starting') return;
-			const sid = session.session_id;
-			const gen = genRef.current;
-			apiFetch<Session>(`${sessionsPath}/${sid}`)
-				.then((next) => {
-					if (genRef.current !== gen) return;
+			pollSession(
+				session.session_id,
+				(next) => {
 					if (next.status === 'running' && !next.sandbox_url) {
 						concludeAccessLost();
 					} else if (next.status === 'running') {
-						setSession(next);
-						sessionRef.current = next;
+						commitSession(next);
 					} else if (next.status !== 'starting' && next.status !== 'terminating') {
-						setError({ message: startFailedMessage });
-						setSession(null);
-						sessionRef.current = null;
+						failStart();
 					}
-				})
-				.catch((err: unknown) => {
-					if (genRef.current !== gen) return;
-					// The record vanished mid-start (reaped, or the notebook deleted):
-					// a terminal answer, unlike the transient errors below.
-					if (err instanceof ApiRequestError && err.code === 'NOT_FOUND') {
-						setError({ message: startFailedMessage, code: 'NOT_FOUND' });
-						setSession(null);
-						sessionRef.current = null;
-					}
-					// Anything else is transient; the next tick retries.
-				});
+				},
+				// The record vanished mid-start (reaped, or the notebook deleted).
+				() => failStart('NOT_FOUND'),
+			);
 		},
 		session?.status === 'starting' ? START_POLL_INTERVAL_MS : null,
 	);
@@ -243,17 +253,16 @@ export function useNotebookSession(
 		(fallback: Session['status'] | 'gone') => {
 			// Re-taken here: this runs a second async hop, and the caller's guard
 			// says nothing about a start/stop/restart landing during THIS request.
-			const gen = genRef.current;
+			const gen = generation.current();
 			const conclude = (next: Session | undefined) => {
-				if (genRef.current !== gen) return;
-				setSession(next ?? null);
-				sessionRef.current = next ?? null;
+				if (!generation.isCurrent(gen)) return;
+				commitSession(next ?? null);
 				if (!next) setEnded(fallback);
 			};
-			apiFetch<{ items: Session[] }>(`/api/v1/projects/${projectId}/sessions`)
-				.then((page) =>
+			fetchItems<Session>(`${projectPath(projectId)}/sessions`)
+				.then((items) =>
 					conclude(
-						page.items.find(
+						items.find(
 							(s) =>
 								s.notebook_id === notebookId &&
 								s.mode === 'app' &&
@@ -265,7 +274,7 @@ export function useNotebookSession(
 				)
 				.catch(() => conclude(undefined));
 		},
-		[projectId, notebookId],
+		[projectId, notebookId, commitSession, generation],
 	);
 
 	// App pages: watch the running session so a stop by another editor, a
@@ -276,29 +285,22 @@ export function useNotebookSession(
 		() => {
 			const sid = session?.session_id;
 			if (!sid) return;
-			const gen = genRef.current;
-			apiFetch<Session>(`${sessionsPath}/${sid}`)
-				.then((next) => {
-					if (genRef.current !== gen) return;
+			pollSession(
+				sid,
+				(next) => {
 					if (next.status === 'running' && !next.sandbox_url) {
 						// The app runs on — this caller just lost their seat, so adopting a
 						// "replacement" would only find the same unreachable session.
 						concludeAccessLost();
 					} else if (next.status === 'running') {
 						// Keep connection-count/staleness fields fresh for the banner.
-						setSession(next);
-						sessionRef.current = next;
+						commitSession(next);
 					} else if (next.status !== 'starting') {
 						adoptReplacementOr(next.status);
 					}
-				})
-				.catch((err: unknown) => {
-					if (genRef.current !== gen) return;
-					if (err instanceof ApiRequestError && err.code === 'NOT_FOUND') {
-						adoptReplacementOr('gone');
-					}
-					// Anything else is transient; the next tick retries.
-				});
+				},
+				() => adoptReplacementOr('gone'),
+			);
 		},
 		mode === 'app' && session?.status === 'running' ? RUN_WATCH_INTERVAL_MS : null,
 	);

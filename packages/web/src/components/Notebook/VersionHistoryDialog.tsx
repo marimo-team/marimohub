@@ -5,6 +5,7 @@ import {
 	Button,
 	ConfirmDialog,
 	DialogModal,
+	displayName,
 	EmptyState,
 	Skeleton,
 	UserLabel,
@@ -16,6 +17,8 @@ import {
 	useUsersQuery,
 } from '@/api/hooks';
 import type { UserDirectory } from '@/api/hooks';
+import { useDialogTarget } from '@/hooks/useDialogTarget';
+import { toastError } from '@/lib/errors';
 import { formatRelative } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { NotebookEntry, NotebookVersion } from '@/types';
@@ -143,7 +146,7 @@ export function VersionHistoryDialog({
 	// against the fetched list so selection self-heals when it refetches.
 	const [baseId, setBaseId] = useState<string | null>(null);
 	const [compareId, setCompareId] = useState<string | null>(null);
-	const [restoreTarget, setRestoreTarget] = useState<NotebookVersion | null>(null);
+	const confirmRestore = useDialogTarget<NotebookVersion>();
 
 	const versionsQuery = useNotebookVersionsQuery(projectId, notebook.id);
 	const versions = versionsQuery.data ?? [];
@@ -166,24 +169,23 @@ export function VersionHistoryDialog({
 	const restorable = canRestore && notebook.source_type !== 'git';
 
 	const handleRestore = () => {
-		if (!restoreTarget) return;
-		restoreVersion.mutate(restoreTarget.version_id, {
+		const target = confirmRestore.target;
+		if (!target) return;
+		restoreVersion.mutate(target.version_id, {
 			onSuccess: () => {
 				toast.success('Version restored');
-				setRestoreTarget(null);
+				confirmRestore.close();
 				// Back to defaults: after the list refetches, the diff shows
 				// what changed — pre-restore current → restored current.
 				setBaseId(null);
 				setCompareId(null);
 			},
-			onError: (err) => toast.error(err.message),
+			onError: toastError,
 		});
 	};
 
-	const restoreTargetAuthor = restoreTarget
-		? users?.[restoreTarget.author]?.name ||
-			users?.[restoreTarget.author]?.email ||
-			restoreTarget.author
+	const restoreTargetAuthor = confirmRestore.target
+		? displayName(users?.[confirmRestore.target.author], confirmRestore.target.author)
 		: '';
 
 	const diffPane = () => {
@@ -259,7 +261,7 @@ export function VersionHistoryDialog({
 											setBaseId(v.version_id);
 											setCompareId(null);
 										}}
-										onRestore={() => setRestoreTarget(v)}
+										onRestore={() => confirmRestore.open(v)}
 									/>
 								))}
 							</ul>
@@ -287,12 +289,12 @@ export function VersionHistoryDialog({
 			</DialogModal>
 
 			<ConfirmDialog
-				isOpen={!!restoreTarget}
-				onClose={() => setRestoreTarget(null)}
+				isOpen={confirmRestore.isOpen}
+				onClose={confirmRestore.close}
 				title="Restore Version"
 				description={
-					restoreTarget
-						? `Restore the version saved ${formatRelative(restoreTarget.saved_at)} by ${restoreTargetAuthor}? Your current notebook is preserved as a version in history — nothing is lost.`
+					confirmRestore.target
+						? `Restore the version saved ${formatRelative(confirmRestore.target.saved_at)} by ${restoreTargetAuthor}? Your current notebook is preserved as a version in history — nothing is lost.`
 						: ''
 				}
 				confirmLabel="Restore"

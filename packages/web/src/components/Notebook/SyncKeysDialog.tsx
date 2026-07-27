@@ -1,7 +1,4 @@
-import { useState } from 'react';
-import { toast } from 'sonner';
-import { AlertTriangle, Check, Copy } from 'lucide-react';
-import { Button, DialogModal, IconButton } from '@/components/ui';
+import { Button, CopyField, DialogModal, WriteOnceWarning } from '@/components/ui';
 import { DOCS_SYNCING_URL } from '@/lib/links';
 
 export interface SyncKeysDialogProps {
@@ -11,41 +8,6 @@ export interface SyncKeysDialogProps {
 	syncUrl: string;
 	/** The write-once token, present only right after creation or rotation. */
 	token?: string;
-}
-
-function CopyField({ label, value }: { label: string; value: string }) {
-	const [copied, setCopied] = useState(false);
-
-	const copy = async () => {
-		try {
-			await navigator.clipboard.writeText(value);
-			setCopied(true);
-			setTimeout(() => setCopied(false), 1500);
-		} catch {
-			toast.error('Could not copy to clipboard');
-		}
-	};
-
-	return (
-		<div className="flex flex-col gap-1.5">
-			<span className="text-xs font-medium text-muted-foreground">{label}</span>
-			<div className="flex items-center gap-2">
-				<input
-					readOnly
-					aria-label={label}
-					value={value}
-					onFocus={(e) => e.target.select()}
-					className="h-9 w-full rounded-md border border-input bg-muted/40 px-3 font-mono text-xs text-foreground outline-none"
-				/>
-				<IconButton
-					label={copied ? 'Copied' : `Copy ${label.toLowerCase()}`}
-					onPress={() => void copy()}
-				>
-					{copied ? <Check className="size-4 text-primary" /> : <Copy className="size-4" />}
-				</IconButton>
-			</div>
-		</div>
-	);
 }
 
 /**
@@ -77,10 +39,7 @@ export function SyncKeysDialog({ isOpen, onClose, title, syncUrl, token }: SyncK
 				{token ? (
 					<>
 						<CopyField label="Sync token" value={token} />
-						<div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-							<AlertTriangle className="mt-px size-4 shrink-0" />
-							<span>Copy this token now — it is shown once and cannot be retrieved later.</span>
-						</div>
+						<WriteOnceWarning />
 					</>
 				) : (
 					<p className="rounded-md border border-input bg-muted/40 px-3 py-2 text-xs text-muted-foreground">

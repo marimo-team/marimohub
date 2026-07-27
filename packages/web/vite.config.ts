@@ -44,5 +44,13 @@ export default defineConfig({
 		environment: 'jsdom',
 		setupFiles: ['./src/test/setup.ts'],
 		include: ['src/**/*.test.{ts,tsx}'],
+		// The root config excludes this package from its coverage run (the `@/`
+		// aliases only resolve under this config), so the settings live here.
+		coverage: {
+			provider: 'v8',
+			reporter: ['text', 'html'],
+			include: ['src/**/*.{ts,tsx}'],
+			exclude: ['src/**/*.test.{ts,tsx}', 'src/test/**', 'src/main.tsx', 'src/**/*.d.ts'],
+		},
 	},
 });

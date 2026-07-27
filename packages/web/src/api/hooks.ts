@@ -1,11 +1,18 @@
+import { useQuery, useSuspenseQuery, useMutation, keepPreviousData } from '@tanstack/react-query';
+import { apiFetch } from './client';
+import { useApiMutation } from './mutation';
 import {
-	useQuery,
-	useSuspenseQuery,
-	useMutation,
-	useQueryClient,
-	keepPreviousData,
-} from '@tanstack/react-query';
-import { apiFetch, ApiRequestError } from './client';
+	del,
+	fetchItems,
+	isApiErrorCode,
+	isNotFoundError,
+	notebookPath,
+	patchJson,
+	post,
+	postJson,
+	projectPath,
+	putJson,
+} from './request';
 import { sanitizeFilename, triggerDownload } from '../lib/download';
 import { userKeys, projectKeys, notebookKeys, sessionKeys, systemKeys } from './queryKeys';
 import type {
@@ -34,19 +41,19 @@ import type {
 /** How often the notebook table re-polls runtime status, in ms. */
 const SESSIONS_POLL_INTERVAL_MS = 5_000;
 
-/** A page of a list endpoint: items plus an opaque cursor for the next page. */
-interface Paginated<T> {
-	items: T[];
-	next_cursor: string | null;
-}
+/**
+ * Deployment-scoped facts (identity, version, capabilities): fixed for the life
+ * of a page load, so they are held fresh forever and a failure is not retried —
+ * the dependent UI just renders nothing rather than spamming the endpoint.
+ */
+const IMMUTABLE_QUERY = { staleTime: Number.POSITIVE_INFINITY, retry: false } as const;
 
 // Auth
 export function useUserQuery() {
 	return useQuery({
 		queryKey: userKeys.me(),
 		queryFn: () => apiFetch<User>('/api/v1/me'),
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
+		...IMMUTABLE_QUERY,
 	});
 }
 
@@ -63,54 +70,37 @@ export function useApiTokensQuery(enabled = true) {
 
 /** Mint a token. The response's `token` is shown once and never retrievable again. */
 export function useCreateApiToken() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (body: { name: string; expires_in_days?: number }) =>
-			apiFetch<ApiTokenCreated>('/api/v1/me/tokens', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
-			}),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: userKeys.tokens() });
-		},
-	});
+	return useApiMutation(
+		(body: { name: string; expires_in_days?: number }) =>
+			postJson<ApiTokenCreated>('/api/v1/me/tokens', body),
+		() => [userKeys.tokens()],
+	);
 }
 
 export function useRevokeApiToken() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (tokenId: string) =>
-			apiFetch<void>(`/api/v1/me/tokens/${tokenId}`, { method: 'DELETE' }),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: userKeys.tokens() });
-		},
-	});
+	return useApiMutation(
+		(tokenId: string) => del(`/api/v1/me/tokens/${tokenId}`),
+		() => [userKeys.tokens()],
+	);
 }
 
 // System
 
-/**
- * Fetch deployment metadata for the footer info popover. Effectively immutable
- * for the life of a page load, so it's held fresh forever; `retry: false` keeps a
- * failure from spamming — the footer just shows nothing.
- */
+/** Deployment metadata for the footer info popover. */
 export function useVersionQuery() {
 	return useQuery({
 		queryKey: systemKeys.version(),
 		queryFn: () => apiFetch<ServerVersion>('/api/v1/version'),
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
+		...IMMUTABLE_QUERY,
 	});
 }
 
-/** Deployment capability flags (e.g. whether WIF is configured). Fixed per page load. */
+/** Deployment capability flags (e.g. whether WIF is configured). */
 export function useCapabilitiesQuery() {
 	return useQuery({
 		queryKey: systemKeys.capabilities(),
 		queryFn: () => apiFetch<Capabilities>('/api/v1/capabilities'),
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
+		...IMMUTABLE_QUERY,
 	});
 }
 
@@ -155,7 +145,7 @@ export function useUserSearchQuery(query: string) {
 export function useProjectsQuery() {
 	return useSuspenseQuery({
 		queryKey: projectKeys.list(),
-		queryFn: async () => (await apiFetch<Paginated<ProjectSummary>>('/api/v1/projects')).items,
+		queryFn: () => fetchItems<ProjectSummary>('/api/v1/projects'),
 	});
 }
 
@@ -163,122 +153,90 @@ export function useProjectQuery(projectId: string) {
 	return useSuspenseQuery({
 		queryKey: projectKeys.detail(projectId),
 		// Full project meta (incl. `federation`), not the snapshot summary the list returns.
-		queryFn: () => apiFetch<ProjectDetail>(`/api/v1/projects/${projectId}`),
+		queryFn: () => apiFetch<ProjectDetail>(projectPath(projectId)),
 	});
 }
 
 export function useCreateProject() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (body: { name: string; description: string }) =>
-			apiFetch<ProjectSummary>('/api/v1/projects', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
-			}),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
-		},
-	});
+	return useApiMutation(
+		(body: { name: string; description: string }) =>
+			postJson<ProjectSummary>('/api/v1/projects', body),
+		() => [projectKeys.list()],
+	);
 }
 
 export function useUpdateProject() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: ({
+	return useApiMutation(
+		// Partial update: callers send only the fields they change.
+		({
 			projectId,
 			...body
 		}: {
-			// Partial update: callers send only the fields they change.
 			projectId: string;
 			name?: string;
 			description?: string;
 			tags?: string[];
 			federation?: ProjectFederation;
-		}) =>
-			apiFetch<ProjectDetail>(`/api/v1/projects/${projectId}`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
-			}),
-		onSuccess: (_data, { projectId }) => {
-			void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
-			void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
-		},
-	});
+		}) => patchJson<ProjectDetail>(projectPath(projectId), body),
+		({ projectId }) => [projectKeys.list(), projectKeys.detail(projectId)],
+	);
 }
 
 export function useDeleteProject() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (projectId: string) =>
-			apiFetch<void>(`/api/v1/projects/${projectId}`, { method: 'DELETE' }),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
-		},
-	});
+	return useApiMutation(
+		(projectId: string) => del(projectPath(projectId)),
+		() => [projectKeys.list()],
+	);
 }
 
 // Project members
 export function useProjectMembersQuery(projectId: string) {
 	return useQuery({
 		queryKey: projectKeys.members(projectId),
-		queryFn: () => apiFetch<ProjectMember[]>(`/api/v1/projects/${projectId}/members`),
+		queryFn: () => apiFetch<ProjectMember[]>(`${projectPath(projectId)}/members`),
 	});
 }
 
-/** Invalidate a project's member list and detail (both carry membership). */
-function useInvalidateMembers(projectId: string) {
-	const queryClient = useQueryClient();
-	return () => {
-		void queryClient.invalidateQueries({ queryKey: projectKeys.members(projectId) });
-		void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
-	};
-}
+/** A project's member list and its detail both carry membership — drop both. */
+const memberKeys = (projectId: string) => [
+	projectKeys.members(projectId),
+	projectKeys.detail(projectId),
+];
 
 export function useAddMember(projectId: string) {
-	const invalidate = useInvalidateMembers(projectId);
-	return useMutation({
+	return useApiMutation(
 		// Exactly one of user_id / email, enforced server-side (422).
-		mutationFn: (body: { user_id?: string; email?: string; role: ProjectRole }) =>
-			apiFetch<ProjectDetail>(`/api/v1/projects/${projectId}/members`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
-			}),
-		onSuccess: invalidate,
-	});
+		(body: { user_id?: string; email?: string; role: ProjectRole }) =>
+			postJson<ProjectDetail>(`${projectPath(projectId)}/members`, body),
+		() => memberKeys(projectId),
+	);
 }
 
 // `uid` is the member's user id or invite email; emails need URL-encoding.
+const memberPath = (projectId: string, uid: string) =>
+	`${projectPath(projectId)}/members/${encodeURIComponent(uid)}`;
+
 export function useUpdateMemberRole(projectId: string) {
-	const invalidate = useInvalidateMembers(projectId);
-	return useMutation({
-		mutationFn: ({ uid, role }: { uid: string; role: ProjectRole }) =>
-			apiFetch<ProjectDetail>(`/api/v1/projects/${projectId}/members/${encodeURIComponent(uid)}`, {
-				method: 'PUT',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ role }),
-			}),
-		onSuccess: invalidate,
-	});
+	return useApiMutation(
+		({ uid, role }: { uid: string; role: ProjectRole }) =>
+			putJson<ProjectDetail>(memberPath(projectId, uid), { role }),
+		() => memberKeys(projectId),
+	);
 }
 
 export function useRemoveMember(projectId: string) {
-	const invalidate = useInvalidateMembers(projectId);
-	return useMutation({
-		mutationFn: (uid: string) =>
-			apiFetch<void>(`/api/v1/projects/${projectId}/members/${encodeURIComponent(uid)}`, {
-				method: 'DELETE',
-			}),
-		onSuccess: invalidate,
-	});
+	return useApiMutation(
+		(uid: string) => del(memberPath(projectId, uid)),
+		() => memberKeys(projectId),
+	);
 }
 
 /** A 404 from the secrets routes means the deployment has the feature disabled. */
 export function isSecretsDisabledError(err: unknown): boolean {
-	return err instanceof ApiRequestError && err.code === 'NOT_FOUND';
+	return isApiErrorCode(err, 'NOT_FOUND');
 }
+
+const secretsPath = (projectId: string) => `${projectPath(projectId)}/secrets`;
 
 /**
  * List a project's secret entries (metadata only — never a value). Resolves to
@@ -292,18 +250,13 @@ export function useProjectSecretsQuery(projectId: string, enabled = true) {
 		retry: (count, err) => !isSecretsDisabledError(err) && count < 2,
 		queryFn: async () => {
 			try {
-				return await apiFetch<SecretEntry[]>(`/api/v1/projects/${projectId}/secrets`);
+				return await apiFetch<SecretEntry[]>(secretsPath(projectId));
 			} catch (err) {
 				if (isSecretsDisabledError(err)) return null;
 				throw err;
 			}
 		},
 	});
-}
-
-function useInvalidateSecrets(projectId: string) {
-	const queryClient = useQueryClient();
-	return () => queryClient.invalidateQueries({ queryKey: projectKeys.secrets(projectId) });
 }
 
 interface ReferenceInput {
@@ -326,49 +279,40 @@ function referenceBody({ backend, locator, expand, prefix }: ReferenceInput) {
 }
 
 export function usePutSecret(projectId: string) {
-	const invalidate = useInvalidateSecrets(projectId);
-	return useMutation({
-		mutationFn: (input: ReferenceInput) =>
-			apiFetch<SecretEntry>(
-				`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(input.name)}`,
-				{
-					method: 'PUT',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify(referenceBody(input)),
-				},
+	return useApiMutation(
+		(input: ReferenceInput) =>
+			putJson<SecretEntry>(
+				`${secretsPath(projectId)}/${encodeURIComponent(input.name)}`,
+				referenceBody(input),
 			),
-		onSuccess: invalidate,
-	});
+		() => [projectKeys.secrets(projectId)],
+	);
 }
 
 export function useValidateSecret(projectId: string) {
 	return useMutation({
 		mutationFn: (input: ReferenceInput) =>
-			apiFetch<{ ok: boolean; reason?: string }>(`/api/v1/projects/${projectId}/secrets/validate`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(referenceBody(input)),
-			}),
+			postJson<{ ok: boolean; reason?: string }>(
+				`${secretsPath(projectId)}/validate`,
+				referenceBody(input),
+			),
 	});
 }
 
 export function useDeleteSecret(projectId: string) {
-	const invalidate = useInvalidateSecrets(projectId);
-	return useMutation({
-		mutationFn: (name: string) =>
-			apiFetch<void>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(name)}`, {
-				method: 'DELETE',
-			}),
-		onSuccess: invalidate,
-	});
+	return useApiMutation(
+		(name: string) => del(`${secretsPath(projectId)}/${encodeURIComponent(name)}`),
+		() => [projectKeys.secrets(projectId)],
+	);
 }
 
 // Notebooks
+const notebooksPath = (projectId: string) => `${projectPath(projectId)}/notebooks`;
+
 export function useNotebooksQuery(projectId: string) {
 	return useSuspenseQuery({
 		queryKey: notebookKeys.list(projectId),
-		queryFn: async () =>
-			(await apiFetch<Paginated<NotebookEntry>>(`/api/v1/projects/${projectId}/notebooks`)).items,
+		queryFn: () => fetchItems<NotebookEntry>(notebooksPath(projectId)),
 	});
 }
 
@@ -389,26 +333,18 @@ export function useNotebookQuery(
 ) {
 	return useQuery({
 		queryKey: notebookKeys.detail(projectId, notebookId),
-		queryFn: () =>
-			apiFetch<NotebookDetail>(`/api/v1/projects/${projectId}/notebooks/${notebookId}`),
+		queryFn: () => apiFetch<NotebookDetail>(notebookPath(projectId, notebookId)),
 		staleTime: options.staleTime ?? 5 * 60 * 1000,
 		refetchInterval: options.refetchIntervalMs,
 	});
 }
 
 export function useCreateNotebook(projectId: string) {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (body: { title: string; description: string; code: string; base_image?: string }) =>
-			apiFetch<NotebookMeta>(`/api/v1/projects/${projectId}/notebooks`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
-			}),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: notebookKeys.list(projectId) });
-		},
-	});
+	return useApiMutation(
+		(body: { title: string; description: string; code: string; base_image?: string }) =>
+			postJson<NotebookMeta>(notebooksPath(projectId), body),
+		() => [notebookKeys.list(projectId)],
+	);
 }
 
 /**
@@ -417,88 +353,52 @@ export function useCreateNotebook(projectId: string) {
  * notebooks are copied as detached local notebooks.
  */
 export function useDuplicateNotebook(projectId: string) {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: ({ notebookId, title }: { notebookId: string; title?: string }) =>
-			apiFetch<NotebookMeta>(`/api/v1/projects/${projectId}/notebooks/${notebookId}/duplicate`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(title ? { title } : {}),
-			}),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: notebookKeys.list(projectId) });
-		},
-	});
+	return useApiMutation(
+		({ notebookId, title }: { notebookId: string; title?: string }) =>
+			postJson<NotebookMeta>(
+				`${notebookPath(projectId, notebookId)}/duplicate`,
+				title ? { title } : {},
+			),
+		() => [notebookKeys.list(projectId)],
+	);
 }
 
 /** Create a git-synced notebook; the response carries its write-once sync token. */
 export function useCreateSyncedNotebook(projectId: string) {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (body: {
+	return useApiMutation(
+		(body: {
 			title: string;
 			description: string;
 			repo: string;
 			branch: string;
 			root_path?: string;
 			entry_notebook: string;
-		}) =>
-			apiFetch<GitNotebookCreateResult>(`/api/v1/projects/${projectId}/notebooks/git`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
-			}),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: notebookKeys.list(projectId) });
-		},
-	});
+		}) => postJson<GitNotebookCreateResult>(`${notebooksPath(projectId)}/git`, body),
+		() => [notebookKeys.list(projectId)],
+	);
 }
 
 /** Rotate a synced notebook's sync token, invalidating the old one. */
 export function useRotateSyncToken(projectId: string) {
 	return useMutation({
 		mutationFn: (notebookId: string) =>
-			apiFetch<SyncToken>(
-				`/api/v1/projects/${projectId}/notebooks/${notebookId}/sync-token/rotate`,
-				{ method: 'POST' },
-			),
+			post<SyncToken>(`${notebookPath(projectId, notebookId)}/sync-token/rotate`),
 	});
 }
 
 export function useUpdateNotebook(projectId: string) {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: ({
-			notebookId,
-			...body
-		}: {
-			notebookId: string;
-			title?: string;
-			base_image?: string | null;
-		}) =>
-			apiFetch<NotebookMeta>(`/api/v1/projects/${projectId}/notebooks/${notebookId}`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
-			}),
-		onSuccess: (_data, { notebookId }) => {
-			void queryClient.invalidateQueries({ queryKey: notebookKeys.list(projectId) });
-			void queryClient.invalidateQueries({ queryKey: notebookKeys.detail(projectId, notebookId) });
-		},
-	});
+	return useApiMutation(
+		({ notebookId, ...body }: { notebookId: string; title?: string; base_image?: string | null }) =>
+			patchJson<NotebookMeta>(notebookPath(projectId, notebookId), body),
+		({ notebookId }) => [notebookKeys.list(projectId), notebookKeys.detail(projectId, notebookId)],
+	);
 }
 
 export function useDeleteNotebook(projectId: string) {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (notebookId: string) =>
-			apiFetch<void>(`/api/v1/projects/${projectId}/notebooks/${notebookId}`, {
-				method: 'DELETE',
-			}),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: notebookKeys.list(projectId) });
-		},
-	});
+	return useApiMutation(
+		(notebookId: string) => del(notebookPath(projectId, notebookId)),
+		() => [notebookKeys.list(projectId)],
+	);
 }
 
 /** Fetch the notebook's current `.py` source and save it as `<title>.py`. */
@@ -506,7 +406,7 @@ export function useDownloadNotebookFile(projectId: string) {
 	return useMutation({
 		mutationFn: async ({ notebookId, title }: { notebookId: string; title: string }) => {
 			const { code } = await apiFetch<{ code: string }>(
-				`/api/v1/projects/${projectId}/notebooks/${notebookId}/content`,
+				`${notebookPath(projectId, notebookId)}/content`,
 			);
 			triggerDownload(`${sanitizeFilename(title)}.py`, new Blob([code], { type: 'text/x-python' }));
 		},
@@ -521,9 +421,7 @@ export function useDownloadNotebookFile(projectId: string) {
 export function useDownloadWorkspace(projectId: string) {
 	return useMutation({
 		mutationFn: async ({ notebookId, title }: { notebookId: string; title: string }) => {
-			const res = await fetch(
-				`/api/v1/projects/${projectId}/notebooks/${notebookId}/workspace.zip`,
-			);
+			const res = await fetch(`${notebookPath(projectId, notebookId)}/workspace.zip`);
 			if (!res.ok) {
 				throw new Error(`Failed to download workspace (${res.status})`);
 			}
@@ -533,6 +431,8 @@ export function useDownloadWorkspace(projectId: string) {
 }
 
 // Notebook versions
+const versionsPath = (projectId: string, notebookId: string) =>
+	`${notebookPath(projectId, notebookId)}/versions`;
 
 /**
  * A notebook's saved versions, newest first (the API's order). Single page
@@ -541,12 +441,7 @@ export function useDownloadWorkspace(projectId: string) {
 export function useNotebookVersionsQuery(projectId: string, notebookId: string) {
 	return useQuery({
 		queryKey: notebookKeys.versions(projectId, notebookId),
-		queryFn: async () =>
-			(
-				await apiFetch<Paginated<NotebookVersion>>(
-					`/api/v1/projects/${projectId}/notebooks/${notebookId}/versions`,
-				)
-			).items,
+		queryFn: () => fetchItems<NotebookVersion>(versionsPath(projectId, notebookId)),
 	});
 }
 
@@ -559,9 +454,7 @@ export function useNotebookVersionQuery(
 	return useQuery({
 		queryKey: notebookKeys.version(projectId, notebookId, versionId ?? ''),
 		queryFn: () =>
-			apiFetch<NotebookVersionDetail>(
-				`/api/v1/projects/${projectId}/notebooks/${notebookId}/versions/${versionId}`,
-			),
+			apiFetch<NotebookVersionDetail>(`${versionsPath(projectId, notebookId)}/${versionId}`),
 		enabled: !!versionId,
 		staleTime: Number.POSITIVE_INFINITY,
 	});
@@ -584,7 +477,7 @@ export function useNotebookHtmlQuery(projectId: string, notebookId: string) {
 	return useQuery({
 		queryKey: notebookKeys.html(projectId, notebookId),
 		queryFn: async (): Promise<NotebookHtmlSnapshot | null> => {
-			const res = await fetch(`/api/v1/projects/${projectId}/notebooks/${notebookId}/html`);
+			const res = await fetch(`${notebookPath(projectId, notebookId)}/html`);
 			if (res.status === 404) {
 				// Only "exists but never ran" is the empty state; a deleted/hidden
 				// notebook (code NOT_FOUND) must surface as an error, not "no outputs".
@@ -610,21 +503,15 @@ export function useNotebookHtmlQuery(projectId: string, notebookId: string) {
  * list as well as the notebook itself.
  */
 export function useRestoreVersion(projectId: string, notebookId: string) {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationFn: (versionId: string) =>
-			apiFetch<NotebookMeta>(
-				`/api/v1/projects/${projectId}/notebooks/${notebookId}/versions/${versionId}/restore`,
-				{ method: 'POST' },
-			),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({
-				queryKey: notebookKeys.versions(projectId, notebookId),
-			});
-			void queryClient.invalidateQueries({ queryKey: notebookKeys.detail(projectId, notebookId) });
-			void queryClient.invalidateQueries({ queryKey: notebookKeys.list(projectId) });
-		},
-	});
+	return useApiMutation(
+		(versionId: string) =>
+			post<NotebookMeta>(`${versionsPath(projectId, notebookId)}/${versionId}/restore`),
+		() => [
+			notebookKeys.versions(projectId, notebookId),
+			notebookKeys.detail(projectId, notebookId),
+			notebookKeys.list(projectId),
+		],
+	);
 }
 
 // Sessions
@@ -638,8 +525,7 @@ export function useRestoreVersion(projectId: string, notebookId: string) {
 export function useProjectSessionsQuery(projectId: string, enabled = true) {
 	return useQuery({
 		queryKey: sessionKeys.listByProject(projectId),
-		queryFn: async () =>
-			(await apiFetch<Paginated<Session>>(`/api/v1/projects/${projectId}/sessions`)).items,
+		queryFn: () => fetchItems<Session>(`${projectPath(projectId)}/sessions`),
 		refetchInterval: SESSIONS_POLL_INTERVAL_MS,
 		enabled,
 	});
@@ -647,7 +533,15 @@ export function useProjectSessionsQuery(projectId: string, enabled = true) {
 
 /** Base URL of a notebook's session collection (also exported for the session hook). */
 export const notebookSessionsPath = (projectId: string, notebookId: string) =>
-	`/api/v1/projects/${projectId}/notebooks/${notebookId}/sessions`;
+	`${notebookPath(projectId, notebookId)}/sessions`;
+
+/**
+ * Provisioning a cold sandbox can take a while (the kernel may build its uv venv
+ * on first boot), and teardown saves the notebook and destroys the sandbox
+ * synchronously with no server-side budget bounding it — so both override the
+ * client's default 20s timeout. Must exceed the provisioner's waitForPort budget.
+ */
+const SESSION_LIFECYCLE_TIMEOUT_MS = 150_000; // 2.5 minutes
 
 /**
  * The create-session request. Sent with no body for `edit` (byte-identical to
@@ -655,29 +549,16 @@ export const notebookSessionsPath = (projectId: string, notebookId: string) =>
  * the server attaches ANY editor to the notebook's running app.
  */
 function startSessionRequest(projectId: string, notebookId: string, mode: 'edit' | 'app') {
-	// Provisioning a cold sandbox can take a while (the kernel may build its uv
-	// venv on first boot), so override the client's default 20s timeout. Must
-	// exceed the provisioner's waitForPort budget.
-	return apiFetch<Session>(notebookSessionsPath(projectId, notebookId), {
-		method: 'POST',
-		timeout: 150_000, // 2.5 minutes
-		...(mode === 'app'
-			? {
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ mode }),
-				}
-			: {}),
-	});
+	const path = notebookSessionsPath(projectId, notebookId);
+	const init = { timeout: SESSION_LIFECYCLE_TIMEOUT_MS };
+	return mode === 'app' ? postJson<Session>(path, { mode }, init) : post<Session>(path, init);
 }
 
+// An abort surfaces as a failed stop, which halts a restart half-done (app
+// stopped, never restarted) while the server tears down anyway.
 function stopSessionRequest(projectId: string, notebookId: string, sessionId: string) {
-	// Teardown saves the notebook and destroys the sandbox synchronously, and —
-	// unlike start — has no server-side budget bounding it. An abort surfaces as a
-	// failed stop, which halts a restart half-done (app stopped, never restarted)
-	// while the server tears down anyway, so allow the same budget as create.
-	return apiFetch<void>(`${notebookSessionsPath(projectId, notebookId)}/${sessionId}`, {
-		method: 'DELETE',
-		timeout: 150_000, // 2.5 minutes
+	return del<void>(`${notebookSessionsPath(projectId, notebookId)}/${sessionId}`, {
+		timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
 	});
 }
 
@@ -691,40 +572,31 @@ export function useStartSession(
 	});
 }
 
-/** Refresh the status indicators right away rather than waiting for the poll. */
-function useInvalidateSessions(projectId: string) {
-	const queryClient = useQueryClient();
-	return () => {
-		void queryClient.invalidateQueries({ queryKey: sessionKeys.listByProject(projectId) });
-	};
-}
-
 /**
  * Restart the shared app: stop the given session, then start a fresh one (which
  * picks up the notebook's current head — the staleness banner's action). The
  * stop is awaited so the fresh create can't reuse the dying sandbox.
  */
 export function useRestartApp(projectId: string, notebookId: string) {
-	const invalidate = useInvalidateSessions(projectId);
-	return useMutation({
-		mutationFn: async (sessionId: string) => {
+	return useApiMutation(
+		async (sessionId: string) => {
 			try {
 				await stopSessionRequest(projectId, notebookId, sessionId);
 			} catch (err) {
 				// Already gone (stopped/reaped underneath us): the restart intent
 				// still holds, so proceed to the fresh start.
-				if (!(err instanceof ApiRequestError && err.code === 'NOT_FOUND')) throw err;
+				if (!isNotFoundError(err)) throw err;
 			}
 			return startSessionRequest(projectId, notebookId, 'app');
 		},
-		onSuccess: invalidate,
-	});
+		// Refresh the status indicators right away rather than waiting for the poll.
+		() => [sessionKeys.listByProject(projectId)],
+	);
 }
 
 export function useStopSession(projectId: string, notebookId: string) {
-	const invalidate = useInvalidateSessions(projectId);
-	return useMutation({
-		mutationFn: (sessionId: string) => stopSessionRequest(projectId, notebookId, sessionId),
-		onSuccess: invalidate,
-	});
+	return useApiMutation(
+		(sessionId: string) => stopSessionRequest(projectId, notebookId, sessionId),
+		() => [sessionKeys.listByProject(projectId)],
+	);
 }

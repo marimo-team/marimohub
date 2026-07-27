@@ -6,6 +6,7 @@ import {
 	ComboBox,
 	ConfirmDialog,
 	DialogModal,
+	displayName,
 	IconButton,
 	Tooltip,
 	UserLabel,
@@ -21,6 +22,8 @@ import {
 } from '@/api/hooks';
 import type { UserDirectory } from '@/api/hooks';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useDialogTarget } from '@/hooks/useDialogTarget';
+import { toastError } from '@/lib/errors';
 import { defaultAccessSummary, ROLES, roleDescriptions } from '@/lib/roles';
 import type { ProjectDetail, ProjectMember, ProjectRole, ResolvedUser } from '@/types';
 
@@ -243,7 +246,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 	const addMember = useAddMember(project.id);
 	const updateRole = useUpdateMemberRole(project.id);
 	const removeMember = useRemoveMember(project.id);
-	const [removeTarget, setRemoveTarget] = useState<ProjectMember | null>(null);
+	const confirmRemove = useDialogTarget<ProjectMember>();
 
 	const handleAdd = async (choice: MemberChoice, role: ProjectRole) => {
 		try {
@@ -251,7 +254,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			toast.success('email' in choice ? 'Invite added' : 'Member added');
 			return true;
 		} catch (err) {
-			toast.error((err as Error).message);
+			toastError(err);
 			return false;
 		}
 	};
@@ -261,26 +264,28 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			{ uid: memberKey(member), role },
 			{
 				onSuccess: () => toast.success('Role updated'),
-				onError: (err) => toast.error(err.message),
+				onError: toastError,
 			},
 		);
 	};
 
 	const handleRemove = () => {
-		if (!removeTarget) return;
-		removeMember.mutate(memberKey(removeTarget), {
+		const target = confirmRemove.target;
+		if (!target) return;
+		removeMember.mutate(memberKey(target), {
 			onSuccess: () => {
 				toast.success('Member removed');
-				setRemoveTarget(null);
+				confirmRemove.close();
 			},
-			onError: (err) => toast.error(err.message),
+			onError: toastError,
 		});
 	};
 
-	const removeTargetName = removeTarget
-		? (removeTarget.user_id &&
-				(users?.[removeTarget.user_id]?.name || users?.[removeTarget.user_id]?.email)) ||
-			memberKey(removeTarget)
+	const removeTargetName = confirmRemove.target
+		? displayName(
+				confirmRemove.target.user_id ? users?.[confirmRemove.target.user_id] : undefined,
+				memberKey(confirmRemove.target),
+			)
 		: '';
 
 	return (
@@ -334,7 +339,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 													label={`Remove ${key}`}
 													tooltip="Remove member"
 													tone="danger"
-													onPress={() => setRemoveTarget(member)}
+													onPress={() => confirmRemove.open(member)}
 												>
 													<Trash2 className="size-4" />
 												</IconButton>
@@ -363,8 +368,8 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			</DialogModal>
 
 			<ConfirmDialog
-				isOpen={!!removeTarget}
-				onClose={() => setRemoveTarget(null)}
+				isOpen={confirmRemove.isOpen}
+				onClose={confirmRemove.close}
 				title="Remove Member"
 				description={`Remove "${removeTargetName}" from "${project.name}"? They lose access to all notebooks in this project.`}
 				confirmLabel="Remove"

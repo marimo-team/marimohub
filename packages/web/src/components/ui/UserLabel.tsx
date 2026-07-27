@@ -12,8 +12,11 @@ export interface UserLabelProps {
 	className?: string;
 }
 
-/** Display name for a user, with the email as a hover title for disambiguation. */
-function displayName(user: ResolvedUser | undefined, fallbackId: string): string {
+/**
+ * How a user is named in prose. Exported so confirmation copy ("Remove <name>?")
+ * names them the same way as the row it was opened from.
+ */
+export function displayName(user: ResolvedUser | undefined, fallbackId: string): string {
 	return user?.name || user?.email || fallbackId;
 }
 
