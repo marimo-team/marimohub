@@ -50,6 +50,9 @@ async function openUserMenu(user: ReturnType<typeof userEvent.setup>) {
 afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
+	// Neither of the above reverts a property descriptor, so the stub would stay
+	// installed over the real Clipboard API for the rest of the run.
+	Reflect.deleteProperty(navigator, 'clipboard');
 	localStorage.clear();
 	document.documentElement.classList.remove('dark');
 });

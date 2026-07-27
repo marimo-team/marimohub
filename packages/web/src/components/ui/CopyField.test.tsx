@@ -17,6 +17,9 @@ function setupWithClipboard(writeText: () => Promise<void>) {
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	// restoreAllMocks does not revert a property descriptor, so the stub would
+	// stay installed over the real Clipboard API for the rest of the run.
+	Reflect.deleteProperty(navigator, 'clipboard');
 });
 
 describe('CopyField', () => {
