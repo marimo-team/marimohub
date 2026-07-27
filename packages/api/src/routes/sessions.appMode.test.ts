@@ -481,12 +481,17 @@ describe('Session routes (app mode)', () => {
 	});
 
 	it('records an audit event for the app start; an attach records nothing', async () => {
+		const utcDay = () => new Date().toISOString().slice(0, 10);
+		// `append` keys events by its own clock, and `getEvents` reads one day's
+		// prefix — so a UTC-midnight rollover mid-test would hide them.
+		const startedOn = utcDay();
 		const app = await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
 		await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
 
 		const services = createServices(bucket);
-		const day = new Date().toISOString().slice(0, 10);
-		const starts = (await services.events.getEvents(day)).filter((e) => e.event === 'app.start');
+		const days = [...new Set([startedOn, utcDay()])];
+		const events = (await Promise.all(days.map((d) => services.events.getEvents(d)))).flat();
+		const starts = events.filter((e) => e.event === 'app.start');
 		expect(starts).toHaveLength(1);
 		expect(starts[0]).toMatchObject({ actor: ACTOR, session_id: app.session_id });
 	});

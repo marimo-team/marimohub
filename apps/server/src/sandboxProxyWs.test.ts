@@ -153,6 +153,7 @@ describe('attachSandboxProxyUpgrade', () => {
 			const req = fakeIncomingMessage(`/proxy/${token}/`);
 			req.headers.cookie = 'hub_session=secret';
 			req.headers.authorization = 'Bearer mhub_pat_secret';
+			req.headers['cf-access-jwt-assertion'] = 'eyJhbGciOiJSUzI1NiJ9.access.jwt';
 			req.headers['x-custom'] = 'passes';
 			lastUpstreamHeaders = undefined;
 			server.listeners[0](req, socket, Buffer.alloc(0));
@@ -162,6 +163,7 @@ describe('attachSandboxProxyUpgrade', () => {
 			expect(lastUpstreamHeaders).toBeDefined();
 			expect(lastUpstreamHeaders!.cookie).toBeUndefined();
 			expect(lastUpstreamHeaders!.authorization).toBeUndefined();
+			expect(lastUpstreamHeaders!['cf-access-jwt-assertion']).toBeUndefined();
 			expect(lastUpstreamHeaders!['x-custom']).toBe('passes');
 		});
 

@@ -57,11 +57,18 @@ describe('SessionService (app mode)', () => {
 	});
 
 	describe('findReusable per mode', () => {
+		/** An app session as the create saga leaves it: running AND holding the claim. */
+		const claimedApp = async (user: UserId) => {
+			const app = await running(user, 'app');
+			await sessions.claimApp(projectId, notebookId, app.session_id);
+			return app;
+		};
+
 		it('never crosses modes', async () => {
 			await running(USER_A, 'edit');
 			expect(await sessions.findReusable(projectId, notebookId, USER_A, 'app')).toBeUndefined();
 
-			await running(USER_A, 'app');
+			await claimedApp(USER_A);
 			const edit = await sessions.findReusable(projectId, notebookId, USER_A, 'edit');
 			const run = await sessions.findReusable(projectId, notebookId, USER_A, 'app');
 			expect(edit?.mode).toBeUndefined(); // stored edit records omit mode
@@ -70,9 +77,60 @@ describe('SessionService (app mode)', () => {
 		});
 
 		it('is user-blind for run: another editor attaches to the shared app', async () => {
-			const app = await running(USER_A, 'app');
+			const app = await claimedApp(USER_A);
 			const found = await sessions.findReusable(projectId, notebookId, USER_B, 'app');
 			expect(found?.session_id).toBe(app.session_id);
+		});
+
+		it('hands out the claim holder, not the newest starting racer', async () => {
+			// A and B both raced to start the app; A won `claimApp`, so B is already
+			// doomed (it throws AppClaimLostError and terminates its own record).
+			// Handing B to a third caller would strand it on a session that never runs.
+			const a = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: USER_A,
+				mode: 'app',
+			});
+			await sessions.claimApp(projectId, notebookId, a.session_id);
+			const b = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: USER_B,
+				mode: 'app',
+			});
+			// B is the newer record, so heartbeat order alone would pick it.
+			expect(new Date(b.last_heartbeat).getTime()).toBeGreaterThanOrEqual(
+				new Date(a.last_heartbeat).getTime(),
+			);
+
+			const found = await sessions.findReusable(projectId, notebookId, uid('user_c'), 'app');
+			expect(found?.session_id).toBe(a.session_id);
+		});
+
+		it('reuses nothing when the app claim is absent', async () => {
+			// No claim = no holder, so the caller starts fresh and steals the (stale)
+			// claim via claimApp rather than attaching to an unowned record.
+			await running(USER_A, 'app');
+			expect(await sessions.findReusable(projectId, notebookId, USER_B, 'app')).toBeUndefined();
+		});
+
+		it('reuses nothing once the claim has been released', async () => {
+			const app = await claimedApp(USER_A);
+			await sessions.releaseApp(projectId, notebookId, app.session_id);
+			expect(await sessions.findReusable(projectId, notebookId, USER_B, 'app')).toBeUndefined();
+		});
+
+		it('reuses nothing when the claim is corrupt', async () => {
+			await claimedApp(USER_A);
+			await bucket.put(paths.appClaim(projectId, notebookId), 'not json');
+			expect(await sessions.findReusable(projectId, notebookId, USER_B, 'app')).toBeUndefined();
+		});
+
+		it('reuses nothing when the claim names a session that is no longer a candidate', async () => {
+			const app = await claimedApp(USER_A);
+			await sessions.markTerminated(projectId, app.session_id);
+			expect(await sessions.findReusable(projectId, notebookId, USER_B, 'app')).toBeUndefined();
 		});
 
 		it('stays per-user for edit', async () => {

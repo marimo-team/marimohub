@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session } from '@/types';
@@ -23,7 +23,18 @@ function makeAppSession(overrides: Partial<Session> = {}): Session {
 
 function renderIndicator(
 	session: Session,
-	{ canControl = true, canOpen = false, editActive = false, headVersion = 'ver-head' } = {},
+	{
+		canControl = true,
+		canOpen = false,
+		editActive = false,
+		headVersion = 'ver-head',
+	}: {
+		canControl?: boolean;
+		canOpen?: boolean;
+		editActive?: boolean;
+		/** A function to model a head that moves between popover opens. */
+		headVersion?: string | (() => string);
+	} = {},
 ) {
 	vi.stubGlobal(
 		'fetch',
@@ -32,7 +43,10 @@ function renderIndicator(
 			const body = url.includes('/notebooks/')
 				? {
 						meta: { id: 'nb-1', title: 'NB', author: 'user_1' },
-						source: { type: 'local', current_version_id: headVersion },
+						source: {
+							type: 'local',
+							current_version_id: typeof headVersion === 'function' ? headVersion() : headVersion,
+						},
 					}
 				: {};
 			return new Response(JSON.stringify({ success: true, data: body }), {
@@ -138,6 +152,28 @@ describe('AppSessionIndicator', () => {
 			headVersion: 'ver-head',
 		});
 		await userEvent.click(screen.getByRole('button'));
+
+		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();
+	});
+
+	// A version committed server-side (an edit session ending) invalidates
+	// nothing on the client, so a cached head would hide the hint for 5 minutes.
+	it('re-reads the notebook head each time the popover opens', async () => {
+		let head = 'ver-head';
+		renderIndicator(makeAppSession({ source_version_id: 'ver-head' }), {
+			headVersion: () => head,
+		});
+		const trigger = screen.getByRole('button');
+
+		await userEvent.click(trigger);
+		expect(await screen.findByText('App running')).toBeInTheDocument();
+		expect(screen.queryByText(/Restart to update/)).toBeNull();
+
+		await userEvent.keyboard('{Escape}');
+		await waitFor(() => expect(screen.queryByText('App running')).toBeNull());
+
+		head = 'ver-next';
+		await userEvent.click(trigger);
 
 		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();
 	});

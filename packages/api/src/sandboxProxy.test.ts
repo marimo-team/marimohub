@@ -268,13 +268,16 @@ describe('forwardHttp', () => {
 		expect(res.status).toBe(502);
 	});
 
-	it('strips hub credentials (Cookie/Authorization) before the kernel sees the request', async () => {
+	it('strips hub credentials (Cookie/Authorization/CF-Access) before the kernel sees the request', async () => {
 		// Notebook code can read request headers (mo.app_meta().request) — the
-		// caller's hub session cookie / PAT must never reach it.
+		// caller's hub session cookie / PAT / Access assertion must never reach it.
 		const req = new Request('https://hub.example.com/proxy/tok/api', {
 			headers: {
 				cookie: 'hub_session=secret',
 				authorization: 'Bearer mhub_pat_secret',
+				'cf-access-jwt-assertion': 'eyJhbGciOiJSUzI1NiJ9.access.jwt',
+				'cf-access-client-id': 'svc.access',
+				'cf-access-client-secret': 'svc-secret',
 				'x-custom': 'passes',
 			},
 		});
@@ -282,6 +285,9 @@ describe('forwardHttp', () => {
 		const seen = (await res.json()) as Record<string, string>;
 		expect(seen.cookie).toBeUndefined();
 		expect(seen.authorization).toBeUndefined();
+		expect(seen['cf-access-jwt-assertion']).toBeUndefined();
+		expect(seen['cf-access-client-id']).toBeUndefined();
+		expect(seen['cf-access-client-secret']).toBeUndefined();
 		expect(seen['x-custom']).toBe('passes');
 	});
 

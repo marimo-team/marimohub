@@ -48,41 +48,24 @@ const PROCESS_STARTED_AT = new Date().toISOString();
 /** Default concurrent-session cap per user when unset (a cost-DoS guard). */
 const DEFAULT_MAX_SESSIONS_PER_USER = 10;
 
-/** Parse the per-user concurrent-session cap. `0` disables the cap (unlimited). */
-function parseSessionCap(env: Env): number | undefined {
-	const raw = env.MARIMOHUB_MAX_SESSIONS_PER_USER;
-	// Empty means unset, NOT `Number('') === 0` (which would silently disable the cap).
-	if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_SESSIONS_PER_USER;
-	const n = Number(raw);
-	if (!Number.isInteger(n) || n < 0) {
-		throw new ConfigError(
-			`Invalid MARIMOHUB_MAX_SESSIONS_PER_USER: ${raw} (expected a non-negative integer)`,
-			{
-				variable: 'MARIMOHUB_MAX_SESSIONS_PER_USER',
-				remediation: 'Use 0 (unlimited) or a positive integer.',
-			},
-		);
-	}
-	return n === 0 ? undefined : n;
-}
-
 /** Default per-project concurrent app (`run`) session cap when unset. */
 const DEFAULT_MAX_APPS_PER_PROJECT = 5;
 
-/** Parse the per-project app cap. `0` disables the cap (unlimited). */
-function parseAppCap(env: Env): number | undefined {
-	const raw = env.MARIMOHUB_MAX_APPS_PER_PROJECT;
+/**
+ * Parse a concurrency cap. `0` disables the cap (unlimited); unset falls back to
+ * `dflt`. Not `parseIntEnv`: that treats `''` as unset but not `'  '`, and does
+ * not reject a negative or fractional cap.
+ */
+function parseCap(env: Env, key: string, dflt: number): number | undefined {
+	const raw = env[key];
 	// Empty means unset, NOT `Number('') === 0` (which would silently disable the cap).
-	if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_APPS_PER_PROJECT;
+	if (raw === undefined || raw.trim() === '') return dflt;
 	const n = Number(raw);
 	if (!Number.isInteger(n) || n < 0) {
-		throw new ConfigError(
-			`Invalid MARIMOHUB_MAX_APPS_PER_PROJECT: ${raw} (expected a non-negative integer)`,
-			{
-				variable: 'MARIMOHUB_MAX_APPS_PER_PROJECT',
-				remediation: 'Use 0 (unlimited) or a positive integer.',
-			},
-		);
+		throw new ConfigError(`Invalid ${key}: ${raw} (expected a non-negative integer)`, {
+			variable: key,
+			remediation: 'Use 0 (unlimited) or a positive integer.',
+		});
 	}
 	return n === 0 ? undefined : n;
 }
@@ -305,8 +288,16 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 			defaultRole: parseDefaultRole(env),
 			viewerMode: parseViewerMode(env),
 			allowedOrigins: parseList(env.MARIMOHUB_ALLOWED_ORIGINS),
-			maxConcurrentSessionsPerUser: parseSessionCap(env),
-			maxAppsPerProject: parseAppCap(env),
+			maxConcurrentSessionsPerUser: parseCap(
+				env,
+				'MARIMOHUB_MAX_SESSIONS_PER_USER',
+				DEFAULT_MAX_SESSIONS_PER_USER,
+			),
+			maxAppsPerProject: parseCap(
+				env,
+				'MARIMOHUB_MAX_APPS_PER_PROJECT',
+				DEFAULT_MAX_APPS_PER_PROJECT,
+			),
 		},
 		// Workload Identity Federation (no-op unless the WIF env vars are configured).
 		...makeWif(env),

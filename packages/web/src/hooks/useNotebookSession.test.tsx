@@ -593,6 +593,112 @@ describe('useNotebookSession (app mode)', () => {
 		expect(result.current.isProvisioning).toBe(false);
 	});
 
+	it('a watch poll that lands after a restart does not resurrect the old session', async () => {
+		vi.useFakeTimers();
+		let releaseWatch!: () => void;
+		const watchGate = new Promise<void>((resolve) => {
+			releaseWatch = resolve;
+		});
+		let creates = 0;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				const method = init?.method ?? 'GET';
+				if (String(url).endsWith('/heartbeat')) return jsonOk(undefined);
+				if (method === 'POST') {
+					creates += 1;
+					return jsonOk(makeSession({ session_id: `sess-${creates}`, mode: 'app' }));
+				}
+				if (method === 'DELETE') return jsonOk(undefined);
+				if (String(url).endsWith('/sessions/sess-1')) {
+					// Held open across the restart below, then answered with the stale
+					// (still `running`) view of the session the restart replaced.
+					await watchGate;
+					return jsonOk(makeSession({ session_id: 'sess-1', mode: 'app' }));
+				}
+				return jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		expect(result.current.session?.session_id).toBe('sess-1');
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(10_000);
+		});
+
+		act(() => result.current.restart());
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		await settleHook();
+		expect(result.current.session?.session_id).toBe('sess-2');
+
+		releaseWatch();
+		await settleHook();
+
+		expect(result.current.session?.session_id).toBe('sess-2');
+		expect(result.current.ended).toBeNull();
+		expect(result.current.error).toBeNull();
+	});
+
+	it('a start poll that lands after a restart does not fail the fresh session', async () => {
+		vi.useFakeTimers();
+		let releasePoll!: () => void;
+		const pollGate = new Promise<void>((resolve) => {
+			releasePoll = resolve;
+		});
+		let creates = 0;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				const method = init?.method ?? 'GET';
+				if (String(url).endsWith('/heartbeat')) return jsonOk(undefined);
+				if (method === 'POST') {
+					creates += 1;
+					return creates === 1
+						? jsonOk(makeSession({ mode: 'app', status: 'starting', sandbox_url: undefined }))
+						: jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
+				}
+				if (method === 'DELETE') return jsonOk(undefined);
+				if (String(url).endsWith('/sessions/sess-1')) {
+					await pollGate;
+					return jsonOk(makeSession({ mode: 'app', status: 'failed', sandbox_url: undefined }));
+				}
+				return jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		expect(result.current.session?.status).toBe('starting');
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2_000);
+		});
+
+		act(() => result.current.restart());
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		await settleHook();
+		expect(result.current.isRunning).toBe(true);
+
+		// The abandoned session's terminal answer must not fail the app that
+		// replaced it.
+		releasePoll();
+		await settleHook();
+
+		expect(result.current.session?.session_id).toBe('sess-2');
+		expect(result.current.error).toBeNull();
+		expect(result.current.isRunning).toBe(true);
+	});
+
 	it('restart proceeds to a fresh start when the session is already gone (404)', async () => {
 		let posts = 0;
 		vi.stubGlobal(

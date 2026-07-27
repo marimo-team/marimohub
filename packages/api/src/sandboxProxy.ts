@@ -137,10 +137,19 @@ const HOP_BY_HOP = new Set([
 /**
  * Hub credentials must never reach the kernel: it runs `--no-token` and needs
  * none, and notebook code can read request headers (`mo.app_meta().request`) —
- * forwarding them would hand every caller's session cookie / bearer token to
- * the notebook author. The WS forwarder strips the same pair.
+ * forwarding them would hand every caller's credential to the notebook author.
+ * `cf-access-jwt-assertion` is exactly that under the Cloudflare Access
+ * authenticator (it is the whole proof of identity), and the `cf-access-client-*`
+ * service-token pair mints one. Access's `CF_Authorization` cookie is covered by
+ * `cookie`. The WS forwarder filters on this same set.
  */
-export const CREDENTIAL_HEADERS = new Set(['cookie', 'authorization']);
+export const CREDENTIAL_HEADERS = new Set([
+	'cookie',
+	'authorization',
+	'cf-access-jwt-assertion',
+	'cf-access-client-id',
+	'cf-access-client-secret',
+]);
 
 /**
  * In `proxy` exposure the kernel answers on the APP's origin, so a `Set-Cookie`

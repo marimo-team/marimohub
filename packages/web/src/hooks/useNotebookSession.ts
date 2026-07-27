@@ -88,6 +88,17 @@ export function useNotebookSession(
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
 	const startedRef = useRef(false);
+	// Bumped by every start/stop/restart. Async work started under an older
+	// generation must not write state: `useInterval` clears only the timer and an
+	// in-flight `apiFetch` has no abort hook, so a poll issued before a restart
+	// still lands afterwards — re-arming the dying session, or failing the fresh
+	// one. A counter rather than a session-id comparison so it also holds for
+	// handlers entered while `sessionRef` still points at the old session.
+	const genRef = useRef(0);
+	const nextGeneration = useCallback(() => {
+		genRef.current += 1;
+		return genRef.current;
+	}, []);
 
 	// The server withholds `sandbox_url` from a caller who may no longer reach the
 	// kernel, so a `running` session without one means access was revoked. That
@@ -101,10 +112,12 @@ export function useNotebookSession(
 	}, [mode]);
 
 	const start = useCallback(() => {
+		const gen = nextGeneration();
 		setError(null);
 		setEnded(null);
 		startSession.mutate(undefined, {
 			onSuccess: (data) => {
+				if (genRef.current !== gen) return;
 				if (data.status === 'running' && !data.sandbox_url) {
 					concludeAccessLost();
 					return;
@@ -113,25 +126,28 @@ export function useNotebookSession(
 				sessionRef.current = data;
 			},
 			onError: (err) => {
+				if (genRef.current !== gen) return;
 				setError({
 					message: err.message,
 					code: err instanceof ApiRequestError ? err.code : undefined,
 				});
 			},
 		});
-	}, [startSession, concludeAccessLost]);
+	}, [startSession, concludeAccessLost, nextGeneration]);
 
 	const stop = useCallback(() => {
 		const s = sessionRef.current;
 		if (s) {
+			nextGeneration();
 			stopSession.mutate(s.session_id);
 			sessionRef.current = null;
 			setSession(null);
 		}
-	}, [stopSession]);
+	}, [stopSession, nextGeneration]);
 
 	const restart = useCallback(() => {
 		const s = sessionRef.current;
+		const gen = nextGeneration();
 		setError(null);
 		setEnded(null);
 		if (s) {
@@ -145,10 +161,12 @@ export function useNotebookSession(
 			// that did nothing.
 			stopSession.mutate(s.session_id, {
 				onSuccess: () => {
+					if (genRef.current !== gen) return;
 					setRestarting(false);
 					start();
 				},
 				onError: (err) => {
+					if (genRef.current !== gen) return;
 					setRestarting(false);
 					// Already gone (stopped/reaped underneath us): the restart intent
 					// still holds, so start fresh.
@@ -165,7 +183,7 @@ export function useNotebookSession(
 		} else {
 			start();
 		}
-	}, [stopSession, start]);
+	}, [stopSession, start, nextGeneration]);
 
 	// Start once, on the first enabled render (guarded so strict-mode's
 	// double-invoke doesn't provision two sandboxes).
@@ -187,8 +205,10 @@ export function useNotebookSession(
 		() => {
 			if (session?.status !== 'starting') return;
 			const sid = session.session_id;
+			const gen = genRef.current;
 			apiFetch<Session>(`${sessionsPath}/${sid}`)
 				.then((next) => {
+					if (genRef.current !== gen) return;
 					if (next.status === 'running' && !next.sandbox_url) {
 						concludeAccessLost();
 					} else if (next.status === 'running') {
@@ -201,6 +221,7 @@ export function useNotebookSession(
 					}
 				})
 				.catch((err: unknown) => {
+					if (genRef.current !== gen) return;
 					// The record vanished mid-start (reaped, or the notebook deleted):
 					// a terminal answer, unlike the transient errors below.
 					if (err instanceof ApiRequestError && err.code === 'NOT_FOUND') {
@@ -220,7 +241,11 @@ export function useNotebookSession(
 	// purpose: a create here would auto-start a stopped app.
 	const adoptReplacementOr = useCallback(
 		(fallback: Session['status'] | 'gone') => {
+			// Re-taken here: this runs a second async hop, and the caller's guard
+			// says nothing about a start/stop/restart landing during THIS request.
+			const gen = genRef.current;
 			const conclude = (next: Session | undefined) => {
+				if (genRef.current !== gen) return;
 				setSession(next ?? null);
 				sessionRef.current = next ?? null;
 				if (!next) setEnded(fallback);
@@ -251,8 +276,10 @@ export function useNotebookSession(
 		() => {
 			const sid = session?.session_id;
 			if (!sid) return;
+			const gen = genRef.current;
 			apiFetch<Session>(`${sessionsPath}/${sid}`)
 				.then((next) => {
+					if (genRef.current !== gen) return;
 					if (next.status === 'running' && !next.sandbox_url) {
 						// The app runs on — this caller just lost their seat, so adopting a
 						// "replacement" would only find the same unreachable session.
@@ -266,6 +293,7 @@ export function useNotebookSession(
 					}
 				})
 				.catch((err: unknown) => {
+					if (genRef.current !== gen) return;
 					if (err instanceof ApiRequestError && err.code === 'NOT_FOUND') {
 						adoptReplacementOr('gone');
 					}

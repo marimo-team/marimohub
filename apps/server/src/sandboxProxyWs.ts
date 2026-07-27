@@ -9,7 +9,11 @@
 import http from 'node:http';
 import https from 'node:https';
 import type { Duplex } from 'node:stream';
-import { authorizeProxyRequest, UNSAFE_RESPONSE_HEADERS } from '@marimo-hub/api';
+import {
+	authorizeProxyRequest,
+	CREDENTIAL_HEADERS,
+	UNSAFE_RESPONSE_HEADERS,
+} from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
 import { logEvent } from './log';
 
@@ -58,10 +62,15 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 				const lib = target.protocol === 'https:' ? https : http;
 				// Rewrite Host + Origin to the kernel so marimo's origin/host check
 				// (which would otherwise see the app host) reads the upgrade as
-				// same-origin. Hub credentials are stripped (CREDENTIAL_HEADERS in
-				// sandboxProxy.ts — notebook code can read request headers); the rest
-				// of the WS handshake headers pass through.
-				const { cookie: _cookie, authorization: _authorization, ...forwarded } = req.headers;
+				// same-origin. Hub credentials are stripped via the shared
+				// CREDENTIAL_HEADERS denylist — one list for both transports, so the
+				// WS path can't drift behind the HTTP one; every other handshake
+				// header passes through.
+				const forwarded: http.OutgoingHttpHeaders = {};
+				for (const [key, value] of Object.entries(req.headers)) {
+					if (CREDENTIAL_HEADERS.has(key.toLowerCase())) continue;
+					forwarded[key] = value;
+				}
 				const headers = { ...forwarded, host: target.host, origin: target.origin };
 				const proxyReq = lib.request({
 					protocol: target.protocol,

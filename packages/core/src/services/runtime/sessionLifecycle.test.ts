@@ -511,6 +511,18 @@ describe('kernelActiveConnections', () => {
 		expect(await kernelActiveConnections(sandbox)).toBeNull();
 	});
 
+	it('returns null on a digit run too long to be a safe integer', async () => {
+		// `Number('9'.repeat(309))` is Infinity, and JSON.stringify writes that into
+		// the session record as null — a value SessionSchema rejects, leaving the
+		// record permanently unreadable and its sandbox invisible to every sweep.
+		const sandbox = sandboxWith(async () => ({
+			success: true,
+			stdout: `${'9'.repeat(309)}\n`,
+			stderr: '',
+		}));
+		expect(await kernelActiveConnections(sandbox)).toBeNull();
+	});
+
 	it('returns null when the exec throws (sandbox unreachable)', async () => {
 		const sandbox = sandboxWith(async () => {
 			throw new Error('unreachable');

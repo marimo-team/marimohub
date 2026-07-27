@@ -380,16 +380,18 @@ export function useNotebooksQuery(projectId: string) {
 export function useNotebookQuery(
 	projectId: string,
 	notebookId: string,
-	// Poll option for consumers that compare against the notebook HEAD (the app
-	// page's staleness banner): versions are committed server-side (snapshotter,
-	// teardown), which no client-side invalidation ever observes.
-	options: { refetchIntervalMs?: number } = {},
+	// Freshness options for consumers that compare against the notebook HEAD (the
+	// app page's staleness banner): versions are committed server-side
+	// (snapshotter, teardown), which no client-side invalidation ever observes.
+	// `refetchIntervalMs` polls for a long-lived view; `staleTime: 0` re-reads on
+	// mount instead, for a short-lived one that must not trust the shared cache.
+	options: { refetchIntervalMs?: number; staleTime?: number } = {},
 ) {
 	return useQuery({
 		queryKey: notebookKeys.detail(projectId, notebookId),
 		queryFn: () =>
 			apiFetch<NotebookDetail>(`/api/v1/projects/${projectId}/notebooks/${notebookId}`),
-		staleTime: 5 * 60 * 1000,
+		staleTime: options.staleTime ?? 5 * 60 * 1000,
 		refetchInterval: options.refetchIntervalMs,
 	});
 }
@@ -669,12 +671,13 @@ function startSessionRequest(projectId: string, notebookId: string, mode: 'edit'
 }
 
 function stopSessionRequest(projectId: string, notebookId: string, sessionId: string) {
-	// Teardown saves the notebook and destroys the sandbox, which can take tens
-	// of seconds — the client's default 20s timeout would abort a slow stop
-	// mid-restart, leaving the app stopped and never restarted.
+	// Teardown saves the notebook and destroys the sandbox synchronously, and —
+	// unlike start — has no server-side budget bounding it. An abort surfaces as a
+	// failed stop, which halts a restart half-done (app stopped, never restarted)
+	// while the server tears down anyway, so allow the same budget as create.
 	return apiFetch<void>(`${notebookSessionsPath(projectId, notebookId)}/${sessionId}`, {
 		method: 'DELETE',
-		timeout: 60_000,
+		timeout: 150_000, // 2.5 minutes
 	});
 }
 

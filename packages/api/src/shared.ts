@@ -32,6 +32,7 @@ import type {
 	ViewerMode,
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
+import { describeError, logEvent } from './log';
 
 // Re-export the injected-context types for route modules that import from './shared'.
 export type { ApiDeps, HonoEnv } from './context';
@@ -142,26 +143,47 @@ export function sessionRetirer(deps: ApiDeps): SessionRetirer {
  * would otherwise keep serving it (in subdomain exposure the hub is not even in
  * their request path). `scope` narrows to one notebook. Edit sessions are left to
  * the heartbeat reaper: retiring one commits a save to deleted content.
- * Best-effort — the lifecycle sweep is the backstop.
+ * Best-effort, but every failure is logged: the lifecycle sweep reaps by
+ * idle/expiry only — it has no deleted-content check, and an actively-viewed app
+ * keeps extending its own deadline — so a stranded app can serve deleted content
+ * indefinitely.
  */
 export async function retireLiveApps(
 	deps: ApiDeps,
 	pid: ProjectId,
 	scope?: (session: Session) => boolean,
 ): Promise<void> {
+	let apps: Session[];
 	try {
-		const apps = (await deps.services.sessions.listActiveByProject(pid)).filter(
+		apps = (await deps.services.sessions.listActiveByProject(pid)).filter(
 			(s) => s.status === 'running' && !sessionPersistsEdits(s) && (!scope || scope(s)),
 		);
-		for (const s of apps) {
+	} catch (err) {
+		logEvent({
+			level: 'error',
+			event: 'app_retire_list_failed',
+			project_id: pid,
+			error: describeError(err),
+		});
+		return;
+	}
+	// Per-app, so one failure cannot strand the apps behind it.
+	for (const s of apps) {
+		try {
 			const { session, transitioned } = await deps.services.sessions.beginTerminating(
 				pid,
 				s.session_id,
 			);
 			await sessionRetirer(deps).retire(session, { teardown: transitioned });
+		} catch (err) {
+			logEvent({
+				level: 'error',
+				event: 'app_retire_failed',
+				project_id: pid,
+				session_id: s.session_id,
+				error: describeError(err),
+			});
 		}
-	} catch {
-		// covered by the sweep
 	}
 }
 

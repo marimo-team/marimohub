@@ -3,6 +3,7 @@ export type { ApiDeps, HonoEnv, Services, SessionLifetimeConfig } from './contex
 export { createApp, assertProjectRole } from './shared';
 export {
 	authorizeProxyRequest,
+	CREDENTIAL_HEADERS,
 	forwardHttp,
 	sandboxProxyMiddleware,
 	UNSAFE_RESPONSE_HEADERS,

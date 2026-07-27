@@ -250,6 +250,34 @@ describe('releaseSingletonClaim', () => {
 		expect(await holderAt(bucket)).toBe('B');
 	});
 
+	it('reports a non-race failure instead of passing it off as a release', async () => {
+		// A bucket outage or a corrupt claim body is NOT the re-acquire race the
+		// swallow is for; the claim is still held afterwards, so it must be visible.
+		const bucket = new MemoryBucket();
+		await bucket.put(KEY, serialize('A'));
+		const boom = new Error('bucket down');
+		vi.spyOn(bucket, 'get').mockRejectedValue(boom);
+		const onReleaseError = vi.fn();
+
+		await releaseSingletonClaim({ ...claimCfg(bucket), onReleaseError }, 'A');
+		vi.restoreAllMocks();
+
+		expect(onReleaseError).toHaveBeenCalledWith(boom);
+		expect(await holderAt(bucket)).toBe('A'); // unchanged: the release never happened
+	});
+
+	it('stays silent on a losing CAS (the expected re-acquire race)', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put(KEY, serialize('A'));
+		vi.spyOn(bucket, 'put').mockRejectedValue(new PreconditionFailedError('race'));
+		const onReleaseError = vi.fn();
+
+		await releaseSingletonClaim({ ...claimCfg(bucket), onReleaseError }, 'A');
+		vi.restoreAllMocks();
+
+		expect(onReleaseError).not.toHaveBeenCalled();
+	});
+
 	it('a released claim is free for the next acquirer even though the object remains', async () => {
 		const bucket = new MemoryBucket();
 		await bucket.put(KEY, serialize('A'));

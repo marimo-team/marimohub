@@ -61,8 +61,13 @@ function AppSessionDetails({
 }) {
 	const now = useNow();
 	const { data: users } = useUsersQuery([session.user_id]);
-	// Lazy (popover-open only) head-version fetch for the stale hint.
-	const { data: notebook } = useNotebookQuery(session.project_id, session.notebook_id);
+	// Lazy (popover-open only) head-version fetch for the stale hint. `staleTime:
+	// 0` because this mounts only while the popover is open: the shared cache may
+	// hold a head from before an edit session committed a new version, and nothing
+	// invalidates it — a cached read would hide the stale hint entirely.
+	const { data: notebook } = useNotebookQuery(session.project_id, session.notebook_id, {
+		staleTime: 0,
+	});
 	// Suppressed while the notebook is being edited — the head is still moving.
 	const stale = !editActive && isAppStale(session, notebook?.source.current_version_id);
 	const connections = session.active_connections;

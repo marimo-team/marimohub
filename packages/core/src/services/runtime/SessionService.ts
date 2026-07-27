@@ -309,7 +309,9 @@ export class SessionService {
 	 *
 	 * Reuse is keyed per the mode's `reuseScope`: `per-user` (edit) matches only
 	 * the caller's own session; `per-notebook` (the shared app) is user-blind —
-	 * ANY editor's request attaches. That user-blind reuse IS the singleton.
+	 * ANY editor's request attaches. That user-blind reuse IS the singleton, so
+	 * for a singleton mode the CLAIM, not the heartbeat order, decides which
+	 * candidate is handed out.
 	 */
 	async findReusable(
 		projectId: ProjectId,
@@ -318,21 +320,46 @@ export class SessionService {
 		mode: SessionMode = 'edit',
 	): Promise<Session | undefined> {
 		const now = Date.now();
-		const userBlind = MODE_POLICY[mode].reuseScope === 'per-notebook';
+		const policy = MODE_POLICY[mode];
+		const userBlind = policy.reuseScope === 'per-notebook';
 		// Scoped to the project prefix; filter to the notebook in memory.
 		const sessions = await this.scanProject(projectId, (session) => session);
-		return sessions
-			.filter(
-				(s) =>
-					s.notebook_id === notebookId &&
-					sessionMode(s) === mode &&
-					(userBlind || s.user_id === userId) &&
-					((s.status === 'running' && !!s.sandbox_url) ||
-						(s.status === 'starting' && now - new Date(s.started_at).getTime() < HEARTBEAT_TTL_MS)),
-			)
-			.sort(
-				(a, b) => new Date(b.last_heartbeat).getTime() - new Date(a.last_heartbeat).getTime(),
-			)[0];
+		const candidates = sessions.filter(
+			(s) =>
+				s.notebook_id === notebookId &&
+				sessionMode(s) === mode &&
+				(userBlind || s.user_id === userId) &&
+				((s.status === 'running' && !!s.sandbox_url) ||
+					(s.status === 'starting' && now - new Date(s.started_at).getTime() < HEARTBEAT_TTL_MS)),
+		);
+		if (policy.singleton) return this.claimHolderAmong(projectId, notebookId, candidates);
+		return candidates.sort(
+			(a, b) => new Date(b.last_heartbeat).getTime() - new Date(a.last_heartbeat).getTime(),
+		)[0];
+	}
+
+	/**
+	 * The candidate that currently HOLDS the app claim. Heartbeat order is not
+	 * authority here: two racers can both be `starting`, and the one that lost
+	 * `claimApp` tears its own record down — handing it out as the shared app
+	 * strands the attaching caller on a session that will never run. An absent,
+	 * free, corrupt, or dangling claim means no live holder, so the caller
+	 * correctly starts fresh and steals the stale claim via `acquireSingletonClaim`.
+	 */
+	private async claimHolderAmong(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		candidates: Session[],
+	): Promise<Session | undefined> {
+		const obj = await this.bucket.get(paths.appClaim(projectId, notebookId));
+		if (!obj) return undefined;
+		let holder: SessionId | null;
+		try {
+			holder = AppClaimSchema.parse(await obj.json()).session_id;
+		} catch {
+			return undefined;
+		}
+		return holder ? candidates.find((s) => s.session_id === holder) : undefined;
 	}
 
 	/**
@@ -419,6 +446,10 @@ export class SessionService {
 				JSON.stringify({ session_id: holder, claimed_at: new Date().toISOString() }),
 			parseHolder: (raw) => AppClaimSchema.parse(raw).session_id,
 			isHolderLive: (holder) => this.holdsLiveApp(projectId, notebookId, holder as SessionId),
+			onReleaseError: (err) => {
+				this.metrics.increment('sessions.app_claim.release_error');
+				console.warn(`releaseApp: app claim for notebook ${notebookId}: ${String(err)}`);
+			},
 			retry: {
 				onConflict: () => this.metrics.increment('sessions.app_claim.conflict'),
 				onExhausted: () => this.metrics.increment('sessions.app_claim.exhausted'),

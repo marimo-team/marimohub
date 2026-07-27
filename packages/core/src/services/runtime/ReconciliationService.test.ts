@@ -3,10 +3,12 @@ import { createNotebookId, createProjectId, createSandboxId, createVersionId } f
 import type { SandboxId } from '../../ids';
 import { paths } from '../../paths';
 import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type { Session } from '../../schema';
 import {
 	ACTOR,
 	appClaimHolder,
 	makeLocalSource,
+	makeSession,
 	MemoryBucket,
 	RecordingCompute,
 } from '../../testing';
@@ -59,6 +61,18 @@ describe('ReconciliationService', () => {
 			sandbox_id: sandboxId,
 		});
 
+	const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+
+	/** Write a session record directly, for statuses the service has no setter for. */
+	async function putSession(overrides: Partial<Session>): Promise<Session> {
+		const session = makeSession({ project_id: projectId, notebook_id: notebookId, ...overrides });
+		await bucket.put(
+			paths.session(session.project_id, session.session_id),
+			JSON.stringify(session),
+		);
+		return session;
+	}
+
 	it('skips cleanly when the provider cannot enumerate', async () => {
 		const noList: SandboxProvider = {
 			create: () => ({}) as unknown as SandboxInstance,
@@ -86,7 +100,11 @@ describe('ReconciliationService', () => {
 		const result = await reconciler.reconcile();
 
 		expect(result.reclaimed).toBe(1);
-		expect(compute.destroyed).toEqual([terminalId]);
+		// A saving reclaim destroys twice — teardown's destroy, then the confirming
+		// one that gates `sandbox_reclaimed_at` (idempotent per the compute contract).
+		expect(compute.destroyed).toContain(terminalId);
+		const stored = await sessions.getSession(projectId, session.session_id);
+		expect(stored.sandbox_reclaimed_at).toBeDefined();
 	});
 
 	it('Rule 1: commits the session (with the right actor) before destroying', async () => {
@@ -105,7 +123,60 @@ describe('ReconciliationService', () => {
 			expect.anything(),
 			ACTOR,
 		);
+		expect(compute.destroyed).toContain(terminalId);
+	});
+
+	it('Rule 1: destroys WITHOUT committing when a live session owns the notebook', async () => {
+		// The expired sandbox's content is stale by definition: committing it would
+		// clobber the head version the live session is writing, mirror-delete the
+		// workspace keys it created, and rewind the FS-snapshot pointer.
+		await putSession({ status: 'expired', sandbox_id: terminalId, started_at: iso(-60 * 60_000) });
+		const live = await createSession(healthyId);
+		await sessions.heartbeat(projectId, live.session_id); // -> running
+		compute.active = [{ id: terminalId }, { id: healthyId }];
+
+		const result = await reconciler.reconcile();
+
+		expect(result.reclaimed).toBe(1);
 		expect(compute.destroyed).toEqual([terminalId]);
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+	});
+
+	it('Rule 1: leaves a freshly expired record alone until past the provision grace', async () => {
+		// `expireStale()` runs immediately before reconcile, so a provision slower
+		// than the heartbeat TTL lands here `expired` while still restoring files.
+		const session = await putSession({
+			status: 'expired',
+			sandbox_id: terminalId,
+			started_at: iso(-60_000),
+		});
+		compute.active = [{ id: terminalId }];
+
+		const result = await reconciler.reconcile();
+
+		expect(result.reclaimed).toBe(0);
+		expect(compute.destroyed).toEqual([]);
+		const stored = await sessions.getSession(projectId, session.session_id);
+		expect(stored.sandbox_reclaimed_at).toBeUndefined();
+	});
+
+	it('Rule 1: counts reclaimed only once the destroy is confirmed', async () => {
+		const session = await createSession(terminalId);
+		await sessions.terminate(projectId, session.session_id);
+		compute.active = [{ id: terminalId }];
+		vi.spyOn(compute, 'create').mockReturnValue({
+			async destroy() {
+				throw new Error('destroy boom');
+			},
+		} as unknown as SandboxInstance);
+
+		const result = await reconciler.reconcile();
+
+		// The sandbox is still alive, so the metric must not claim a recovered leak
+		// and the one-shot marker must stay unset for the next pass to retry.
+		expect(result.reclaimed).toBe(0);
+		const stored = await sessions.getSession(projectId, session.session_id);
+		expect(stored.sandbox_reclaimed_at).toBeUndefined();
 	});
 
 	it('Rule 2: marks a record failed when its sandbox has vanished', async () => {
@@ -222,7 +293,7 @@ describe('ReconciliationService', () => {
 		const result = await reconciler.reconcile();
 
 		expect(result.reclaimed).toBe(1);
-		expect(compute.destroyed).toEqual([terminalId]);
+		expect(compute.destroyed).toContain(terminalId);
 	});
 
 	it('Rule 1: reclaims a lingering sandbox behind a terminating record', async () => {
@@ -236,7 +307,7 @@ describe('ReconciliationService', () => {
 		const result = await reconciler.reconcile();
 
 		expect(result.reclaimed).toBe(1);
-		expect(compute.destroyed).toEqual([goneId]);
+		expect(compute.destroyed).toContain(goneId);
 	});
 
 	it('Rule 2 does not misfire on a terminating record whose sandbox vanished', async () => {

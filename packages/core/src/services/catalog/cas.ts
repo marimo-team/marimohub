@@ -69,6 +69,13 @@ export interface SingletonClaimConfig {
 	 * between claim and release) harmless.
 	 */
 	isHolderLive: (holder: string) => Promise<boolean>;
+	/**
+	 * Observe a release that failed for a reason OTHER than losing the CAS race
+	 * (bucket outage, corrupt claim body). The release still swallows it — every
+	 * caller is unguarded and a leaked claim self-heals on the next acquire — so
+	 * this hook is the only signal that it happened.
+	 */
+	onReleaseError?: (err: unknown) => void;
 	retry?: CasRetryOptions;
 }
 
@@ -113,7 +120,10 @@ export async function acquireSingletonClaim(
  * cost is a pointer outliving the app; deleting the notebook or project reaps it.
  */
 export async function releaseSingletonClaim(
-	cfg: Pick<SingletonClaimConfig, 'bucket' | 'key' | 'serialize' | 'parseHolder'>,
+	cfg: Pick<
+		SingletonClaimConfig,
+		'bucket' | 'key' | 'serialize' | 'parseHolder' | 'onReleaseError'
+	>,
 	holder: string,
 ): Promise<void> {
 	try {
@@ -121,9 +131,14 @@ export async function releaseSingletonClaim(
 		if (!existing) return;
 		if (cfg.parseHolder(await existing.json()) !== holder) return;
 		await cfg.bucket.put(cfg.key, cfg.serialize(null), { onlyIfEtagMatches: existing.etag });
-	} catch {
+	} catch (err) {
 		// A losing CAS means someone re-acquired underneath us — exactly the claim
-		// this release must not touch.
+		// this release must not touch. Anything else (bucket read failure, corrupt
+		// body) is a real failure, still swallowed so an unguarded caller's stop or
+		// reconciliation pass survives it, but never silently.
+		if (err instanceof PreconditionFailedError) return;
+		if (cfg.onReleaseError) cfg.onReleaseError(err);
+		else console.warn(`releaseSingletonClaim: ${cfg.key}: ${String(err)}`);
 	}
 }
 

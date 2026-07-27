@@ -18,9 +18,10 @@ const SESSION_SWEEP_CONCURRENCY = 8;
  * A slow provision (cold image, large workspace copy) can outlive the 5-minute
  * heartbeat TTL and be flipped to `expired` while still restoring files; tearing
  * it down mid-restore would mirror-delete not-yet-restored workspace keys from
- * the bucket. Mirrors the reconciler's orphan grace window.
+ * the bucket. Shared with `ReconciliationService`, the other reclaimer, so both
+ * hold off for the same window; sized like the reconciler's orphan grace.
  */
-const RECLAIM_PROVISION_GRACE_MS = Millis.minutes(15);
+export const RECLAIM_PROVISION_GRACE_MS = Millis.minutes(15);
 
 /**
  * Ask the marimo kernel how many websocket connections (editors) it has, via an
@@ -47,9 +48,13 @@ export async function kernelActiveConnections(
 		);
 		if (!res.success) return null;
 		// Whole output or nothing — `parseInt` would read 2 out of "2garbage", and a
-		// half-parsed answer must count as unknown rather than steer reaping.
+		// half-parsed answer must count as unknown rather than steer reaping. The
+		// safe-integer check rejects an absurdly long digit run, which would become
+		// `Infinity` and serialize into the session record as a schema-invalid
+		// `null`, making the record unreadable and its sandbox invisible to sweeps.
 		const out = res.stdout.trim();
-		return /^\d+$/.test(out) ? Number(out) : null;
+		const n = Number(out);
+		return /^\d+$/.test(out) && Number.isSafeInteger(n) ? n : null;
 	} catch {
 		return null;
 	}
