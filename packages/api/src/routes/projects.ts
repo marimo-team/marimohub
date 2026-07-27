@@ -1,5 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { effectiveRole, NotFoundError, ROLES, toPublicProject, UserId } from '@marimo-hub/core';
+import { effectiveRole, ROLES, toPublicProject, UserId } from '@marimo-hub/core';
 import type { AuthSubject, Project, ProjectMember, Role } from '@marimo-hub/core';
 import {
 	assertProjectRole,
@@ -17,6 +17,7 @@ import {
 	ProjectIdParam,
 	ProjectMemberResponseSchema,
 	ProjectResponseSchema,
+	retireLiveApps,
 	SnapshotProjectEntrySchema,
 	SuccessResponseSchema,
 } from '../shared';
@@ -291,18 +292,14 @@ app.openapi(getProject, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	// 404s a project the caller can't see (MARIMOHUB_DEFAULT_ROLE=none, non-member).
+	// 404s a project the caller can't see (MARIMOHUB_DEFAULT_ROLE=none, non-member)
+	// or one that is soft-deleted.
 	const project = await loadVisibleProject(
 		deps.services.projects,
 		pid,
 		user,
 		deps.policy.defaultRole,
 	);
-	// A soft-deleted project reads as gone to clients (the bytes linger only until
-	// the GC sweep). `getProject` itself stays raw so the sweep can still read it.
-	if (project.status === 'deleted') {
-		throw new NotFoundError(`Project ${pid} not found`);
-	}
 	c.header('ETag', etagFor(project.updated_at));
 	return c.json(
 		{ success: true, data: projectResponse(project, user, deps.policy.defaultRole) },
@@ -332,6 +329,7 @@ app.openapi(deleteProject, async (c) => {
 	const { pid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'admin', deps.policy.defaultRole);
 	await projects.deleteProject(pid, user.id, ifMatchToken(c));
+	await retireLiveApps(deps, pid);
 	return c.json({ success: true }, 200);
 });
 

@@ -1546,6 +1546,28 @@ describe('NotebookService', () => {
 			expect(await listAllKeys(bucket, siblingPrefix)).toEqual(siblingKeysBefore);
 			expect(await notebooks.getNotebookContent(projectId, sibling.id)).toBe('s1');
 		});
+
+		it('removes the app claim when the soft-delete cleanup did not', async () => {
+			const doomed = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Doomed', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			await notebooks.deleteNotebook(projectId, doomed.id, ACTOR);
+			// The claim lives outside the notebook subtree, so one the soft-delete's
+			// best-effort cleanup missed would outlive the notebook forever.
+			await bucket.put(
+				paths.appClaim(projectId, doomed.id),
+				JSON.stringify({
+					session_id: 'sess-0000000000000001',
+					claimed_at: new Date().toISOString(),
+				}),
+			);
+
+			await notebooks.hardDeleteNotebook(projectId, doomed.id);
+
+			expect(await bucket.get(paths.appClaim(projectId, doomed.id))).toBeNull();
+		});
 	});
 
 	describe('sweepDeletedNotebooks', () => {

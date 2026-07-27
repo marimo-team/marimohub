@@ -1,5 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { MAX_REQUEST_BYTES, MAX_VERSIONS } from '@marimo-hub/core';
+import { MAX_REQUEST_BYTES, MAX_VERSIONS, viewerSessionModes } from '@marimo-hub/core';
 import {
 	CapabilitiesResponseSchema,
 	createApp,
@@ -87,9 +87,11 @@ app.openapi(capabilitiesRoute, (c) => {
 		// createApi defaults this; the fallback satisfies the optional type for
 		// direct callers (mirrors the sandbox.exposure pattern).
 		viewer_mode: deps.policy.viewerMode ?? 'static',
+		viewer_session_modes: [...viewerSessionModes(deps.policy.viewerMode)],
 		default_role: deps.policy.defaultRole ?? null,
 		limits: {
 			max_concurrent_sessions_per_user: deps.policy.maxConcurrentSessionsPerUser ?? null,
+			max_apps_per_project: deps.policy.maxAppsPerProject ?? null,
 			max_request_bytes: MAX_REQUEST_BYTES,
 			max_versions_per_notebook: MAX_VERSIONS,
 			default_page_size: DEFAULT_PAGE_SIZE,

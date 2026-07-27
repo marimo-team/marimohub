@@ -1,8 +1,18 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import type { SessionEnv, Session } from '@marimo-hub/core';
+import type {
+	AuthUser,
+	Project,
+	ProjectId,
+	SessionEnv,
+	Session,
+	SessionId,
+	SessionMode,
+	UserId,
+} from '@marimo-hub/core';
 import {
 	aiConfigToSessionEnv,
 	BadRequestError,
+	ConflictError,
 	createSandboxId,
 	DomainError,
 	effectiveRole,
@@ -15,24 +25,34 @@ import {
 	resolveRestoreSnapshot,
 	ResourceExhaustedError,
 	saga,
+	MODE_POLICY,
 	SandboxProvisioner,
+	SESSION_MODES,
+	sessionMode,
+	sessionModePolicy,
 	SubdomainExposure,
+	canStartSessionMode,
 	UnavailableError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
+import { errorMetadata } from '../log';
+import type { ApiDeps, PolicyConfig } from '../context';
 import {
-	assertProjectVisible,
+	assertSessionAccess,
 	assertSessionControl,
 	commonErrors,
 	createApp,
 	errorResponses,
 	IdempotencyKeyHeader,
 	jsonContent,
+	loadVisibleProject,
 	NotebookIdParam,
 	ProjectIdParam,
 	SessionIdParam,
+	sessionGrantsFor,
 	SessionResponseSchema,
+	sessionRetirer,
 	SuccessResponseSchema,
 } from '../shared';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
@@ -74,9 +94,24 @@ const listSessions = createRoute({
 			'Active sessions for the project, newest first',
 		),
 		...commonErrors(),
-		...errorResponses(400),
+		// 404: unknown project, or one hidden from the caller (members-only).
+		...errorResponses(400, 404),
 	},
 });
+
+// Optional body: absent (or `{}`) = `edit`, so pre-`mode` clients are untouched.
+const SessionCreateBodySchema = z
+	.object({
+		/**
+		 * `edit` (default): the caller's personal editor session. `app`: the
+		 * notebook served as a read-only app — a per-notebook singleton shared by
+		 * everyone (any admitted request attaches to the running app). Viewers are
+		 * admitted per MARIMOHUB_VIEWER_MODE: `app` under `applications` or
+		 * `ephemeral-sandbox`, `edit` under `ephemeral-sandbox` only.
+		 */
+		mode: z.enum(SESSION_MODES).optional(),
+	})
+	.openapi('SessionCreateBody');
 
 const createSession = createRoute({
 	method: 'post',
@@ -84,19 +119,29 @@ const createSession = createRoute({
 	tags: ['Sessions'],
 	summary: 'Create a session and provision a sandbox',
 	// `Idempotency-Key` is accepted and documented, but this route is already
-	// idempotent on (user, notebook) via the reuse path in the handler, so the key
-	// needs no separate store: a retry hits the same reused session.
+	// idempotent via the reuse path in the handler — per (user, notebook) for
+	// `edit`, per notebook for `app` (the shared singleton) — so the key needs
+	// no separate store: a retry hits the same reused session.
 	description:
 		'Create-or-reuse: returns the caller’s existing starting/running session for ' +
-		'this notebook when one exists, otherwise provisions a new sandbox.',
-	request: { params: NotebookIdParam, headers: IdempotencyKeyHeader },
+		'this notebook when one exists (for `mode: "app"`, ANY user’s running app ' +
+		'session), otherwise provisions a new sandbox.',
+	request: {
+		params: NotebookIdParam,
+		headers: IdempotencyKeyHeader,
+		body: {
+			content: { 'application/json': { schema: SessionCreateBodySchema } },
+			required: false,
+			description: 'Optional; omit for an edit session.',
+		},
+	},
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: SessionCreateResponseSchema }),
 			'Session created or reused',
 		),
 		...commonErrors(),
-		...errorResponses(400, 403, 404, 429),
+		...errorResponses(400, 403, 404, 409, 429),
 	},
 });
 
@@ -148,36 +193,164 @@ const heartbeatSession = createRoute({
 // --- App ---
 
 /**
- * Project a stored Session onto the public Session response envelope. Exposes
- * `user_id` (who started it) for the collaborative "started by" UI — visible only
- * to users who can already list the project's sessions. Internal infra fields
- * (`sandbox_id`, `used_fallback`) stay private.
+ * Project a stored Session onto the public Session response envelope, carrying
+ * the caller's evaluated grants (`sessionGrantsFor`). `sandbox_url` rides on
+ * `can.attach`: in `subdomain` exposure the URL is the kernel capability
+ * itself (kernels run `--no-token`), so listing it to a caller the kernel
+ * gates would reject hands them the kernel. Exposes `user_id` (who started it)
+ * for the collaborative "started by" UI — visible only to users who can
+ * already list the project's sessions. Internal infra fields (`sandbox_id`,
+ * `used_fallback`) stay private.
  */
-function toSessionResponse(s: Session) {
+function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean }) {
 	return {
 		session_id: s.session_id,
 		notebook_id: s.notebook_id,
 		project_id: s.project_id,
 		user_id: s.user_id,
 		status: s.status,
-		sandbox_url: s.sandbox_url,
+		sandbox_url: can.attach ? s.sandbox_url : undefined,
+		can,
 		started_at: s.started_at,
 		last_heartbeat: s.last_heartbeat,
 		ephemeral: s.ephemeral,
-		error: s.error,
+		// Defaulted in the projection so clients never see `undefined` (stored
+		// records predating the field omit it).
+		mode: sessionMode(s),
+		source_version_id: s.source_version_id,
+		active_connections: s.active_connections,
+		connections_checked_at: s.connections_checked_at,
+		// A provision failure's message can name the sandbox host — the very thing
+		// withholding `sandbox_url` protects — so it rides the same grant.
+		error: can.attach ? s.error : undefined,
 	};
 }
 
 /**
  * Sanitize a provisioning error into the `{ code, message }` persisted on a failed
- * session. A DomainError contributes its own code/message; anything else becomes a
- * generic `PROVISION_FAILED` with only the error name + message — never raw upstream
- * detail or secret material (WIF/AI failures are already scrubbed and non-fatal).
+ * session. A DomainError contributes its own code/message — ours, and scrubbed at
+ * the throw site. Anything else is arbitrary upstream text (an SDK error, a
+ * secret manager's response) that can carry credential material, so only its
+ * class name survives; the full error still reaches the server-side log.
  */
 function toSessionError(err: unknown): { code: string; message: string } {
 	if (err instanceof DomainError) return { code: err.code, message: err.message };
 	const e = err instanceof Error ? err : new Error(String(err));
-	return { code: 'PROVISION_FAILED', message: `${e.name}: ${e.message}` };
+	return { code: 'PROVISION_FAILED', message: `Failed to provision the sandbox (${e.name})` };
+}
+
+/**
+ * Internal sentinel: another concurrent "Run as app" won the app claim. Carries
+ * the winner's session id so the losing create can attach to it (returned as
+ * `reused: true`) instead of surfacing an error.
+ */
+class AppClaimLostError extends Error {
+	constructor(readonly holder: SessionId) {
+		super('app claim lost');
+	}
+}
+
+/**
+ * The start gate — `canStartSessionMode` as a thrower, plus the session
+ * classification: a viewer's admitted session is what
+ * `MODE_POLICY[mode].viewerSession` says — their own ephemeral throwaway for
+ * `edit`, the shared singleton for `app` (identical to an editor-started one,
+ * WIF/secrets included).
+ */
+function authorizeSessionStart(
+	project: Project,
+	user: AuthUser,
+	mode: SessionMode,
+	policy: PolicyConfig,
+): { ephemeral: boolean } {
+	const role = effectiveRole(project, user, policy.defaultRole);
+	if (!canStartSessionMode({ role, viewerMode: policy.viewerMode }, mode)) {
+		// Throws the canonical editor-gate 403 (canStart admits every editor+).
+		requireRole(project, user, 'editor', policy.defaultRole);
+	}
+	return { ephemeral: role === 'viewer' && MODE_POLICY[mode].viewerSession === 'ephemeral' };
+}
+
+const CAP_REACHED = {
+	appsPerProject: (max: number) =>
+		`Concurrent app limit reached for this project (${max}). Stop an app before starting another.`,
+	appsPerUser: (max: number) =>
+		`Concurrent app limit reached (${max} apps started by you). Stop an app before starting another.`,
+	sessionsPerUser: (max: number) =>
+		`Concurrent session limit reached (${max}). Terminate a session before starting another.`,
+};
+
+/**
+ * The caps that apply to `mode`, each with the queue it bounds. Edit sessions
+ * consume the per-user cap. Apps are capped per project AND per starter: without
+ * the latter, a user could escape the cost bound entirely by fanning apps out
+ * across (freely creatable) projects. Shared apps are few per person, so the
+ * starter bound rarely binds on legitimate use.
+ */
+function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserId) {
+	const { sessions } = deps.services;
+	const maxSessions = deps.policy.maxConcurrentSessionsPerUser;
+	if (MODE_POLICY[mode].capScope === 'project') {
+		return [
+			{
+				max: deps.policy.maxAppsPerProject,
+				message: CAP_REACHED.appsPerProject,
+				queue: () => sessions.listActiveAppsForProject(pid),
+			},
+			{
+				max: maxSessions,
+				message: CAP_REACHED.appsPerUser,
+				queue: () => sessions.listActiveForUser(userId, 'project'),
+			},
+		];
+	}
+	return [
+		{
+			max: maxSessions,
+			message: CAP_REACHED.sessionsPerUser,
+			queue: () => sessions.listActiveForUser(userId),
+		},
+	];
+}
+
+/**
+ * Cost-DoS guards, checked after reuse so a reconnect/attach never trips them.
+ * Cheap pre-flight: rejects before any record or sandbox exists. Not sufficient
+ * on its own — see `assertCapAfterCreate`.
+ */
+async function enforceSessionCap(
+	deps: ApiDeps,
+	mode: SessionMode,
+	pid: ProjectId,
+	userId: UserId,
+): Promise<void> {
+	for (const cap of capsFor(deps, mode, pid, userId)) {
+		if (cap.max && cap.max > 0 && (await cap.queue()).length >= cap.max) {
+			throw new ResourceExhaustedError(cap.message(cap.max));
+		}
+	}
+}
+
+/**
+ * Close the count-then-create window: N concurrent creates all clear the
+ * pre-flight check, because none of their records exists yet. Once the record IS
+ * written every racer reads the same set, so ranking by start order admits
+ * exactly `max` of them — the rest abort and compensate. Ranking (not counting)
+ * is what avoids the other failure mode, where each racer rejects every other.
+ */
+async function assertCapAfterCreate(
+	deps: ApiDeps,
+	mode: SessionMode,
+	pid: ProjectId,
+	userId: UserId,
+	sessionId: SessionId,
+): Promise<void> {
+	for (const cap of capsFor(deps, mode, pid, userId)) {
+		if (!cap.max || cap.max <= 0) continue;
+		const rank = (await cap.queue()).findIndex((s) => s.session_id === sessionId);
+		// rank < 0: our record went terminal underneath us — nothing left to cap.
+		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message(cap.max));
+	}
 }
 
 const app = createApp();
@@ -189,12 +362,18 @@ app.openapi(listSessions, async (c) => {
 	const { pid } = c.req.valid('param');
 	// Read-only project-scoped data, gated at `viewer` like the notebook-list route:
 	// open when a default role is set, members-only under MARIMOHUB_DEFAULT_ROLE=none.
-	await assertProjectVisible(projects, pid, user, deps.policy.defaultRole);
+	// The project is loaded (not just visibility-checked) to gate each item's
+	// kernel URL and `can` grants by the caller's role (see sessionGrantsFor).
+	const project = await loadVisibleProject(projects, pid, user, deps.policy.defaultRole);
 	const active = await sessions.listActiveByProject(pid);
-	const data = paginate(active.map(toSessionResponse), c.req.valid('query'), {
-		key: (s) => s.started_at,
-		tiebreak: (s) => s.session_id,
-	});
+	const data = paginate(
+		active.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy))),
+		c.req.valid('query'),
+		{
+			key: (s) => s.started_at,
+			tiebreak: (s) => s.session_id,
+		},
+	);
 	return c.json({ success: true, data }, 200);
 });
 
@@ -206,12 +385,18 @@ app.openapi(getSession, async (c) => {
 	// Read-only, project-scoped (matches listSessions). The project-scoped key 404s
 	// a cross-project id; the notebook check keeps a same-project/other-notebook id
 	// out of scope.
-	await assertProjectVisible(projects, pid, user, deps.policy.defaultRole);
+	const project = await loadVisibleProject(projects, pid, user, deps.policy.defaultRole);
 	const session = await sessions.getSession(pid, sid);
 	if (session.notebook_id !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
-	return c.json({ success: true, data: toSessionResponse(session) }, 200);
+	return c.json(
+		{
+			success: true,
+			data: toSessionResponse(session, sessionGrantsFor(project, user, session, deps.policy)),
+		},
+		200,
+	);
 });
 
 app.openapi(createSession, async (c) => {
@@ -219,23 +404,29 @@ app.openapi(createSession, async (c) => {
 	const { sessions, projects, notebooks } = deps.services;
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
+	const mode: SessionMode = c.req.valid('json')?.mode ?? 'edit';
 
-	// Starting a session runs code — editor+ gets a normal (persisting) session.
-	// An effective viewer is admitted only under MARIMOHUB_VIEWER_MODE=
-	// ephemeral-sandbox, with a session whose edits are never written back; in
-	// `static` mode viewers never reach a kernel. The loaded project is reused
-	// below (federation opt-in) instead of re-fetched.
+	// Starting a session runs code — see authorizeSessionStart for the matrix.
+	// The loaded project is reused below (federation opt-in), not re-fetched.
+	// A soft-deleted project reads as gone here as it does on every read route: its
+	// bytes linger until GC, but no new kernel may serve them.
 	const project = await projects.getProject(pid);
-	const role = effectiveRole(project, user, deps.policy.defaultRole);
-	const ephemeral = role !== 'editor' && role !== 'admin';
-	if (ephemeral && !(role === 'viewer' && deps.policy.viewerMode === 'ephemeral-sandbox')) {
-		// Throws the canonical editor-gate 403 (role is below editor here).
-		requireRole(project, user, 'editor', deps.policy.defaultRole);
+	if (project.status === 'deleted') {
+		throw new NotFoundError(`Project ${pid} not found`);
 	}
+	const { ephemeral } = authorizeSessionStart(project, user, mode, deps.policy);
+	const grants = (s: Session) => sessionGrantsFor(project, user, s, deps.policy);
 
 	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
 	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook id.
+	// A soft-deleted notebook is treated as missing: getNotebook still serves it
+	// (the delete/GC paths need that), but starting a session on it would serve
+	// deleted content — and, for `app`, recreate the singleton claim that
+	// deleteNotebook just cleaned up, permanently (its cleanup never runs again).
 	const notebook = await notebooks.getNotebook(pid, nid);
+	if (notebook.meta.status === 'deleted') {
+		throw new NotFoundError(`Notebook ${nid} not found`);
+	}
 	const workspacePolicy = workspaceSourcePolicy(notebook.source);
 	// Synced sources are read-only mirrors served from the immutable workspace of the
 	// version the source currently points at; a session can't start before a push.
@@ -248,6 +439,12 @@ app.openapi(createSession, async (c) => {
 	const workspacePrefix = syncedVersionId
 		? paths.project(pid).notebook(nid).version(syncedVersionId).workspacePrefix
 		: undefined;
+	// Staleness provenance: a non-persisting mode serves a frozen snapshot, so
+	// stamp the head committed version it was provisioned from — what the client
+	// compares for the "app is stale" banner.
+	const sourceVersionId = MODE_POLICY[mode].persistsEdits
+		? undefined
+		: (notebook.source.current_version_id ?? undefined);
 
 	const { compute, bucket: bucketHandle, sandbox } = deps;
 	// The notebook's stored choice, resolved leniently: "default"/absent → first
@@ -264,24 +461,33 @@ app.openapi(createSession, async (c) => {
 	// what stops a refresh loop from piling up `starting` records and tripping the
 	// cap. Checked before the cap (so a reuse is never rejected) and short-circuits
 	// before any compute call. A `starting` reuse has no URL yet; the client polls
-	// `GET …/sessions/{sid}` until it is `running`.
-	const reusable = await sessions.findReusable(pid, nid, user.id);
+	// `GET …/sessions/{sid}` until it is `running`. For `app` the lookup is
+	// user-blind — any editor attaches to the notebook's shared app.
+	const reusable = await sessions.findReusable(pid, nid, user.id, mode);
 	if (reusable) {
 		// A role change flips the session class the caller is entitled to (a demoted
 		// editor must not keep a persisting, WIF-holding kernel; a promoted viewer's
 		// edits must stop being discarded). A stale-class session is retired below
 		// like a dead kernel instead of reused.
 		const classMismatch = !!reusable.ephemeral !== ephemeral;
+		// findReusable is user-blind for the shared app, so this may be someone
+		// else's running app. Only a caller who could stop it outright may
+		// retire-and-replace it — otherwise a viewer's create (or a probe
+		// false-negative under load) tears the app down under everyone.
+		const mayRetire = !MODE_POLICY[mode].singleton || grants(reusable).stop;
 		// Only a `running` reconnect can hit a dead kernel; a `starting` reuse has no
 		// kernel yet. Probe what the browser would hit (origin in proxy mode, else url).
 		const kernelUrl =
-			reusable.status === 'running' && reusable.sandbox_id
+			mayRetire && reusable.status === 'running' && reusable.sandbox_id
 				? (reusable.sandbox_origin_url ?? reusable.sandbox_url)
 				: undefined;
 		const dead =
 			!!kernelUrl && !!deps.kernelProbe && (await deps.kernelProbe(kernelUrl)) === 'dead';
-		if (!dead && !classMismatch) {
-			return c.json({ success: true, data: { ...toSessionResponse(reusable), reused: true } }, 200);
+		if (!mayRetire || (!dead && !classMismatch)) {
+			return c.json(
+				{ success: true, data: { ...toSessionResponse(reusable, grants(reusable)), reused: true } },
+				200,
+			);
 		}
 
 		// Sandbox alive but marimo exited (e.g. shut down from the notebook UI), so a
@@ -290,37 +496,12 @@ app.openapi(createSession, async (c) => {
 		// sandbox restores — then fall through to provision a new one. Best-effort, so a
 		// concurrent refresh that also saw `dead` does no harm.
 		const claimed = await sessions.beginTerminating(reusable.project_id, reusable.session_id);
-		if (claimed.status === 'terminating' && reusable.sandbox_id) {
-			try {
-				await provisioner.teardown(
-					compute.create(reusable.sandbox_id),
-					notebooks,
-					bucketHandle,
-					pid,
-					nid,
-					reusable.user_id,
-					sandbox.persistWorkspace,
-					sandbox.workdir,
-					{ persistEdits: !reusable.ephemeral },
-				);
-			} catch {
-				// Sandbox may already be gone; still mark it terminated.
-			}
-		}
-		await sessions.markTerminated(reusable.project_id, reusable.session_id);
+		// Skip the sandbox work unless this call won the terminating transition —
+		// a concurrent stop that won owns the teardown.
+		await sessionRetirer(deps).retire(reusable, { teardown: claimed.transitioned });
 	}
 
-	// Cost-DoS guard: cap a user's concurrent (billable) sessions. A runaway
-	// client reconnecting in a loop would otherwise provision unbounded sandboxes.
-	const maxSessions = deps.policy.maxConcurrentSessionsPerUser;
-	if (maxSessions && maxSessions > 0) {
-		const active = await sessions.countActiveForUser(user.id);
-		if (active >= maxSessions) {
-			throw new ResourceExhaustedError(
-				`Concurrent session limit reached (${maxSessions}). Terminate a session before starting another.`,
-			);
-		}
-	}
+	await enforceSessionCap(deps, mode, pid, user.id);
 
 	const sandboxId = createSandboxId();
 
@@ -352,6 +533,7 @@ app.openapi(createSession, async (c) => {
 		project_id: pid,
 		notebook_id: nid,
 		user_id: user.id,
+		mode,
 	});
 	try {
 		await saga(observer)
@@ -362,7 +544,27 @@ app.openapi(createSession, async (c) => {
 					user_id: user.id,
 					sandbox_id: sandboxId,
 					ephemeral,
+					mode,
+					source_version_id: sourceVersionId,
 				});
+			})
+			// The pre-flight cap check alone is raceable; re-rank now that this
+			// session is visible to every concurrent create.
+			.step('cap_recheck', () =>
+				assertCapAfterCreate(deps, mode, pid, user.id, session!.session_id),
+			)
+			// The app singleton: exactly one concurrent "Run as app" wins the
+			// per-notebook claim; a loser aborts before provisioning (no second
+			// sandbox) and attaches to the winner in the catch below.
+			.step('app_claim', {
+				do: async () => {
+					if (!MODE_POLICY[mode].singleton) return;
+					const claim = await sessions.claimApp(pid, nid, session!.session_id);
+					if (!claim.claimed) throw new AppClaimLostError(claim.holder);
+				},
+				compensate: async () => {
+					if (session) await sessions.releaseAppFor(session);
+				},
 			})
 			.step('sandbox_provision', {
 				do: async () => {
@@ -400,8 +602,10 @@ app.openapi(createSession, async (c) => {
 
 					// Managed AI: best-effort session-scoped token + marimo AI config pointed
 					// at our proxy. A mint failure yields no AI config, never a failed kernel.
+					// Skipped for apps: the injected config drives the *editor's* AI
+					// assistant, and `marimo run` has no editor surface.
 					const resolveAiEnv = async () => {
-						if (!deps.ai) return;
+						if (!deps.ai || !MODE_POLICY[mode].injectEditorAi) return;
 						try {
 							const token = await mintAiSessionToken(
 								deps.ai.signingSecret,
@@ -446,9 +650,14 @@ app.openapi(createSession, async (c) => {
 							return vars;
 						} catch (err) {
 							observer.tag('secret_resolution_failed', true);
-							// Non-leaking: the resolver names the entry, never the value.
+							// The resolver's message can quote the value it failed on, so the
+							// error must not be carried anywhere — as `cause` it would reach the
+							// request log through `describeError`'s chain.
+							for (const [key, value] of Object.entries(errorMetadata(err))) {
+								observer.tag(`secrets_${key}`, value);
+							}
 							throw new UnavailableError(
-								`secret_resolution_failed: ${err instanceof Error ? err.message : String(err)}`,
+								'secret_resolution_failed: could not resolve this project’s secrets',
 							);
 						}
 					};
@@ -493,11 +702,16 @@ app.openapi(createSession, async (c) => {
 						image,
 						sessionEnv,
 						entryNotebook: workspacePolicy.entryNotebook,
-						// Ephemeral sandboxes never mount the live workspace: a mount writes
-						// viewer edits straight through to the bucket (bypassing every
-						// persistEdits guard) and puts the deployment's bucket credentials
-						// inside a viewer's sandbox. Copy-only loads the files server-side.
-						workspaceLoadMode: ephemeral ? 'copy-only' : workspacePolicy.loadMode,
+						launchMode: mode,
+						// Ephemeral and app sandboxes never mount the live workspace: a mount
+						// writes straight through to the bucket (bypassing every persistEdits
+						// guard), puts the deployment's bucket credentials inside a viewer's
+						// sandbox, and — for apps — would race the edit kernel's autosaves on
+						// the same objects. Copy-only loads the files server-side.
+						workspaceLoadMode:
+							ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
+								? 'copy-only'
+								: workspacePolicy.loadMode,
 						workspacePrefix,
 					});
 					({ url, usedFallback } = provisionResult);
@@ -525,8 +739,62 @@ app.openapi(createSession, async (c) => {
 					ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
 				);
 			})
+			// A slow provision looks like a wedged holder once the `starting` record
+			// ages past the liveness window, so a second "Run as app" may steal the
+			// claim mid-provision. Re-assert it AFTER the record is `running` (a
+			// running holder is never treated as stale, so no later steal is
+			// possible): if it was stolen, this saga compensates — the sandbox is
+			// destroyed, the record terminated — and the caller attaches to the
+			// thief. Without this, both provisions would finish `running` and the
+			// per-notebook singleton would be two apps.
+			.step('app_claim_recheck', async () => {
+				if (!MODE_POLICY[mode].singleton) return;
+				const claim = await sessions.claimApp(pid, nid, session!.session_id);
+				if (!claim.claimed) throw new AppClaimLostError(claim.holder);
+			})
+			// A delete only retires sessions that are already `running`, so one that
+			// lands mid-provision leaves this kernel serving deleted content — and,
+			// for an app, the recheck above just re-created the claim `deleteNotebook`
+			// cleaned up. Abort so the saga destroys the sandbox and drops the claim.
+			// Past this step the record is `running`, so a later delete catches it —
+			// and a delete writes the status before it lists sessions to retire, so
+			// nothing falls between the two.
+			.step('notebook_recheck', async () => {
+				const current = await notebooks.getNotebook(pid, nid).catch(() => null);
+				if (!current || current.meta.status === 'deleted') {
+					throw new NotFoundError(`Notebook ${nid} not found`);
+				}
+			})
+			// The same race one level up, which the check above does NOT cover: a
+			// soft-deleted project keeps its notebooks readable until GC, so
+			// `getNotebook` still answers `active`.
+			.step('project_recheck', async () => {
+				const current = await projects.getProject(pid).catch(() => null);
+				if (!current || current.status === 'deleted') {
+					throw new NotFoundError(`Project ${pid} not found`);
+				}
+			})
 			.run();
 	} catch (err) {
+		if (err instanceof AppClaimLostError) {
+			// Lost the app singleton — at the initial claim (nothing provisioned yet)
+			// or at the post-provision recheck (the saga compensation just destroyed
+			// our sandbox). Either way: retire our record and attach to the winner
+			// exactly as the reuse path would have.
+			observer.tag('app_claim_lost', true);
+			if (session) {
+				await sessions.markTerminated(pid, session.session_id).catch(() => {});
+			}
+			const winner = await sessions.getSession(pid, err.holder).catch(() => {});
+			if (winner && winner.notebook_id === nid && sessionModePolicy(winner).singleton) {
+				return c.json(
+					{ success: true, data: { ...toSessionResponse(winner, grants(winner)), reused: true } },
+					200,
+				);
+			}
+			// The winner vanished between claim and read — rare; the client retries.
+			throw new ConflictError('The app is being started by another user. Retry shortly.');
+		}
 		// Record WHY the session failed so the client polling `GET …/sessions/{sid}`
 		// sees a reason, not a bare `failed`. Best-effort (never mask the original
 		// error): a marking failure just leaves the record for the stale reaper, and
@@ -539,14 +807,37 @@ app.openapi(createSession, async (c) => {
 		observer.flush();
 	}
 
-	return c.json({ success: true, data: { ...toSessionResponse(updated!), reused: false } }, 200);
+	// An app start puts a (possibly secrets/WIF-bearing) kernel in front of the
+	// whole admitted audience — who did it belongs in the project's event log.
+	// Best-effort like every audit append.
+	if (MODE_POLICY[mode].singleton) {
+		await deps.services.events
+			.append({
+				event: 'app.start',
+				actor: user.id,
+				project_id: pid,
+				notebook_id: nid,
+				session_id: session!.session_id,
+			})
+			.catch(() => {});
+	}
+
+	return c.json(
+		{ success: true, data: { ...toSessionResponse(updated!, grants(updated!)), reused: false } },
+		200,
+	);
 });
 
 app.openapi(deleteSession, async (c) => {
 	const deps = c.get('deps');
-	const { sessions, projects, notebooks } = deps.services;
+	const { sessions, projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid, sid } = c.req.valid('param');
+
+	// Project visibility FIRST (404 when hidden, matching getSession) — resolving
+	// the session before it would let 403-vs-404 leak whether a session id exists
+	// in a project the caller cannot see.
+	const project = await loadVisibleProject(projects, pid, user, deps.policy.defaultRole);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
@@ -557,40 +848,16 @@ app.openapi(deleteSession, async (c) => {
 
 	// Terminating a session tears down a running kernel — editor+, or the owner of
 	// their own ephemeral session (role re-checked; see assertSessionControl).
-	await assertSessionControl(projects, existing, user, deps.policy.defaultRole);
+	assertSessionControl(project, existing, user, deps.policy);
 
 	// Mark `terminating` first (atomic): pollers immediately see `Stopping…` while
-	// the teardown below runs, instead of a stale `running`. The CAS in the service
-	// makes this stick even against an in-flight heartbeat.
-	const session = await sessions.beginTerminating(pid, sid);
+	// the retire below runs, instead of a stale `running`. The CAS in the service
+	// makes this stick even against an in-flight heartbeat. Only the caller that
+	// won the transition runs the teardown — a concurrent stop's loser must not
+	// save-and-destroy the same sandbox twice.
+	const { session, transitioned } = await sessions.beginTerminating(pid, sid);
 
-	// Read the notebook back, cut a version of the session's edits (with any
-	// HTML/session snapshots), then destroy the sandbox. Attribute the version to
-	// the session's owner (who made the edits), not whoever triggered the close.
-	if (session.sandbox_id) {
-		try {
-			const { compute, bucket } = deps;
-			const provisioner = new SandboxProvisioner(compute);
-			const sandbox = compute.create(session.sandbox_id);
-
-			await provisioner.teardown(
-				sandbox,
-				notebooks,
-				bucket,
-				session.project_id,
-				session.notebook_id,
-				session.user_id,
-				deps.sandbox.persistWorkspace,
-				deps.sandbox.workdir,
-				{ persistEdits: !session.ephemeral },
-			);
-		} catch {
-			// Best-effort: sandbox may already be destroyed
-		}
-	}
-
-	// Teardown done (or the sandbox was already gone) → terminal.
-	await sessions.markTerminated(pid, sid);
+	await sessionRetirer(deps).retire(session, { teardown: transitioned });
 
 	return c.json({ success: true }, 200);
 });
@@ -601,6 +868,9 @@ app.openapi(heartbeatSession, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, sid } = c.req.valid('param');
 
+	// Project visibility FIRST (404 when hidden) — see the delete route.
+	const project = await loadVisibleProject(projects, pid, user, deps.policy.defaultRole);
+
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
 	const existing = await sessions.getSession(pid, sid);
@@ -608,13 +878,19 @@ app.openapi(heartbeatSession, async (c) => {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
 
-	// Extending a session keeps a kernel alive — editor+, or the owner of their
-	// own ephemeral session (role re-checked; see assertSessionControl).
-	await assertSessionControl(projects, existing, user, deps.policy.defaultRole);
+	// Access-level gate, not control: an admitted viewer watching the shared app
+	// must keep it alive too (see assertSessionAccess).
+	assertSessionAccess(project, existing, user, deps.policy);
 
 	const updated = await sessions.heartbeat(pid, sid);
 
-	return c.json({ success: true, data: toSessionResponse(updated) }, 200);
+	return c.json(
+		{
+			success: true,
+			data: toSessionResponse(updated, sessionGrantsFor(project, user, updated, deps.policy)),
+		},
+		200,
+	);
 });
 
 export default app;

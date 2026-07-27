@@ -46,11 +46,13 @@ function makeFetch(
 		notebooks?: NotebookEntry[];
 		sessions?: Session[];
 		capabilities?: unknown;
+		role?: 'admin' | 'editor' | 'viewer';
 	} = {},
 ) {
 	const notebooks = options.notebooks ?? [notebook()];
 	const sessions = options.sessions ?? [];
 	const capabilities = options.capabilities ?? { federation: { available: false } };
+	const proj = { ...project(), ...(options.role ? { your_role: options.role } : {}) };
 	const calls: { url: string; method: string; body: unknown }[] = [];
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
@@ -88,7 +90,7 @@ function makeFetch(
 			return jsonOk({ items: sessions, next_cursor: null });
 		if (url.includes('/capabilities')) return jsonOk(capabilities);
 		if (url.includes('/users')) return jsonOk({});
-		if (url.endsWith(`/projects/${PID}`)) return jsonOk(project());
+		if (url.endsWith(`/projects/${PID}`)) return jsonOk(proj);
 		throw new Error(`unexpected fetch: ${method} ${url}`);
 	});
 	vi.stubGlobal('fetch', impl);
@@ -368,6 +370,94 @@ describe('Project — Notebook Actions', () => {
 			).toBe(true),
 		);
 		expect(await screen.findByLabelText('Sync token')).toHaveValue('rotated-token');
+	});
+
+	it('viewer + applications: may open the running app but not stop it', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'viewer',
+			sessions: [
+				{
+					...runningSession(),
+					session_id: 'sess-app',
+					mode: 'app',
+					can: { attach: true, stop: false },
+				} as Session,
+			],
+			capabilities: {
+				federation: { available: false },
+				viewer_mode: 'applications',
+				viewer_session_modes: ['app'],
+			},
+		});
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		expect(await screen.findByText('Open app')).toBeInTheDocument();
+		expect(screen.queryByText('Stop app')).toBeNull();
+	});
+
+	it('viewer + applications: may start the app when none is running', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'viewer',
+			capabilities: {
+				federation: { available: false },
+				viewer_mode: 'applications',
+				viewer_session_modes: ['app'],
+			},
+		});
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		expect(await screen.findByText('Run as app')).toBeInTheDocument();
+	});
+
+	it('viewer + static: no app actions in the menu', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'viewer',
+			sessions: [
+				{
+					...runningSession(),
+					session_id: 'sess-app',
+					mode: 'app',
+					can: { attach: false, stop: false },
+				} as Session,
+			],
+			capabilities: {
+				federation: { available: false },
+				viewer_mode: 'static',
+				viewer_session_modes: [],
+			},
+		});
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		expect(await screen.findByText('Rename')).toBeInTheDocument();
+		expect(screen.queryByText('Open app')).toBeNull();
+		expect(screen.queryByText('Run as app')).toBeNull();
+		expect(screen.queryByText('Stop app')).toBeNull();
+	});
+
+	it('editor keeps Open app + Stop app on a running app', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'editor',
+			sessions: [
+				{
+					...runningSession(),
+					session_id: 'sess-app',
+					mode: 'app',
+					can: { attach: true, stop: true },
+				} as Session,
+			],
+		});
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		expect(await screen.findByText('Open app')).toBeInTheDocument();
+		expect(screen.getByText('Stop app')).toBeInTheDocument();
 	});
 
 	it('stops a running session from the row action', async () => {

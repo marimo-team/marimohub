@@ -151,7 +151,10 @@ describe('SessionLifecycleService', () => {
 
 		it('no-ops when an explicit stop wins the beginTerminating race', async () => {
 			const s = await putSession({ expires_at: iso(-1000), last_snapshot_at: iso(0) });
-			vi.spyOn(sessions, 'beginTerminating').mockResolvedValue({ ...s, status: 'terminated' });
+			vi.spyOn(sessions, 'beginTerminating').mockResolvedValue({
+				session: { ...s, status: 'terminated' },
+				transitioned: false,
+			});
 
 			const result = await makeService().sweep(now);
 
@@ -500,6 +503,11 @@ describe('kernelActiveConnections', () => {
 
 	it('returns null on garbage output', async () => {
 		const sandbox = sandboxWith(async () => ({ success: true, stdout: 'Traceback…', stderr: '' }));
+		expect(await kernelActiveConnections(sandbox)).toBeNull();
+	});
+
+	it('returns null on partially numeric output', async () => {
+		const sandbox = sandboxWith(async () => ({ success: true, stdout: '2garbage\n', stderr: '' }));
 		expect(await kernelActiveConnections(sandbox)).toBeNull();
 	});
 

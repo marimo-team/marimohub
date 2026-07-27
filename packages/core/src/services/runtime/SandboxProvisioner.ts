@@ -1,6 +1,7 @@
 import { all, allSettled } from 'better-all';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
+import type { SessionMode } from '../../constants';
 import { UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
@@ -98,6 +99,12 @@ export interface ProvisionOptions {
 	sessionEnv?: SessionEnv | Promise<SessionEnv | undefined>;
 	/** Workspace-relative notebook file marimo should open. Defaults to `notebook.py`. */
 	entryNotebook?: string;
+	/**
+	 * Session mode driving the marimo subcommand (see `LAUNCH_MODES`). `app`
+	 * sandboxes must also pass `workspaceLoadMode: 'copy-only'` — a mounted
+	 * workspace would let app code write through to the bucket.
+	 */
+	launchMode?: SessionMode;
 	/** How to load the cached workspace into the sandbox. Defaults to mount-or-copy. */
 	workspaceLoadMode?: WorkspaceLoadMode;
 	/**
@@ -126,13 +133,15 @@ export interface ProvisionResult {
  * the server-side structured log.
  */
 function provisionFailure(step: string, err: unknown): UnavailableError {
-	const e = err as { name?: string; message?: string; code?: string; transportCode?: string };
+	const e = err as { name?: string; code?: string; transportCode?: string };
 	const parts = [`Failed to start sandbox while ${step}`];
 	if (e?.name) parts.push(e.name);
 	// gRPC status (e.g. INTERNAL, UNAVAILABLE) or SDK code — operational, not sensitive.
 	const code = e?.transportCode ?? e?.code;
 	if (code) parts.push(`[${code}]`);
-	if (e?.message) parts.push(`- ${e.message}`);
+	// The vendor message is deliberately dropped: an SDK can echo the request it
+	// failed on, credentials included, and this string is shown to the caller and
+	// persisted on the session record.
 	const wrapped = new UnavailableError(parts.join(' '));
 	(wrapped as { cause?: unknown }).cause = err;
 	return wrapped;
@@ -374,6 +383,7 @@ export class SandboxProvisioner {
 			notebookFile: options.entryNotebook ?? 'notebook.py',
 			port: MARIMO_PORT,
 			host: '0.0.0.0',
+			mode: options.launchMode,
 			assetUrl: options.assetUrl,
 			baseUrl: options.baseUrl,
 		});

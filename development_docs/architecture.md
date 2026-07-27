@@ -172,6 +172,60 @@ A new compute backend only has to satisfy the `SandboxProvider` /
 unchanged whether the kernel runs in a Cloudflare Container, a Modal sandbox, or
 a local host subprocess.
 
+**App sessions (`mode: "app"`).** Besides the per-user edit session, a notebook
+can be served as a read-only application via `marimo run` — a second session
+class sharing the same provision/teardown machinery with three deliberate
+differences:
+
+- **Shared singleton.** One app sandbox per notebook, shared by everyone
+  admitted to it: reuse is user-blind, any editor may stop/restart it, and a
+  CAS'd claim object (`_system/apps/{pid}/{nid}.json`) prevents concurrent
+  starts from double-provisioning. Liveness is collective — any open app tab
+  heartbeats it.
+- **Copy-only, never written back.** The app sandbox loads a copy of the
+  workspace at provision time (never a read-write mount — app code must not
+  write through to the mirror the edit session owns) and skips every
+  persistence path at teardown: no version, no HTML/session snapshot, no
+  workspace mirror, no FS-snapshot capture. Consequently an app serves a
+  snapshot; edits made after it started don't appear until it is restarted
+  (the UI surfaces this via `source_version_id` staleness).
+- **Kernel-per-viewer memory model.** `marimo run` spawns one kernel per
+  connected browser inside the single sandbox, so memory scales with concurrent
+  viewers in a fixed-size sandbox; marimo's default session TTL garbage-collects
+  disconnected viewers' kernels. Size app-heavy deployments accordingly.
+
+**Apps are editor-only by default; viewer access is a deployment opt-in.**
+Under the default `MARIMOHUB_VIEWER_MODE=static`, viewers cannot start, open,
+or reach an app: session create, heartbeat, and stop require editor+, the
+proxy re-authorizes every HTTP request (WebSockets at each upgrade — an
+established socket lives until it closes) in `proxy` exposure, and — because in
+`subdomain` exposure the kernel URL itself is the access capability (kernels
+run `--no-token`; see docs/security.md) — the session read projections
+(list/get) withhold `sandbox_url` from callers the kernel gates would reject.
+The UI says so rather than dangling an unopenable indicator. The reason is
+credential exposure: app sandboxes keep WIF credentials and project
+secrets injected (apps commonly exist to query project data), and `marimo run`
+exposes UI-driven inputs into arbitrary notebook code — acceptable inside the
+editor trust boundary (editors can already reach those credentials via an edit
+session), but a real exfiltration surface for an untrusted audience. Setting
+`MARIMOHUB_VIEWER_MODE=applications` (or its superset `ephemeral-sandbox`)
+accepts that trade-off deployment-wide: viewers may then start, open, and
+heartbeat the shared app — it is the same full-fat singleton regardless of who
+started it — while stop/restart stays editor+. All of these decisions flow
+from one pure evaluator in core (`sessionCan`/`canStartSessionMode` in
+`services/runtime/sessionAuthz.ts`, over the `VIEWER_SESSION_MODES` admission
+table in `constants.ts`): the API's throwing gates (`assertSessionControl`,
+`assertSessionAccess`), the `sandbox_url` projection, and the per-caller
+`can: { attach, stop }` grants shipped on every session response are the same
+function applied to the same facts — and the web renders from `session.can`
+and `capabilities.viewer_session_modes` instead of re-deriving policy, so
+client and server cannot disagree. Apps skip
+managed-AI injection (no editor surface). They are excluded from the per-user
+_edit_ cap; instead they are capped per project
+(`MARIMOHUB_MAX_APPS_PER_PROJECT`) and per starter (the per-user cap also
+bounds apps a user has started, so freely creatable projects are not a
+cost-ceiling escape).
+
 ### 3.3 Authentication (AuthN)
 
 Establishes _who_ is making a request. **Authentication is OAuth/OIDC only** —

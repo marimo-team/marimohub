@@ -151,10 +151,11 @@ export interface PolicyConfig {
 	 */
 	defaultRole?: Role;
 	/**
-	 * What an effective `viewer` sees when opening a notebook
-	 * (config: MARIMOHUB_VIEWER_MODE): `static` (the last captured HTML snapshot;
-	 * sessions stay editor-only) or `ephemeral-sandbox` (a real kernel whose
-	 * session is never written back). Optional — `createApi` defaults it to
+	 * What an effective `viewer` gets (config: MARIMOHUB_VIEWER_MODE), each tier
+	 * a superset of the last: `static` (the last captured HTML snapshot; sessions
+	 * stay editor-only), `applications` (viewers may also use the shared notebook
+	 * app), or `ephemeral-sandbox` (viewers additionally get a real edit kernel
+	 * whose session is never written back). Optional — `createApi` defaults it to
 	 * `static` so library/Workers wiring gets the safe mode without opting in.
 	 */
 	viewerMode?: ViewerMode;
@@ -167,9 +168,18 @@ export interface PolicyConfig {
 	/**
 	 * Max concurrent non-terminal sessions a single user may hold. A cost-DoS
 	 * guard (each session is billable compute); the create-session route rejects
-	 * with 429 past the cap. Unset/undefined = unlimited.
+	 * with 429 past the cap. Counts `edit` sessions, and separately bounds the
+	 * apps a single user has STARTED — without that, freely creatable projects
+	 * would let one user escape the cost ceiling entirely via `maxAppsPerProject`
+	 * slots. Unset/undefined = unlimited.
 	 */
 	maxConcurrentSessionsPerUser?: number;
+	/**
+	 * Max concurrent app sessions per project
+	 * (config: MARIMOHUB_MAX_APPS_PER_PROJECT). Checked after reuse, so
+	 * attaching to a running app never trips it. Unset/undefined = unlimited.
+	 */
+	maxAppsPerProject?: number;
 }
 
 /**

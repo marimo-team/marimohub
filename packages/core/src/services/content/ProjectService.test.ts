@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NotFoundError, PreconditionFailedError } from '../../errors';
 import { UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
+import { paths } from '../../paths';
 import { ACTOR, setupTestEnv } from '../../testing';
 import type { MemoryBucket } from '../../testing';
 import type { CatalogService } from '../catalog/CatalogService';
@@ -389,6 +390,48 @@ describe('ProjectService', () => {
 
 			expect(await listAllKeys(bucket, `projects/${doomed.id}/`)).toEqual([]);
 			expect(await bucket.get(`projects/${doomed.id}/project.json`)).toBeNull();
+		});
+
+		it('removes every app claim, including ones the per-notebook cleanup left behind', async () => {
+			const doomed = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
+			const a = await notebooks.createNotebook(
+				doomed.id,
+				{ title: 'A', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const b = await notebooks.createNotebook(
+				doomed.id,
+				{ title: 'B', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const keeper = await projects.createProject({ name: 'Keeper', description: 'D' }, ACTOR);
+			const kept = await notebooks.createNotebook(
+				keeper.id,
+				{ title: 'K', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			// Claims live under `_system/`, outside the project subtree, and project
+			// ids never recur — so no future claimApp would ever self-heal these.
+			for (const [pid, nid] of [
+				[doomed.id, a.id],
+				[doomed.id, b.id],
+				[keeper.id, kept.id],
+			] as const) {
+				await bucket.put(
+					paths.appClaim(pid, nid),
+					JSON.stringify({
+						session_id: 'sess-0000000000000001',
+						claimed_at: new Date().toISOString(),
+					}),
+				);
+			}
+
+			await projects.deleteProject(doomed.id, ACTOR);
+			await projects.hardDeleteProject(doomed.id);
+
+			expect(await listAllKeys(bucket, paths.appClaimsForProject(doomed.id))).toEqual([]);
+			// Another project's claim is untouched.
+			expect(await bucket.get(paths.appClaim(keeper.id, kept.id))).not.toBeNull();
 		});
 	});
 

@@ -96,7 +96,7 @@ describe('useNotebookSession', () => {
 
 		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
 
-		await waitFor(() => expect(result.current.error).toBe('sandbox unavailable'));
+		await waitFor(() => expect(result.current.error?.message).toBe('sandbox unavailable'));
 		expect(result.current.session).toBeNull();
 		expect(result.current.isRunning).toBe(false);
 	});
@@ -127,7 +127,7 @@ describe('useNotebookSession', () => {
 		);
 
 		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
-		await waitFor(() => expect(result.current.error).toBe('boom'));
+		await waitFor(() => expect(result.current.error?.message).toBe('boom'));
 
 		act(() => result.current.start());
 
@@ -186,7 +186,7 @@ describe('useNotebookSession', () => {
 			await vi.advanceTimersByTimeAsync(2_000);
 		});
 
-		expect(result.current.error).toBe('The kernel failed to start.');
+		expect(result.current.error?.message).toBe('The kernel failed to start.');
 		expect(result.current.session).toBeNull();
 	});
 
@@ -243,5 +243,378 @@ describe('useNotebookSession', () => {
 		});
 		expect(result.current.isRunning).toBe(true);
 		expect(polls).toBe(2);
+	});
+});
+
+describe('useNotebookSession (app mode)', () => {
+	it("sends { mode: 'app' } on the create request", async () => {
+		const fetchMock = vi.fn(async (..._args: Parameters<typeof fetch>) =>
+			jsonOk(makeSession({ mode: 'app' })),
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+
+		const [, init] = fetchMock.mock.calls[0];
+		expect(init?.method).toBe('POST');
+		expect(String(init?.body)).toContain('"mode":"app"');
+	});
+
+	it('flips to ended when the shared app is stopped underneath the page', async () => {
+		vi.useFakeTimers();
+		let stopped = false;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1')) {
+					return jsonOk(makeSession({ mode: 'app', status: stopped ? 'terminated' : 'running' }));
+				}
+				// The replacement check: no other app is running.
+				if (String(url).endsWith(`/projects/${PID}/sessions`)) return jsonOk({ items: [] });
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		expect(result.current.isRunning).toBe(true);
+
+		stopped = true;
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(10_000);
+		});
+
+		expect(result.current.ended).toBe('terminated');
+		expect(result.current.session).toBeNull();
+		expect(result.current.error).toBeNull();
+	});
+
+	it('treats a reaped (404) session as gone, not an error', async () => {
+		vi.useFakeTimers();
+		let reaped = false;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1')) {
+					if (reaped) return jsonError('NOT_FOUND', 'gone', 404);
+					return jsonOk(makeSession({ mode: 'app' }));
+				}
+				if (String(url).endsWith(`/projects/${PID}/sessions`)) return jsonOk({ items: [] });
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		expect(result.current.isRunning).toBe(true);
+
+		reaped = true;
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(10_000);
+		});
+
+		expect(result.current.ended).toBe('gone');
+		expect(result.current.error).toBeNull();
+	});
+
+	// Left unhandled this state renders nothing: not running, not provisioning.
+	it('flips to access_lost when a poll withholds sandbox_url on a running app', async () => {
+		vi.useFakeTimers();
+		let revoked = false;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1')) {
+					return jsonOk(
+						makeSession({ mode: 'app', ...(revoked ? { sandbox_url: undefined } : {}) }),
+					);
+				}
+				if (String(url).endsWith(`/projects/${PID}/sessions`)) return jsonOk({ items: [] });
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		expect(result.current.isRunning).toBe(true);
+
+		revoked = true;
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(10_000);
+		});
+		await settleHook();
+
+		expect(result.current.ended).toBe('access_lost');
+		expect(result.current.session).toBeNull();
+		expect(result.current.isProvisioning).toBe(false);
+		expect(result.current.error).toBeNull();
+	});
+
+	it('does not adopt a replacement app the caller cannot reach', async () => {
+		vi.useFakeTimers();
+		let swapped = false;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1')) {
+					return swapped
+						? jsonError('NOT_FOUND', 'gone', 404)
+						: jsonOk(makeSession({ mode: 'app' }));
+				}
+				if (String(url).endsWith(`/projects/${PID}/sessions`)) {
+					return jsonOk({
+						items: swapped
+							? [makeSession({ session_id: 'sess-9', mode: 'app', sandbox_url: undefined })]
+							: [],
+					});
+				}
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		expect(result.current.isRunning).toBe(true);
+
+		swapped = true;
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(10_000);
+		});
+		await settleHook();
+
+		expect(result.current.session).toBeNull();
+		expect(result.current.ended).toBe('gone');
+	});
+
+	it('a viewer whose access is revoked mid-start gets an error, not a blank page', async () => {
+		vi.useFakeTimers();
+		let revoked = false;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') {
+					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+				}
+				if (String(url).endsWith('/sessions/sess-1')) {
+					return jsonOk(makeSession(revoked ? { sandbox_url: undefined } : { status: 'starting' }));
+				}
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+		expect(result.current.isProvisioning).toBe(true);
+
+		revoked = true;
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2_000);
+		});
+		await settleHook();
+
+		expect(result.current.error?.code).toBe('FORBIDDEN');
+		expect(result.current.session).toBeNull();
+		expect(result.current.isProvisioning).toBe(false);
+	});
+
+	it("adopts the replacement app when another user's restart swapped the session", async () => {
+		vi.useFakeTimers();
+		let swapped = false;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') return jsonOk(makeSession({ mode: 'app' }));
+				if (String(url).endsWith('/sessions/sess-1')) {
+					return swapped
+						? jsonError('NOT_FOUND', 'gone', 404)
+						: jsonOk(makeSession({ mode: 'app' }));
+				}
+				if (String(url).endsWith(`/projects/${PID}/sessions`)) {
+					return jsonOk({
+						items: swapped ? [makeSession({ session_id: 'sess-9', mode: 'app' })] : [],
+					});
+				}
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		expect(result.current.isRunning).toBe(true);
+
+		swapped = true;
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(10_000);
+		});
+		await settleHook();
+
+		// Anyone else's restart must not strand this page on "App stopped".
+		expect(result.current.session?.session_id).toBe('sess-9');
+		expect(result.current.ended).toBeNull();
+	});
+
+	it('a session that vanishes mid-start surfaces an error, not an endless spinner', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') {
+					return jsonOk(makeSession({ mode: 'app', status: 'starting', sandbox_url: undefined }));
+				}
+				if (String(url).endsWith('/sessions/sess-1')) {
+					return jsonError('NOT_FOUND', 'gone', 404);
+				}
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await settleHook();
+		expect(result.current.session?.status).toBe('starting');
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2_000);
+		});
+
+		expect(result.current.error?.message).toBe('The app failed to start.');
+		expect(result.current.session).toBeNull();
+		expect(result.current.isProvisioning).toBe(false);
+	});
+
+	it('reports provisioning while a restart’s stop half is still in flight', async () => {
+		let resolveDelete!: () => void;
+		const deletePending = new Promise<void>((resolve) => {
+			resolveDelete = resolve;
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'DELETE') {
+					await deletePending;
+					return jsonOk(undefined);
+				}
+				return jsonOk(makeSession({ mode: 'app' }));
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+
+		act(() => result.current.restart());
+		// A real teardown takes tens of seconds; the page must show a spinner,
+		// not a blank body, until the stop settles and the fresh start begins.
+		await waitFor(() => expect(result.current.isProvisioning).toBe(true));
+		expect(result.current.session).toBeNull();
+		expect(result.current.error).toBeNull();
+
+		resolveDelete();
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+	});
+
+	it('restart stops the current session, then starts a fresh one', async () => {
+		const calls: string[] = [];
+		let creates = 0;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				const method = init?.method ?? 'GET';
+				calls.push(`${method} ${String(url)}`);
+				if (method === 'POST') {
+					creates += 1;
+					return jsonOk(makeSession({ session_id: `sess-${creates}`, mode: 'app' }));
+				}
+				if (method === 'DELETE') return jsonOk(undefined);
+				throw new Error(`unexpected fetch: ${method} ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+
+		act(() => result.current.restart());
+		await waitFor(() => expect(result.current.session?.session_id).toBe('sess-2'));
+
+		const deleteIdx = calls.findIndex((c) => c.startsWith('DELETE'));
+		const secondCreateIdx = calls.lastIndexOf(
+			`POST /api/v1/projects/${PID}/notebooks/${NID}/sessions`,
+		);
+		expect(deleteIdx).toBeGreaterThan(-1);
+		expect(secondCreateIdx).toBeGreaterThan(deleteIdx);
+	});
+
+	it('restart surfaces a failed stop instead of silently re-attaching', async () => {
+		let posts = 0;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+				const method = init?.method ?? 'GET';
+				if (method === 'POST') {
+					posts += 1;
+					return jsonOk(makeSession({ mode: 'app' }));
+				}
+				if (method === 'DELETE') return jsonError('INTERNAL_ERROR', 'teardown failed', 500);
+				throw new Error(`unexpected fetch: ${method}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+
+		act(() => result.current.restart());
+		await waitFor(() => expect(result.current.error?.message).toMatch(/teardown failed/));
+		// No second create — re-attaching to the session the restart failed to
+		// stop would read as a restart that did nothing.
+		expect(posts).toBe(1);
+		expect(result.current.isProvisioning).toBe(false);
+	});
+
+	it('restart proceeds to a fresh start when the session is already gone (404)', async () => {
+		let posts = 0;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+				const method = init?.method ?? 'GET';
+				if (method === 'POST') {
+					posts += 1;
+					return jsonOk(makeSession({ session_id: `sess-${posts}`, mode: 'app' }));
+				}
+				if (method === 'DELETE') return jsonError('NOT_FOUND', 'Session not found', 404);
+				throw new Error(`unexpected fetch: ${method}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+
+		act(() => result.current.restart());
+		await waitFor(() => expect(result.current.session?.session_id).toBe('sess-2'));
+		expect(result.current.error).toBeNull();
 	});
 });

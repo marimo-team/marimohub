@@ -81,12 +81,19 @@ the only places concrete adapters are imported. **Reject PRs that violate this**
 
 ## Key invariant
 
-`_system/catalog.json` (see `packages/core/src/paths.ts`) is the only object
-mutated in place. All writes to it go through `CatalogService.mutateSnapshot`
+`_system/catalog.json` (see `packages/core/src/paths.ts`) is the only object in
+the content store mutated in place. All writes to it go through
+`CatalogService.mutateSnapshot`
 (`packages/core/src/services/catalog/CatalogService.ts`), which performs a
-compare-and-swap on the object's ETag (conditional PUT) with retry. Everything
-else in the store is immutable or append-only. Do not write the catalog pointer
-by any other path. See [`development_docs/bucket_spec.md`](./development_docs/bucket_spec.md).
+compare-and-swap on the object's ETag (conditional PUT) with retry. The one
+other CAS-managed pointer is the per-notebook app claim
+(`_system/apps/{pid}/{nid}.json`), written ONLY via
+`SessionService.claimApp`/`releaseApp` — sole exception: deleting the owning
+notebook or project also deletes its claim object(s) as cleanup. Everything
+else in the store is immutable, append-only, or an operational record
+(sessions, identities, tokens). Do not write the catalog pointer or the app
+claim by any other path.
+See [`development_docs/bucket_spec.md`](./development_docs/bucket_spec.md).
 
 ## Outstanding work
 

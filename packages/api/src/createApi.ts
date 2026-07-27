@@ -99,10 +99,22 @@ export function createApi(rawDeps: ApiDeps) {
 	// is one branch. 5xx (server-side failures + unknown errors) is logged with the
 	// full cause chain; the client only ever sees the sanitized envelope.
 	app.onError((err, c) => {
-		// HTTPException (e.g. from the AI proxy's bearer-auth middleware) carries its
-		// own Response; a custom onError replaces Hono's default handling of it, so
-		// honor it here instead of masking it as a 500.
-		if (err instanceof HTTPException) return err.getResponse();
+		// HTTPException (hono's own throws: malformed JSON in a request body, the
+		// AI proxy's bearer-auth middleware) carries a Response with a PLAIN-TEXT
+		// body. Honor its status and headers (e.g. WWW-Authenticate) but rewrap
+		// the body — the envelope invariant says every error is
+		// `{ success: false, error }`, and third-party SDKs parse on that.
+		if (err instanceof HTTPException) {
+			const res = err.getResponse();
+			for (const [name, value] of res.headers) {
+				if (name.toLowerCase() !== 'content-type') c.header(name, value);
+			}
+			const code =
+				{ 400: 'BAD_REQUEST', 401: 'UNAUTHORIZED', 403: 'FORBIDDEN', 404: 'NOT_FOUND' }[
+					res.status
+				] ?? (res.status >= 500 ? 'INTERNAL_ERROR' : 'BAD_REQUEST');
+			return fail(c, code, err.message || res.statusText || 'Request failed', res.status);
+		}
 		if (err instanceof DomainError) {
 			if (err.status >= 500) {
 				logEvent({

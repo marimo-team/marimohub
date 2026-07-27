@@ -3,7 +3,13 @@ import { createNotebookId, createProjectId, createSandboxId, createVersionId } f
 import type { SandboxId } from '../../ids';
 import { paths } from '../../paths';
 import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
-import { ACTOR, makeLocalSource, MemoryBucket, RecordingCompute } from '../../testing';
+import {
+	ACTOR,
+	appClaimHolder,
+	makeLocalSource,
+	MemoryBucket,
+	RecordingCompute,
+} from '../../testing';
 import { CatalogService } from '../catalog/CatalogService';
 import { NotebookService } from '../content/NotebookService';
 import { ReconciliationService } from './ReconciliationService';
@@ -207,8 +213,10 @@ describe('ReconciliationService', () => {
 		// Save-on-reap can reject (bucket/sandbox RPC failure); the reconciler must
 		// still guarantee the sandbox dies and count it reclaimed.
 		const provisioner = (
-			reconciler as unknown as { provisioner: { teardown: () => Promise<void> } }
-		).provisioner;
+			reconciler as unknown as {
+				retirer: { provisioner: { teardown: () => Promise<void> } };
+			}
+		).retirer.provisioner;
 		vi.spyOn(provisioner, 'teardown').mockRejectedValue(new Error('teardown boom'));
 
 		const result = await reconciler.reconcile();
@@ -244,5 +252,49 @@ describe('ReconciliationService', () => {
 		expect(compute.destroyed).toEqual([]);
 		const stored = await sessions.getSession(projectId, session.session_id);
 		expect(stored.status).toBe('terminating');
+	});
+
+	describe('app sessions', () => {
+		const createApp = async (sandboxId: SandboxId) => {
+			const session = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+				sandbox_id: sandboxId,
+				mode: 'app',
+			});
+			await sessions.claimApp(projectId, notebookId, session.session_id);
+			return session;
+		};
+
+		const claim = () => appClaimHolder(bucket, projectId, notebookId);
+
+		it('Rule 1: destroys a terminal app without committing, and releases its claim', async () => {
+			const session = await createApp(terminalId);
+			await sessions.terminate(projectId, session.session_id);
+			expect(await claim()).toBe(session.session_id);
+			compute.active = [{ id: terminalId }];
+
+			const result = await reconciler.reconcile();
+
+			expect(result.reclaimed).toBe(1);
+			expect(compute.destroyed).toEqual([terminalId]);
+			// An app never writes back — reclaiming one must not cut a version.
+			expect(notebooks.commitSession).not.toHaveBeenCalled();
+			expect(await claim()).toBeNull();
+		});
+
+		it('Rule 2: marks a vanished live app failed and releases its claim', async () => {
+			const session = await createApp(goneId);
+			await sessions.setRunning(projectId, session.session_id, 'https://kernel.example');
+			compute.active = [];
+
+			const result = await reconciler.reconcile();
+
+			expect(result.markedDead).toBe(1);
+			const stored = await sessions.getSession(projectId, session.session_id);
+			expect(stored.status).toBe('failed');
+			expect(await claim()).toBeNull();
+		});
 	});
 });

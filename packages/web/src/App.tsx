@@ -102,6 +102,11 @@ function AppContent() {
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
 						<Route path="/projects/:pid/notebooks/:nid" element={<NotebookPage />} />
+						{/* The shared app, full-screen like the editor (outside StandardLayout). */}
+						<Route
+							path="/projects/:pid/notebooks/:nid/app"
+							element={<NotebookPage variant="app" />}
+						/>
 						<Route path="*" element={<StandardLayout />} />
 					</Routes>
 				</Suspense>

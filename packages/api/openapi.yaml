@@ -145,7 +145,15 @@ components:
           type: string
           enum:
             - static
+            - applications
             - ephemeral-sandbox
+        viewer_session_modes:
+          type: array
+          items:
+            type: string
+            enum:
+              - edit
+              - app
         default_role:
           type:
             - string
@@ -162,6 +170,10 @@ components:
               type:
                 - number
                 - 'null'
+            max_apps_per_project:
+              type:
+                - number
+                - 'null'
             max_request_bytes:
               type: number
             max_versions_per_notebook:
@@ -172,6 +184,7 @@ components:
               type: number
           required:
             - max_concurrent_sessions_per_user
+            - max_apps_per_project
             - max_request_bytes
             - max_versions_per_notebook
             - default_page_size
@@ -183,6 +196,7 @@ components:
       required:
         - federation
         - viewer_mode
+        - viewer_session_modes
         - default_role
         - limits
         - sandbox_images
@@ -674,6 +688,29 @@ components:
           example: 2025-03-05T14:00:00Z
         ephemeral:
           type: boolean
+        mode:
+          type: string
+          enum:
+            - edit
+            - app
+        source_version_id:
+          type: string
+        can:
+          type: object
+          properties:
+            attach:
+              type: boolean
+            stop:
+              type: boolean
+          required:
+            - attach
+            - stop
+        active_connections:
+          type: number
+        connections_checked_at:
+          type: string
+          format: date-time
+          example: 2025-03-05T14:00:00Z
         error:
           type: object
           properties:
@@ -692,6 +729,8 @@ components:
         - status
         - started_at
         - last_heartbeat
+        - mode
+        - can
     SessionCreateResult:
       allOf:
         - $ref: '#/components/schemas/Session'
@@ -701,6 +740,14 @@ components:
               type: boolean
           required:
             - reused
+    SessionCreateBody:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum:
+            - edit
+            - app
     SecretEntry:
       type: object
       properties:
@@ -2964,6 +3011,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: Validation error
           content:
@@ -3137,8 +3190,8 @@ paths:
         - Sessions
       summary: Create a session and provision a sandbox
       description: 'Create-or-reuse: returns the caller’s existing starting/running
-        session for this notebook when one exists, otherwise provisions a new
-        sandbox.'
+        session for this notebook when one exists (for `mode: "app"`, ANY user’s
+        running app session), otherwise provisions a new sandbox.'
       parameters:
         - schema:
             type: string
@@ -3162,6 +3215,13 @@ paths:
           required: false
           name: idempotency-key
           in: header
+      requestBody:
+        required: false
+        description: Optional; omit for an edit session.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCreateBody'
       responses:
         '200':
           description: Session created or reused
@@ -3199,6 +3259,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
           content:
             application/json:
               schema:

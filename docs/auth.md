@@ -68,7 +68,14 @@ capabilities below it.
 | See projects and notebooks, read versions and code              |    x     |    x     |    x    |
 | Create, update, and delete notebooks; save and restore versions |          |    x     |    x    |
 | Start and stop kernel sessions                                  |          |    x     |    x    |
+| Start, open, and use [notebook apps](./apps.md)                 |    \*    |    x     |    x    |
+| Stop or restart the shared notebook app                         |          |    x     |    x    |
 | Update or delete projects; manage members                       |          |          |    x    |
+
+\* Viewers get app access only when the deployment sets
+`MARIMOHUB_VIEWER_MODE=applications` (or `ephemeral-sandbox`) — see
+[What viewers see](#what-viewers-see-marimohub_viewer_mode) and
+[Notebook apps](./apps.md#who-can-do-what).
 
 Enforcement is server-side. A write with an insufficient role returns
 `403 FORBIDDEN`. Any authenticated user can create a project; the creator becomes
@@ -106,13 +113,22 @@ those invites to be removed first.
 
 ### What viewers see: `MARIMOHUB_VIEWER_MODE`
 
-What a viewer gets when opening a notebook depends on `MARIMOHUB_VIEWER_MODE`:
+What a viewer gets depends on `MARIMOHUB_VIEWER_MODE`. The modes are ordered:
+each tier includes everything the previous one grants.
 
-- `static` (default): the last captured HTML snapshot. No compute, no code
-  execution.
-- `ephemeral-sandbox`: a real kernel in a temporary, private session. The viewer
-  can run and edit code, but nothing is written back — no version, snapshot, or
-  workspace changes. Edits are discarded when the session ends.
+- `static` (default): opening a notebook shows the last captured HTML snapshot.
+  No compute, no code execution. Apps stay editor-only.
+- `applications`: additionally, viewers can use
+  [notebook apps](./apps.md) — start one, open it, and keep it alive while they
+  have it open. The app is the same shared, per-notebook session editors use
+  (viewers cannot stop or restart it). Note that the app kernel runs notebook
+  code with the project's secrets and federated credentials, so enable this
+  only for audiences you trust with what the app can reach. Opening a notebook
+  (rather than its app) still shows the static snapshot.
+- `ephemeral-sandbox`: additionally, opening a notebook provisions a real
+  kernel in a temporary, private session. The viewer can run and edit code, but
+  nothing is written back — no version, snapshot, or workspace changes. Edits
+  are discarded when the session ends.
 
 Ephemeral sessions are per-user: each viewer gets their own sandbox, isolated
 from every other user's, and only its owner can reach it. Refreshing or

@@ -4,6 +4,7 @@ import { FileTrigger } from 'react-aria-components';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import {
+	AppWindow,
 	ArrowLeft,
 	ChevronDown,
 	Container,
@@ -16,6 +17,7 @@ import {
 	KeyRound,
 	MoreHorizontal,
 	Pencil,
+	Play,
 	Plus,
 	Power,
 	RefreshCw,
@@ -60,11 +62,13 @@ import {
 	useUpdateProject,
 	useDeleteProject,
 	useProjectSessionsQuery,
+	useRestartApp,
 	useStopSession,
 	useUsersQuery,
 	useCapabilitiesQuery,
 	useRotateSyncToken,
 } from '@/api/hooks';
+import { AppSessionIndicator } from './AppSessionIndicator';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
 import { ProjectSecretsDialog } from './ProjectSecretsDialog';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
@@ -79,7 +83,7 @@ import { useSearchHotkey } from '@/hooks/useSearchHotkey';
 import { filterBySearch } from '@/lib/search';
 import { formatRelative } from '@/lib/time';
 import { syncUrl } from '@/lib/links';
-import { sessionsByNotebook } from '@/lib/sessions';
+import { appConnectionHint, sessionsByNotebook } from '@/lib/sessions';
 import type { DropdownMenuOption } from '@/components/ui';
 import type { NotebookEntry, Session } from '@/types';
 
@@ -130,6 +134,13 @@ export function Project() {
 	const [stopModal, setStopModal] = useState<{ notebook: NotebookEntry; session: Session } | null>(
 		null,
 	);
+	// The shared app's stop/restart confirm — separate from the edit-kernel stop
+	// so the copy can warn about disconnecting other people.
+	const [appModal, setAppModal] = useState<{
+		action: 'stop' | 'restart';
+		notebook: NotebookEntry;
+		session: Session;
+	} | null>(null);
 	// Project-level edit/delete (this page's project, not the notebooks).
 	const editProjectModal = useDisclosure();
 	const deleteProjectModal = useDisclosure();
@@ -153,6 +164,13 @@ export function Project() {
 	const rotateSyncToken = useRotateSyncToken(pid!);
 	// Re-bound each render to the notebook in the stop dialog; only fired on confirm.
 	const stopSession = useStopSession(pid!, stopModal?.notebook.id ?? '');
+	const stopAppSession = useStopSession(pid!, appModal?.notebook.id ?? '');
+	const restartAppSession = useRestartApp(pid!, appModal?.notebook.id ?? '');
+	// Per-session actions render from the server-evaluated `session.can` grants.
+	// Start has no session to carry grants, so it derives from the evaluated
+	// admission row in capabilities. The server enforces all of it regardless.
+	const canStartApps =
+		project.your_role !== 'viewer' || (capabilities?.viewer_session_modes ?? []).includes('app');
 
 	const editProjectForm = useAppForm({
 		defaultValues: { name: project.name, description: project.description },
@@ -330,6 +348,25 @@ export function Project() {
 		});
 	};
 
+	const handleAppAction = () => {
+		if (!appModal) return;
+		const { action, notebook, session } = appModal;
+		const mutation = action === 'stop' ? stopAppSession : restartAppSession;
+		mutation.mutate(session.session_id, {
+			onSuccess: () => {
+				toast.success(
+					action === 'stop'
+						? `Stopped the app for "${notebook.title}"`
+						: `Restarted the app for "${notebook.title}"`,
+				);
+				setAppModal(null);
+			},
+			onError: (err) => {
+				toast.error(err.message);
+			},
+		});
+	};
+
 	const handleSyncedCreated = (result: SyncedNotebookCreated) => {
 		syncedCreateModal.close();
 		setSyncKeys({ notebookId: result.notebookId, title: result.title, token: result.token });
@@ -351,6 +388,34 @@ export function Project() {
 	const notebookActions = (nb: NotebookEntry): DropdownMenuOption[] => [
 		{ id: 'rename', label: 'Rename', icon: <Pencil className="size-4" /> },
 		{ id: 'duplicate', label: 'Duplicate', icon: <Copy className="size-4" /> },
+		// The shared app: start it, open the running one, or stop it — each item
+		// gated by the caller's server-evaluated grants on the live session.
+		// Derived from the 5s session poll, so an item can be ~5s stale: a racing
+		// "Run as app" harmlessly attaches (create reuses per mode); a racing
+		// "Stop app" 404s into a toast.
+		...(() => {
+			const app = sessionByNotebook.get(nb.id)?.app;
+			if (!app) {
+				return canStartApps
+					? [{ id: 'run-app', label: 'Run as app', icon: <Play className="size-4" /> }]
+					: [];
+			}
+			return [
+				...(app.can?.attach
+					? [{ id: 'open-app', label: 'Open app', icon: <AppWindow className="size-4" /> }]
+					: []),
+				...(app.can?.stop
+					? [
+							{
+								id: 'stop-app',
+								label: 'Stop app',
+								icon: <Power className="size-4" />,
+								danger: true,
+							},
+						]
+					: []),
+			];
+		})(),
 		...(offersImageChoice
 			? [{ id: 'change-image', label: 'Change base image', icon: <Container className="size-4" /> }]
 			: []),
@@ -482,6 +547,7 @@ export function Project() {
 				<ListContainer>
 					{filteredNotebooks.map((nb) => {
 						const badges = notebookBadges(nb);
+						const live = sessionByNotebook.get(nb.id);
 						return (
 							<RowLink
 								key={nb.id}
@@ -492,14 +558,14 @@ export function Project() {
 								contentClassName="items-center justify-between gap-3 py-3.5"
 								actions={
 									<>
-										{sessionByNotebook.has(nb.id) && (
+										{/* Primary shutdown stays edit-only: the inline Power button
+										    never targets the shared app (dropdown/popover do). */}
+										{live?.edit && (
 											<IconButton
 												label="Shut down kernel"
 												tooltip="Shut down kernel"
 												tone="danger"
-												onPress={() =>
-													setStopModal({ notebook: nb, session: sessionByNotebook.get(nb.id)! })
-												}
+												onPress={() => setStopModal({ notebook: nb, session: live.edit! })}
 											>
 												<Power className="size-4" />
 											</IconButton>
@@ -512,7 +578,14 @@ export function Project() {
 											onAction={(key) => {
 												if (key === 'rename') setRenameModal(nb);
 												else if (key === 'duplicate') handleDuplicate(nb);
-												else if (key === 'change-image') setBaseImageModal(nb);
+												else if (key === 'run-app' || key === 'open-app')
+													void navigate(`/projects/${pid}/notebooks/${nb.id}/app`, {
+														state: { title: nb.title },
+													});
+												else if (key === 'stop-app') {
+													const app = sessionByNotebook.get(nb.id)?.app;
+													if (app) setAppModal({ action: 'stop', notebook: nb, session: app });
+												} else if (key === 'change-image') setBaseImageModal(nb);
 												else if (key === 'history') setHistoryModal(nb);
 												else if (key === 'sync-keys')
 													setSyncKeys({ notebookId: nb.id, title: nb.title });
@@ -544,10 +617,21 @@ export function Project() {
 									))}
 								</div>
 								<div className="flex shrink-0 items-center gap-3">
-									<SessionStatusDot
-										session={sessionByNotebook.get(nb.id)}
-										loading={sessionsLoading}
-									/>
+									{live?.app && (
+										<AppSessionIndicator
+											session={live.app}
+											canControl={!!live.app.can?.stop}
+											canOpen={!!live.app.can?.attach}
+											editActive={!!live.edit}
+											onStop={() =>
+												setAppModal({ action: 'stop', notebook: nb, session: live.app! })
+											}
+											onRestart={() =>
+												setAppModal({ action: 'restart', notebook: nb, session: live.app! })
+											}
+										/>
+									)}
+									<SessionStatusDot session={live?.edit} loading={sessionsLoading} />
 									<span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
 										<span className="text-muted-foreground/70">by</span>
 										<UserLabel
@@ -693,6 +777,21 @@ export function Project() {
 				pendingLabel="Stopping..."
 				isPending={stopSession.isPending}
 				onConfirm={handleStop}
+			/>
+
+			<ConfirmDialog
+				isOpen={!!appModal}
+				onClose={() => setAppModal(null)}
+				title={appModal?.action === 'restart' ? 'Restart App' : 'Stop App'}
+				description={
+					appModal?.action === 'restart'
+						? `Restart the app for "${appModal.notebook.title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${appConnectionHint(appModal.session)}`
+						: `Stop the app for "${appModal?.notebook.title}"? Anyone using it will be disconnected.${appConnectionHint(appModal?.session)}`
+				}
+				confirmLabel={appModal?.action === 'restart' ? 'Restart' : 'Stop App'}
+				pendingLabel={appModal?.action === 'restart' ? 'Restarting...' : 'Stopping...'}
+				isPending={stopAppSession.isPending || restartAppSession.isPending}
+				onConfirm={handleAppAction}
 			/>
 
 			<FormDialog

@@ -19,6 +19,7 @@ import {
 	ProxyExposure,
 	runPreflight,
 	SubdomainExposure,
+	VIEWER_MODES,
 } from '@marimo-hub/core';
 import type { Metrics, Role, SandboxExposure, ViewerMode } from '@marimo-hub/core';
 import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
@@ -50,13 +51,35 @@ const DEFAULT_MAX_SESSIONS_PER_USER = 10;
 /** Parse the per-user concurrent-session cap. `0` disables the cap (unlimited). */
 function parseSessionCap(env: Env): number | undefined {
 	const raw = env.MARIMOHUB_MAX_SESSIONS_PER_USER;
-	if (raw === undefined) return DEFAULT_MAX_SESSIONS_PER_USER;
+	// Empty means unset, NOT `Number('') === 0` (which would silently disable the cap).
+	if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_SESSIONS_PER_USER;
 	const n = Number(raw);
 	if (!Number.isInteger(n) || n < 0) {
 		throw new ConfigError(
 			`Invalid MARIMOHUB_MAX_SESSIONS_PER_USER: ${raw} (expected a non-negative integer)`,
 			{
 				variable: 'MARIMOHUB_MAX_SESSIONS_PER_USER',
+				remediation: 'Use 0 (unlimited) or a positive integer.',
+			},
+		);
+	}
+	return n === 0 ? undefined : n;
+}
+
+/** Default per-project concurrent app (`run`) session cap when unset. */
+const DEFAULT_MAX_APPS_PER_PROJECT = 5;
+
+/** Parse the per-project app cap. `0` disables the cap (unlimited). */
+function parseAppCap(env: Env): number | undefined {
+	const raw = env.MARIMOHUB_MAX_APPS_PER_PROJECT;
+	// Empty means unset, NOT `Number('') === 0` (which would silently disable the cap).
+	if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_APPS_PER_PROJECT;
+	const n = Number(raw);
+	if (!Number.isInteger(n) || n < 0) {
+		throw new ConfigError(
+			`Invalid MARIMOHUB_MAX_APPS_PER_PROJECT: ${raw} (expected a non-negative integer)`,
+			{
+				variable: 'MARIMOHUB_MAX_APPS_PER_PROJECT',
 				remediation: 'Use 0 (unlimited) or a positive integer.',
 			},
 		);
@@ -133,17 +156,18 @@ function parseDefaultRole(env: Env): Role | undefined {
 }
 
 /**
- * What an effective `viewer` sees when opening a notebook. `static` (the
- * default) serves the last captured HTML snapshot — no compute, no code
- * execution; `ephemeral-sandbox` provisions a real kernel whose session is
- * never written back. Throws on any other value.
+ * What an effective `viewer` gets, each tier a superset of the last. `static`
+ * (the default) serves the last captured HTML snapshot — no compute, no code
+ * execution; `applications` also admits viewers to the shared notebook app;
+ * `ephemeral-sandbox` additionally provisions a real edit kernel whose session
+ * is never written back. Throws on any other value.
  */
 function parseViewerMode(env: Env): ViewerMode {
 	const raw = env.MARIMOHUB_VIEWER_MODE?.trim().toLowerCase();
 	if (raw === undefined || raw === '') return 'static';
-	if (raw === 'static' || raw === 'ephemeral-sandbox') return raw;
+	if ((VIEWER_MODES as readonly string[]).includes(raw)) return raw as ViewerMode;
 	throw new ConfigError(
-		`Invalid MARIMOHUB_VIEWER_MODE: ${env.MARIMOHUB_VIEWER_MODE} (expected static or ephemeral-sandbox)`,
+		`Invalid MARIMOHUB_VIEWER_MODE: ${env.MARIMOHUB_VIEWER_MODE} (expected ${VIEWER_MODES.join(', ')})`,
 		{ variable: 'MARIMOHUB_VIEWER_MODE' },
 	);
 }
@@ -282,6 +306,7 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 			viewerMode: parseViewerMode(env),
 			allowedOrigins: parseList(env.MARIMOHUB_ALLOWED_ORIGINS),
 			maxConcurrentSessionsPerUser: parseSessionCap(env),
+			maxAppsPerProject: parseAppCap(env),
 		},
 		// Workload Identity Federation (no-op unless the WIF env vars are configured).
 		...makeWif(env),

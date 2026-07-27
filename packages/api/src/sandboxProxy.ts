@@ -2,16 +2,18 @@
  * Request-time forwarding for `proxy` sandbox-exposure mode.
  *
  * The browser reaches a kernel via `…/proxy/<token>/…` on the app's origin. Each
- * request is authenticated and authorized per-session (the caller must hold the
- * project role that starting a session requires), then streamed to the kernel's
- * origin. The kernel runs under `--base-url=/proxy/<token>`, so the full path is
- * forwarded unchanged. `authorizeProxyRequest` is shared with the WebSocket path
- * (the Node entrypoint) so the two transports authorize identically.
+ * HTTP request is authenticated and authorized per-session (the caller must hold
+ * the project role that starting a session requires), then streamed to the
+ * kernel's origin. The kernel runs under `--base-url=/proxy/<token>`, so the full
+ * path is forwarded unchanged. `authorizeProxyRequest` is shared with the
+ * WebSocket path (the Node entrypoint) so the two transports authorize
+ * identically — but a WebSocket is authorized at the UPGRADE only: an
+ * established kernel socket outlives a later revocation until it closes.
  */
 import type { MiddlewareHandler } from 'hono';
 import { ForbiddenError, ProxyExposure, verifyProxyToken } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
-import { assertSessionControl, fail } from './shared';
+import { assertSessionAccess, fail } from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
 export type ProxyDecision =
@@ -91,11 +93,22 @@ export async function authorizeProxyRequest(
 		};
 	}
 
-	// Per-session authorization: editor+ (mirroring create-session), or the owner
-	// of this ephemeral (viewer) session — role re-checked per request, so a
-	// revoked membership cuts kernel access (see assertSessionControl).
+	// Per-session authorization — role re-checked per request, so a revoked
+	// membership cuts kernel access (assertSessionAccess says who is admitted).
+	let project;
 	try {
-		await assertSessionControl(deps.services.projects, session, user, deps.policy.defaultRole);
+		project = await deps.services.projects.getProject(projectId);
+	} catch {
+		// A session whose project is gone is unreachable, like a missing session.
+		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+	}
+	// A soft-deleted project's kernels go dark immediately: this gate is the only
+	// thing in the browser→kernel path, and the sandbox may still be alive.
+	if (project.status === 'deleted') {
+		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+	}
+	try {
+		assertSessionAccess(project, session, user, deps.policy);
 	} catch (err) {
 		if (err instanceof ForbiddenError) {
 			return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: err.message };
@@ -121,10 +134,26 @@ const HOP_BY_HOP = new Set([
 	'host',
 ]);
 
+/**
+ * Hub credentials must never reach the kernel: it runs `--no-token` and needs
+ * none, and notebook code can read request headers (`mo.app_meta().request`) —
+ * forwarding them would hand every caller's session cookie / bearer token to
+ * the notebook author. The WS forwarder strips the same pair.
+ */
+export const CREDENTIAL_HEADERS = new Set(['cookie', 'authorization']);
+
+/**
+ * In `proxy` exposure the kernel answers on the APP's origin, so a `Set-Cookie`
+ * it emits is written for the hub — letting notebook-author code overwrite the
+ * caller's hub session. The WS forwarder strips the same set from its 101.
+ */
+export const UNSAFE_RESPONSE_HEADERS = new Set(['set-cookie', 'set-cookie2']);
+
 function requestHeaders(request: Request, targetUrl: string): Headers {
 	const out = new Headers();
 	request.headers.forEach((value, key) => {
-		if (!HOP_BY_HOP.has(key.toLowerCase())) out.set(key, value);
+		const k = key.toLowerCase();
+		if (!HOP_BY_HOP.has(k) && !CREDENTIAL_HEADERS.has(k)) out.set(key, value);
 	});
 	// marimo validates a request's Origin against its own host; present the kernel
 	// origin so the proxied request reads as same-origin (Host is set by `fetch`).
@@ -140,7 +169,7 @@ function responseHeaders(headers: Headers): Headers {
 	const decoded = headers.has('content-encoding');
 	headers.forEach((value, key) => {
 		const k = key.toLowerCase();
-		if (HOP_BY_HOP.has(k)) return;
+		if (HOP_BY_HOP.has(k) || UNSAFE_RESPONSE_HEADERS.has(k)) return;
 		if (decoded && (k === 'content-encoding' || k === 'content-length')) return;
 		out.set(key, value);
 	});

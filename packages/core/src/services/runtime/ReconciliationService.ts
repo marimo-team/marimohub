@@ -4,7 +4,7 @@ import type { SandboxId } from '../../ids';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
 import type { NotebookService } from '../content/NotebookService';
-import { SandboxProvisioner } from './SandboxProvisioner';
+import { SessionRetirer } from './SessionRetirer';
 import { listAllKeys } from '../catalog/storage';
 import type { SessionService } from './SessionService';
 
@@ -43,7 +43,7 @@ export interface ReconcileResult {
  * never a concrete adapter — so it respects the inward dependency rule.
  */
 export class ReconciliationService {
-	private readonly provisioner: SandboxProvisioner;
+	private readonly retirer: SessionRetirer;
 
 	constructor(
 		private sessions: SessionService,
@@ -56,7 +56,14 @@ export class ReconciliationService {
 		/** Sandbox working dir, so save-on-reap reads the right path. See ProvisionOptions. */
 		private workdir?: string,
 	) {
-		this.provisioner = new SandboxProvisioner(compute);
+		this.retirer = new SessionRetirer({
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			persistWorkspace,
+			workdir,
+		});
 	}
 
 	async reconcile(opts?: { orphanGraceMs?: number }): Promise<ReconcileResult> {
@@ -96,28 +103,9 @@ export class ReconciliationService {
 				// Rule 1 — record is terminal OR mid-teardown (`terminating`) but the
 				// sandbox is still alive (and billing). A `terminating` record whose
 				// teardown never finished would otherwise leak the sandbox forever, since
-				// it is neither live (Rule 2) nor an unrecorded orphan (Rule 3). Save edits
-				// back when reachable, then guarantee the sandbox dies.
-				const sandbox = this.compute.create(sandboxId);
-				try {
-					await this.provisioner.teardown(
-						sandbox,
-						this.notebooks,
-						this.bucket,
-						session.project_id,
-						session.notebook_id,
-						session.user_id,
-						this.persistWorkspace,
-						this.workdir,
-						{ persistEdits: !session.ephemeral },
-					);
-				} catch {
-					try {
-						await sandbox.destroy();
-					} catch {
-						// Best-effort: a later sweep will retry if the sandbox survives.
-					}
-				}
+				// it is neither live (Rule 2) nor an unrecorded orphan (Rule 3). Retire
+				// through the one seam, minus the terminal mark (the record already is).
+				await this.retirer.retire(session, { markTerminated: false });
 				reclaimed++;
 			} else if (isLive && !activeIds.has(sandboxId)) {
 				// Rule 2 — live record, sandbox gone (crashed / idle-timed-out). The
@@ -129,6 +117,7 @@ export class ReconciliationService {
 				} catch {
 					// Best-effort: the session may have been deleted concurrently.
 				}
+				await this.sessions.releaseAppFor(session);
 			}
 		}
 

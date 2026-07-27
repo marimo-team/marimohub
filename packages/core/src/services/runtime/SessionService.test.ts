@@ -339,7 +339,13 @@ describe('SessionService', () => {
 			await sessions.setRunning(projectId, created.session_id, 'https://sandbox.example');
 
 			const stopping = await sessions.beginTerminating(projectId, created.session_id);
-			expect(stopping.status).toBe('terminating');
+			expect(stopping.session.status).toBe('terminating');
+			expect(stopping.transitioned).toBe(true);
+
+			// A second stop loses the transition race — it must not claim the teardown.
+			const again = await sessions.beginTerminating(projectId, created.session_id);
+			expect(again.session.status).toBe('terminating');
+			expect(again.transitioned).toBe(false);
 
 			const stopped = await sessions.markTerminated(projectId, created.session_id);
 			expect(stopped.status).toBe('terminated');

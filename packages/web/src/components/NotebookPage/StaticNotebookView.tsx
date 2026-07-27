@@ -10,7 +10,8 @@ interface StaticNotebookViewProps {
 }
 
 /**
- * What a viewer sees under MARIMOHUB_VIEWER_MODE=static: the notebook's last
+ * What a viewer sees opening a notebook when their viewer mode grants no edit
+ * kernel (MARIMOHUB_VIEWER_MODE=static or applications): the notebook's last
  * captured HTML snapshot (from a past editor session's teardown), or an empty
  * state when none exists yet. The snapshot is user-generated HTML, so it renders
  * in an iframe WITHOUT `allow-same-origin` — an opaque origin, unlike the

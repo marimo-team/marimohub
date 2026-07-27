@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
 import { MemoryBucket } from '../../testing';
-import { mutateObject, withCasRetry } from './cas';
+import { acquireSingletonClaim, mutateObject, releaseSingletonClaim, withCasRetry } from './cas';
 
 describe('withCasRetry', () => {
 	it('returns the first successful attempt', async () => {
@@ -148,5 +148,117 @@ describe('mutateObject', () => {
 
 		expect(seen).toEqual([0, 99]); // applied to the stale value, then re-applied to fresh
 		expect(result.n).toBe(100);
+	});
+});
+
+describe('releaseSingletonClaim', () => {
+	const KEY = 'claim';
+	const serialize = (holder: string | null) => JSON.stringify({ session_id: holder });
+	const parseHolder = (raw: unknown) => (raw as { session_id: string | null }).session_id;
+
+	const claimCfg = (bucket: MemoryBucket) => ({
+		bucket,
+		key: KEY,
+		serialize,
+		parseHolder,
+		isHolderLive: async () => true,
+	});
+
+	const holderAt = async (bucket: MemoryBucket) => {
+		const obj = await bucket.get(KEY);
+		return obj ? parseHolder(await obj.json()) : null;
+	};
+
+	/** Let B replace the claim in the window between release's read and its write. */
+	const raceReacquire = (bucket: MemoryBucket, next: string) => {
+		const realGet = bucket.get.bind(bucket);
+		let raced = false;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			const obj = await realGet(key);
+			if (!raced && key === KEY) {
+				raced = true;
+				await bucket.put(KEY, serialize(next));
+			}
+			return obj;
+		});
+	};
+
+	it('marks the claim free instead of deleting it', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put(KEY, serialize('A'));
+
+		await releaseSingletonClaim(claimCfg(bucket), 'A');
+
+		expect(await bucket.get(KEY)).not.toBeNull();
+		expect(await holderAt(bucket)).toBeNull();
+	});
+
+	it('leaves a claim another session holds untouched', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put(KEY, serialize('B'));
+
+		await releaseSingletonClaim(claimCfg(bucket), 'A');
+
+		expect(await holderAt(bucket)).toBe('B');
+	});
+
+	it('does not delete a claim a new holder acquired mid-release', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put(KEY, serialize('A'));
+		raceReacquire(bucket, 'B');
+
+		await releaseSingletonClaim(claimCfg(bucket), 'A');
+		vi.restoreAllMocks();
+
+		expect(await holderAt(bucket)).toBe('B');
+	});
+
+	it('a release racing a re-acquire cannot hand the singleton to a third session', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put(KEY, serialize('A'));
+		raceReacquire(bucket, 'B');
+
+		await releaseSingletonClaim(claimCfg(bucket), 'A');
+		vi.restoreAllMocks();
+
+		// B is live, so C must lose.
+		expect(await acquireSingletonClaim(claimCfg(bucket), 'C')).toEqual({
+			acquired: false,
+			holder: 'B',
+		});
+	});
+
+	it('keeps exactly one holder when a stale release lands after the winner re-asserts its claim', async () => {
+		// The create saga's `app_claim_recheck` ordering, where A provisioned slowly
+		// and B stole the claim: B re-asserts, then A's compensation releases late.
+		const bucket = new MemoryBucket();
+		await bucket.put(KEY, serialize('A'));
+		expect(await acquireSingletonClaim(claimCfg(bucket), 'B')).toEqual({
+			acquired: false,
+			holder: 'A',
+		});
+
+		// A's saga aborts and releases; B then wins the free key and re-asserts.
+		await releaseSingletonClaim(claimCfg(bucket), 'A');
+		expect(await acquireSingletonClaim(claimCfg(bucket), 'B')).toEqual({
+			acquired: true,
+			holder: 'B',
+		});
+		// A's compensation fires a second, stale release.
+		await releaseSingletonClaim(claimCfg(bucket), 'A');
+
+		expect(await holderAt(bucket)).toBe('B');
+	});
+
+	it('a released claim is free for the next acquirer even though the object remains', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put(KEY, serialize('A'));
+		await releaseSingletonClaim(claimCfg(bucket), 'A');
+
+		expect(await acquireSingletonClaim(claimCfg(bucket), 'C')).toEqual({
+			acquired: true,
+			holder: 'C',
+		});
+		expect(await holderAt(bucket)).toBe('C');
 	});
 });

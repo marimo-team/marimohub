@@ -105,6 +105,58 @@ describe('authorizeProxyRequest', () => {
 		expect(d).toMatchObject({ kind: 'reject', status: 403 });
 	});
 
+	describe('viewer access to the shared app kernel', () => {
+		let appToken: string;
+
+		beforeEach(async () => {
+			const services = createServices(bucket);
+			const notebooks = await services.notebooks.listNotebooks(pid);
+			const session = await services.sessions.createSession({
+				notebook_id: notebooks[0].id,
+				project_id: pid,
+				user_id: ACTOR,
+				mode: 'app',
+			});
+			await services.sessions.setRunning(pid, session.session_id, '/proxy/x/', false, ORIGIN);
+			appToken = await signProxyToken(pid, session.session_id as never, SECRET);
+		});
+
+		const viewerDeps = (viewerMode?: 'static' | 'applications' | 'ephemeral-sandbox') => ({
+			...deps(STRANGER),
+			policy: { defaultRole: 'viewer' as const, ...(viewerMode ? { viewerMode } : {}) },
+		});
+
+		it('forwards a viewer to the app kernel under `applications` and `ephemeral-sandbox`', async () => {
+			for (const mode of ['applications', 'ephemeral-sandbox'] as const) {
+				const d = await authorizeProxyRequest(req(`/proxy/${appToken}/`), viewerDeps(mode));
+				expect(d.kind).toBe('forward');
+			}
+		});
+
+		it('rejects a viewer from the app kernel under `static` (and when unset)', async () => {
+			for (const dep of [viewerDeps('static'), viewerDeps()]) {
+				const d = await authorizeProxyRequest(req(`/proxy/${appToken}/`), dep);
+				expect(d).toMatchObject({ kind: 'reject', status: 403 });
+			}
+		});
+
+		it('never admits a viewer to another user’s EDIT kernel, whatever the viewer mode', async () => {
+			const d = await authorizeProxyRequest(
+				req(`/proxy/${token}/`),
+				viewerDeps('ephemeral-sandbox'),
+			);
+			expect(d).toMatchObject({ kind: 'reject', status: 403 });
+		});
+
+		it('members-only deployment: a non-member gains nothing from `applications`', async () => {
+			const d = await authorizeProxyRequest(req(`/proxy/${appToken}/`), {
+				...deps(STRANGER),
+				policy: { viewerMode: 'applications' as const },
+			});
+			expect(d).toMatchObject({ kind: 'reject', status: 403 });
+		});
+	});
+
 	it('forwards an authorized request to the kernel origin, preserving the full path', async () => {
 		const d = await authorizeProxyRequest(req(`/proxy/${token}/assets/app.js?v=1`), deps(ACTOR));
 		expect(d).toMatchObject({
@@ -118,6 +170,14 @@ describe('authorizeProxyRequest', () => {
 		await createServices(bucket).sessions.terminate(pid, sessionId as never);
 		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(ACTOR));
 		expect(d).toMatchObject({ kind: 'reject', status: 410 });
+	});
+
+	it('rejects a session whose project was soft-deleted', async () => {
+		// Deleting a project must cut kernel access immediately — the sandbox may
+		// still be alive, and in proxy mode this is the only gate in its path.
+		await createServices(bucket).projects.deleteProject(pid, ACTOR);
+		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(ACTOR));
+		expect(d.kind).not.toBe('forward');
 	});
 
 	it('rejects 404 when the token references a session that does not exist', async () => {
@@ -157,6 +217,14 @@ describe('forwardHttp', () => {
 
 	beforeAll(async () => {
 		server = createServer((req, res) => {
+			if (req.url === '/setcookie') {
+				res.writeHead(200, {
+					'set-cookie': 'mh_session=attacker; Path=/',
+					'content-type': 'text/plain',
+				});
+				res.end('ok');
+				return;
+			}
 			if (req.url === '/gzip') {
 				const body = gzipSync('hello '.repeat(20));
 				res.writeHead(200, {
@@ -198,6 +266,31 @@ describe('forwardHttp', () => {
 	it('returns 502 when the kernel is unreachable', async () => {
 		const res = await forwardHttp(new Request('https://hub/x'), 'http://127.0.0.1:1/down');
 		expect(res.status).toBe(502);
+	});
+
+	it('strips hub credentials (Cookie/Authorization) before the kernel sees the request', async () => {
+		// Notebook code can read request headers (mo.app_meta().request) — the
+		// caller's hub session cookie / PAT must never reach it.
+		const req = new Request('https://hub.example.com/proxy/tok/api', {
+			headers: {
+				cookie: 'hub_session=secret',
+				authorization: 'Bearer mhub_pat_secret',
+				'x-custom': 'passes',
+			},
+		});
+		const res = await forwardHttp(req, `${origin}/echo`);
+		const seen = (await res.json()) as Record<string, string>;
+		expect(seen.cookie).toBeUndefined();
+		expect(seen.authorization).toBeUndefined();
+		expect(seen['x-custom']).toBe('passes');
+	});
+
+	it('strips Set-Cookie from the kernel response', async () => {
+		// In proxy mode a kernel cookie is written for the hub's own origin, so a
+		// notebook could overwrite the caller's hub session.
+		const res = await forwardHttp(new Request('https://hub/x'), `${origin}/setcookie`);
+		expect(res.headers.get('set-cookie')).toBeNull();
+		expect(await res.text()).toBe('ok');
 	});
 });
 

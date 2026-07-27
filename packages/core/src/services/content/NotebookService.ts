@@ -671,6 +671,13 @@ export class NotebookService {
 			() => ({ status: 'deleted' as const, updated_at: now }),
 			(p) => ({ updated_at: now, notebook_count: Math.max(0, p.notebook_count - 1) }),
 		);
+
+		// Drop the app-singleton claim: a deleted notebook's id never recurs, so
+		// without this the pointer would leak forever (the stale-claim self-heal
+		// only runs on the next `claimApp`, which a deleted notebook never gets).
+		// Cleanup of an orphaned pointer, not a claim write — the claim's write
+		// discipline (claimApp/releaseApp) still holds for live notebooks.
+		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
 	}
 
 	async listVersions(projectId: ProjectId, notebookId: NotebookId): Promise<Version[]> {
@@ -862,6 +869,9 @@ export class NotebookService {
 		// Notebook base is `projects/{pid}/notebooks/{nid}`; the subtree prefix is
 		// that with a trailing slash so every file under it is captured.
 		await deleteByPrefix(this.bucket, `${nb.base}/`);
+		// Belt-and-braces with deleteNotebook: the app claim lives under `_system/`,
+		// outside the notebook subtree.
+		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
 	}
 
 	/**

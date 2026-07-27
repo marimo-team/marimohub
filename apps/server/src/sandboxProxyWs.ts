@@ -9,7 +9,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import type { Duplex } from 'node:stream';
-import { authorizeProxyRequest } from '@marimo-hub/api';
+import { authorizeProxyRequest, UNSAFE_RESPONSE_HEADERS } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
 import { logEvent } from './log';
 
@@ -58,8 +58,11 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 				const lib = target.protocol === 'https:' ? https : http;
 				// Rewrite Host + Origin to the kernel so marimo's origin/host check
 				// (which would otherwise see the app host) reads the upgrade as
-				// same-origin. The rest of the WS handshake headers pass through.
-				const headers = { ...req.headers, host: target.host, origin: target.origin };
+				// same-origin. Hub credentials are stripped (CREDENTIAL_HEADERS in
+				// sandboxProxy.ts — notebook code can read request headers); the rest
+				// of the WS handshake headers pass through.
+				const { cookie: _cookie, authorization: _authorization, ...forwarded } = req.headers;
+				const headers = { ...forwarded, host: target.host, origin: target.origin };
 				const proxyReq = lib.request({
 					protocol: target.protocol,
 					hostname: target.hostname,
@@ -80,6 +83,7 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 					const headerLines: string[] = [statusLine];
 					for (const [key, value] of Object.entries(proxyRes.headers)) {
 						if (value === undefined) continue;
+						if (UNSAFE_RESPONSE_HEADERS.has(key.toLowerCase())) continue;
 						if (Array.isArray(value)) for (const v of value) headerLines.push(`${key}: ${v}`);
 						else headerLines.push(`${key}: ${value}`);
 					}

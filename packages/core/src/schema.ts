@@ -3,6 +3,7 @@ import {
 	NOTEBOOK_STATUSES,
 	PROJECT_STATUSES,
 	ROLES,
+	SESSION_MODES,
 	SESSION_STATUSES,
 	SOURCE_TYPES,
 } from './constants';
@@ -445,6 +446,24 @@ export const SessionSchema = z.object({
 	 * this. Absent = persisting (all records predating the flag).
 	 */
 	ephemeral: z.boolean().optional(),
+	/**
+	 * `edit` (per-user editor) or `app` (read-only, shared per notebook, never
+	 * written back — see `sessionPersistsEdits`). Absent = `edit` (records
+	 * predating the field); read via `sessionMode()`, never directly. Immutable
+	 * for the session's life.
+	 */
+	mode: z.enum(SESSION_MODES).optional(),
+	/**
+	 * `app` only: the notebook's head version at provision. Never mutated after
+	 * create — comparing it against the current head is what detects a stale app.
+	 */
+	source_version_id: VersionIdSchema.optional(),
+	/**
+	 * `app` only: connection count from the lifecycle sweep's last kernel probe —
+	 * approximate by design (as fresh as the sweep cadence).
+	 */
+	active_connections: z.number().int().nonnegative().optional(),
+	connections_checked_at: z.iso.datetime().optional(),
 	runtime: RuntimeSchema.optional(),
 	sandbox_id: SandboxIdSchema.optional(),
 	sandbox_url: z.string().optional(),
@@ -467,6 +486,25 @@ export const SessionSchema = z.object({
 });
 
 export type Session = z.infer<typeof SessionSchema>;
+
+// --- App claim ---
+//
+// Per-notebook pointer anchoring the "one app sandbox per notebook" singleton:
+// `_system/apps/{pid}/{nid}.json` names the `run` session that owns the app.
+// Written create-if-absent by the create saga's `app_claim` step (exactly one
+// concurrent "Run as app" wins; losers attach to the winner via reuse) and
+// replaced via ETag CAS when it points at a dead session. Beside the catalog
+// pointer, this is the second CAS-managed mutable object in the store — all
+// writes go through `SessionService.claimApp`/`releaseApp`.
+//
+// `session_id: null` is the free marker a release CAS-writes in place of a
+// delete, so a release racing a re-acquire cannot drop the new holder's claim.
+export const AppClaimSchema = z.object({
+	session_id: SessionIdSchema.nullable(),
+	claimed_at: z.iso.datetime(),
+});
+
+export type AppClaim = z.infer<typeof AppClaimSchema>;
 
 // --- Identity ---
 //

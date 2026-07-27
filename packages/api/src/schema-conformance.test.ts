@@ -135,10 +135,16 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'last_snapshot_at',
 			'sandbox_reclaimed_at',
 		];
+		// `can` is response-only: the caller's evaluated grants, computed per
+		// request — never stored on the record.
+		const responseOnlyFields = ['can'];
 		const coreKeys = shapeKeys(CoreSessionSchema);
 		const apiKeys = shapeKeys(SessionResponseSchema);
-		expect(coreKeys.filter((k) => !internalSessionFields.includes(k))).toEqual(apiKeys);
+		expect(coreKeys.filter((k) => !internalSessionFields.includes(k))).toEqual(
+			apiKeys.filter((k) => !responseOnlyFields.includes(k)),
+		);
 		for (const f of internalSessionFields) expect(coreKeys).toContain(f);
+		for (const f of responseOnlyFields) expect(apiKeys).toContain(f);
 	});
 
 	// The Source discriminated union members must each match their core member

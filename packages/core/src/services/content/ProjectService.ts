@@ -323,6 +323,9 @@ export class ProjectService {
 		// the `project.json` filename) so it stays consistent with the path layout.
 		const prefix = paths.project(id).meta.replace(/project\.json$/, '');
 		await deleteByPrefix(this.bucket, prefix);
+		// App-singleton claims live under `_system/`, outside the project subtree —
+		// reclaim them too or they leak forever (project ids never recur).
+		await deleteByPrefix(this.bucket, paths.appClaimsForProject(id));
 	}
 
 	/**
