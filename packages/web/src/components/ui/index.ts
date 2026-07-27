@@ -53,7 +53,12 @@ export type { TooltipProps } from './Tooltip';
 
 export { SessionStatusDot } from './SessionStatusDot';
 
-export { UserLabel } from './UserLabel';
+export { UserLabel, displayName } from './UserLabel';
 export type { UserLabelProps } from './UserLabel';
+
+export { CopyField } from './CopyField';
+export type { CopyFieldProps } from './CopyField';
+
+export { WriteOnceWarning } from './WriteOnceWarning';
 
 export { ErrorBoundary } from './ErrorBoundary';

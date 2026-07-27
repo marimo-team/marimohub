@@ -1,4 +1,3 @@
-import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import { ChevronRight, Folder, FolderPlus, Plus, SearchX } from 'lucide-react';
@@ -21,7 +20,8 @@ import {
 } from '@/components/form';
 import { useProjectsQuery, useCreateProject } from '@/api/hooks';
 import { useDisclosure } from '@/hooks/useDisclosure';
-import { useSearchHotkey } from '@/hooks/useSearchHotkey';
+import { useSearchField } from '@/hooks/useSearchField';
+import { toastError } from '@/lib/errors';
 import { filterBySearch } from '@/lib/search';
 
 const projectSchema = z.object({
@@ -32,10 +32,8 @@ const projectSchema = z.object({
 const EMPTY_PROJECT = { name: '', description: '' };
 
 export function ProjectList() {
-	const [searchQuery, setSearchQuery] = useState('');
+	const search = useSearchField();
 	const createModal = useDisclosure();
-	const searchRef = useRef<HTMLInputElement>(null);
-	useSearchHotkey(searchRef);
 
 	const { data: projects } = useProjectsQuery();
 	const createProject = useCreateProject();
@@ -51,7 +49,7 @@ export function ProjectList() {
 				toast.success(`Created project "${name}"`);
 				createModal.close();
 			} catch (err) {
-				toast.error((err as Error).message);
+				toastError(err);
 			}
 		},
 	});
@@ -59,7 +57,7 @@ export function ProjectList() {
 
 	const filteredProjects = filterBySearch(
 		projects,
-		searchQuery,
+		search.query,
 		(p) => `${p.name} ${p.description}`,
 	);
 
@@ -86,17 +84,17 @@ export function ProjectList() {
 				<SearchField
 					aria-label="Search projects"
 					placeholder="Search projects..."
-					value={searchQuery}
-					onChange={setSearchQuery}
-					inputRef={searchRef}
+					value={search.query}
+					onChange={search.setQuery}
+					inputRef={search.inputRef}
 				/>
 			</div>
 
 			{filteredProjects.length === 0 ? (
-				searchQuery ? (
+				search.query ? (
 					<EmptyState
 						icon={<SearchX />}
-						message={`No projects matching "${searchQuery}"`}
+						message={`No projects matching "${search.query}"`}
 						description="Try a different search term."
 					/>
 				) : (

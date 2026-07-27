@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { AlertTriangle, AppWindow, ArrowLeft, Eye, Pencil, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -21,6 +21,7 @@ import {
 } from '@/api/hooks';
 import { useNotebookSession } from '@/hooks/useNotebookSession';
 import type { SessionEnded } from '@/hooks/useNotebookSession';
+import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
@@ -56,7 +57,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const notebookTitle = (location.state as { title?: string } | null)?.title ?? nid ?? 'Notebook';
 	const renameModal = useDisclosure();
 	// Stop/Restart disconnect everyone using the shared app, so both confirm first.
-	const [confirmAppAction, setConfirmAppAction] = useState<'stop' | 'restart' | null>(null);
+	const confirmAppAction = useDialogTarget<'stop' | 'restart'>();
 
 	// The viewer branch (server-enforced regardless): editors get a session as
 	// always; a viewer gets an edit kernel only when the deployment's evaluated
@@ -108,7 +109,8 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	// time someone types.
 	// Stops once the app has ended — the banner it feeds is gone with the iframe.
 	const { data: projectSessions } = useProjectSessionsQuery(pid!, isApp && !ended);
-	const editActive = isApp && !!sessionsByNotebook(projectSessions).get(nid!)?.edit;
+	const sessionByNotebook = useMemo(() => sessionsByNotebook(projectSessions), [projectSessions]);
+	const editActive = isApp && !!sessionByNotebook.get(nid!)?.edit;
 	const appStale =
 		isApp && !!session && !editActive && isAppStale(session, notebook?.source.current_version_id);
 	// A viewer deep-linking to /app gets a plain 403 panel; retrying can only
@@ -186,7 +188,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 						<Button
 							variant="unstyled"
 							className="flex h-[26px] items-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11"
-							onPress={() => setConfirmAppAction('restart')}
+							onPress={() => confirmAppAction.open('restart')}
 						>
 							<RefreshCw className="size-3" />
 							Restart
@@ -196,7 +198,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 						<Button
 							variant="unstyled"
 							className="flex h-[26px] items-center rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-destructive hover:bg-destructive/10 hover:text-destructive max-md:min-h-11"
-							onPress={isApp ? () => setConfirmAppAction('stop') : handleStop}
+							onPress={isApp ? () => confirmAppAction.open('stop') : handleStop}
 						>
 							Stop
 						</Button>
@@ -243,7 +245,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 								<Button
 									variant="unstyled"
 									className="ml-1 shrink-0 rounded text-xs font-medium text-primary underline-offset-2 hover:underline"
-									onPress={() => setConfirmAppAction('restart')}
+									onPress={() => confirmAppAction.open('restart')}
 								>
 									Restart to update
 								</Button>
@@ -317,18 +319,18 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 
 			{isApp && (
 				<ConfirmDialog
-					isOpen={confirmAppAction !== null}
-					onClose={() => setConfirmAppAction(null)}
-					title={confirmAppAction === 'restart' ? 'Restart App' : 'Stop App'}
+					isOpen={confirmAppAction.isOpen}
+					onClose={confirmAppAction.close}
+					title={confirmAppAction.target === 'restart' ? 'Restart App' : 'Stop App'}
 					description={
-						confirmAppAction === 'restart'
+						confirmAppAction.target === 'restart'
 							? `Restart the app for "${title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${appConnectionHint(session ?? undefined)}`
 							: `Stop the app for "${title}"? Anyone using it will be disconnected.${appConnectionHint(session ?? undefined)}`
 					}
-					confirmLabel={confirmAppAction === 'restart' ? 'Restart' : 'Stop App'}
+					confirmLabel={confirmAppAction.target === 'restart' ? 'Restart' : 'Stop App'}
 					onConfirm={() => {
-						const action = confirmAppAction;
-						setConfirmAppAction(null);
+						const action = confirmAppAction.target;
+						confirmAppAction.close();
 						if (action === 'restart') restart();
 						else handleStop();
 					}}

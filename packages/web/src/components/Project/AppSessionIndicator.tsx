@@ -1,9 +1,8 @@
-import { useState } from 'react';
 import { AppWindow, Power, RefreshCw } from 'lucide-react';
 import type { Session } from '@/types';
 import { useNotebookQuery, useUsersQuery } from '@/api/hooks';
 import { Button, Popover, UserLabel } from '@/components/ui';
-import { useInterval } from '@/hooks/useInterval';
+import { useNow } from '@/hooks/useNow';
 import { cn } from '@/lib/utils';
 import { formatDuration, formatRelative } from '@/lib/time';
 
@@ -16,13 +15,6 @@ const APP_STATUS: Partial<
 	starting: { className: 'text-amber-500', label: 'App starting', pulse: true },
 	terminating: { className: 'text-orange-500', label: 'App stopping', pulse: true },
 };
-
-/** Tick `now` once a second so an open popover's elapsed duration stays live. */
-function useNow(): number {
-	const [now, setNow] = useState(() => Date.now());
-	useInterval(() => setNow(Date.now()), 1000);
-	return now;
-}
 
 /**
  * Whether the app session is serving an older version than the notebook's

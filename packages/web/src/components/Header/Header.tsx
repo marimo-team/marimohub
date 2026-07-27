@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
 import { ChevronDown, Copy, KeyRound, Moon, Sun } from 'lucide-react';
@@ -6,12 +5,15 @@ import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { Brand } from '@/components/ui';
+import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
+import { useDisclosure } from '@/hooks/useDisclosure';
 import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
 
 export function Header() {
 	const { user, signOut } = useAuth();
 	const { theme, toggleTheme } = useTheme();
-	const [tokensOpen, setTokensOpen] = useState(false);
+	const tokensDialog = useDisclosure();
+	const { copy } = useCopyToClipboard();
 
 	return (
 		<header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-md max-md:px-3">
@@ -52,9 +54,8 @@ export function Header() {
 								onAction={(key) => {
 									if (key === 'signout') signOut();
 									else if (key === 'copy-id') {
-										void navigator.clipboard.writeText(user.id);
-										toast.success('User id copied');
-									} else if (key === 'api-tokens') setTokensOpen(true);
+										void copy(user.id).then((ok) => ok && toast.success('User id copied'));
+									} else if (key === 'api-tokens') tokensDialog.open();
 								}}
 							>
 								<MenuItem
@@ -95,7 +96,7 @@ export function Header() {
 				)}
 			</div>
 
-			<ApiTokensDialog isOpen={tokensOpen} onClose={() => setTokensOpen(false)} />
+			<ApiTokensDialog isOpen={tokensDialog.isOpen} onClose={tokensDialog.close} />
 		</header>
 	);
 }

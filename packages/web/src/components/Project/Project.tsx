@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { FileTrigger } from 'react-aria-components';
 import { toast } from 'sonner';
@@ -78,8 +78,10 @@ import { SyncedNotebookDialog } from '@/components/Notebook/SyncedNotebookDialog
 import type { SyncedNotebookCreated } from '@/components/Notebook/SyncedNotebookDialog';
 import { SyncKeysDialog } from '@/components/Notebook/SyncKeysDialog';
 import { VersionHistoryDialog } from '@/components/Notebook/VersionHistoryDialog';
+import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
-import { useSearchHotkey } from '@/hooks/useSearchHotkey';
+import { useSearchField } from '@/hooks/useSearchField';
+import { toastError } from '@/lib/errors';
 import { filterBySearch } from '@/lib/search';
 import { formatRelative } from '@/lib/time';
 import { syncUrl } from '@/lib/links';
@@ -111,36 +113,28 @@ const NEW_NOTEBOOK_CODE = (name: string) =>
 export function Project() {
 	const { pid } = useParams<{ pid: string }>();
 	const navigate = useNavigate();
-	const [searchQuery, setSearchQuery] = useState('');
-	const searchRef = useRef<HTMLInputElement>(null);
-	useSearchHotkey(searchRef);
+	const search = useSearchField();
 
-	// Data-bearing dialogs keep the target in state; boolean dialogs use useDisclosure.
+	// Dialogs acting on a row use useDialogTarget; plain ones use useDisclosure.
 	const uploadModal = useDisclosure();
 	// When set, a `.py` file's contents seed the new notebook instead of the template.
 	const [uploadedCode, setUploadedCode] = useState<string | null>(null);
 	const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
-	const [deleteModal, setDeleteModal] = useState<NotebookEntry | null>(null);
-	const [renameModal, setRenameModal] = useState<NotebookEntry | null>(null);
-	const [baseImageModal, setBaseImageModal] = useState<NotebookEntry | null>(null);
-	const [historyModal, setHistoryModal] = useState<NotebookEntry | null>(null);
+	const deleteModal = useDialogTarget<NotebookEntry>();
+	const renameModal = useDialogTarget<NotebookEntry>();
+	const baseImageModal = useDialogTarget<NotebookEntry>();
+	const historyModal = useDialogTarget<NotebookEntry>();
 	const syncedCreateModal = useDisclosure();
-	const [syncKeys, setSyncKeys] = useState<{
-		notebookId: string;
-		title: string;
-		token?: string;
-	} | null>(null);
-	const [rotateModal, setRotateModal] = useState<NotebookEntry | null>(null);
-	const [stopModal, setStopModal] = useState<{ notebook: NotebookEntry; session: Session } | null>(
-		null,
-	);
+	const syncKeys = useDialogTarget<{ notebookId: string; title: string; token?: string }>();
+	const rotateModal = useDialogTarget<NotebookEntry>();
+	const stopModal = useDialogTarget<{ notebook: NotebookEntry; session: Session }>();
 	// The shared app's stop/restart confirm — separate from the edit-kernel stop
 	// so the copy can warn about disconnecting other people.
-	const [appModal, setAppModal] = useState<{
+	const appModal = useDialogTarget<{
 		action: 'stop' | 'restart';
 		notebook: NotebookEntry;
 		session: Session;
-	} | null>(null);
+	}>();
 	// Project-level edit/delete (this page's project, not the notebooks).
 	const editProjectModal = useDisclosure();
 	const deleteProjectModal = useDisclosure();
@@ -163,9 +157,9 @@ export function Project() {
 	const offersImageChoice = sandboxImages.length > 1;
 	const rotateSyncToken = useRotateSyncToken(pid!);
 	// Re-bound each render to the notebook in the stop dialog; only fired on confirm.
-	const stopSession = useStopSession(pid!, stopModal?.notebook.id ?? '');
-	const stopAppSession = useStopSession(pid!, appModal?.notebook.id ?? '');
-	const restartAppSession = useRestartApp(pid!, appModal?.notebook.id ?? '');
+	const stopSession = useStopSession(pid!, stopModal.target?.notebook.id ?? '');
+	const stopAppSession = useStopSession(pid!, appModal.target?.notebook.id ?? '');
+	const restartAppSession = useRestartApp(pid!, appModal.target?.notebook.id ?? '');
 	// Per-session actions render from the server-evaluated `session.can` grants.
 	// Start has no session to carry grants, so it derives from the evaluated
 	// admission row in capabilities. The server enforces all of it regardless.
@@ -186,7 +180,7 @@ export function Project() {
 				toast.success(`Updated project "${name}"`);
 				editProjectModal.close();
 			} catch (err) {
-				toast.error((err as Error).message);
+				toastError(err);
 			}
 		},
 	});
@@ -208,7 +202,7 @@ export function Project() {
 				toast.success(`Deleted "${project.name}"`);
 				void navigate('/');
 			} catch (err) {
-				toast.error((err as Error).message);
+				toastError(err);
 			}
 		},
 	});
@@ -229,7 +223,7 @@ export function Project() {
 				toast.success(`Created "${name}"`);
 				closeCreateModal();
 			} catch (err) {
-				toast.error((err as Error).message);
+				toastError(err);
 			}
 		},
 	});
@@ -248,9 +242,7 @@ export function Project() {
 					);
 					secretsModal.close();
 				},
-				onError: (err) => {
-					toast.error(err.message);
-				},
+				onError: toastError,
 			},
 		);
 	};
@@ -260,16 +252,10 @@ export function Project() {
 
 	// Resolve every author (and session starter) shown on the page in one batch,
 	// so opaque user ids render as names.
-	const userIds = useMemo(
-		() => [
-			...new Set([
-				...(notebooks ?? []).map((nb) => nb.author),
-				...(sessions ?? []).map((s) => s.user_id),
-			]),
-		],
-		[notebooks, sessions],
-	);
-	const { data: users, isLoading: usersLoading } = useUsersQuery(userIds);
+	const { data: users, isLoading: usersLoading } = useUsersQuery([
+		...(notebooks ?? []).map((nb) => nb.author),
+		...(sessions ?? []).map((s) => s.user_id),
+	]);
 
 	const closeCreateModal = () => {
 		setUploadedCode(null);
@@ -298,16 +284,15 @@ export function Project() {
 	};
 
 	const handleDelete = () => {
-		if (!deleteModal) return;
+		const nb = deleteModal.target;
+		if (!nb) return;
 
-		deleteNotebook.mutate(deleteModal.id, {
+		deleteNotebook.mutate(nb.id, {
 			onSuccess: () => {
-				toast.success(`Deleted "${deleteModal.title}"`);
-				setDeleteModal(null);
+				toast.success(`Deleted "${nb.title}"`);
+				deleteModal.close();
 			},
-			onError: (err) => {
-				toast.error(err.message);
-			},
+			onError: toastError,
 		});
 	};
 
@@ -320,10 +305,7 @@ export function Project() {
 	};
 
 	const handleDownloadFile = (nb: NotebookEntry) => {
-		downloadNotebookFile.mutate(
-			{ notebookId: nb.id, title: nb.title },
-			{ onError: (err) => toast.error(err.message) },
-		);
+		downloadNotebookFile.mutate({ notebookId: nb.id, title: nb.title }, { onError: toastError });
 	};
 
 	const handleDownloadWorkspace = (nb: NotebookEntry) => {
@@ -335,22 +317,21 @@ export function Project() {
 	};
 
 	const handleStop = () => {
-		if (!stopModal) return;
+		const stop = stopModal.target;
+		if (!stop) return;
 
-		stopSession.mutate(stopModal.session.session_id, {
+		stopSession.mutate(stop.session.session_id, {
 			onSuccess: () => {
-				toast.success(`Stopped "${stopModal.notebook.title}"`);
-				setStopModal(null);
+				toast.success(`Stopped "${stop.notebook.title}"`);
+				stopModal.close();
 			},
-			onError: (err) => {
-				toast.error(err.message);
-			},
+			onError: toastError,
 		});
 	};
 
 	const handleAppAction = () => {
-		if (!appModal) return;
-		const { action, notebook, session } = appModal;
+		if (!appModal.target) return;
+		const { action, notebook, session } = appModal.target;
 		const mutation = action === 'stop' ? stopAppSession : restartAppSession;
 		mutation.mutate(session.session_id, {
 			onSuccess: () => {
@@ -359,29 +340,27 @@ export function Project() {
 						? `Stopped the app for "${notebook.title}"`
 						: `Restarted the app for "${notebook.title}"`,
 				);
-				setAppModal(null);
+				appModal.close();
 			},
-			onError: (err) => {
-				toast.error(err.message);
-			},
+			onError: toastError,
 		});
 	};
 
 	const handleSyncedCreated = (result: SyncedNotebookCreated) => {
 		syncedCreateModal.close();
-		setSyncKeys({ notebookId: result.notebookId, title: result.title, token: result.token });
+		syncKeys.open({ notebookId: result.notebookId, title: result.title, token: result.token });
 	};
 
 	const handleRotateToken = () => {
-		if (!rotateModal) return;
-		const { id, title } = rotateModal;
+		if (!rotateModal.target) return;
+		const { id, title } = rotateModal.target;
 		rotateSyncToken.mutate(id, {
 			onSuccess: (data) => {
 				toast.success(`Rotated sync token for "${title}"`);
-				setRotateModal(null);
-				setSyncKeys({ notebookId: id, title, token: data.sync_token });
+				rotateModal.close();
+				syncKeys.open({ notebookId: id, title, token: data.sync_token });
 			},
-			onError: (err) => toast.error(err.message),
+			onError: toastError,
 		});
 	};
 
@@ -439,7 +418,7 @@ export function Project() {
 		{ id: 'delete', label: 'Delete', icon: <Trash2 className="size-4" />, danger: true },
 	];
 
-	const filteredNotebooks = filterBySearch(notebooks, searchQuery, (nb) => nb.title);
+	const filteredNotebooks = filterBySearch(notebooks, search.query, (nb) => nb.title);
 
 	return (
 		<PageContainer>
@@ -517,17 +496,17 @@ export function Project() {
 				<SearchField
 					aria-label="Search notebooks"
 					placeholder="Search notebooks..."
-					value={searchQuery}
-					onChange={setSearchQuery}
-					inputRef={searchRef}
+					value={search.query}
+					onChange={search.setQuery}
+					inputRef={search.inputRef}
 				/>
 			</div>
 
 			{filteredNotebooks.length === 0 ? (
-				searchQuery ? (
+				search.query ? (
 					<EmptyState
 						icon={<SearchX />}
-						message={`No notebooks matching "${searchQuery}"`}
+						message={`No notebooks matching "${search.query}"`}
 						description="Try a different search term."
 					/>
 				) : (
@@ -565,7 +544,7 @@ export function Project() {
 												label="Shut down kernel"
 												tooltip="Shut down kernel"
 												tone="danger"
-												onPress={() => setStopModal({ notebook: nb, session: live.edit! })}
+												onPress={() => stopModal.open({ notebook: nb, session: live.edit! })}
 											>
 												<Power className="size-4" />
 											</IconButton>
@@ -576,7 +555,7 @@ export function Project() {
 											triggerClassName="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100"
 											options={notebookActions(nb)}
 											onAction={(key) => {
-												if (key === 'rename') setRenameModal(nb);
+												if (key === 'rename') renameModal.open(nb);
 												else if (key === 'duplicate') handleDuplicate(nb);
 												else if (key === 'run-app' || key === 'open-app')
 													void navigate(`/projects/${pid}/notebooks/${nb.id}/app`, {
@@ -584,15 +563,15 @@ export function Project() {
 													});
 												else if (key === 'stop-app') {
 													const app = sessionByNotebook.get(nb.id)?.app;
-													if (app) setAppModal({ action: 'stop', notebook: nb, session: app });
-												} else if (key === 'change-image') setBaseImageModal(nb);
-												else if (key === 'history') setHistoryModal(nb);
+													if (app) appModal.open({ action: 'stop', notebook: nb, session: app });
+												} else if (key === 'change-image') baseImageModal.open(nb);
+												else if (key === 'history') historyModal.open(nb);
 												else if (key === 'sync-keys')
-													setSyncKeys({ notebookId: nb.id, title: nb.title });
-												else if (key === 'rotate-token') setRotateModal(nb);
+													syncKeys.open({ notebookId: nb.id, title: nb.title });
+												else if (key === 'rotate-token') rotateModal.open(nb);
 												else if (key === 'download-file') handleDownloadFile(nb);
 												else if (key === 'download-workspace') handleDownloadWorkspace(nb);
-												else if (key === 'delete') setDeleteModal(nb);
+												else if (key === 'delete') deleteModal.open(nb);
 											}}
 										/>
 									</>
@@ -624,10 +603,10 @@ export function Project() {
 											canOpen={!!live.app.can?.attach}
 											editActive={!!live.edit}
 											onStop={() =>
-												setAppModal({ action: 'stop', notebook: nb, session: live.app! })
+												appModal.open({ action: 'stop', notebook: nb, session: live.app! })
 											}
 											onRestart={() =>
-												setAppModal({ action: 'restart', notebook: nb, session: live.app! })
+												appModal.open({ action: 'restart', notebook: nb, session: live.app! })
 											}
 										/>
 									)}
@@ -700,31 +679,31 @@ export function Project() {
 				</div>
 			</FormDialog>
 
-			{renameModal && (
+			{renameModal.target && (
 				<RenameNotebookDialog
-					isOpen={!!renameModal}
-					onClose={() => setRenameModal(null)}
+					isOpen={renameModal.isOpen}
+					onClose={renameModal.close}
 					projectId={pid!}
-					notebook={renameModal}
+					notebook={renameModal.target}
 				/>
 			)}
 
-			{baseImageModal && (
+			{baseImageModal.target && (
 				<ChangeBaseImageDialog
-					isOpen={!!baseImageModal}
-					onClose={() => setBaseImageModal(null)}
+					isOpen={baseImageModal.isOpen}
+					onClose={baseImageModal.close}
 					projectId={pid!}
-					notebook={baseImageModal}
+					notebook={baseImageModal.target}
 				/>
 			)}
 
 			{/* Mounted only while open so history is fetched on demand and selection resets. */}
-			{historyModal && (
+			{historyModal.target && (
 				<VersionHistoryDialog
 					isOpen
-					onClose={() => setHistoryModal(null)}
+					onClose={historyModal.close}
 					projectId={pid!}
-					notebook={historyModal}
+					notebook={historyModal.target}
 					canRestore={project.your_role !== 'viewer'}
 				/>
 			)}
@@ -736,21 +715,21 @@ export function Project() {
 				onCreated={handleSyncedCreated}
 			/>
 
-			{syncKeys && (
+			{syncKeys.target && (
 				<SyncKeysDialog
-					isOpen={!!syncKeys}
-					onClose={() => setSyncKeys(null)}
-					title={syncKeys.title}
-					syncUrl={syncUrl(pid!, syncKeys.notebookId)}
-					token={syncKeys.token}
+					isOpen={syncKeys.isOpen}
+					onClose={syncKeys.close}
+					title={syncKeys.target.title}
+					syncUrl={syncUrl(pid!, syncKeys.target.notebookId)}
+					token={syncKeys.target.token}
 				/>
 			)}
 
 			<ConfirmDialog
-				isOpen={!!rotateModal}
-				onClose={() => setRotateModal(null)}
+				isOpen={rotateModal.isOpen}
+				onClose={rotateModal.close}
 				title="Rotate Sync Token"
-				description={`Rotate the sync token for "${rotateModal?.title}"? The current token stops working immediately and any pusher using it must be updated.`}
+				description={`Rotate the sync token for "${rotateModal.target?.title}"? The current token stops working immediately and any pusher using it must be updated.`}
 				confirmLabel="Rotate"
 				pendingLabel="Rotating..."
 				isPending={rotateSyncToken.isPending}
@@ -758,10 +737,10 @@ export function Project() {
 			/>
 
 			<ConfirmDialog
-				isOpen={!!deleteModal}
-				onClose={() => setDeleteModal(null)}
+				isOpen={deleteModal.isOpen}
+				onClose={deleteModal.close}
 				title="Delete Notebook"
-				description={`Are you sure you want to delete "${deleteModal?.title}"? This action cannot be undone.`}
+				description={`Are you sure you want to delete "${deleteModal.target?.title}"? This action cannot be undone.`}
 				confirmLabel="Delete"
 				pendingLabel="Deleting..."
 				isPending={deleteNotebook.isPending}
@@ -769,10 +748,10 @@ export function Project() {
 			/>
 
 			<ConfirmDialog
-				isOpen={!!stopModal}
-				onClose={() => setStopModal(null)}
+				isOpen={stopModal.isOpen}
+				onClose={stopModal.close}
 				title="Shut Down Kernel"
-				description={`Shut down the running kernel for "${stopModal?.notebook.title}"? Saved work is preserved; the sandbox is stopped and can be started again later.`}
+				description={`Shut down the running kernel for "${stopModal.target?.notebook.title}"? Saved work is preserved; the sandbox is stopped and can be started again later.`}
 				confirmLabel="Shut Down"
 				pendingLabel="Stopping..."
 				isPending={stopSession.isPending}
@@ -780,16 +759,16 @@ export function Project() {
 			/>
 
 			<ConfirmDialog
-				isOpen={!!appModal}
-				onClose={() => setAppModal(null)}
-				title={appModal?.action === 'restart' ? 'Restart App' : 'Stop App'}
+				isOpen={appModal.isOpen}
+				onClose={appModal.close}
+				title={appModal.target?.action === 'restart' ? 'Restart App' : 'Stop App'}
 				description={
-					appModal?.action === 'restart'
-						? `Restart the app for "${appModal.notebook.title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${appConnectionHint(appModal.session)}`
-						: `Stop the app for "${appModal?.notebook.title}"? Anyone using it will be disconnected.${appConnectionHint(appModal?.session)}`
+					appModal.target?.action === 'restart'
+						? `Restart the app for "${appModal.target.notebook.title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${appConnectionHint(appModal.target.session)}`
+						: `Stop the app for "${appModal.target?.notebook.title}"? Anyone using it will be disconnected.${appConnectionHint(appModal.target?.session)}`
 				}
-				confirmLabel={appModal?.action === 'restart' ? 'Restart' : 'Stop App'}
-				pendingLabel={appModal?.action === 'restart' ? 'Restarting...' : 'Stopping...'}
+				confirmLabel={appModal.target?.action === 'restart' ? 'Restart' : 'Stop App'}
+				pendingLabel={appModal.target?.action === 'restart' ? 'Restarting...' : 'Stopping...'}
 				isPending={stopAppSession.isPending || restartAppSession.isPending}
 				onConfirm={handleAppAction}
 			/>

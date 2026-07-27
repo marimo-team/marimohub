@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { toast } from 'sonner';
 import { useSelector } from '@tanstack/react-store';
 import { ExternalLink, KeyRound, Plus, Trash2 } from 'lucide-react';
@@ -10,6 +9,8 @@ import {
 	usePutSecret,
 	useValidateSecret,
 } from '@/api/hooks';
+import { useDialogTarget } from '@/hooks/useDialogTarget';
+import { toastError } from '@/lib/errors';
 import { DOCS_FEDERATION_URL } from '@/lib/links';
 import type { ProjectDetail, SecretEntry } from '@/types';
 
@@ -157,7 +158,7 @@ function StoredKeysSection({ project, isOpen }: { project: ProjectDetail; isOpen
 	const putSecret = usePutSecret(project.id);
 	const deleteSecret = useDeleteSecret(project.id);
 	const isAdmin = project.your_role === 'admin';
-	const [removeTarget, setRemoveTarget] = useState<SecretEntry | null>(null);
+	const confirmDelete = useDialogTarget<SecretEntry>();
 
 	const validateSecret = useValidateSecret(project.id);
 
@@ -174,7 +175,7 @@ function StoredKeysSection({ project, isOpen }: { project: ProjectDetail; isOpen
 				toast.success('Secret saved');
 				form.reset();
 			} catch (err) {
-				toast.error((err as Error).message);
+				toastError(err);
 			}
 		},
 	});
@@ -187,18 +188,19 @@ function StoredKeysSection({ project, isOpen }: { project: ProjectDetail; isOpen
 			if (res.ok) toast.success('Reference resolves');
 			else toast.error(res.reason ?? 'Reference did not resolve');
 		} catch (err) {
-			toast.error((err as Error).message);
+			toastError(err);
 		}
 	};
 
 	const handleRemove = () => {
-		if (!removeTarget) return;
-		deleteSecret.mutate(removeTarget.name, {
+		const target = confirmDelete.target;
+		if (!target) return;
+		deleteSecret.mutate(target.name, {
 			onSuccess: () => {
 				toast.success('Secret deleted');
-				setRemoveTarget(null);
+				confirmDelete.close();
 			},
-			onError: (err) => toast.error(err.message),
+			onError: toastError,
 		});
 	};
 
@@ -246,7 +248,7 @@ function StoredKeysSection({ project, isOpen }: { project: ProjectDetail; isOpen
 									label={`Delete ${entry.name}`}
 									tooltip="Delete secret"
 									tone="danger"
-									onPress={() => setRemoveTarget(entry)}
+									onPress={() => confirmDelete.open(entry)}
 								>
 									<Trash2 className="size-4" />
 								</IconButton>
@@ -318,10 +320,10 @@ function StoredKeysSection({ project, isOpen }: { project: ProjectDetail; isOpen
 			)}
 
 			<ConfirmDialog
-				isOpen={!!removeTarget}
-				onClose={() => setRemoveTarget(null)}
+				isOpen={confirmDelete.isOpen}
+				onClose={confirmDelete.close}
 				title="Delete secret"
-				description={`Delete "${removeTarget?.name}"? Sessions in this project will no longer receive it.`}
+				description={`Delete "${confirmDelete.target?.name}"? Sessions in this project will no longer receive it.`}
 				confirmLabel="Delete"
 				pendingLabel="Deleting..."
 				isPending={deleteSecret.isPending}

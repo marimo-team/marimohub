@@ -1,7 +1,6 @@
-import { useState } from 'react';
 import type { Session } from '@/types';
 import { useUsersQuery } from '@/api/hooks';
-import { useInterval } from '@/hooks/useInterval';
+import { useNow } from '@/hooks/useNow';
 import { formatDuration, formatRelative } from '@/lib/time';
 import { StatusDot } from './StatusDot';
 import { Popover } from './Popover';
@@ -25,13 +24,6 @@ const STATUS_DOT: Partial<
 	terminating: { className: 'bg-orange-500', label: 'Stopping', pulse: true },
 	failed: { className: 'bg-red-500', label: 'Failed' },
 };
-
-/** Tick `now` once a second so an open popover's elapsed duration stays live. */
-function useNow(): number {
-	const [now, setNow] = useState(() => Date.now());
-	useInterval(() => setNow(Date.now()), 1000);
-	return now;
-}
 
 /**
  * Popover body for a live session: who started it, when, and (while running) how
