@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.13-slim
+FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
 
-ARG MARIMO_VERSION=0.23.11
+ARG MARIMO_VERSION=0.23.15
 ENV MARIMO_VERSION=${MARIMO_VERSION}
 
-COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c /uv /uvx /usr/local/bin/
 
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates locales \
  && sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
