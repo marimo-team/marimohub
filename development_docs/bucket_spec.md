@@ -10,7 +10,7 @@
 
 This document specifies the full bucket schema and architecture for running marimo notebook CRUD operations against S3-compatible storage, with no external database. The design is inspired by Apache Iceberg's metadata indirection pattern: a single atomic pointer (`catalog.json`) is the only mutable file in the system. Everything else is either immutable or append-only.
 
-> **Core Invariant:** `catalog.json` is the only file ever overwritten in place. Every other write creates a new object. Reads are always consistent and concurrent writes are safe via conditional PUT (`If-Match` on ETag).
+> **Core Invariant:** `catalog.json` is the only file in the content store ever overwritten in place. Every other content write creates a new object. Reads are always consistent and concurrent writes are safe via conditional PUT (`If-Match` on ETag). Outside the content store, `_system/` carries a small set of mutable operational records — sessions (§4.8), the app claim (§4.8.1), identities (§4.10), tokens (§4.11) — that never touch the snapshot chain; the CAS-managed ones (`catalog.json`, session records, the app claim) are each written through exactly one service method.
 
 ### Design Goals
 
@@ -114,6 +114,7 @@ s3-bucket/
 | `_system/catalog.json`                                         | JSON     | Single entry point. Points to the current snapshot. Only file mutated in-place.                                                                                                                                                                                                                                                                                                                                                        |
 | `_system/snapshots/{id}.json`                                  | JSON     | Immutable index snapshot. Lists all projects and notebooks with metadata. Written once, never modified.                                                                                                                                                                                                                                                                                                                                |
 | `_system/sessions/{pid}/{sid}.json`                            | JSON     | Live session record, partitioned by project so a project-scoped read lists only `_system/sessions/{pid}/`. Created on notebook open, updated by heartbeat, cleaned up on close or TTL expiry.                                                                                                                                                                                                                                          |
+| `_system/apps/{pid}/{nid}.json`                                | JSON     | Per-notebook app-singleton claim: names the app session that owns the notebook's shared app sandbox. Written create-if-absent by the create saga, replaced via ETag CAS when stale, CAS'd to a free marker (`session_id: null`) on teardown. All writes go through `SessionService.claimApp`/`releaseApp`. See §4.8.1.                                                                                                                 |
 | `_system/identities/{user-id}.json`                            | JSON     | User display identity (`{ id, email, name }`). Upserted on each authenticated request; mutable, last-writer-wins. Resolves opaque `author`/`user_id` ids to a person.                                                                                                                                                                                                                                                                  |
 | `_system/tokens/{token-id}.json`                               | JSON     | Personal access token record (`{ id, user_id, name, hash, … }`) keyed by the ULID embedded in the presented `mhub_pat_` bearer, so verification is a single GET. Stores only the SHA-256 of the secret. Mutable, last-writer-wins (coarse `last_used_at` refresh); revocation deletes the object. See §4.11.                                                                                                                           |
 | `_system/logs/{YYYY-MM-DD}.log`                                | Text     | Human-readable application log. One file per day. For ops debugging only.                                                                                                                                                                                                                                                                                                                                                              |
@@ -316,6 +317,26 @@ When a session goes `failed`, `markFailed` may persist an optional sanitized `er
 5. `terminated`/`expired` records older than the retention window (24h) are deleted by the scheduled reaper (see §8)
 
 > **On object storage vs. a live state store for sessions:** the object store is appropriate for session _records_ — created on open, updated periodically, read for display — and the record carries `sandbox_id` / `sandbox_url` pointing at the live kernel runtime (a separate container/compute service). It is not appropriate for sub-second kernel state (output streaming, variable inspection); that lives in the kernel runtime itself, backed by a low-latency state store (in-memory cache / stateful coordinator) if cross-request coordination is needed. For MVP — tracking who has what open, TTL cleanup — the object store is sufficient.
+
+**App sessions.** A session record may carry `mode: "app"`: the notebook served as a read-only application via `marimo run` instead of the editor. App sessions are **per-notebook singletons shared by all editors** (reuse is user-blind; `user_id` is attribution only), are provisioned copy-only (never a bucket mount), and are **never written back** — no version, HTML/session snapshot, workspace mirror, or FS-snapshot pointer advances from an app sandbox. App-only fields: `source_version_id` (the notebook's head version at provision — staleness detection), `active_connections` + `connections_checked_at` (the lifecycle sweep's last kernel connection probe). Absent `mode` = `edit`.
+
+### 4.8.1 `_system/apps/{pid}/{nid}.json`
+
+The app-singleton claim anchors "one app sandbox per notebook" against concurrent `Run as app` requests. Beside `catalog.json` and the session records, it is the third CAS-managed mutable object in the store.
+
+```json
+{ "session_id": "sess_01HXYZ44444", "claimed_at": "2025-03-05T14:30:00Z" }
+```
+
+`session_id: null` is the **free marker** a release writes in place of the value — see rule 3.
+
+Write discipline (all through `SessionService.claimApp` / `releaseApp`, which delegate to the generic `acquireSingletonClaim`/`releaseSingletonClaim` primitives beside `withCasRetry` — a future lease of the same shape reuses them, not this object):
+
+1. The create saga's `app_claim` step writes the claim **create-if-absent** (`If-None-Match: *`) after the session record and before any compute call — exactly one of N concurrent creates wins; losers attach to the winner's session via the user-blind reuse path.
+2. A claim whose holder session is terminal, absent, or a wedged `starting` record past the provision window is **stale** and replaced via ETag CAS.
+3. Every teardown path (explicit stop, lifecycle reaper, reconciliation, saga compensation) **frees** the claim when it names the session being torn down, by CAS'ing `session_id` to `null` rather than deleting the object. There is no conditional-delete primitive, so a read-then-delete would drop a claim a new holder acquired between the read and the delete — freeing the singleton under a running app and letting a third session acquire it. The CAS loses that race instead, leaving the new holder's claim intact. The cost is a pointer that outlives the app; rule 5's cleanup removes it.
+4. The create saga **re-asserts** the claim after the session is marked `running`: a slow provision can look like a wedged holder (rule 2) and lose the claim mid-provision, and a running holder is never stale — so the recheck is the last point a steal can be detected. A loser compensates (sandbox destroyed, record terminated) and attaches to the current holder.
+5. Cleanup deletes, outside `claimApp`/`releaseApp`: deleting a notebook (soft or hard) or hard-deleting a project also deletes the claim object(s) under it, so no claim outlives its notebook.
 
 ### 4.9 `_system/events/{YYYY-MM-DD}/{event-id}.json`
 

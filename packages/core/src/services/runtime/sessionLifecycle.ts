@@ -7,7 +7,8 @@ import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import { isTerminal } from './sessionState';
+import { SessionRetirer } from './SessionRetirer';
+import { isTerminal, sessionModePolicy, sessionPersistsEdits } from './sessionState';
 import type { SessionService } from './SessionService';
 
 const SESSION_SWEEP_CONCURRENCY = 8;
@@ -17,36 +18,67 @@ const SESSION_SWEEP_CONCURRENCY = 8;
  * A slow provision (cold image, large workspace copy) can outlive the 5-minute
  * heartbeat TTL and be flipped to `expired` while still restoring files; tearing
  * it down mid-restore would mirror-delete not-yet-restored workspace keys from
- * the bucket. Mirrors the reconciler's orphan grace window.
+ * the bucket. Shared with `ReconciliationService`, the other reclaimer, so both
+ * hold off for the same window; sized like the reconciler's orphan grace.
  */
-const RECLAIM_PROVISION_GRACE_MS = Millis.minutes(15);
+export const RECLAIM_PROVISION_GRACE_MS = Millis.minutes(15);
 
 /**
  * Ask the marimo kernel how many websocket connections (editors) it has, via an
  * `exec` INSIDE the sandbox — exposure-mode-independent (works for `subdomain`
- * and `proxy`) and needs no auth (the kernel runs `marimo edit --no-token`).
+ * and `proxy`) and needs no auth (the kernel runs with `--no-token`).
+ *
+ * `basePath` is the prefix marimo serves under (its `--base-url`, e.g.
+ * `/proxy/<token>` in proxy exposure) — the status endpoint exists ONLY under
+ * that prefix, so probing the root there would always 404 into a null.
  *
  * Returns null when the kernel could not be reached or answered garbage —
  * "unknown", which callers treat conservatively: a session with a fresh
  * heartbeat is never reaped on a null probe; only stale AND unreachable
  * (⇒ the kernel is almost certainly dead) is reaped.
  */
-export async function kernelActiveConnections(sandbox: SandboxInstance): Promise<number | null> {
+export async function kernelActiveConnections(
+	sandbox: SandboxInstance,
+	basePath = '',
+): Promise<number | null> {
 	try {
 		const res = await sandbox.exec(
 			`python3 -c "import json,urllib.request;` +
-				`print(json.load(urllib.request.urlopen('http://127.0.0.1:${MARIMO_PORT}/api/status/connections',timeout=3))['active'])"`,
+				`print(json.load(urllib.request.urlopen('http://127.0.0.1:${MARIMO_PORT}${basePath}/api/status/connections',timeout=3))['active'])"`,
 		);
 		if (!res.success) return null;
-		const n = Number.parseInt(res.stdout.trim(), 10);
-		return Number.isFinite(n) && n >= 0 ? n : null;
+		// Whole output or nothing — `parseInt` would read 2 out of "2garbage", and a
+		// half-parsed answer must count as unknown rather than steer reaping. The
+		// safe-integer check rejects an absurdly long digit run, which would become
+		// `Infinity` and serialize into the session record as a schema-invalid
+		// `null`, making the record unreadable and its sandbox invisible to sweeps.
+		const out = res.stdout.trim();
+		const n = Number(out);
+		return /^\d+$/.test(out) && Number.isSafeInteger(n) ? n : null;
 	} catch {
 		return null;
 	}
 }
 
 /** Injectable probe seam (tests fake the kernel answer without an exec fake). */
-export type ConnectionProbe = (sandbox: SandboxInstance) => Promise<number | null>;
+export type ConnectionProbe = (
+	sandbox: SandboxInstance,
+	basePath?: string,
+) => Promise<number | null>;
+
+/**
+ * The kernel's serving prefix, recovered from the session's client URL:
+ * `/proxy/<token>` under proxy exposure (where the URL's path IS marimo's
+ * `--base-url`), empty under subdomain exposure (kernel at root).
+ */
+function kernelBasePath(s: Session): string {
+	if (!s.sandbox_url) return '';
+	try {
+		return new URL(s.sandbox_url).pathname.replace(/\/$/, '');
+	} catch {
+		return '';
+	}
+}
 
 export interface SessionLifecycleConfig {
 	/** Reap (with save) when there are no active connections AND the heartbeat is this stale. */
@@ -86,6 +118,7 @@ export interface SweepResult {
  */
 export class SessionLifecycleService {
 	private readonly provisioner: SandboxProvisioner;
+	private readonly retirer: SessionRetirer;
 
 	constructor(
 		private sessions: SessionService,
@@ -96,6 +129,14 @@ export class SessionLifecycleService {
 		private probe: ConnectionProbe = kernelActiveConnections,
 	) {
 		this.provisioner = new SandboxProvisioner(compute);
+		this.retirer = new SessionRetirer({
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			persistWorkspace: cfg.persistWorkspace,
+			workdir: cfg.workdir,
+		});
 	}
 
 	async sweep(now = Date.now()): Promise<SweepResult> {
@@ -114,12 +155,16 @@ export class SessionLifecycleService {
 				s.sandbox_id &&
 				(s.status === 'running' || (isTerminal(s.status) && !s.sandbox_reclaimed_at)),
 		);
-		// Notebooks that currently have a live session. An older (expired) sandbox
-		// for one of these must never commit: its content is stale by definition and
-		// would clobber the live session's head version.
+		// Notebooks that currently have a live PERSISTING session. An older (expired)
+		// sandbox for one of these must never commit: its content is stale by
+		// definition and would clobber the live session's head version. App sessions
+		// never write back, so they must not count — a long-lived shared app must
+		// not suppress the save of an expired edit session on its notebook.
 		const liveNotebooks = new Set<NotebookId>(
 			sessions
-				.filter((s) => s.status === 'running' || s.status === 'starting')
+				.filter(
+					(s) => (s.status === 'running' || s.status === 'starting') && sessionPersistsEdits(s),
+				)
 				.map((s) => s.notebook_id),
 		);
 
@@ -140,11 +185,22 @@ export class SessionLifecycleService {
 			// Only probe when a reap decision hinges on it (cost control: one exec per
 			// near-deadline/stale session per sweep, nothing for healthy ones). Only an
 			// `expired` record can still have a live kernel among the terminal ones.
+			// Exception: every running app session is probed each sweep — its
+			// connection count feeds the "~N connected" stop-confirm hint.
 			let active: number | null = null;
 			const reapCandidate =
 				s.status === 'expired' || (s.status === 'running' && (pastDeadline || heartbeatStale));
-			if (this.cfg.connectionAware && reapCandidate) {
-				active = await this.probe(sandbox);
+			const appConnectionCheck = sessionModePolicy(s).singleton && s.status === 'running';
+			if (this.cfg.connectionAware && (reapCandidate || appConnectionCheck)) {
+				active = await this.probe(sandbox, kernelBasePath(s));
+				// A null probe is "unknown" — leave the last stamp rather than write a
+				// lie. An unchanged count is skipped too: no CAS/ETag churn against
+				// heartbeats for the steady state.
+				if (appConnectionCheck && active !== null && active !== s.active_connections) {
+					await this.sessions
+						.markConnections(s.project_id, s.session_id, active, new Date(now).toISOString())
+						.catch(() => {});
+				}
 			}
 			const hasEditors = (active ?? 0) > 0;
 
@@ -168,10 +224,10 @@ export class SessionLifecycleService {
 					) {
 						return;
 					}
-					const save = s.status === 'expired' && !superseded && !s.ephemeral;
+					const save = s.status === 'expired' && !superseded && sessionPersistsEdits(s);
 					// Only `expired` reclaims are counted: for terminated/failed records the
 					// confirm-destroy is a routine no-op, not a recovered leak.
-					if ((await this.reclaimSandbox(s, sandbox, save)) && s.status === 'expired') {
+					if ((await this.retirer.reclaim(s, save)) && s.status === 'expired') {
 						result.reclaimed++;
 					}
 					return;
@@ -185,7 +241,7 @@ export class SessionLifecycleService {
 					hasEditors || (this.cfg.connectionAware && active === null && !heartbeatStale);
 
 				if (heartbeatStale && !hasEditors) {
-					if (await this.gracefulTeardown(s, sandbox)) result.reapedIdle++;
+					if (await this.gracefulTeardown(s)) result.reapedIdle++;
 					return;
 				}
 				if (pastDeadline) {
@@ -201,7 +257,7 @@ export class SessionLifecycleService {
 							.catch(() => {});
 						result.extended++;
 					} else {
-						if (await this.gracefulTeardown(s, sandbox)) result.reapedExpired++;
+						if (await this.gracefulTeardown(s)) result.reapedExpired++;
 						return;
 					}
 				}
@@ -212,7 +268,7 @@ export class SessionLifecycleService {
 			// Source-only (`includeWorkspace: false`): a full workspace mirror every
 			// interval is too expensive; the mirror still refreshes at teardown.
 			const snapshotDue =
-				!s.ephemeral &&
+				sessionPersistsEdits(s) &&
 				this.cfg.snapshotIntervalMs > 0 &&
 				now - Date.parse(s.last_snapshot_at ?? s.started_at) >= this.cfg.snapshotIntervalMs;
 			if (snapshotDue) {
@@ -245,71 +301,17 @@ export class SessionLifecycleService {
 
 	/**
 	 * Reap one LIVE session: CAS-claim via `beginTerminating` (an explicit stop or
-	 * concurrent sweep wins the race and this no-ops), save + destroy, mark
-	 * terminated. If the destroy inside teardown silently failed, the terminal
-	 * record re-enters the sweep as a reclaim candidate, so nothing is leaked.
+	 * concurrent sweep wins the race and this no-ops), then retire through the
+	 * one seam (save + destroy + terminal mark + claim release). If the destroy
+	 * inside teardown silently failed, the terminal record re-enters the sweep
+	 * as a reclaim candidate, so nothing is leaked.
 	 */
-	private async gracefulTeardown(s: Session, sandbox: SandboxInstance): Promise<boolean> {
+	private async gracefulTeardown(s: Session): Promise<boolean> {
 		const claimed = await this.sessions
 			.beginTerminating(s.project_id, s.session_id)
 			.catch(() => null);
-		if (claimed?.status !== 'terminating') return false;
-		try {
-			await this.provisioner.teardown(
-				sandbox,
-				this.notebooks,
-				this.bucket,
-				s.project_id,
-				s.notebook_id,
-				s.user_id,
-				this.cfg.persistWorkspace,
-				this.cfg.workdir,
-				{ persistEdits: !s.ephemeral },
-			);
-		} catch {
-			// Never leave a sandbox running and billing behind a failed save.
-			await sandbox.destroy().catch(() => {});
-		}
-		await this.sessions.markTerminated(s.project_id, s.session_id).catch(() => {});
-		return true;
-	}
-
-	/**
-	 * Reclaim the sandbox behind an already-terminal record: save first when the
-	 * content is still authoritative (`save`), then destroy. `teardown` swallows
-	 * destroy failures, so the destroy is re-confirmed here (idempotent per the
-	 * compute contract) before stamping the one-shot `sandbox_reclaimed_at` marker
-	 * — a failed destroy leaves the marker unset and the next sweep retries.
-	 */
-	private async reclaimSandbox(
-		s: Session,
-		sandbox: SandboxInstance,
-		save: boolean,
-	): Promise<boolean> {
-		if (save) {
-			try {
-				await this.provisioner.teardown(
-					sandbox,
-					this.notebooks,
-					this.bucket,
-					s.project_id,
-					s.notebook_id,
-					s.user_id,
-					this.cfg.persistWorkspace,
-					this.cfg.workdir,
-				);
-			} catch {
-				// Destroy is confirmed below regardless.
-			}
-		}
-		try {
-			await sandbox.destroy();
-		} catch {
-			return false;
-		}
-		await this.sessions
-			.markSandboxReclaimed(s.project_id, s.session_id, new Date().toISOString())
-			.catch(() => {});
+		if (!claimed?.transitioned) return false;
+		await this.retirer.retire(s);
 		return true;
 	}
 }

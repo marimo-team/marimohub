@@ -55,6 +55,93 @@ export async function withCasRetry<T>(
 	throw new ConflictError('Write conflict: max retries exceeded');
 }
 
+export interface SingletonClaimConfig {
+	bucket: Bucket;
+	/** The one object anchoring the singleton (e.g. `_system/apps/{pid}/{nid}.json`). */
+	key: string;
+	/** Serialize a holder id into the stored claim body; `null` writes the free marker. */
+	serialize: (holder: string | null) => string;
+	/** Extract the holder id from a stored claim (`null` = released); throw on a corrupt body. */
+	parseHolder: (raw: unknown) => string | null;
+	/**
+	 * Whether a holder still owns the claim. A claim whose holder is not live is
+	 * stale and gets replaced — the self-healing that makes a leaked claim (crash
+	 * between claim and release) harmless.
+	 */
+	isHolderLive: (holder: string) => Promise<boolean>;
+	/**
+	 * Observe a release that failed for a reason OTHER than losing the CAS race
+	 * (bucket outage, corrupt claim body). The release still swallows it — every
+	 * caller is unguarded and a leaked claim self-heals on the next acquire — so
+	 * this hook is the only signal that it happened.
+	 */
+	onReleaseError?: (err: unknown) => void;
+	retry?: CasRetryOptions;
+}
+
+/**
+ * Acquire a single-holder claim over one bucket object: create-if-absent when
+ * the key is absent (exactly one concurrent acquirer wins), replace via ETag CAS
+ * when the standing claim is released, stale, or corrupt, no-op when `holder`
+ * already owns it. Returns `{ acquired: false, holder }` when someone live holds it.
+ */
+export async function acquireSingletonClaim(
+	cfg: SingletonClaimConfig,
+	holder: string,
+): Promise<{ acquired: boolean; holder: string }> {
+	const body = cfg.serialize(holder);
+	return withCasRetry(async () => {
+		const existing = await cfg.bucket.get(cfg.key);
+		if (!existing) {
+			await cfg.bucket.put(cfg.key, body, { onlyIfNotExists: true });
+			return { acquired: true, holder };
+		}
+		let current: string | null | undefined;
+		try {
+			current = cfg.parseHolder(await existing.json());
+		} catch {
+			// Corrupt claim — stale by definition; replaced below.
+		}
+		if (current === holder) return { acquired: true, holder };
+		if (current && (await cfg.isHolderLive(current))) {
+			return { acquired: false, holder: current };
+		}
+		// CAS the replacement so two concurrent stale-claim replacers can't both win.
+		await cfg.bucket.put(cfg.key, body, { onlyIfEtagMatches: existing.etag });
+		return { acquired: true, holder };
+	}, cfg.retry);
+}
+
+/**
+ * Release a claim held by `holder`; a no-op when someone else holds it. CAS'd to
+ * the free marker rather than deleted — the bucket port has no conditional
+ * delete, so a read-then-delete would drop a claim a new holder acquired in that
+ * window, handing the singleton to a third acquirer while that holder runs. The
+ * cost is a pointer outliving the app; deleting the notebook or project reaps it.
+ */
+export async function releaseSingletonClaim(
+	cfg: Pick<
+		SingletonClaimConfig,
+		'bucket' | 'key' | 'serialize' | 'parseHolder' | 'onReleaseError'
+	>,
+	holder: string,
+): Promise<void> {
+	try {
+		const existing = await cfg.bucket.get(cfg.key);
+		if (!existing) return;
+		if (cfg.parseHolder(await existing.json()) !== holder) return;
+		await cfg.bucket.put(cfg.key, cfg.serialize(null), { onlyIfEtagMatches: existing.etag });
+	} catch (err) {
+		// A losing CAS means someone re-acquired underneath us — exactly the claim
+		// this release must not touch. Anything else (bucket read failure, corrupt
+		// body) is a real failure, still swallowed so an unguarded caller's stop or
+		// reconciliation pass survives it, but never silently.
+		if (err instanceof PreconditionFailedError) return;
+		if (cfg.onReleaseError) cfg.onReleaseError(err);
+		else console.warn(`releaseSingletonClaim: ${cfg.key}: ${String(err)}`);
+	}
+}
+
 /**
  * Atomic read-modify-write of one JSON object via CAS. `apply` returns the next
  * value, or `null` to skip the write. On a losing race `apply` re-runs against the

@@ -377,12 +377,22 @@ export function useNotebooksQuery(projectId: string) {
  * suspense) so the notebook page can render its shell — and start the kernel —
  * without blocking on metadata; the "created by" line fills in when it arrives.
  */
-export function useNotebookQuery(projectId: string, notebookId: string) {
+export function useNotebookQuery(
+	projectId: string,
+	notebookId: string,
+	// Freshness options for consumers that compare against the notebook HEAD (the
+	// app page's staleness banner): versions are committed server-side
+	// (snapshotter, teardown), which no client-side invalidation ever observes.
+	// `refetchIntervalMs` polls for a long-lived view; `staleTime: 0` re-reads on
+	// mount instead, for a short-lived one that must not trust the shared cache.
+	options: { refetchIntervalMs?: number; staleTime?: number } = {},
+) {
 	return useQuery({
 		queryKey: notebookKeys.detail(projectId, notebookId),
 		queryFn: () =>
 			apiFetch<NotebookDetail>(`/api/v1/projects/${projectId}/notebooks/${notebookId}`),
-		staleTime: 5 * 60 * 1000,
+		staleTime: options.staleTime ?? 5 * 60 * 1000,
+		refetchInterval: options.refetchIntervalMs,
 	});
 }
 
@@ -625,41 +635,96 @@ export function useRestoreVersion(projectId: string, notebookId: string) {
  * (not suspense) so a background poll never suspends the table; TanStack pauses
  * interval refetch while the tab is unfocused, so this stays cheap.
  */
-export function useProjectSessionsQuery(projectId: string) {
+export function useProjectSessionsQuery(projectId: string, enabled = true) {
 	return useQuery({
 		queryKey: sessionKeys.listByProject(projectId),
 		queryFn: async () =>
 			(await apiFetch<Paginated<Session>>(`/api/v1/projects/${projectId}/sessions`)).items,
 		refetchInterval: SESSIONS_POLL_INTERVAL_MS,
+		enabled,
 	});
 }
 
-export function useStartSession(projectId: string, notebookId: string) {
+/** Base URL of a notebook's session collection (also exported for the session hook). */
+export const notebookSessionsPath = (projectId: string, notebookId: string) =>
+	`/api/v1/projects/${projectId}/notebooks/${notebookId}/sessions`;
+
+/**
+ * The create-session request. Sent with no body for `edit` (byte-identical to
+ * the pre-`mode` client) and `{ mode: "app" }` for the shared app singleton —
+ * the server attaches ANY editor to the notebook's running app.
+ */
+function startSessionRequest(projectId: string, notebookId: string, mode: 'edit' | 'app') {
+	// Provisioning a cold sandbox can take a while (the kernel may build its uv
+	// venv on first boot), so override the client's default 20s timeout. Must
+	// exceed the provisioner's waitForPort budget.
+	return apiFetch<Session>(notebookSessionsPath(projectId, notebookId), {
+		method: 'POST',
+		timeout: 150_000, // 2.5 minutes
+		...(mode === 'app'
+			? {
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ mode }),
+				}
+			: {}),
+	});
+}
+
+function stopSessionRequest(projectId: string, notebookId: string, sessionId: string) {
+	// Teardown saves the notebook and destroys the sandbox synchronously, and —
+	// unlike start — has no server-side budget bounding it. An abort surfaces as a
+	// failed stop, which halts a restart half-done (app stopped, never restarted)
+	// while the server tears down anyway, so allow the same budget as create.
+	return apiFetch<void>(`${notebookSessionsPath(projectId, notebookId)}/${sessionId}`, {
+		method: 'DELETE',
+		timeout: 150_000, // 2.5 minutes
+	});
+}
+
+export function useStartSession(
+	projectId: string,
+	notebookId: string,
+	mode: 'edit' | 'app' = 'edit',
+) {
 	return useMutation({
-		mutationFn: () =>
-			// Provisioning a cold sandbox can take a while (the kernel may build its uv
-			// venv on first boot), so override the client's default 20s timeout. Must
-			// exceed the provisioner's waitForPort budget.
-			apiFetch<Session>(`/api/v1/projects/${projectId}/notebooks/${notebookId}/sessions`, {
-				method: 'POST',
-				timeout: 150_000, // 2.5 minutes
-			}),
+		mutationFn: () => startSessionRequest(projectId, notebookId, mode),
+	});
+}
+
+/** Refresh the status indicators right away rather than waiting for the poll. */
+function useInvalidateSessions(projectId: string) {
+	const queryClient = useQueryClient();
+	return () => {
+		void queryClient.invalidateQueries({ queryKey: sessionKeys.listByProject(projectId) });
+	};
+}
+
+/**
+ * Restart the shared app: stop the given session, then start a fresh one (which
+ * picks up the notebook's current head — the staleness banner's action). The
+ * stop is awaited so the fresh create can't reuse the dying sandbox.
+ */
+export function useRestartApp(projectId: string, notebookId: string) {
+	const invalidate = useInvalidateSessions(projectId);
+	return useMutation({
+		mutationFn: async (sessionId: string) => {
+			try {
+				await stopSessionRequest(projectId, notebookId, sessionId);
+			} catch (err) {
+				// Already gone (stopped/reaped underneath us): the restart intent
+				// still holds, so proceed to the fresh start.
+				if (!(err instanceof ApiRequestError && err.code === 'NOT_FOUND')) throw err;
+			}
+			return startSessionRequest(projectId, notebookId, 'app');
+		},
+		onSuccess: invalidate,
 	});
 }
 
 export function useStopSession(projectId: string, notebookId: string) {
-	const queryClient = useQueryClient();
+	const invalidate = useInvalidateSessions(projectId);
 	return useMutation({
-		mutationFn: (sessionId: string) =>
-			apiFetch<void>(
-				`/api/v1/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}`,
-				{
-					method: 'DELETE',
-				},
-			),
-		onSuccess: () => {
-			// Refresh the status indicators right away rather than waiting for the poll.
-			void queryClient.invalidateQueries({ queryKey: sessionKeys.listByProject(projectId) });
-		},
+		mutationFn: (sessionId: string) => stopSessionRequest(projectId, notebookId, sessionId),
+		onSuccess: invalidate,
 	});
 }

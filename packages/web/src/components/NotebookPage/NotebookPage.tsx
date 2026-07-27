@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Eye, Pencil } from 'lucide-react';
+import { AlertTriangle, AppWindow, ArrowLeft, Eye, Pencil, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
 	Button,
+	ConfirmDialog,
 	IconButton,
 	IconLink,
 	StatusDot,
@@ -14,53 +16,105 @@ import {
 	useCapabilitiesQuery,
 	useNotebookQuery,
 	useProjectQuery,
+	useProjectSessionsQuery,
 	useUsersQuery,
 } from '@/api/hooks';
 import { useNotebookSession } from '@/hooks/useNotebookSession';
+import type { SessionEnded } from '@/hooks/useNotebookSession';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
+import { isAppStale } from '@/components/Project/AppSessionIndicator';
+import { appConnectionHint, sessionsByNotebook } from '@/lib/sessions';
 
-export function NotebookPage() {
+/** Copy for the app page's terminal panel, keyed by how the session ended. */
+function endedPanel(ended: SessionEnded): { title: string; message: string; canRestart: boolean } {
+	// Access lost, not a stopped app: it is still serving everyone else, so
+	// offering "Restart app" would only produce a 403.
+	if (ended === 'access_lost') {
+		return {
+			title: 'Access ended',
+			message: 'You no longer have access to this app.',
+			canRestart: false,
+		};
+	}
+	const stopped = (message: string) => ({ title: 'App stopped', message, canRestart: true });
+	if (ended === 'terminated' || ended === 'terminating') return stopped('The app was stopped.');
+	if (ended === 'expired') {
+		return stopped('The app reached its session lifetime and was shut down.');
+	}
+	if (ended === 'failed') return stopped('The app crashed.');
+	return stopped('The app is no longer running.');
+}
+
+export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' }) {
 	const { pid, nid } = useParams<{ pid: string; nid: string }>();
 	const navigate = useNavigate();
 	const location = useLocation();
+	const isApp = variant === 'app';
 
 	const notebookTitle = (location.state as { title?: string } | null)?.title ?? nid ?? 'Notebook';
 	const renameModal = useDisclosure();
+	// Stop/Restart disconnect everyone using the shared app, so both confirm first.
+	const [confirmAppAction, setConfirmAppAction] = useState<'stop' | 'restart' | null>(null);
 
-	// The viewer-mode branch (server-enforced regardless): editors get a session
-	// as always; a viewer gets one only under MARIMOHUB_VIEWER_MODE=
-	// ephemeral-sandbox, and the static snapshot view under `static`. The session
-	// auto-start is held until the branch is decided so a viewer never fires a
-	// doomed request; a failed capabilities probe falls back to `static` (the
-	// server default) instead of spinning forever.
+	// The viewer branch (server-enforced regardless): editors get a session as
+	// always; a viewer gets an edit kernel only when the deployment's evaluated
+	// admission row (`capabilities.viewer_session_modes`) grants `edit`, and the
+	// static snapshot view otherwise. The session auto-start is held until the
+	// branch is decided so a viewer never fires a doomed request; a failed
+	// capabilities probe (or version skew with an older API) falls back to the
+	// grant-nothing row — the server default — never an infinite spinner. The
+	// app page skips the branch entirely — the server admits viewers per its
+	// row, and a disallowed viewer's create lands on the error panel (403, no
+	// retry loop).
 	const { data: project } = useProjectQuery(pid!);
 	const { data: capabilities, isError: capabilitiesError } = useCapabilitiesQuery();
 	const isViewer = project.your_role === 'viewer';
-	// Resolved-but-missing (version skew with an older API) and a failed probe
-	// both fall back to `static` — the server default — never an infinite spinner.
-	const viewerMode = capabilities
-		? (capabilities.viewer_mode ?? 'static')
+	const viewerGrants = capabilities
+		? (capabilities.viewer_session_modes ?? [])
 		: capabilitiesError
-			? 'static'
+			? []
 			: undefined;
-	const staticView = isViewer && viewerMode === 'static';
-	const resolvingMode = isViewer && viewerMode === undefined;
+	const viewerHasEditKernel = !!viewerGrants?.includes('edit');
+	const staticView = !isApp && isViewer && viewerGrants !== undefined && !viewerHasEditKernel;
+	const resolvingMode = !isApp && isViewer && viewerGrants === undefined;
 
-	const { session, error, isProvisioning, isRunning, sandboxUrl, start, stop } = useNotebookSession(
-		pid!,
-		nid!,
-		{ enabled: !isViewer || viewerMode === 'ephemeral-sandbox' },
-	);
+	const { session, error, isProvisioning, isRunning, sandboxUrl, ended, start, stop, restart } =
+		useNotebookSession(pid!, nid!, {
+			enabled: isApp || !isViewer || viewerHasEditKernel,
+			mode: isApp ? 'app' : 'edit',
+		});
 
 	// Metadata for the "created by" line — loaded lazily so it never blocks the
 	// kernel from starting. The author id is resolved to a name via the directory.
-	const { data: notebook } = useNotebookQuery(pid!, nid!);
+	// On the app page it also carries the head version for the staleness banner,
+	// which must track versions committed server-side (snapshotter, teardown) —
+	// hence the poll; a cached-once head would never fire (or mis-fire) the banner.
+	const { data: notebook } = useNotebookQuery(
+		pid!,
+		nid!,
+		isApp ? { refetchIntervalMs: 30_000 } : {},
+	);
 	const author = notebook?.meta.author;
 	// Prefer the canonical title once detail loads, so a rename reflects immediately.
 	const title = notebook?.meta.title ?? notebookTitle;
 	const { data: users } = useUsersQuery(author ? [author] : []);
+
+	// App pages watch the project's sessions (5s poll) to know whether the
+	// notebook is being edited: the periodic snapshotter commits a version every
+	// ~2 minutes mid-edit, so the staleness banner is suppressed until editing
+	// stops — otherwise it would flap (with a disconnect-everyone CTA) the whole
+	// time someone types.
+	// Stops once the app has ended — the banner it feeds is gone with the iframe.
+	const { data: projectSessions } = useProjectSessionsQuery(pid!, isApp && !ended);
+	const editActive = isApp && !!sessionsByNotebook(projectSessions).get(nid!)?.edit;
+	const appStale =
+		isApp && !!session && !editActive && isAppStale(session, notebook?.source.current_version_id);
+	// A viewer deep-linking to /app gets a plain 403 panel; retrying can only
+	// fail again, so the button is dropped (no retry loop, manual or otherwise).
+	const showRetry = error?.code !== 'FORBIDDEN';
+	const terminal = isApp && ended && !isProvisioning ? endedPanel(ended) : null;
 
 	const backToProject = () => {
 		void navigate(`/projects/${pid}`);
@@ -70,7 +124,8 @@ export function NotebookPage() {
 	// the kernel keeps running so re-opening the notebook RESUMES it (the create-session
 	// route returns the live session instead of provisioning a new sandbox). Heartbeats
 	// stop when the page unmounts, so an abandoned session is reaped by the server's
-	// heartbeat-TTL reaper. Tearing down (and saving files back) happens on explicit Stop.
+	// heartbeat-TTL reaper. For the shared app this matters doubly: other people may
+	// still be using it. Tearing down happens only on explicit Stop.
 	const handleStop = () => {
 		stop();
 		backToProject();
@@ -89,7 +144,13 @@ export function NotebookPage() {
 				</IconLink>
 				<div className="h-5 w-px bg-border" />
 				<span className="truncate text-[13px] font-medium">{title}</span>
-				{!isViewer && (
+				{isApp && (
+					<span className="flex shrink-0 items-center gap-1 rounded-full border border-primary/20 bg-primary/5 px-2 py-0.5 text-[11px] font-medium text-primary">
+						<AppWindow className="size-3" />
+						App
+					</span>
+				)}
+				{!isApp && !isViewer && (
 					<IconButton
 						label="Rename notebook"
 						tooltip="Rename notebook"
@@ -119,11 +180,23 @@ export function NotebookPage() {
 							</Tooltip>
 						)
 					)}
-					{session && (
+					{/* Stop/Restart render from the server-evaluated grants: editors on
+					    the shared app, or the owner of their own ephemeral session. */}
+					{isApp && session?.can?.stop && (
+						<Button
+							variant="unstyled"
+							className="flex h-[26px] items-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11"
+							onPress={() => setConfirmAppAction('restart')}
+						>
+							<RefreshCw className="size-3" />
+							Restart
+						</Button>
+					)}
+					{session?.can?.stop && (
 						<Button
 							variant="unstyled"
 							className="flex h-[26px] items-center rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-destructive hover:bg-destructive/10 hover:text-destructive max-md:min-h-11"
-							onPress={handleStop}
+							onPress={isApp ? () => setConfirmAppAction('stop') : handleStop}
 						>
 							Stop
 						</Button>
@@ -141,7 +214,7 @@ export function NotebookPage() {
 							'animate-spin',
 						)}
 					/>
-					<p>{resolvingMode ? 'Loading...' : 'Starting sandbox...'}</p>
+					<p>{resolvingMode ? 'Loading...' : isApp ? 'Starting app...' : 'Starting sandbox...'}</p>
 				</div>
 			)}
 
@@ -156,6 +229,27 @@ export function NotebookPage() {
 							</span>
 						</div>
 					)}
+					{appStale && (
+						<div
+							aria-live="polite"
+							className="flex items-center gap-1.5 border-b bg-amber-500/10 px-3 py-1.5 text-xs text-muted-foreground"
+						>
+							<AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-500" />
+							<span>
+								The notebook has changed since this app started — it's serving an older version.
+							</span>
+							{/* Whoever may stop the app may restart it; others get only the hint. */}
+							{session?.can?.stop && (
+								<Button
+									variant="unstyled"
+									className="ml-1 shrink-0 rounded text-xs font-medium text-primary underline-offset-2 hover:underline"
+									onPress={() => setConfirmAppAction('restart')}
+								>
+									Restart to update
+								</Button>
+							)}
+						</div>
+					)}
 					<div className="flex-1 overflow-hidden">
 						<iframe
 							className="size-full border-0"
@@ -168,13 +262,27 @@ export function NotebookPage() {
 				</>
 			)}
 
-			{error && (
-				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-					<p className="max-w-md text-sm text-destructive">{error}</p>
+			{/* The session ended underneath an open app page (stopped by another
+			    editor, lifetime expiry, crash, the notebook was deleted, or this
+			    caller's access was revoked). A deliberate terminal panel — never an
+			    error-toast loop, never an auto-restart (a restart would surprise
+			    whoever stopped it). */}
+			{terminal && (
+				<div
+					aria-live="polite"
+					className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center"
+				>
+					<AppWindow className="size-8 text-muted-foreground" />
+					<div className="flex flex-col gap-1">
+						<p className="text-sm font-medium">{terminal.title}</p>
+						<p className="max-w-md text-sm text-muted-foreground">{terminal.message}</p>
+					</div>
 					<div className="flex gap-2">
-						<Button variant="primary" onPress={start}>
-							Retry
-						</Button>
+						{terminal.canRestart && (
+							<Button variant="primary" onPress={start}>
+								Restart app
+							</Button>
+						)}
 						<Button variant="ghost" onPress={backToProject}>
 							Back
 						</Button>
@@ -182,12 +290,50 @@ export function NotebookPage() {
 				</div>
 			)}
 
-			<RenameNotebookDialog
-				isOpen={renameModal.isOpen}
-				onClose={renameModal.close}
-				projectId={pid!}
-				notebook={{ id: nid!, title }}
-			/>
+			{error && !ended && (
+				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+					<p className="max-w-md text-sm text-destructive">{error.message}</p>
+					<div className="flex gap-2">
+						{showRetry && (
+							<Button variant="primary" onPress={start}>
+								Retry
+							</Button>
+						)}
+						<Button variant="ghost" onPress={backToProject}>
+							Back
+						</Button>
+					</div>
+				</div>
+			)}
+
+			{!isApp && (
+				<RenameNotebookDialog
+					isOpen={renameModal.isOpen}
+					onClose={renameModal.close}
+					projectId={pid!}
+					notebook={{ id: nid!, title }}
+				/>
+			)}
+
+			{isApp && (
+				<ConfirmDialog
+					isOpen={confirmAppAction !== null}
+					onClose={() => setConfirmAppAction(null)}
+					title={confirmAppAction === 'restart' ? 'Restart App' : 'Stop App'}
+					description={
+						confirmAppAction === 'restart'
+							? `Restart the app for "${title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${appConnectionHint(session ?? undefined)}`
+							: `Stop the app for "${title}"? Anyone using it will be disconnected.${appConnectionHint(session ?? undefined)}`
+					}
+					confirmLabel={confirmAppAction === 'restart' ? 'Restart' : 'Stop App'}
+					onConfirm={() => {
+						const action = confirmAppAction;
+						setConfirmAppAction(null);
+						if (action === 'restart') restart();
+						else handleStop();
+					}}
+				/>
+			)}
 		</div>
 	);
 }

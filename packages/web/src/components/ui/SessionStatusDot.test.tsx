@@ -13,6 +13,8 @@ function makeSession(status: Session['status']): Session {
 		project_id: 'proj-000000000000000',
 		user_id: 'user_1',
 		status,
+		mode: 'edit',
+		can: { attach: true, stop: true },
 		started_at: '2026-06-24T12:00:00Z',
 		last_heartbeat: '2026-06-24T12:00:00Z',
 	};

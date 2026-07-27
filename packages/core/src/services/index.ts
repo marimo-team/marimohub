@@ -62,11 +62,23 @@ export { ProxyExposure, SubdomainExposure } from './runtime/sandboxExposure';
 export {
 	ACTIVE_STATUSES,
 	isTerminal,
+	MODE_POLICY,
 	nextStatus,
 	PRESENT_STATUSES,
 	type SessionEvent,
+	sessionMode,
+	type SessionModePolicy,
+	sessionModePolicy,
+	sessionPersistsEdits,
 	TERMINAL_STATUSES,
 } from './runtime/sessionState';
+export {
+	canStartSessionMode,
+	type SessionAction,
+	type SessionActor,
+	sessionCan,
+	sessionGrants,
+} from './runtime/sessionAuthz';
 export { signProxyToken, verifyProxyToken } from './runtime/proxyToken';
 export { resolveBaseImage } from './runtime/resolveBaseImage';
 export { probeKernelLiveness } from './runtime/kernelProbe';
@@ -99,6 +111,8 @@ export {
 	resolveRestoreSnapshot,
 } from './content/filesystemSnapshots';
 export { SessionService } from './runtime/SessionService';
+export { SessionRetirer } from './runtime/SessionRetirer';
+export type { SessionRetirerDeps } from './runtime/SessionRetirer';
 
 /**
  * Compose the domain services over a bucket. `metrics` is optional and defaults

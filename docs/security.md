@@ -33,6 +33,10 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net
 
 The kernel URL is **not authenticated by the hub** — the per-session sandbox id
 is the only capability. Don't expose the kernel hostname beyond the iframe.
+Because the URL is the capability, the session API shows `sandbox_url` only to
+callers who could reach that kernel: editors, the owner of an ephemeral viewer
+session, and — when the [viewer mode](/apps#who-can-do-what) grants apps —
+viewers, for the shared app only.
 
 ### `proxy`: forwarded through the app
 
@@ -56,6 +60,13 @@ MARIMOHUB_APP_BASE_URL=https://hub.example.com
 The separate-domain guard doesn't apply here, and
 `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` is unused. Proxy mode runs on the Node
 server; the Cloudflare Workers deployment uses `subdomain`.
+
+Note the interaction with [notebook apps](/apps): the same-origin risk you
+acknowledge is that notebook-authored JS can script the control plane as
+whoever opens the kernel. `MARIMOHUB_VIEWER_MODE=applications` widens who that
+can be — from editors opening their own notebooks to any viewer opening a
+shared app someone else wrote. Combine proxy mode with viewer apps only if you
+trust every notebook author in the deployment.
 
 ## Kernels run tokenless
 
@@ -86,6 +97,12 @@ server-side on every route. Non-members fall back to `MARIMOHUB_DEFAULT_ROLE`
 reading a project's audit log (`GET /projects/{pid}/events`) — events record
 member management and deletion activity. See
 [Auth → Authorization](/auth#authorization-roles).
+
+Kernel access follows the same gates. [Notebook apps](/apps) are editor-only by
+default; `MARIMOHUB_VIEWER_MODE=applications` (or `ephemeral-sandbox`) opens
+them to viewers — a deliberate trade-off, because the app kernel runs notebook
+code with the project's secrets and federated credentials injected. See
+[Notebook apps → Who can do what](/apps#who-can-do-what).
 
 ## Request safety
 

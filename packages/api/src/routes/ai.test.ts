@@ -44,15 +44,29 @@ function post(
 
 afterEach(() => vi.restoreAllMocks());
 
+/**
+ * Errors on this route must stay OpenAI-shaped (`{ error: { message, type } }`),
+ * never the hub's `{ success, error }` envelope — marimo's `openai` client parses
+ * the former to show the user why the call failed.
+ */
+async function expectOpenAiError(res: Response, message: string, type: string) {
+	const json = (await res.json()) as { error?: { message?: string; type?: string } };
+	expect(json).not.toHaveProperty('success');
+	expect(json.error?.message).toBe(message);
+	expect(json.error?.type).toBe(type);
+}
+
 describe('POST /api/ai/v1/chat/completions', () => {
 	it('rejects a missing token', async () => {
 		const res = await post(null, { model: 'x', messages: [] });
 		expect(res.status).toBe(401);
+		await expectOpenAiError(res, 'Missing bearer token', 'invalid_request_error');
 	});
 
 	it('rejects a forged token', async () => {
 		const res = await post('not.a.token', { model: 'x', messages: [] });
 		expect(res.status).toBe(401);
+		await expectOpenAiError(res, 'Invalid or expired token', 'invalid_request_error');
 	});
 
 	it('404s when AI is not configured', async () => {
@@ -95,6 +109,7 @@ describe('POST /api/ai/v1/chat/completions', () => {
 		);
 		const res = await post(expired, { model: 'm', messages: [] });
 		expect(res.status).toBe(401);
+		await expectOpenAiError(res, 'Invalid or expired token', 'invalid_request_error');
 	});
 
 	it('forwards to the upstream with the real key and streams back', async () => {

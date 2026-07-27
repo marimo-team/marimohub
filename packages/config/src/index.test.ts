@@ -258,18 +258,24 @@ describe('createFromEnv default role', () => {
 		expect(createFromEnv({ ...baseEnv }).policy.viewerMode).toBe('static');
 	});
 
-	it('accepts explicit static/ephemeral-sandbox (case-insensitive)', () => {
+	it('accepts explicit static/applications/ephemeral-sandbox (case-insensitive)', () => {
 		expect(
 			createFromEnv({ ...baseEnv, MARIMOHUB_VIEWER_MODE: 'ephemeral-sandbox' }).policy.viewerMode,
 		).toBe('ephemeral-sandbox');
+		expect(
+			createFromEnv({ ...baseEnv, MARIMOHUB_VIEWER_MODE: 'applications' }).policy.viewerMode,
+		).toBe('applications');
+		expect(
+			createFromEnv({ ...baseEnv, MARIMOHUB_VIEWER_MODE: 'Applications' }).policy.viewerMode,
+		).toBe('applications');
 		expect(createFromEnv({ ...baseEnv, MARIMOHUB_VIEWER_MODE: 'Static' }).policy.viewerMode).toBe(
 			'static',
 		);
 	});
 
-	it('throws on an invalid viewer mode', () => {
+	it('throws on an invalid viewer mode, naming the accepted values', () => {
 		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_VIEWER_MODE: 'readonly' })).toThrow(
-			/Invalid MARIMOHUB_VIEWER_MODE/,
+			/Invalid MARIMOHUB_VIEWER_MODE.*static, applications, ephemeral-sandbox/,
 		);
 	});
 
@@ -504,6 +510,34 @@ describe('createFromEnv concurrent-session cap', () => {
 		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_MAX_SESSIONS_PER_USER: raw })).toThrow(
 			/MARIMOHUB_MAX_SESSIONS_PER_USER/,
 		);
+	});
+
+	it('defaults the per-project app cap to 5', () => {
+		expect(createFromEnv({ ...baseEnv }).policy.maxAppsPerProject).toBe(5);
+	});
+
+	it('treats an app cap of 0 as unlimited (undefined)', () => {
+		expect(
+			createFromEnv({ ...baseEnv, MARIMOHUB_MAX_APPS_PER_PROJECT: '0' }).policy.maxAppsPerProject,
+		).toBeUndefined();
+	});
+
+	it.each(['-1', '2.5', 'abc'])('rejects the invalid app cap %o', (raw) => {
+		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_MAX_APPS_PER_PROJECT: raw })).toThrow(
+			/MARIMOHUB_MAX_APPS_PER_PROJECT/,
+		);
+	});
+
+	it('treats an empty value as unset (defaults), never as 0/unlimited', () => {
+		// `Number('') === 0`, so `MARIMOHUB_MAX_APPS_PER_PROJECT=` in an env file
+		// would otherwise silently disable the cap instead of applying the default.
+		const cfg = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_MAX_SESSIONS_PER_USER: '',
+			MARIMOHUB_MAX_APPS_PER_PROJECT: ' ',
+		});
+		expect(cfg.policy.maxConcurrentSessionsPerUser).toBe(10);
+		expect(cfg.policy.maxAppsPerProject).toBe(5);
 	});
 });
 

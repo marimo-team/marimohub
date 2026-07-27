@@ -6,12 +6,14 @@ function session(
 	notebookId: string,
 	status: Session['status'],
 	id = `${notebookId}-${status}`,
+	mode: Session['mode'] = 'edit',
 ): Session {
 	return {
 		session_id: id,
 		notebook_id: notebookId,
 		project_id: 'proj-1',
 		status,
+		mode,
 		started_at: '2025-03-05T14:00:00Z',
 		last_heartbeat: '2025-03-05T14:00:00Z',
 	} as Session;
@@ -39,8 +41,8 @@ describe('sessionsByNotebook', () => {
 
 	it('keys sessions by notebook id', () => {
 		const map = sessionsByNotebook([session('nb-a', 'running'), session('nb-b', 'terminating')]);
-		expect(map.get('nb-a')?.status).toBe('running');
-		expect(map.get('nb-b')?.status).toBe('terminating');
+		expect(map.get('nb-a')?.edit?.status).toBe('running');
+		expect(map.get('nb-b')?.edit?.status).toBe('terminating');
 	});
 
 	it('keeps the liveliest session when a notebook has several', () => {
@@ -50,7 +52,7 @@ describe('sessionsByNotebook', () => {
 			session('nb-a', 'starting', 'starting-one'),
 		]);
 		expect(map.size).toBe(1);
-		expect(map.get('nb-a')?.session_id).toBe('running-one');
+		expect(map.get('nb-a')?.edit?.session_id).toBe('running-one');
 	});
 
 	it('is order-independent (first-seen liveliest still wins)', () => {
@@ -58,6 +60,26 @@ describe('sessionsByNotebook', () => {
 			session('nb-a', 'running', 'running-one'),
 			session('nb-a', 'terminating', 'terminating-one'),
 		]);
-		expect(map.get('nb-a')?.session_id).toBe('running-one');
+		expect(map.get('nb-a')?.edit?.session_id).toBe('running-one');
+	});
+
+	it('partitions edit and app sessions per notebook', () => {
+		const map = sessionsByNotebook([
+			session('nb-a', 'running', 'edit-one'),
+			session('nb-a', 'running', 'app-one', 'app'),
+		]);
+		expect(map.size).toBe(1);
+		expect(map.get('nb-a')?.edit?.session_id).toBe('edit-one');
+		expect(map.get('nb-a')?.app?.session_id).toBe('app-one');
+	});
+
+	it('ranks liveliness within a mode, not across modes', () => {
+		const map = sessionsByNotebook([
+			session('nb-a', 'starting', 'edit-one'),
+			session('nb-a', 'running', 'app-one', 'app'),
+			session('nb-a', 'terminating', 'app-two', 'app'),
+		]);
+		expect(map.get('nb-a')?.edit?.session_id).toBe('edit-one');
+		expect(map.get('nb-a')?.app?.session_id).toBe('app-one');
 	});
 });

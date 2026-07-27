@@ -713,6 +713,38 @@ describe('Notebook routes', () => {
 		await expectError(await stranger('POST', nb(`/${created.id}/duplicate`), {}), 403);
 	});
 
+	// A default role makes every authenticated user a viewer without a membership
+	// lookup — but it must not also skip the project's lifecycle check, or a
+	// soft-deleted project's code stays readable for the whole GC grace period.
+	describe.each(['viewer', 'editor'] as const)('soft-deleted project (default %s)', (role) => {
+		let created: any;
+		let read: ReturnType<typeof createTestApi>['request'];
+
+		beforeEach(async () => {
+			created = await expectOk<any>(
+				await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),
+				201,
+			);
+			await expectOk(await request('DELETE', `/projects/${projectId}`));
+			read = createTestApi({
+				bucket,
+				userId: uid('user_default_role'),
+				deps: { policy: { defaultRole: role } },
+			}).request;
+		});
+
+		it.each([
+			['list notebooks', ''],
+			['notebook detail', '/{nid}'],
+			['notebook content', '/{nid}/content'],
+			['notebook versions', '/{nid}/versions'],
+			['HTML snapshot', '/{nid}/html'],
+		])('%s returns 404', async (_label, suffix) => {
+			const res = await read('GET', nb(suffix.replace('{nid}', created.id)));
+			await expectError(res, 404, 'NOT_FOUND');
+		});
+	});
+
 	it('GET exposes an ETag; PUT/DELETE honor If-Match', async () => {
 		const created = await expectOk<any>(
 			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),

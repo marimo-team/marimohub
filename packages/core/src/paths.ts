@@ -113,6 +113,14 @@ export const paths = {
 	session: (projectId: ProjectId, id: SessionId) => `_system/sessions/${projectId}/${id}.json`,
 	sessionsPrefix: '_system/sessions/',
 	sessionsForProject: (projectId: ProjectId) => `_system/sessions/${projectId}/`,
+	/**
+	 * Per-notebook app-singleton claim (see `AppClaimSchema`): names the `run`
+	 * session that owns the notebook's shared app sandbox. CAS-managed via
+	 * `SessionService.claimApp`/`releaseApp` only.
+	 */
+	appClaim: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/apps/${projectId}/${notebookId}.json`,
+	appClaimsForProject: (projectId: ProjectId) => `_system/apps/${projectId}/`,
 	identity: (userId: UserId) => `_system/identities/${encodeURIComponent(userId)}.json`,
 	identitiesPrefix: '_system/identities/',
 	// One mutable record per personal access token, keyed by the id embedded in

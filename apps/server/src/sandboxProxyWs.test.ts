@@ -2,6 +2,7 @@ import type http from 'node:http';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { PassThrough } from 'node:stream';
+import type { Duplex } from 'node:stream';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
 import type { ApiDeps } from '@marimo-hub/api';
@@ -91,9 +92,11 @@ describe('attachSandboxProxyUpgrade', () => {
 	describe('upstream relay', () => {
 		let upstream: ReturnType<typeof createServer>;
 		let upstreamOrigin: string;
+		let lastUpstreamHeaders: http.IncomingHttpHeaders | undefined;
 
 		beforeAll(async () => {
-			upstream = createServer((_req, res) => {
+			upstream = createServer((req, res) => {
+				lastUpstreamHeaders = req.headers;
 				res.writeHead(404, 'Not Found');
 				res.end();
 			});
@@ -145,10 +148,96 @@ describe('attachSandboxProxyUpgrade', () => {
 
 			const socket = new PassThrough();
 			const out = collect(socket);
-			server.listeners[0](fakeIncomingMessage(`/proxy/${token}/`), socket, Buffer.alloc(0));
+			// Hub credentials ride the browser's upgrade request; the kernel (and the
+			// notebook code that can read its request headers) must never see them.
+			const req = fakeIncomingMessage(`/proxy/${token}/`);
+			req.headers.cookie = 'hub_session=secret';
+			req.headers.authorization = 'Bearer mhub_pat_secret';
+			req.headers['cf-access-jwt-assertion'] = 'eyJhbGciOiJSUzI1NiJ9.access.jwt';
+			req.headers['x-custom'] = 'passes';
+			lastUpstreamHeaders = undefined;
+			server.listeners[0](req, socket, Buffer.alloc(0));
 
 			await vi.waitFor(() => expect(socket.destroyed).toBe(true));
 			expect(out.text()).toMatch(/^HTTP\/1\.1 404/);
+			expect(lastUpstreamHeaders).toBeDefined();
+			expect(lastUpstreamHeaders!.cookie).toBeUndefined();
+			expect(lastUpstreamHeaders!.authorization).toBeUndefined();
+			expect(lastUpstreamHeaders!['cf-access-jwt-assertion']).toBeUndefined();
+			expect(lastUpstreamHeaders!['x-custom']).toBe('passes');
+		});
+
+		it('strips Set-Cookie from a successful upgrade handshake', async () => {
+			// The 101's headers are relayed verbatim, on the app's own origin — so a
+			// kernel cookie would overwrite the caller's hub session.
+			const upgrader = createServer();
+			// An upgraded socket detaches from the server, so keep it to close by hand.
+			let upstreamSocket: Duplex | undefined;
+			upgrader.on('upgrade', (_req, socket) => {
+				upstreamSocket = socket;
+				socket.write(
+					'HTTP/1.1 101 Switching Protocols\r\n' +
+						'Upgrade: websocket\r\n' +
+						'Connection: Upgrade\r\n' +
+						'Set-Cookie: mh_session=attacker; Path=/\r\n\r\n',
+				);
+			});
+			await new Promise<void>((resolve) => upgrader.listen(0, '127.0.0.1', resolve));
+			const upgraderOrigin = `http://127.0.0.1:${(upgrader.address() as AddressInfo).port}`;
+
+			try {
+				const bucket = await createInitializedBucket();
+				const services = createServices(bucket);
+				const project = await services.projects.createProject(
+					{ name: 'Owned', description: 'd' },
+					ACTOR,
+				);
+				const pid = project.id as ProjectId;
+				const notebook = await services.notebooks.createNotebook(
+					pid,
+					{ title: 'NB', description: 'd', code: 'import marimo as mo' },
+					ACTOR,
+				);
+				const session = await services.sessions.createSession({
+					notebook_id: notebook.id,
+					project_id: pid,
+					user_id: ACTOR,
+				});
+				await services.sessions.setRunning(
+					pid,
+					session.session_id,
+					'/proxy/x/',
+					false,
+					upgraderOrigin,
+				);
+				const token = await signProxyToken(pid, session.session_id, SECRET);
+
+				const deps: ApiDeps = makeTestDeps(bucket, {
+					authenticator: authAs(ACTOR),
+					sandbox: {
+						bucket: { name: 'test', endpoint: '' },
+						hostname: 'localhost',
+						workdir: '/workspace',
+						persistWorkspace: 'source',
+						exposure: new ProxyExposure(SECRET),
+					},
+				});
+				const server = fakeUpgradeServer();
+				attachSandboxProxyUpgrade(server, deps);
+
+				const socket = new PassThrough();
+				const out = collect(socket);
+				const req = fakeIncomingMessage(`/proxy/${token}/`);
+				req.headers.connection = 'Upgrade';
+				req.headers.upgrade = 'websocket';
+				server.listeners[0](req, socket, Buffer.alloc(0));
+
+				await vi.waitFor(() => expect(out.text()).toMatch(/^HTTP\/1\.1 101/));
+				expect(out.text().toLowerCase()).not.toContain('set-cookie');
+			} finally {
+				upstreamSocket?.destroy();
+				await new Promise<void>((resolve) => upgrader.close(() => resolve()));
+			}
 		});
 	});
 

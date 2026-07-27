@@ -1,10 +1,29 @@
 import { expect } from 'vitest';
 import { NotFoundError } from '../errors';
+import { paths } from '../paths';
+import { AppClaimSchema } from '../schema';
+import type { NotebookId, ProjectId, SessionId } from '../ids';
+import type { Bucket } from '../ports/bucket';
 import type { ExecResult, ListFilesResult, ReadFileResult } from '../ports/sandbox';
 
 /** Assert that an async operation rejects with `NotFoundError`. */
 export async function expectNotFound(fn: () => Promise<unknown>): Promise<void> {
 	await expect(fn()).rejects.toThrow(NotFoundError);
+}
+
+/**
+ * The session holding a notebook's app singleton, or null when free. A released
+ * claim is CAS'd to a free marker rather than deleted, so "no holder" is not the
+ * same as "no object" — assert on this, not on the object.
+ */
+export async function appClaimHolder(
+	bucket: Bucket,
+	projectId: ProjectId,
+	notebookId: NotebookId,
+): Promise<SessionId | null> {
+	const obj = await bucket.get(paths.appClaim(projectId, notebookId));
+	if (!obj) return null;
+	return AppClaimSchema.parse(await obj.json()).session_id;
 }
 
 /**

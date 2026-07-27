@@ -28,6 +28,16 @@ export const SESSION_STATUSES = [
 ] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
+/**
+ * How a session's kernel serves the notebook. `edit` is the marimo editor
+ * (per-user, edits persisted at teardown); `app` serves it read-only via
+ * `marimo run` — a per-notebook singleton shared by all editors, provisioned
+ * copy-only, never written back. Named for what the user gets (an app), not
+ * the CLI subcommand that implements it.
+ */
+export const SESSION_MODES = ['edit', 'app'] as const;
+export type SessionMode = (typeof SESSION_MODES)[number];
+
 /** Where a notebook's source lives. `git` = a git repo push-synced from an external host. */
 export const SOURCE_TYPES = ['local', 'git'] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
@@ -52,14 +62,37 @@ export const ROLES = ['admin', 'editor', 'viewer'] as const;
 export type Role = (typeof ROLES)[number];
 
 /**
- * What an effective `viewer` sees when opening a notebook
- * (config: MARIMOHUB_VIEWER_MODE). `static` serves the last captured HTML
- * snapshot — no compute, no code execution. `ephemeral-sandbox` provisions a
- * real kernel whose session is never written back (no version, snapshot, or
- * workspace mutation on teardown). Editors and above are unaffected.
+ * What an effective `viewer` gets (config: MARIMOHUB_VIEWER_MODE), ordered
+ * least → most access; each tier is a superset of the previous. `static`
+ * serves the last captured HTML snapshot — no compute, no code execution.
+ * `applications` additionally admits viewers to the shared notebook app.
+ * `ephemeral-sandbox` additionally provisions a real edit kernel whose session
+ * is never written back (no version, snapshot, or workspace mutation on
+ * teardown). Editors and above are unaffected.
  */
-export const VIEWER_MODES = ['static', 'ephemeral-sandbox'] as const;
+export const VIEWER_MODES = ['static', 'applications', 'ephemeral-sandbox'] as const;
 export type ViewerMode = (typeof VIEWER_MODES)[number];
+
+/**
+ * The session modes an effective viewer may start or attach to, per viewer
+ * mode — the single table behind every viewer-admission branch. What the
+ * admitted session IS comes from `MODE_POLICY[mode].viewerSession`.
+ */
+export const VIEWER_SESSION_MODES: Record<ViewerMode, readonly SessionMode[]> = {
+	static: [],
+	applications: ['app'],
+	'ephemeral-sandbox': ['app', 'edit'],
+};
+
+/**
+ * The `VIEWER_SESSION_MODES` row for a possibly-unset viewer mode. Unset — and
+ * any out-of-enum value an untyped library caller wires into the policy —
+ * fails closed to `static` (grant nothing) instead of throwing inside an
+ * authorization gate.
+ */
+export function viewerSessionModes(mode: ViewerMode | undefined): readonly SessionMode[] {
+	return VIEWER_SESSION_MODES[mode ?? 'static'] ?? VIEWER_SESSION_MODES.static;
+}
 
 /** Port the marimo kernel listens on inside every sandbox (provisioner + probes). */
 export const MARIMO_PORT = 2718;

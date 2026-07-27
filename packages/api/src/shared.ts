@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
 	canAct,
+	effectiveRole,
 	NotebookId,
 	NotFoundError,
 	NOTEBOOK_STATUSES,
@@ -10,13 +11,28 @@ import {
 	ProjectId,
 	requireRole,
 	ROLES,
+	SESSION_MODES,
 	SESSION_STATUSES,
 	SessionId,
+	sessionCan,
+	sessionGrants,
+	sessionPersistsEdits,
+	SessionRetirer,
 	SOURCE_TYPES,
 	VIEWER_MODES,
 } from '@marimo-hub/core';
-import type { AuthSubject, Project, ProjectService, Role, Session } from '@marimo-hub/core';
-import type { HonoEnv } from './context';
+import type {
+	AuthSubject,
+	Project,
+	ProjectService,
+	Role,
+	Session,
+	SessionAction,
+	SessionActor,
+	ViewerMode,
+} from '@marimo-hub/core';
+import type { ApiDeps, HonoEnv } from './context';
+import { describeError, logEvent } from './log';
 
 // Re-export the injected-context types for route modules that import from './shared'.
 export type { ApiDeps, HonoEnv } from './context';
@@ -40,38 +56,145 @@ export async function assertProjectRole(
 	return project;
 }
 
+/** The slice of PolicyConfig the session gates need. */
+export type SessionPolicy = { defaultRole?: Role; viewerMode?: ViewerMode };
+
 /**
- * Gate control of a live session (heartbeat / stop / kernel proxy): `editor`+
- * as for starting one, OR the owner of an ephemeral (viewer) session who still
- * holds at least `viewer` on the project. The role is re-checked on every call
- * — ownership of the stamped record alone must not outlive a revoked
- * membership, or a removed user could keep their kernel alive indefinitely.
- * Session ownership is deliberately strict id equality — an email-invite match
- * never transfers control of someone else's session.
+ * The caller as `sessionCan` sees them, with the role evaluated against the
+ * loaded project. Roles are re-evaluated per request — ownership of a stamped
+ * record alone must not outlive a revoked membership.
  */
-export async function assertSessionControl(
-	projects: ProjectService,
-	session: Pick<Session, 'project_id' | 'user_id' | 'ephemeral'>,
+export function sessionActorFor(
+	project: Project,
 	subject: AuthSubject,
-	defaultRole?: Role,
+	policy: SessionPolicy,
+): SessionActor {
+	return {
+		userId: subject.id,
+		role: effectiveRole(project, subject, policy.defaultRole),
+		viewerMode: policy.viewerMode,
+	};
+}
+
+/** The caller's evaluated grants on a session — the `can` object in responses. */
+export function sessionGrantsFor(
+	project: Project,
+	subject: AuthSubject,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	policy: SessionPolicy,
+): { attach: boolean; stop: boolean } {
+	return sessionGrants(sessionActorFor(project, subject, policy), session);
+}
+
+function assertSession(
+	action: SessionAction,
+	project: Project,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	subject: AuthSubject,
+	policy: SessionPolicy,
+): void {
+	if (sessionCan(action, sessionActorFor(project, subject, policy), session)) return;
+	// The canonical editor-gate 403 (sessionCan admits every editor+, so this throws).
+	requireRole(project, subject, 'editor', policy.defaultRole);
+}
+
+/**
+ * Gate control of a live session (stop / terminate) — `sessionCan('stop')` as
+ * a thrower. Editor+, or the owner of their own ephemeral (viewer) session.
+ */
+export function assertSessionControl(
+	project: Project,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	subject: AuthSubject,
+	policy: SessionPolicy,
+): void {
+	assertSession('stop', project, session, subject, policy);
+}
+
+/**
+ * Gate *reaching* a live session's kernel (proxy traffic, keep-alive
+ * heartbeats) — `sessionCan('attach')` as a thrower. Everything the control
+ * gate admits, plus any viewer for a shared-mode session their viewer mode
+ * grants.
+ */
+export function assertSessionAccess(
+	project: Project,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	subject: AuthSubject,
+	policy: SessionPolicy,
+): void {
+	assertSession('attach', project, session, subject, policy);
+}
+
+/** The retire seam (save + destroy + terminal mark + claim release) over this request's deps. */
+export function sessionRetirer(deps: ApiDeps): SessionRetirer {
+	return new SessionRetirer({
+		sessions: deps.services.sessions,
+		notebooks: deps.services.notebooks,
+		compute: deps.compute,
+		bucket: deps.bucket,
+		persistWorkspace: deps.sandbox.persistWorkspace,
+		workdir: deps.sandbox.workdir,
+	});
+}
+
+/**
+ * Tear down the project's live app kernels after its content was deleted — they
+ * would otherwise keep serving it (in subdomain exposure the hub is not even in
+ * their request path). `scope` narrows to one notebook. Edit sessions are left to
+ * the heartbeat reaper: retiring one commits a save to deleted content.
+ * Best-effort, but every failure is logged: the lifecycle sweep reaps by
+ * idle/expiry only — it has no deleted-content check, and an actively-viewed app
+ * keeps extending its own deadline — so a stranded app can serve deleted content
+ * indefinitely.
+ */
+export async function retireLiveApps(
+	deps: ApiDeps,
+	pid: ProjectId,
+	scope?: (session: Session) => boolean,
 ): Promise<void> {
-	const project = await projects.getProject(session.project_id);
-	if (
-		session.ephemeral &&
-		session.user_id === subject.id &&
-		canAct(project, subject, 'viewer', defaultRole)
-	) {
+	let apps: Session[];
+	try {
+		apps = (await deps.services.sessions.listActiveByProject(pid)).filter(
+			(s) => s.status === 'running' && !sessionPersistsEdits(s) && (!scope || scope(s)),
+		);
+	} catch (err) {
+		logEvent({
+			level: 'error',
+			event: 'app_retire_list_failed',
+			project_id: pid,
+			error: describeError(err),
+		});
 		return;
 	}
-	requireRole(project, subject, 'editor', defaultRole);
+	// Per-app, so one failure cannot strand the apps behind it.
+	for (const s of apps) {
+		try {
+			const { session, transitioned } = await deps.services.sessions.beginTerminating(
+				pid,
+				s.session_id,
+			);
+			await sessionRetirer(deps).retire(session, { teardown: transitioned });
+		} catch (err) {
+			logEvent({
+				level: 'error',
+				event: 'app_retire_failed',
+				project_id: pid,
+				session_id: s.session_id,
+				error: describeError(err),
+			});
+		}
+	}
 }
 
 /**
  * Load `project.json` and require the caller can *see* it (at least `viewer`),
  * throwing **404 NotFound** (not 403) when they can't — so a hidden project
  * (`MARIMOHUB_DEFAULT_ROLE=none`, non-member) is indistinguishable from a
- * nonexistent one. Returns the loaded project for reuse. Use in read routes that
- * need the project object anyway.
+ * nonexistent one. A soft-deleted project is 404 too — its bytes linger until the
+ * GC sweep, but nothing about it stays reachable, sessions and kernels included.
+ * Returns the loaded project for reuse. Use in read routes that need the project
+ * object anyway.
  */
 export async function loadVisibleProject(
 	projects: ProjectService,
@@ -80,16 +203,18 @@ export async function loadVisibleProject(
 	defaultRole?: Role,
 ): Promise<Project> {
 	const project = await projects.getProject(pid);
-	if (!canAct(project, subject, 'viewer', defaultRole)) {
+	if (project.status === 'deleted' || !canAct(project, subject, 'viewer', defaultRole)) {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
 	return project;
 }
 
 /**
- * Read gate for routes that don't otherwise load the project. Fast-path when a
- * `defaultRole` is set (every authenticated user is a viewer, so no load); under
- * `none` it enforces membership via {@link loadVisibleProject}.
+ * Read gate for routes that don't otherwise load the project. The project is
+ * loaded even under a `defaultRole` that makes every authenticated user a
+ * viewer: a default role bypasses *membership* evaluation, never *lifecycle*
+ * evaluation — skipping the load would leave a soft-deleted project's notebooks
+ * readable for the whole GC grace period.
  */
 export async function assertProjectVisible(
 	projects: ProjectService,
@@ -97,7 +222,6 @@ export async function assertProjectVisible(
 	subject: AuthSubject,
 	defaultRole?: Role,
 ): Promise<void> {
-	if (defaultRole != null) return;
 	await loadVisibleProject(projects, pid, subject, defaultRole);
 }
 
@@ -505,6 +629,13 @@ export const SessionResponseSchema = z
 		/** The user id (auth `sub`) that started the session — resolve via /api/v1/users. */
 		user_id: z.string(),
 		status: z.enum(SESSION_STATUSES),
+		/**
+		 * The kernel URL the browser embeds. Absent while `starting`, and absent
+		 * from list/get projections for callers who may not reach this kernel: in
+		 * `subdomain` exposure the URL itself is the access capability (the kernel
+		 * runs `--no-token`), so it is shown only to callers the kernel gates
+		 * would admit.
+		 */
 		sandbox_url: z.string().optional(),
 		started_at: dt(),
 		last_heartbeat: dt(),
@@ -514,6 +645,31 @@ export const SessionResponseSchema = z
 		 * "edits won't be saved" banner; absent = persisting.
 		 */
 		ephemeral: z.boolean().optional(),
+		/**
+		 * `edit` (the editor; per-user) or `app` (the notebook served read-only —
+		 * a per-notebook singleton shared by everyone admitted to it). Always
+		 * present in responses; stored records may omit it (= `edit`).
+		 */
+		mode: z.enum(SESSION_MODES),
+		/**
+		 * `app` only: the notebook's head version when the app was provisioned.
+		 * Compare against the notebook's current head to show "app is stale —
+		 * restart to update".
+		 */
+		source_version_id: z.string().optional(),
+		/**
+		 * The caller's grants on this session, evaluated server-side (the same
+		 * `sessionCan` the gates enforce): `attach` — may reach the kernel (open,
+		 * heartbeat; `sandbox_url` is present iff true), `stop` — may stop or
+		 * restart it. Clients render from these instead of re-deriving policy.
+		 */
+		can: z.object({ attach: z.boolean(), stop: z.boolean() }),
+		/**
+		 * `app` only: kernel connection count as of the lifecycle sweep's last
+		 * probe (approximate). Drives the "~N connected" stop-confirm hint.
+		 */
+		active_connections: z.number().optional(),
+		connections_checked_at: dt().optional(),
 		/** Why the session went `failed` (sanitized); absent unless it failed. */
 		error: z.object({ code: z.string(), message: z.string() }).optional(),
 	})
@@ -574,12 +730,19 @@ export const CapabilitiesResponseSchema = z
 		 */
 		viewer_mode: z.enum(VIEWER_MODES),
 		/**
+		 * The session modes an effective viewer may start or attach to under this
+		 * deployment's viewer mode — the server's admission row, evaluated, so
+		 * clients render from it instead of re-deriving policy from `viewer_mode`.
+		 */
+		viewer_session_modes: z.array(z.enum(SESSION_MODES)),
+		/**
 		 * Role granted to an authenticated non-member (MARIMOHUB_DEFAULT_ROLE);
 		 * null = members-only. The UI derives its role/access copy from this.
 		 */
 		default_role: z.enum(ROLES).nullable(),
 		limits: z.object({
 			max_concurrent_sessions_per_user: z.number().nullable(),
+			max_apps_per_project: z.number().nullable(),
 			max_request_bytes: z.number(),
 			max_versions_per_notebook: z.number(),
 			default_page_size: z.number(),

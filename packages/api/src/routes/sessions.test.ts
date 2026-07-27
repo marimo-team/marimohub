@@ -207,11 +207,13 @@ describe('Session routes', () => {
 		await expectError(await stranger('POST', sessionsPath()), 403, 'FORBIDDEN');
 	});
 
-	it('DELETE /sessions/{sid} as a non-member returns 403 (IDOR fix)', async () => {
+	it('DELETE /sessions/{sid} as a non-member returns 404 (no IDOR, no existence oracle)', async () => {
+		// 404, not 403: a hidden project's session ids must be indistinguishable
+		// from nonexistent ones (matches getSession).
 		const sid = await startSession();
-		await expectError(await stranger('DELETE', sessionsPath(`/${sid}`)), 403, 'FORBIDDEN');
+		await expectError(await stranger('DELETE', sessionsPath(`/${sid}`)), 404, 'NOT_FOUND');
 
-		// The session must still be terminable by the owner — the 403 did not act.
+		// The session must still be terminable by the owner — the denial did not act.
 		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)));
 	});
 
@@ -278,9 +280,9 @@ describe('Session routes', () => {
 		);
 	});
 
-	it('POST /sessions/{sid}/heartbeat as a non-member returns 403', async () => {
+	it('POST /sessions/{sid}/heartbeat as a non-member returns 404 (no existence oracle)', async () => {
 		const sid = await startSession();
-		await expectError(await stranger('POST', sessionsPath(`/${sid}/heartbeat`)), 403, 'FORBIDDEN');
+		await expectError(await stranger('POST', sessionsPath(`/${sid}/heartbeat`)), 404, 'NOT_FOUND');
 	});
 
 	it('POST /sessions/{sid}/heartbeat happy path as the owner returns 200', async () => {
@@ -621,8 +623,10 @@ describe('Session routes', () => {
 				userId: VIEWER,
 				compute: makeFakeCompute(),
 			}).request;
-			await expectError(await revoked('POST', sessionsPath(`/${sid}/heartbeat`)), 403, 'FORBIDDEN');
-			await expectError(await revoked('DELETE', sessionsPath(`/${sid}`)), 403, 'FORBIDDEN');
+			// 404, not 403: with no role the project itself is hidden, and a hidden
+			// project's session ids read as nonexistent.
+			await expectError(await revoked('POST', sessionsPath(`/${sid}/heartbeat`)), 404, 'NOT_FOUND');
+			await expectError(await revoked('DELETE', sessionsPath(`/${sid}`)), 404, 'NOT_FOUND');
 		});
 
 		it('a role change retires the old-class session instead of reusing it', async () => {

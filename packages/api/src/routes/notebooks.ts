@@ -31,6 +31,7 @@ import {
 	ProjectIdParam,
 	RuntimeResponseSchema,
 	NotebookVersionResponseSchema,
+	retireLiveApps,
 	SnapshotNotebookEntrySchema,
 	SuccessResponseSchema,
 } from '../shared';
@@ -494,6 +495,9 @@ app.openapi(deleteNotebook, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'editor', deps.policy.defaultRole);
 	await notebooks.deleteNotebook(pid, nid, user.id, ifMatchToken(c));
+
+	await retireLiveApps(deps, pid, (s) => s.notebook_id === nid);
+
 	return c.json({ success: true }, 200);
 });
 

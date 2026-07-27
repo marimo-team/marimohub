@@ -2303,6 +2303,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
 					headers: {
@@ -2497,7 +2506,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a session and provision a sandbox
-		 * @description Create-or-reuse: returns the caller’s existing starting/running session for this notebook when one exists, otherwise provisions a new sandbox.
+		 * @description Create-or-reuse: returns the caller’s existing starting/running session for this notebook when one exists (for `mode: "app"`, ANY user’s running app session), otherwise provisions a new sandbox.
 		 */
 		post: {
 			parameters: {
@@ -2511,7 +2520,12 @@ export interface paths {
 				};
 				cookie?: never;
 			};
-			requestBody?: never;
+			/** @description Optional; omit for an edit session. */
+			requestBody?: {
+				content: {
+					'application/json': components['schemas']['SessionCreateBody'];
+				};
+			};
 			responses: {
 				/** @description Session created or reused */
 				200: {
@@ -2555,6 +2569,15 @@ export interface paths {
 				};
 				/** @description Not found */
 				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Conflict */
+				409: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3478,11 +3501,13 @@ export interface components {
 				available: boolean;
 			};
 			/** @enum {string} */
-			viewer_mode: 'static' | 'ephemeral-sandbox';
+			viewer_mode: 'static' | 'applications' | 'ephemeral-sandbox';
+			viewer_session_modes: ('edit' | 'app')[];
 			/** @enum {string|null} */
 			default_role: 'admin' | 'editor' | 'viewer' | null;
 			limits: {
 				max_concurrent_sessions_per_user: number | null;
+				max_apps_per_project: number | null;
 				max_request_bytes: number;
 				max_versions_per_notebook: number;
 				default_page_size: number;
@@ -3716,6 +3741,19 @@ export interface components {
 			 */
 			last_heartbeat: string;
 			ephemeral?: boolean;
+			/** @enum {string} */
+			mode: 'edit' | 'app';
+			source_version_id?: string;
+			can: {
+				attach: boolean;
+				stop: boolean;
+			};
+			active_connections?: number;
+			/**
+			 * Format: date-time
+			 * @example 2025-03-05T14:00:00Z
+			 */
+			connections_checked_at?: string;
 			error?: {
 				code: string;
 				message: string;
@@ -3723,6 +3761,10 @@ export interface components {
 		};
 		SessionCreateResult: components['schemas']['Session'] & {
 			reused: boolean;
+		};
+		SessionCreateBody: {
+			/** @enum {string} */
+			mode?: 'edit' | 'app';
 		};
 		SecretEntry: {
 			name: string;

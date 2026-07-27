@@ -13,17 +13,42 @@ export function rankSession(status: string | undefined): number {
 	return LIVELINESS_RANK[status ?? ''] ?? 0;
 }
 
+/** A notebook's live runtime, split by mode: the caller's-view edit kernel and
+ * the shared app singleton. Either side may be absent. */
+export interface NotebookSessions {
+	edit?: Session;
+	app?: Session;
+}
+
 /**
- * Reduce a flat list of sessions to one "most alive" session per notebook,
- * keyed by `notebook_id`. Pure — safe to call with `undefined` (treated as
+ * "~N people are connected" for the stop/restart-app confirms — the number is
+ * the lifecycle sweep's last probe, so it's approximate; omitted when unknown
+ * or zero.
+ */
+export function appConnectionHint(session: Session | undefined): string {
+	const n = session?.active_connections;
+	if (typeof n !== 'number' || n <= 0) return '';
+	return ` About ${n} ${n === 1 ? 'person is' : 'people are'} connected right now.`;
+}
+
+/**
+ * Reduce a flat list of sessions to the "most alive" session per notebook and
+ * per mode, keyed by `notebook_id`. Edit and app sessions coexist (one edit
+ * sandbox per user + one shared app sandbox), so the row renders both
+ * indicators independently. Pure — safe to call with `undefined` (treated as
  * empty) so callers can pass a query result straight through.
  */
-export function sessionsByNotebook(sessions: readonly Session[] | undefined): Map<string, Session> {
-	const map = new Map<string, Session>();
+export function sessionsByNotebook(
+	sessions: readonly Session[] | undefined,
+): Map<string, NotebookSessions> {
+	const map = new Map<string, NotebookSessions>();
 	for (const s of sessions ?? []) {
-		const current = map.get(s.notebook_id);
+		const entry = map.get(s.notebook_id) ?? {};
+		const key = s.mode === 'app' ? 'app' : 'edit';
+		const current = entry[key];
 		if (!current || rankSession(s.status) > rankSession(current.status)) {
-			map.set(s.notebook_id, s);
+			entry[key] = s;
+			map.set(s.notebook_id, entry);
 		}
 	}
 	return map;

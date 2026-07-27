@@ -1,10 +1,12 @@
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
-import type { SandboxId } from '../../ids';
+import type { NotebookId, SandboxId } from '../../ids';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
 import type { NotebookService } from '../content/NotebookService';
-import { SandboxProvisioner } from './SandboxProvisioner';
+import { SessionRetirer } from './SessionRetirer';
+import { RECLAIM_PROVISION_GRACE_MS } from './sessionLifecycle';
+import { sessionPersistsEdits } from './sessionState';
 import { listAllKeys } from '../catalog/storage';
 import type { SessionService } from './SessionService';
 
@@ -19,7 +21,7 @@ const DEFAULT_ORPHAN_GRACE_MS = Millis.minutes(15);
 export interface ReconcileResult {
 	/** True when the provider can't enumerate (no `listActive`) — nothing reconciled. */
 	skipped: boolean;
-	/** Rule 1: terminal records whose still-running sandbox was torn down. */
+	/** Rule 1: terminal records whose still-running sandbox was confirmed destroyed. */
 	reclaimed: number;
 	/** Rule 2: live records whose sandbox had vanished, now marked terminated. */
 	markedDead: number;
@@ -43,7 +45,7 @@ export interface ReconcileResult {
  * never a concrete adapter — so it respects the inward dependency rule.
  */
 export class ReconciliationService {
-	private readonly provisioner: SandboxProvisioner;
+	private readonly retirer: SessionRetirer;
 
 	constructor(
 		private sessions: SessionService,
@@ -56,7 +58,14 @@ export class ReconciliationService {
 		/** Sandbox working dir, so save-on-reap reads the right path. See ProvisionOptions. */
 		private workdir?: string,
 	) {
-		this.provisioner = new SandboxProvisioner(compute);
+		this.retirer = new SessionRetirer({
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			persistWorkspace,
+			workdir,
+		});
 	}
 
 	async reconcile(opts?: { orphanGraceMs?: number }): Promise<ReconcileResult> {
@@ -81,6 +90,19 @@ export class ReconciliationService {
 			if (s.sandbox_id) recordedSandboxIds.add(s.sandbox_id);
 		}
 
+		// Notebooks that currently have a live PERSISTING session. An older
+		// (terminal) sandbox for one of these must never commit: its content is
+		// stale by definition and would clobber the live session's head version,
+		// mirror-delete the workspace keys the live session wrote, and rewind the
+		// FS-snapshot pointer. Same rule (and reasoning) as the lifecycle sweep.
+		const liveNotebooks = new Set<NotebookId>(
+			sessions
+				.filter(
+					(s) => (s.status === 'running' || s.status === 'starting') && sessionPersistsEdits(s),
+				)
+				.map((s) => s.notebook_id),
+		);
+
 		let reclaimed = 0;
 		let markedDead = 0;
 		let orphansReaped = 0;
@@ -96,29 +118,21 @@ export class ReconciliationService {
 				// Rule 1 — record is terminal OR mid-teardown (`terminating`) but the
 				// sandbox is still alive (and billing). A `terminating` record whose
 				// teardown never finished would otherwise leak the sandbox forever, since
-				// it is neither live (Rule 2) nor an unrecorded orphan (Rule 3). Save edits
-				// back when reachable, then guarantee the sandbox dies.
-				const sandbox = this.compute.create(sandboxId);
-				try {
-					await this.provisioner.teardown(
-						sandbox,
-						this.notebooks,
-						this.bucket,
-						session.project_id,
-						session.notebook_id,
-						session.user_id,
-						this.persistWorkspace,
-						this.workdir,
-						{ persistEdits: !session.ephemeral },
-					);
-				} catch {
-					try {
-						await sandbox.destroy();
-					} catch {
-						// Best-effort: a later sweep will retry if the sandbox survives.
-					}
+				// it is neither live (Rule 2) nor an unrecorded orphan (Rule 3). Reclaim
+				// through the one seam: the record is already terminal, so this is a
+				// (save-then-)destroy plus the one-shot `sandbox_reclaimed_at` stamp.
+
+				// `expireStale()` runs immediately before this sweep, so a provision
+				// slower than the heartbeat TTL arrives here `expired` while it is still
+				// restoring files; tearing it down mid-restore mirror-deletes bucket keys.
+				if (
+					session.status === 'expired' &&
+					now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
+				) {
+					continue;
 				}
-				reclaimed++;
+				const save = !liveNotebooks.has(session.notebook_id) && sessionPersistsEdits(session);
+				if (await this.retirer.reclaim(session, save)) reclaimed++;
 			} else if (isLive && !activeIds.has(sandboxId)) {
 				// Rule 2 — live record, sandbox gone (crashed / idle-timed-out). The
 				// kernel URL is dead; mark the record failed (it didn't stop cleanly) so it
@@ -129,6 +143,7 @@ export class ReconciliationService {
 				} catch {
 					// Best-effort: the session may have been deleted concurrently.
 				}
+				await this.sessions.releaseAppFor(session);
 			}
 		}
 

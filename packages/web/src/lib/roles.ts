@@ -9,16 +9,18 @@ export const ROLES = Object.keys(ROLE_ORDER) as ProjectRole[];
 /**
  * Human copy for each role, derived from the deployment config rather than
  * hardcoded: what a `viewer` actually gets depends on MARIMOHUB_VIEWER_MODE
- * (a static HTML snapshot vs a throwaway sandbox that can run code). Falls back
- * to mode-neutral copy while capabilities are still loading.
+ * (a static HTML snapshot, running apps, or a throwaway sandbox that can run
+ * code). Falls back to mode-neutral copy while capabilities are still loading.
  */
 export function roleDescriptions(caps: Capabilities | undefined): Record<ProjectRole, string> {
 	const viewer =
 		caps === undefined
 			? 'View projects and notebooks (read-only)'
 			: caps.viewer_mode === 'ephemeral-sandbox'
-				? 'View notebooks and run them in a temporary sandbox — changes are never saved'
-				: 'View notebooks and their last saved outputs (read-only)';
+				? 'View notebooks, use running apps, and run notebooks in a temporary sandbox — changes are never saved'
+				: caps.viewer_mode === 'applications'
+					? 'View notebooks read-only and use notebooks running as apps'
+					: 'View notebooks and their last saved outputs (read-only)';
 	return {
 		admin: 'Manage members and project settings, plus everything an editor can do',
 		editor: 'Create, edit, and run notebooks',

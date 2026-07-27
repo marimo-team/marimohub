@@ -8,11 +8,36 @@ export function logEvent(fields: Record<string, unknown>): void {
 }
 
 /**
+ * An error's identity with no free-form text — enough to triage a provider
+ * failure from a log line. For the errors {@link describeError} is unsafe on:
+ * ones whose message or causes can quote credential material.
+ */
+export function errorMetadata(err: unknown): Record<string, string | number> {
+	// Not even `String(err)` — a thrown non-Error may BE the secret.
+	if (!(err instanceof Error)) return { error_name: `non-error(${typeof err})` };
+	const e = err as Error & { code?: unknown; status?: unknown; operation?: unknown };
+	const out: Record<string, string | number> = { error_name: e.name };
+	for (const [key, value] of [
+		['error_code', e.code],
+		['error_status', e.status],
+		['error_operation', e.operation],
+	] as const) {
+		// Enum-ish identifiers only — anything else is free-form text of unknown origin.
+		if (typeof value === 'number') out[key] = value;
+		if (typeof value === 'string' && value.length <= 64) out[key] = value;
+	}
+	return out;
+}
+
+/**
  * Extract a rich, JSON-serializable description of an error for SERVER logs:
  * name, message, stack, and any duck-typed vendor fields (gRPC `transportCode`,
  * `operation`, SDK `code`), plus the `cause` chain. Read by duck-typing only — no
  * adapter/SDK import — so it stays usable from `api`/`core` without breaking the
  * dependency rule. This is for logs, never returned to clients.
+ *
+ * It performs NO redaction: never hand it (or attach as `cause`) an error whose
+ * text may quote a secret — use {@link errorMetadata} for those.
  */
 export function describeError(err: unknown, depth = 3): Record<string, unknown> {
 	if (!(err instanceof Error)) return { value: String(err) };

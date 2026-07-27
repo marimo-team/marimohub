@@ -2,16 +2,26 @@ import type { Bucket, BucketObject } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import type { SessionMode } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
 import { NotFoundError, PreconditionFailedError } from '../../errors';
-import { mutateObject } from '../catalog/cas';
+import { acquireSingletonClaim, mutateObject, releaseSingletonClaim } from '../catalog/cas';
+import type { SingletonClaimConfig } from '../catalog/cas';
 import { createSessionId } from '../../ids';
-import type { NotebookId, ProjectId, SandboxId, SessionId, UserId } from '../../ids';
+import type { NotebookId, ProjectId, SandboxId, SessionId, UserId, VersionId } from '../../ids';
 import { paths } from '../../paths';
-import { parseStored, SessionSchema } from '../../schema';
+import { AppClaimSchema, parseStored, SessionSchema } from '../../schema';
 import type { Session } from '../../schema';
-import { ACTIVE_STATUSES, isTerminal, nextStatus, PRESENT_STATUSES } from './sessionState';
+import {
+	ACTIVE_STATUSES,
+	isTerminal,
+	nextStatus,
+	PRESENT_STATUSES,
+	MODE_POLICY,
+	sessionMode,
+	sessionModePolicy,
+} from './sessionState';
 import { listAllObjects } from '../catalog/storage';
 
 export interface CreateSessionInput {
@@ -23,6 +33,10 @@ export interface CreateSessionInput {
 	sandbox_url?: string;
 	/** Viewer session whose edits are discarded at teardown (see SessionSchema). */
 	ephemeral?: boolean;
+	/** `edit` (default) or `app` (the shared singleton; see SessionSchema). */
+	mode?: SessionMode;
+	/** `app` only: the notebook's head version at provision, for staleness detection. */
+	source_version_id?: VersionId;
 }
 
 const HEARTBEAT_TTL_MS = Millis.minutes(5);
@@ -35,6 +49,14 @@ const HEARTBEAT_PERSIST_INTERVAL_MS = Millis.seconds(60);
 
 /** Sentinel for a session object that vanished between list and read. */
 const SKIP = Symbol('missing-session');
+
+/**
+ * Total order over session records — every replica derives the same queue
+ * position from the same records, which is what lets the create route's cap
+ * recheck pick one winner instead of every racer rejecting the others.
+ */
+const byStartOrder = (a: Session, b: Session) =>
+	a.started_at.localeCompare(b.started_at) || a.session_id.localeCompare(b.session_id);
 
 export class SessionService {
 	constructor(
@@ -79,6 +101,8 @@ export class SessionService {
 			started_at: now,
 			last_heartbeat: now,
 			...(input.ephemeral ? { ephemeral: true } : {}),
+			...(input.mode && input.mode !== 'edit' ? { mode: input.mode } : {}),
+			...(input.source_version_id ? { source_version_id: input.source_version_id } : {}),
 			runtime: input.runtime,
 			sandbox_id: input.sandbox_id,
 			sandbox_url: input.sandbox_url,
@@ -157,13 +181,24 @@ export class SessionService {
 		});
 	}
 
-	/** Mark a session `terminating` (stop requested; teardown in flight). Visible to
-	 * pollers as `Stopping…`. No-op on a session that is already terminal/terminating. */
-	async beginTerminating(projectId: ProjectId, id: SessionId): Promise<Session> {
-		return this.mutate(projectId, id, (session) => {
-			const next = nextStatus(session.status, 'terminate');
-			return next ? { ...session, status: next } : null;
+	/**
+	 * Mark a session `terminating` (stop requested; teardown in flight). Visible to
+	 * pollers as `Stopping…`. No-op on a session that is already
+	 * terminal/terminating — `transitioned` reports whether THIS call won the
+	 * transition, so exactly one racer owns the teardown (a loser must not run a
+	 * second save-and-destroy over the same sandbox).
+	 */
+	async beginTerminating(
+		projectId: ProjectId,
+		id: SessionId,
+	): Promise<{ session: Session; transitioned: boolean }> {
+		let transitioned = false;
+		const session = await this.mutate(projectId, id, (current) => {
+			const next = nextStatus(current.status, 'terminate');
+			transitioned = next !== null;
+			return next ? { ...current, status: next } : null;
 		});
+		return { session, transitioned };
 	}
 
 	/** Mark a session `terminated` (teardown finished). Terminates from any live or
@@ -264,46 +299,235 @@ export class SessionService {
 	}
 
 	/**
-	 * Find a session the user can REUSE for this notebook so a refresh during start
-	 * doesn't pile up sandboxes: a `running` session with a `sandbox_url` (reconnect
-	 * to the live kernel), OR an in-flight `starting` session still within the
-	 * provision window (attach to the one already provisioning — the client polls it
-	 * to `running`). Stale `starting` records are ignored so a wedged provision isn't
-	 * reused forever. Returns the most recently heartbeated match.
+	 * Find a session the caller can REUSE for this notebook so a refresh during
+	 * start doesn't pile up sandboxes: a `running` session with a `sandbox_url`
+	 * (reconnect to the live kernel), OR an in-flight `starting` session still
+	 * within the provision window (attach to the one already provisioning — the
+	 * client polls it to `running`). Stale `starting` records are ignored so a
+	 * wedged provision isn't reused forever. Returns the most recently
+	 * heartbeated match.
+	 *
+	 * Reuse is keyed per the mode's `reuseScope`: `per-user` (edit) matches only
+	 * the caller's own session; `per-notebook` (the shared app) is user-blind —
+	 * ANY editor's request attaches. That user-blind reuse IS the singleton, so
+	 * for a singleton mode the CLAIM, not the heartbeat order, decides which
+	 * candidate is handed out.
 	 */
 	async findReusable(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		userId: UserId,
+		mode: SessionMode = 'edit',
 	): Promise<Session | undefined> {
 		const now = Date.now();
+		const policy = MODE_POLICY[mode];
+		const userBlind = policy.reuseScope === 'per-notebook';
 		// Scoped to the project prefix; filter to the notebook in memory.
 		const sessions = await this.scanProject(projectId, (session) => session);
-		return sessions
-			.filter(
-				(s) =>
-					s.notebook_id === notebookId &&
-					s.user_id === userId &&
-					((s.status === 'running' && !!s.sandbox_url) ||
-						(s.status === 'starting' && now - new Date(s.started_at).getTime() < HEARTBEAT_TTL_MS)),
-			)
-			.sort(
-				(a, b) => new Date(b.last_heartbeat).getTime() - new Date(a.last_heartbeat).getTime(),
-			)[0];
+		const candidates = sessions.filter(
+			(s) =>
+				s.notebook_id === notebookId &&
+				sessionMode(s) === mode &&
+				(userBlind || s.user_id === userId) &&
+				((s.status === 'running' && !!s.sandbox_url) ||
+					(s.status === 'starting' && now - new Date(s.started_at).getTime() < HEARTBEAT_TTL_MS)),
+		);
+		if (policy.singleton) return this.claimHolderAmong(projectId, notebookId, candidates);
+		return candidates.sort(
+			(a, b) => new Date(b.last_heartbeat).getTime() - new Date(a.last_heartbeat).getTime(),
+		)[0];
+	}
+
+	/**
+	 * The candidate that currently HOLDS the app claim. Heartbeat order is not
+	 * authority here: two racers can both be `starting`, and the one that lost
+	 * `claimApp` tears its own record down — handing it out as the shared app
+	 * strands the attaching caller on a session that will never run. An absent,
+	 * free, corrupt, or dangling claim means no live holder, so the caller
+	 * correctly starts fresh and steals the stale claim via `acquireSingletonClaim`.
+	 */
+	private async claimHolderAmong(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		candidates: Session[],
+	): Promise<Session | undefined> {
+		const obj = await this.bucket.get(paths.appClaim(projectId, notebookId));
+		if (!obj) return undefined;
+		let holder: SessionId | null;
+		try {
+			holder = AppClaimSchema.parse(await obj.json()).session_id;
+		} catch {
+			return undefined;
+		}
+		return holder ? candidates.find((s) => s.session_id === holder) : undefined;
 	}
 
 	/**
 	 * Count a user's active sessions (`starting`/`running`) — `terminating` is
 	 * excluded so a stop immediately frees a slot. The create-session route uses
 	 * this to enforce a concurrent-session cap (a cost-DoS guard against a runaway
-	 * client). Soft/best-effort (count→create is not atomic), acceptable under the
-	 * trusted-user model; the per-notebook reuse in `findReusable` is what stops a
-	 * refresh loop from tripping it.
+	 * client) — as a pre-flight only, since count→create is not atomic; the route
+	 * re-ranks via `listActiveForUser` once the record exists. The per-notebook
+	 * reuse in `findReusable` is what stops a refresh loop from tripping it.
 	 */
-	async countActiveForUser(userId: UserId): Promise<number> {
+	async countActiveForUser(userId: UserId, capScope: 'user' | 'project' = 'user'): Promise<number> {
+		return (await this.listActiveForUser(userId, capScope)).length;
+	}
+
+	/**
+	 * The sessions `countActiveForUser` counts, in start order — the cap recheck
+	 * needs WHERE in the queue a session landed, not just how many there are.
+	 *
+	 * Scoped per cap: `user` = the caller's edit slots; `project` = the apps this
+	 * user STARTED, deployment-wide — the per-user cost bound that stops fanning
+	 * apps out across projects from creating unbounded sandboxes.
+	 */
+	async listActiveForUser(
+		userId: UserId,
+		capScope: 'user' | 'project' = 'user',
+	): Promise<Session[]> {
 		const active = ACTIVE_STATUSES as readonly Session['status'][];
 		const sessions = await this.listSessions();
-		return sessions.filter((s) => s.user_id === userId && active.includes(s.status)).length;
+		return sessions
+			.filter(
+				(s) =>
+					s.user_id === userId &&
+					active.includes(s.status) &&
+					sessionModePolicy(s).capScope === capScope,
+			)
+			.sort(byStartOrder);
+	}
+
+	/**
+	 * Count a project's active app sessions, for the per-project app cap
+	 * (`MARIMOHUB_MAX_APPS_PER_PROJECT`). Pre-flight only, like
+	 * `countActiveForUser`; the user-blind reuse in `findReusable` keeps an
+	 * attach from ever tripping it. `terminating` is excluded (matching the
+	 * user cap): a stop frees the slot while teardown finishes, so the live
+	 * sandbox count can briefly exceed the cap.
+	 */
+	async countActiveAppsForProject(projectId: ProjectId): Promise<number> {
+		return (await this.listActiveAppsForProject(projectId)).length;
+	}
+
+	/** The sessions `countActiveAppsForProject` counts, in start order. */
+	async listActiveAppsForProject(projectId: ProjectId): Promise<Session[]> {
+		const active = ACTIVE_STATUSES as readonly Session['status'][];
+		const sessions = await this.scanProject(projectId, (session) => session);
+		return sessions
+			.filter((s) => active.includes(s.status) && sessionModePolicy(s).capScope === 'project')
+			.sort(byStartOrder);
+	}
+
+	/**
+	 * Stamp the lifecycle sweep's kernel connection-count probe onto an app
+	 * session, so stop/restart confirmations can show "~N connected". Pure
+	 * bookkeeping — never touches status.
+	 */
+	async markConnections(
+		projectId: ProjectId,
+		id: SessionId,
+		activeConnections: number,
+		at: string,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => ({
+			...session,
+			active_connections: activeConnections,
+			connections_checked_at: at,
+		}));
+	}
+
+	/** The app-singleton lease over `_system/apps/{pid}/{nid}.json` (see AppClaimSchema). */
+	private appClaimConfig(projectId: ProjectId, notebookId: NotebookId): SingletonClaimConfig {
+		return {
+			bucket: this.bucket,
+			key: paths.appClaim(projectId, notebookId),
+			serialize: (holder) =>
+				JSON.stringify({ session_id: holder, claimed_at: new Date().toISOString() }),
+			parseHolder: (raw) => AppClaimSchema.parse(raw).session_id,
+			isHolderLive: (holder) => this.holdsLiveApp(projectId, notebookId, holder as SessionId),
+			onReleaseError: (err) => {
+				this.metrics.increment('sessions.app_claim.release_error');
+				console.warn(`releaseApp: app claim for notebook ${notebookId}: ${String(err)}`);
+			},
+			retry: {
+				onConflict: () => this.metrics.increment('sessions.app_claim.conflict'),
+				onExhausted: () => this.metrics.increment('sessions.app_claim.exhausted'),
+			},
+		};
+	}
+
+	/**
+	 * Claim the per-notebook app singleton for `sessionId`. Exactly one of N
+	 * concurrent "Run as app" sagas wins; a loser gets `{ claimed: false,
+	 * holder }` and attaches to the winner via the user-blind reuse path. A
+	 * claim whose holder is terminal, absent, or a wedged `starting` record
+	 * past the provision window is stale and replaced. Idempotent for the
+	 * current holder. (Semantics live in `acquireSingletonClaim`.)
+	 */
+	async claimApp(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		sessionId: SessionId,
+	): Promise<{ claimed: boolean; holder: SessionId }> {
+		const { acquired, holder } = await acquireSingletonClaim(
+			this.appClaimConfig(projectId, notebookId),
+			sessionId,
+		);
+		return { claimed: acquired, holder: holder as SessionId };
+	}
+
+	/**
+	 * Whether `holder` still owns THIS notebook's app: a singleton-mode session on
+	 * `notebookId` that is `running`, or `starting` and fresh. Referential
+	 * integrity counts as liveness — a claim naming an edit session or another
+	 * notebook's app is invalid, and treating it as live would leave the notebook
+	 * permanently unable to run as an app.
+	 */
+	private async holdsLiveApp(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		holder: SessionId,
+	): Promise<boolean> {
+		try {
+			const session = await this.getSession(projectId, holder);
+			if (session.notebook_id !== notebookId || !sessionModePolicy(session).singleton) {
+				return false;
+			}
+			return (
+				session.status === 'running' ||
+				(session.status === 'starting' &&
+					Date.now() - new Date(session.started_at).getTime() < HEARTBEAT_TTL_MS)
+			);
+		} catch (err) {
+			if (err instanceof NotFoundError) return false;
+			throw err;
+		}
+	}
+
+	/**
+	 * Release the app claim held by `sessionId` — a no-op when someone else holds
+	 * it, including one who re-acquired mid-release (the CAS in
+	 * `releaseSingletonClaim` loses rather than clobbering them). The object stays,
+	 * marked free; `deleteNotebook`/`deleteProject` remove it.
+	 */
+	async releaseApp(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		sessionId: SessionId,
+	): Promise<void> {
+		await releaseSingletonClaim(this.appClaimConfig(projectId, notebookId), sessionId);
+	}
+
+	/**
+	 * Release the claim a just-retired session may hold — a no-op for
+	 * non-singleton modes, so every teardown path can call it unconditionally.
+	 */
+	async releaseAppFor(
+		session: Pick<Session, 'mode' | 'project_id' | 'notebook_id' | 'session_id'>,
+	): Promise<void> {
+		if (!sessionModePolicy(session).singleton) return;
+		await this.releaseApp(session.project_id, session.notebook_id, session.session_id);
 	}
 
 	async expireStale(): Promise<number> {

@@ -27,11 +27,11 @@ describe('GET /api/v1/capabilities', () => {
 		expect(await expectOk(res)).toMatchObject({ federation: { available: false } });
 	});
 
-	it('reports the configured viewer mode, defaulting to static', async () => {
+	it('reports the configured viewer mode and its evaluated admission row, defaulting to static', async () => {
 		const defaulted = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		expect(
 			await expectOk(await createApi(defaulted).request('/api/v1/capabilities')),
-		).toMatchObject({ viewer_mode: 'static' });
+		).toMatchObject({ viewer_mode: 'static', viewer_session_modes: [] });
 
 		const configured = makeTestDeps(new MemoryBucket(), {
 			authenticator: authed,
@@ -39,7 +39,19 @@ describe('GET /api/v1/capabilities', () => {
 		});
 		expect(
 			await expectOk(await createApi(configured).request('/api/v1/capabilities')),
-		).toMatchObject({ viewer_mode: 'ephemeral-sandbox' });
+		).toMatchObject({
+			viewer_mode: 'ephemeral-sandbox',
+			viewer_session_modes: ['app', 'edit'],
+		});
+
+		const apps = makeTestDeps(new MemoryBucket(), {
+			authenticator: authed,
+			policy: { viewerMode: 'applications' },
+		});
+		expect(await expectOk(await createApi(apps).request('/api/v1/capabilities'))).toMatchObject({
+			viewer_mode: 'applications',
+			viewer_session_modes: ['app'],
+		});
 	});
 
 	it('reports the configured default role, null when members-only', async () => {
@@ -60,13 +72,14 @@ describe('GET /api/v1/capabilities', () => {
 	it('reports deployment limits', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), {
 			authenticator: authed,
-			policy: { maxConcurrentSessionsPerUser: 3 },
+			policy: { maxConcurrentSessionsPerUser: 3, maxAppsPerProject: 5 },
 		});
 		const data = await expectOk<{ limits: Record<string, number | null> }>(
 			await createApi(deps).request('/api/v1/capabilities'),
 		);
 		expect(data.limits).toEqual({
 			max_concurrent_sessions_per_user: 3,
+			max_apps_per_project: 5,
 			max_request_bytes: 10 * 1024 * 1024,
 			max_versions_per_notebook: 50,
 			default_page_size: 100,

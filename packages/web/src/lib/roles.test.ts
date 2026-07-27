@@ -8,6 +8,7 @@ const caps = (over: Partial<Capabilities>): Capabilities =>
 describe('roleDescriptions', () => {
 	it('describes viewers by the deployment viewer mode', () => {
 		expect(roleDescriptions(caps({ viewer_mode: 'static' })).viewer).toMatch(/last saved outputs/);
+		expect(roleDescriptions(caps({ viewer_mode: 'applications' })).viewer).toMatch(/apps/);
 		expect(roleDescriptions(caps({ viewer_mode: 'ephemeral-sandbox' })).viewer).toMatch(
 			/temporary sandbox/,
 		);

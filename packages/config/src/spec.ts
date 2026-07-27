@@ -739,8 +739,16 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_MAX_SESSIONS_PER_USER',
 						name: 'Max sessions per user',
-						description: 'Per-user concurrent session cap (`0` = unlimited).',
+						description:
+							'Per-user concurrent session cap (`0` = unlimited). Counts `edit` sessions, and separately bounds the apps a single user may have started — the cost ceiling a user cannot escape by fanning apps out across projects (apps are also capped per project via `MARIMOHUB_MAX_APPS_PER_PROJECT`).',
 						default: '10',
+					},
+					{
+						id: 'MARIMOHUB_MAX_APPS_PER_PROJECT',
+						name: 'Max apps per project',
+						description:
+							'Concurrent app (`mode: app`) sessions per project (`0` = unlimited). Apps are shared per-notebook singletons, so this caps how many notebooks in a project can be served as apps at once.',
+						default: '5',
 					},
 					{
 						id: 'MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',
@@ -802,14 +810,18 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_VIEWER_MODE',
 						name: 'Viewer mode',
 						description:
-							'What a user whose effective role is `viewer` sees when opening a notebook ' +
-							'(static | ephemeral-sandbox). `static` serves the last captured HTML snapshot ' +
-							'(no compute, no code execution); `ephemeral-sandbox` provisions a real kernel ' +
-							'whose edits are discarded on teardown (no version, snapshot, or workspace ' +
+							'What a user whose effective role is `viewer` gets ' +
+							'(static | applications | ephemeral-sandbox); each tier is a superset of the ' +
+							'previous. `static` serves the last captured HTML snapshot (no compute, no code ' +
+							'execution); `applications` also lets viewers use notebooks running as shared ' +
+							'apps (note: the app kernel runs with the project’s secrets/federated ' +
+							'credentials, so only enable it for audiences you trust with the app’s ' +
+							'outputs); `ephemeral-sandbox` additionally provisions a real edit kernel whose ' +
+							'edits are discarded on teardown (no version, snapshot, or workspace ' +
 							'write-back). Applies to any effective viewer — via `MARIMOHUB_DEFAULT_ROLE=viewer` ' +
 							'or an explicit viewer membership. Editors and above are unaffected. ' +
 							'See [Auth -> What viewers see](./auth.md#what-viewers-see-marimohub_viewer_mode).',
-						example: 'ephemeral-sandbox',
+						example: 'applications',
 						default: 'static',
 					},
 					{
