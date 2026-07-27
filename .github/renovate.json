@@ -18,6 +18,12 @@
 	],
 	"packageRules": [
 		{
+			"description": "Match pnpm's 14-day minimum release age for npm packages",
+			"matchDatasources": ["npm"],
+			"minimumReleaseAge": "14 days",
+			"internalChecksFilter": "strict"
+		},
+		{
 			"description": "Check the sandbox image for marimo updates daily",
 			"matchDatasources": ["pypi"],
 			"matchPackageNames": ["marimo"],
