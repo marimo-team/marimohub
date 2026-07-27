@@ -82,6 +82,16 @@ describe('config -> code generators', () => {
 			it('library', () => expect(generateLibrary(sel)).toMatchSnapshot());
 		});
 	}
+
+	it('marks unresolved required values and retains useful examples as comments', () => {
+		const env = generateEnv(CASES['default-prod (s3 + modal + oidc)']);
+		expect(env).toContain('MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub');
+		expect(env).toContain(
+			'MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest',
+		);
+		expect(env).toContain('MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret');
+		expect(env).not.toContain('MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub');
+	});
 });
 
 describe('validateSelection', () => {

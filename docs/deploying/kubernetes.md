@@ -1,3 +1,7 @@
+---
+description: Deploy marimohub and isolated notebook kernels on a Kubernetes cluster.
+---
+
 # Deploying on Kubernetes (native kernels)
 
 Run marimohub on any Kubernetes cluster with the **`kubernetes`** compute

@@ -1,3 +1,7 @@
+---
+description: Understand kernel isolation, authentication, authorization, request safety, and storage integrity.
+---
+
 # Security model
 
 marimohub runs **untrusted code** (notebook kernels) on behalf of authenticated
@@ -90,12 +94,13 @@ See [Auth](/auth) for provider setup.
 
 ## Authorization (roles)
 
-Reads are open to any authenticated user; writes are gated by role
-(`viewer` < `editor` < `admin`) against the target project, enforced
-server-side on every route. Non-members fall back to `MARIMOHUB_DEFAULT_ROLE`
-(default `editor`). Project edit/delete always requires `admin`, as does
-reading a project's audit log (`GET /projects/{pid}/events`) — events record
-member management and deletion activity. See
+Project reads require an effective `viewer` role, obtained through ownership,
+membership, or `MARIMOHUB_DEFAULT_ROLE`. Non-members cannot see a project when
+the default role is `none`. Writes require `editor` or `admin` against the target
+project and are enforced server-side on every route. Project edit/delete always
+requires `admin`, as does reading a project's audit log
+(`GET /projects/{pid}/events`) — events record member management and deletion
+activity. See
 [Auth → Authorization](/auth#authorization-roles).
 
 Kernel access follows the same gates. [Notebook apps](/apps) are editor-only by

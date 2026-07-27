@@ -1,3 +1,7 @@
+---
+description: Deploy marimohub on Cloudflare Workers with R2, Containers, and Access.
+---
+
 # Deploying on Cloudflare
 
 Run marimohub **fully serverless** — no always-on server, no database:

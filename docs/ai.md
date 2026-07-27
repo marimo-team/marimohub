@@ -1,3 +1,7 @@
+---
+description: Configure a server-managed OpenAI-compatible provider for notebook AI features.
+---
+
 # Managed AI
 
 Give every notebook a working AI assistant without asking users for their own

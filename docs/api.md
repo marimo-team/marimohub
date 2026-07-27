@@ -1,3 +1,7 @@
+---
+description: Use the authenticated JSON API, published OpenAPI document, and typed TypeScript client.
+---
+
 # API & client
 
 marimohub exposes a JSON HTTP API under `/api/v1/*` and ships a typed TypeScript
@@ -17,15 +21,31 @@ Every `/api/v1/*` response uses one envelope:
 Authentication is via the session cookie issued by your [auth](/auth) backend,
 or a [personal access token](/api-tokens) sent as `Authorization: Bearer …`
 (for CI, scripts, and the CLI).
-Reads are open to any authenticated user; writes are role-gated (see
-[Security → Authorization](/security#authorization-roles)). The one read
-exception is the audit log, which requires project `admin`.
+Project reads require effective `viewer` access through ownership, membership,
+or `MARIMOHUB_DEFAULT_ROLE`; `none` hides non-member projects. Writes are
+role-gated, and the audit log requires project `admin` (see
+[Security → Authorization](/security#authorization-roles)).
 
 ## Endpoints
 
-The OpenAPI 3.1 document is served live at **`GET /api/v1/doc`** (and the source is
-[`packages/api/openapi.yaml`](https://github.com/marimo-team/marimohub/blob/main/packages/api/openapi.yaml)).
-Point any OpenAPI tool (Swagger UI, Scalar, code generators) at it.
+The docs site publishes the OpenAPI 3.1 document at
+**[`/openapi.yaml`](/openapi.yaml)** from the same source checkout used to build
+these docs. Use that URL for code generation and offline tooling.
+
+A running hub also serves **`GET /api/v1/doc`**. That endpoint is protected like
+the rest of `/api/v1/*`, so send a session cookie or PAT:
+
+```bash
+export MARIMOHUB_URL=https://hub.example.com
+export MARIMOHUB_TOKEN=mhub_pat_…
+curl --fail --location \
+  --header "Authorization: Bearer ${MARIMOHUB_TOKEN}" \
+  "${MARIMOHUB_URL}/api/v1/doc" \
+  --output openapi.yaml
+```
+
+The repository source is
+[`packages/api/openapi.yaml`](https://github.com/marimo-team/marimohub/blob/main/packages/api/openapi.yaml).
 
 Resource groups:
 
@@ -77,10 +97,11 @@ is generated from the same OpenAPI document, so its types always match the live
 routes. It unwraps the envelope and throws a typed `ApiRequestError` on failure.
 
 ```ts
-import { apiFetch, type Project } from '@marimo-hub/client';
+import { apiFetch, type ResolvedUser } from '@marimo-hub/client';
 
-// GET /api/v1/projects/{id} → unwrapped data, fully typed
-const project = await apiFetch<Project>(`/api/v1/projects/${id}`);
+const user = await apiFetch<ResolvedUser>('https://hub.example.com/api/v1/me', {
+	headers: { Authorization: `Bearer ${process.env.MARIMOHUB_TOKEN}` },
+});
 ```
 
 The exported types (`Project`, `NotebookMeta`, `NotebookDetail`, `Session`,

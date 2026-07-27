@@ -1,3 +1,7 @@
+---
+description: Manage operator-controlled project secrets and inject them into notebook sandboxes.
+---
+
 # Project secrets
 
 Let a **project admin** register a third-party key — `OPENAI_API_KEY`, a database

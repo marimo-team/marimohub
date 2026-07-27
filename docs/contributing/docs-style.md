@@ -1,3 +1,7 @@
+---
+description: Write and verify operator-first marimohub documentation.
+---
+
 # Documentation style
 
 marimohub docs are operator-first. Write for someone evaluating, configuring,

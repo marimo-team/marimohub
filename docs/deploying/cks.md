@@ -1,3 +1,7 @@
+---
+description: Deploy marimohub on CoreWeave Kubernetes Service with Sandboxes, CAIOS, DNS, TLS, and OIDC.
+---
+
 # Deploying on CoreWeave (CKS)
 
 This is the complete 0→100 guide for running marimohub on CoreWeave: a CKS
@@ -369,7 +373,8 @@ helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
 Watch `kubectl -n marimohub get pods` and
 `kubectl -n marimohub get certificate` (the `app-tls` cert issues in a minute
 or two). The full values surface is in the
-[chart README](../../charts/marimohub/README.md); every `MARIMOHUB_*` var is in
+[chart README](https://github.com/marimo-team/marimohub/blob/main/charts/marimohub/README.md);
+every `MARIMOHUB_*` var is in
 [Configuration](../configuration.md).
 
 ## 9. Wildcard TLS for sandbox kernels

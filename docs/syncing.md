@@ -1,3 +1,7 @@
+---
+description: Push read-only notebooks into marimohub from external source systems.
+---
+
 # Syncing from external sources
 
 > **Status: work in progress.** Synced sources are usable but evolving. The

@@ -1,3 +1,7 @@
+---
+description: Build a compatible, pre-installed container image for marimohub notebook kernels.
+---
+
 # Sandbox image (bring your own container)
 
 A compute **backend** decides _where_ a kernel runs (`docker`, `kubernetes`,

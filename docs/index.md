@@ -1,5 +1,6 @@
 ---
 layout: home
+description: Self-hostable, provider-agnostic storage, compute, and identity for running marimo notebooks.
 
 hero:
   name: marimohub
@@ -34,13 +35,23 @@ features:
     details: Optionally front any OpenAI-compatible provider so every notebook's AI assistant just works — the real key stays server-side.
 ---
 
+## What marimohub is
+
+marimohub is a self-hostable platform for storing, managing, and running marimo
+notebooks. Bring your own object storage, sandbox provider, and identity system;
+the hub provides the web app, API, version history, access control, and kernel
+lifecycle.
+
 <div class="home-wizard">
 
 ## Configure your deployment
 
-Pick your storage, compute, and auth backends to generate ready-to-paste config
-(`.env`, Helm, or Docker Compose) and the equivalent library wiring code — live,
-no install required.
+Pick your storage, compute, and auth backends to generate a clearly marked config
+scaffold (`.env`, Helm, or Docker Compose) and the equivalent library wiring code
+— live, no install required.
+
+For a terminal-only equivalent, use the
+[non-interactive configuration scaffold](/getting-started#non-interactive-configuration-scaffold).
 
 <DeploymentWizard />
 
