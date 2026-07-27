@@ -1,0 +1,64 @@
+name: Publish sandbox image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/marimo-sandbox/Dockerfile'
+  pull_request:
+    paths:
+      - 'images/marimo-sandbox/Dockerfile'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  image:
+    name: Build, test, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Read marimo version
+        id: version
+        run: |
+          VERSION="$(sed -n 's/^ARG MARIMO_VERSION=//p' images/marimo-sandbox/Dockerfile)"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid MARIMO_VERSION: $VERSION"
+            exit 1
+          fi
+          echo "marimo=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build and run acceptance tests
+        run: examples/sandbox-image/acceptance-test.sh marimo-sandbox:ci images/marimo-sandbox
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        if: github.event_name == 'push'
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: images/marimo-sandbox
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}
+            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}
