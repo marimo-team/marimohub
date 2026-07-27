@@ -68,6 +68,10 @@ function renderGroup(group: ConfigGroup): string {
 
 export function renderConfigDocs(spec: ConfigGroup[]): string {
 	const body = [
+		'---',
+		'description: Authoritative generated reference for every marimohub configuration variable and backend selector.',
+		'---',
+		'',
 		AUTOGEN_HEADER,
 		'',
 		'# Configuration reference',

@@ -1,3 +1,7 @@
+---
+description: Select and configure the sandbox backend that runs marimohub notebook kernels.
+---
+
 # Compute
 
 Compute is where each notebook's Python kernel runs. The web UI connects to an

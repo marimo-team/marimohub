@@ -1,6 +1,11 @@
+---
+description: Install, update, validate, and operate marimohub with its OCI Helm chart.
+---
+
 # Deploying with Helm
 
-The [`charts/marimohub`](../../charts/marimohub) chart installs a single-tenant
+The [`charts/marimohub`](https://github.com/marimo-team/marimohub/tree/main/charts/marimohub)
+chart installs a single-tenant
 marimohub on any Kubernetes cluster: one release is one isolated instance backed
 by your own storage, compute, and identity provider.
 
@@ -21,10 +26,13 @@ kubectl -n marimohub create secret generic marimohub-secrets \
   --from-literal=MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=...
 
 helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
-  --version 1.4.2 -n marimohub -f values.yaml
+  --version <VERSION> -n marimohub -f values.yaml
 ```
 
-Start from [`charts/marimohub/ci/example-values.yaml`](../../charts/marimohub/ci/example-values.yaml).
+Replace `<VERSION>` with a tag from
+[GitHub Releases](https://github.com/marimo-team/marimohub/releases), without
+the leading `v`. Start from
+[`charts/marimohub/ci/example-values.yaml`](https://github.com/marimo-team/marimohub/blob/main/charts/marimohub/ci/example-values.yaml).
 Reference the secret you created with `secrets.existingSecret: marimohub-secrets`.
 The full `MARIMOHUB_*` surface is in [Configuration](../configuration.md).
 
@@ -32,7 +40,7 @@ The full `MARIMOHUB_*` surface is in [Configuration](../configuration.md).
 
 ```bash
 helm upgrade marimohub oci://ghcr.io/marimo-team/charts/marimohub \
-  --version 1.5.0 -n marimohub -f values.yaml   # upgrade to a new release
+  --version <VERSION> -n marimohub -f values.yaml
 helm rollback marimohub -n marimohub            # revert
 helm history marimohub -n marimohub             # what's running
 ```
@@ -75,9 +83,10 @@ Then open the app, sign in, create a notebook, start a kernel, and save it.
 ## Troubleshooting
 
 See [Troubleshooting](../troubleshooting.md) and
-[`charts/marimohub/README.md`](../../charts/marimohub/README.md).
+[`charts/marimohub/README.md`](https://github.com/marimo-team/marimohub/blob/main/charts/marimohub/README.md).
 
 ## See also
 
-- [`charts/marimohub/README.md`](../../charts/marimohub/README.md) — full values reference.
+- [`charts/marimohub/README.md`](https://github.com/marimo-team/marimohub/blob/main/charts/marimohub/README.md)
+  — full values reference.
 - [Configuration](../configuration.md) for every variable.

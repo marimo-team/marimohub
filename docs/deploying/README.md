@@ -1,3 +1,7 @@
+---
+description: Choose a deployment guide for Helm, Kubernetes, cloud platforms, or a single instance.
+---
+
 # Deploying
 
 marimohub ships as a single container image (`apps/server/Dockerfile`) that

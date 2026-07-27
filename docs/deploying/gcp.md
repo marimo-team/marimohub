@@ -1,3 +1,7 @@
+---
+description: Deploy marimohub using Google Cloud compute, storage, identity, and networking services.
+---
+
 # Deploying on GCP
 
 Run the `apps/server` image on GKE or Cloud Run, backed by Google Cloud Storage

@@ -1,8 +1,23 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitepress';
 import llmstxt from 'vitepress-plugin-llms';
 
 const REPO = 'https://github.com/marimo-team/marimohub';
 const SITE = 'https://marimohub.docs.marimo.io';
+const OPENAPI_PATH = fileURLToPath(new URL('../../../packages/api/openapi.yaml', import.meta.url));
+
+const openApiArtifact = {
+	name: 'marimohub-openapi-artifact',
+	apply: 'build' as const,
+	generateBundle() {
+		this.emitFile({
+			type: 'asset',
+			fileName: 'openapi.yaml',
+			source: readFileSync(OPENAPI_PATH, 'utf8'),
+		});
+	},
+};
 
 // Content lives in the repo-root docs/ folder; this package is just the site tooling.
 export default defineConfig({
@@ -16,6 +31,7 @@ export default defineConfig({
 
 	vite: {
 		plugins: [
+			openApiArtifact,
 			// Emits llms.txt, llms-full.txt, and a raw-markdown twin next to every page.
 			llmstxt({
 				domain: SITE,
@@ -72,9 +88,6 @@ export default defineConfig({
 		'deploying/README.md': 'deploying/index.md',
 	},
 
-	// development_docs/ and charts/ links resolve on GitHub but aren't part of this site.
-	ignoreDeadLinks: [/development_docs/, /charts\//],
-
 	themeConfig: {
 		nav: [
 			{
@@ -109,12 +122,13 @@ export default defineConfig({
 			},
 			{
 				text: 'Reference',
-				activeMatch: '^/(configuration|api|architecture)',
+				activeMatch: '^/(configuration|api|architecture|agent-guide)',
 				items: [
 					{ text: 'Configuration', link: '/configuration' },
 					{ text: 'API & client', link: '/api' },
 					{ text: 'API tokens', link: '/api-tokens' },
 					{ text: 'How it works', link: '/architecture' },
+					{ text: 'Agent guide', link: '/agent-guide' },
 				],
 			},
 			{ text: 'Contribute', link: '/contributing/docs-style' },
@@ -172,6 +186,7 @@ export default defineConfig({
 					{ text: 'API & client', link: '/api' },
 					{ text: 'API tokens', link: '/api-tokens' },
 					{ text: 'How it works', link: '/architecture' },
+					{ text: 'Agent guide', link: '/agent-guide' },
 				],
 			},
 			{

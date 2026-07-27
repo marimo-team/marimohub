@@ -1,3 +1,7 @@
+---
+description: Diagnose startup, login, kernel, storage, and live-deployment failures.
+---
+
 # Troubleshooting
 
 Common failures and what they mean. Most startup refusals are marimohub failing
@@ -84,9 +88,9 @@ this). See [Sandbox image](/sandbox-image).
 
 ### First kernel is slow (cold start)
 
-`uv` resolves the notebook's dependencies on launch. Pre-**warm the uv cache**
-in your image (project-mode `uv sync`) so the resolve is a local copy, not a
-PyPI download. See [Sandbox image → Why a warm cache matters](/sandbox-image#why-a-warm-cache-matters).
+Pre-install marimo and common libraries into the image's project environment so
+the startup `uv sync --inexact` only adds notebook-specific dependencies. See
+[Sandbox image → Why pre-install (not just cache)](/sandbox-image#why-pre-install-not-just-cache).
 
 ## Check a live deployment
 

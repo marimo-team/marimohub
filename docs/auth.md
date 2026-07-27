@@ -1,3 +1,7 @@
+---
+description: Configure OIDC, Cloudflare Access, or local authentication and understand project authorization.
+---
+
 # Auth
 
 Auth decides who can sign in and what they can do. You must choose a backend. If

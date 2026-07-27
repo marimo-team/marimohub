@@ -1,3 +1,7 @@
+---
+description: Exchange notebook session identity for short-lived cloud credentials without long-lived keys.
+---
+
 # Workload Identity Federation
 
 Give a project's notebooks access to cloud resources **without creating any long-lived access key**.

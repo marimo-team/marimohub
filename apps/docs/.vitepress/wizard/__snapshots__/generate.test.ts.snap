@@ -3,7 +3,7 @@
 exports[`config -> code generators > default-prod (s3 + modal + oidc) > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3
-MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
 MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
@@ -12,24 +12,24 @@ MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
 MARIMOHUB_COMPUTE_BACKEND=modal
-MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
 MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
-MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=  # required, secret
-MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=  # required, secret
+MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
+MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_APP_NAME=marimohub
 
 # --- Auth ---
 MARIMOHUB_AUTH_BACKEND=oidc
-MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
-MARIMOHUB_AUTH_OIDC_CLIENT_ID=  # required
-MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=  # required, secret
-MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
-MARIMOHUB_AUTH_SESSION_SECRET=  # required, secret
-MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com,example.org
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
 # --- Managed AI ---
 MARIMOHUB_AI_BACKEND=none
@@ -46,29 +46,29 @@ exports[`config -> code generators > default-prod (s3 + modal + oidc) > compose 
       - '3000:3000'
     environment:
       MARIMOHUB_STORAGE_BACKEND: s3
-      MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+      MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
       MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: modal
-      MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+      MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
       MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
-      MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: ""
-      MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: ""
+      MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
+      MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
       MARIMOHUB_AUTH_BACKEND: oidc
-      MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-      MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-      MARIMOHUB_AUTH_SESSION_SECRET: ""
-      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
@@ -77,23 +77,23 @@ exports[`config -> code generators > default-prod (s3 + modal + oidc) > helm 1`]
 "# Non-secret MARIMOHUB_* config -> ConfigMap.
 config:
   MARIMOHUB_STORAGE_BACKEND: s3
-  MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+  MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: modal
-  MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+  MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
   MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
   MARIMOHUB_AUTH_BACKEND: oidc
-  MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-  MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
 
@@ -102,10 +102,10 @@ secrets:
   data:
     MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
     MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
-    MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: ""
-    MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: ""
-    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-    MARIMOHUB_AUTH_SESSION_SECRET: """
+    MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
+    MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
 `;
 
 exports[`config -> code generators > default-prod (s3 + modal + oidc) > library 1`] = `
@@ -175,13 +175,13 @@ MARIMOHUB_COMPUTE_DOCKER_NETWORK=marimohub
 
 # --- Auth ---
 MARIMOHUB_AUTH_BACKEND=oidc
-MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
-MARIMOHUB_AUTH_OIDC_CLIENT_ID=  # required
-MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=  # required, secret
-MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
-MARIMOHUB_AUTH_SESSION_SECRET=  # required, secret
-MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com,example.org
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
 # --- Managed AI ---
 MARIMOHUB_AI_BACKEND=none
@@ -209,13 +209,13 @@ exports[`config -> code generators > fs + docker + oidc (single-box) > compose 1
       MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
       MARIMOHUB_COMPUTE_DOCKER_NETWORK: marimohub
       MARIMOHUB_AUTH_BACKEND: oidc
-      MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-      MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-      MARIMOHUB_AUTH_SESSION_SECRET: ""
-      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
@@ -235,19 +235,19 @@ config:
   MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: 127.0.0.1
   MARIMOHUB_COMPUTE_DOCKER_NETWORK: marimohub
   MARIMOHUB_AUTH_BACKEND: oidc
-  MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-  MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
 secrets:
   data:
-    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-    MARIMOHUB_AUTH_SESSION_SECRET: """
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
 `;
 
 exports[`config -> code generators > fs + docker + oidc (single-box) > library 1`] = `
@@ -298,7 +298,7 @@ const app = createApi({
 exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=gcs
-MARIMOHUB_STORAGE_GCS_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_GCS_BUCKET=_replace_me_  # e.g. orgname-marimohub
 MARIMOHUB_STORAGE_GCS_SA_KEY=  # secret
 MARIMOHUB_STORAGE_GCS_ACCESS_TOKEN=  # secret
 MARIMOHUB_STORAGE_GCS_API_ENDPOINT=https://storage.googleapis.com
@@ -323,13 +323,13 @@ MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS=120
 
 # --- Auth ---
 MARIMOHUB_AUTH_BACKEND=oidc
-MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
-MARIMOHUB_AUTH_OIDC_CLIENT_ID=  # required
-MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=  # required, secret
-MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
-MARIMOHUB_AUTH_SESSION_SECRET=  # required, secret
-MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com,example.org
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
 # --- Managed AI ---
 MARIMOHUB_AI_BACKEND=none
@@ -346,7 +346,7 @@ exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace 
       - '3000:3000'
     environment:
       MARIMOHUB_STORAGE_BACKEND: gcs
-      MARIMOHUB_STORAGE_GCS_BUCKET: orgname-marimohub
+      MARIMOHUB_STORAGE_GCS_BUCKET: _replace_me_ # e.g. orgname-marimohub
       MARIMOHUB_STORAGE_GCS_SA_KEY: ""
       MARIMOHUB_STORAGE_GCS_ACCESS_TOKEN: ""
       MARIMOHUB_STORAGE_GCS_API_ENDPOINT: https://storage.googleapis.com
@@ -367,13 +367,13 @@ exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace 
       MARIMOHUB_COMPUTE_KUBERNETES_GPU: 1
       MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS: 120
       MARIMOHUB_AUTH_BACKEND: oidc
-      MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-      MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-      MARIMOHUB_AUTH_SESSION_SECRET: ""
-      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
       MARIMOHUB_PERSIST_WORKSPACE: workspace"
 `;
@@ -382,7 +382,7 @@ exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace 
 "# Non-secret MARIMOHUB_* config -> ConfigMap.
 config:
   MARIMOHUB_STORAGE_BACKEND: gcs
-  MARIMOHUB_STORAGE_GCS_BUCKET: orgname-marimohub
+  MARIMOHUB_STORAGE_GCS_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_GCS_API_ENDPOINT: https://storage.googleapis.com
   MARIMOHUB_COMPUTE_BACKEND: kubernetes
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
@@ -401,11 +401,11 @@ config:
   MARIMOHUB_COMPUTE_KUBERNETES_GPU: 1
   MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS: 120
   MARIMOHUB_AUTH_BACKEND: oidc
-  MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-  MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: workspace
 
@@ -414,8 +414,8 @@ secrets:
   data:
     MARIMOHUB_STORAGE_GCS_SA_KEY: ""
     MARIMOHUB_STORAGE_GCS_ACCESS_TOKEN: ""
-    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-    MARIMOHUB_AUTH_SESSION_SECRET: """
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
 `;
 
 exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace > library 1`] = `
@@ -591,7 +591,7 @@ const app = createApi({
 exports[`config -> code generators > s3 + coreweave + oidc, custom image > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3
-MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
 MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
@@ -605,7 +605,7 @@ MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
 MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
-MARIMOHUB_COMPUTE_COREWEAVE_API_KEY=  # required, secret
+MARIMOHUB_COMPUTE_COREWEAVE_API_KEY=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL=
 MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG=marimohub
 MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE=https://{sandboxId}-{port}.{host}
@@ -621,13 +621,13 @@ MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT=true
 
 # --- Auth ---
 MARIMOHUB_AUTH_BACKEND=oidc
-MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
-MARIMOHUB_AUTH_OIDC_CLIENT_ID=  # required
-MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=  # required, secret
-MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
-MARIMOHUB_AUTH_SESSION_SECRET=  # required, secret
-MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com,example.org
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
 # --- Managed AI ---
 MARIMOHUB_AI_BACKEND=none
@@ -644,7 +644,7 @@ exports[`config -> code generators > s3 + coreweave + oidc, custom image > compo
       - '3000:3000'
     environment:
       MARIMOHUB_STORAGE_BACKEND: s3
-      MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+      MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
       MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
@@ -656,7 +656,7 @@ exports[`config -> code generators > s3 + coreweave + oidc, custom image > compo
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
       MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
-      MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: ""
+      MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: _replace_me_
       MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL: ""
       MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG: marimohub
       MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE: https://{sandboxId}-{port}.{host}
@@ -670,13 +670,13 @@ exports[`config -> code generators > s3 + coreweave + oidc, custom image > compo
       MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION: us-east-04a
       MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT: true
       MARIMOHUB_AUTH_BACKEND: oidc
-      MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-      MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-      MARIMOHUB_AUTH_SESSION_SECRET: ""
-      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
@@ -685,7 +685,7 @@ exports[`config -> code generators > s3 + coreweave + oidc, custom image > helm 
 "# Non-secret MARIMOHUB_* config -> ConfigMap.
 config:
   MARIMOHUB_STORAGE_BACKEND: s3
-  MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+  MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
@@ -708,11 +708,11 @@ config:
   MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION: us-east-04a
   MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT: true
   MARIMOHUB_AUTH_BACKEND: oidc
-  MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-  MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
 
@@ -721,9 +721,9 @@ secrets:
   data:
     MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
     MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
-    MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: ""
-    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-    MARIMOHUB_AUTH_SESSION_SECRET: """
+    MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: _replace_me_
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
 `;
 
 exports[`config -> code generators > s3 + coreweave + oidc, custom image > library 1`] = `
@@ -776,7 +776,7 @@ const app = createApi({
 exports[`config -> code generators > s3 + docker + dev > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3
-MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
 MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
@@ -815,7 +815,7 @@ exports[`config -> code generators > s3 + docker + dev > compose 1`] = `
       - '3000:3000'
     environment:
       MARIMOHUB_STORAGE_BACKEND: s3
-      MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+      MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
       MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
@@ -842,7 +842,7 @@ exports[`config -> code generators > s3 + docker + dev > helm 1`] = `
 "# Non-secret MARIMOHUB_* config -> ConfigMap.
 config:
   MARIMOHUB_STORAGE_BACKEND: s3
-  MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+  MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
@@ -917,7 +917,7 @@ const app = createApi({
 exports[`config -> code generators > s3 + e2b + oidc > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3
-MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
 MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
@@ -931,7 +931,7 @@ MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
 MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
-MARIMOHUB_COMPUTE_E2B_API_KEY=  # required, secret
+MARIMOHUB_COMPUTE_E2B_API_KEY=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_E2B_TEMPLATE=marimo
 MARIMOHUB_COMPUTE_E2B_DOMAIN=
 MARIMOHUB_COMPUTE_E2B_OWNER_TAG=marimohub
@@ -939,13 +939,13 @@ MARIMOHUB_COMPUTE_E2B_MAX_LIFETIME_SECONDS=28800
 
 # --- Auth ---
 MARIMOHUB_AUTH_BACKEND=oidc
-MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
-MARIMOHUB_AUTH_OIDC_CLIENT_ID=  # required
-MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=  # required, secret
-MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
-MARIMOHUB_AUTH_SESSION_SECRET=  # required, secret
-MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com,example.org
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
 # --- Managed AI ---
 MARIMOHUB_AI_BACKEND=none
@@ -962,7 +962,7 @@ exports[`config -> code generators > s3 + e2b + oidc > compose 1`] = `
       - '3000:3000'
     environment:
       MARIMOHUB_STORAGE_BACKEND: s3
-      MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+      MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
       MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
@@ -974,19 +974,19 @@ exports[`config -> code generators > s3 + e2b + oidc > compose 1`] = `
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
       MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
-      MARIMOHUB_COMPUTE_E2B_API_KEY: ""
+      MARIMOHUB_COMPUTE_E2B_API_KEY: _replace_me_
       MARIMOHUB_COMPUTE_E2B_TEMPLATE: marimo
       MARIMOHUB_COMPUTE_E2B_DOMAIN: ""
       MARIMOHUB_COMPUTE_E2B_OWNER_TAG: marimohub
       MARIMOHUB_COMPUTE_E2B_MAX_LIFETIME_SECONDS: 28800
       MARIMOHUB_AUTH_BACKEND: oidc
-      MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-      MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-      MARIMOHUB_AUTH_SESSION_SECRET: ""
-      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
@@ -995,7 +995,7 @@ exports[`config -> code generators > s3 + e2b + oidc > helm 1`] = `
 "# Non-secret MARIMOHUB_* config -> ConfigMap.
 config:
   MARIMOHUB_STORAGE_BACKEND: s3
-  MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+  MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
@@ -1010,11 +1010,11 @@ config:
   MARIMOHUB_COMPUTE_E2B_OWNER_TAG: marimohub
   MARIMOHUB_COMPUTE_E2B_MAX_LIFETIME_SECONDS: 28800
   MARIMOHUB_AUTH_BACKEND: oidc
-  MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-  MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
 
@@ -1023,9 +1023,9 @@ secrets:
   data:
     MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
     MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
-    MARIMOHUB_COMPUTE_E2B_API_KEY: ""
-    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-    MARIMOHUB_AUTH_SESSION_SECRET: """
+    MARIMOHUB_COMPUTE_E2B_API_KEY: _replace_me_
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
 `;
 
 exports[`config -> code generators > s3 + e2b + oidc > library 1`] = `
@@ -1078,7 +1078,7 @@ const app = createApi({
 exports[`config -> code generators > s3 + modal + oidc, managed ai > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3
-MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
 MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
@@ -1087,29 +1087,29 @@ MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
 MARIMOHUB_COMPUTE_BACKEND=modal
-MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
 MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
-MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=  # required, secret
-MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=  # required, secret
+MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
+MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_APP_NAME=marimohub
 
 # --- Auth ---
 MARIMOHUB_AUTH_BACKEND=oidc
-MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
-MARIMOHUB_AUTH_OIDC_CLIENT_ID=  # required
-MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=  # required, secret
-MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
-MARIMOHUB_AUTH_SESSION_SECRET=  # required, secret
-MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com,example.org
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
 # --- Managed AI ---
 MARIMOHUB_AI_BACKEND=openai-compatible
-MARIMOHUB_AI_UPSTREAM_BASE_URL=https://api.openai.com/v1
-MARIMOHUB_AI_UPSTREAM_API_KEY=sk-...
+MARIMOHUB_AI_UPSTREAM_BASE_URL=_replace_me_  # e.g. https://api.openai.com/v1
+MARIMOHUB_AI_UPSTREAM_API_KEY=_replace_me_  # e.g. sk-...
 MARIMOHUB_AI_UPSTREAM_PROJECT=my-team/my-project
 MARIMOHUB_AI_MODEL=gpt-4o-mini
 MARIMOHUB_AI_ALLOWED_MODELS=gpt-4o-mini,gpt-4o
@@ -1130,32 +1130,32 @@ exports[`config -> code generators > s3 + modal + oidc, managed ai > compose 1`]
       - '3000:3000'
     environment:
       MARIMOHUB_STORAGE_BACKEND: s3
-      MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+      MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
       MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: modal
-      MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+      MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
       MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
-      MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: ""
-      MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: ""
+      MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
+      MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
       MARIMOHUB_AUTH_BACKEND: oidc
-      MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-      MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-      MARIMOHUB_AUTH_SESSION_SECRET: ""
-      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: openai-compatible
-      MARIMOHUB_AI_UPSTREAM_BASE_URL: https://api.openai.com/v1
-      MARIMOHUB_AI_UPSTREAM_API_KEY: sk-...
+      MARIMOHUB_AI_UPSTREAM_BASE_URL: _replace_me_ # e.g. https://api.openai.com/v1
+      MARIMOHUB_AI_UPSTREAM_API_KEY: _replace_me_ # e.g. sk-...
       MARIMOHUB_AI_UPSTREAM_PROJECT: my-team/my-project
       MARIMOHUB_AI_MODEL: gpt-4o-mini
       MARIMOHUB_AI_ALLOWED_MODELS: "gpt-4o-mini,gpt-4o"
@@ -1170,25 +1170,25 @@ exports[`config -> code generators > s3 + modal + oidc, managed ai > helm 1`] = 
 "# Non-secret MARIMOHUB_* config -> ConfigMap.
 config:
   MARIMOHUB_STORAGE_BACKEND: s3
-  MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+  MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: modal
-  MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+  MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
   MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
   MARIMOHUB_AUTH_BACKEND: oidc
-  MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-  MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: openai-compatible
-  MARIMOHUB_AI_UPSTREAM_BASE_URL: https://api.openai.com/v1
+  MARIMOHUB_AI_UPSTREAM_BASE_URL: _replace_me_ # e.g. https://api.openai.com/v1
   MARIMOHUB_AI_UPSTREAM_PROJECT: my-team/my-project
   MARIMOHUB_AI_MODEL: gpt-4o-mini
   MARIMOHUB_AI_ALLOWED_MODELS: "gpt-4o-mini,gpt-4o"
@@ -1203,11 +1203,11 @@ secrets:
   data:
     MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
     MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
-    MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: ""
-    MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: ""
-    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-    MARIMOHUB_AUTH_SESSION_SECRET: ""
-    MARIMOHUB_AI_UPSTREAM_API_KEY: sk-..."
+    MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
+    MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+    MARIMOHUB_AI_UPSTREAM_API_KEY: _replace_me_ # e.g. sk-..."
 `;
 
 exports[`config -> code generators > s3 + modal + oidc, managed ai > library 1`] = `
@@ -1279,23 +1279,23 @@ MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE=true
 
 # --- Compute ---
 MARIMOHUB_COMPUTE_BACKEND=modal
-MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
 MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
-MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=  # required, secret
-MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=  # required, secret
+MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
+MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_APP_NAME=marimohub
 
 # --- Auth ---
 MARIMOHUB_AUTH_BACKEND=oidc
-MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
-MARIMOHUB_AUTH_OIDC_CLIENT_ID=  # required
-MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=  # required, secret
-MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
-MARIMOHUB_AUTH_SESSION_SECRET=  # required, secret
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=acme.com
 
 # --- Managed AI ---
@@ -1320,21 +1320,21 @@ exports[`config -> code generators > s3 + modal + oidc, value overrides > compos
       MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
       MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
       MARIMOHUB_COMPUTE_BACKEND: modal
-      MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+      MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
       MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
       MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
-      MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: ""
-      MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: ""
+      MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
+      MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
       MARIMOHUB_AUTH_BACKEND: oidc
-      MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-      MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-      MARIMOHUB_AUTH_SESSION_SECRET: ""
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: acme.com
       MARIMOHUB_AI_BACKEND: none
       MARIMOHUB_PERSIST_WORKSPACE: source"
@@ -1349,16 +1349,16 @@ config:
   MARIMOHUB_STORAGE_S3_REGION: eu-west-1
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
   MARIMOHUB_COMPUTE_BACKEND: modal
-  MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+  MARIMOHUB_COMPUTE_IMAGE: _replace_me_ # e.g. ghcr.io/orgname/marimo-sandbox:latest
   MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
   MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
   MARIMOHUB_AUTH_BACKEND: oidc
-  MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-  MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: acme.com
   MARIMOHUB_AI_BACKEND: none
@@ -1369,10 +1369,10 @@ secrets:
   data:
     MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
     MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
-    MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: ""
-    MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: ""
-    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-    MARIMOHUB_AUTH_SESSION_SECRET: """
+    MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
+    MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
 `;
 
 exports[`config -> code generators > s3 + modal + oidc, value overrides > library 1`] = `
@@ -1427,7 +1427,7 @@ const app = createApi({
 exports[`config -> code generators > s3 + none + dev > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3
-MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
 MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
@@ -1463,7 +1463,7 @@ exports[`config -> code generators > s3 + none + dev > compose 1`] = `
       - '3000:3000'
     environment:
       MARIMOHUB_STORAGE_BACKEND: s3
-      MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+      MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
       MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
@@ -1487,7 +1487,7 @@ exports[`config -> code generators > s3 + none + dev > helm 1`] = `
 "# Non-secret MARIMOHUB_* config -> ConfigMap.
 config:
   MARIMOHUB_STORAGE_BACKEND: s3
-  MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+  MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
@@ -1561,7 +1561,7 @@ const app = createApi({
 exports[`config -> code generators > s3 + wandb + oidc > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3
-MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
 MARIMOHUB_STORAGE_S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
 MARIMOHUB_STORAGE_S3_REGION=us-east-1
 MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=  # secret
@@ -1575,7 +1575,7 @@ MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
 MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
-MARIMOHUB_COMPUTE_WANDB_API_KEY=  # required, secret
+MARIMOHUB_COMPUTE_WANDB_API_KEY=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_WANDB_ENTITY=my-team
 MARIMOHUB_COMPUTE_WANDB_PROJECT=sandbox
 MARIMOHUB_COMPUTE_WANDB_BASE_URL=https://api.cwsandbox.com
@@ -1584,13 +1584,13 @@ MARIMOHUB_COMPUTE_WANDB_MAX_LIFETIME_SECONDS=28800
 
 # --- Auth ---
 MARIMOHUB_AUTH_BACKEND=oidc
-MARIMOHUB_AUTH_OIDC_ISSUER=https://accounts.example.com
-MARIMOHUB_AUTH_OIDC_CLIENT_ID=  # required
-MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=  # required, secret
-MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
-MARIMOHUB_AUTH_SESSION_SECRET=  # required, secret
-MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com,example.org
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
 # --- Managed AI ---
 MARIMOHUB_AI_BACKEND=none
@@ -1607,7 +1607,7 @@ exports[`config -> code generators > s3 + wandb + oidc > compose 1`] = `
       - '3000:3000'
     environment:
       MARIMOHUB_STORAGE_BACKEND: s3
-      MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+      MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
       MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
       MARIMOHUB_STORAGE_S3_REGION: us-east-1
       MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
@@ -1619,20 +1619,20 @@ exports[`config -> code generators > s3 + wandb + oidc > compose 1`] = `
       MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
       MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
-      MARIMOHUB_COMPUTE_WANDB_API_KEY: ""
+      MARIMOHUB_COMPUTE_WANDB_API_KEY: _replace_me_
       MARIMOHUB_COMPUTE_WANDB_ENTITY: my-team
       MARIMOHUB_COMPUTE_WANDB_PROJECT: sandbox
       MARIMOHUB_COMPUTE_WANDB_BASE_URL: https://api.cwsandbox.com
       MARIMOHUB_COMPUTE_WANDB_OWNER_TAG: marimohub
       MARIMOHUB_COMPUTE_WANDB_MAX_LIFETIME_SECONDS: 28800
       MARIMOHUB_AUTH_BACKEND: oidc
-      MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-      MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-      MARIMOHUB_AUTH_SESSION_SECRET: ""
-      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
@@ -1641,7 +1641,7 @@ exports[`config -> code generators > s3 + wandb + oidc > helm 1`] = `
 "# Non-secret MARIMOHUB_* config -> ConfigMap.
 config:
   MARIMOHUB_STORAGE_BACKEND: s3
-  MARIMOHUB_STORAGE_S3_BUCKET: orgname-marimohub
+  MARIMOHUB_STORAGE_S3_BUCKET: _replace_me_ # e.g. orgname-marimohub
   MARIMOHUB_STORAGE_S3_ENDPOINT: https://s3.us-east-1.amazonaws.com
   MARIMOHUB_STORAGE_S3_REGION: us-east-1
   MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE: true
@@ -1657,11 +1657,11 @@ config:
   MARIMOHUB_COMPUTE_WANDB_OWNER_TAG: marimohub
   MARIMOHUB_COMPUTE_WANDB_MAX_LIFETIME_SECONDS: 28800
   MARIMOHUB_AUTH_BACKEND: oidc
-  MARIMOHUB_AUTH_OIDC_ISSUER: https://accounts.example.com
-  MARIMOHUB_AUTH_OIDC_CLIENT_ID: ""
-  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
-  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: "example.com,example.org"
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
 
@@ -1670,9 +1670,9 @@ secrets:
   data:
     MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID: ""
     MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY: ""
-    MARIMOHUB_COMPUTE_WANDB_API_KEY: ""
-    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: ""
-    MARIMOHUB_AUTH_SESSION_SECRET: """
+    MARIMOHUB_COMPUTE_WANDB_API_KEY: _replace_me_
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
 `;
 
 exports[`config -> code generators > s3 + wandb + oidc > library 1`] = `

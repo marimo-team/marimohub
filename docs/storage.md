@@ -1,3 +1,7 @@
+---
+description: Select and configure S3, GCS, filesystem, R2, or memory storage for marimohub.
+---
+
 # Storage
 
 Storage is where marimohub keeps notebooks, version history, session records, and
@@ -80,4 +84,4 @@ After deploy:
 ## Troubleshooting
 
 See [Troubleshooting -> The server refuses to start](./troubleshooting.md#the-server-refuses-to-start)
-and [Operations -> Backups & restore](./operations.md#backups--restore).
+and [Operations -> Backups & restore](./operations.md#backups-restore).

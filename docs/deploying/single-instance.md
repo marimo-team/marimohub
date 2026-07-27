@@ -1,3 +1,7 @@
+---
+description: Run marimohub, filesystem storage, and Docker kernels on one Linux host.
+---
+
 # Deploying on a single instance
 
 Run everything on one Linux machine — a beefy cloud VM (AWS EC2, GCP Compute

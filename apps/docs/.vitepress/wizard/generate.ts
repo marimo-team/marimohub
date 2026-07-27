@@ -43,13 +43,35 @@ function effective(sel: WizardSelection): Record<string, string> {
 	return { ...optionDefaults, ...sel.options, ...sel.values };
 }
 
-/** Resolve a var's value: override -> example -> concrete default -> ''. */
+/** Resolve a var's value: explicit override -> example -> concrete default -> unset. */
 export function resolveValue(id: string, values: Record<string, string>): string {
 	const user = values[id]?.trim();
 	if (user) return user;
 	const v = ALL_VARS_BY_ID.get(id);
 	if (v?.example) return v.example;
 	return concreteDefault(v?.default);
+}
+
+interface GeneratedValue {
+	value: string;
+	example?: string;
+}
+
+function generatedValue(
+	v: ConfigVar,
+	values: Record<string, string>,
+	sel: WizardSelection,
+): GeneratedValue {
+	const explicit = values[v.id]?.trim();
+	if (explicit) return { value: explicit };
+	if (v.id === 'MARIMOHUB_ALLOW_EPHEMERAL_STORAGE' && sel.storage === 'memory') {
+		return { value: 'true' };
+	}
+
+	const requiredForSelection =
+		v.required || (v.id === 'MARIMOHUB_COMPUTE_IMAGE' && sel.compute === 'modal');
+	if (requiredForSelection) return { value: '_replace_me_', example: v.example };
+	return { value: resolveValue(v.id, values) };
 }
 
 interface Section {
@@ -99,11 +121,16 @@ export function generateEnv(sel: WizardSelection): string {
 			lines.push(`${section.selector.id}=${section.selector.value}`);
 		}
 		for (const v of section.vars) {
-			const value = resolveValue(v.id, values);
+			const generated = generatedValue(v, values, sel);
 			const notes = [v.required ? 'required' : '', v.secret ? 'secret' : '']
 				.filter(Boolean)
 				.join(', ');
-			lines.push(`${v.id}=${value}${!value && notes ? `  # ${notes}` : ''}`);
+			const hint = generated.example
+				? `  # e.g. ${generated.example}`
+				: (generated.value === '_replace_me_' || !generated.value) && notes
+					? `  # ${notes}`
+					: '';
+			lines.push(`${v.id}=${generated.value}${hint}`);
 		}
 		return lines.join('\n');
 	});
@@ -127,11 +154,14 @@ export function generateHelm(sel: WizardSelection): string {
 			config.push(`  ${section.selector.id}: ${yamlScalar(section.selector.value)}`);
 		}
 		for (const v of section.vars) {
-			const value = resolveValue(v.id, values);
+			const generated = generatedValue(v, values, sel);
+			const rendered = `${yamlScalar(generated.value)}${
+				generated.example ? ` # e.g. ${generated.example}` : ''
+			}`;
 			if (v.secret) {
-				secrets.push(`    ${v.id}: ${yamlScalar(value)}`);
+				secrets.push(`    ${v.id}: ${rendered}`);
 			} else {
-				config.push(`  ${v.id}: ${yamlScalar(value)}`);
+				config.push(`  ${v.id}: ${rendered}`);
 			}
 		}
 	}
@@ -158,7 +188,12 @@ export function generateCompose(sel: WizardSelection): string {
 			env.push(`      ${section.selector.id}: ${yamlScalar(section.selector.value)}`);
 		}
 		for (const v of section.vars) {
-			env.push(`      ${v.id}: ${yamlScalar(resolveValue(v.id, values))}`);
+			const generated = generatedValue(v, values, sel);
+			env.push(
+				`      ${v.id}: ${yamlScalar(generated.value)}${
+					generated.example ? ` # e.g. ${generated.example}` : ''
+				}`,
+			);
 		}
 	}
 	return [

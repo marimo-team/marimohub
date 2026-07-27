@@ -1,3 +1,7 @@
+---
+description: Clone and run the full marimohub development stack locally, then verify its API and web app.
+---
+
 # Testing locally
 
 Run marimohub on your machine with no external services. This is the fastest way
@@ -10,9 +14,23 @@ auth providers.
 - pnpm 10.20.0
 - `uv` and Python, required only when you start local kernels
 
-## Run the dev stack
+Check the installed versions:
 
 ```bash
+node --version
+pnpm --version
+uv --version
+python3 --version
+```
+
+## Run the dev stack
+
+Clone the repository if you do not already have a checkout, then run from its
+root:
+
+```bash
+git clone https://github.com/marimo-team/marimohub.git
+cd marimohub
 pnpm install --frozen-lockfile
 pnpm dev
 ```
@@ -27,8 +45,9 @@ MARIMOHUB_COMPUTE_BACKEND=local
 MARIMOHUB_AUTH_BACKEND=dev
 ```
 
-The server listens on `PORT` (default `3000`) and serves the API plus built web
-assets. The web dev server also runs for frontend development.
+Startup is ready when the `server` process is listening on port `3000` and the
+`web` process prints a Vite local URL on port `5175`. The server owns the API;
+the web dev server proxies `/api` requests to it.
 
 ## What the local backends mean
 
@@ -56,14 +75,24 @@ you are testing.
 
 ## Validate the local run
 
-1. Open the web app.
+In another terminal, check the unauthenticated health endpoint:
+
+```bash
+curl --fail --silent http://localhost:3000/api/health
+```
+
+It should return `{"status":"ok"}`. Then:
+
+1. Open `http://localhost:5175`.
 2. Create a project.
 3. Create or upload a notebook.
-4. Start a kernel.
-5. Stop and restart the dev process.
+4. Start a kernel. If `uv` and Python are unavailable, stop after step 3.
+5. Stop and restart `pnpm dev`.
 
 The project will disappear after restart when you use memory storage. That is
-expected; switch to a durable storage backend before keeping real notebooks.
+expected. The local trial succeeded if the health check passed, the web app
+loaded, and you could create a project. Switch to a durable storage backend
+before keeping real notebooks.
 
 ## Next
 

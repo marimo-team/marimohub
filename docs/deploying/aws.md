@@ -1,3 +1,7 @@
+---
+description: Deploy marimohub using AWS compute, S3 storage, identity, and networking services.
+---
+
 # Deploying on AWS
 
 Run the `apps/server` image on EKS or ECS/Fargate, backed by native S3 and a

@@ -1,3 +1,7 @@
+---
+description: Choose between the prebuilt config-driven server and composing marimohub packages as a library.
+---
+
 # Deployment options
 
 There are two ways to run marimohub. Both run the same server; they differ only

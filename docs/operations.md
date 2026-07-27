@@ -1,3 +1,7 @@
+---
+description: Operate, scale, back up, upgrade, observe, and control the cost of a marimohub deployment.
+---
+
 # Operations
 
 Running marimohub day-to-day. The API tier is **stateless** — all state lives in
@@ -70,13 +74,16 @@ everything.
 
 ```bash
 helm upgrade marimohub oci://ghcr.io/marimo-team/charts/marimohub \
-  --version 1.5.0 -n marimohub -f values.yaml
+  --version <VERSION> -n marimohub -f values.yaml
 helm rollback marimohub -n marimohub     # revert
 helm history marimohub -n marimohub      # what's running
 ```
 
-See [Deploying with Helm](/deploying/helm). The API tier is stateless, so
-rolling upgrades need no draining beyond your normal readiness gating.
+Replace `<VERSION>` with a tag from
+[GitHub Releases](https://github.com/marimo-team/marimohub/releases), without
+the leading `v`. See [Deploying with Helm](/deploying/helm). The API tier is
+stateless, so rolling upgrades need no draining beyond your normal readiness
+gating.
 
 ## Configuration changes
 

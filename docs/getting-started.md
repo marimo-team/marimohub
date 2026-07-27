@@ -1,3 +1,7 @@
+---
+description: Try marimohub locally, choose backends, generate a configuration scaffold, and validate a deployment.
+---
+
 # Getting started
 
 marimohub runs on your infrastructure. An operator usually does four things:
@@ -45,9 +49,39 @@ custom adapters can compose the packages directly as a library. See
 [Deployment options](./deployment-options.md) for the trade-off.
 
 Use the configurator to generate a `.env`, Helm values, Docker Compose service,
-or equivalent library wiring.
+or equivalent library wiring. The result is a scaffold: replace every
+`_replace_me_` value, using its `# e.g.` comment as a guide, then review the
+optional values before deploying.
 
 <DeploymentWizard />
+
+### Non-interactive configuration scaffold
+
+Agents and terminal-only workflows can start from this equivalent S3 + Modal +
+OIDC scaffold:
+
+```bash
+MARIMOHUB_STORAGE_BACKEND=s3
+MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub
+
+MARIMOHUB_COMPUTE_BACKEND=modal
+MARIMOHUB_COMPUTE_IMAGE=_replace_me_  # e.g. ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_
+MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_
+
+MARIMOHUB_AUTH_BACKEND=oidc
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
+```
+
+Change the selector values and follow [Storage](./storage.md),
+[Compute](./compute.md), and [Auth](./auth.md) for other backends. The generated
+[Configuration](./configuration.md) reference is authoritative for variable
+names, defaults, and requirements.
 
 The full generated reference is [Configuration](./configuration.md).
 
