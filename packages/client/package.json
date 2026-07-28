@@ -20,7 +20,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"ofetch": "catalog:"
+		"openapi-fetch": "catalog:"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",

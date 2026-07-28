@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch, ApiRequestError } from './index';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { apiClient, apiData, ApiRequestError } from './index';
+import type { components } from './schema';
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
@@ -8,7 +9,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 	});
 }
 
-function stubFetch(impl: () => Promise<Response>) {
+function stubFetch(impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
 	const fn = vi.fn(impl);
 	vi.stubGlobal('fetch', fn);
 	return fn;
@@ -28,25 +29,28 @@ describe('ApiRequestError', () => {
 	});
 });
 
-describe('apiFetch', () => {
+describe('apiData', () => {
 	it('unwraps the { success, data } envelope on success', async () => {
 		stubFetch(async () => jsonResponse({ success: true, data: { id: 'proj-1', name: 'X' } }));
 
-		const data = await apiFetch<{ id: string; name: string }>('/api/projects/proj-1');
+		const data = await apiData(apiClient.GET('/api/v1/me'));
 		expect(data).toEqual({ id: 'proj-1', name: 'X' });
 	});
 
-	it('forwards the input URL and request init through to fetch', async () => {
+	it('serializes the typed path, method, and body', async () => {
 		const fn = stubFetch(async () => jsonResponse({ success: true, data: null }));
 
-		await apiFetch('/api/projects', { method: 'POST', body: '{}' });
-
-		// ofetch normalizes options (Headers instance, added accept/content-type,
-		// abort signal), so assert the URL + the parts we set, not verbatim equality.
-		expect(fn).toHaveBeenCalledWith(
-			'/api/projects',
-			expect.objectContaining({ method: 'POST', body: '{}' }),
+		await apiData(
+			apiClient.POST('/api/v1/projects', {
+				body: { name: 'Example', description: 'Typed request' },
+			}),
 		);
+
+		const [input, init] = fn.mock.calls[0] ?? [];
+		expect(input).toBe('/api/v1/projects');
+		expect(init?.method).toBe('POST');
+		expect(new Headers(init?.headers).get('content-type')).toBe('application/json');
+		expect(init?.body).toBe(JSON.stringify({ name: 'Example', description: 'Typed request' }));
 	});
 
 	it('throws ApiRequestError with the server code/message on { success: false }', async () => {
@@ -54,7 +58,7 @@ describe('apiFetch', () => {
 			jsonResponse({ success: false, error: { code: 'FORBIDDEN', message: 'nope' } }, 403),
 		);
 
-		await expect(apiFetch('/api/projects')).rejects.toMatchObject({
+		await expect(apiData(apiClient.GET('/api/v1/me'))).rejects.toMatchObject({
 			name: 'ApiRequestError',
 			code: 'FORBIDDEN',
 			message: 'nope',
@@ -64,7 +68,7 @@ describe('apiFetch', () => {
 	it('falls back to UNKNOWN / "Request failed" when the error envelope is bare', async () => {
 		stubFetch(async () => jsonResponse({ success: false }, 500));
 
-		await expect(apiFetch('/api/projects')).rejects.toMatchObject({
+		await expect(apiData(apiClient.GET('/api/v1/me'))).rejects.toMatchObject({
 			code: 'UNKNOWN',
 			message: 'Request failed',
 		});
@@ -79,7 +83,9 @@ describe('apiFetch', () => {
 				}),
 		);
 
-		const err = (await apiFetch('/api/projects').catch((e) => e)) as ApiRequestError;
+		const err = (await apiData(apiClient.GET('/api/v1/me')).catch(
+			(e: unknown) => e,
+		)) as ApiRequestError;
 		expect(err).toBeInstanceOf(ApiRequestError);
 		expect(err.code).toBe('PARSE_ERROR');
 		expect(err.message).toContain('502');
@@ -89,23 +95,22 @@ describe('apiFetch', () => {
 		stubFetch(async () => {
 			throw new Error('Failed to fetch');
 		});
-		await expect(apiFetch('/api/projects')).rejects.toMatchObject({
+		await expect(apiData(apiClient.GET('/api/v1/me'))).rejects.toMatchObject({
 			name: 'ApiRequestError',
 			code: 'NETWORK_ERROR',
 		});
 	});
 
-	it('throws NETWORK_ERROR on a timeout (retry:0, aborts the request)', async () => {
-		// Never resolves on its own; rejects only when ofetch aborts on the timeout.
+	it('throws NETWORK_ERROR when the request times out', async () => {
 		stubFetch(
-			(_input?: unknown, init?: RequestInit) =>
+			(_input, init) =>
 				new Promise<Response>((_resolve, reject) => {
 					init?.signal?.addEventListener('abort', () =>
 						reject(new DOMException('The operation was aborted', 'AbortError')),
 					);
 				}),
 		);
-		await expect(apiFetch('/api/projects', { timeout: 5 })).rejects.toMatchObject({
+		await expect(apiData(apiClient.GET('/api/v1/me', { timeout: 5 }))).rejects.toMatchObject({
 			code: 'NETWORK_ERROR',
 		});
 	});
@@ -114,7 +119,9 @@ describe('apiFetch', () => {
 		'throws PARSE_ERROR for a valid-JSON body that is not an envelope object (%o)',
 		async (body) => {
 			stubFetch(async () => jsonResponse(body));
-			const err = (await apiFetch('/api/projects').catch((e) => e)) as ApiRequestError;
+			const err = (await apiData(apiClient.GET('/api/v1/me')).catch(
+				(e: unknown) => e,
+			)) as ApiRequestError;
 			expect(err).toBeInstanceOf(ApiRequestError);
 			expect(err.code).toBe('PARSE_ERROR');
 		},
@@ -124,11 +131,31 @@ describe('apiFetch', () => {
 		stubFetch(async () =>
 			jsonResponse({ success: false, error: { code: 'CONFLICT', message: 'stale' } }, 200),
 		);
-		await expect(apiFetch('/api/projects')).rejects.toMatchObject({ code: 'CONFLICT' });
+		await expect(apiData(apiClient.GET('/api/v1/me'))).rejects.toMatchObject({
+			code: 'CONFLICT',
+		});
 	});
 
 	it('returns undefined data when success is true but data is absent', async () => {
 		stubFetch(async () => jsonResponse({ success: true }));
-		expect(await apiFetch('/api/projects')).toBeUndefined();
+		expect(await apiData(apiClient.GET('/api/v1/me'))).toBeUndefined();
+	});
+
+	it('infers response data and rejects invalid paths and bodies', () => {
+		expectTypeOf(() => apiData(apiClient.GET('/api/v1/me'))).returns.toEqualTypeOf<
+			Promise<components['schemas']['Me']>
+		>();
+
+		expectTypeOf(
+			// @ts-expect-error The route is not present in the generated schema.
+			() => apiClient.GET('/api/v1/missing'),
+		).toBeFunction();
+
+		expectTypeOf(() =>
+			apiClient.POST('/api/v1/projects', {
+				// @ts-expect-error Project creation requires a description.
+				body: { name: 'Missing description' },
+			}),
+		).toBeFunction();
 	});
 });

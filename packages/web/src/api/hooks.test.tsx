@@ -20,17 +20,35 @@ import {
 const PID = 'proj-1';
 const NID = 'nb-1';
 
-type FetchHandler = (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type FetchHandler = (url: RequestInfo | URL, init?: RequestInit | Request) => Promise<Response>;
+
+function requestUrl(input: RequestInfo | URL): string {
+	if (input instanceof Request) {
+		const url = new URL(input.url);
+		return `${url.pathname}${url.search}`;
+	}
+	return String(input);
+}
 
 /** Stub the network with a URL/method router; anything unrouted is a test bug. */
 function stubFetch(handler: FetchHandler) {
-	const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => handler(url, init));
+	const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) =>
+		handler(requestUrl(url), url instanceof Request ? url : init),
+	);
 	vi.stubGlobal('fetch', fetchMock);
 	return fetchMock;
 }
 
 const urlsOf = (fetchMock: ReturnType<typeof stubFetch>) =>
-	fetchMock.mock.calls.map(([url]) => String(url));
+	fetchMock.mock.calls.map(([url]) => requestUrl(url));
+
+function requestOf(fetchMock: ReturnType<typeof stubFetch>, index = 0): Request {
+	const [input, init] = fetchMock.mock.calls[index] ?? [];
+	if (input === undefined) throw new Error('expected a request');
+	return input instanceof Request
+		? input
+		: new Request(new URL(String(input), 'http://test.local'), init);
+}
 
 /** The query keys passed to `invalidateQueries`, in call order. */
 function invalidatedKeys(spy: { mock: { calls: unknown[][] } }): unknown[] {
@@ -253,10 +271,10 @@ describe('useStartSession', () => {
 			await result.current.mutateAsync();
 		});
 
-		const [url, init] = fetchMock.mock.calls[0];
-		expect(String(url)).toBe(sessionsPath);
-		expect(init?.method).toBe('POST');
-		expect(init?.body ?? undefined).toBeUndefined();
+		const request = requestOf(fetchMock);
+		expect(requestUrl(request)).toBe(sessionsPath);
+		expect(request.method).toBe('POST');
+		expect(await request.clone().text()).toBe('');
 	});
 
 	it('creates an app session with a JSON mode body', async () => {
@@ -269,11 +287,11 @@ describe('useStartSession', () => {
 			await result.current.mutateAsync();
 		});
 
-		const [url, init] = fetchMock.mock.calls[0];
-		expect(String(url)).toBe(sessionsPath);
-		expect(init?.method).toBe('POST');
-		expect(String(init?.body)).toBe('{"mode":"app"}');
-		expect(new Headers(init?.headers).get('content-type')).toBe('application/json');
+		const request = requestOf(fetchMock);
+		expect(requestUrl(request)).toBe(sessionsPath);
+		expect(request.method).toBe('POST');
+		expect(await request.clone().text()).toBe('{"mode":"app"}');
+		expect(request.headers.get('content-type')).toBe('application/json');
 	});
 });
 
@@ -303,10 +321,9 @@ describe('useRestartApp', () => {
 			await result.current.mutateAsync('sess-1');
 		});
 
-		const methods = fetchMock.mock.calls.map(([url, init]) => `${init?.method} ${String(url)}`);
+		const methods = fetchMock.mock.calls.map(([url, init]) => `${init?.method} ${requestUrl(url)}`);
 		expect(methods).toEqual([`DELETE ${sessionsPath}/sess-1`, `POST ${sessionsPath}`]);
-		const [, startInit] = fetchMock.mock.calls[1];
-		expect(String(startInit?.body)).toBe('{"mode":"app"}');
+		expect(await requestOf(fetchMock, 1).clone().text()).toBe('{"mode":"app"}');
 		expect(invalidatedKeys(spy)).toEqual([sessionKeys.listByProject(PID)]);
 	});
 
@@ -367,11 +384,11 @@ describe('list + detail invalidation', () => {
 			await result.current.mutateAsync({ projectId: PID, name: 'Renamed' });
 		});
 
-		const [url, init] = fetchMock.mock.calls[0];
-		expect(String(url)).toBe(`/api/v1/projects/${PID}`);
-		expect(init?.method).toBe('PATCH');
+		const request = requestOf(fetchMock);
+		expect(requestUrl(request)).toBe(`/api/v1/projects/${PID}`);
+		expect(request.method).toBe('PATCH');
 		// `projectId` addresses the resource; it must not be sent as a patch field.
-		expect(String(init?.body)).toBe('{"name":"Renamed"}');
+		expect(await request.clone().text()).toBe('{"name":"Renamed"}');
 		expect(invalidatedKeys(spy)).toEqual([projectKeys.list(), projectKeys.detail(PID)]);
 	});
 });

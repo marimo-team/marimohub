@@ -17,6 +17,8 @@ import type {
 	GitNotebookCreateResult as ClientGitNotebookCreateResult,
 	SyncToken as ClientSyncToken,
 	Session as ClientSession,
+	DeploymentInfo as ClientDeploymentInfo,
+	User as ClientUser,
 	SecretEntry as ClientSecretEntry,
 	ResolvedUser as ClientResolvedUser,
 	ApiToken as ClientApiToken,
@@ -58,43 +60,5 @@ export type ApiToken = ClientApiToken;
 export type ApiTokenCreated = ClientApiTokenCreated;
 export type ApiResponse<T> = ClientApiResponse<T>;
 export type ApiError = ClientApiError;
-
-// Web-local: the `GET .../versions/{vid}` payload. Inlined in the OpenAPI doc
-// (no named component), so declared here like `User`/`ServerVersion` below.
-export interface NotebookVersionDetail {
-	version: NotebookVersion;
-	code: string;
-}
-
-// Web-local: the `/api/v1/me` payload. The OpenAPI doc inlines this response (no
-// named `User` component), so the generated client exposes no equivalent type.
-// Kept here as the single web-side declaration of the authenticated-user shape.
-export interface User {
-	id: string;
-	email: string;
-	logout_url?: string | null;
-}
-
-// Web-local: the `/api/v1/version` payload. Inlined in the OpenAPI doc (no named
-// component), so — like `User` above — it's declared here rather than imported
-// from the generated client.
-export interface ServerVersion {
-	/** Deployment version (short git SHA / release tag), or `dev` when unset. */
-	version: string;
-	/** Server Docker image reference (`repo:tag`), or null when not baked in. */
-	image: string | null;
-	/** Sandbox/kernel image the deployment runs, or null when unset. */
-	sandbox_image: string | null;
-	/** ISO timestamp this replica/process started, or null when unset. */
-	started_at: string | null;
-	/** Replica identity (pod/host name), or null when unset. */
-	replica: string | null;
-	/** Node.js runtime version, or null when unknown. */
-	node: string | null;
-	/** Resolved adapter selectors, for at-a-glance ops/debugging. */
-	backends: {
-		storage: string;
-		compute: string;
-		auth: string;
-	};
-}
+export type User = ClientUser;
+export type ServerVersion = ClientDeploymentInfo;

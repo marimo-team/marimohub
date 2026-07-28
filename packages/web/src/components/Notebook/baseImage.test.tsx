@@ -37,6 +37,7 @@ describe('useSandboxImages', () => {
 		const { result } = renderHookWithClient(() => useSandboxImages(), { toaster: false });
 
 		expect(result.current).toEqual([]);
+		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 		expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/capabilities');
 
 		resolveCapabilities(jsonOk({ sandbox_images: ['img-a', 'img-b'] }));

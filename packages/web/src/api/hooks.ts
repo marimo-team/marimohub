@@ -1,42 +1,10 @@
 import { useQuery, useSuspenseQuery, useMutation, keepPreviousData } from '@tanstack/react-query';
-import { apiFetch } from './client';
+import { apiClient, apiData } from './client';
 import { useApiMutation } from './mutation';
-import {
-	del,
-	fetchItems,
-	isApiErrorCode,
-	isNotFoundError,
-	notebookPath,
-	patchJson,
-	post,
-	postJson,
-	projectPath,
-	putJson,
-} from './request';
+import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
 import { sanitizeFilename, triggerDownload } from '../lib/download';
 import { userKeys, projectKeys, notebookKeys, sessionKeys, systemKeys } from './queryKeys';
-import type {
-	User,
-	ResolvedUser,
-	ProjectSummary,
-	ProjectDetail,
-	ProjectFederation,
-	ProjectMember,
-	ProjectRole,
-	Capabilities,
-	NotebookEntry,
-	NotebookMeta,
-	NotebookDetail,
-	NotebookVersion,
-	NotebookVersionDetail,
-	GitNotebookCreateResult,
-	SyncToken,
-	ServerVersion,
-	Session,
-	SecretEntry,
-	ApiToken,
-	ApiTokenCreated,
-} from '../types';
+import type { ResolvedUser, ProjectFederation, ProjectRole } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
 const SESSIONS_POLL_INTERVAL_MS = 5_000;
@@ -52,7 +20,7 @@ const IMMUTABLE_QUERY = { staleTime: Number.POSITIVE_INFINITY, retry: false } as
 export function useUserQuery() {
 	return useQuery({
 		queryKey: userKeys.me(),
-		queryFn: () => apiFetch<User>('/api/v1/me'),
+		queryFn: () => apiData(apiClient.GET('/api/v1/me')),
 		...IMMUTABLE_QUERY,
 	});
 }
@@ -63,7 +31,7 @@ export function useUserQuery() {
 export function useApiTokensQuery(enabled = true) {
 	return useQuery({
 		queryKey: userKeys.tokens(),
-		queryFn: () => apiFetch<ApiToken[]>('/api/v1/me/tokens'),
+		queryFn: () => apiData(apiClient.GET('/api/v1/me/tokens')),
 		enabled,
 	});
 }
@@ -72,14 +40,19 @@ export function useApiTokensQuery(enabled = true) {
 export function useCreateApiToken() {
 	return useApiMutation(
 		(body: { name: string; expires_in_days?: number }) =>
-			postJson<ApiTokenCreated>('/api/v1/me/tokens', body),
+			apiData(apiClient.POST('/api/v1/me/tokens', { body })),
 		() => [userKeys.tokens()],
 	);
 }
 
 export function useRevokeApiToken() {
 	return useApiMutation(
-		(tokenId: string) => del(`/api/v1/me/tokens/${tokenId}`),
+		(tokenId: string) =>
+			apiData(
+				apiClient.DELETE('/api/v1/me/tokens/{tokenId}', {
+					params: { path: { tokenId } },
+				}),
+			),
 		() => [userKeys.tokens()],
 	);
 }
@@ -90,7 +63,7 @@ export function useRevokeApiToken() {
 export function useVersionQuery() {
 	return useQuery({
 		queryKey: systemKeys.version(),
-		queryFn: () => apiFetch<ServerVersion>('/api/v1/version'),
+		queryFn: () => apiData(apiClient.GET('/api/v1/version')),
 		...IMMUTABLE_QUERY,
 	});
 }
@@ -99,7 +72,7 @@ export function useVersionQuery() {
 export function useCapabilitiesQuery() {
 	return useQuery({
 		queryKey: systemKeys.capabilities(),
-		queryFn: () => apiFetch<Capabilities>('/api/v1/capabilities'),
+		queryFn: () => apiData(apiClient.GET('/api/v1/capabilities')),
 		...IMMUTABLE_QUERY,
 	});
 }
@@ -119,7 +92,11 @@ export function useUsersQuery(ids: readonly (string | undefined)[]) {
 	return useQuery({
 		queryKey: userKeys.resolve(unique),
 		queryFn: () =>
-			apiFetch<UserDirectory>(`/api/v1/users?ids=${encodeURIComponent(unique.join(','))}`),
+			apiData(
+				apiClient.GET('/api/v1/users', {
+					params: { query: { ids: unique.join(',') } },
+				}),
+			),
 		enabled: unique.length > 0,
 		staleTime: 5 * 60 * 1000,
 	});
@@ -134,7 +111,7 @@ export function useUserSearchQuery(query: string) {
 	const q = query.trim();
 	return useQuery({
 		queryKey: userKeys.search(q),
-		queryFn: () => apiFetch<ResolvedUser[]>(`/api/v1/users/search?q=${encodeURIComponent(q)}`),
+		queryFn: () => apiData(apiClient.GET('/api/v1/users/search', { params: { query: { q } } })),
 		enabled: q.length >= 2,
 		staleTime: 30 * 1000,
 		placeholderData: keepPreviousData,
@@ -145,7 +122,7 @@ export function useUserSearchQuery(query: string) {
 export function useProjectsQuery() {
 	return useSuspenseQuery({
 		queryKey: projectKeys.list(),
-		queryFn: () => fetchItems<ProjectSummary>('/api/v1/projects'),
+		queryFn: async () => (await apiData(apiClient.GET('/api/v1/projects'))).items,
 	});
 }
 
@@ -153,14 +130,19 @@ export function useProjectQuery(projectId: string) {
 	return useSuspenseQuery({
 		queryKey: projectKeys.detail(projectId),
 		// Full project meta (incl. `federation`), not the snapshot summary the list returns.
-		queryFn: () => apiFetch<ProjectDetail>(projectPath(projectId)),
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}', {
+					params: { path: { pid: projectId } },
+				}),
+			),
 	});
 }
 
 export function useCreateProject() {
 	return useApiMutation(
 		(body: { name: string; description: string }) =>
-			postJson<ProjectSummary>('/api/v1/projects', body),
+			apiData(apiClient.POST('/api/v1/projects', { body })),
 		() => [projectKeys.list()],
 	);
 }
@@ -177,14 +159,25 @@ export function useUpdateProject() {
 			description?: string;
 			tags?: string[];
 			federation?: ProjectFederation;
-		}) => patchJson<ProjectDetail>(projectPath(projectId), body),
+		}) =>
+			apiData(
+				apiClient.PATCH('/api/v1/projects/{pid}', {
+					params: { path: { pid: projectId } },
+					body,
+				}),
+			),
 		({ projectId }) => [projectKeys.list(), projectKeys.detail(projectId)],
 	);
 }
 
 export function useDeleteProject() {
 	return useApiMutation(
-		(projectId: string) => del(projectPath(projectId)),
+		(projectId: string) =>
+			apiData(
+				apiClient.DELETE('/api/v1/projects/{pid}', {
+					params: { path: { pid: projectId } },
+				}),
+			),
 		() => [projectKeys.list()],
 	);
 }
@@ -193,7 +186,12 @@ export function useDeleteProject() {
 export function useProjectMembersQuery(projectId: string) {
 	return useQuery({
 		queryKey: projectKeys.members(projectId),
-		queryFn: () => apiFetch<ProjectMember[]>(`${projectPath(projectId)}/members`),
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/members', {
+					params: { path: { pid: projectId } },
+				}),
+			),
 	});
 }
 
@@ -207,26 +205,37 @@ export function useAddMember(projectId: string) {
 	return useApiMutation(
 		// Exactly one of user_id / email, enforced server-side (422).
 		(body: { user_id?: string; email?: string; role: ProjectRole }) =>
-			postJson<ProjectDetail>(`${projectPath(projectId)}/members`, body),
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/members', {
+					params: { path: { pid: projectId } },
+					body,
+				}),
+			),
 		() => memberKeys(projectId),
 	);
 }
 
-// `uid` is the member's user id or invite email; emails need URL-encoding.
-const memberPath = (projectId: string, uid: string) =>
-	`${projectPath(projectId)}/members/${encodeURIComponent(uid)}`;
-
 export function useUpdateMemberRole(projectId: string) {
 	return useApiMutation(
 		({ uid, role }: { uid: string; role: ProjectRole }) =>
-			putJson<ProjectDetail>(memberPath(projectId, uid), { role }),
+			apiData(
+				apiClient.PUT('/api/v1/projects/{pid}/members/{uid}', {
+					params: { path: { pid: projectId, uid } },
+					body: { role },
+				}),
+			),
 		() => memberKeys(projectId),
 	);
 }
 
 export function useRemoveMember(projectId: string) {
 	return useApiMutation(
-		(uid: string) => del(memberPath(projectId, uid)),
+		(uid: string) =>
+			apiData(
+				apiClient.DELETE('/api/v1/projects/{pid}/members/{uid}', {
+					params: { path: { pid: projectId, uid } },
+				}),
+			),
 		() => memberKeys(projectId),
 	);
 }
@@ -235,8 +244,6 @@ export function useRemoveMember(projectId: string) {
 export function isSecretsDisabledError(err: unknown): boolean {
 	return isApiErrorCode(err, 'NOT_FOUND');
 }
-
-const secretsPath = (projectId: string) => `${projectPath(projectId)}/secrets`;
 
 /**
  * List a project's secret entries (metadata only — never a value). Resolves to
@@ -250,7 +257,11 @@ export function useProjectSecretsQuery(projectId: string, enabled = true) {
 		retry: (count, err) => !isSecretsDisabledError(err) && count < 2,
 		queryFn: async () => {
 			try {
-				return await apiFetch<SecretEntry[]>(secretsPath(projectId));
+				return await apiData(
+					apiClient.GET('/api/v1/projects/{pid}/secrets', {
+						params: { path: { pid: projectId } },
+					}),
+				);
 			} catch (err) {
 				if (isSecretsDisabledError(err)) return null;
 				throw err;
@@ -281,9 +292,11 @@ function referenceBody({ backend, locator, expand, prefix }: ReferenceInput) {
 export function usePutSecret(projectId: string) {
 	return useApiMutation(
 		(input: ReferenceInput) =>
-			putJson<SecretEntry>(
-				`${secretsPath(projectId)}/${encodeURIComponent(input.name)}`,
-				referenceBody(input),
+			apiData(
+				apiClient.PUT('/api/v1/projects/{pid}/secrets/{name}', {
+					params: { path: { pid: projectId, name: input.name } },
+					body: referenceBody(input),
+				}),
 			),
 		() => [projectKeys.secrets(projectId)],
 	);
@@ -292,27 +305,40 @@ export function usePutSecret(projectId: string) {
 export function useValidateSecret(projectId: string) {
 	return useMutation({
 		mutationFn: (input: ReferenceInput) =>
-			postJson<{ ok: boolean; reason?: string }>(
-				`${secretsPath(projectId)}/validate`,
-				referenceBody(input),
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/secrets/validate', {
+					params: { path: { pid: projectId } },
+					body: referenceBody(input),
+				}),
 			),
 	});
 }
 
 export function useDeleteSecret(projectId: string) {
 	return useApiMutation(
-		(name: string) => del(`${secretsPath(projectId)}/${encodeURIComponent(name)}`),
+		(name: string) =>
+			apiData(
+				apiClient.DELETE('/api/v1/projects/{pid}/secrets/{name}', {
+					params: { path: { pid: projectId, name } },
+				}),
+			),
 		() => [projectKeys.secrets(projectId)],
 	);
 }
 
 // Notebooks
-const notebooksPath = (projectId: string) => `${projectPath(projectId)}/notebooks`;
 
 export function useNotebooksQuery(projectId: string) {
 	return useSuspenseQuery({
 		queryKey: notebookKeys.list(projectId),
-		queryFn: () => fetchItems<NotebookEntry>(notebooksPath(projectId)),
+		queryFn: async () =>
+			(
+				await apiData(
+					apiClient.GET('/api/v1/projects/{pid}/notebooks', {
+						params: { path: { pid: projectId } },
+					}),
+				)
+			).items,
 	});
 }
 
@@ -333,7 +359,12 @@ export function useNotebookQuery(
 ) {
 	return useQuery({
 		queryKey: notebookKeys.detail(projectId, notebookId),
-		queryFn: () => apiFetch<NotebookDetail>(notebookPath(projectId, notebookId)),
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}', {
+					params: { path: { pid: projectId, nid: notebookId } },
+				}),
+			),
 		staleTime: options.staleTime ?? 5 * 60 * 1000,
 		refetchInterval: options.refetchIntervalMs,
 	});
@@ -342,7 +373,12 @@ export function useNotebookQuery(
 export function useCreateNotebook(projectId: string) {
 	return useApiMutation(
 		(body: { title: string; description: string; code: string; base_image?: string }) =>
-			postJson<NotebookMeta>(notebooksPath(projectId), body),
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks', {
+					params: { path: { pid: projectId } },
+					body,
+				}),
+			),
 		() => [notebookKeys.list(projectId)],
 	);
 }
@@ -355,9 +391,11 @@ export function useCreateNotebook(projectId: string) {
 export function useDuplicateNotebook(projectId: string) {
 	return useApiMutation(
 		({ notebookId, title }: { notebookId: string; title?: string }) =>
-			postJson<NotebookMeta>(
-				`${notebookPath(projectId, notebookId)}/duplicate`,
-				title ? { title } : {},
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/duplicate', {
+					params: { path: { pid: projectId, nid: notebookId } },
+					body: title ? { title } : {},
+				}),
 			),
 		() => [notebookKeys.list(projectId)],
 	);
@@ -373,7 +411,13 @@ export function useCreateSyncedNotebook(projectId: string) {
 			branch: string;
 			root_path?: string;
 			entry_notebook: string;
-		}) => postJson<GitNotebookCreateResult>(`${notebooksPath(projectId)}/git`, body),
+		}) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/git', {
+					params: { path: { pid: projectId } },
+					body,
+				}),
+			),
 		() => [notebookKeys.list(projectId)],
 	);
 }
@@ -382,21 +426,35 @@ export function useCreateSyncedNotebook(projectId: string) {
 export function useRotateSyncToken(projectId: string) {
 	return useMutation({
 		mutationFn: (notebookId: string) =>
-			post<SyncToken>(`${notebookPath(projectId, notebookId)}/sync-token/rotate`),
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate', {
+					params: { path: { pid: projectId, nid: notebookId } },
+				}),
+			),
 	});
 }
 
 export function useUpdateNotebook(projectId: string) {
 	return useApiMutation(
 		({ notebookId, ...body }: { notebookId: string; title?: string; base_image?: string | null }) =>
-			patchJson<NotebookMeta>(notebookPath(projectId, notebookId), body),
+			apiData(
+				apiClient.PATCH('/api/v1/projects/{pid}/notebooks/{nid}', {
+					params: { path: { pid: projectId, nid: notebookId } },
+					body,
+				}),
+			),
 		({ notebookId }) => [notebookKeys.list(projectId), notebookKeys.detail(projectId, notebookId)],
 	);
 }
 
 export function useDeleteNotebook(projectId: string) {
 	return useApiMutation(
-		(notebookId: string) => del(notebookPath(projectId, notebookId)),
+		(notebookId: string) =>
+			apiData(
+				apiClient.DELETE('/api/v1/projects/{pid}/notebooks/{nid}', {
+					params: { path: { pid: projectId, nid: notebookId } },
+				}),
+			),
 		() => [notebookKeys.list(projectId)],
 	);
 }
@@ -405,19 +463,17 @@ export function useDeleteNotebook(projectId: string) {
 export function useDownloadNotebookFile(projectId: string) {
 	return useMutation({
 		mutationFn: async ({ notebookId, title }: { notebookId: string; title: string }) => {
-			const { code } = await apiFetch<{ code: string }>(
-				`${notebookPath(projectId, notebookId)}/content`,
+			const { code } = await apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/content', {
+					params: { path: { pid: projectId, nid: notebookId } },
+				}),
 			);
 			triggerDownload(`${sanitizeFilename(title)}.py`, new Blob([code], { type: 'text/x-python' }));
 		},
 	});
 }
 
-/**
- * Download the notebook's workspace as a zip. The endpoint returns binary (not
- * the JSON envelope), so this bypasses the typed `apiFetch` and uses a plain
- * same-origin `fetch` — the session cookie rides along automatically.
- */
+/** The workspace archive is binary, so it bypasses the JSON client. */
 export function useDownloadWorkspace(projectId: string) {
 	return useMutation({
 		mutationFn: async ({ notebookId, title }: { notebookId: string; title: string }) => {
@@ -431,8 +487,6 @@ export function useDownloadWorkspace(projectId: string) {
 }
 
 // Notebook versions
-const versionsPath = (projectId: string, notebookId: string) =>
-	`${notebookPath(projectId, notebookId)}/versions`;
 
 /**
  * A notebook's saved versions, newest first (the API's order). Single page
@@ -441,7 +495,14 @@ const versionsPath = (projectId: string, notebookId: string) =>
 export function useNotebookVersionsQuery(projectId: string, notebookId: string) {
 	return useQuery({
 		queryKey: notebookKeys.versions(projectId, notebookId),
-		queryFn: () => fetchItems<NotebookVersion>(versionsPath(projectId, notebookId)),
+		queryFn: async () =>
+			(
+				await apiData(
+					apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/versions', {
+						params: { path: { pid: projectId, nid: notebookId } },
+					}),
+				)
+			).items,
 	});
 }
 
@@ -454,7 +515,13 @@ export function useNotebookVersionQuery(
 	return useQuery({
 		queryKey: notebookKeys.version(projectId, notebookId, versionId ?? ''),
 		queryFn: () =>
-			apiFetch<NotebookVersionDetail>(`${versionsPath(projectId, notebookId)}/${versionId}`),
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}', {
+					params: {
+						path: { pid: projectId, nid: notebookId, vid: versionId ?? '' },
+					},
+				}),
+			),
 		enabled: !!versionId,
 		staleTime: Number.POSITIVE_INFINITY,
 	});
@@ -467,12 +534,7 @@ export interface NotebookHtmlSnapshot {
 	capturedAt: string | null;
 }
 
-/**
- * Fetch the notebook's latest HTML snapshot for the viewer static mode. Raw
- * fetch, not `apiFetch`: the route serves `text/html`, not the JSON envelope.
- * A 404 (code `NO_HTML_SNAPSHOT`) resolves to null — the "no outputs yet"
- * empty state, not an error.
- */
+/** Fetch the latest HTML snapshot; `NO_HTML_SNAPSHOT` is an empty state. */
 export function useNotebookHtmlQuery(projectId: string, notebookId: string) {
 	return useQuery({
 		queryKey: notebookKeys.html(projectId, notebookId),
@@ -505,7 +567,13 @@ export function useNotebookHtmlQuery(projectId: string, notebookId: string) {
 export function useRestoreVersion(projectId: string, notebookId: string) {
 	return useApiMutation(
 		(versionId: string) =>
-			post<NotebookMeta>(`${versionsPath(projectId, notebookId)}/${versionId}/restore`),
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}/restore', {
+					params: {
+						path: { pid: projectId, nid: notebookId, vid: versionId },
+					},
+				}),
+			),
 		() => [
 			notebookKeys.versions(projectId, notebookId),
 			notebookKeys.detail(projectId, notebookId),
@@ -525,15 +593,18 @@ export function useRestoreVersion(projectId: string, notebookId: string) {
 export function useProjectSessionsQuery(projectId: string, enabled = true) {
 	return useQuery({
 		queryKey: sessionKeys.listByProject(projectId),
-		queryFn: () => fetchItems<Session>(`${projectPath(projectId)}/sessions`),
+		queryFn: async () =>
+			(
+				await apiData(
+					apiClient.GET('/api/v1/projects/{pid}/sessions', {
+						params: { path: { pid: projectId } },
+					}),
+				)
+			).items,
 		refetchInterval: SESSIONS_POLL_INTERVAL_MS,
 		enabled,
 	});
 }
-
-/** Base URL of a notebook's session collection (also exported for the session hook). */
-export const notebookSessionsPath = (projectId: string, notebookId: string) =>
-	`${notebookPath(projectId, notebookId)}/sessions`;
 
 /**
  * Provisioning a cold sandbox can take a while (the kernel may build its uv venv
@@ -549,17 +620,30 @@ const SESSION_LIFECYCLE_TIMEOUT_MS = 150_000; // 2.5 minutes
  * the server attaches ANY editor to the notebook's running app.
  */
 function startSessionRequest(projectId: string, notebookId: string, mode: 'edit' | 'app') {
-	const path = notebookSessionsPath(projectId, notebookId);
-	const init = { timeout: SESSION_LIFECYCLE_TIMEOUT_MS };
-	return mode === 'app' ? postJson<Session>(path, { mode }, init) : post<Session>(path, init);
+	const params = { path: { pid: projectId, nid: notebookId } };
+	return apiData(
+		mode === 'app'
+			? apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
+					params,
+					body: { mode },
+					timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
+				})
+			: apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
+					params,
+					timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
+				}),
+	);
 }
 
 // An abort surfaces as a failed stop, which halts a restart half-done (app
 // stopped, never restarted) while the server tears down anyway.
 function stopSessionRequest(projectId: string, notebookId: string, sessionId: string) {
-	return del<void>(`${notebookSessionsPath(projectId, notebookId)}/${sessionId}`, {
-		timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
-	});
+	return apiData(
+		apiClient.DELETE('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}', {
+			params: { path: { pid: projectId, nid: notebookId, sid: sessionId } },
+			timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
+		}),
+	);
 }
 
 export function useStartSession(

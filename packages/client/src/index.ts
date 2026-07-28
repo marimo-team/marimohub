@@ -1,16 +1,11 @@
 /**
- * @marimo-hub/client — the typed API client.
- *
- * `schema.ts` is generated from the API's OpenAPI 3.1 document
- * (`pnpm --filter @marimo-hub/client generate`, sourced from
- * `packages/api/openapi.yaml`, which `@marimo-hub/api`'s
- * `generateOpenApiDocument()` produces and the API's openapi.spec test keeps in
- * sync). This package replaces the hand-maintained `src/types/index.ts` the SPA
- * used to carry.
+ * Typed requests backed by the generated OpenAPI schema.
+ * Regenerate it with `pnpm --filter @marimo-hub/client generate`.
  */
-import { ofetch } from 'ofetch';
+import createClient from 'openapi-fetch';
+import type { ClientOptions, Middleware } from 'openapi-fetch';
 export type { paths, components, operations } from './schema';
-import type { components } from './schema';
+import type { components, paths } from './schema';
 
 /** Convenience aliases for the domain response schemas. */
 export type Project = components['schemas']['Project'];
@@ -33,6 +28,7 @@ export type SecretInput = components['schemas']['SecretInput'];
 export type NotebookVersion = components['schemas']['NotebookVersion'];
 /** Read-only deployment metadata from `GET /api/v1/version`. */
 export type DeploymentInfo = components['schemas']['DeploymentInfo'];
+export type User = components['schemas']['Me'];
 /** A resolved user identity ({ id, email, name }) from `GET /api/v1/users`. */
 export type ResolvedUser = components['schemas']['User'];
 /** A personal access token's metadata (never the secret). */
@@ -61,63 +57,110 @@ export class ApiRequestError extends Error {
 	}
 }
 
-/**
- * `ofetch` client for the SPA's `/api/*` calls. A timeout keeps a hung request
- * from stalling the UI; react-query owns query retry/backoff above this layer, so
- * we don't retry here (and so never replay a mutation). The API answers errors as
- * `{ success: false, error }` with a non-2xx status, so `ignoreResponseError` lets
- * us read that envelope ourselves instead of letting ofetch throw, and
- * `responseType: 'json'` parses the body regardless of the content-type header.
- */
-const apiClient = ofetch.create({
-	timeout: 20_000,
-	retry: 0,
-	ignoreResponseError: true,
-	responseType: 'json',
-});
+const DEFAULT_TIMEOUT_MS = 20_000;
 
-/**
- * Fetch a `/api/*` endpoint and unwrap the `{ success, data }` envelope, throwing
- * an {@link ApiRequestError} on failure.
- */
-export async function apiFetch<T>(
-	input: RequestInfo | URL,
-	init?: RequestInit & { timeout?: number },
-): Promise<T> {
-	let response;
+type RequestWithTimeout = Request & { timeout?: unknown };
+
+const timeoutMiddleware: Middleware = {
+	onRequest({ request }) {
+		const requestedTimeout = (request as RequestWithTimeout).timeout;
+		const timeout =
+			typeof requestedTimeout === 'number' &&
+			Number.isFinite(requestedTimeout) &&
+			requestedTimeout > 0
+				? requestedTimeout
+				: DEFAULT_TIMEOUT_MS;
+		return new Request(request, {
+			signal: AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]),
+		});
+	},
+};
+
+const defaultBaseUrl =
+	typeof globalThis.location === 'object' ? globalThis.location.origin : 'http://localhost';
+
+async function dispatchRequest(request: Request): Promise<Response> {
+	const url = new URL(request.url);
+	const input =
+		url.origin === defaultBaseUrl ? `${url.pathname}${url.search}${url.hash}` : url.href;
+	return globalThis.fetch(input, {
+		body: request.body ? await request.clone().text() : undefined,
+		cache: request.cache,
+		credentials: request.credentials,
+		headers: request.headers,
+		integrity: request.integrity,
+		keepalive: request.keepalive,
+		method: request.method,
+		mode: request.mode,
+		redirect: request.redirect,
+		referrer: request.referrer,
+		referrerPolicy: request.referrerPolicy,
+		signal: request.signal,
+	});
+}
+
+export function createApiClient(options: ClientOptions = {}) {
+	const { baseUrl = defaultBaseUrl, fetch = dispatchRequest, ...rest } = options;
+	const client = createClient<paths>({ ...rest, baseUrl, fetch });
+	client.use(timeoutMiddleware);
+	return client;
+}
+
+export const apiClient = createApiClient();
+
+type FetchResult<T> =
+	| { data: T; error?: never; response: Response }
+	| { data?: never; error: unknown; response: Response };
+
+export type ApiData<T> = T extends { success: true; data: infer Data }
+	? Data
+	: T extends { success: true }
+		? void
+		: never;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function malformedResponse(status?: number): ApiRequestError {
+	const detail = status === undefined ? '' : `Server returned ${status} with a `;
+	return new ApiRequestError('PARSE_ERROR', `${detail}malformed response envelope`);
+}
+
+function unwrapEnvelope<T>(value: T, status: number): ApiData<T> {
+	if (!isRecord(value) || typeof value.success !== 'boolean') {
+		throw malformedResponse(status);
+	}
+
+	if (!value.success) {
+		const error = isRecord(value.error) ? value.error : undefined;
+		throw new ApiRequestError(
+			typeof error?.code === 'string' ? error.code : 'UNKNOWN',
+			typeof error?.message === 'string' ? error.message : 'Request failed',
+		);
+	}
+
+	return value.data as ApiData<T>;
+}
+
+/** Unwrap the API envelope and normalize API, transport, and parse failures. */
+export async function apiData<T>(request: Promise<FetchResult<T>>): Promise<ApiData<T>> {
+	let result: FetchResult<T>;
 	try {
-		// ofetch's request type is `RequestInfo` (string | Request); normalize a URL.
-		const request = input instanceof URL ? input.href : input;
-		response = await apiClient.raw<unknown>(request, init);
+		result = await request;
 	} catch (err) {
-		// No HTTP response at all (network failure or timeout).
+		if (err instanceof SyntaxError) {
+			throw malformedResponse();
+		}
 		throw new ApiRequestError(
 			'NETWORK_ERROR',
 			err instanceof Error ? err.message : 'Network request failed',
 		);
 	}
 
-	// `_data` is the destr-parsed body. Validate it's actually our `{ success, ... }`
-	// envelope before trusting it, rather than casting whatever came back.
-	const parsed = response._data;
-	if (
-		typeof parsed !== 'object' ||
-		parsed === null ||
-		typeof (parsed as ApiResponse<T>).success !== 'boolean'
-	) {
-		throw new ApiRequestError(
-			'PARSE_ERROR',
-			`Server returned ${response.status} with a malformed response envelope`,
-		);
-	}
-	const json = parsed as ApiResponse<T>;
-
-	if (!json.success) {
-		throw new ApiRequestError(
-			json.error?.code ?? 'UNKNOWN',
-			json.error?.message ?? 'Request failed',
-		);
+	if (result.error !== undefined) {
+		return unwrapEnvelope(result.error, result.response.status);
 	}
 
-	return json.data as T;
+	return unwrapEnvelope(result.data, result.response.status);
 }

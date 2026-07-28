@@ -29,6 +29,7 @@ catalog:
   lucide-react: ^1.17.0
   oauth4webapi: ^3.8.6
   ofetch: ^1.5.1
+  openapi-fetch: ^0.17.0
   sonner: ^2.0.7
   tailwind-merge: ^3.6.0
   tailwindcss: ^4.3.0

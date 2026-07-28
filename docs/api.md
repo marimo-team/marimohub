@@ -93,15 +93,18 @@ session-status poll loop cheap.
 ## Typed client
 
 [`@marimo-hub/client`](https://github.com/marimo-team/marimohub/tree/main/packages/client)
-is generated from the same OpenAPI document, so its types always match the live
-routes. It unwraps the envelope and throws a typed `ApiRequestError` on failure.
+uses the same generated OpenAPI document, so paths, parameters, bodies, and
+responses are checked against the live routes. `apiData` unwraps the envelope
+and throws an `ApiRequestError` on failure.
 
 ```ts
-import { apiFetch, type ResolvedUser } from '@marimo-hub/client';
+import { apiData, createApiClient } from '@marimo-hub/client';
 
-const user = await apiFetch<ResolvedUser>('https://hub.example.com/api/v1/me', {
+const api = createApiClient({
+	baseUrl: 'https://hub.example.com',
 	headers: { Authorization: `Bearer ${process.env.MARIMOHUB_TOKEN}` },
 });
+const user = await apiData(api.GET('/api/v1/me'));
 ```
 
 The exported types (`Project`, `NotebookMeta`, `NotebookDetail`, `Session`,
