@@ -3477,6 +3477,7 @@ export interface components {
 					| 'VALIDATION_ERROR'
 					| 'RESOURCE_EXHAUSTED'
 					| 'NOT_INITIALIZED'
+					| 'NO_HTML_SNAPSHOT'
 					| 'SERVICE_UNAVAILABLE'
 					| 'INTERNAL_ERROR';
 				message: string;

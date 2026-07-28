@@ -7,7 +7,7 @@ import type { User } from '@/types';
 import { jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { AuthProvider, useAuth } from './AuthContext';
 
-const ME: User = { id: 'usr-1', email: 'ada@example.com' };
+const ME: User = { id: 'usr-1', email: 'ada@example.com', logout_url: null };
 
 type AuthValue = ReturnType<typeof useAuth>;
 
@@ -77,6 +77,7 @@ describe('AuthProvider', () => {
 
 		expect(screen.getByTestId('pending')).toHaveTextContent('true');
 		expect(screen.getByTestId('user')).toHaveTextContent('anonymous');
+		await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 		expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/me');
 
 		await act(async () => {

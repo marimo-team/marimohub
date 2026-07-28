@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { apiFetch, ApiRequestError } from '@/api/client';
-import { notebookSessionsPath, useStartSession, useStopSession } from '@/api/hooks';
-import { fetchItems, isNotFoundError, projectPath } from '@/api/request';
+import { apiClient, apiData, ApiRequestError } from '@/api/client';
+import { useStartSession, useStopSession } from '@/api/hooks';
+import { isNotFoundError } from '@/api/request';
 import { useGeneration } from '@/hooks/useGeneration';
 import { useInterval } from '@/hooks/useInterval';
 import type { Session } from '@/types';
@@ -83,7 +83,6 @@ export function useNotebookSession(
 ): NotebookSession {
 	const startSession = useStartSession(projectId, notebookId, mode);
 	const stopSession = useStopSession(projectId, notebookId);
-	const sessionsPath = notebookSessionsPath(projectId, notebookId);
 
 	const [session, setSession] = useState<Session | null>(null);
 	const [error, setError] = useState<SessionError | null>(null);
@@ -209,7 +208,13 @@ export function useNotebookSession(
 	const pollSession = useCallback(
 		(sessionId: string, onNext: (next: Session) => void, onGone: () => void) => {
 			const gen = generation.current();
-			apiFetch<Session>(`${sessionsPath}/${sessionId}`)
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}', {
+					params: {
+						path: { pid: projectId, nid: notebookId, sid: sessionId },
+					},
+				}),
+			)
 				.then((next) => {
 					if (generation.isCurrent(gen)) onNext(next);
 				})
@@ -217,7 +222,7 @@ export function useNotebookSession(
 					if (generation.isCurrent(gen) && isNotFoundError(err)) onGone();
 				});
 		},
-		[sessionsPath, generation],
+		[projectId, notebookId, generation],
 	);
 
 	// A start that reuses an in-flight `starting` session (a concurrent refresh was
@@ -259,10 +264,14 @@ export function useNotebookSession(
 				commitSession(next ?? null);
 				if (!next) setEnded(fallback);
 			};
-			fetchItems<Session>(`${projectPath(projectId)}/sessions`)
-				.then((items) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/sessions', {
+					params: { path: { pid: projectId } },
+				}),
+			)
+				.then((page) =>
 					conclude(
-						items.find(
+						page.items.find(
 							(s) =>
 								s.notebook_id === notebookId &&
 								s.mode === 'app' &&
@@ -305,16 +314,21 @@ export function useNotebookSession(
 		mode === 'app' && session?.status === 'running' ? RUN_WATCH_INTERVAL_MS : null,
 	);
 
-	// Heartbeat while running so the server's TTL reaper keeps the kernel alive.
-	// Fire-and-forget: a missed heartbeat is non-fatal (the server reaps on TTL), so
-	// swallow errors. Routed through apiFetch for a request timeout so a hung ping
-	// can't pile up across intervals.
+	// Heartbeats are best-effort; the server's TTL handles missed requests.
 	useInterval(
 		() => {
 			if (session?.status !== 'running') return;
-			apiFetch(`${sessionsPath}/${session.session_id}/heartbeat`, { method: 'POST' }).catch(
-				() => {},
-			);
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat', {
+					params: {
+						path: {
+							pid: projectId,
+							nid: notebookId,
+							sid: session.session_id,
+						},
+					},
+				}),
+			).catch(() => {});
 		},
 		session?.status === 'running' ? HEARTBEAT_INTERVAL_MS : null,
 	);
