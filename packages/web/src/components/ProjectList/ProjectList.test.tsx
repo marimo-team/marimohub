@@ -59,6 +59,7 @@ describe('ProjectList', () => {
 		renderList([project('Sales'), project('Marketing')]);
 		await waitForLoaded();
 
+		expect(document.title).toBe('Projects · marimohub');
 		expect(screen.getByText('Sales')).toBeInTheDocument();
 		expect(screen.getByText('Marketing')).toBeInTheDocument();
 	});

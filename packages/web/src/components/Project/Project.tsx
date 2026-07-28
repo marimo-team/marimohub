@@ -422,6 +422,7 @@ export function Project() {
 
 	return (
 		<PageContainer>
+			<title>{`${project.name} · marimohub`}</title>
 			<PageHeader
 				actions={
 					<div className="flex items-center gap-1.5">
