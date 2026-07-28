@@ -84,6 +84,29 @@ The response returns the notebook plus its sync credentials:
 The `sync_token` is shown **once**. Store it as a CI secret. The server keeps
 only a SHA-256 of it.
 
+### View or edit sync settings
+
+In the project notebook menu, open **Sync settings** to view the repository,
+branch, repo folder, entry notebook, sync URL, and last successful sync. Project
+editors can change all four source coordinates:
+
+```http
+PATCH /api/v1/projects/{pid}/notebooks/{nid}/source
+Content-Type: application/json
+
+{
+  "repo": "acme/analytics",
+  "branch": "release",
+  "root_path": "notebooks",
+  "entry_notebook": "dashboard.py"
+}
+```
+
+Before the first push, changes take effect immediately. After a notebook has
+synced, changes remain pending until an archive matching the new configuration
+arrives. The notebook continues serving its last successful version in the
+meantime. Editing the source does not change the sync URL or rotate its token.
+
 ## 2. Push an archive
 
 Upload the tree under `root_path` as the request body. Authenticate with the
@@ -112,7 +135,18 @@ X-Marimohub-Commit: 9f2c1ab…
 
 `X-Marimohub-Repo` / `-Branch` / `-Root-Path` re-state the notebook's
 configuration so a misrouted workflow can't push to the wrong notebook; a
-mismatch is rejected with `400`.
+mismatch is rejected with `400`. The response names every mismatched header and
+includes its received and expected values, for example:
+
+```json
+{
+	"success": false,
+	"error": {
+		"code": "BAD_REQUEST",
+		"message": "Sync source mismatch: X-Marimohub-Root-Path received \"other\", expected \"apps\". Update the request headers or the notebook's sync settings."
+	}
+}
+```
 
 The archive paths are **relative to `root_path`**, and `entry_notebook` must be
 present in the archive.
@@ -137,7 +171,9 @@ git archive --format=tar.gz -o sync.tgz HEAD:apps   # tree under apps/
 
 Git commit SHAs are content-addressed, so re-pushing the **same commit** is a
 no-op — safe to retry. Pushing a **new commit** cuts a new immutable version and
-advances the notebook.
+advances the notebook. A push matching pending settings always creates and
+promotes a version, even if its SHA matches the version from the previous source
+configuration.
 
 ## GitHub Actions example
 

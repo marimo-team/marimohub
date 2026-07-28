@@ -198,6 +198,32 @@ describe('SourceSchema (discriminated union)', () => {
 		expect(src.current_version_id).toBe(versionId);
 	});
 
+	it('parses a git source with pending settings', () => {
+		const src = SourceSchema.parse({
+			schema_version: 1,
+			type: 'git',
+			provider: 'github',
+			repo: 'marimo-team/marimo',
+			branch: 'main',
+			root_path: 'apps',
+			entry_notebook: 'my_app.py',
+			pending_config: {
+				repo: 'marimo-team/marimohub',
+				branch: 'release',
+				root_path: 'examples',
+				entry_notebook: 'dashboard.py',
+			},
+			sync_mode: 'push',
+			current_version_id: createVersionId(),
+			commit: 'deadbeef',
+			last_synced_at: NOW,
+		});
+		expect(src.type).toBe('git');
+		if (src.type === 'git') {
+			expect(src.pending_config?.entry_notebook).toBe('dashboard.py');
+		}
+	});
+
 	it('parses an unsynced git source draft', () => {
 		const src = SourceSchema.parse({
 			schema_version: 1,

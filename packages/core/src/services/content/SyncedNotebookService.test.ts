@@ -89,6 +89,96 @@ describe('SyncedNotebookService', () => {
 		});
 	});
 
+	describe('updateSource', () => {
+		it('updates an unsynced draft immediately', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+
+			const source = await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{
+					repo: 'new/repo',
+					branch: 'release',
+					root_path: 'apps',
+					entry_notebook: 'dashboard.py',
+				},
+				ACTOR,
+			);
+
+			expect(source).toMatchObject({
+				repo: 'new/repo',
+				branch: 'release',
+				root_path: 'apps',
+				entry_notebook: 'dashboard.py',
+			});
+			expect(source.pending_config).toBeUndefined();
+			expect((await notebooks.getNotebook(projectId, meta.id)).meta.status).toBe('draft');
+		});
+
+		it('stages edits after a sync and keeps serving the active source', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
+			const before = await notebooks.getNotebook(projectId, meta.id);
+
+			const source = await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{
+					repo: 'new/repo',
+					branch: 'release',
+					root_path: 'apps',
+					entry_notebook: 'dashboard.py',
+				},
+				ACTOR,
+			);
+
+			expect(source.repo).toBe('owner/repo');
+			expect(source.current_version_id).toBe(
+				before.source.type === 'git' ? before.source.current_version_id : null,
+			);
+			expect(source.commit).toBe('commit-aaaa');
+			expect(source.pending_config).toEqual({
+				repo: 'new/repo',
+				branch: 'release',
+				root_path: 'apps',
+				entry_notebook: 'dashboard.py',
+			});
+			expect(await notebooks.getNotebookContent(projectId, meta.id)).toBe('import marimo');
+		});
+
+		it('clears a pending edit when settings are reverted to the active source', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
+			await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{
+					repo: 'new/repo',
+					branch: 'release',
+					root_path: 'apps',
+					entry_notebook: 'dashboard.py',
+				},
+				ACTOR,
+			);
+
+			const source = await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{
+					repo: 'owner/repo',
+					branch: 'main',
+					root_path: '',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+
+			expect(source.pending_config).toBeUndefined();
+			expect(source.repo).toBe('owner/repo');
+			expect(source.commit).toBe('commit-aaaa');
+		});
+	});
+
 	describe('sync', () => {
 		it('advances the source to a new version and flips status to active', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
@@ -120,14 +210,57 @@ describe('SyncedNotebookService', () => {
 			}
 		});
 
-		it('rejects a payload whose repo does not match the source', async () => {
+		it('reports every mismatched source header with received and expected values', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 			await expect(
 				notebooks.synced.sync(projectId, meta.id, {
 					...syncInput('commit-bbbb'),
 					repo: 'other/repo',
+					branch: 'feature',
+					root_path: 'apps',
 				}),
-			).rejects.toThrow();
+			).rejects.toThrow(
+				'Sync source mismatch: X-Marimohub-Repo received "other/repo", expected "owner/repo"; X-Marimohub-Branch received "feature", expected "main"; X-Marimohub-Root-Path received "apps", expected "". Update the request headers or the notebook\'s sync settings.',
+			);
+		});
+
+		it('promotes pending settings even when the commit SHA matches the active source', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
+			await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{
+					repo: 'new/repo',
+					branch: 'release',
+					root_path: 'apps',
+					entry_notebook: 'dashboard.py',
+				},
+				ACTOR,
+			);
+
+			await notebooks.synced.sync(projectId, meta.id, {
+				repo: 'new/repo',
+				branch: 'release',
+				root_path: 'apps',
+				commit: 'commit-aaaa',
+				files: [{ path: 'dashboard.py', bytes: enc('print("new")') }],
+			});
+
+			const after = await notebooks.getNotebook(projectId, meta.id);
+			expect(after.source).toMatchObject({
+				type: 'git',
+				repo: 'new/repo',
+				branch: 'release',
+				root_path: 'apps',
+				entry_notebook: 'dashboard.py',
+				commit: 'commit-aaaa',
+			});
+			if (after.source.type === 'git') {
+				expect(after.source.pending_config).toBeUndefined();
+			}
+			expect(await notebooks.getNotebookContent(projectId, meta.id)).toBe('print("new")');
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(2);
 		});
 
 		// A stale-source push whose commit was already claimed by a concurrent push
@@ -169,6 +302,43 @@ describe('SyncedNotebookService', () => {
 			const versionsAfter = await env.notebooks.listVersions(pid, meta.id);
 			expect(versionsAfter.length).toBe(versionsBefore.length + 1);
 		});
+
+		it('rejects an in-flight push when the source settings change before its CAS', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const pid = project.id;
+			const { meta } = await env.notebooks.synced.create(pid, CREATE_INPUT, ACTOR);
+			await env.notebooks.synced.sync(pid, meta.id, syncInput('commit-aaaa'));
+			const stale = await env.notebooks.getNotebook(pid, meta.id);
+
+			await env.notebooks.synced.updateSource(
+				pid,
+				meta.id,
+				{
+					repo: 'new/repo',
+					branch: 'main',
+					root_path: '',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+			const racing = new SyncedNotebookService(env.bucket, env.catalog, noopMetrics, {
+				getNotebook: async () => ({ meta: stale.meta, source: stale.source }),
+				pruneVersions: async () => {},
+			});
+
+			await expect(racing.sync(pid, meta.id, syncInput('commit-bbbb'))).rejects.toThrow(
+				'X-Marimohub-Repo received "owner/repo", expected "new/repo"',
+			);
+			const after = await env.notebooks.getNotebook(pid, meta.id);
+			expect(after.source).toMatchObject({
+				type: 'git',
+				repo: 'owner/repo',
+				commit: 'commit-aaaa',
+				pending_config: { repo: 'new/repo' },
+			});
+			expect(await env.notebooks.listVersions(pid, meta.id)).toHaveLength(1);
+		});
 	});
 
 	describe('non-synced (local) notebooks', () => {
@@ -183,6 +353,23 @@ describe('SyncedNotebookService', () => {
 		it('rotateToken rejects a local (non-git) notebook', async () => {
 			const local = await createLocal();
 			await expect(notebooks.synced.rotateToken(projectId, local.id)).rejects.toThrow();
+		});
+
+		it('updateSource rejects a local (non-git) notebook', async () => {
+			const local = await createLocal();
+			await expect(
+				notebooks.synced.updateSource(
+					projectId,
+					local.id,
+					{
+						repo: 'owner/repo',
+						branch: 'main',
+						root_path: '',
+						entry_notebook: 'app.py',
+					},
+					ACTOR,
+				),
+			).rejects.toThrow('Notebook is not backed by a synced source');
 		});
 
 		it('sync rejects a local (non-git) notebook', async () => {

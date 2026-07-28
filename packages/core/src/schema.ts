@@ -332,14 +332,21 @@ export const LocalSourceSchema = z.object({
 // `push` only — so `provider` is informational (for display/links) and `repo`,
 // `branch`, `commit` are plain git coordinates, host-agnostic. Sync fields are
 // null until the first push lands; see `SyncedNotebookService`.
-export const GitSourceSchema = z.object({
-	schema_version: SchemaVersionSchema,
-	type: z.literal('git'),
-	provider: z.literal('github'),
+export const GitSourceConfigSchema = z.object({
 	repo: z.string(),
 	branch: z.string(),
 	root_path: z.string(),
 	entry_notebook: z.string(),
+});
+
+export type GitSourceConfig = z.infer<typeof GitSourceConfigSchema>;
+
+export const GitSourceSchema = z.object({
+	schema_version: SchemaVersionSchema,
+	type: z.literal('git'),
+	provider: z.literal('github'),
+	...GitSourceConfigSchema.shape,
+	pending_config: GitSourceConfigSchema.optional(),
 	sync_mode: z.literal('push'),
 	current_version_id: VersionIdSchema.nullable(),
 	commit: z.string().nullable(),

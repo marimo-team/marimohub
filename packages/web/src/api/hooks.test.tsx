@@ -9,6 +9,7 @@ import {
 	useProjectSecretsQuery,
 	useRestartApp,
 	useStartSession,
+	useUpdateGitSource,
 	useUpdateNotebook,
 	useUpdateProject,
 	useUserQuery,
@@ -369,6 +370,27 @@ describe('list + detail invalidation', () => {
 
 		await act(async () => {
 			await result.current.mutateAsync({ notebookId: NID, title: 'Renamed' });
+		});
+
+		expect(invalidatedKeys(spy)).toEqual([notebookKeys.list(PID), notebookKeys.detail(PID, NID)]);
+	});
+
+	it('useUpdateGitSource invalidates the list and notebook detail it patched', async () => {
+		stubFetch(async () => jsonOk({ source: { type: 'git' } }));
+
+		const { result, client } = renderHookWithClient(() => useUpdateGitSource(PID), {
+			toaster: false,
+		});
+		const spy = vi.spyOn(client, 'invalidateQueries');
+
+		await act(async () => {
+			await result.current.mutateAsync({
+				notebookId: NID,
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: 'apps',
+				entry_notebook: 'dashboard.py',
+			});
 		});
 
 		expect(invalidatedKeys(spy)).toEqual([notebookKeys.list(PID), notebookKeys.detail(PID, NID)]);

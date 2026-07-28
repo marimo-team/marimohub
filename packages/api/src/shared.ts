@@ -577,13 +577,20 @@ export const LocalSourceResponseSchema = z.object({
 	current_version_id: z.string(),
 });
 
+export const GitSourceConfigResponseSchema = z
+	.object({
+		repo: z.string(),
+		branch: z.string(),
+		root_path: z.string(),
+		entry_notebook: z.string(),
+	})
+	.openapi('GitSourceConfig');
+
 export const GitSourceResponseSchema = z.object({
 	type: z.literal('git'),
 	provider: z.literal('github'),
-	repo: z.string(),
-	branch: z.string(),
-	root_path: z.string(),
-	entry_notebook: z.string(),
+	...GitSourceConfigResponseSchema.shape,
+	pending_config: GitSourceConfigResponseSchema.optional(),
 	sync_mode: z.literal('push'),
 	current_version_id: z.string().nullable(),
 	commit: z.string().nullable(),
