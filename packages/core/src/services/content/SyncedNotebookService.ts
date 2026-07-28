@@ -220,6 +220,7 @@ export class SyncedNotebookService {
 			message: `Sync ${prepared.commit.slice(0, 12)}`,
 			parentId: syncedSource.current_version_id,
 		});
+		let versionToKeep = versionId;
 
 		await saga(metricsObserver(this.metrics, 'saga.synced_notebook_sync'))
 			// The version id is fresh, so this write never races another push.
@@ -237,11 +238,10 @@ export class SyncedNotebookService {
 					() => this.deleteVersion(versionPaths),
 				),
 			)
-			// CAS the source pointer onto the new version. On a losing race we re-read: if
-			// a concurrent push already took this commit we skip (our version is a harmless
-			// orphan that pruning reaps); otherwise we advance over it.
-			.step('advance_source', () =>
-				mutateObject(
+			// `mutateObject` returns the concurrent winner when this commit already won.
+			// Pruning must protect that pointer rather than this request's orphan.
+			.step('advance_source', async () => {
+				const advancedSource = await mutateObject(
 					this.bucket,
 					nb.source,
 					(raw) => SourceSchema.parse(raw),
@@ -258,8 +258,9 @@ export class SyncedNotebookService {
 							last_synced_at: now,
 						};
 					},
-				),
-			)
+				);
+				versionToKeep = assertSyncedSource(advancedSource).current_version_id ?? versionId;
+			})
 			.run();
 
 		// Past the commit point. Meta and the catalog entry are denormalized views that
@@ -276,7 +277,7 @@ export class SyncedNotebookService {
 			() => ({ updated_at: now }),
 		);
 
-		await this.hooks.pruneVersions(projectId, notebookId, versionId);
+		await this.hooks.pruneVersions(projectId, notebookId, versionToKeep);
 		return updatedMeta;
 	}
 }

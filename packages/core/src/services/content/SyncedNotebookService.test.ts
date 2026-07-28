@@ -283,12 +283,15 @@ describe('SyncedNotebookService', () => {
 				winner.source.type === 'git' ? winner.source.current_version_id : null;
 
 			const versionsBefore = await env.notebooks.listVersions(pid, meta.id);
+			let protectedVersionId: string | undefined;
 
 			// Our push also targets commit B, but started from the stale (commit-A) source.
 			// Its CAS re-reads the pointer (now commit B) and must no-op rather than clobber.
 			const racing = new SyncedNotebookService(env.bucket, env.catalog, noopMetrics, {
 				getNotebook: async () => ({ meta: stale.meta, source: stale.source }),
-				pruneVersions: async () => {},
+				pruneVersions: async (_projectId, _notebookId, keep) => {
+					protectedVersionId = keep;
+				},
 			});
 			await expect(racing.sync(pid, meta.id, syncInput('commit-bbbb'))).resolves.toBeDefined();
 
@@ -298,6 +301,7 @@ describe('SyncedNotebookService', () => {
 				expect(after.source.commit).toBe('commit-bbbb');
 				expect(after.source.current_version_id).toBe(winnerVersionId);
 			}
+			expect(protectedVersionId).toBe(winnerVersionId);
 			// The losing push's version is left behind as a harmless orphan.
 			const versionsAfter = await env.notebooks.listVersions(pid, meta.id);
 			expect(versionsAfter.length).toBe(versionsBefore.length + 1);
