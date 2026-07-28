@@ -168,6 +168,7 @@ describe('NotebookPage viewer modes', () => {
 				container.querySelector('iframe[src="https://sandbox.example/kernel"]'),
 			).not.toBeNull(),
 		);
+		expect(document.title).toBe('Forecast · marimohub');
 		expect(sessionPosts(impl)).toHaveLength(1);
 		expect(screen.queryByText(/won't be saved/)).toBeNull();
 	});

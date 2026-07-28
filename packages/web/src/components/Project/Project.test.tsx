@@ -134,6 +134,7 @@ describe('Project — Delete Project (type-to-confirm)', () => {
 		const calls = makeFetch();
 		await renderProject();
 
+		expect(document.title).toBe('Sales · marimohub');
 		await user.click(screen.getByRole('button', { name: 'Delete project' }));
 		const dialog = screen.getByRole('dialog');
 		const confirm = within(dialog).getByRole('button', { name: 'Delete' });

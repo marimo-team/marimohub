@@ -63,6 +63,7 @@ export function ProjectList() {
 
 	return (
 		<PageContainer>
+			<title>Projects · marimohub</title>
 			<PageHeader
 				actions={
 					<Button variant="primary" onPress={createModal.open}>
