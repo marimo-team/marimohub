@@ -71,13 +71,29 @@ function makeFetch(
 			return jsonOk({ ...notebook(), id: 'nb-copy', title: 'Forecast (copy)' });
 		if (method === 'POST' && url.endsWith(`/projects/${PID}/notebooks/nb-1/sync-token/rotate`))
 			return jsonOk({ sync_token: 'rotated-token' });
+		if (method === 'PATCH' && url.endsWith(`/projects/${PID}/notebooks/nb-1/source`))
+			return jsonOk({ source: body });
 		if (method === 'DELETE' && url.endsWith(`/projects/${PID}/notebooks/nb-1/sessions/sess-1`))
 			return jsonOk(null);
 		if (method === 'GET' && url.endsWith(`/projects/${PID}/notebooks/nb-1`))
 			return jsonOk({
 				meta: notebook(),
 				readme: null,
-				source: { type: 'local', current_version_id: 'ver-1' },
+				source:
+					notebooks.find((entry) => entry.id === 'nb-1')?.source_type === 'git'
+						? {
+								type: 'git',
+								provider: 'github',
+								repo: 'acme/analytics',
+								branch: 'main',
+								root_path: 'apps',
+								entry_notebook: 'dashboard.py',
+								sync_mode: 'push',
+								current_version_id: 'ver-1',
+								commit: 'abc123',
+								last_synced_at: '2025-03-05T14:00:00Z',
+							}
+						: { type: 'local', current_version_id: 'ver-1' },
 			});
 		if (method === 'GET' && url.endsWith(`/projects/${PID}/notebooks/nb-1/content`))
 			return jsonOk({ code: 'print("download")' });
@@ -340,16 +356,21 @@ describe('Project — Notebook Actions', () => {
 		expect(createObjectURL).toHaveBeenCalledOnce();
 	});
 
-	it('opens sync keys for a git-backed notebook', async () => {
+	it('offers one unified sync settings action for a git-backed notebook', async () => {
 		const user = userEvent.setup();
 		makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });
 		await renderProject();
 
-		await chooseNotebookAction(user, 'Sync keys');
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		expect(await screen.findByText('Sync settings')).toBeInTheDocument();
+		expect(screen.queryByText('Sync keys')).not.toBeInTheDocument();
+		expect(screen.queryByText('Rotate sync token')).not.toBeInTheDocument();
+		await user.click(screen.getByText('Sync settings'));
 
 		expect(
-			await screen.findByRole('heading', { name: 'Sync keys — Forecast' }),
+			await screen.findByRole('heading', { name: 'Sync settings — Forecast' }),
 		).toBeInTheDocument();
+		expect(await screen.findByLabelText('Repository')).toHaveValue('acme/analytics');
 		expect(screen.getByLabelText<HTMLInputElement>('Sync URL').value).toContain(
 			`/api/sync/git/v1/projects/${PID}/notebooks/nb-1`,
 		);
@@ -360,8 +381,9 @@ describe('Project — Notebook Actions', () => {
 		const calls = makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });
 		await renderProject();
 
-		await chooseNotebookAction(user, 'Rotate sync token');
-		await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Rotate' }));
+		await chooseNotebookAction(user, 'Sync settings');
+		await user.click(await screen.findByRole('button', { name: 'Rotate token' }));
+		await user.click(screen.getByRole('button', { name: 'Rotate' }));
 
 		await waitFor(() =>
 			expect(

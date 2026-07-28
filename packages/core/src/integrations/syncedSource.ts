@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { BadRequestError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
 import { toHex } from '../internal/hex';
-import type { GitSource, Source } from '../schema';
+import type { GitSource, GitSourceConfig, Source } from '../schema';
 import {
 	normalizeEntryNotebook,
 	normalizeWorkspaceRootPath,
@@ -32,6 +32,8 @@ export interface SyncNotebookInput {
 	files: SyncedWorkspaceFile[];
 }
 
+export type UpdateSyncedNotebookSourceInput = GitSourceConfig;
+
 export const SyncTokenRecordSchema = z.object({
 	schema_version: z.literal(1),
 	token_sha256: z.string(),
@@ -59,15 +61,57 @@ function timingSafeEqual(a: string, b: string): boolean {
 	return diff === 0;
 }
 
+export function normalizeGitSourceConfig(input: {
+	repo: string;
+	branch: string;
+	root_path?: string;
+	entry_notebook: string;
+}): GitSourceConfig {
+	const repo = input.repo.trim();
+	if (!repo) {
+		throw new BadRequestError('repo is required');
+	}
+	const branch = input.branch.trim();
+	if (!branch) {
+		throw new BadRequestError('branch is required');
+	}
+	return {
+		repo,
+		branch,
+		root_path: normalizeWorkspaceRootPath(input.root_path),
+		entry_notebook: normalizeEntryNotebook(input.entry_notebook),
+	};
+}
+
+export function gitSourceConfig(source: GitSource): GitSourceConfig {
+	return {
+		repo: source.repo,
+		branch: source.branch,
+		root_path: source.root_path,
+		entry_notebook: source.entry_notebook,
+	};
+}
+
+export function effectiveGitSourceConfig(source: GitSource): GitSourceConfig {
+	return source.pending_config ?? gitSourceConfig(source);
+}
+
+export function gitSourceConfigsEqual(a: GitSourceConfig, b: GitSourceConfig): boolean {
+	return (
+		a.repo === b.repo &&
+		a.branch === b.branch &&
+		a.root_path === b.root_path &&
+		a.entry_notebook === b.entry_notebook
+	);
+}
+
 export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
+	const config = normalizeGitSourceConfig(input);
 	return {
 		schema_version: 1,
 		type: 'git',
 		provider: input.provider ?? 'github',
-		repo: input.repo,
-		branch: input.branch,
-		root_path: normalizeWorkspaceRootPath(input.root_path),
-		entry_notebook: normalizeEntryNotebook(input.entry_notebook),
+		...config,
 		sync_mode: 'push',
 		current_version_id: null,
 		commit: null,
@@ -109,14 +153,29 @@ export function assertSyncedSource(source: Source): GitSource {
 export function prepareSync(
 	source: GitSource,
 	input: SyncNotebookInput,
-): { commit: string; files: SyncedWorkspaceFileMap } {
+): { commit: string; config: GitSourceConfig; files: SyncedWorkspaceFileMap } {
+	const config = effectiveGitSourceConfig(source);
 	const rootPath = normalizeWorkspaceRootPath(input.root_path);
-	if (
-		input.repo !== source.repo ||
-		input.branch !== source.branch ||
-		rootPath !== source.root_path
-	) {
-		throw new BadRequestError('Sync payload does not match the notebook source');
+	const received = {
+		'X-Marimohub-Repo': input.repo,
+		'X-Marimohub-Branch': input.branch,
+		'X-Marimohub-Root-Path': rootPath,
+	};
+	const expected = {
+		'X-Marimohub-Repo': config.repo,
+		'X-Marimohub-Branch': config.branch,
+		'X-Marimohub-Root-Path': config.root_path,
+	};
+	const mismatches = Object.entries(expected)
+		.filter(([header, value]) => received[header as keyof typeof received] !== value)
+		.map(
+			([header, value]) =>
+				`${header} received ${JSON.stringify(received[header as keyof typeof received])}, expected ${JSON.stringify(value)}`,
+		);
+	if (mismatches.length > 0) {
+		throw new BadRequestError(
+			`Sync source mismatch: ${mismatches.join('; ')}. Update the request headers or the notebook's sync settings.`,
+		);
 	}
 	const commit = input.commit.trim();
 	if (commit.length === 0) {
@@ -124,8 +183,8 @@ export function prepareSync(
 	}
 
 	const files = toSyncedWorkspaceFileMap(input.files);
-	if (!files.has(source.entry_notebook)) {
-		throw new BadRequestError(`entry_notebook not found in sync archive: ${source.entry_notebook}`);
+	if (!files.has(config.entry_notebook)) {
+		throw new BadRequestError(`entry_notebook not found in sync archive: ${config.entry_notebook}`);
 	}
-	return { commit, files };
+	return { commit, config, files };
 }

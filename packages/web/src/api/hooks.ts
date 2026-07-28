@@ -434,6 +434,28 @@ export function useRotateSyncToken(projectId: string) {
 	});
 }
 
+export function useUpdateGitSource(projectId: string) {
+	return useApiMutation(
+		({
+			notebookId,
+			...body
+		}: {
+			notebookId: string;
+			repo: string;
+			branch: string;
+			root_path: string;
+			entry_notebook: string;
+		}) =>
+			apiData(
+				apiClient.PATCH('/api/v1/projects/{pid}/notebooks/{nid}/source', {
+					params: { path: { pid: projectId, nid: notebookId } },
+					body,
+				}),
+			),
+		({ notebookId }) => [notebookKeys.list(projectId), notebookKeys.detail(projectId, notebookId)],
+	);
+}
+
 export function useUpdateNotebook(projectId: string) {
 	return useApiMutation(
 		({ notebookId, ...body }: { notebookId: string; title?: string; base_image?: string | null }) =>

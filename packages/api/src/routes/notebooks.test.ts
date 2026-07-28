@@ -199,6 +199,118 @@ describe('Notebook routes', () => {
 		expect(JSON.stringify(detail.source)).not.toContain(data.sync_token);
 	});
 
+	it('PATCH /{nid}/source updates a draft git source directly', async () => {
+		const created = await expectOk<any>(
+			await request('POST', nb('/git'), {
+				title: 'GitHub app',
+				description: 'Synced',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+			}),
+			201,
+		);
+
+		const data = await expectOk<any>(
+			await request('PATCH', nb(`/${created.notebook.id}/source`), {
+				repo: 'new/repo',
+				branch: 'release',
+				root_path: 'apps',
+				entry_notebook: 'dashboard.py',
+			}),
+		);
+
+		expect(data.source).toMatchObject({
+			type: 'git',
+			repo: 'new/repo',
+			branch: 'release',
+			root_path: 'apps',
+			entry_notebook: 'dashboard.py',
+			current_version_id: null,
+		});
+		expect(data.source.pending_config).toBeUndefined();
+	});
+
+	it('PATCH /{nid}/source stages changes after the first sync', async () => {
+		const created = await expectOk<any>(
+			await request('POST', nb('/git'), {
+				title: 'GitHub app',
+				description: 'Synced',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+			}),
+			201,
+		);
+		await expectOk(
+			await app.request(`/api/sync/git/v1/projects/${projectId}/notebooks/${created.notebook.id}`, {
+				method: 'POST',
+				body: zipSync({ 'app.py': encode('print("old")') }),
+				headers: {
+					Authorization: `Bearer ${created.sync_token}`,
+					'Content-Type': 'application/zip',
+					'X-Marimohub-Repo': 'org/repo',
+					'X-Marimohub-Branch': 'main',
+					'X-Marimohub-Commit': 'abc123',
+				},
+			}),
+		);
+
+		const data = await expectOk<any>(
+			await request('PATCH', nb(`/${created.notebook.id}/source`), {
+				repo: 'new/repo',
+				branch: 'release',
+				root_path: 'apps',
+				entry_notebook: 'dashboard.py',
+			}),
+		);
+
+		expect(data.source.repo).toBe('org/repo');
+		expect(data.source.pending_config).toEqual({
+			repo: 'new/repo',
+			branch: 'release',
+			root_path: 'apps',
+			entry_notebook: 'dashboard.py',
+		});
+		const content = await expectOk<any>(
+			await request('GET', nb(`/${created.notebook.id}/content`)),
+		);
+		expect(content.code).toBe('print("old")');
+	});
+
+	it('PATCH /{nid}/source rejects local notebooks and viewers', async () => {
+		const local = await expectOk<any>(
+			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'x = 1' }),
+			201,
+		);
+		const body = {
+			repo: 'org/repo',
+			branch: 'main',
+			root_path: '',
+			entry_notebook: 'app.py',
+		};
+		await expectError(await request('PATCH', nb(`/${local.id}/source`), body), 400, 'BAD_REQUEST');
+
+		const synced = await expectOk<any>(
+			await request('POST', nb('/git'), {
+				title: 'GitHub app',
+				description: 'Synced',
+				...body,
+			}),
+			201,
+		);
+		const viewer = createTestApi({
+			bucket,
+			userId: uid('user_viewer'),
+			deps: { policy: { defaultRole: 'viewer' } },
+		}).request;
+		await expectError(
+			await viewer('PATCH', nb(`/${synced.notebook.id}/source`), body),
+			403,
+			'FORBIDDEN',
+		);
+	});
+
 	it('POST sync endpoint accepts a zip archive and updates GitHub content', async () => {
 		const created = await expectOk<any>(
 			await request('POST', nb('/git'), {

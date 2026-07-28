@@ -25,6 +25,7 @@ import {
 	IdempotencyKeyHeader,
 	jsonBody,
 	jsonContent,
+	GitSourceResponseSchema,
 	NotebookDetailResponseSchema,
 	NotebookIdParam,
 	NotebookMetaResponseSchema,
@@ -91,6 +92,13 @@ const GitNotebookCreateResponseSchema = z
 		sync_token: z.string(),
 	})
 	.openapi('GitNotebookCreateResult');
+
+const UpdateGitSourceBody = z.object({
+	repo: z.string().min(1).openapi({ example: 'marimo-team/marimohub' }),
+	branch: z.string().min(1).openapi({ example: 'main' }),
+	root_path: z.string().openapi({ example: 'apps' }),
+	entry_notebook: z.string().min(1).openapi({ example: 'my_app.py' }),
+});
 
 const UpdateNotebookBody = z.object({
 	title: z.string().min(1).optional(),
@@ -205,6 +213,25 @@ const rotateSyncToken = createRoute({
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: SyncTokenResponseSchema }),
 			'Sync token rotated',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404),
+	},
+});
+
+const updateGitSource = createRoute({
+	method: 'patch',
+	path: '/projects/{pid}/notebooks/{nid}/source',
+	tags: ['Notebooks'],
+	summary: 'Update a git-synced notebook source',
+	request: { params: NotebookIdParam, body: jsonBody(UpdateGitSourceBody) },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({ source: GitSourceResponseSchema }),
+			}),
+			'Git source updated',
 		),
 		...commonErrors(),
 		...errorResponses(400, 403, 404),
@@ -441,6 +468,17 @@ app.openapi(rotateSyncToken, async (c) => {
 	await assertProjectRole(projects, pid, user, 'editor', deps.policy.defaultRole);
 	const { sync_token } = await notebooks.synced.rotateToken(pid, nid);
 	return c.json({ success: true, data: { sync_url: syncUrl(c, pid, nid), sync_token } }, 200);
+});
+
+app.openapi(updateGitSource, async (c) => {
+	const deps = c.get('deps');
+	const { notebooks, projects } = deps.services;
+	const user = c.get('user');
+	const { pid, nid } = c.req.valid('param');
+	await assertProjectRole(projects, pid, user, 'editor', deps.policy.defaultRole);
+	const source = await notebooks.synced.updateSource(pid, nid, c.req.valid('json'), user.id);
+	const { schema_version: _schemaVersion, ...publicSource } = source;
+	return c.json({ success: true, data: { source: publicSource } }, 200);
 });
 
 app.openapi(getNotebook, async (c) => {

@@ -66,7 +66,6 @@ import {
 	useStopSession,
 	useUsersQuery,
 	useCapabilitiesQuery,
-	useRotateSyncToken,
 } from '@/api/hooks';
 import { AppSessionIndicator } from './AppSessionIndicator';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
@@ -76,7 +75,7 @@ import { ChangeBaseImageDialog } from '@/components/Notebook/ChangeBaseImageDial
 import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/baseImage';
 import { SyncedNotebookDialog } from '@/components/Notebook/SyncedNotebookDialog';
 import type { SyncedNotebookCreated } from '@/components/Notebook/SyncedNotebookDialog';
-import { SyncKeysDialog } from '@/components/Notebook/SyncKeysDialog';
+import { SyncSettingsDialog } from '@/components/Notebook/SyncSettingsDialog';
 import { VersionHistoryDialog } from '@/components/Notebook/VersionHistoryDialog';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
@@ -125,8 +124,7 @@ export function Project() {
 	const baseImageModal = useDialogTarget<NotebookEntry>();
 	const historyModal = useDialogTarget<NotebookEntry>();
 	const syncedCreateModal = useDisclosure();
-	const syncKeys = useDialogTarget<{ notebookId: string; title: string; token?: string }>();
-	const rotateModal = useDialogTarget<NotebookEntry>();
+	const syncSettings = useDialogTarget<{ notebookId: string; title: string; token?: string }>();
 	const stopModal = useDialogTarget<{ notebook: NotebookEntry; session: Session }>();
 	// The shared app's stop/restart confirm — separate from the edit-kernel stop
 	// so the copy can warn about disconnecting other people.
@@ -155,7 +153,6 @@ export function Project() {
 	// The picker only appears when there is an actual choice to make.
 	const sandboxImages = capabilities?.sandbox_images ?? [];
 	const offersImageChoice = sandboxImages.length > 1;
-	const rotateSyncToken = useRotateSyncToken(pid!);
 	// Re-bound each render to the notebook in the stop dialog; only fired on confirm.
 	const stopSession = useStopSession(pid!, stopModal.target?.notebook.id ?? '');
 	const stopAppSession = useStopSession(pid!, appModal.target?.notebook.id ?? '');
@@ -348,19 +345,10 @@ export function Project() {
 
 	const handleSyncedCreated = (result: SyncedNotebookCreated) => {
 		syncedCreateModal.close();
-		syncKeys.open({ notebookId: result.notebookId, title: result.title, token: result.token });
-	};
-
-	const handleRotateToken = () => {
-		if (!rotateModal.target) return;
-		const { id, title } = rotateModal.target;
-		rotateSyncToken.mutate(id, {
-			onSuccess: (data) => {
-				toast.success(`Rotated sync token for "${title}"`);
-				rotateModal.close();
-				syncKeys.open({ notebookId: id, title, token: data.sync_token });
-			},
-			onError: toastError,
+		syncSettings.open({
+			notebookId: result.notebookId,
+			title: result.title,
+			token: result.token,
 		});
 	};
 
@@ -401,10 +389,9 @@ export function Project() {
 		{ id: 'history', label: 'Version history', icon: <History className="size-4" /> },
 		...(nb.source_type === 'git'
 			? [
-					{ id: 'sync-keys', label: 'Sync keys', icon: <KeyRound className="size-4" /> },
 					{
-						id: 'rotate-token',
-						label: 'Rotate sync token',
+						id: 'sync-settings',
+						label: 'Sync settings',
 						icon: <RefreshCw className="size-4" />,
 					},
 				]
@@ -567,9 +554,8 @@ export function Project() {
 													if (app) appModal.open({ action: 'stop', notebook: nb, session: app });
 												} else if (key === 'change-image') baseImageModal.open(nb);
 												else if (key === 'history') historyModal.open(nb);
-												else if (key === 'sync-keys')
-													syncKeys.open({ notebookId: nb.id, title: nb.title });
-												else if (key === 'rotate-token') rotateModal.open(nb);
+												else if (key === 'sync-settings')
+													syncSettings.open({ notebookId: nb.id, title: nb.title });
 												else if (key === 'download-file') handleDownloadFile(nb);
 												else if (key === 'download-workspace') handleDownloadWorkspace(nb);
 												else if (key === 'delete') deleteModal.open(nb);
@@ -716,26 +702,18 @@ export function Project() {
 				onCreated={handleSyncedCreated}
 			/>
 
-			{syncKeys.target && (
-				<SyncKeysDialog
-					isOpen={syncKeys.isOpen}
-					onClose={syncKeys.close}
-					title={syncKeys.target.title}
-					syncUrl={syncUrl(pid!, syncKeys.target.notebookId)}
-					token={syncKeys.target.token}
+			{syncSettings.target && (
+				<SyncSettingsDialog
+					isOpen={syncSettings.isOpen}
+					onClose={syncSettings.close}
+					projectId={pid!}
+					notebookId={syncSettings.target.notebookId}
+					title={syncSettings.target.title}
+					syncUrl={syncUrl(pid!, syncSettings.target.notebookId)}
+					canEdit={project.your_role !== 'viewer'}
+					initialToken={syncSettings.target.token}
 				/>
 			)}
-
-			<ConfirmDialog
-				isOpen={rotateModal.isOpen}
-				onClose={rotateModal.close}
-				title="Rotate Sync Token"
-				description={`Rotate the sync token for "${rotateModal.target?.title}"? The current token stops working immediately and any pusher using it must be updated.`}
-				confirmLabel="Rotate"
-				pendingLabel="Rotating..."
-				isPending={rotateSyncToken.isPending}
-				onConfirm={handleRotateToken}
-			/>
 
 			<ConfirmDialog
 				isOpen={deleteModal.isOpen}

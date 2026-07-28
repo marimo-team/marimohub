@@ -145,4 +145,26 @@ describe('Git sync routes', () => {
 		const error = await expectError(await syncRequest({ notebookId, headers }), 400, 'BAD_REQUEST');
 		expect(error.message).toContain('x-marimohub-commit');
 	});
+
+	it('reports every mismatched source header with expected and received values', async () => {
+		const { notebookId, syncToken } = await createSyncedNotebook();
+		const error = await expectError(
+			await syncRequest({
+				notebookId,
+				headers: {
+					...requiredHeaders(syncToken),
+					'X-Marimohub-Repo': 'other/repo',
+					'X-Marimohub-Branch': 'feature',
+					'X-Marimohub-Root-Path': 'apps',
+				},
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+
+		expect(error.message).toContain('X-Marimohub-Repo received "other/repo", expected "org/repo"');
+		expect(error.message).toContain('X-Marimohub-Branch received "feature", expected "main"');
+		expect(error.message).toContain('X-Marimohub-Root-Path received "apps", expected ""');
+		expect(error.message).toContain("notebook's sync settings");
+	});
 });

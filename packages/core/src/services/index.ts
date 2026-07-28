@@ -22,7 +22,11 @@ export { MaintenanceService } from './catalog/MaintenanceService';
 export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/MaintenanceService';
 export { MaintenanceLock } from './catalog/MaintenanceLock';
 export { MAX_VERSIONS, NotebookService } from './content/NotebookService';
-export type { CreateSyncedNotebookInput, SyncNotebookInput } from '../integrations/syncedSource';
+export type {
+	CreateSyncedNotebookInput,
+	SyncNotebookInput,
+	UpdateSyncedNotebookSourceInput,
+} from '../integrations/syncedSource';
 export { ProjectService } from './content/ProjectService';
 export { ProjectSecretsStore } from './secrets/ProjectSecretsStore';
 export type { ProjectSecretsStoreOptions } from './secrets/ProjectSecretsStore';

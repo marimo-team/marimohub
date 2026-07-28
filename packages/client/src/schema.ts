@@ -1454,6 +1454,139 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/source': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		/** Update a git-synced notebook source */
+		patch: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+					nid: string;
+				};
+				cookie?: never;
+			};
+			requestBody: {
+				content: {
+					'application/json': {
+						/** @example marimo-team/marimohub */
+						repo: string;
+						/** @example main */
+						branch: string;
+						/** @example apps */
+						root_path: string;
+						/** @example my_app.py */
+						entry_notebook: string;
+					};
+				};
+			};
+			responses: {
+				/** @description Git source updated */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: {
+								source: {
+									/** @enum {string} */
+									type: 'git';
+									/** @enum {string} */
+									provider: 'github';
+									repo: string;
+									branch: string;
+									root_path: string;
+									entry_notebook: string;
+									pending_config?: components['schemas']['GitSourceConfig'];
+									/** @enum {string} */
+									sync_mode: 'push';
+									current_version_id: string | null;
+									commit: string | null;
+									/**
+									 * Format: date-time
+									 * @example 2025-03-05T14:00:00Z
+									 */
+									last_synced_at: string | null;
+								};
+							};
+						};
+					};
+				};
+				/** @description Bad request */
+				400: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}': {
 		parameters: {
 			query?: never;
@@ -3663,6 +3796,12 @@ export interface components {
 			sync_url: string;
 			sync_token: string;
 		};
+		GitSourceConfig: {
+			repo: string;
+			branch: string;
+			root_path: string;
+			entry_notebook: string;
+		};
 		NotebookDetail: {
 			meta: components['schemas']['NotebookMeta'];
 			readme: string | null;
@@ -3683,6 +3822,7 @@ export interface components {
 					branch: string;
 					root_path: string;
 					entry_notebook: string;
+					pending_config?: components['schemas']['GitSourceConfig'];
 					/** @enum {string} */
 					sync_mode: 'push';
 					current_version_id: string | null;
