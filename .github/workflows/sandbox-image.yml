@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # docker (with buildx) and curl are preinstalled on ubuntu-latest runners,
       # so the script needs no extra setup. It builds the context and runs every
       # check against the image.
