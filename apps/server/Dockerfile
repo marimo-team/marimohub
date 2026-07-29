@@ -1,7 +1,7 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
 # --- build stage: install workspace, build the SPA and the server bundle ---
-FROM node:24-slim AS build
+FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS build
 # CI=true keeps pnpm non-interactive (no TTY prompts) during the image build.
 ENV CI=true
 # git: required by the root `prepare` script (vp config).
@@ -16,7 +16,7 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm exec vp run --filter @marimo-hub/web --filter @marimo-hub/server build
 
 # --- runtime: self-contained server bundle + prebuilt static SPA ---
-FROM node:24-slim AS runtime
+FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \

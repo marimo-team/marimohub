@@ -4,7 +4,7 @@
 image:
   repository: ghcr.io/marimo-team/marimohub
   # Empty => use the chart's appVersion, so --version pins chart and image together.
-  tag: ''
+  tag: '@sha256:65768bd13e4d2de57df93db6c507335cf6193eeafea5f9f1d142bd703431ea23'
   pullPolicy: IfNotPresent
 
 # Pull secrets for a private image; the public GHCR image needs none.
