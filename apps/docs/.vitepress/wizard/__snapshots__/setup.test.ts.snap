@@ -13,6 +13,7 @@ MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_SESSION_SECRET=…            # signs the session cookie (HS256, ≥32 bytes)
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com  # REQUIRED allowlist (verified email); \`*\` allows all
 # MARIMOHUB_AUTH_OIDC_AUDIENCE=…           # optional: expected ID-token audience (the client id is enforced anyway)
+# MARIMOHUB_AUTH_OIDC_PROMPT=consent       # optional: override the default (select_account) OAuth prompt
 </code></pre>
 <p>The <strong>redirect URI</strong> is always <code>https://&lt;your-host&gt;/api/auth/callback</code>. Register
 it with your provider exactly as you set it here, or login fails with a
@@ -34,6 +35,10 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=…apps.googleusercontent.com
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=…
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com   # a single domain is also sent to Google as the \`hd\` hint
 </code></pre>
+<p>marimohub defaults the OAuth <code>prompt</code> to <code>select_account</code>, so a returning user
+always gets the Google account chooser instead of being silently logged in with
+their last account. Override it via <code>MARIMOHUB_AUTH_OIDC_PROMPT</code> (e.g. <code>consent</code>
+to also re-show the consent screen).</p>
 <p>See <a href="https://developers.google.com/identity/openid-connect/openid-connect">Google's OpenID Connect docs</a>.</p>
 <h3>Microsoft Entra ID</h3>
 <ol>

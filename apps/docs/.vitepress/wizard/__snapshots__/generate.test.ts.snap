@@ -32,6 +32,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
@@ -75,6 +76,7 @@ exports[`config -> code generators > azure + kubernetes + oidc > compose 1`] = `
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
@@ -108,6 +110,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
@@ -203,6 +206,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
@@ -242,6 +246,7 @@ exports[`config -> code generators > default-prod (s3 + modal + oidc) > compose 
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
@@ -268,6 +273,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
@@ -355,6 +361,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
@@ -389,6 +396,7 @@ exports[`config -> code generators > fs + docker + oidc (single-box) > compose 1
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
@@ -414,6 +422,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
@@ -493,6 +502,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
@@ -527,6 +537,7 @@ exports[`config -> code generators > fs + podman + oidc > compose 1`] = `
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
@@ -552,6 +563,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
@@ -642,6 +654,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
@@ -686,6 +699,7 @@ exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace 
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
@@ -719,6 +733,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: workspace
@@ -940,6 +955,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
@@ -989,6 +1005,7 @@ exports[`config -> code generators > s3 + coreweave + oidc, custom image > compo
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
@@ -1026,6 +1043,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
@@ -1258,6 +1276,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
@@ -1299,6 +1318,7 @@ exports[`config -> code generators > s3 + e2b + oidc > compose 1`] = `
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
@@ -1328,6 +1348,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
@@ -1417,6 +1438,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
@@ -1465,6 +1487,7 @@ exports[`config -> code generators > s3 + modal + oidc, managed ai > compose 1`]
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: openai-compatible
@@ -1500,6 +1523,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: openai-compatible
   MARIMOHUB_AI_UPSTREAM_BASE_URL: _replace_me_ # e.g. https://api.openai.com/v1
@@ -1609,6 +1633,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=acme.com
 
@@ -1648,6 +1673,7 @@ exports[`config -> code generators > s3 + modal + oidc, value overrides > compos
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: acme.com
       MARIMOHUB_AI_BACKEND: none
@@ -1674,6 +1700,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: acme.com
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source
@@ -1903,6 +1930,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_OIDC_PROMPT=consent
 MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
 
@@ -1945,6 +1973,7 @@ exports[`config -> code generators > s3 + wandb + oidc > compose 1`] = `
       MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
       MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
       MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_OIDC_PROMPT: consent
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
@@ -1975,6 +2004,7 @@ config:
   MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
   MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
   MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
   MARIMOHUB_PERSIST_WORKSPACE: source

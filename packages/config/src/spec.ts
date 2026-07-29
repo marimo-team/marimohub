@@ -714,6 +714,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Expected ID-token audience (optional; oauth4webapi enforces the client id automatically).',
 					},
 					{
+						id: 'MARIMOHUB_AUTH_OIDC_PROMPT',
+						name: 'OIDC prompt',
+						description:
+							'OAuth `prompt` parameter. Defaults to `select_account`, so a returning user always gets the account chooser instead of being silently logged in with their last account. Override with `consent` to re-show the consent screen, or space-separated combinations.',
+						default: 'select_account',
+						example: 'consent',
+					},
+					{
 						id: 'MARIMOHUB_AUTH_SESSION_SECRET',
 						name: 'Session secret',
 						description: 'Secret that signs the session cookie (HS256; ≥32 bytes).',

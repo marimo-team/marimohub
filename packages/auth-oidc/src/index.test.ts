@@ -237,9 +237,28 @@ describe('OIDC routes', () => {
 		expect(location.searchParams.get('code_challenge')).toBe('challenge-1');
 		expect(location.searchParams.get('code_challenge_method')).toBe('S256');
 		expect(location.searchParams.get('hd')).toBe('example.com');
+		expect(location.searchParams.get('prompt')).toBe('select_account');
 		expect(setCookie).toContain(`${TXN_COOKIE}=`);
 		expect(setCookie).toContain('HttpOnly');
 		expect(setCookie).toContain('Secure');
+	});
+
+	it('defaults prompt to select_account, forcing the account chooser', async () => {
+		const { routes } = makeOidc({});
+
+		const res = await routes.request('/api/auth/login');
+		const location = new URL(res.headers.get('location') ?? '');
+
+		expect(location.searchParams.get('prompt')).toBe('select_account');
+	});
+
+	it('lets the configured prompt override the default', async () => {
+		const { routes } = makeOidc({ prompt: 'consent' });
+
+		const res = await routes.request('/api/auth/login');
+		const location = new URL(res.headers.get('location') ?? '');
+
+		expect(location.searchParams.get('prompt')).toBe('consent');
 	});
 
 	it('does not include an hd hint when multiple domains are allowed', async () => {

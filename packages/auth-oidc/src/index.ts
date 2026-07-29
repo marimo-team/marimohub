@@ -38,6 +38,8 @@ export interface OidcConfig {
 	audience?: string;
 	/** OAuth scopes (default `openid email profile`). */
 	scopes?: string;
+	/** OAuth `prompt` parameter (default `select_account`). */
+	prompt?: string;
 	/** Secret used to sign the session + transaction cookies (HS256). */
 	sessionSecret: string;
 	/** Where to send the user after a successful login (default `/`). */
@@ -202,6 +204,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		if (allowedDomains.length === 1) {
 			url.searchParams.set('hd', allowedDomains[0]);
 		}
+		url.searchParams.set('prompt', config.prompt ?? 'select_account');
 		return c.redirect(url.toString());
 	});
 
