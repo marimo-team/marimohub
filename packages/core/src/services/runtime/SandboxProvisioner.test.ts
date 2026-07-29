@@ -16,7 +16,7 @@ import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import type { BucketConfig, WorkspaceLoadStrategies } from './SandboxProvisioner';
 
-const MOUNT_PATH = '/workspace/notebooks';
+const MOUNT_PATH = '/workspace';
 
 const bucketConfig: BucketConfig = {
 	name: 'test-bucket',
@@ -83,9 +83,11 @@ describe('SandboxProvisioner', () => {
 			expect(calls.exec).toContain('true');
 			// Bucket was mounted (no fallback file copy).
 			expect(calls.mountBucket).toHaveLength(1);
+			expect(calls.mountBucket[0].mountPath).toBe(MOUNT_PATH);
 			expect(calls.writeFile).toHaveLength(0);
 
 			expect(calls.startProcess).toHaveLength(1);
+			expect(calls.startProcess[0].options?.cwd).toBe(MOUNT_PATH);
 			expect(calls.startProcess[0].cmd).toContain('marimo edit');
 			expect(calls.startProcess[0].cmd).toContain('2718');
 			expect(calls.waitForPort).toEqual([2718]);

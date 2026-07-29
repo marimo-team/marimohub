@@ -38,12 +38,11 @@ export const template = Template()
 	.runCmd(
 		`cd /tmp/base && uv venv --python 3.13 /opt/venv && uv add --compile-bytecode "marimo[recommended,ai,sql]==${MARIMO_VERSION}" && rm -rf /tmp/base`,
 	)
-	// Kernels run in /workspace/notebooks; world-writable so the exec user can write
-	// the notebook + snapshots.
-	.runCmd('mkdir -p /workspace/notebooks && chmod -R 0777 /workspace')
+	// The exec user must be able to write the notebook and snapshots in /workspace.
+	.runCmd('mkdir -p /workspace && chmod -R 0777 /workspace')
 	// Runtime env for the kernel's login shell (see files/marimo.sh). THE KEY GOTCHA:
 	// E2B runs commands in a login shell that re-sources /etc/profile, so the build
 	// env above never reaches the launch — `UV_PROJECT_ENVIRONMENT` etc. must live in
 	// /etc/profile.d for `uv run --no-sync marimo` to resolve /opt/venv.
 	.copy('files/marimo.sh', '/etc/profile.d/marimo.sh')
-	.setWorkdir('/workspace/notebooks');
+	.setWorkdir('/workspace');

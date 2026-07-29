@@ -56,9 +56,8 @@ export interface ProvisionOptions {
 	/** Storage bucket handle for fallback file copy. */
 	bucketHandle?: Bucket;
 	/**
-	 * Working directory inside the sandbox (cwd for marimo; notebook files land in
-	 * `<workdir>/notebooks`). Must be writable by the sandbox image's user.
-	 * Defaults to `/workspace`.
+	 * Working directory inside the sandbox where notebook files land and marimo
+	 * runs. Must be writable by the sandbox image's user. Defaults to `/workspace`.
 	 */
 	workdir?: string;
 	/**
@@ -271,7 +270,7 @@ export class SandboxProvisioner {
 	): Promise<ProvisionResult> {
 		const nb = paths.project(options.projectId).notebook(options.notebookId);
 		const workdir = options.workdir ?? DEFAULT_WORKDIR;
-		const mountPath = `${workdir}/notebooks`;
+		const mountPath = workdir;
 		const sw = new Stopwatch();
 
 		const ensureReachable = () => this.ensureReachable(sandbox, sw);
@@ -482,7 +481,7 @@ export class SandboxProvisioner {
 		const { source } = await notebooks.getNotebook(projectId, notebookId);
 		if (!workspaceSourcePolicy(source).persistSessionEdits) return false;
 
-		const mountPath = `${workdir}/notebooks`;
+		const mountPath = workdir;
 		// The commit chain and the workspace mirror are independent best-effort
 		// steps over disjoint bucket keys, so they run concurrently.
 		const { commit, workspace } = await allSettled({

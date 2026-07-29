@@ -34,9 +34,9 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV MARIMO_SKIP_UPDATE_CHECK=1 \
     _MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD=[html]
 
-# Non-root user + a writable /workspace (kernels run in /workspace/notebooks).
+# Non-root user + a writable /workspace.
 RUN useradd -m appuser \
- && mkdir -p /workspace/notebooks \
+ && mkdir -p /workspace \
  && chown -R appuser:appuser /workspace
 
 # Pre-install marimo (pinned) + the popular libraries in warm/pyproject.toml into
@@ -61,7 +61,7 @@ ENV VIRTUAL_ENV=/opt/venv \
     PATH=/opt/venv/bin:$PATH
 
 USER appuser
-WORKDIR /workspace/notebooks
+WORKDIR /workspace
 
 # Not used in production (the provisioner supplies the launch command); lets a bare
 # `docker run` start a kernel for a sanity check, straight from the pre-installed

@@ -333,7 +333,7 @@ config:
   # Compute — CoreWeave Sandboxes (steps 4–5)
   MARIMOHUB_COMPUTE_BACKEND: coreweave
   MARIMOHUB_COMPUTE_IMAGE: ghcr.io/marimo-team/marimo:latest-sql
-  MARIMOHUB_COMPUTE_WORKDIR: /home/appuser
+  MARIMOHUB_COMPUTE_WORKDIR: /home/appuser/workspace
   MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: sandbox.<ORG-ID>-marimohub.coreweave.app
   # No {port}: Traefik routes the hostname to the kernel port.
   MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE: https://{sandboxId}.{host}
@@ -360,8 +360,8 @@ Two values worth calling out:
   the hub UI.
 - `MARIMOHUB_COMPUTE_IMAGE` is the kernel image. `ghcr.io/marimo-team/marimo:latest-sql`
   works out of the box (it runs as a non-root user whose writable home is
-  `/home/appuser` — hence `MARIMOHUB_COMPUTE_WORKDIR`). To build your own, see
-  [Sandbox image](../sandbox-image.md).
+  `/home/appuser`, so this config uses `/home/appuser/workspace`). To build your
+  own, see [Sandbox image](../sandbox-image.md).
 
 Install:
 

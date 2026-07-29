@@ -134,7 +134,7 @@ describe('KubernetesCompute', () => {
 			// A fresh instance (as the API does for teardown) targets the same Pod.
 			await compute
 				.create(SANDBOX_ID)
-				.writeFiles([{ path: '/workspace/notebooks/notebook.py', content: 'x=1' }]);
+				.writeFiles([{ path: '/workspace/notebook.py', content: 'x=1' }]);
 			expect(world.execCalls.every((c) => c.name === NAME)).toBe(true);
 		});
 
@@ -183,11 +183,11 @@ describe('KubernetesCompute', () => {
 			const world = makeWorld();
 			await makeCompute(world)
 				.create(SANDBOX_ID)
-				.writeFiles([{ path: '/workspace/notebooks/notebook.py', content: 'x=1' }]);
+				.writeFiles([{ path: '/workspace/notebook.py', content: 'x=1' }]);
 			const call = world.execCalls.at(-1)!;
 			expect(call.stdin).toBe('x=1');
-			expect(shCmd(call)).toContain("mkdir -p '/workspace/notebooks'");
-			expect(shCmd(call)).toContain("cat > '/workspace/notebooks/notebook.py'");
+			expect(shCmd(call)).toContain("mkdir -p '/workspace'");
+			expect(shCmd(call)).toContain("cat > '/workspace/notebook.py'");
 		});
 
 		it('readFile returns file contents from the in-pod cat', async () => {
@@ -197,9 +197,7 @@ describe('KubernetesCompute', () => {
 						? { stdout: 'print(1)', stderr: '', exitCode: 0 }
 						: undefined,
 			});
-			const res = await makeCompute(world)
-				.create(SANDBOX_ID)
-				.readFile('/workspace/notebooks/notebook.py');
+			const res = await makeCompute(world).create(SANDBOX_ID).readFile('/workspace/notebook.py');
 			expectFileResult(res, { success: true, content: 'print(1)', encoding: 'utf-8' });
 		});
 
@@ -208,9 +206,7 @@ describe('KubernetesCompute', () => {
 				execImpl: (cmd) =>
 					cmd[2].startsWith('cat -- ') ? { stdout: '', stderr: 'missing', exitCode: 1 } : undefined,
 			});
-			const res = await makeCompute(world)
-				.create(SANDBOX_ID)
-				.readFile('/workspace/notebooks/missing.py');
+			const res = await makeCompute(world).create(SANDBOX_ID).readFile('/workspace/missing.py');
 
 			expect(res).toEqual({ success: false, content: '' });
 		});
@@ -239,7 +235,7 @@ describe('KubernetesCompute', () => {
 			await expect(
 				makeCompute(world)
 					.create(SANDBOX_ID)
-					.writeFiles([{ path: '/workspace/notebooks/notebook.py', content: 'x=1' }]),
+					.writeFiles([{ path: '/workspace/notebook.py', content: 'x=1' }]),
 			).rejects.toThrow(/permission denied/);
 		});
 	});

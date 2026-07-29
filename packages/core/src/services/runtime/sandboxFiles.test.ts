@@ -12,7 +12,7 @@ import {
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
 
 // `makeFsSandbox`'s default root — every test mounts the notebook here.
-const MOUNT = '/workspace/notebooks';
+const MOUNT = '/workspace';
 
 function nbCtx() {
 	const projectId = createProjectId();

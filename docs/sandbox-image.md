@@ -51,7 +51,7 @@ which takes a comma-separated list of template ids.
 ## The contract
 
 marimohub copies the notebook into the image and launches the kernel itself,
-reusing the image's pre-installed environment. With cwd `/workspace/notebooks`:
+reusing the image's pre-installed environment. With cwd `/workspace`:
 
 ```sh
 uv sync --inexact --no-compile-bytecode   # add the notebook's deps to the base env (skipped when it declares none)
@@ -68,7 +68,7 @@ So your image must provide:
 3. **A POSIX shell (`sh`) + coreutils** — `base64`, `mkdir`, `rm`, `cat`, `true`.
    marimohub transfers notebook files and probes reachability with these.
 4. **`git`** — only if notebooks use git checkouts, but cheap to include.
-5. **A writable working directory** (`/workspace/notebooks`) **and a writable
+5. **A writable working directory** (`/workspace`) **and a writable
    `UV_PROJECT_ENVIRONMENT`**, so `uv sync --inexact` can add a notebook's extra
    deps. If your image's non-root user can't write `/workspace`, set
    `MARIMOHUB_COMPUTE_WORKDIR` to a directory it can.
@@ -114,13 +114,13 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv UV_LINK_MODE=copy
 # Skip marimo's PyPI version ping, and continuously snapshot the notebook to
 # __marimo__/notebook.html so the host captures it on teardown.
 ENV MARIMO_SKIP_UPDATE_CHECK=1 _MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD=[html]
-RUN useradd -m appuser && mkdir -p /workspace/notebooks && chown -R appuser:appuser /workspace
+RUN useradd -m appuser && mkdir -p /workspace && chown -R appuser:appuser /workspace
 COPY warm/pyproject.toml /tmp/base/pyproject.toml
 RUN cd /tmp/base && uv add --compile-bytecode "marimo[recommended]==${MARIMO_VERSION}" \
  && uv cache clean && rm -rf /tmp/base && chown -R appuser:appuser /opt/venv
 ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH
 USER appuser
-WORKDIR /workspace/notebooks
+WORKDIR /workspace
 ```
 
 Build with a version-stamped tag, push, and point `MARIMOHUB_COMPUTE_IMAGE` at it:

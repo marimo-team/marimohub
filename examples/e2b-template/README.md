@@ -46,7 +46,7 @@ env the launch needs — above all `UV_PROJECT_ENVIRONMENT=/opt/venv`, so
 ## How it works
 
 marimo + the base libraries are pre-installed into `/opt/venv`
-(`UV_PROJECT_ENVIRONMENT`), so the provisioner's launch in `/workspace/notebooks`
+(`UV_PROJECT_ENVIRONMENT`), so the provisioner's launch in `/workspace`
 starts instantly for a notebook that only uses them:
 
 ```sh

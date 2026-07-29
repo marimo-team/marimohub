@@ -298,7 +298,7 @@ describe('Session routes', () => {
 	});
 
 	it('DELETE /sessions/{sid} cuts a version from the sandbox edits and captures snapshots', async () => {
-		const MOUNT = '/workspace/notebooks';
+		const MOUNT = '/workspace';
 		// A compute whose sandbox reports the session's edited files + marimo artifacts.
 		const editing = createTestApi({
 			bucket,
@@ -661,8 +661,8 @@ describe('Session routes', () => {
 			// The sandbox holds edits that a persisting teardown WOULD commit.
 			const compute = makeFakeCompute({
 				files: {
-					'/workspace/notebooks/notebook.py': 'print(2)  # viewer edit',
-					'/workspace/notebooks/__marimo__/notebook.html': '<html>x</html>',
+					'/workspace/notebook.py': 'print(2)  # viewer edit',
+					'/workspace/__marimo__/notebook.html': '<html>x</html>',
 				},
 			});
 			const viewer = viewerModeApi(VIEWER, 'ephemeral-sandbox', compute);

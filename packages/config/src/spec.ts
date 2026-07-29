@@ -216,7 +216,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_WORKDIR',
 						name: 'Sandbox working directory',
 						description:
-							'Working directory inside the sandbox; notebook files land in `<workdir>/notebooks`.',
+							'Working directory inside the sandbox where notebook files land and marimo runs.',
 						default: '/workspace',
 					},
 					{
