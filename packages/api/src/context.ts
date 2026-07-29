@@ -62,10 +62,10 @@ export interface SandboxConfig {
 	/** Public hostname used when exposing kernel ports (was `c.env.SANDBOX_HOSTNAME`). */
 	hostname: string;
 	/**
-	 * Working directory inside the sandbox (notebook files land in
-	 * `<workdir>/notebooks`). Must be writable by the sandbox image's user —
-	 * e.g. the marimo OSS image runs as a non-root user with no `/workspace`.
-	 * Config: MARIMOHUB_COMPUTE_WORKDIR. Defaults to `/workspace`.
+	 * Working directory inside the sandbox where notebook files land and marimo
+	 * runs. Must be writable by the sandbox image's user — e.g. the marimo OSS
+	 * image runs as a non-root user with no `/workspace`. Config:
+	 * MARIMOHUB_COMPUTE_WORKDIR. Defaults to `/workspace`.
 	 */
 	workdir: string;
 	/**

@@ -63,13 +63,13 @@ wait_http_200() { # $1 = host port
 	return 1
 }
 
-# Lay out /workspace/notebooks the way the provisioner does: a marimo notebook
+# Lay out /workspace the way the provisioner does: a marimo notebook
 # (deps NOT inline — marimohub stores them in pyproject.toml) plus a pyproject
 # that declares them.
 provision_notebook() { # $1 = container id
 	# `-i` keeps stdin open so the heredoc reaches `cat` inside the container;
 	# without it docker exec discards stdin and writes an empty file.
-	docker exec -i "$1" sh -lc 'cd /workspace/notebooks && cat > notebook.py' <<'PY'
+	docker exec -i "$1" sh -lc 'cd /workspace && cat > notebook.py' <<'PY'
 import marimo
 
 app = marimo.App()
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     app.run()
 PY
 	# Only the user's libraries — marimo is pre-installed in the image's env.
-	docker exec -i "$1" sh -lc 'cd /workspace/notebooks && cat > pyproject.toml' <<'TOML'
+	docker exec -i "$1" sh -lc 'cd /workspace && cat > pyproject.toml' <<'TOML'
 [project]
 name = "nb"
 version = "0.1.0"
@@ -100,7 +100,7 @@ TOML
 # detached, logging to /tmp/m.log.
 launch_kernel() { # $1 = container id
 	docker exec -d "$1" sh -lc '
-		cd /workspace/notebooks
+		cd /workspace
 		[ -s pyproject.toml ] && uv sync --inexact || true
 		uv run --no-sync marimo edit notebook.py \
 			--convert --headless --no-token --host 0.0.0.0 --port 2718 >/tmp/m.log 2>&1
@@ -120,25 +120,25 @@ docker run --rm "$IMAGE" sh -lc '
 	command -v uv >/dev/null   || { echo "uv missing"; exit 1; }
 	command -v git >/dev/null  || { echo "git missing"; exit 1; }
 	command -v base64 >/dev/null || { echo "base64 missing"; exit 1; }
-	test -w /workspace/notebooks || { echo "/workspace/notebooks not writable"; exit 1; }
+	test -w /workspace || { echo "/workspace not writable"; exit 1; }
 	[ "$(id -u)" != "0" ] || { echo "running as root"; exit 1; }
 ' || fail "image contract not satisfied (uv/git/coreutils/writable non-root workdir)"
-ok "uv + git + coreutils present; /workspace/notebooks writable; non-root"
+ok "uv + git + coreutils present; /workspace writable; non-root"
 
 # --- 2. pre-installed env: marimo + base libs ready with no install ----------
 echo "==> 2. Pre-installed env (fast startup)"
 # marimo + base libs must already be importable from the env (not just cached), so
 # the base case starts with no build.
-docker run --rm "$IMAGE" sh -lc 'cd /workspace/notebooks && uv run --no-sync python -c "import marimo, polars, narwhals"' \
+docker run --rm "$IMAGE" sh -lc 'cd /workspace && uv run --no-sync python -c "import marimo, polars, narwhals"' \
 	|| fail "image does not pre-install marimo + base libraries into the project env"
 ok "marimo + base libs pre-installed (importable, no build → fast base-case startup)"
 cid="$(run_detached "$IMAGE" sleep infinity)"
 provision_notebook "$cid"
 # The launch setup step (`uv sync --inexact`) must add the notebook's deps without
 # removing the pre-installed base, and download little — the base is already there.
-docker exec "$cid" sh -lc 'cd /workspace/notebooks && uv sync --inexact >/tmp/sync.log 2>&1' \
+docker exec "$cid" sh -lc 'cd /workspace && uv sync --inexact >/tmp/sync.log 2>&1' \
 	|| { docker exec "$cid" sh -lc 'tail -10 /tmp/sync.log'; fail "uv sync --inexact failed"; }
-docker exec "$cid" sh -lc 'cd /workspace/notebooks && uv run --no-sync python -c "import marimo, polars"' \
+docker exec "$cid" sh -lc 'cd /workspace && uv run --no-sync python -c "import marimo, polars"' \
 	|| fail "marimo or base lib missing after uv sync --inexact (base was removed?)"
 dl="$(docker exec "$cid" sh -lc 'grep -ic "Downloading" /tmp/sync.log || true')"
 [ "${dl:-99}" -le 5 ] || fail "uv sync --inexact downloaded $dl wheels (expected ≤5; base is pre-installed)"
@@ -149,7 +149,7 @@ docker rm -f "$cid" >/dev/null 2>&1
 echo "==> 2b. Pinned marimo (no auto-upgrade)"
 mv="$(docker run --rm "$IMAGE" sh -lc 'printf %s "$MARIMO_VERSION"')"
 [ -n "$mv" ] || fail "image does not set MARIMO_VERSION — marimo is not pinned"
-got="$(docker run --rm "$IMAGE" sh -lc 'cd /workspace/notebooks && uv run --no-sync python -c "import marimo; print(marimo.__version__)" 2>/dev/null | tail -1')"
+got="$(docker run --rm "$IMAGE" sh -lc 'cd /workspace && uv run --no-sync python -c "import marimo; print(marimo.__version__)" 2>/dev/null | tail -1')"
 [ "$got" = "$mv" ] || fail "pre-installed marimo is ${got:-none}, expected pinned $mv"
 ok "marimo pinned to $mv (pre-installed; launch never upgrades it)"
 
@@ -165,7 +165,7 @@ docker rm -f "$cid" >/dev/null 2>&1
 # --- 4. --convert rescues a non-marimo python file (no pyproject) ------------
 echo "==> 4. --convert opens a non-marimo file"
 cid="$(run_detached -p 127.0.0.1:2719:2718 "$IMAGE" sleep infinity)"
-docker exec "$cid" sh -lc 'cd /workspace/notebooks && printf "import marimo\n" > notebook.py'
+docker exec "$cid" sh -lc 'cd /workspace && printf "import marimo\n" > notebook.py'
 launch_kernel "$cid"
 wait_http_200 2719 || { docker exec "$cid" sh -lc 'tail -20 /tmp/m.log' || true; fail "--convert did not open the non-marimo file"; }
 ok "--convert serves a plain Python file with no pyproject (HTTP 200)"

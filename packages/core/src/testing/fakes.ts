@@ -131,7 +131,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 	return { instance, calls };
 }
 
-const DEFAULT_FS_ROOT = '/workspace/notebooks';
+const DEFAULT_FS_ROOT = '/workspace';
 
 function fsBase64Encode(bytes: Uint8Array): string {
 	let bin = '';

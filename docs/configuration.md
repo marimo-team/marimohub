@@ -91,7 +91,7 @@ Read regardless of the selected compute backend.
 | `MARIMOHUB_COMPUTE_IMAGE` | Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
 | `MARIMOHUB_COMPUTE_IDLE_TIMEOUT` | Idle duration before a kernel auto-stops (modal). | — | — | `20m` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
-| `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox; notebook files land in `<workdir>/notebooks`. | — | `/workspace` | — |
+| `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |
 | `MARIMOHUB_COMPUTE_ASSET_URL` | Base URL for marimo frontend assets (e.g. a CDN). Omit to use the bundled assets. | — | — | `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist` |
 
 ### CoreWeave Sandbox

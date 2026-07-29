@@ -21,7 +21,7 @@ ENV LANG=en_US.UTF-8 \
     _MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD=[html]
 
 RUN useradd -m appuser \
- && mkdir -p /workspace/notebooks \
+ && mkdir -p /workspace \
  && chown -R appuser:appuser /workspace
 
 # Retaining uv's cache makes overlapping per-notebook dependency installs cache hits.
@@ -57,6 +57,6 @@ ENV VIRTUAL_ENV=/opt/venv \
     PATH=/opt/venv/bin:$PATH
 
 USER appuser
-WORKDIR /workspace/notebooks
+WORKDIR /workspace
 
 CMD ["uv", "run", "--no-sync", "marimo", "edit", "notebook.py", "--convert", "--headless", "--no-token", "--host", "0.0.0.0", "--port", "2718"]

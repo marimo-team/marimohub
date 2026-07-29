@@ -34,7 +34,7 @@ deliberate, manual step, never automatic.
 
 ## How it works
 
-The provisioner runs, in `/workspace/notebooks`:
+The provisioner runs in `/workspace`:
 
 ```sh
 uv sync --inexact --no-compile-bytecode   # add the notebook's deps, keep the pre-installed base

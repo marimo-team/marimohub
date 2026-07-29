@@ -78,14 +78,14 @@ describe('rewriteWorkspace (pure)', () => {
 describe('LocalCompute file ops', () => {
 	it('round-trips files under the workspace and maps /workspace paths', async () => {
 		const sb = newSandbox();
-		const mkdir = await sb.exec('mkdir -p /workspace/notebooks');
+		const mkdir = await sb.exec('mkdir -p /workspace');
 		expect(mkdir.success).toBe(true);
 
-		await sb.writeFiles([{ path: '/workspace/notebooks/notebook.py', content: 'print(1)' }]);
-		const read = await sb.readFile('/workspace/notebooks/notebook.py');
+		await sb.writeFiles([{ path: '/workspace/notebook.py', content: 'print(1)' }]);
+		const read = await sb.readFile('/workspace/notebook.py');
 		expectFileResult(read, { success: true, content: 'print(1)' });
 
-		const list = await sb.listFiles('/workspace/notebooks');
+		const list = await sb.listFiles('/workspace');
 		expect(list.success).toBe(true);
 		expect(list.files.map((f) => f.name)).toContain('notebook.py');
 	});
