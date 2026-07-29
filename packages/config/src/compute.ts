@@ -4,7 +4,8 @@ import { LocalCompute } from '@marimo-hub/compute-local';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
 import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';
-import { DockerCompute } from '@marimo-hub/compute-docker';
+import { DockerCompute } from '@marimo-hub/compute-container/docker';
+import { PodmanCompute } from '@marimo-hub/compute-container/podman';
 import { E2bCompute } from '@marimo-hub/compute-e2b';
 import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
 import { parseBool, parseIntEnv, parseList, requiredVar } from './env';
@@ -219,6 +220,13 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				host: env.MARIMOHUB_COMPUTE_DOCKER_HOST,
 				bindHost: env.MARIMOHUB_COMPUTE_DOCKER_BIND_HOST,
 				network: env.MARIMOHUB_COMPUTE_DOCKER_NETWORK,
+			});
+		case 'podman':
+			return new PodmanCompute({
+				image: defaultImage,
+				host: env.MARIMOHUB_COMPUTE_PODMAN_HOST,
+				bindHost: env.MARIMOHUB_COMPUTE_PODMAN_BIND_HOST,
+				network: env.MARIMOHUB_COMPUTE_PODMAN_NETWORK,
 			});
 		case 'e2b':
 			// E2B sandboxes (e2b.dev): per-session sandbox with a public per-port URL

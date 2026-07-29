@@ -34,7 +34,7 @@ MARIMOHUB_PERSIST_WORKSPACE=source
 ```
 
 - Everything is documented in [Configuration](./configuration.md).
-- Best for standard deployments (Docker, Kubernetes).
+- Best for standard deployments (Docker, Podman, Kubernetes).
 
 ## 2. SDK / library composition (the complex case)
 

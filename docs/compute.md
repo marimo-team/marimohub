@@ -20,6 +20,7 @@ Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
 | E2B        | `e2b`        | Managed code sandboxes                      |
 | Kubernetes | `kubernetes` | Pods in your own cluster                    |
 | Docker     | `docker`     | Single-host container per kernel            |
+| Podman     | `podman`     | Rootless or remote container per kernel     |
 | Local      | `local`      | Local development with `uv run marimo edit` |
 | Cloudflare | `cloudflare` | Workers entrypoint with Containers binding  |
 | None       | `none`       | Browse notebooks without runnable kernels   |
@@ -74,6 +75,10 @@ model.
 ### Docker
 
 <!--@include: ./setup/compute/docker.md-->
+
+### Podman
+
+<!--@include: ./setup/compute/podman.md-->
 
 ### Local (dev)
 

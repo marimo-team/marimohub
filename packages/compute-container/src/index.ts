@@ -1,25 +1,7 @@
 /**
- * Docker compute backend — a `SandboxProvider` that runs each marimo kernel in a
- * container on a Docker daemon (local socket or a remote `DOCKER_HOST`).
- *
- * It's the isolated sibling of the `local` subprocess adapter: same "browser hits
- * the kernel directly" model (so `proxy()` is a no-op), but each sandbox is a
- * container with a published port instead of a host child process. Good for
- * single-host self-hosting.
- *
- * Design:
- *  - One container per sandbox, named `marimohub-sbx-<id>` and labelled
- *    `marimohub.sandbox=<id>` (the seam the reconciler enumerates).
- *  - The container's entrypoint is overridden with `sleep infinity` so it stays up
- *    as an exec target; the marimo kernel is launched later via `docker exec -d`.
- *  - Container port 2718 is published to an OS-assigned host port at create; the
- *    kernel must bind 0.0.0.0 inside the container (the SandboxProvisioner passes
- *    `--host 0.0.0.0`) for the publish to be reachable.
- *  - State lives in Docker, not this process, so every op re-resolves by container
- *    name — teardown works across restarts (like the CoreWeave adapter).
- *
- * The `docker` CLI is invoked through an injectable {@link DockerRunner} (the test
- * seam); the default runner spawns the binary on PATH.
+ * Shared CLI container adapter used by the Docker and Podman compute providers.
+ * State stays in the selected engine, so operations re-resolve containers by name
+ * and teardown continues to work across server restarts.
  */
 import { spawn } from 'node:child_process';
 import {
@@ -59,24 +41,21 @@ const NAME_PREFIX = 'marimohub-sbx-';
 const DEFAULT_LABEL_KEY = 'marimohub.sandbox';
 const DEFAULT_IMAGE = 'ghcr.io/marimo-team/marimo:latest';
 
-export interface DockerRunResult {
+export interface ContainerRunResult {
 	stdout: string;
 	stderr: string;
 	exitCode: number;
 }
 
 /**
- * The slice of the `docker` CLI this adapter uses. Injecting it (rather than
- * spawning directly) is the test seam: production uses {@link spawnDockerRunner},
- * tests pass a fake. `args` are passed to `docker` verbatim; `stdin`, when set, is
- * piped to the process (used by `writeFiles`).
+ * The slice of a container CLI used by the adapter. Injecting it keeps tests
+ * hermetic while production spawns the selected engine binary on PATH.
  */
-export interface DockerRunner {
-	run(args: string[], options?: { stdin?: string | Uint8Array }): Promise<DockerRunResult>;
+export interface ContainerRunner {
+	run(args: string[], options?: { stdin?: string | Uint8Array }): Promise<ContainerRunResult>;
 }
 
-/** Default {@link DockerRunner}: spawns the `docker` binary on PATH. */
-export function spawnDockerRunner(bin = 'docker'): DockerRunner {
+export function spawnContainerRunner(bin: string): ContainerRunner {
 	return {
 		run(args, options) {
 			return new Promise((resolve) => {
@@ -99,24 +78,25 @@ export function spawnDockerRunner(bin = 'docker'): DockerRunner {
 	};
 }
 
-export interface DockerConfig {
+export interface ContainerConfig {
 	/** Image with marimo + uv + python. Default `ghcr.io/marimo-team/marimo:latest`. */
 	image?: string;
 	/** Hostname the returned kernel URL points at (what the browser hits). Default `localhost`. */
 	host?: string;
 	/** Host interface the container port is published on. Default `127.0.0.1`. */
 	bindHost?: string;
-	/** Optional docker network to attach sandboxes to. */
+	/** Optional container network to attach sandboxes to. */
 	network?: string;
 	/** Label key used to tag + enumerate our containers. Default `marimohub.sandbox`. */
 	labelKey?: string;
 }
 
-type ResolvedConfig = Required<Omit<DockerConfig, 'network'>> & Pick<DockerConfig, 'network'>;
+type ResolvedConfig = Required<Omit<ContainerConfig, 'network'>> &
+	Pick<ContainerConfig, 'network'> & { engine: string };
 
 let procSeq = 0;
 
-class DockerSandboxInstance implements SandboxInstance {
+class ContainerSandboxInstance implements SandboxInstance {
 	private readonly name: string;
 	private env: Record<string, string> = {};
 	/** Cached host port for the published kernel port, once known. */
@@ -125,19 +105,19 @@ class DockerSandboxInstance implements SandboxInstance {
 	constructor(
 		private readonly id: SandboxId,
 		private readonly config: ResolvedConfig,
-		private readonly docker: DockerRunner,
+		private readonly runner: ContainerRunner,
 	) {
 		this.name = `${NAME_PREFIX}${id}`;
 	}
 
 	/** Ensure the container exists and is running; create it (idempotently) if not. */
 	private async ensure(): Promise<void> {
-		const inspect = await this.docker.run(['inspect', '-f', '{{.State.Running}}', this.name]);
+		const inspect = await this.runner.run(['inspect', '-f', '{{.State.Running}}', this.name]);
 		if (inspect.exitCode === 0 && inspect.stdout.trim() === 'true') return;
 
 		// A stopped container with our name would make `run --name` fail — clear it.
 		if (inspect.exitCode === 0) {
-			await this.docker.run(['rm', '-f', this.name]);
+			await this.runner.run(['rm', '-f', this.name]);
 		}
 
 		const args = [
@@ -154,20 +134,22 @@ class DockerSandboxInstance implements SandboxInstance {
 		if (this.config.network) args.push('--network', this.config.network);
 		args.push(this.config.image, 'sleep', 'infinity');
 
-		const res = await this.docker.run(args);
+		const res = await this.runner.run(args);
 		if (res.exitCode !== 0) {
-			throw new Error(`docker run failed for sandbox ${this.id}: ${res.stderr || res.stdout}`);
+			throw new Error(
+				`${this.config.engine} run failed for sandbox ${this.id}: ${res.stderr || res.stdout}`,
+			);
 		}
 	}
 
-	/** Prefix accumulated env vars onto a shell command (no per-exec env in `docker exec`). */
+	/** Prefix accumulated env vars onto a shell command. */
 	private withEnv(cmd: string): string {
 		return withEnvPrefix(cmd, this.env);
 	}
 
-	private async dexec(cmd: string, flags: string[] = []): Promise<DockerRunResult> {
+	private async dexec(cmd: string, flags: string[] = []): Promise<ContainerRunResult> {
 		await this.ensure();
-		return this.docker.run(['exec', ...flags, this.name, 'sh', '-lc', this.withEnv(cmd)]);
+		return this.runner.run(['exec', ...flags, this.name, 'sh', '-lc', this.withEnv(cmd)]);
 	}
 
 	async exec(cmd: string): Promise<ExecResult> {
@@ -210,7 +192,7 @@ class DockerSandboxInstance implements SandboxInstance {
 			throw new Error(`writeFiles mkdir failed: ${mk.stderr || mk.stdout}`);
 		}
 		await mapWithConcurrency(files, WRITE_CONCURRENCY, async (f) => {
-			const res = await this.docker.run(
+			const res = await this.runner.run(
 				['exec', '-i', this.name, 'sh', '-c', `cat > ${shellQuote(f.path)}`],
 				{ stdin: f.content },
 			);
@@ -232,7 +214,7 @@ class DockerSandboxInstance implements SandboxInstance {
 	async mountBucket(_options: MountBucketOptions): Promise<void> {
 		// No FUSE mount — throwing makes SandboxProvisioner fall back to copying
 		// notebook files in/out (the intended path, like local/modal/coreweave).
-		throw new Error('docker compute uses file copy, not bucket mount');
+		throw new Error(`${this.config.engine} compute uses file copy, not bucket mount`);
 	}
 
 	async unmountBucket(_mountPath: string): Promise<void> {
@@ -242,9 +224,11 @@ class DockerSandboxInstance implements SandboxInstance {
 	/** Read the OS-assigned host port mapped to the container's kernel port. */
 	private async resolveHostPort(): Promise<number> {
 		if (this.hostPort) return this.hostPort;
-		const res = await this.docker.run(['port', this.name, `${KERNEL_PORT}/tcp`]);
+		const res = await this.runner.run(['port', this.name, `${KERNEL_PORT}/tcp`]);
 		if (res.exitCode !== 0) {
-			throw new Error(`docker port failed for ${this.name}: ${res.stderr || res.stdout}`);
+			throw new Error(
+				`${this.config.engine} port failed for ${this.name}: ${res.stderr || res.stdout}`,
+			);
 		}
 		// Output lines look like `0.0.0.0:49153` / `[::]:49153`; take the first port.
 		const match = res.stdout.match(/:(\d+)\s*$/m);
@@ -275,23 +259,21 @@ class DockerSandboxInstance implements SandboxInstance {
 		}
 		const probeInside = (port: number) => this.probePort(port);
 		const readLogs = () => this.dexec(`cat ${logPath} 2>/dev/null || true`);
-		const id = `docker-proc-${procSeq}`;
+		const id = `${this.config.engine}-proc-${procSeq}`;
 		const containerName = this.name;
-		const docker = this.docker;
+		const runner = this.runner;
 
 		return {
 			id,
 			command: cmd,
 			async kill(_signal?: string): Promise<void> {
 				// No tracked PID for a detached exec; best-effort kill of the kernel.
-				await docker.run(['exec', containerName, 'pkill', '-f', 'marimo']).catch(() => {});
+				await runner.run(['exec', containerName, 'pkill', '-f', 'marimo']).catch(() => {});
 			},
 			async waitForPort(port: number, opts?: WaitForPortOptions): Promise<void> {
 				const timeout = opts?.timeout ?? 30_000;
-				// Probe INSIDE the container, not the published host port: Docker's
-				// userland proxy accepts a host-port connection immediately (before the
-				// app binds), so a host-side TCP check is a false-positive. An in-container
-				// loopback probe only succeeds once marimo actually listens.
+				// Probe inside the container because a port forwarder may accept host
+				// connections before the application has bound its container port.
 				await pollUntilReady(() => probeInside(port), {
 					timeoutMs: timeout,
 					intervalMs: 500,
@@ -312,19 +294,21 @@ class DockerSandboxInstance implements SandboxInstance {
 	}
 
 	async destroy(): Promise<void> {
-		await this.docker.run(['rm', '-f', '-v', this.name]);
+		await this.runner.run(['rm', '-f', '-v', this.name]);
 		this.hostPort = undefined;
 	}
 }
 
-export class DockerCompute implements SandboxProvider {
+export class ContainerCompute implements SandboxProvider {
 	private readonly config: ResolvedConfig;
 
 	constructor(
-		config: DockerConfig = {},
-		private readonly docker: DockerRunner = spawnDockerRunner(),
+		engine: string,
+		config: ContainerConfig = {},
+		private readonly runner: ContainerRunner = spawnContainerRunner(engine),
 	) {
 		this.config = {
+			engine,
 			image: config.image || DEFAULT_IMAGE,
 			host: config.host || 'localhost',
 			bindHost: config.bindHost || '127.0.0.1',
@@ -335,7 +319,7 @@ export class DockerCompute implements SandboxProvider {
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
 		const config = options?.image ? { ...this.config, image: options.image } : this.config;
-		return new DockerSandboxInstance(id, config, this.docker);
+		return new ContainerSandboxInstance(id, config, this.runner);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {
@@ -344,7 +328,7 @@ export class DockerCompute implements SandboxProvider {
 	}
 
 	async listActive(): Promise<ActiveSandbox[]> {
-		const res = await this.docker.run([
+		const res = await this.runner.run([
 			'ps',
 			'--filter',
 			`label=${this.config.labelKey}`,

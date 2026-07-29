@@ -90,7 +90,7 @@ _No environment variables to set here._
 
 ## Compute
 
-Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `wandb`, `modal`, `docker`, `e2b`, `kubernetes`, `local`, `none`.
+Selected by `MARIMOHUB_COMPUTE_BACKEND`; one of `coreweave`, `wandb`, `modal`, `docker`, `podman`, `e2b`, `kubernetes`, `local`, `none`.
 
 Where notebook kernels run. The shared variables apply across compute backends.
 
@@ -166,6 +166,18 @@ Runs each kernel in a container on a Docker daemon (local socket or remote `DOCK
 | `MARIMOHUB_COMPUTE_DOCKER_HOST` | Hostname the returned kernel URL points at (what the browser hits). | — | `localhost` | — |
 | `MARIMOHUB_COMPUTE_DOCKER_BIND_HOST` | Host interface the container port is published on. | — | `127.0.0.1` | — |
 | `MARIMOHUB_COMPUTE_DOCKER_NETWORK` | Optional Docker network to attach sandboxes to. | — | — | `marimohub` |
+
+### Podman
+
+`MARIMOHUB_COMPUTE_BACKEND=podman`
+
+Runs each kernel in a container through the Podman CLI. Supports local, rootless, or remote Podman when the server user has a configured connection. Uses the shared `MARIMOHUB_COMPUTE_IMAGE`.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_COMPUTE_PODMAN_HOST` | Hostname the returned kernel URL points at (what the browser hits). | — | `localhost` | — |
+| `MARIMOHUB_COMPUTE_PODMAN_BIND_HOST` | Host interface the container port is published on. | — | `127.0.0.1` | — |
+| `MARIMOHUB_COMPUTE_PODMAN_NETWORK` | Optional Podman network to attach sandboxes to. | — | — | `marimohub` |
 
 ### E2B
 

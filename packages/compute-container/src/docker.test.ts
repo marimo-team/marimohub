@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core';
 import { expectListFilesResult } from '@marimo-hub/core/testing';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
-import { DockerCompute, spawnDockerRunner } from './index';
-import type { DockerRunner, DockerRunResult } from './index';
+import { DockerCompute, spawnDockerRunner } from './docker';
+import type { DockerRunner, DockerRunResult } from './docker';
+import { containerCliContract } from './testing';
 
 /**
  * Hermetic tests for the Docker compute adapter: a fake `DockerRunner` records
@@ -458,3 +459,10 @@ describe('DockerCompute', () => {
 computeContract('DockerCompute', () => new DockerCompute({}, fakeRunner(defaultHandler).runner), {
 	mountFallsBack: true,
 });
+
+containerCliContract(
+	'DockerCompute',
+	'docker',
+	(config, runner) => new DockerCompute(config, runner),
+	spawnDockerRunner,
+);

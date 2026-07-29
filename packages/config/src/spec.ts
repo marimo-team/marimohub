@@ -456,6 +456,32 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				],
 			},
 			{
+				name: 'Podman',
+				selectorValue: 'podman',
+				description:
+					'Runs each kernel in a container through the Podman CLI. Supports local, rootless, or remote Podman when the server user has a configured connection. Uses the shared `MARIMOHUB_COMPUTE_IMAGE`.',
+				vars: [
+					{
+						id: 'MARIMOHUB_COMPUTE_PODMAN_HOST',
+						name: 'Podman kernel host',
+						description: 'Hostname the returned kernel URL points at (what the browser hits).',
+						default: 'localhost',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_PODMAN_BIND_HOST',
+						name: 'Podman bind host',
+						description: 'Host interface the container port is published on.',
+						default: '127.0.0.1',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_PODMAN_NETWORK',
+						name: 'Podman network',
+						description: 'Optional Podman network to attach sandboxes to.',
+						example: 'marimohub',
+					},
+				],
+			},
+			{
 				name: 'E2B',
 				selectorValue: 'e2b',
 				description:

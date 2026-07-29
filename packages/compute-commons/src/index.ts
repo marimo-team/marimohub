@@ -28,9 +28,9 @@ export function shellQuote(value: string): string {
 
 /**
  * Build the `export K='v'; …` shell prefix that carries accumulated env vars into
- * a command, for backends whose `exec` has no per-command env (CoreWeave, Docker,
- * Kubernetes pod-exec). Values are {@link shellQuote}d. Returns `cmd` unchanged
- * when `env` is empty.
+ * a command, for backends whose `exec` has no per-command env (CoreWeave,
+ * Docker, Podman, Kubernetes pod-exec). Values are {@link shellQuote}d. Returns
+ * `cmd` unchanged when `env` is empty.
  */
 export function withEnvPrefix(cmd: string, env: Record<string, string>): string {
 	const keys = Object.keys(env);

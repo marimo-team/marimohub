@@ -1,5 +1,5 @@
 {
-	"name": "@marimo-hub/compute-docker",
+	"name": "@marimo-hub/compute-container",
 	"version": "0.0.0",
 	"private": true,
 	"license": "Apache-2.0",
@@ -8,7 +8,8 @@
 	],
 	"type": "module",
 	"exports": {
-		".": "./src/index.ts",
+		"./docker": "./src/docker.ts",
+		"./podman": "./src/podman.ts",
 		"./package.json": "./package.json"
 	},
 	"scripts": {

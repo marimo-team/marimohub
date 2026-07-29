@@ -28,19 +28,20 @@ adapter.
 
 ## Compute (`SandboxProvider`)
 
-| Status | Provider                        | Adapter              | Notes                                                 |
-| ------ | ------------------------------- | -------------------- | ----------------------------------------------------- |
-| ✅     | CoreWeave Sandboxes (cwsandbox) | `compute-coreweave`  | Vendored gRPC SDK                                     |
-| ✅     | Cloudflare Containers           | `compute-cloudflare` | Durable Object-backed; Workers-only                   |
-| ✅     | E2B                             | `compute-e2b`        | `e2b` SDK is an optional, bring-your-own dependency   |
-| ✅     | Local subprocess                | `compute-local`      | Dev only (`uv run marimo edit` on the host)           |
-| 🟡     | Modal                           | `compute-modal`      |                                                       |
-| 🟡     | Docker                          | `compute-docker`     | Local end-to-end test passed; not run in a deployment |
-| 🟡     | Kubernetes                      | `compute-kubernetes` | Pod + Service + Ingress per sandbox; vendor-neutral   |
-| ⬜     | Fly.io Machines                 | —                    | VM per sandbox, per-machine public hostname           |
-| ⬜     | Daytona                         | —                    | Sandbox SDK (exec/files/preview URLs)                 |
-| ⬜     | AWS Fargate / ECS RunTask       | —                    | RunTask + ECS Exec + ALB                              |
-| ⬜     | Runpod / Lambda / Beam          | —                    | For GPU kernels                                       |
+| Status | Provider                        | Adapter                    | Notes                                                 |
+| ------ | ------------------------------- | -------------------------- | ----------------------------------------------------- |
+| ✅     | CoreWeave Sandboxes (cwsandbox) | `compute-coreweave`        | Vendored gRPC SDK                                     |
+| ✅     | Cloudflare Containers           | `compute-cloudflare`       | Durable Object-backed; Workers-only                   |
+| ✅     | E2B                             | `compute-e2b`              | `e2b` SDK is an optional, bring-your-own dependency   |
+| ✅     | Local subprocess                | `compute-local`            | Dev only (`uv run marimo edit` on the host)           |
+| 🟡     | Modal                           | `compute-modal`            |                                                       |
+| 🟡     | Docker                          | `compute-container/docker` | Local end-to-end test passed; not run in a deployment |
+| 🟡     | Podman                          | `compute-container/podman` | Hermetic CLI tests; not yet live-verified             |
+| 🟡     | Kubernetes                      | `compute-kubernetes`       | Pod + Service + Ingress per sandbox; vendor-neutral   |
+| ⬜     | Fly.io Machines                 | —                          | VM per sandbox, per-machine public hostname           |
+| ⬜     | Daytona                         | —                          | Sandbox SDK (exec/files/preview URLs)                 |
+| ⬜     | AWS Fargate / ECS RunTask       | —                          | RunTask + ECS Exec + ALB                              |
+| ⬜     | Runpod / Lambda / Beam          | —                          | For GPU kernels                                       |
 
 ## Auth (`Authenticator`)
 

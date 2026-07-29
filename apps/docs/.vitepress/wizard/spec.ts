@@ -61,6 +61,7 @@ const ICONS: Record<string, string> = {
 	coreweave: '🧶',
 	wandb: '🪄',
 	docker: '🐳',
+	podman: '🦭',
 	e2b: '📦',
 	kubernetes: '☸️',
 	local: '💻',
@@ -273,13 +274,25 @@ export const COMPUTE_WIRING: Record<string, BackendWiring> = {
 			].join('\n'),
 	},
 	docker: {
-		imports: [`import { DockerCompute } from '@marimo-hub/compute-docker';`],
+		imports: [`import { DockerCompute } from '@marimo-hub/compute-container/docker';`],
 		rhs: (r) =>
 			[
 				`new DockerCompute({`,
 				`\timage: ${env('MARIMOHUB_COMPUTE_IMAGE')},`,
 				`\thost: ${lit('MARIMOHUB_COMPUTE_DOCKER_HOST', r)},`,
 				`\tbindHost: ${lit('MARIMOHUB_COMPUTE_DOCKER_BIND_HOST', r)},`,
+				`})`,
+			].join('\n'),
+	},
+	podman: {
+		imports: [`import { PodmanCompute } from '@marimo-hub/compute-container/podman';`],
+		rhs: (r) =>
+			[
+				`new PodmanCompute({`,
+				`\timage: ${env('MARIMOHUB_COMPUTE_IMAGE')},`,
+				`\thost: ${lit('MARIMOHUB_COMPUTE_PODMAN_HOST', r)},`,
+				`\tbindHost: ${lit('MARIMOHUB_COMPUTE_PODMAN_BIND_HOST', r)},`,
+				`\tnetwork: ${lit('MARIMOHUB_COMPUTE_PODMAN_NETWORK', r)},`,
 				`})`,
 			].join('\n'),
 	},

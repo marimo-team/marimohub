@@ -51,11 +51,11 @@ the web dev server proxies `/api` requests to it.
 
 ## What the local backends mean
 
-| Part    | Local backend           | Production swap                                                 |
-| ------- | ----------------------- | --------------------------------------------------------------- |
-| Storage | `memory`, volatile      | CAIOS, S3, GCS, Azure, or R2 -> [Storage](./storage.md)         |
-| Compute | `local`, host process   | CoreWeave, Modal, Kubernetes, Docker -> [Compute](./compute.md) |
-| Auth    | `dev`, fixed local user | OIDC or Cloudflare Access -> [Auth](./auth.md)                  |
+| Part    | Local backend           | Production swap                                                         |
+| ------- | ----------------------- | ----------------------------------------------------------------------- |
+| Storage | `memory`, volatile      | CAIOS, S3, GCS, Azure, or R2 -> [Storage](./storage.md)                 |
+| Compute | `local`, host process   | CoreWeave, Modal, Kubernetes, Docker, Podman -> [Compute](./compute.md) |
+| Auth    | `dev`, fixed local user | OIDC or Cloudflare Access -> [Auth](./auth.md)                          |
 
 The local stack is not a production mode. It stores nothing durably, starts
 kernels on your machine, and authenticates every request as a fixed development

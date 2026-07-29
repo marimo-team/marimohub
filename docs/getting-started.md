@@ -27,7 +27,7 @@ Every deployment picks one option for each port.
 | Decision                           | Common options                                          | Guide                   |
 | ---------------------------------- | ------------------------------------------------------- | ----------------------- |
 | **Storage** - where notebooks live | CAIOS, AWS S3, GCS, Azure Blob Storage, MinIO, R2       | [Storage](./storage.md) |
-| **Compute** - where kernels run    | CoreWeave Sandboxes, Modal, Kubernetes, Docker          | [Compute](./compute.md) |
+| **Compute** - where kernels run    | CoreWeave Sandboxes, Modal, Kubernetes, Docker, Podman  | [Compute](./compute.md) |
 | **Auth** - who can sign in         | OpenID Connect (Google, Okta, Auth0), Cloudflare Access | [Auth](./auth.md)       |
 
 Storage is the decision to make first. It holds the durable state and must

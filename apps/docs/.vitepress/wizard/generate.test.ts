@@ -42,6 +42,13 @@ const CASES: Record<string, WizardSelection> = {
 		ai: 'none',
 		values: { MARIMOHUB_STORAGE_FS_ROOT: '/var/lib/marimohub/storage' },
 	},
+	'fs + podman + oidc': {
+		storage: 'fs',
+		compute: 'podman',
+		auth: 'oidc',
+		ai: 'none',
+		values: { MARIMOHUB_STORAGE_FS_ROOT: '/var/lib/marimohub/storage' },
+	},
 	's3 + coreweave + oidc, custom image': {
 		storage: 's3',
 		compute: 'coreweave',
