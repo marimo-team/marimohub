@@ -429,7 +429,7 @@ exports[`config -> code generators > fs + docker + oidc (single-box) > library 1
 "import { createApi } from '@marimo-hub/api';
 import { createServices } from '@marimo-hub/core';
 import { FsStorage } from '@marimo-hub/storage-fs';
-import { DockerCompute } from '@marimo-hub/compute-docker';
+import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { createOidcAuth } from '@marimo-hub/auth-oidc';
 
 const bucket = new FsStorage({
@@ -440,6 +440,145 @@ const compute = new DockerCompute({
 	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
 	host: "localhost",
 	bindHost: "127.0.0.1",
+});
+
+const { authenticator, routes: authRoutes } = createOidcAuth({
+	issuer: process.env.MARIMOHUB_AUTH_OIDC_ISSUER!,
+	clientId: process.env.MARIMOHUB_AUTH_OIDC_CLIENT_ID!,
+	clientSecret: process.env.MARIMOHUB_AUTH_OIDC_CLIENT_SECRET!,
+	redirectUri: process.env.MARIMOHUB_AUTH_OIDC_REDIRECT_URI!,
+	sessionSecret: process.env.MARIMOHUB_AUTH_SESSION_SECRET!,
+	allowedEmailDomains: (process.env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS ?? '').split(','),
+});
+
+const app = createApi({
+	services: createServices(bucket),
+	bucket,
+	compute,
+	authenticator,
+	authRoutes,
+	sandbox: {
+		bucket: {
+			name: process.env.MARIMOHUB_STORAGE_S3_BUCKET ?? '',
+			endpoint: process.env.MARIMOHUB_STORAGE_S3_ENDPOINT ?? '',
+		},
+		hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
+		workdir: process.env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
+		persistWorkspace: "source",
+	},
+	policy: {},
+});"
+`;
+
+exports[`config -> code generators > fs + podman + oidc > .env 1`] = `
+"# --- Storage ---
+MARIMOHUB_STORAGE_BACKEND=fs
+MARIMOHUB_STORAGE_FS_ROOT=/var/lib/marimohub/storage
+
+# --- Compute ---
+MARIMOHUB_COMPUTE_BACKEND=podman
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
+MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
+MARIMOHUB_COMPUTE_WORKDIR=/workspace
+MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_PODMAN_HOST=localhost
+MARIMOHUB_COMPUTE_PODMAN_BIND_HOST=127.0.0.1
+MARIMOHUB_COMPUTE_PODMAN_NETWORK=marimohub
+
+# --- Auth ---
+MARIMOHUB_AUTH_BACKEND=oidc
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
+
+# --- Managed AI ---
+MARIMOHUB_AI_BACKEND=none
+
+# --- Options ---
+MARIMOHUB_PERSIST_WORKSPACE=source"
+`;
+
+exports[`config -> code generators > fs + podman + oidc > compose 1`] = `
+"services:
+  marimohub:
+    image: ghcr.io/marimo-team/marimohub:latest
+    ports:
+      - '3000:3000'
+    environment:
+      MARIMOHUB_STORAGE_BACKEND: fs
+      MARIMOHUB_STORAGE_FS_ROOT: /var/lib/marimohub/storage
+      MARIMOHUB_COMPUTE_BACKEND: podman
+      MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+      MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
+      MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+      MARIMOHUB_COMPUTE_WORKDIR: /workspace
+      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_PODMAN_HOST: localhost
+      MARIMOHUB_COMPUTE_PODMAN_BIND_HOST: 127.0.0.1
+      MARIMOHUB_COMPUTE_PODMAN_NETWORK: marimohub
+      MARIMOHUB_AUTH_BACKEND: oidc
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
+      MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_PERSIST_WORKSPACE: source"
+`;
+
+exports[`config -> code generators > fs + podman + oidc > helm 1`] = `
+"# Non-secret MARIMOHUB_* config -> ConfigMap.
+config:
+  MARIMOHUB_STORAGE_BACKEND: fs
+  MARIMOHUB_STORAGE_FS_ROOT: /var/lib/marimohub/storage
+  MARIMOHUB_COMPUTE_BACKEND: podman
+  MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+  MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
+  MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+  MARIMOHUB_COMPUTE_WORKDIR: /workspace
+  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_PODMAN_HOST: localhost
+  MARIMOHUB_COMPUTE_PODMAN_BIND_HOST: 127.0.0.1
+  MARIMOHUB_COMPUTE_PODMAN_NETWORK: marimohub
+  MARIMOHUB_AUTH_BACKEND: oidc
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
+  MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_PERSIST_WORKSPACE: source
+
+# Secret values -> Secret (prefer secrets.existingSecret in production).
+secrets:
+  data:
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
+`;
+
+exports[`config -> code generators > fs + podman + oidc > library 1`] = `
+"import { createApi } from '@marimo-hub/api';
+import { createServices } from '@marimo-hub/core';
+import { FsStorage } from '@marimo-hub/storage-fs';
+import { PodmanCompute } from '@marimo-hub/compute-container/podman';
+import { createOidcAuth } from '@marimo-hub/auth-oidc';
+
+const bucket = new FsStorage({
+	root: process.env.MARIMOHUB_STORAGE_FS_ROOT!,
+});
+
+const compute = new PodmanCompute({
+	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
+	host: "localhost",
+	bindHost: "127.0.0.1",
+	network: "marimohub",
 });
 
 const { authenticator, routes: authRoutes } = createOidcAuth({
@@ -1048,7 +1187,7 @@ exports[`config -> code generators > s3 + docker + dev > library 1`] = `
 "import { createApi } from '@marimo-hub/api';
 import { createServices } from '@marimo-hub/core';
 import { S3Storage } from '@marimo-hub/storage-s3';
-import { DockerCompute } from '@marimo-hub/compute-docker';
+import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
 
 const bucket = new S3Storage({

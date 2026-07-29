@@ -500,11 +500,8 @@ importers:
         specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
-  packages/compute-coreweave:
+  packages/compute-container:
     dependencies:
-      '@coreweave/cwsandbox':
-        specifier: file:../../vendor/cwsandbox
-        version: file:vendor/cwsandbox
       '@marimo-hub/compute-commons':
         specifier: workspace:*
         version: link:../compute-commons
@@ -528,8 +525,11 @@ importers:
         specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
-  packages/compute-docker:
+  packages/compute-coreweave:
     dependencies:
+      '@coreweave/cwsandbox':
+        specifier: file:../../vendor/cwsandbox
+        version: file:vendor/cwsandbox
       '@marimo-hub/compute-commons':
         specifier: workspace:*
         version: link:../compute-commons
@@ -670,12 +670,12 @@ importers:
       '@marimo-hub/auth-oidc':
         specifier: workspace:*
         version: link:../auth-oidc
+      '@marimo-hub/compute-container':
+        specifier: workspace:*
+        version: link:../compute-container
       '@marimo-hub/compute-coreweave':
         specifier: workspace:*
         version: link:../compute-coreweave
-      '@marimo-hub/compute-docker':
-        specifier: workspace:*
-        version: link:../compute-docker
       '@marimo-hub/compute-e2b':
         specifier: workspace:*
         version: link:../compute-e2b

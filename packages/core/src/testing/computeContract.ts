@@ -47,7 +47,7 @@ export interface ComputeContractOptions {
 	/**
 	 * The adapter rejects `mountBucket` so the provisioner falls back to copying
 	 * files in — true for every backend that can't mount the storage bucket
-	 * natively (Modal, E2B, Docker, CoreWeave, Kubernetes).
+	 * natively (Modal, E2B, Docker, Podman, CoreWeave, Kubernetes).
 	 */
 	mountFallsBack?: boolean;
 	/** Hostname passed to `exposePort`; some adapters embed it in the URL. */

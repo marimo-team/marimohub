@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { Seconds } from '@marimo-hub/core';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { LocalCompute } from '@marimo-hub/compute-local';
-import { DockerCompute } from '@marimo-hub/compute-docker';
+import { DockerCompute } from '@marimo-hub/compute-container/docker';
+import { PodmanCompute } from '@marimo-hub/compute-container/podman';
 import { CoreWeaveCompute } from '@marimo-hub/compute-coreweave';
 import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
 import {
@@ -15,7 +16,17 @@ import { ConfigError } from './errors';
 
 /** Peek at a provider's private constructor config (test-only). */
 const configOf = (provider: unknown) =>
-	(provider as { config: { image?: string; template?: string } }).config;
+	(
+		provider as {
+			config: {
+				image?: string;
+				template?: string;
+				host?: string;
+				bindHost?: string;
+				network?: string;
+			};
+		}
+	).config;
 
 /**
  * Backend-selector tests for `makeCompute`. It takes an env object, so each case
@@ -42,6 +53,27 @@ describe('makeCompute backend selection', () => {
 
 	it('selects docker', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'docker' })).toBeInstanceOf(DockerCompute);
+	});
+
+	it('selects podman', () => {
+		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'podman' })).toBeInstanceOf(PodmanCompute);
+	});
+
+	it('forwards Podman-specific connection and network settings', () => {
+		expect(
+			configOf(
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'podman',
+					MARIMOHUB_COMPUTE_PODMAN_HOST: 'kernels.example.test',
+					MARIMOHUB_COMPUTE_PODMAN_BIND_HOST: '0.0.0.0',
+					MARIMOHUB_COMPUTE_PODMAN_NETWORK: 'marimohub',
+				}),
+			),
+		).toMatchObject({
+			host: 'kernels.example.test',
+			bindHost: '0.0.0.0',
+			network: 'marimohub',
+		});
 	});
 
 	it('selects local', () => {
@@ -206,6 +238,14 @@ describe('sandbox image list', () => {
 			configOf(
 				makeCompute({
 					MARIMOHUB_COMPUTE_BACKEND: 'docker',
+					MARIMOHUB_COMPUTE_IMAGE: 'img-a,img-b',
+				}),
+			).image,
+		).toBe('img-a');
+		expect(
+			configOf(
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'podman',
 					MARIMOHUB_COMPUTE_IMAGE: 'img-a,img-b',
 				}),
 			).image,

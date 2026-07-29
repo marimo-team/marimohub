@@ -14,8 +14,8 @@ operators can swap providers without changing the domain logic.
 
 - Bring your own **storage**: CoreWeave CAIOS, S3-compatible storage, Google Cloud
   Storage, Azure Blob Storage, filesystem, or Cloudflare R2.
-- Bring your own **compute**: CoreWeave Sandboxes, Modal, Kubernetes, Docker, E2B,
-  Cloudflare Containers, or local subprocesses.
+- Bring your own **compute**: CoreWeave Sandboxes, Modal, Kubernetes, Docker,
+  Podman, E2B, Cloudflare Containers, or local subprocesses.
 - Bring your own **identity**: OpenID Connect or Cloudflare Access.
 - Optional managed AI and project secrets, with server-side keys instead of
   notebook-supplied credentials.

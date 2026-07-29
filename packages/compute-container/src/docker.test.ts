@@ -2,8 +2,12 @@ import { describe, it, expect } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core';
 import { expectListFilesResult } from '@marimo-hub/core/testing';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
-import { DockerCompute, spawnDockerRunner } from './index';
-import type { DockerRunner, DockerRunResult } from './index';
+import { DockerCompute, spawnDockerRunner } from './docker';
+import {
+	containerCliContract,
+	createRecordingContainerRunner as fakeRunner,
+	defaultContainerCliHandler as defaultHandler,
+} from './testing';
 
 /**
  * Hermetic tests for the Docker compute adapter: a fake `DockerRunner` records
@@ -13,35 +17,6 @@ import type { DockerRunner, DockerRunResult } from './index';
 
 const SANDBOX_ID = 'sb-abc' as SandboxId;
 const NAME = 'marimohub-sbx-sb-abc';
-
-interface Call {
-	args: string[];
-	stdin?: string | Uint8Array;
-}
-
-/** Fake runner: matches on a prefix of args, else returns a default ok result. */
-function fakeRunner(
-	handler: (args: string[], stdin?: string | Uint8Array) => DockerRunResult | undefined,
-): {
-	runner: DockerRunner;
-	calls: Call[];
-} {
-	const calls: Call[] = [];
-	const runner: DockerRunner = {
-		async run(args, options) {
-			calls.push({ args, stdin: options?.stdin });
-			return handler(args, options?.stdin) ?? { stdout: '', stderr: '', exitCode: 0 };
-		},
-	};
-	return { runner, calls };
-}
-
-/** Default handler: container not yet running, `run` succeeds, `port` returns a mapping. */
-function defaultHandler(args: string[]): DockerRunResult | undefined {
-	if (args[0] === 'inspect') return { stdout: 'false', stderr: '', exitCode: 1 }; // not found
-	if (args[0] === 'port') return { stdout: '0.0.0.0:49153\n[::]:49153\n', stderr: '', exitCode: 0 };
-	return undefined; // ok
-}
 
 describe('DockerCompute', () => {
 	it('create + ensure: runs the container with name, label, and published port', async () => {
@@ -458,3 +433,10 @@ describe('DockerCompute', () => {
 computeContract('DockerCompute', () => new DockerCompute({}, fakeRunner(defaultHandler).runner), {
 	mountFallsBack: true,
 });
+
+containerCliContract(
+	'DockerCompute',
+	'docker',
+	(config, runner) => new DockerCompute(config, runner),
+	spawnDockerRunner,
+);

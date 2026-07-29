@@ -4,9 +4,10 @@ description: Build a compatible, pre-installed container image for marimohub not
 
 # Sandbox image (bring your own container)
 
-A compute **backend** decides _where_ a kernel runs (`docker`, `kubernetes`,
-`modal`, `coreweave`). The **sandbox image** decides _what_ runs inside it — the
-Python version, system libraries, and pre-installed packages your notebooks get.
+A compute **backend** decides _where_ a kernel runs (`docker`, `podman`,
+`kubernetes`, `modal`, `coreweave`). The **sandbox image** decides _what_ runs
+inside it — the Python version, system libraries, and pre-installed packages
+your notebooks get.
 
 You bring your own image. Set it once per deployment:
 
@@ -141,6 +142,7 @@ libraries, edit `warm/pyproject.toml`; add system libraries with extra
 | ---------- | ---------------------------------------------------------------------------------------------- |
 | Kubernetes | Create an image pull secret; set `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET` to its name. |
 | Docker     | `docker login` on the server's Docker daemon — its credentials pull the image.                 |
+| Podman     | `podman login` for the server user or configured remote connection.                            |
 | Modal      | Configure registry credentials in Modal; pass the image reference.                             |
 | CoreWeave  | Configure registry credentials in CoreWeave; pass the image reference.                         |
 

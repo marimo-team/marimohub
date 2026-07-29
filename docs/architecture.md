@@ -14,11 +14,11 @@ marimohub depends on three external systems — **storage**, **compute**, and
 an _adapter_ behind its port, so you swap providers without touching the domain
 logic, and you can switch later without migrating notebooks.
 
-| Port        | What it does            | Adapters                                                                                                          |
-| ----------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Storage** | Holds all state         | `s3`, `gcs`, `azure`, `fs`, `r2`, `memory` — [Storage](/storage)                                                  |
-| **Compute** | Runs notebook kernels   | `coreweave`, `wandb`, `modal`, `kubernetes`, `docker`, `e2b`, `local`, `cloudflare`, `none` — [Compute](/compute) |
-| **Auth**    | Decides who can sign in | `oidc`, `cloudflare-access`, `dev` — [Auth](/auth)                                                                |
+| Port        | What it does            | Adapters                                                                                                                    |
+| ----------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Storage** | Holds all state         | `s3`, `gcs`, `azure`, `fs`, `r2`, `memory` — [Storage](/storage)                                                            |
+| **Compute** | Runs notebook kernels   | `coreweave`, `wandb`, `modal`, `kubernetes`, `docker`, `podman`, `e2b`, `local`, `cloudflare`, `none` — [Compute](/compute) |
+| **Auth**    | Decides who can sign in | `oidc`, `cloudflare-access`, `dev` — [Auth](/auth)                                                                          |
 
 You select an adapter per port with the `*_BACKEND` env vars, and the server
 wires everything up. See [Deployment options](/deployment-options) for the

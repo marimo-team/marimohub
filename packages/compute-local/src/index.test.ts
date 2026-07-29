@@ -183,7 +183,9 @@ describe('LocalCompute process lifecycle', () => {
 
 	it('rejects waitForPort with stderr when the process exits early', async () => {
 		const sb = newSandbox();
-		const proc = await sb.startProcess('node -e "console.error(\'boom\'); process.exit(1)"');
+		const proc = await sb.startProcess(
+			'node -e "console.error(\'boom\'); process.exit(1)" -- --port 2718',
+		);
 		await expect(proc.waitForPort(2718, { timeout: 5_000 })).rejects.toThrow(/boom|exited/);
 	});
 
