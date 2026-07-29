@@ -70,6 +70,7 @@ export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?:
 				audience: env.MARIMOHUB_AUTH_OIDC_AUDIENCE,
 				sessionSecret: oidc('MARIMOHUB_AUTH_SESSION_SECRET'),
 				allowedEmailDomains: parseEmailDomains(env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS),
+				prompt: env.MARIMOHUB_AUTH_OIDC_PROMPT?.trim() || undefined,
 			});
 			return { authenticator, authRoutes: routes };
 		}

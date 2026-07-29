@@ -276,6 +276,7 @@ App-native OpenID Connect (the production backend).
 | `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET` 🔒 | OAuth2 client secret. | Yes | — | — |
 | `MARIMOHUB_AUTH_OIDC_REDIRECT_URI` | Absolute callback URL. | Yes | — | `https://hub.example.com/api/auth/callback` |
 | `MARIMOHUB_AUTH_OIDC_AUDIENCE` | Expected ID-token audience (optional; oauth4webapi enforces the client id automatically). | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_PROMPT` | OAuth `prompt` parameter. Defaults to `select_account`, so a returning user always gets the account chooser instead of being silently logged in with their last account. Override with `consent` to re-show the consent screen, or space-separated combinations. | — | `select_account` | `consent` |
 | `MARIMOHUB_AUTH_SESSION_SECRET` 🔒 | Secret that signs the session cookie (HS256; ≥32 bytes). | Yes | — | — |
 | `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist (requires a verified email). Required so a deployment cannot silently admit every account the IdP authenticates; set `*` to explicitly allow all domains. A single domain is also sent to Google as the `hd` hint. | Yes | — | `example.com,example.org` |
 

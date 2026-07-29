@@ -14,6 +14,7 @@ MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_SESSION_SECRET=…            # signs the session cookie (HS256, ≥32 bytes)
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com  # REQUIRED allowlist (verified email); `*` allows all
 # MARIMOHUB_AUTH_OIDC_AUDIENCE=…           # optional: expected ID-token audience (the client id is enforced anyway)
+# MARIMOHUB_AUTH_OIDC_PROMPT=consent       # optional: override the default (select_account) OAuth prompt
 ```
 
 The **redirect URI** is always `https://<your-host>/api/auth/callback`. Register
@@ -39,6 +40,11 @@ MARIMOHUB_AUTH_OIDC_CLIENT_ID=…apps.googleusercontent.com
 MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=…
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com   # a single domain is also sent to Google as the `hd` hint
 ```
+
+marimohub defaults the OAuth `prompt` to `select_account`, so a returning user
+always gets the Google account chooser instead of being silently logged in with
+their last account. Override it via `MARIMOHUB_AUTH_OIDC_PROMPT` (e.g. `consent`
+to also re-show the consent screen).
 
 See [Google's OpenID Connect docs](https://developers.google.com/identity/openid-connect/openid-connect).
 
