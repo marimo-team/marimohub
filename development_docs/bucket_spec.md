@@ -294,6 +294,7 @@ Records are partitioned by project (`_system/sessions/{pid}/{sid}.json`) so the 
 	},
 	"sandbox_id": "sbx_01HXYZ55555",
 	"sandbox_url": "https://sandbox.example.com/sess_01HXYZ44444",
+	"compute_profile": "small",
 	"used_fallback": false
 }
 ```
@@ -306,7 +307,7 @@ When a session goes `failed`, `markFailed` may persist an optional sanitized `er
 
 **Valid `status` values:** `starting` · `running` · `idle` · `terminated` · `expired`
 
-`sandbox_id` / `sandbox_url` link the record to the live kernel runtime (a separate container/compute service); `used_fallback` records whether a fallback runtime was used.
+`sandbox_id` / `sandbox_url` link the record to the live kernel runtime (a separate container/compute service); `compute_profile` records the configured profile name used at launch and is absent when profiles are unset; `used_fallback` records whether a fallback runtime was used. The optional field is forward-compatible with existing records and requires no migration.
 
 **Session lifecycle:**
 

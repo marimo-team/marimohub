@@ -474,6 +474,7 @@ export const SessionSchema = z.object({
 	runtime: RuntimeSchema.optional(),
 	sandbox_id: SandboxIdSchema.optional(),
 	sandbox_url: z.string().optional(),
+	compute_profile: z.string().optional(),
 	/**
 	 * Server-reachable kernel endpoint, persisted only in `proxy` exposure mode so
 	 * the app's `/proxy/*` forwarder can reach the kernel. Distinct from

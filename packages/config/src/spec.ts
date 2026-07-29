@@ -14,6 +14,8 @@ export interface ConfigVar {
 	description: string;
 	/** Illustrative value (never a real secret). */
 	example?: string;
+	/** Only emit this variable from the setup wizard when the user supplies a value. */
+	optIn?: boolean;
 	/** Documented default, in string form, when the variable is unset. */
 	default?: string;
 	/** Whether the variable is required when its backend is selected. */
@@ -227,6 +229,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`.',
 						example: 'ghcr.io/orgname/marimo-sandbox:latest',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_PROFILES',
+						name: 'Compute profiles',
+						description:
+							'Ordered named CPU/memory profiles (`name:cpu=<cores>;mem=<Mi|Gi|Ti>`). The first profile is applied to new sandboxes by Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B.',
+						example: 'small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi',
+						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_IDLE_TIMEOUT',

@@ -18,6 +18,7 @@ export interface KubernetesResources {
 	memory?: string;
 	/** GPU count, mapped to `nvidia.com/gpu` (e.g. `1`). */
 	gpu?: string;
+	profileLimits?: { cpu?: boolean; memory?: boolean };
 }
 
 export interface KubernetesConfig {
@@ -98,6 +99,8 @@ export interface K8sClient {
 	ensure(options: EnsureSandboxOptions): Promise<void>;
 	/** Pod phase, or `undefined` if the Pod does not exist. */
 	getPhase(name: string): Promise<string | undefined>;
+	/** Latest scheduler rejection for the Pod, when one exists. */
+	getSchedulingFailure(name: string): Promise<string | undefined>;
 	/** Run a command in the Pod; `stdin` is piped to the process when provided. */
 	exec(name: string, command: string[], stdin?: string | Uint8Array): Promise<K8sExecResult>;
 	/** Delete the Pod + Service + Ingress for a session. Idempotent (tolerates 404). */

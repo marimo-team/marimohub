@@ -26,6 +26,11 @@ import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
 import { makeAi } from './ai';
 import { makeAuth } from './auth';
 import { makeCompute, resolveSandboxImages } from './compute';
+import {
+	parseComputeProfiles,
+	resolveResources,
+	unsupportedBackendNotice,
+} from './computeProfiles';
 import { makeSecrets } from './secrets';
 import { makeStorage, makeSandboxBucketConfig } from './storage';
 import { makeWif } from './wif';
@@ -37,6 +42,16 @@ import { buildPreflightChecks } from './preflightChecks';
 
 export { ConfigError, isConfigError } from './errors';
 export type { ConfigErrorOptions } from './errors';
+export {
+	ComputeProfileConfigError,
+	hasConfiguredResources,
+	parseComputeProfiles,
+	resolveResources,
+	unsupportedBackendNotice,
+} from './computeProfiles';
+export type { ComputeProfile, ComputeProfilesConfig, ComputeResources } from './computeProfiles';
+
+const warnedUnsupportedProfileBackends = new Set<string>();
 
 /**
  * When this process started, captured once at module load. Surfaced by
@@ -259,6 +274,18 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 	const { authenticator, authRoutes } = makeAuth(env);
 	const sessionLifetime = parseSessionLifetime(env);
 	const sandboxImages = resolveSandboxImages(env);
+	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
+	const computeResources = resolveResources(computeProfiles);
+	const computeBackend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset';
+	const profileNotice = unsupportedBackendNotice(computeBackend, computeProfiles);
+	if (
+		profileNotice &&
+		['e2b', 'cloudflare', 'local', 'none', 'noop'].includes(computeBackend) &&
+		!warnedUnsupportedProfileBackends.has(computeBackend)
+	) {
+		console.warn(profileNotice);
+		warnedUnsupportedProfileBackends.add(computeBackend);
+	}
 	const services = createServices(bucket, metrics);
 	const deps: ApiDeps = {
 		services,
@@ -283,6 +310,8 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 			persistWorkspace: parsePersistWorkspace(env),
 			sessionLifetime,
 			images: sandboxImages,
+			resources: computeResources,
+			computeProfile: computeProfiles.defaultProfile?.name,
 		},
 		policy: {
 			defaultRole: parseDefaultRole(env),

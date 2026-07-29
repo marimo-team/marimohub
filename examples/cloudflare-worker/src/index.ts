@@ -16,6 +16,10 @@ import {
 import { CloudflareAccessAuthenticator } from '@marimo-hub/auth-cloudflare-access';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
 import { CloudflareSandboxProvider, ContainerProxy, Sandbox } from '@marimo-hub/compute-cloudflare';
+import {
+	parseComputeProfiles,
+	unsupportedBackendNotice,
+} from '@marimo-hub/config/compute-profiles';
 import { R2BucketAdapter } from '@marimo-hub/storage-r2';
 
 // Re-export the Sandbox Durable Object so wrangler can discover it, and
@@ -24,9 +28,16 @@ export { Sandbox, ContainerProxy };
 
 // Worker R2 binding (wrangler.jsonc `r2_buckets`) the sandbox mounts credential-less.
 const R2_BINDING = 'NOTEBOOKS_BUCKET';
+let warnedAboutComputeProfiles = false;
 
-function buildDeps(request: Request, env: Env): ApiDeps {
+export function buildDeps(request: Request, env: Env): ApiDeps {
 	const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
+	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
+	const profileNotice = unsupportedBackendNotice('cloudflare', computeProfiles);
+	if (profileNotice && !warnedAboutComputeProfiles) {
+		console.warn(profileNotice);
+		warnedAboutComputeProfiles = true;
+	}
 
 	let authenticator;
 	if (env.AUTH_MODE === 'access') {
@@ -108,6 +119,7 @@ function buildDeps(request: Request, env: Env): ApiDeps {
 			// subdomain exposure on a dedicated isolated domain.
 			hostname: sandboxHostname ?? '',
 			workdir: env.SANDBOX_WORKDIR || '/workspace',
+			computeProfile: computeProfiles.defaultProfile?.name,
 			// Which sandbox working-dir files survive a session. `source` persists only
 			// the source files; `workspace` also captures runtime files (e.g. generated
 			// data) into the notebook workspace on teardown and restores them next time.

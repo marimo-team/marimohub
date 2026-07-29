@@ -101,6 +101,7 @@ Read regardless of the selected compute backend.
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_COMPUTE_IMAGE` | Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
+| `MARIMOHUB_COMPUTE_PROFILES` | Ordered named CPU/memory profiles (`name:cpu=<cores>;mem=<Mi\|Gi\|Ti>`). The first profile is applied to new sandboxes by Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B. | — | — | `small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi` |
 | `MARIMOHUB_COMPUTE_IDLE_TIMEOUT` | Idle duration before a kernel auto-stops (modal). | — | — | `20m` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |

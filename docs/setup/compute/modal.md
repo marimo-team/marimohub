@@ -19,6 +19,10 @@ Modal is fully serverless — nothing to provision or scale, and you pay only fo
 running kernels. The easiest path if you don't already run a cluster.
 :::
 
+The adapter creates and reconnects to sandboxes through Modal's supported
+JavaScript SDK. Compute profiles are passed as the SDK's `cpu` and `memoryMiB`
+sandbox options.
+
 ::: warning Cold starts & shared workspaces
 A freshly-started kernel can take a few seconds to boot; a warm sandbox image
 ([Sandbox image](/sandbox-image)) helps. If multiple apps share one Modal

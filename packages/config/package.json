@@ -9,6 +9,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./compute-profiles": "./src/computeProfiles.ts",
 		"./spec": "./src/spec.ts",
 		"./package.json": "./package.json"
 	},

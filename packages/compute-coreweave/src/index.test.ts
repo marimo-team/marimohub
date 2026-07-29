@@ -4,7 +4,7 @@ import type { SandboxInfo } from '@coreweave/cwsandbox';
 import type { SandboxId, SandboxProvider } from '@marimo-hub/core';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
-import { CoreWeaveCompute } from './index';
+import { coreWeaveProfileResources, CoreWeaveCompute } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
 import { fakeProcess, makeWorld, procResult } from './testWorld';
 
@@ -95,6 +95,42 @@ describe('CoreWeaveCompute', () => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID, { image: 'override-image' }).exec('true');
 			expect(world.created[0].containerImage).toBe('override-image');
+		});
+
+		it('maps per-create resources to equal requests and limits', async () => {
+			expect(coreWeaveProfileResources({})).toBeUndefined();
+			expect(coreWeaveProfileResources({ cpu: 1.5, memoryBytes: 2 * 1024 ** 3 })).toEqual({
+				requests: { cpu: '1.5', memory: '2048Mi' },
+				limits: { cpu: '1.5', memory: '2048Mi' },
+			});
+
+			const world = makeWorld();
+			await makeCompute(world)
+				.create(SANDBOX_ID, {
+					resources: { cpu: 1.5, memoryBytes: 2 * 1024 ** 3 },
+				})
+				.exec('true');
+			expect(world.created[0].resources).toEqual({
+				requests: { cpu: '1.5', memory: '2048Mi' },
+				limits: { cpu: '1.5', memory: '2048Mi' },
+			});
+		});
+
+		it('overlays only profile fields on configured resources', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				resources: {
+					requests: { cpu: '2', memory: '4Gi' },
+					limits: { cpu: '3', memory: '6Gi' },
+				},
+			})
+				.create(SANDBOX_ID, { resources: { cpu: 1 } })
+				.exec('true');
+			expect(world.created[0].resources).toEqual({
+				requests: { cpu: '1', memory: '4Gi' },
+				limits: { cpu: '1', memory: '6Gi' },
+			});
 		});
 
 		it('passes objectStorageAccess and endpoint env when buckets are configured', async () => {

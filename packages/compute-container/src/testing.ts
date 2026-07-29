@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core';
 import type { SandboxProvider } from '@marimo-hub/core/ports';
+import { containerResourceArgs } from './index';
 import type { ContainerConfig, ContainerRunner, ContainerRunResult } from './index';
 
 const SANDBOX_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
@@ -78,6 +79,31 @@ export function containerCliContract(
 			const run = calls.find((call) => call.args[0] === 'run')?.args ?? [];
 			expect(run).toContain('override-image');
 			expect(run).not.toContain('default-image');
+		});
+
+		it('maps per-sandbox resources to engine limits without changing empty options', async () => {
+			expect(containerResourceArgs({})).toEqual([]);
+			expect(containerResourceArgs({ cpu: 0.5, memoryBytes: 512 * 1024 ** 2 })).toEqual([
+				'--cpus',
+				'0.5',
+				'--memory',
+				'536870912',
+			]);
+
+			const { runner, calls } = createRecordingContainerRunner(defaultContainerCliHandler);
+			await makeProvider({ image: 'sandbox-image' }, runner)
+				.create(SANDBOX_ID, {
+					resources: { cpu: 0.5, memoryBytes: 512 * 1024 ** 2 },
+				})
+				.exec('true');
+
+			const run = calls.find((call) => call.args[0] === 'run')?.args ?? [];
+			expect(run.slice(run.indexOf('--cpus'), run.indexOf('--cpus') + 4)).toEqual([
+				'--cpus',
+				'0.5',
+				'--memory',
+				'536870912',
+			]);
 		});
 
 		it('streams file bytes over stdin', async () => {

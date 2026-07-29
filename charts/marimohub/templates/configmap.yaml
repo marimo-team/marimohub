@@ -1,4 +1,4 @@
-{{- if .Values.config }}
+{{- if or .Values.config .Values.compute.profiles }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -7,6 +7,11 @@ metadata:
     {{- include "marimohub.labels" . | nindent 4 }}
 data:
   {{- range $k, $v := .Values.config }}
+  {{- if not (and $.Values.compute.profiles (eq $k "MARIMOHUB_COMPUTE_PROFILES")) }}
   {{ $k }}: {{ $v | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.compute.profiles }}
+  MARIMOHUB_COMPUTE_PROFILES: {{ . | quote }}
   {{- end }}
 {{- end }}

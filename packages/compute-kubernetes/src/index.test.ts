@@ -7,7 +7,7 @@ import {
 	expectFileResult,
 	expectListFilesResult,
 } from '@marimo-hub/core/testing';
-import { KubernetesCompute, resourceName } from './index';
+import { KubernetesCompute, kubernetesProfileResources, resourceName } from './index';
 import type { EnsureSandboxOptions, K8sClient, K8sExecResult, KubernetesConfig } from './index';
 
 /**
@@ -31,7 +31,7 @@ const baseConfig: KubernetesConfig = {
 
 type ExecImpl = (command: string[], stdin?: string | Uint8Array) => K8sExecResult | undefined;
 
-function makeWorld(opts?: { execImpl?: ExecImpl; phase?: string }) {
+function makeWorld(opts?: { execImpl?: ExecImpl; phase?: string; schedulingFailure?: string }) {
 	const ensured: EnsureSandboxOptions[] = [];
 	const deleted: string[] = [];
 	const execCalls: { name: string; command: string[]; stdin?: string | Uint8Array }[] = [];
@@ -44,6 +44,7 @@ function makeWorld(opts?: { execImpl?: ExecImpl; phase?: string }) {
 				pods.set(o.name, { sandboxId: o.sandboxId, phase: opts?.phase ?? 'Running' });
 		},
 		getPhase: async (name) => pods.get(name)?.phase,
+		getSchedulingFailure: async () => opts?.schedulingFailure,
 		exec: async (name, command, stdin) => {
 			execCalls.push({ name, command, stdin });
 			return opts?.execImpl?.(command, stdin) ?? { stdout: '', stderr: '', exitCode: 0 };
@@ -161,6 +162,42 @@ describe('KubernetesCompute', () => {
 			});
 		});
 
+		it('maps profile resources to equal requests and limits', async () => {
+			expect(kubernetesProfileResources({})).toBeUndefined();
+			expect(kubernetesProfileResources({ cpu: 1.5, memoryBytes: 2 * 1024 ** 3 })).toEqual({
+				cpu: '1500m',
+				memory: '2048Mi',
+				profileLimits: { cpu: true, memory: true },
+			});
+
+			const world = makeWorld();
+			await makeCompute(world)
+				.create(SANDBOX_ID, {
+					resources: { cpu: 1.5, memoryBytes: 2 * 1024 ** 3 },
+				})
+				.exec('true');
+			expect(world.ensured[0].resources).toEqual({
+				cpu: '1500m',
+				memory: '2048Mi',
+				profileLimits: { cpu: true, memory: true },
+			});
+		});
+
+		it('limits only profile fields when overlaying legacy requests', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				resources: { cpu: '2', memory: '4Gi' },
+			})
+				.create(SANDBOX_ID, { resources: { memoryBytes: 1024 ** 3 } })
+				.exec('true');
+			expect(world.ensured[0].resources).toEqual({
+				cpu: '2',
+				memory: '1024Mi',
+				profileLimits: { memory: true },
+			});
+		});
+
 		it('throws immediately when the pod enters a terminal phase while becoming ready', async () => {
 			const world = makeWorld({ phase: 'Failed' });
 
@@ -175,6 +212,15 @@ describe('KubernetesCompute', () => {
 			await expect(compute.create(SANDBOX_ID).exec('true')).rejects.toThrow(
 				/timed out waiting for pod .* to reach Running/,
 			);
+		});
+
+		it('includes the scheduler rejection when a pending Pod times out', async () => {
+			const world = makeWorld({
+				phase: 'Pending',
+				schedulingFailure: '0/3 nodes are available: 3 Insufficient cpu.',
+			});
+			const compute = makeCompute(world, { ...baseConfig, podReadyTimeout: Millis.of(30) });
+			await expect(compute.create(SANDBOX_ID).exec('true')).rejects.toThrow(/Insufficient cpu/);
 		});
 	});
 

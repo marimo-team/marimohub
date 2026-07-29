@@ -56,6 +56,7 @@ import type { K8sClient, KubernetesConfig } from './shared';
 export * from './shared';
 import type {
 	ActiveSandbox,
+	ComputeResources,
 	CreateSandboxOptions,
 	ExecResult,
 	ExecStreamOptions,
@@ -78,6 +79,24 @@ import type {
 const DEFAULT_KERNEL_PORT = 2718;
 /** Default marimo-capable image when `MARIMOHUB_COMPUTE_IMAGE` is unset. */
 const DEFAULT_IMAGE = 'ghcr.io/marimo-team/marimo:latest';
+
+export function kubernetesProfileResources(
+	resources: ComputeResources | undefined,
+): KubernetesConfig['resources'] {
+	if (!resources || (resources.cpu === undefined && resources.memoryBytes === undefined)) {
+		return undefined;
+	}
+	return {
+		...(resources.cpu !== undefined ? { cpu: `${Math.round(resources.cpu * 1000)}m` } : {}),
+		...(resources.memoryBytes !== undefined
+			? { memory: `${Math.ceil(resources.memoryBytes / 1024 ** 2)}Mi` }
+			: {}),
+		profileLimits: {
+			...(resources.cpu !== undefined ? { cpu: true } : {}),
+			...(resources.memoryBytes !== undefined ? { memory: true } : {}),
+		},
+	};
+}
 
 /** Derive a DNS-1123-safe resource name from a `SandboxId`. */
 export function resourceName(id: SandboxId): string {
@@ -168,8 +187,12 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			{
 				timeoutMs: timeout,
 				intervalMs: 1000,
-				timeoutMessage: () =>
-					`timed out waiting for pod ${this.name} to reach Running after ${timeout}ms`,
+				timeoutMessage: async () => {
+					const schedulingFailure = await this.client.getSchedulingFailure(this.name);
+					return `timed out waiting for pod ${this.name} to reach Running after ${timeout}ms${
+						schedulingFailure ? `: ${schedulingFailure}` : ''
+					}`;
+				},
 			},
 		);
 	}
@@ -339,7 +362,26 @@ export class KubernetesCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
-		const config = options?.image ? { ...this.config, image: options.image } : this.config;
+		const profileResources = kubernetesProfileResources(options?.resources);
+		const config =
+			options?.image || profileResources
+				? {
+						...this.config,
+						...(options?.image ? { image: options.image } : {}),
+						...(profileResources
+							? {
+									resources: {
+										...this.config.resources,
+										...profileResources,
+										profileLimits: {
+											...this.config.resources?.profileLimits,
+											...profileResources.profileLimits,
+										},
+									},
+								}
+							: {}),
+					}
+				: this.config;
 		return new KubernetesSandboxInstance(id, config, this.getClient());
 	}
 

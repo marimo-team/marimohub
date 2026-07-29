@@ -41,6 +41,8 @@ function buildResources(r: EnsureSandboxOptions['resources']): V1Container['reso
 	const limits: Record<string, string> = {};
 	if (r.cpu) requests.cpu = r.cpu;
 	if (r.memory) requests.memory = r.memory;
+	if (r.profileLimits?.cpu && r.cpu) limits.cpu = r.cpu;
+	if (r.profileLimits?.memory && r.memory) limits.memory = r.memory;
 	// GPUs are integer, non-overcommittable resources: they go in limits only.
 	if (r.gpu) limits['nvidia.com/gpu'] = r.gpu;
 	const out: V1Container['resources'] = {};
@@ -227,6 +229,27 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			} catch (err) {
 				if (hasCode(err, 404)) return undefined;
 				throw err;
+			}
+		},
+
+		async getSchedulingFailure(name: string): Promise<string | undefined> {
+			const { core } = await apis();
+			try {
+				const events = await core.listNamespacedEvent({
+					namespace,
+					fieldSelector: `involvedObject.kind=Pod,involvedObject.name=${name}`,
+				});
+				const messages = events.items
+					.filter(
+						(event) =>
+							event.reason === 'FailedScheduling' ||
+							event.message?.toLowerCase().includes('unschedulable'),
+					)
+					.map((event) => event.message)
+					.filter((message): message is string => Boolean(message));
+				return messages.at(-1);
+			} catch {
+				return undefined;
 			}
 		},
 

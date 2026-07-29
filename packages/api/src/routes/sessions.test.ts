@@ -164,6 +164,34 @@ describe('Session routes', () => {
 		});
 	});
 
+	it('passes default profile resources and records the profile name internally', async () => {
+		const compute = makeFakeCompute();
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: {
+				sandbox: {
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'source',
+					resources: { cpu: 0.5, memoryBytes: 512 * 1024 ** 2 },
+					computeProfile: 'small',
+				},
+			},
+		}).request;
+
+		const data = await expectOk<any>(await request('POST', sessionsPath()));
+		expect(compute.lastCreateOptions?.resources).toEqual({
+			cpu: 0.5,
+			memoryBytes: 512 * 1024 ** 2,
+		});
+		expect(data.compute_profile).toBeUndefined();
+		const stored = await createServices(bucket).sessions.getSession(pid, data.session_id);
+		expect(stored.compute_profile).toBe('small');
+	});
+
 	it('POST /sessions stamps expires_at from the session lifetime when configured', async () => {
 		const withLifetime = createTestApi({
 			bucket,

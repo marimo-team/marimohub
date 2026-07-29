@@ -17,6 +17,11 @@ fullnameOverride: ''
 # The API tier is stateless, so it scales freely.
 replicaCount: 2
 
+# Resources assigned to each newly-created notebook sandbox. Empty leaves the
+# compute backend's existing defaults unchanged.
+compute:
+  profiles: ''
+
 # Singleton session reaper. Exactly one must run; the chart pins it to one
 # replica + Recreate. Don't scale it.
 maintenance:
