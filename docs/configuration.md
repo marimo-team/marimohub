@@ -16,9 +16,9 @@ Every marimohub configuration variable, grouped by category and backend. Each ca
 
 ## Storage
 
-Selected by `MARIMOHUB_STORAGE_BACKEND` (default `s3`); one of `s3`, `gcs`, `fs`, `memory`, `r2`.
+Selected by `MARIMOHUB_STORAGE_BACKEND` (default `s3`); one of `s3`, `gcs`, `azure`, `fs`, `memory`, `r2`.
 
-Where all notebooks and state are stored. `s3` and `gcs` are the durable backends for self-hosted servers; `fs` is durable on a single node; `r2` is Workers-only and `memory` is for dev/tests.
+Where all notebooks and state are stored. `s3`, `gcs`, and `azure` are the durable backends for self-hosted servers; `fs` is durable on a single node; `r2` is Workers-only and `memory` is for dev/tests.
 
 ### S3 / S3-compatible
 
@@ -47,6 +47,18 @@ Native GCS via its JSON API; uses object generations for the atomic conditional 
 | `MARIMOHUB_STORAGE_GCS_SA_KEY` 🔒 | Service-account key JSON (the file contents). Minted into short-lived access tokens. Provide this OR a static access token. | — | — | — |
 | `MARIMOHUB_STORAGE_GCS_ACCESS_TOKEN` 🔒 | Static OAuth2 access token, as an alternative to a service-account key (e.g. when an external process supplies tokens). | — | — | — |
 | `MARIMOHUB_STORAGE_GCS_API_ENDPOINT` | Override the JSON API base URL — e.g. to target a fake-gcs-server emulator. | — | `https://storage.googleapis.com` | `https://storage.googleapis.com` |
+
+### Azure Blob Storage
+
+`MARIMOHUB_STORAGE_BACKEND=azure`
+
+Native Azure Blob Storage using ETags for atomic conditional writes. Uses DefaultAzureCredential with an account URL, or a connection string for local and legacy deployments.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_STORAGE_AZURE_CONTAINER` | Name of the Blob Storage container that backs the hub. | Yes | — | `orgname-marimohub` |
+| `MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL` | Blob service account URL used with DefaultAzureCredential. Required unless a connection string is set. | — | — | `https://account.blob.core.windows.net` |
+| `MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING` 🔒 | Optional connection string for local or legacy deployments. When set, it takes precedence over the account URL. | — | — | — |
 
 ### Filesystem
 

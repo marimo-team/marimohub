@@ -4,6 +4,9 @@ packages:
   - examples/*
 
 catalog:
+  '@azure/core-auth': ^1.11.0
+  '@azure/identity': ^4.13.1
+  '@azure/storage-blob': ^12.33.0
   '@aws-sdk/client-s3': ^3.1066.0
   '@aws-sdk/client-secrets-manager': ^3.1066.0
   '@vitest/coverage-v8': 4.1.8

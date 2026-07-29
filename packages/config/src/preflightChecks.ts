@@ -58,7 +58,7 @@ async function checkStorage(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
 					`${backend} storage enforces conditional writes within this process only — ` +
 					'concurrent hub replicas sharing the same storage can lose catalog updates',
 				remediation:
-					'Run a single hub replica against this storage, or use s3/gcs for multi-replica deployments.',
+					'Run a single hub replica against this storage, or use s3/gcs/azure for multi-replica deployments.',
 			};
 		}
 		return { status: 'ok', message: `${backend} reachable and honors conditional writes` };
@@ -74,13 +74,14 @@ async function checkStorage(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
 				status: 'fail',
 				fatal: true,
 				message,
-				remediation: 'Use AWS S3, Cloudflare R2, or a recent MinIO that enforces If-Match.',
+				remediation:
+					'Use Azure Blob Storage, GCS, AWS S3, Cloudflare R2, or a recent MinIO that enforces atomic conditional writes.',
 			};
 		}
 		return {
 			status: 'fail',
 			message: `Could not verify storage: ${message}`,
-			remediation: 'Check the bucket name, endpoint, region, and credentials.',
+			remediation: 'Check the bucket/container name, endpoint, region, and credentials.',
 		};
 	}
 }

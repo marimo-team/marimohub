@@ -13,7 +13,7 @@ operators can swap providers without changing the domain logic.
 ## What you get
 
 - Bring your own **storage**: CoreWeave CAIOS, S3-compatible storage, Google Cloud
-  Storage, or Cloudflare R2.
+  Storage, Azure Blob Storage, filesystem, or Cloudflare R2.
 - Bring your own **compute**: CoreWeave Sandboxes, Modal, Kubernetes, Docker, E2B,
   Cloudflare Containers, or local subprocesses.
 - Bring your own **identity**: OpenID Connect or Cloudflare Access.

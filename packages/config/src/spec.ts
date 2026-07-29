@@ -53,7 +53,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		selector: 'MARIMOHUB_STORAGE_BACKEND',
 		selectorDefault: 's3',
 		description:
-			'Where all notebooks and state are stored. `s3` and `gcs` are the durable backends for self-hosted servers; `fs` is durable on a single node; `r2` is Workers-only and `memory` is for dev/tests.',
+			'Where all notebooks and state are stored. `s3`, `gcs`, and `azure` are the durable backends for self-hosted servers; `fs` is durable on a single node; `r2` is Workers-only and `memory` is for dev/tests.',
 		backends: [
 			{
 				name: 'S3 / S3-compatible',
@@ -138,6 +138,35 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Override the JSON API base URL — e.g. to target a fake-gcs-server emulator.',
 						example: 'https://storage.googleapis.com',
 						default: 'https://storage.googleapis.com',
+					},
+				],
+			},
+			{
+				name: 'Azure Blob Storage',
+				selectorValue: 'azure',
+				description:
+					'Native Azure Blob Storage using ETags for atomic conditional writes. Uses DefaultAzureCredential with an account URL, or a connection string for local and legacy deployments.',
+				vars: [
+					{
+						id: 'MARIMOHUB_STORAGE_AZURE_CONTAINER',
+						name: 'Azure container',
+						description: 'Name of the Blob Storage container that backs the hub.',
+						example: 'orgname-marimohub',
+						required: true,
+					},
+					{
+						id: 'MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL',
+						name: 'Azure Blob service URL',
+						description:
+							'Blob service account URL used with DefaultAzureCredential. Required unless a connection string is set.',
+						example: 'https://account.blob.core.windows.net',
+					},
+					{
+						id: 'MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING',
+						name: 'Azure Storage connection string',
+						description:
+							'Optional connection string for local or legacy deployments. When set, it takes precedence over the account URL.',
+						secret: true,
 					},
 				],
 			},

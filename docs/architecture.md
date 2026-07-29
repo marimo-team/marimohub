@@ -16,7 +16,7 @@ logic, and you can switch later without migrating notebooks.
 
 | Port        | What it does            | Adapters                                                                                                          |
 | ----------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Storage** | Holds all state         | `s3`, `gcs`, `fs`, `r2`, `memory` — [Storage](/storage)                                                           |
+| **Storage** | Holds all state         | `s3`, `gcs`, `azure`, `fs`, `r2`, `memory` — [Storage](/storage)                                                  |
 | **Compute** | Runs notebook kernels   | `coreweave`, `wandb`, `modal`, `kubernetes`, `docker`, `e2b`, `local`, `cloudflare`, `none` — [Compute](/compute) |
 | **Auth**    | Decides who can sign in | `oidc`, `cloudflare-access`, `dev` — [Auth](/auth)                                                                |
 

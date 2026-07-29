@@ -232,7 +232,7 @@ export function validateSelection(sel: WizardSelection): SelectionWarning[] {
 			level: 'danger',
 			title: 'Storage is volatile',
 			message:
-				'The in-memory store loses all data on restart. Use s3 or gcs for anything you keep.',
+				'The in-memory store loses all data on restart. Use s3, gcs, or azure for anything you keep.',
 		});
 	}
 	if (sel.storage === 'fs') {
@@ -240,7 +240,7 @@ export function validateSelection(sel: WizardSelection): SelectionWarning[] {
 			level: 'warning',
 			title: 'Filesystem storage is single-replica',
 			message:
-				'Conditional writes are enforced within one server process — run exactly one replica, and in containers mount a persistent volume at the storage root. Use s3 or gcs for multi-replica deployments.',
+				'Conditional writes are enforced within one server process — run exactly one replica, and in containers mount a persistent volume at the storage root. Use s3, gcs, or azure for multi-replica deployments.',
 		});
 	}
 	if (sel.compute === 'local') {

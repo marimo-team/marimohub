@@ -33,6 +33,7 @@
 		"@marimo-hub/credentials-aws": "workspace:*",
 		"@marimo-hub/credentials-coreweave": "workspace:*",
 		"@marimo-hub/secrets-aws": "workspace:*",
+		"@marimo-hub/storage-azure": "workspace:*",
 		"@marimo-hub/storage-fs": "workspace:*",
 		"@marimo-hub/storage-gcs": "workspace:*",
 		"@marimo-hub/storage-s3": "workspace:*",

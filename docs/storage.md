@@ -1,5 +1,5 @@
 ---
-description: Select and configure S3, GCS, filesystem, R2, or memory storage for marimohub.
+description: Select and configure S3, GCS, Azure, filesystem, R2, or memory storage for marimohub.
 ---
 
 # Storage
@@ -17,6 +17,7 @@ Selector: `MARIMOHUB_STORAGE_BACKEND`. Full variables:
 | ---------- | -------- | ------- | --------------------------------------------- |
 | S3         | `s3`     | Yes     | CoreWeave CAIOS, AWS S3, MinIO, Tigris, Ceph  |
 | GCS        | `gcs`    | Yes     | Google Cloud Storage                          |
+| Azure      | `azure`  | Yes     | Azure Blob Storage                            |
 | Filesystem | `fs`     | Yes     | Single-node self-hosting on a local disk      |
 | R2         | `r2`     | Yes     | Cloudflare Workers through a platform binding |
 | Memory     | `memory` | No      | Local development and tests only              |
@@ -39,7 +40,7 @@ Known-good options:
 - Google Cloud Storage through object generations (`ifGenerationMatch`).
 - The `fs` backend enforces conditional writes within a single server process
   (and the server logs a startup warning saying so). That is safe for one
-  replica; run multiple replicas only on `s3` or `gcs`.
+  replica; run multiple replicas only on `s3`, `gcs`, or `azure`.
 
 ## Configure it
 
@@ -50,6 +51,10 @@ Known-good options:
 ### Google Cloud Storage
 
 <!--@include: ./setup/storage/gcs.md-->
+
+### Azure Blob Storage
+
+<!--@include: ./setup/storage/azure.md-->
 
 ### Filesystem setup
 
