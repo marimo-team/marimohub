@@ -29,6 +29,24 @@ function processResult(exitCode = 0, stdout = '', stderr = ''): ModalProcessLike
 	};
 }
 
+function pendingProcessResult(): {
+	process: ModalProcessLike;
+	resolve: (exitCode: number) => void;
+} {
+	let resolve = (_exitCode: number) => {};
+	const wait = new Promise<number>((resolveWait) => {
+		resolve = resolveWait;
+	});
+	return {
+		process: {
+			stdout: textStream(''),
+			stderr: textStream(''),
+			wait: () => wait,
+		},
+		resolve,
+	};
+}
+
 class FakeSandbox implements ModalSandboxLike {
 	readonly files = new Map<string, string | Uint8Array>();
 	readonly directories = new Map<string, ModalFileInfoLike[]>();
@@ -280,6 +298,8 @@ describe('ModalCompute', () => {
 	it('kills a started process by its tracked PID rather than matching its command', async () => {
 		const world = makeWorld();
 		const sandbox = new FakeSandbox();
+		const pending = pendingProcessResult();
+		sandbox.execImpl = () => pending.process;
 		world.existing.set(SANDBOX_ID, sandbox);
 		const command = 'python -c "print([1 + 2])"';
 
@@ -292,9 +312,32 @@ describe('ModalCompute', () => {
 		expect(sandbox.execCalls[0].command[2]).toContain(`exec sh -lc '`);
 		expect(sandbox.execCalls[0].command[2]).toContain(command);
 		const killCommand = sandbox.execCalls[1].command[2];
+		expect(killCommand).toContain('read -r pid started');
+		expect(killCommand).toContain('cat "/proc/$pid/stat"');
+		expect(killCommand).toContain('[ "${20}" = "$started" ]');
 		expect(killCommand).toContain('kill -KILL -- "$pid"');
 		expect(killCommand).not.toContain('pkill');
 		expect(killCommand).not.toContain(command);
+	});
+
+	it('removes process tracking state on exit and ignores later kill requests', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		const pending = pendingProcessResult();
+		let execCount = 0;
+		sandbox.execImpl = () => (execCount++ === 0 ? pending.process : processResult());
+		world.existing.set(SANDBOX_ID, sandbox);
+
+		const process = await makeCompute(world).create(SANDBOX_ID).startProcess('true');
+		pending.resolve(0);
+
+		await expect.poll(() => sandbox.execCalls.length).toBe(2);
+		expect(sandbox.execCalls[1].command[2]).toMatch(
+			/^rm -f '\/tmp\/marimohub-process-[\w-]+\.pid'$/,
+		);
+
+		await process.kill('SIGKILL');
+		expect(sandbox.execCalls).toHaveLength(2);
 	});
 
 	it('treats destroy of an absent sandbox as idempotent', async () => {

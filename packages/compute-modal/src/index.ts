@@ -329,7 +329,10 @@ class ModalSandboxInstance implements SandboxInstance {
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
 		const pidPath = `/tmp/marimohub-process-${randomUUID()}.pid`;
 		const trackedCommand = [
-			`printf '%s\\n' "$$" > ${shellQuote(pidPath)}`,
+			'stat=$(cat /proc/$$/stat)',
+			'stat=${stat##*) }',
+			'set -- $stat',
+			`printf '%s %s\\n' "$$" "\${20}" > ${shellQuote(pidPath)}`,
 			`exec sh -lc ${shellQuote(cmd)}`,
 		].join('; ');
 		const process = await this.spawn(['sh', '-lc', trackedCommand], {
@@ -340,26 +343,39 @@ class ModalSandboxInstance implements SandboxInstance {
 		let stdout = '';
 		let stderr = '';
 		let exitCode: number | undefined;
+		let settled = false;
+		const execInSandbox = (command: string) => this.exec(command);
 		const stdoutDone = consumeStream(process.stdout, (chunk) => {
 			stdout += chunk;
 		});
 		const stderrDone = consumeStream(process.stderr, (chunk) => {
 			stderr += chunk;
 		});
-		const exited = process.wait().then((code) => {
-			exitCode = code;
-			return code;
-		});
-		const execInSandbox = (command: string) => this.exec(command);
+		const exited = process
+			.wait()
+			.then((code) => {
+				exitCode = code;
+				return code;
+			})
+			.finally(() => {
+				settled = true;
+				void execInSandbox(`rm -f ${shellQuote(pidPath)}`).catch(() => {});
+			});
 
 		return {
 			id: options?.processId ?? `modal-process-${++processSequence}`,
 			command: cmd,
 			async kill(signal?: string): Promise<void> {
+				if (settled) return;
 				const normalized = /^SIG[A-Z0-9]+$/.test(signal ?? '') ? signal!.slice(3) : 'TERM';
 				await execInSandbox(
-					`pid=$(cat ${shellQuote(pidPath)} 2>/dev/null) && ` +
+					`read -r pid started < ${shellQuote(pidPath)} && ` +
 						`case "$pid" in ''|*[!0-9]*) exit 1;; esac && ` +
+						`case "$started" in ''|*[!0-9]*) exit 1;; esac && ` +
+						`stat=$(cat "/proc/$pid/stat" 2>/dev/null) && ` +
+						`stat=\${stat##*) } && ` +
+						`set -- $stat && ` +
+						`[ "\${20}" = "$started" ] && ` +
 						`kill -${normalized} -- "$pid"`,
 				).catch(() => {});
 			},
