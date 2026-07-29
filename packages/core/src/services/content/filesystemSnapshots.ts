@@ -1,6 +1,6 @@
 import type { NotebookId, ProjectId, SandboxId } from '../../ids';
 import { asFilesystemSnapshots } from '../../ports/sandbox';
-import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type { ComputeResources, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { FsSnapshot } from '../../schema';
 import type { NotebookService } from './NotebookService';
 
@@ -26,6 +26,7 @@ export function createOrRestoreSandbox(
 	id: SandboxId,
 	restoreSnapshotId?: string,
 	image?: string,
+	resources?: ComputeResources,
 ): SandboxInstance {
 	const fs = asFilesystemSnapshots(provider);
 	// reuse: false — this id is brand new, so the adapter's reconnect lookup can
@@ -34,7 +35,7 @@ export function createOrRestoreSandbox(
 	// captured on, so a base-image change only applies once no restore pointer exists.
 	return fs && restoreSnapshotId
 		? fs.createFromSnapshot(id, restoreSnapshotId)
-		: provider.create(id, { reuse: false, image });
+		: provider.create(id, { reuse: false, image, resources });
 }
 
 /**

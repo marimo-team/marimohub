@@ -132,6 +132,14 @@ export interface ActiveSandbox {
 	createdAt?: string;
 }
 
+/** Backend-neutral resources requested for one sandbox. Empty means provider defaults. */
+export interface ComputeResources {
+	/** CPU cores. Fractional values are allowed. */
+	cpu?: number;
+	/** Memory in bytes. */
+	memoryBytes?: number;
+}
+
 export interface CreateSandboxOptions {
 	/**
 	 * May the adapter reconnect to an existing sandbox with this id instead of
@@ -146,6 +154,8 @@ export interface CreateSandboxOptions {
 	 * Omitted → the adapter's constructor default. Ignored by `local`.
 	 */
 	image?: string;
+	/** Resources resolved by the control plane for this sandbox. */
+	resources?: ComputeResources;
 }
 
 export interface SandboxProvider {

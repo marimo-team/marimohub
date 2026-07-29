@@ -57,7 +57,7 @@ import {
 	shellQuote,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
-import type { SandboxId, Seconds, Timings } from '@marimo-hub/core';
+import type { ComputeResources, SandboxId, Seconds, Timings } from '@marimo-hub/core';
 import type {
 	CreateSandboxOptions,
 	ExecResult,
@@ -83,6 +83,35 @@ const DEFAULT_KERNEL_PORT = 2718;
 const DEFAULT_OWNER_TAG = 'marimohub';
 /** Prefix for the per-sandbox tag that encodes our `SandboxId`. */
 const ID_TAG_PREFIX = 'mh-sbx-';
+
+export function coreWeaveProfileResources(
+	resources: ComputeResources | undefined,
+): ResourceOptions | undefined {
+	if (!resources || (resources.cpu === undefined && resources.memoryBytes === undefined)) {
+		return undefined;
+	}
+	const values = {
+		...(resources.cpu !== undefined ? { cpu: String(resources.cpu) } : {}),
+		...(resources.memoryBytes !== undefined
+			? { memory: `${Math.ceil(resources.memoryBytes / 1024 ** 2)}Mi` }
+			: {}),
+	};
+	return { requests: { ...values }, limits: { ...values } };
+}
+
+function mergeCoreWeaveResources(
+	base: ResourceOptions | undefined,
+	profile: ResourceOptions,
+): ResourceOptions {
+	const baseRequests = base && 'requests' in base ? base.requests : (base ?? {});
+	const baseLimits = base && 'limits' in base ? base.limits : (base ?? {});
+	const profileRequests = 'requests' in profile ? profile.requests : profile;
+	const profileLimits = 'limits' in profile ? profile.limits : profile;
+	return {
+		requests: { ...baseRequests, ...profileRequests },
+		limits: { ...baseLimits, ...profileLimits },
+	};
+}
 
 export interface CoreWeaveConfig {
 	/**
@@ -539,7 +568,17 @@ export class CoreWeaveCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
-		const config = options?.image ? { ...this.config, image: options.image } : this.config;
+		const resources = coreWeaveProfileResources(options?.resources);
+		const config =
+			options?.image || resources
+				? {
+						...this.config,
+						...(options?.image ? { image: options.image } : {}),
+						...(resources
+							? { resources: mergeCoreWeaveResources(this.config.resources, resources) }
+							: {}),
+					}
+				: this.config;
 		return new CoreWeaveSandboxInstance(id, config, this.getClient(), options?.reuse ?? true);
 	}
 

@@ -1,427 +1,398 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { NotFoundError } from 'modal';
 import type { SandboxId } from '@marimo-hub/core';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
-import { ModalCompute } from './index';
+import { modalProfileResources, ModalCompute, parseModalDuration } from './index';
+import type {
+	ModalClientLike,
+	ModalFileInfoLike,
+	ModalProcessLike,
+	ModalSandboxLike,
+} from './index';
 
-const TOKEN_ID = 'tok_id';
-const TOKEN_SECRET = 'tok_secret';
-const IMAGE = 'my-image';
-const API_BASE = 'https://api.modal.test';
 const SANDBOX_ID = 'sb-abc' as SandboxId;
 
-function makeCompute() {
-	return new ModalCompute({
-		tokenId: TOKEN_ID,
-		tokenSecret: TOKEN_SECRET,
-		image: IMAGE,
-		apiBase: API_BASE,
+function textStream(value: string): ReadableStream<string> {
+	return new ReadableStream({
+		start(controller) {
+			if (value) controller.enqueue(value);
+			controller.close();
+		},
 	});
 }
 
-function mockOkResponse(body: unknown, status = 200) {
-	return new Response(JSON.stringify(body), { status });
+function processResult(exitCode = 0, stdout = '', stderr = ''): ModalProcessLike {
+	return {
+		stdout: textStream(stdout),
+		stderr: textStream(stderr),
+		wait: async () => exitCode,
+	};
 }
 
-function mockErrorResponse(status = 500) {
-	return new Response('internal error', { status });
+function pendingProcessResult(): {
+	process: ModalProcessLike;
+	resolve: (exitCode: number) => void;
+} {
+	let resolve = (_exitCode: number) => {};
+	const wait = new Promise<number>((resolveWait) => {
+		resolve = resolveWait;
+	});
+	return {
+		process: {
+			stdout: textStream(''),
+			stderr: textStream(''),
+			wait: () => wait,
+		},
+		resolve,
+	};
 }
 
-// Parse a captured request body for shape assertions. JSON.parse now returns
-// `unknown` (ts-reset), so tests opt back into property access via this helper.
-function parseBody(body: unknown): any {
-	return JSON.parse(body as string);
+class FakeSandbox implements ModalSandboxLike {
+	readonly files = new Map<string, string | Uint8Array>();
+	readonly directories = new Map<string, ModalFileInfoLike[]>();
+	readonly execCalls: {
+		command: string[];
+		options?: Parameters<ModalSandboxLike['exec']>[1];
+	}[] = [];
+	readonly tags: Record<string, string>;
+	terminated = false;
+	execImpl: (command: string[]) => ModalProcessLike = () => processResult();
+
+	constructor(tags: Record<string, string> = {}) {
+		this.tags = tags;
+	}
+
+	filesystem = {
+		readText: async (path: string) => {
+			const value = this.files.get(path);
+			if (typeof value !== 'string') throw new Error('not found');
+			return value;
+		},
+		writeText: async (content: string, path: string) => {
+			this.files.set(path, content);
+		},
+		writeBytes: async (content: Uint8Array, path: string) => {
+			this.files.set(path, content);
+		},
+		listFiles: async (path: string) => this.directories.get(path) ?? [],
+	};
+
+	async exec(
+		command: string[],
+		options?: Parameters<ModalSandboxLike['exec']>[1],
+	): Promise<ModalProcessLike> {
+		this.execCalls.push({ command, options });
+		return this.execImpl(command);
+	}
+
+	async getTags(): Promise<Record<string, string>> {
+		return this.tags;
+	}
+
+	async terminate(): Promise<void> {
+		this.terminated = true;
+	}
+
+	async tunnels(): Promise<Record<number, { url: string }>> {
+		return { 2718: { url: 'https://sandbox.modal.host' } };
+	}
 }
 
-const mockFetch = vi.fn<typeof fetch>();
+function makeWorld() {
+	const existing = new Map<string, FakeSandbox>();
+	const listed: FakeSandbox[] = [];
+	const created: {
+		app: unknown;
+		image: unknown;
+		options: Parameters<ModalClientLike['sandboxes']['create']>[2];
+		sandbox: FakeSandbox;
+	}[] = [];
+	const appCalls: { name: string; options?: { createIfMissing?: boolean } }[] = [];
+	const imageCalls: string[] = [];
 
-beforeEach(() => {
-	vi.stubGlobal('fetch', mockFetch);
-});
+	const client: ModalClientLike = {
+		apps: {
+			async fromName(name, options) {
+				appCalls.push({ name, options });
+				return { appId: `ap-${name}` };
+			},
+		},
+		images: {
+			fromRegistry(image) {
+				imageCalls.push(image);
+				return { image };
+			},
+		},
+		sandboxes: {
+			async create(app, image, options) {
+				const sandbox = new FakeSandbox(options.tags);
+				existing.set(options.name, sandbox);
+				created.push({ app, image, options, sandbox });
+				return sandbox;
+			},
+			async fromName(_appName, name) {
+				const sandbox = existing.get(name);
+				if (!sandbox) throw new NotFoundError('missing');
+				return sandbox;
+			},
+			async *list() {
+				yield* listed;
+			},
+		},
+	};
 
-afterEach(() => {
-	vi.unstubAllGlobals();
-	mockFetch.mockReset();
-});
+	return { client, existing, listed, created, appCalls, imageCalls };
+}
+
+function makeCompute(world: ReturnType<typeof makeWorld>, overrides = {}) {
+	return new ModalCompute(
+		{
+			tokenId: 'token-id',
+			tokenSecret: 'token-secret',
+			image: 'ghcr.io/acme/marimo:latest',
+			appName: 'hub-app',
+			idleTimeout: '20m',
+			...overrides,
+		},
+		world.client,
+	);
+}
 
 describe('ModalCompute', () => {
-	describe('create().exec()', () => {
-		it('POSTs to the exec endpoint with the correct command + headers', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({ exit_code: 0, stdout: 'hi', stderr: '' }));
+	it('creates fresh sandboxes through the supported SDK with profile resources', async () => {
+		const world = makeWorld();
+		await makeCompute(world)
+			.create(SANDBOX_ID, {
+				reuse: false,
+				resources: { cpu: 1.5, memoryBytes: 2 * 1024 ** 3 },
+			})
+			.exec('true');
 
-			const result = await makeCompute().create(SANDBOX_ID).exec('echo hi');
-
-			expectExecResult(result, { success: true, stdout: 'hi', stderr: '' });
-
-			const [url, init] = mockFetch.mock.calls[0];
-			expect(String(url)).toBe(`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/exec`);
-			expect(init?.method).toBe('POST');
-			// ofetch normalizes headers into a Headers instance before calling fetch.
-			const headers = new Headers(init?.headers as HeadersInit);
-			expect(headers.get('Modal-Key')).toBe(TOKEN_ID);
-			expect(headers.get('Modal-Secret')).toBe(TOKEN_SECRET);
-			const body = parseBody(init?.body as string);
-			expect(body.command).toEqual(['sh', '-lc', 'echo hi']);
+		expect(world.created).toHaveLength(1);
+		expect(world.created[0].options).toMatchObject({
+			name: SANDBOX_ID,
+			cpu: 1.5,
+			memoryMiB: 2048,
+			encryptedPorts: [2718],
+			idleTimeoutMs: 20 * 60_000,
+			timeoutMs: 24 * 60 * 60_000,
+			tags: {
+				'marimohub.owner': 'hub-app',
+				'marimohub.sandbox-id': SANDBOX_ID,
+			},
 		});
-
-		it('returns success=false when exit_code is non-zero', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({ exit_code: 1, stdout: '', stderr: 'err' }));
-			const result = await makeCompute().create(SANDBOX_ID).exec('bad-cmd');
-			expectExecResult(result, { success: false, stderr: 'err' });
-		});
-
-		it('throws when the API returns a non-OK status', async () => {
-			mockFetch.mockResolvedValueOnce(mockErrorResponse(500));
-			await expect(makeCompute().create(SANDBOX_ID).exec('cmd')).rejects.toThrow(/Modal API/);
-		});
+		expect(world.imageCalls).toEqual(['ghcr.io/acme/marimo:latest']);
+		expect(world.created[0].sandbox.execCalls[0].command).toEqual(['sh', '-lc', 'true']);
 	});
 
-	describe('listActive()', () => {
-		it('returns only running/undefined-state sandboxes with well-formed ids', async () => {
-			mockFetch.mockResolvedValueOnce(
-				mockOkResponse({
-					sandboxes: [
-						{ sandbox_id: 'sb-aaaaaaaaaaaaaaaa', state: 'running' },
-						{ id: 'sb-bbbbbbbbbbbbbbbb' }, // state undefined → live
-						{ sandbox_id: 'sb-cccccccccccccccc', state: 'stopped' }, // excluded by state
-						{ sandbox_id: '', state: 'running' }, // empty id — excluded
-						{ sandbox_id: 'modal-native-id', state: 'running' }, // not our id — excluded
-					],
-				}),
-			);
-			const active = await makeCompute().listActive();
-			expect(active.map((s) => s.id).sort()).toEqual([
-				'sb-aaaaaaaaaaaaaaaa',
-				'sb-bbbbbbbbbbbbbbbb',
-			]);
+	it('keeps unset resources as an exact create-options no-op', async () => {
+		expect(modalProfileResources(undefined)).toEqual({});
+		expect(modalProfileResources({ cpu: 0.5, memoryBytes: 512 * 1024 ** 2 })).toEqual({
+			cpu: 0.5,
+			memoryMiB: 512,
 		});
 
-		it('GETs the sandboxes list endpoint with app_name scoping', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({ sandboxes: [] }));
-			const compute = new ModalCompute({
-				tokenId: TOKEN_ID,
-				tokenSecret: TOKEN_SECRET,
-				image: IMAGE,
-				apiBase: API_BASE,
-				appName: 'myapp',
-			});
-			await compute.listActive();
-			const [url, init] = mockFetch.mock.calls[0];
-			expect(String(url)).toContain('app_name=myapp');
-			expect(init?.method).toBe('GET');
-		});
-
-		it('handles missing sandboxes array (returns empty)', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({}));
-			expect(await makeCompute().listActive()).toEqual([]);
-		});
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID, { reuse: false }).exec('true');
+		expect(world.created[0].options).not.toHaveProperty('cpu');
+		expect(world.created[0].options).not.toHaveProperty('memoryMiB');
 	});
 
-	describe('create().gitCheckout()', () => {
-		it('issues a shell-quoted git clone (injection-safe via compute-commons)', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({ exit_code: 0, stdout: '', stderr: '' }));
-			await makeCompute().create(SANDBOX_ID).gitCheckout('https://x/y; rm -rf /', {
-				branch: 'main',
-				targetDir: 'w',
-			});
-			const body = parseBody(mockFetch.mock.calls[0][1]?.body as string);
-			// The malicious repo string is safely quoted, not interpolated raw.
-			expect(body.command).toEqual([
-				'sh',
-				'-lc',
-				"git clone --branch 'main' 'https://x/y; rm -rf /' 'w'",
-			]);
-		});
+	it('reattaches by sandbox name when reuse is enabled', async () => {
+		const world = makeWorld();
+		const existing = new FakeSandbox();
+		world.existing.set(SANDBOX_ID, existing);
 
-		it('throws when the clone fails', async () => {
-			mockFetch.mockResolvedValueOnce(
-				mockOkResponse({ exit_code: 128, stdout: '', stderr: 'fatal: repo' }),
-			);
-			await expect(makeCompute().create(SANDBOX_ID).gitCheckout('https://x/y')).rejects.toThrow(
-				/git checkout failed: fatal: repo/,
-			);
-		});
+		await makeCompute(world).create(SANDBOX_ID).exec('echo hi');
+
+		expect(world.created).toHaveLength(0);
+		expect(existing.execCalls[0].command).toEqual(['sh', '-lc', 'echo hi']);
 	});
 
-	describe('create().startProcess()', () => {
-		it('starts a process and returns a process whose methods hit the right endpoints', async () => {
-			mockFetch
-				.mockResolvedValueOnce(mockOkResponse({ process_id: 'p1' })) // startProcess
-				.mockResolvedValueOnce(mockOkResponse({})) // kill
-				.mockResolvedValueOnce(mockOkResponse({})) // waitForPort
-				.mockResolvedValueOnce(mockOkResponse({ stdout: 'out', stderr: 'err' })); // getLogs
-
-			const proc = await makeCompute()
-				.create(SANDBOX_ID)
-				.startProcess('uv run marimo edit', {
-					cwd: '/workspace',
-					env: { A: '1' },
-				});
-
-			// startProcess request shape
-			const [startUrl, startInit] = mockFetch.mock.calls[0];
-			expect(String(startUrl)).toBe(`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/processes`);
-			const startBody = parseBody(startInit?.body as string);
-			expect(startBody.command).toEqual(['sh', '-lc', 'uv run marimo edit']);
-			expect(startBody.cwd).toBe('/workspace');
-			expect(startBody.env).toEqual({ A: '1' });
-
-			// returned process identity
-			expect(proc.id).toBe('p1');
-			expect(proc.command).toBe('uv run marimo edit');
-
-			await proc.kill('SIGTERM');
-			expect(String(mockFetch.mock.calls[1][0])).toBe(
-				`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/processes/p1/kill`,
-			);
-			expect(parseBody(mockFetch.mock.calls[1][1]?.body as string).signal).toBe('SIGTERM');
-
-			await proc.waitForPort(8080, { path: '/health' });
-			const wfpBody = parseBody(mockFetch.mock.calls[2][1]?.body as string);
-			expect(String(mockFetch.mock.calls[2][0])).toBe(
-				`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/wait-for-port`,
-			);
-			expect(wfpBody).toMatchObject({ port: 8080, mode: 'http', path: '/health' });
-
-			const logs = await proc.getLogs();
-			expect(logs).toEqual({ stdout: 'out', stderr: 'err' });
-			expect(String(mockFetch.mock.calls[3][0])).toBe(
-				`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/processes/p1/logs`,
-			);
-		});
-
-		it('waitForPort defaults the mode to http when unspecified', async () => {
-			mockFetch
-				.mockResolvedValueOnce(mockOkResponse({ process_id: 'p1' }))
-				.mockResolvedValueOnce(mockOkResponse({}));
-			const proc = await makeCompute().create(SANDBOX_ID).startProcess('run');
-			await proc.waitForPort(9000);
-			expect(parseBody(mockFetch.mock.calls[1][1]?.body as string).mode).toBe('http');
-		});
+	it('creates on a reuse lookup miss', async () => {
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID).exec('true');
+		expect(world.created).toHaveLength(1);
 	});
 
-	describe('create().exposePort()', () => {
-		it('POSTs to the tunnels endpoint and unwraps the public url', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({ url: 'https://tunnel.modal/abc' }));
-			const result = await makeCompute()
-				.create(SANDBOX_ID)
-				.exposePort(2718, { hostname: 'ignored' });
-			expect(result).toEqual({ url: 'https://tunnel.modal/abc' });
-			const [url, init] = mockFetch.mock.calls[0];
-			expect(String(url)).toBe(`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/tunnels`);
-			expect(parseBody(init?.body as string).port).toBe(2718);
-		});
+	it('maps process output and passes accumulated environment variables', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		sandbox.execImpl = () => processResult(3, 'out', 'err');
+		world.existing.set(SANDBOX_ID, sandbox);
+		const instance = makeCompute(world).create(SANDBOX_ID);
+		await instance.setEnvVars({ A: '1' });
+		await instance.setEnvVars({ B: '2' });
 
-		it('rejects when the tunnels response is missing a url', async () => {
-			// A parseable kernel URL is part of the exposePort contract; a tunnels
-			// response with no `url` must not slip through as `{ url: undefined }`.
-			mockFetch.mockResolvedValueOnce(mockOkResponse({}));
-			await expect(
-				makeCompute().create(SANDBOX_ID).exposePort(2718, { hostname: 'ignored' }),
-			).rejects.toThrow();
-		});
+		const result = await instance.exec('run');
+
+		expectExecResult(result, { success: false, stdout: 'out', stderr: 'err' });
+		expect(sandbox.execCalls[0].options?.env).toEqual({ A: '1', B: '2' });
 	});
 
-	describe('create().destroy()', () => {
-		it('POSTs to the terminate endpoint', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({}));
-			await makeCompute().create(SANDBOX_ID).destroy();
-			expect(String(mockFetch.mock.calls[0][0])).toBe(
-				`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/terminate`,
-			);
-		});
+	it('streams raw stdout without enabling PTY mode', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		sandbox.execImpl = () => processResult(0, 'raw\r\nstdout', 'separate stderr');
+		world.existing.set(SANDBOX_ID, sandbox);
+
+		const stream = await makeCompute(world).create(SANDBOX_ID).execStream('run');
+		const reader = stream.getReader();
+
+		expect(await reader.read()).toEqual({ done: false, value: 'raw\r\nstdout' });
+		expect(sandbox.execCalls[0].options).not.toHaveProperty('pty');
 	});
 
-	describe('create().execStream()', () => {
-		it('streams from the exec endpoint with ?stream=1 and returns the body', async () => {
-			mockFetch.mockResolvedValueOnce(new Response('chunk', { status: 200 }));
-			const stream = await makeCompute().create(SANDBOX_ID).execStream('tail -f log');
-			expect(stream).toBeInstanceOf(ReadableStream);
-			expect(String(mockFetch.mock.calls[0][0])).toContain('?stream=1');
-		});
+	it('reads and writes text and binary files through the SDK filesystem', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		sandbox.files.set('/workspace/in.txt', 'hello');
+		world.existing.set(SANDBOX_ID, sandbox);
+		const instance = makeCompute(world).create(SANDBOX_ID);
 
-		it('throws when the response is not OK', async () => {
-			mockFetch.mockResolvedValueOnce(mockErrorResponse(500));
-			await expect(makeCompute().create(SANDBOX_ID).execStream('x')).rejects.toThrow(
-				/exec stream failed/,
-			);
+		expectFileResult(await instance.readFile('/workspace/in.txt'), {
+			success: true,
+			content: 'hello',
 		});
-
-		it('throws when the response has no body', async () => {
-			mockFetch.mockResolvedValueOnce(new Response(null, { status: 200 }));
-			await expect(makeCompute().create(SANDBOX_ID).execStream('x')).rejects.toThrow(
-				/exec stream failed/,
-			);
-		});
+		await instance.writeFiles([
+			{ path: '/workspace/out.txt', content: 'text' },
+			{ path: '/workspace/out.bin', content: new Uint8Array([0xff, 0x00]) },
+		]);
+		expect(sandbox.files.get('/workspace/out.txt')).toBe('text');
+		expect(sandbox.files.get('/workspace/out.bin')).toEqual(new Uint8Array([0xff, 0x00]));
 	});
 
-	describe('create() file ops', () => {
-		it('readFile returns the content on success', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({ content: 'hello' }));
-			const res = await makeCompute().create(SANDBOX_ID).readFile('/f.txt');
-			expectFileResult(res, { success: true, content: 'hello', encoding: 'utf-8' });
-		});
+	it('lists recursively while respecting hidden-file filtering', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		sandbox.directories.set('/workspace', [
+			{ name: 'a.py', path: '/workspace/a.py', type: 'file', size: 5 },
+			{ name: '.hidden', path: '/workspace/.hidden', type: 'file', size: 1 },
+			{ name: 'sub', path: '/workspace/sub', type: 'directory', size: 0 },
+		]);
+		sandbox.directories.set('/workspace/sub', [
+			{ name: 'b.py', path: '/workspace/sub/b.py', type: 'file', size: 7 },
+		]);
+		world.existing.set(SANDBOX_ID, sandbox);
 
-		it('readFile swallows API errors into success:false (provisioner fallback contract)', async () => {
-			mockFetch.mockResolvedValueOnce(mockErrorResponse(404));
-			const res = await makeCompute().create(SANDBOX_ID).readFile('/missing');
-			expectFileResult(res, { success: false, content: '' });
-		});
+		const result = await makeCompute(world)
+			.create(SANDBOX_ID)
+			.listFiles('/workspace', { recursive: true });
 
-		it('writeFiles mkdirs the parents first, then POSTs each path and content', async () => {
-			mockFetch.mockImplementation(async () =>
-				mockOkResponse({ exit_code: 0, stdout: '', stderr: '' }),
-			);
-			await makeCompute()
-				.create(SANDBOX_ID)
-				.writeFiles([{ path: '/d/f.txt', content: 'data' }]);
-
-			// The REST write creates no parents, so a mkdir exec has to land first.
-			const [mkUrl, mkInit] = mockFetch.mock.calls[0];
-			expect(String(mkUrl)).toBe(`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/exec`);
-			expect(JSON.stringify(parseBody(mkInit?.body as string))).toContain("mkdir -p '/d'");
-
-			const [url, init] = mockFetch.mock.calls[1];
-			expect(String(url)).toBe(`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/files/write`);
-			expect(parseBody(init?.body as string)).toEqual({ path: '/d/f.txt', content: 'data' });
-		});
-
-		it('writeFiles base64-armors bytes and decodes them in-sandbox (JSON would corrupt them)', async () => {
-			mockFetch.mockImplementation(async () =>
-				mockOkResponse({ exit_code: 0, stdout: '', stderr: '' }),
-			);
-			await makeCompute()
-				.create(SANDBOX_ID)
-				.writeFiles([{ path: '/f.bin', content: new Uint8Array([0xff, 0x00, 0x80]) }]);
-
-			// The body must carry base64 TEXT, never a stringified Uint8Array.
-			const writeCall = mockFetch.mock.calls.find(([u]) => String(u).endsWith('/files/write'));
-			const body = parseBody(writeCall![1]?.body as string) as { path: string; content: string };
-			expect(body.path).toBe('/f.bin.b64.tmp');
-			expect(body.content).toBe('/wCA');
-			// …then a decode exec puts the real bytes at the destination.
-			const decode = mockFetch.mock.calls.filter(([u]) => String(u).endsWith('/exec')).at(-1);
-			expect(JSON.stringify(parseBody(decode![1]?.body as string))).toContain(
-				"base64 -d '/f.bin.b64.tmp' > '/f.bin'",
-			);
-		});
-
-		it('writeFiles throws when the parent mkdir exec fails', async () => {
-			mockFetch.mockResolvedValueOnce(
-				mockOkResponse({ exit_code: 1, stdout: '', stderr: 'permission denied' }),
-			);
-			await expect(
-				makeCompute()
-					.create(SANDBOX_ID)
-					.writeFiles([{ path: '/d/f.txt', content: 'x' }]),
-			).rejects.toThrow(/writeFiles mkdir failed.*permission denied/);
-		});
-
-		it('writeFiles throws when the in-sandbox base64 decode exec fails', async () => {
-			mockFetch
-				.mockResolvedValueOnce(mockOkResponse({ exit_code: 0, stdout: '', stderr: '' })) // mkdir
-				.mockResolvedValueOnce(mockOkResponse({})) // files/write (tmp)
-				.mockResolvedValueOnce(mockOkResponse({ exit_code: 1, stdout: '', stderr: 'bad base64' })); // decode
-			await expect(
-				makeCompute()
-					.create(SANDBOX_ID)
-					.writeFiles([{ path: '/f.bin', content: new Uint8Array([1, 2, 3]) }]),
-			).rejects.toThrow(/writeFile \/f\.bin failed.*bad base64/);
-		});
-
-		it('listFiles returns files, defaulting a missing array to []', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({}));
-			expect(await makeCompute().create(SANDBOX_ID).listFiles('/')).toEqual({
-				success: true,
-				files: [],
-			});
-		});
-
-		it('setEnvVars POSTs the env map', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({}));
-			await makeCompute().create(SANDBOX_ID).setEnvVars({ FOO: 'bar' });
-			const [url, init] = mockFetch.mock.calls[0];
-			expect(String(url)).toBe(`${API_BASE}/v1/sandboxes/${SANDBOX_ID}/env`);
-			expect(parseBody(init?.body as string)).toEqual({ env: { FOO: 'bar' } });
-		});
+		expect(result.files.map((file) => file.relativePath)).toEqual(['a.py', 'sub', 'sub/b.py']);
 	});
 
-	describe('unsupported / no-op surface', () => {
-		it('mountBucket throws to trigger the file-copy fallback (no network call)', async () => {
-			await expect(
-				makeCompute().create(SANDBOX_ID).mountBucket({
-					bucketName: 'b',
-					endpoint: 'e',
-					mountPath: '/m',
-					prefix: 'p',
-				}),
-			).rejects.toThrow(/file copy fallback/);
-			expect(mockFetch).not.toHaveBeenCalled();
-		});
+	it('exposes the SDK tunnel and terminates the named sandbox', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		world.existing.set(SANDBOX_ID, sandbox);
+		const instance = makeCompute(world).create(SANDBOX_ID);
 
-		it('unmountBucket is a no-op', async () => {
-			await expect(makeCompute().create(SANDBOX_ID).unmountBucket('/m')).resolves.toBeUndefined();
-			expect(mockFetch).not.toHaveBeenCalled();
+		expect(await instance.exposePort(2718, { hostname: '' })).toEqual({
+			url: 'https://sandbox.modal.host',
 		});
-
-		it('proxy returns null (Modal kernels are reached directly)', async () => {
-			expect(await makeCompute().proxy(new Request('https://x/'))).toBeNull();
-		});
+		await instance.destroy();
+		expect(sandbox.terminated).toBe(true);
 	});
 
-	describe('request behaviour', () => {
-		it('exec opts out of the control-plane timeout (no abort signal), unlike short calls', async () => {
-			mockFetch.mockResolvedValue(mockOkResponse({ exit_code: 0, stdout: '', stderr: '' }));
-			await makeCompute().create(SANDBOX_ID).exec('slow-cmd');
-			const execInit = mockFetch.mock.calls.at(-1)![1];
-			expect(execInit?.signal == null).toBe(true);
+	it('kills a started process by its tracked PID rather than matching its command', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		const pending = pendingProcessResult();
+		sandbox.execImpl = () => pending.process;
+		world.existing.set(SANDBOX_ID, sandbox);
+		const command = 'python -c "print([1 + 2])"';
 
-			mockFetch.mockReset();
-			mockFetch.mockResolvedValue(mockOkResponse({}));
-			await makeCompute().create(SANDBOX_ID).setEnvVars({ A: '1' });
-			const envInit = mockFetch.mock.calls.at(-1)![1];
-			expect(envInit?.signal).toBeInstanceOf(AbortSignal);
-		});
+		const process = await makeCompute(world)
+			.create(SANDBOX_ID)
+			.startProcess(command, { processId: 'kernel' });
+		await process.kill('SIGKILL');
 
-		it('does not retry a non-idempotent exec POST on a 5xx', async () => {
-			mockFetch.mockResolvedValue(mockErrorResponse(500));
-			await expect(makeCompute().create(SANDBOX_ID).exec('cmd')).rejects.toThrow(/Modal API/);
-			expect(mockFetch).toHaveBeenCalledTimes(1);
-		});
-
-		it('passes a network-level (non-response) error through, not wrapped as a Modal API failure', async () => {
-			mockFetch.mockRejectedValue(new TypeError('network down'));
-			const err: unknown = await makeCompute()
-				.create(SANDBOX_ID)
-				.exec('cmd')
-				.catch((e: unknown) => e);
-			// toModalError only builds the `Modal API … failed: <status>` shape for a
-			// FetchError with a response; a bare network error passes through untouched.
-			expect(err).toBeInstanceOf(Error);
-			expect(String((err as Error).message)).not.toContain('Modal API');
-		});
+		expect(process).toMatchObject({ id: 'kernel', command });
+		expect(sandbox.execCalls[0].command[2]).toContain(`exec sh -lc '`);
+		expect(sandbox.execCalls[0].command[2]).toContain(command);
+		const killCommand = sandbox.execCalls[1].command[2];
+		expect(killCommand).toContain('read -r pid started');
+		expect(killCommand).toContain('cat "/proc/$pid/stat"');
+		expect(killCommand).toContain('[ "${20}" = "$started" ]');
+		expect(killCommand).toContain('kill -KILL -- "$pid"');
+		expect(killCommand).not.toContain('pkill');
+		expect(killCommand).not.toContain(command);
 	});
 
-	describe('config defaults', () => {
-		it('falls back to the default API base when apiBase is unset', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({ exit_code: 0, stdout: '', stderr: '' }));
-			const compute = new ModalCompute({
-				tokenId: TOKEN_ID,
-				tokenSecret: TOKEN_SECRET,
-				image: IMAGE,
-			});
-			await compute.create(SANDBOX_ID).exec('echo');
-			expect(String(mockFetch.mock.calls[0][0])).toMatch(/^https:\/\/api\.modal\.com\//);
-		});
+	it('removes process tracking state on exit and ignores later kill requests', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		const pending = pendingProcessResult();
+		let execCount = 0;
+		sandbox.execImpl = () => (execCount++ === 0 ? pending.process : processResult());
+		world.existing.set(SANDBOX_ID, sandbox);
 
-		it('falls back to the default app name in listActive when appName is unset', async () => {
-			mockFetch.mockResolvedValueOnce(mockOkResponse({ sandboxes: [] }));
-			const compute = new ModalCompute({
-				tokenId: TOKEN_ID,
-				tokenSecret: TOKEN_SECRET,
-				image: IMAGE,
-			});
-			await compute.listActive();
-			expect(String(mockFetch.mock.calls[0][0])).toContain('app_name=marimohub');
-		});
+		const process = await makeCompute(world).create(SANDBOX_ID).startProcess('true');
+		pending.resolve(0);
+
+		await expect.poll(() => sandbox.execCalls.length).toBe(2);
+		expect(sandbox.execCalls[1].command[2]).toMatch(
+			/^rm -f '\/tmp\/marimohub-process-[\w-]+\.pid'$/,
+		);
+
+		await process.kill('SIGKILL');
+		expect(sandbox.execCalls).toHaveLength(2);
+	});
+
+	it('treats destroy of an absent sandbox as idempotent', async () => {
+		const world = makeWorld();
+		await expect(makeCompute(world).create(SANDBOX_ID).destroy()).resolves.toBeUndefined();
+		expect(world.created).toHaveLength(0);
+	});
+
+	it('lists only owned sandboxes and maps their stable tags back to SandboxIds', async () => {
+		const world = makeWorld();
+		world.listed.push(
+			new FakeSandbox({
+				'marimohub.owner': 'hub-app',
+				'marimohub.sandbox-id': 'sb-aaaaaaaaaaaaaaaa',
+			}),
+			new FakeSandbox({
+				'marimohub.owner': 'hub-app',
+				'marimohub.sandbox-id': 'foreign-sandbox',
+			}),
+			new FakeSandbox({ 'marimohub.owner': 'hub-app' }),
+		);
+
+		expect(await makeCompute(world).listActive()).toEqual([{ id: 'sb-aaaaaaaaaaaaaaaa' }]);
+	});
+
+	it('uses an image override for one sandbox', async () => {
+		const world = makeWorld();
+		await makeCompute(world)
+			.create(SANDBOX_ID, { reuse: false, image: 'override-image' })
+			.exec('true');
+		expect(world.imageCalls).toEqual(['override-image']);
+	});
+
+	it('keeps unsupported mount behavior and proxy behavior unchanged', async () => {
+		const world = makeWorld();
+		const compute = makeCompute(world);
+		await expect(
+			compute.create(SANDBOX_ID).mountBucket({
+				bucketName: 'b',
+				endpoint: 'e',
+				mountPath: '/m',
+				prefix: 'p',
+			}),
+		).rejects.toThrow(/file copy fallback/);
+		expect(await compute.proxy(new Request('https://example.com'))).toBeNull();
+	});
+});
+
+describe('parseModalDuration', () => {
+	it('parses supported units and rejects invalid values during construction', () => {
+		expect(parseModalDuration(undefined)).toBeUndefined();
+		expect(parseModalDuration('500ms')).toBe(500);
+		expect(parseModalDuration('20m')).toBe(1_200_000);
+		expect(parseModalDuration('1.5h')).toBe(5_400_000);
+		expect(() => parseModalDuration('soon')).toThrow(/Invalid Modal idle timeout/);
+		expect(() => parseModalDuration('0s')).toThrow(/must be positive/);
 	});
 });

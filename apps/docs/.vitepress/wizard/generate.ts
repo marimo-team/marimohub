@@ -48,6 +48,7 @@ export function resolveValue(id: string, values: Record<string, string>): string
 	const user = values[id]?.trim();
 	if (user) return user;
 	const v = ALL_VARS_BY_ID.get(id);
+	if (v?.optIn) return '';
 	if (v?.example) return v.example;
 	return concreteDefault(v?.default);
 }
@@ -111,6 +112,10 @@ function sections(sel: WizardSelection): Section[] {
 	].filter((s) => s.selector || s.vars.length > 0);
 }
 
+function configuredVars(section: Section, values: Record<string, string>): ConfigVar[] {
+	return section.vars.filter((v) => !v.optIn || Boolean(values[v.id]?.trim()));
+}
+
 // --- CONFIGS: .env ---
 
 export function generateEnv(sel: WizardSelection): string {
@@ -120,7 +125,7 @@ export function generateEnv(sel: WizardSelection): string {
 		if (section.selector) {
 			lines.push(`${section.selector.id}=${section.selector.value}`);
 		}
-		for (const v of section.vars) {
+		for (const v of configuredVars(section, values)) {
 			const generated = generatedValue(v, values, sel);
 			const notes = [v.required ? 'required' : '', v.secret ? 'secret' : '']
 				.filter(Boolean)
@@ -153,7 +158,7 @@ export function generateHelm(sel: WizardSelection): string {
 		if (section.selector) {
 			config.push(`  ${section.selector.id}: ${yamlScalar(section.selector.value)}`);
 		}
-		for (const v of section.vars) {
+		for (const v of configuredVars(section, values)) {
 			const generated = generatedValue(v, values, sel);
 			const rendered = `${yamlScalar(generated.value)}${
 				generated.example ? ` # e.g. ${generated.example}` : ''
@@ -187,7 +192,7 @@ export function generateCompose(sel: WizardSelection): string {
 		if (section.selector) {
 			env.push(`      ${section.selector.id}: ${yamlScalar(section.selector.value)}`);
 		}
-		for (const v of section.vars) {
+		for (const v of configuredVars(section, values)) {
 			const generated = generatedValue(v, values, sel);
 			env.push(
 				`      ${v.id}: ${yamlScalar(generated.value)}${

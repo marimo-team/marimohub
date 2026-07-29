@@ -31,6 +31,7 @@ export interface CreateSessionInput {
 	runtime?: { python_version?: string; marimo_version?: string };
 	sandbox_id?: SandboxId;
 	sandbox_url?: string;
+	compute_profile?: string;
 	/** Viewer session whose edits are discarded at teardown (see SessionSchema). */
 	ephemeral?: boolean;
 	/** `edit` (default) or `app` (the shared singleton; see SessionSchema). */
@@ -106,6 +107,7 @@ export class SessionService {
 			runtime: input.runtime,
 			sandbox_id: input.sandbox_id,
 			sandbox_url: input.sandbox_url,
+			compute_profile: input.compute_profile,
 		};
 
 		await this.bucket.put(paths.session(input.project_id, sessionId), JSON.stringify(session));

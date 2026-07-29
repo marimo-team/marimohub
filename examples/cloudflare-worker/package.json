@@ -8,6 +8,7 @@
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",
 		"cf-typegen": "wrangler types",
+		"test": "vp test",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
@@ -17,6 +18,7 @@
 		"@marimo-hub/auth-dev": "workspace:*",
 		"@marimo-hub/compute-cloudflare": "workspace:*",
 		"@marimo-hub/compute-e2b": "workspace:*",
+		"@marimo-hub/config": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
 		"@marimo-hub/storage-r2": "workspace:*",
 		"e2b": "2.30.6"
@@ -24,6 +26,8 @@
 	"devDependencies": {
 		"@cloudflare/workers-types": "catalog:",
 		"@marimo-hub/tsconfig": "workspace:*",
-		"typescript": "catalog:"
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
 	}
 }

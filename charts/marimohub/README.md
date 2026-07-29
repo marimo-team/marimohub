@@ -46,6 +46,7 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `image.repository` | `ghcr.io/marimo-team/marimohub` | |
 | `image.tag` | `""` → chart `appVersion` | Override to decouple image from chart version |
 | `replicaCount` | `2` | Stateless API replicas |
+| `compute.profiles` | `""` | Ordered sandbox CPU/memory profiles; first is the default |
 | `maintenance.enabled` | `true` | Singleton session reaper |
 | `config` | see `values.yaml` | Non-secret `MARIMOHUB_*` → ConfigMap |
 | `secrets.existingSecret` | `""` | Secret you create with the secret vars (recommended) |

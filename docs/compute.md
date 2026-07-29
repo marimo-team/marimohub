@@ -50,6 +50,28 @@ the contract, a pre-warmed example, and how multiple images behave.
 See [Security -> Kernel exposure](./security.md#kernel-exposure) for the trust
 model.
 
+## Compute profiles
+
+Operators can define named CPU and memory profiles in an ordered list:
+
+```bash
+MARIMOHUB_COMPUTE_PROFILES="small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi"
+```
+
+- The first profile is the default and applies to every new sandbox. Reordering
+  the list changes the default.
+- Profile names are stable identifiers. Renaming is remove-and-add; CPU and
+  memory values under an existing name can be changed freely.
+- Changes apply on the next session start. Running kernels keep their current
+  resources.
+- Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B apply profiles. E2B,
+  Cloudflare, local, and none ignore them and log a startup warning; their
+  existing backend-specific sizing remains unchanged.
+
+Docker and Podman enforce each container's limits but have no admission control.
+Ensure the host can accommodate the expected concurrency; N concurrent
+sandboxes at the largest profile can exceed the host's capacity.
+
 ## Configure it
 
 ### CoreWeave

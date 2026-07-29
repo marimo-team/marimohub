@@ -17,6 +17,7 @@ import {
 import { SandboxId } from '@marimo-hub/core';
 import type {
 	ActiveSandbox,
+	ComputeResources,
 	CreateSandboxOptions,
 	ExecResult,
 	ExecStreamOptions,
@@ -94,6 +95,13 @@ export interface ContainerConfig {
 type ResolvedConfig = Required<Omit<ContainerConfig, 'network'>> &
 	Pick<ContainerConfig, 'network'> & { engine: string };
 
+export function containerResourceArgs(resources: ComputeResources = {}): string[] {
+	return [
+		...(resources.cpu !== undefined ? ['--cpus', String(resources.cpu)] : []),
+		...(resources.memoryBytes !== undefined ? ['--memory', String(resources.memoryBytes)] : []),
+	];
+}
+
 let procSeq = 0;
 
 class ContainerSandboxInstance implements SandboxInstance {
@@ -106,6 +114,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 		private readonly id: SandboxId,
 		private readonly config: ResolvedConfig,
 		private readonly runner: ContainerRunner,
+		private readonly resources: ComputeResources,
 	) {
 		this.name = `${NAME_PREFIX}${id}`;
 	}
@@ -131,6 +140,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 			'-p',
 			`${this.config.bindHost}::${KERNEL_PORT}`,
 		];
+		args.push(...containerResourceArgs(this.resources));
 		if (this.config.network) args.push('--network', this.config.network);
 		args.push(this.config.image, 'sleep', 'infinity');
 
@@ -319,7 +329,7 @@ export class ContainerCompute implements SandboxProvider {
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
 		const config = options?.image ? { ...this.config, image: options.image } : this.config;
-		return new ContainerSandboxInstance(id, config, this.runner);
+		return new ContainerSandboxInstance(id, config, this.runner, options?.resources ?? {});
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

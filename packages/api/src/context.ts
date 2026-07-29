@@ -4,6 +4,7 @@ import type {
 	AuthUser,
 	Bucket,
 	BucketConfig,
+	ComputeResources,
 	createServices,
 	FederationTarget,
 	KernelProbe,
@@ -108,6 +109,10 @@ export interface SandboxConfig {
 	 * e2b). Empty/absent = no picker; the compute adapter's own default applies.
 	 */
 	images?: string[];
+	/** Resources from the deployment's default compute profile. */
+	resources?: ComputeResources;
+	/** Name of the default compute profile, persisted on newly-created sessions. */
+	computeProfile?: string;
 }
 
 /**

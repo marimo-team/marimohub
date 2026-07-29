@@ -7,7 +7,12 @@ import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { paths } from '../../paths';
-import type { SandboxInstance, SandboxProcess, SandboxProvider } from '../../ports/sandbox';
+import type {
+	ComputeResources,
+	SandboxInstance,
+	SandboxProcess,
+	SandboxProvider,
+} from '../../ports/sandbox';
 import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
@@ -86,6 +91,8 @@ export interface ProvisionOptions {
 	 * filesystem snapshot — the snapshot encodes its own image.
 	 */
 	image?: string;
+	/** Backend-neutral resources resolved from the deployment's default compute profile. */
+	resources?: ComputeResources;
 	/**
 	 * Environment + files to inject into the sandbox BEFORE the kernel starts — the
 	 * assembled output of the workload-identity broker (federated S3 creds) and/or
@@ -244,6 +251,7 @@ export class SandboxProvisioner {
 			options.sandboxId,
 			options.restoreFilesystemSnapshotId,
 			options.image,
+			options.resources,
 		);
 		const createMs = Date.now() - createStart;
 		try {

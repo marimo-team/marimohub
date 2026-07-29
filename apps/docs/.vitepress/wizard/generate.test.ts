@@ -105,6 +105,17 @@ describe('config -> code generators', () => {
 		expect(env).toContain('MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret');
 		expect(env).not.toContain('MARIMOHUB_STORAGE_S3_BUCKET=orgname-marimohub');
 	});
+
+	it('leaves compute profiles unset unless explicitly configured', () => {
+		const selection = CASES['default-prod (s3 + modal + oidc)'];
+		expect(generateEnv(selection)).not.toContain('MARIMOHUB_COMPUTE_PROFILES');
+		expect(
+			generateEnv({
+				...selection,
+				values: { MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=1;mem=2Gi' },
+			}),
+		).toContain('MARIMOHUB_COMPUTE_PROFILES=small:cpu=1;mem=2Gi');
+	});
 });
 
 describe('validateSelection', () => {

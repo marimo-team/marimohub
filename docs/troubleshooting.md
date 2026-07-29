@@ -93,6 +93,18 @@ Pre-install marimo and common libraries into the image's project environment so
 the startup `uv sync --inexact` only adds notebook-specific dependencies. See
 [Sandbox image → Why pre-install (not just cache)](/sandbox-image#why-pre-install-not-just-cache).
 
+### Kubernetes kernel stays Pending or reports Unschedulable
+
+The default compute profile may request more CPU or memory than any node can
+provide, or the namespace may lack sufficient quota. Check the Pod's
+`FailedScheduling` event, then reduce the profile or add node/quota capacity.
+
+### Kernel exits during startup dependency sync
+
+`uv sync` runs inside the sandbox before marimo starts. If it is killed for
+out-of-memory during dependency installation, use a larger compute profile and
+start a new session.
+
 ## Check a live deployment
 
 `GET /api/health?deep=true` probes every downstream dependency and reports each

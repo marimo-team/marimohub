@@ -11,6 +11,9 @@ ingress:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   host: hub.acme.example.com
 
+compute:
+  profiles: small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi
+
 config:
   MARIMOHUB_STORAGE_BACKEND: s3
   MARIMOHUB_STORAGE_S3_BUCKET: acme-marimohub

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { ProxyExposure } from '@marimo-hub/core';
 import { createFromEnv } from './index';
 
@@ -37,6 +37,53 @@ describe('createFromEnv auth backend selection', () => {
 		});
 		const user = await deps.authenticator.authenticate(new Request('http://x'));
 		expect(user).toEqual({ id: 'alice', email: 'alice@example.com', name: 'Alice Example' });
+	});
+
+	it('parses compute profiles during boot and rejects typos', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_COMPUTE_PROFILES: 'small:cpus=1',
+			}),
+		).toThrow(/unknown key.*"small"/);
+	});
+
+	it('wires the first compute profile into sandbox configuration', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_COMPUTE_BACKEND: 'docker',
+			MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=0.5;mem=512Mi,large:cpu=4;mem=8Gi',
+		});
+		expect(deps.sandbox.resources).toEqual({
+			cpu: 0.5,
+			memoryBytes: 512 * 1024 ** 2,
+		});
+		expect(deps.sandbox.computeProfile).toBe('small');
+	});
+
+	it('warns once at startup when the selected backend ignores configured resources', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=1',
+			});
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=2',
+			});
+			const profileWarnings = warn.mock.calls.filter((call) =>
+				String(call[0]).includes('MARIMOHUB_COMPUTE_PROFILES'),
+			);
+			expect(profileWarnings).toHaveLength(1);
+			expect(String(profileWarnings[0][0])).toContain('ignored');
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it('throws on an unknown backend', () => {
