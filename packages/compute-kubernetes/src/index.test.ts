@@ -169,6 +169,10 @@ describe('KubernetesCompute', () => {
 				memory: '2048Mi',
 				profileLimits: { cpu: true, memory: true },
 			});
+			expect(kubernetesProfileResources({ cpu: 1.2344 })).toEqual({
+				cpu: '1235m',
+				profileLimits: { cpu: true },
+			});
 
 			const world = makeWorld();
 			await makeCompute(world)

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
 import { ModalClient, NotFoundError } from 'modal';
 import {
@@ -6,7 +7,7 @@ import {
 	shellQuote,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
-import type { SandboxId } from '@marimo-hub/core';
+import { SandboxId } from '@marimo-hub/core';
 import type {
 	ActiveSandbox,
 	ComputeResources,
@@ -259,7 +260,6 @@ class ModalSandboxInstance implements SandboxInstance {
 	async execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream> {
 		const process = await this.spawn(['sh', '-lc', cmd], {
 			timeout: options?.timeout,
-			pty: true,
 		});
 		void readStream(process.stderr).catch(() => {});
 		void process.wait().catch(() => {});
@@ -327,7 +327,12 @@ class ModalSandboxInstance implements SandboxInstance {
 	async unmountBucket(_mountPath: string): Promise<void> {}
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
-		const process = await this.spawn(['sh', '-lc', cmd], {
+		const pidPath = `/tmp/marimohub-process-${randomUUID()}.pid`;
+		const trackedCommand = [
+			`printf '%s\\n' "$$" > ${shellQuote(pidPath)}`,
+			`exec sh -lc ${shellQuote(cmd)}`,
+		].join('; ');
+		const process = await this.spawn(['sh', '-lc', trackedCommand], {
 			cwd: options?.cwd,
 			env: options?.env,
 			timeout: options?.timeout,
@@ -352,7 +357,11 @@ class ModalSandboxInstance implements SandboxInstance {
 			command: cmd,
 			async kill(signal?: string): Promise<void> {
 				const normalized = /^SIG[A-Z0-9]+$/.test(signal ?? '') ? signal!.slice(3) : 'TERM';
-				await execInSandbox(`pkill -${normalized} -f -- ${shellQuote(cmd)}`).catch(() => {});
+				await execInSandbox(
+					`pid=$(cat ${shellQuote(pidPath)} 2>/dev/null) && ` +
+						`case "$pid" in ''|*[!0-9]*) exit 1;; esac && ` +
+						`kill -${normalized} -- "$pid"`,
+				).catch(() => {});
 			},
 			async waitForPort(port: number, waitOptions?: WaitForPortOptions): Promise<void> {
 				const timeout = waitOptions?.timeout ?? 30_000;
@@ -448,7 +457,7 @@ export class ModalCompute implements SandboxProvider {
 			tags: { [OWNER_TAG]: appName },
 		})) {
 			const id = (await sandbox.getTags())[SANDBOX_ID_TAG];
-			if (id) active.push({ id: id as SandboxId });
+			if (SandboxId.is(id)) active.push({ id });
 		}
 		return active;
 	}

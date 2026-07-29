@@ -87,7 +87,7 @@ export function kubernetesProfileResources(
 		return undefined;
 	}
 	return {
-		...(resources.cpu !== undefined ? { cpu: `${Math.round(resources.cpu * 1000)}m` } : {}),
+		...(resources.cpu !== undefined ? { cpu: `${Math.ceil(resources.cpu * 1000)}m` } : {}),
 		...(resources.memoryBytes !== undefined
 			? { memory: `${Math.ceil(resources.memoryBytes / 1024 ** 2)}Mi` }
 			: {}),

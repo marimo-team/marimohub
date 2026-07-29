@@ -239,15 +239,29 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 					namespace,
 					fieldSelector: `involvedObject.kind=Pod,involvedObject.name=${name}`,
 				});
-				const messages = events.items
+				const failures = events.items
 					.filter(
 						(event) =>
 							event.reason === 'FailedScheduling' ||
 							event.message?.toLowerCase().includes('unschedulable'),
 					)
-					.map((event) => event.message)
-					.filter((message): message is string => Boolean(message));
-				return messages.at(-1);
+					.filter((event) => Boolean(event.message))
+					.sort((a, b) => {
+						const aTime =
+							a.series?.lastObservedTime ??
+							a.lastTimestamp ??
+							a.eventTime ??
+							a.metadata?.creationTimestamp ??
+							a.firstTimestamp;
+						const bTime =
+							b.series?.lastObservedTime ??
+							b.lastTimestamp ??
+							b.eventTime ??
+							b.metadata?.creationTimestamp ??
+							b.firstTimestamp;
+						return (aTime?.getTime() ?? 0) - (bTime?.getTime() ?? 0);
+					});
+				return failures.at(-1)?.message;
 			} catch {
 				return undefined;
 			}

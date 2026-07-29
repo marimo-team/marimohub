@@ -212,6 +212,19 @@ describe('ModalCompute', () => {
 		expect(sandbox.execCalls[0].options?.env).toEqual({ A: '1', B: '2' });
 	});
 
+	it('streams raw stdout without enabling PTY mode', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		sandbox.execImpl = () => processResult(0, 'raw\r\nstdout', 'separate stderr');
+		world.existing.set(SANDBOX_ID, sandbox);
+
+		const stream = await makeCompute(world).create(SANDBOX_ID).execStream('run');
+		const reader = stream.getReader();
+
+		expect(await reader.read()).toEqual({ done: false, value: 'raw\r\nstdout' });
+		expect(sandbox.execCalls[0].options).not.toHaveProperty('pty');
+	});
+
 	it('reads and writes text and binary files through the SDK filesystem', async () => {
 		const world = makeWorld();
 		const sandbox = new FakeSandbox();
@@ -264,6 +277,26 @@ describe('ModalCompute', () => {
 		expect(sandbox.terminated).toBe(true);
 	});
 
+	it('kills a started process by its tracked PID rather than matching its command', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		world.existing.set(SANDBOX_ID, sandbox);
+		const command = 'python -c "print([1 + 2])"';
+
+		const process = await makeCompute(world)
+			.create(SANDBOX_ID)
+			.startProcess(command, { processId: 'kernel' });
+		await process.kill('SIGKILL');
+
+		expect(process).toMatchObject({ id: 'kernel', command });
+		expect(sandbox.execCalls[0].command[2]).toContain(`exec sh -lc '`);
+		expect(sandbox.execCalls[0].command[2]).toContain(command);
+		const killCommand = sandbox.execCalls[1].command[2];
+		expect(killCommand).toContain('kill -KILL -- "$pid"');
+		expect(killCommand).not.toContain('pkill');
+		expect(killCommand).not.toContain(command);
+	});
+
 	it('treats destroy of an absent sandbox as idempotent', async () => {
 		const world = makeWorld();
 		await expect(makeCompute(world).create(SANDBOX_ID).destroy()).resolves.toBeUndefined();
@@ -276,6 +309,10 @@ describe('ModalCompute', () => {
 			new FakeSandbox({
 				'marimohub.owner': 'hub-app',
 				'marimohub.sandbox-id': 'sb-aaaaaaaaaaaaaaaa',
+			}),
+			new FakeSandbox({
+				'marimohub.owner': 'hub-app',
+				'marimohub.sandbox-id': 'foreign-sandbox',
 			}),
 			new FakeSandbox({ 'marimohub.owner': 'hub-app' }),
 		);

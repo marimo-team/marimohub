@@ -189,7 +189,21 @@ describe('createK8sClient', () => {
 				{ reason: 'Pulled', message: 'image pulled' },
 				{
 					reason: 'FailedScheduling',
+					message: 'stale scheduling failure',
+					lastTimestamp: new Date('2026-01-01T00:00:00.000Z'),
+					metadata: {},
+				},
+				{
+					reason: 'FailedScheduling',
 					message: '0/3 nodes are available: 3 Insufficient memory.',
+					lastTimestamp: new Date('2026-01-01T00:02:00.000Z'),
+					metadata: {},
+				},
+				{
+					reason: 'FailedScheduling',
+					message: 'older failure returned last',
+					lastTimestamp: new Date('2026-01-01T00:01:00.000Z'),
+					metadata: {},
 				},
 			],
 		});
