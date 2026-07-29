@@ -6,15 +6,15 @@ import type { ContainerConfig, ContainerRunner, ContainerRunResult } from './ind
 const SANDBOX_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
 const CONTAINER_NAME = 'marimohub-sbx-sb-aaaaaaaaaaaaaaaa';
 
-interface Call {
+export interface ContainerCliCall {
 	args: string[];
 	stdin?: string | Uint8Array;
 }
 
-function fakeRunner(
+export function createRecordingContainerRunner(
 	handler: (args: string[], stdin?: string | Uint8Array) => ContainerRunResult | undefined,
-): { runner: ContainerRunner; calls: Call[] } {
-	const calls: Call[] = [];
+): { runner: ContainerRunner; calls: ContainerCliCall[] } {
+	const calls: ContainerCliCall[] = [];
 	return {
 		calls,
 		runner: {
@@ -26,7 +26,7 @@ function fakeRunner(
 	};
 }
 
-function defaultHandler(args: string[]): ContainerRunResult | undefined {
+export function defaultContainerCliHandler(args: string[]): ContainerRunResult | undefined {
 	if (args[0] === 'inspect') return { stdout: '', stderr: 'not found', exitCode: 1 };
 	if (args[0] === 'port') return { stdout: '127.0.0.1:49153\n', stderr: '', exitCode: 0 };
 	return undefined;
@@ -40,7 +40,7 @@ export function containerCliContract(
 ): void {
 	describe(`Container CLI contract: ${name}`, () => {
 		it('creates a labelled container with a random loopback port and optional network', async () => {
-			const { runner, calls } = fakeRunner(defaultHandler);
+			const { runner, calls } = createRecordingContainerRunner(defaultContainerCliHandler);
 			const provider = makeProvider(
 				{
 					image: 'sandbox-image',
@@ -70,7 +70,7 @@ export function containerCliContract(
 		});
 
 		it('passes a per-sandbox image override to the engine', async () => {
-			const { runner, calls } = fakeRunner(defaultHandler);
+			const { runner, calls } = createRecordingContainerRunner(defaultContainerCliHandler);
 			const provider = makeProvider({ image: 'default-image' }, runner);
 
 			await provider.create(SANDBOX_ID, { image: 'override-image' }).exec('true');
@@ -81,7 +81,7 @@ export function containerCliContract(
 		});
 
 		it('streams file bytes over stdin', async () => {
-			const { runner, calls } = fakeRunner(defaultHandler);
+			const { runner, calls } = createRecordingContainerRunner(defaultContainerCliHandler);
 			const bytes = new Uint8Array([0xff, 0x00, 0x80]);
 
 			await makeProvider({}, runner)
@@ -101,7 +101,7 @@ export function containerCliContract(
 		});
 
 		it('resolves the published kernel port', async () => {
-			const { runner, calls } = fakeRunner(defaultHandler);
+			const { runner, calls } = createRecordingContainerRunner(defaultContainerCliHandler);
 			const sandbox = makeProvider({ host: 'kernel.example.test' }, runner).create(SANDBOX_ID);
 
 			await expect(sandbox.exposePort(2718, { hostname: 'ignored' })).resolves.toEqual({
@@ -115,7 +115,7 @@ export function containerCliContract(
 		});
 
 		it('lists only valid labelled sandbox container names', async () => {
-			const { runner, calls } = fakeRunner((args) => {
+			const { runner, calls } = createRecordingContainerRunner((args) => {
 				if (args[0] === 'ps') {
 					return {
 						stdout: `${CONTAINER_NAME}\nmarimohub-sbx-invalid\nother\n`,
@@ -123,7 +123,7 @@ export function containerCliContract(
 						exitCode: 0,
 					};
 				}
-				return defaultHandler(args);
+				return defaultContainerCliHandler(args);
 			});
 
 			await expect(makeProvider({}, runner).listActive?.()).resolves.toEqual([{ id: SANDBOX_ID }]);
@@ -138,7 +138,7 @@ export function containerCliContract(
 
 		it('removes the container idempotently', async () => {
 			let removals = 0;
-			const { runner, calls } = fakeRunner((args) => {
+			const { runner, calls } = createRecordingContainerRunner((args) => {
 				if (args[0] === 'rm') {
 					removals++;
 					return {
@@ -147,7 +147,7 @@ export function containerCliContract(
 						exitCode: removals > 1 ? 1 : 0,
 					};
 				}
-				return defaultHandler(args);
+				return defaultContainerCliHandler(args);
 			});
 			const sandbox = makeProvider({}, runner).create(SANDBOX_ID);
 
@@ -160,16 +160,16 @@ export function containerCliContract(
 		});
 
 		it('uses the engine name in process ids and failures', async () => {
-			const success = fakeRunner(defaultHandler);
+			const success = createRecordingContainerRunner(defaultContainerCliHandler);
 			const process = await makeProvider({}, success.runner)
 				.create(SANDBOX_ID)
 				.startProcess('uv run marimo edit');
 			expect(process.id).toMatch(new RegExp(`^${engine}-proc-\\d+$`));
 
-			const failure = fakeRunner((args) =>
+			const failure = createRecordingContainerRunner((args) =>
 				args[0] === 'run'
 					? { stdout: '', stderr: 'engine unavailable', exitCode: 125 }
-					: defaultHandler(args),
+					: defaultContainerCliHandler(args),
 			);
 			await expect(
 				makeProvider({}, failure.runner).create(SANDBOX_ID).exec('true'),
