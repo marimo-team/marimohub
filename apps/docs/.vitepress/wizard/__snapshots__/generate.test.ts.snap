@@ -1,5 +1,180 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`config -> code generators > azure + kubernetes + oidc > .env 1`] = `
+"# --- Storage ---
+MARIMOHUB_STORAGE_BACKEND=azure
+MARIMOHUB_STORAGE_AZURE_CONTAINER=_replace_me_  # e.g. orgname-marimohub
+MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL=https://account.blob.core.windows.net
+MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING=  # secret
+
+# --- Compute ---
+MARIMOHUB_COMPUTE_BACKEND=kubernetes
+MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
+MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
+MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
+MARIMOHUB_COMPUTE_WORKDIR=/workspace
+MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
+MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
+MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE=https://{id}.{host}
+MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=traefik
+MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
+MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT=marimo-kernel
+MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET=regcred
+MARIMOHUB_COMPUTE_KUBERNETES_CPU=2
+MARIMOHUB_COMPUTE_KUBERNETES_MEMORY=4Gi
+MARIMOHUB_COMPUTE_KUBERNETES_GPU=1
+MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS=120
+
+# --- Auth ---
+MARIMOHUB_AUTH_BACKEND=oidc
+MARIMOHUB_AUTH_OIDC_ISSUER=_replace_me_  # e.g. https://accounts.example.com
+MARIMOHUB_AUTH_OIDC_CLIENT_ID=_replace_me_  # required
+MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_OIDC_REDIRECT_URI=_replace_me_  # e.g. https://hub.example.com/api/auth/callback
+MARIMOHUB_AUTH_OIDC_AUDIENCE=
+MARIMOHUB_AUTH_SESSION_SECRET=_replace_me_  # required, secret
+MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.org
+
+# --- Managed AI ---
+MARIMOHUB_AI_BACKEND=none
+
+# --- Options ---
+MARIMOHUB_PERSIST_WORKSPACE=source"
+`;
+
+exports[`config -> code generators > azure + kubernetes + oidc > compose 1`] = `
+"services:
+  marimohub:
+    image: ghcr.io/marimo-team/marimohub:latest
+    ports:
+      - '3000:3000'
+    environment:
+      MARIMOHUB_STORAGE_BACKEND: azure
+      MARIMOHUB_STORAGE_AZURE_CONTAINER: _replace_me_ # e.g. orgname-marimohub
+      MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL: https://account.blob.core.windows.net
+      MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING: ""
+      MARIMOHUB_COMPUTE_BACKEND: kubernetes
+      MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+      MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
+      MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+      MARIMOHUB_COMPUTE_WORKDIR: /workspace
+      MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+      MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE: marimo-kernels
+      MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: https://{id}.{host}
+      MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS: traefik
+      MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: marimo-kernels-wildcard-tls
+      MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT: marimo-kernel
+      MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET: regcred
+      MARIMOHUB_COMPUTE_KUBERNETES_CPU: 2
+      MARIMOHUB_COMPUTE_KUBERNETES_MEMORY: 4Gi
+      MARIMOHUB_COMPUTE_KUBERNETES_GPU: 1
+      MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS: 120
+      MARIMOHUB_AUTH_BACKEND: oidc
+      MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+      MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+      MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+      MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
+      MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+      MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
+      MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
+      MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_PERSIST_WORKSPACE: source"
+`;
+
+exports[`config -> code generators > azure + kubernetes + oidc > helm 1`] = `
+"# Non-secret MARIMOHUB_* config -> ConfigMap.
+config:
+  MARIMOHUB_STORAGE_BACKEND: azure
+  MARIMOHUB_STORAGE_AZURE_CONTAINER: _replace_me_ # e.g. orgname-marimohub
+  MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL: https://account.blob.core.windows.net
+  MARIMOHUB_COMPUTE_BACKEND: kubernetes
+  MARIMOHUB_COMPUTE_IMAGE: ghcr.io/orgname/marimo-sandbox:latest
+  MARIMOHUB_COMPUTE_IDLE_TIMEOUT: 20m
+  MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: hub.example.com
+  MARIMOHUB_COMPUTE_WORKDIR: /workspace
+  MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
+  MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE: marimo-kernels
+  MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: https://{id}.{host}
+  MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS: traefik
+  MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: marimo-kernels-wildcard-tls
+  MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT: marimo-kernel
+  MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET: regcred
+  MARIMOHUB_COMPUTE_KUBERNETES_CPU: 2
+  MARIMOHUB_COMPUTE_KUBERNETES_MEMORY: 4Gi
+  MARIMOHUB_COMPUTE_KUBERNETES_GPU: 1
+  MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS: 120
+  MARIMOHUB_AUTH_BACKEND: oidc
+  MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
+  MARIMOHUB_AUTH_OIDC_CLIENT_ID: _replace_me_
+  MARIMOHUB_AUTH_OIDC_REDIRECT_URI: _replace_me_ # e.g. https://hub.example.com/api/auth/callback
+  MARIMOHUB_AUTH_OIDC_AUDIENCE: ""
+  MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
+  MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_PERSIST_WORKSPACE: source
+
+# Secret values -> Secret (prefer secrets.existingSecret in production).
+secrets:
+  data:
+    MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING: ""
+    MARIMOHUB_AUTH_OIDC_CLIENT_SECRET: _replace_me_
+    MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_"
+`;
+
+exports[`config -> code generators > azure + kubernetes + oidc > library 1`] = `
+"import { createApi } from '@marimo-hub/api';
+import { createServices } from '@marimo-hub/core';
+import { AzureStorage } from '@marimo-hub/storage-azure';
+import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
+import { createOidcAuth } from '@marimo-hub/auth-oidc';
+
+const bucket = new AzureStorage(
+	process.env.MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING
+		? {
+			container: process.env.MARIMOHUB_STORAGE_AZURE_CONTAINER!,
+			connectionString: process.env.MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING!,
+		}
+		: {
+			container: process.env.MARIMOHUB_STORAGE_AZURE_CONTAINER!,
+			accountUrl: process.env.MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL!,
+		},
+);
+
+const compute = new KubernetesCompute({
+	namespace: "marimo-kernels",
+	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
+	hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
+	ingressClassName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
+	tlsSecretName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
+});
+
+const { authenticator, routes: authRoutes } = createOidcAuth({
+	issuer: process.env.MARIMOHUB_AUTH_OIDC_ISSUER!,
+	clientId: process.env.MARIMOHUB_AUTH_OIDC_CLIENT_ID!,
+	clientSecret: process.env.MARIMOHUB_AUTH_OIDC_CLIENT_SECRET!,
+	redirectUri: process.env.MARIMOHUB_AUTH_OIDC_REDIRECT_URI!,
+	sessionSecret: process.env.MARIMOHUB_AUTH_SESSION_SECRET!,
+	allowedEmailDomains: (process.env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS ?? '').split(','),
+});
+
+const app = createApi({
+	services: createServices(bucket),
+	bucket,
+	compute,
+	authenticator,
+	authRoutes,
+	sandbox: {
+		bucket: {
+			name: process.env.MARIMOHUB_STORAGE_S3_BUCKET ?? '',
+			endpoint: process.env.MARIMOHUB_STORAGE_S3_ENDPOINT ?? '',
+		},
+		hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
+		workdir: process.env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
+		persistWorkspace: "source",
+	},
+	policy: {},
+});"
+`;
+
 exports[`config -> code generators > default-prod (s3 + modal + oidc) > .env 1`] = `
 "# --- Storage ---
 MARIMOHUB_STORAGE_BACKEND=s3
@@ -1733,7 +1908,7 @@ exports[`validateSelection > flags dev auth, volatile storage, and unisolated/ab
   },
   {
     "level": "danger",
-    "message": "The in-memory store loses all data on restart. Use s3 or gcs for anything you keep.",
+    "message": "The in-memory store loses all data on restart. Use s3, gcs, or azure for anything you keep.",
     "title": "Storage is volatile",
   },
   {
@@ -1763,7 +1938,7 @@ exports[`validateSelection > flags single-replica fs storage 1`] = `
 [
   {
     "level": "warning",
-    "message": "Conditional writes are enforced within one server process — run exactly one replica, and in containers mount a persistent volume at the storage root. Use s3 or gcs for multi-replica deployments.",
+    "message": "Conditional writes are enforced within one server process — run exactly one replica, and in containers mount a persistent volume at the storage root. Use s3, gcs, or azure for multi-replica deployments.",
     "title": "Filesystem storage is single-replica",
   },
 ]

@@ -33,7 +33,7 @@ off the app's registrable domain (e.g. `sandboxes.example.net`), or switch to
 A preflight check returned a **fatal** result — a deterministic problem a restart
 won't fix. The most common is a store that doesn't honor atomic conditional
 writes (which marimohub needs to update notebooks safely): use a qualifying store
-(AWS S3, R2, GCS, CoreWeave CAIOS, recent MinIO) — see
+(Azure Blob Storage, AWS S3, R2, GCS, CoreWeave CAIOS, recent MinIO) — see
 [Storage](/storage#requirement-atomic-conditional-writes). A malformed
 `MARIMOHUB_WIF_SIGNING_KEY` is the other. The preceding `preflight_check` log line
 names the failing check and the fix.
@@ -45,7 +45,8 @@ problem with `GET /api/health?deep=true` (below).
 ### "MARIMOHUB_STORAGE_BACKEND=memory is non-durable"
 
 The in-memory store is dev/tests only. Set `MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true`
-to acknowledge volatility, or choose `s3`/`gcs`. See [Storage](/storage#memory-dev-tests).
+to acknowledge volatility, or choose `s3`/`gcs`/`azure`. See
+[Storage](/storage#memory-dev-tests).
 
 ## Login fails
 

@@ -53,9 +53,9 @@ There is no database. The object store is the **single source of truth** —
 notebooks, version history, and the catalog all live there.
 
 - **Back up** by backing up the bucket: server-side versioning + lifecycle
-  rules, cross-region replication, or scheduled `aws s3 sync` / `gsutil rsync`
-  to a second bucket. Everything except the in-flight kernel filesystem is
-  durable and restorable.
+  rules, cross-region replication, or scheduled `aws s3 sync` / `gsutil rsync` /
+  `azcopy sync` to a second bucket. Everything except the in-flight kernel
+  filesystem is durable and restorable.
 - **Restore** by pointing a fresh marimohub at a bucket with your objects — no
   migration step. The catalog pointer (`_system/catalog.json`) is the only
   mutated-in-place object; everything else is immutable/append-only, so a

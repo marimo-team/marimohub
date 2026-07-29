@@ -35,6 +35,7 @@ export default defineConfig({
 			// bundled — the runtime image ships no node_modules.
 			/^fflate$/,
 			/^@aws-sdk\//,
+			/^@azure\//,
 			// The vendored CoreWeave Sandbox SDK and its (pure-JS) gRPC/protobuf
 			// deps must be bundled too — the runtime image ships no node_modules,
 			// so externalizing them crashes the `coreweave` compute backend at

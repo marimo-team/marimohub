@@ -53,7 +53,7 @@ the web dev server proxies `/api` requests to it.
 
 | Part    | Local backend           | Production swap                                                 |
 | ------- | ----------------------- | --------------------------------------------------------------- |
-| Storage | `memory`, volatile      | CAIOS, S3, GCS, or R2 -> [Storage](./storage.md)                |
+| Storage | `memory`, volatile      | CAIOS, S3, GCS, Azure, or R2 -> [Storage](./storage.md)         |
 | Compute | `local`, host process   | CoreWeave, Modal, Kubernetes, Docker -> [Compute](./compute.md) |
 | Auth    | `dev`, fixed local user | OIDC or Cloudflare Access -> [Auth](./auth.md)                  |
 

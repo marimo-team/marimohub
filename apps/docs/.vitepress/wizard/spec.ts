@@ -53,6 +53,7 @@ const ICONS: Record<string, string> = {
 	// storage
 	s3: '🪣',
 	gcs: '☁️',
+	azure: '🔷',
 	fs: '📁',
 	memory: '🧪',
 	// compute
@@ -206,6 +207,23 @@ export const STORAGE_WIRING: Record<string, BackendWiring> = {
 				`\tserviceAccountKey: ${env('MARIMOHUB_STORAGE_GCS_SA_KEY')},`,
 				`\taccessToken: ${env('MARIMOHUB_STORAGE_GCS_ACCESS_TOKEN')},`,
 				`})`,
+			].join('\n'),
+	},
+	azure: {
+		imports: [`import { AzureStorage } from '@marimo-hub/storage-azure';`],
+		rhs: () =>
+			[
+				`new AzureStorage(`,
+				`\t${env('MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING')}`,
+				`\t\t? {`,
+				`\t\t\tcontainer: ${env('MARIMOHUB_STORAGE_AZURE_CONTAINER', true)},`,
+				`\t\t\tconnectionString: ${env('MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING', true)},`,
+				`\t\t}`,
+				`\t\t: {`,
+				`\t\t\tcontainer: ${env('MARIMOHUB_STORAGE_AZURE_CONTAINER', true)},`,
+				`\t\t\taccountUrl: ${env('MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL', true)},`,
+				`\t\t},`,
+				`)`,
 			].join('\n'),
 	},
 	fs: {

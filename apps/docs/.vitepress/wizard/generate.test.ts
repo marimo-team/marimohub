@@ -23,6 +23,12 @@ const CASES: Record<string, WizardSelection> = {
 		ai: 'none',
 		options: { MARIMOHUB_PERSIST_WORKSPACE: 'workspace' },
 	},
+	'azure + kubernetes + oidc': {
+		storage: 'azure',
+		compute: 'kubernetes',
+		auth: 'oidc',
+		ai: 'none',
+	},
 	'memory + local + dev (all-local)': {
 		storage: 'memory',
 		compute: 'local',

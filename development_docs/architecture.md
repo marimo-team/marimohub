@@ -96,11 +96,11 @@ The durable home of everything: notebook code, notebook metadata, project
 records (including membership), versions, sessions, and the audit log. There is
 no separate database — **storage is the single source of truth**.
 
-|              |                                                                                                                                                                                                                                                                |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Port**     | `Bucket` — `get` / `head` / `put` / `delete` / `list`, with conditional `put` (compare-and-swap on ETag) for atomic commits                                                                                                                                    |
-| **Adapters** | **S3-compatible** (AWS S3, Cloudflare R2, MinIO, Tigris, Ceph) · **R2** (Cloudflare Workers binding) · **GCS** (Google Cloud Storage via its native JSON API, generation-based CAS) · **memory** (tests / local dev)                                           |
-| **Schema**   | Iceberg-inspired: a single mutable `catalog.json` pointer → immutable snapshots → per-notebook folders, each with a latest-only `workspace/` (code, deps, runtime files) beside an immutable `versions/`. Full detail in [`bucket_spec.md`](./bucket_spec.md). |
+|              |                                                                                                                                                                                                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Port**     | `Bucket` — `get` / `head` / `put` / `delete` / `list`, with conditional `put` (compare-and-swap on ETag) for atomic commits                                                                                                                                                     |
+| **Adapters** | **S3-compatible** (AWS S3, Cloudflare R2, MinIO, Tigris, Ceph) · **R2** (Cloudflare Workers binding) · **GCS** (native JSON API, generation-based CAS) · **Azure Blob Storage** (native SDK, ETag-based CAS) · **filesystem** (single process) · **memory** (tests / local dev) |
+| **Schema**   | Iceberg-inspired: a single mutable `catalog.json` pointer → immutable snapshots → per-notebook folders, each with a latest-only `workspace/` (code, deps, runtime files) beside an immutable `versions/`. Full detail in [`bucket_spec.md`](./bucket_spec.md).                  |
 
 **Why an object store is enough.** The schema uses an atomic pointer
 (`catalog.json`) swapped via conditional PUT (`If-Match` on ETag) as the only
@@ -459,7 +459,7 @@ The same core runs in three shapes. What changes is the **entrypoint** and the
 |                | Cloudflare                                          | Docker (single host)                           | Kubernetes                                 |
 | -------------- | --------------------------------------------------- | ---------------------------------------------- | ------------------------------------------ |
 | **Entrypoint** | Workers (`examples/cloudflare-worker/src/index.ts`) | Node server (`@marimo-hub/server`)             | Same Node server, replicated               |
-| **Storage**    | R2 (binding)                                        | S3 / MinIO                                     | S3 / MinIO / Ceph / GCS                    |
+| **Storage**    | R2 (binding)                                        | S3 / MinIO / filesystem / Azure                | S3 / MinIO / Ceph / GCS / Azure            |
 | **Compute**    | Cloudflare Containers (DO)                          | Docker engine, Modal, E2B (or `local` for dev) | in-cluster pods (`kubernetes`), Modal, E2B |
 | **AuthN**      | Cloudflare Access (OIDC)                            | any OIDC provider                              | any OIDC provider                          |
 | **Frontend**   | Cloudflare static assets                            | nginx sidecar / same server                    | CDN or ingress                             |
@@ -487,6 +487,7 @@ packages/
   storage-s3/             S3-compatible adapter (AWS S3 / MinIO / Tigris)
   storage-r2/             Cloudflare R2 binding adapter
   storage-gcs/            Google Cloud Storage adapter (native JSON API)
+  storage-azure/          Azure Blob Storage adapter (native SDK)
   compute-cloudflare/     Cloudflare Containers adapter
   compute-modal/          Modal adapter
   compute-coreweave/      CoreWeave Sandboxes adapter (vendored cwsandbox SDK)

@@ -2,6 +2,7 @@ import type { Bucket, BucketConfig } from '@marimo-hub/core';
 // Narrow import (not the `/testing` barrel) so the server bundle doesn't pull in
 // the barrel's vitest-dependent test helpers.
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
+import { AzureStorage } from '@marimo-hub/storage-azure';
 import { S3Storage } from '@marimo-hub/storage-s3';
 import { GcsStorage } from '@marimo-hub/storage-gcs';
 import { FsStorage } from '@marimo-hub/storage-fs';
@@ -60,6 +61,26 @@ export function makeStorage(env: Env): Bucket {
 				serviceAccountKey: env.MARIMOHUB_STORAGE_GCS_SA_KEY,
 				accessToken: env.MARIMOHUB_STORAGE_GCS_ACCESS_TOKEN,
 			});
+		case 'azure': {
+			const container = requiredVar(env, 'MARIMOHUB_STORAGE_AZURE_CONTAINER', {
+				remediation: 'Set it to the Azure Blob Storage container that backs the hub.',
+				docs: 'docs/configuration.md#storage',
+			});
+			if (env.MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING) {
+				return new AzureStorage({
+					container,
+					connectionString: env.MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING,
+				});
+			}
+			return new AzureStorage({
+				container,
+				accountUrl: requiredVar(env, 'MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL', {
+					remediation:
+						'Set it to the Blob service URL, or provide MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING.',
+					docs: 'docs/configuration.md#storage',
+				}),
+			});
+		}
 		case 'fs': {
 			const root = requiredVar(env, 'MARIMOHUB_STORAGE_FS_ROOT', {
 				remediation:
@@ -79,12 +100,12 @@ export function makeStorage(env: Env): Bucket {
 			// The in-memory bucket is NON-DURABLE — all state is lost on restart. It
 			// exists for local dev and tests only. Refuse it unless the operator
 			// explicitly opts in, so it can never back a real deployment by accident
-			// (the supported durable backends are `s3` and, in Workers, `r2`).
+			// (the supported durable backends are `s3`, `gcs`, `azure`, and, in Workers, `r2`).
 			if (!parseBool(env, 'MARIMOHUB_ALLOW_EPHEMERAL_STORAGE')) {
 				throw new ConfigError(
 					'MARIMOHUB_STORAGE_BACKEND=memory is non-durable (all state is lost on restart) and is for ' +
 						'local dev/tests only. Set MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true to use it, or choose a ' +
-						'durable backend (s3, gcs, fs).',
+						'durable backend (s3, gcs, azure, fs).',
 					{
 						variable: 'MARIMOHUB_ALLOW_EPHEMERAL_STORAGE',
 						docs: 'docs/configuration.md#storage',
@@ -100,7 +121,7 @@ export function makeStorage(env: Env): Bucket {
 		default:
 			throw new ConfigError(`Unknown MARIMOHUB_STORAGE_BACKEND: ${backend}`, {
 				variable: 'MARIMOHUB_STORAGE_BACKEND',
-				remediation: 'Supported backends: s3, gcs, fs, memory (dev), r2 (Workers).',
+				remediation: 'Supported backends: s3, gcs, azure, fs, memory (dev), r2 (Workers).',
 				docs: 'docs/configuration.md#storage',
 			});
 	}

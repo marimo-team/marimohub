@@ -29,6 +29,7 @@ const DOC_HREFS: Record<string, string> = {
 	'auth/dev': '/auth#dev-bypass',
 	'storage/s3': '/storage#s3-compatible-setup',
 	'storage/gcs': '/storage#google-cloud-storage',
+	'storage/azure': '/storage#azure-blob-storage',
 	'storage/fs': '/storage#filesystem-setup',
 	'storage/memory': '/storage#memory-dev-tests',
 	'compute/coreweave': '/compute#coreweave',

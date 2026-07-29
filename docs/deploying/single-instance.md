@@ -20,7 +20,7 @@ provider.
 - On-prem or single-tenant environments with no object store available.
 - You accept **one replica** (required by `fs` storage) and one host of kernel
   capacity. For HA or horizontal scale, use [Helm](./helm.md) or
-  [Kubernetes](./kubernetes.md) with `s3`/`gcs` instead.
+  [Kubernetes](./kubernetes.md) with `s3`/`gcs`/`azure` instead.
 
 ## Architecture
 
