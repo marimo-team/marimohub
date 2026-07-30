@@ -461,6 +461,27 @@ describe('OIDC routes', () => {
 		expect(res.headers.get('location')).toBe('/p/proj-1?tab=files&auth_error=auth_failed');
 	});
 
+	it.each([
+		['/p/proj-1#cell-3', '/p/proj-1?auth_error=auth_failed#cell-3'],
+		['/p/proj-1?tab=files#cell-3', '/p/proj-1?tab=files&auth_error=auth_failed#cell-3'],
+	])('inserts auth_error into the query, before the fragment (%s)', async (deepLink, expected) => {
+		oauthMock.validateAuthResponse.mockImplementation(() => {
+			throw new Error('provider rejected the callback');
+		});
+		const { routes } = makeOidc();
+		const txn = await beginOidcTransaction(
+			routes,
+			`/api/auth/login?redirect_url=${encodeURIComponent(deepLink)}`,
+		);
+
+		const res = await routes.request('/api/auth/callback?error=access_denied&state=state-1', {
+			headers: { cookie: txn },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe(expected);
+	});
+
 	it('rejects a restricted-domain callback when the email is unverified', async () => {
 		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
 			sub: 'user-1',

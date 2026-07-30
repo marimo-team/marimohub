@@ -200,8 +200,13 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	function callbackError(c: Context, code: string, returnTo?: string | null): Response {
 		deleteCookie(c, TXN_COOKIE, { path: '/' });
 		const target = returnTo ?? postLoginRedirect;
-		const sep = target.includes('?') ? '&' : '?';
-		return c.redirect(`${target}${sep}auth_error=${code}`);
+		// `auth_error` must land in the query string, before any `#fragment` — the
+		// sign-in screen reads it via useSearchParams(), which never sees the hash.
+		const hashIndex = target.indexOf('#');
+		const base = hashIndex === -1 ? target : target.slice(0, hashIndex);
+		const hash = hashIndex === -1 ? '' : target.slice(hashIndex);
+		const sep = base.includes('?') ? '&' : '?';
+		return c.redirect(`${base}${sep}auth_error=${code}${hash}`);
 	}
 
 	const routes = new Hono();
