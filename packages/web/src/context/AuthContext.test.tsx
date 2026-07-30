@@ -36,8 +36,15 @@ function Probe({ label = 'a' }: { label?: string }) {
 	);
 }
 
-function stubLocation(): void {
-	vi.stubGlobal('location', { ...window.location, href: '' });
+function stubLocation(overrides: Partial<Location> = {}): void {
+	vi.stubGlobal('location', {
+		...window.location,
+		pathname: '/',
+		search: '',
+		hash: '',
+		href: '',
+		...overrides,
+	});
 }
 
 beforeEach(() => {
@@ -111,13 +118,81 @@ describe('AuthProvider', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it('signIn navigates to the server OIDC entry point', async () => {
+	it('signIn navigates to the server OIDC entry point without redirect_url from the root', async () => {
 		const user = userEvent.setup();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonOk(ME)),
 		);
 		stubLocation();
+
+		renderWithClient(
+			<AuthProvider>
+				<Probe />
+			</AuthProvider>,
+			{ toaster: false },
+		);
+
+		await user.click(screen.getByRole('button', { name: 'Sign in' }));
+		expect(window.location.href).toBe('/api/auth/login');
+	});
+
+	it('signIn carries the current deep link as redirect_url', async () => {
+		const user = userEvent.setup();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => jsonOk(ME)),
+		);
+		stubLocation({
+			pathname: '/p/proj-1/notebooks/nb-1',
+			search: '?tab=files',
+			hash: '#cell-3',
+		});
+
+		renderWithClient(
+			<AuthProvider>
+				<Probe />
+			</AuthProvider>,
+			{ toaster: false },
+		);
+
+		await user.click(screen.getByRole('button', { name: 'Sign in' }));
+		expect(window.location.href).toBe(
+			`/api/auth/login?redirect_url=${encodeURIComponent('/p/proj-1/notebooks/nb-1?tab=files#cell-3')}`,
+		);
+	});
+
+	it('signIn strips a stale auth_error from the redirect_url', async () => {
+		const user = userEvent.setup();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => jsonOk(ME)),
+		);
+		stubLocation({
+			pathname: '/p/proj-1',
+			search: '?tab=files&auth_error=domain_not_allowed',
+		});
+
+		renderWithClient(
+			<AuthProvider>
+				<Probe />
+			</AuthProvider>,
+			{ toaster: false },
+		);
+
+		await user.click(screen.getByRole('button', { name: 'Sign in' }));
+		expect(window.location.href).toBe(
+			`/api/auth/login?redirect_url=${encodeURIComponent('/p/proj-1?tab=files')}`,
+		);
+	});
+
+	it('signIn treats a root URL carrying only auth_error as having no destination', async () => {
+		const user = userEvent.setup();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => jsonOk(ME)),
+		);
+		stubLocation({ search: '?auth_error=auth_failed' });
 
 		renderWithClient(
 			<AuthProvider>

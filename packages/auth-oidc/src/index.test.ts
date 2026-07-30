@@ -1,6 +1,11 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { SignJWT } from 'jose';
-import { createOidcAuth, normalizeEmailDomains, emailDomainAllowed } from './index';
+import {
+	createOidcAuth,
+	normalizeEmailDomains,
+	emailDomainAllowed,
+	sanitizeReturnTo,
+} from './index';
 
 const oauthMock = vi.hoisted(() => ({
 	ClientSecretPost: vi.fn(),
@@ -113,8 +118,9 @@ function cookiePair(res: Response, name: string): string {
 
 async function beginOidcTransaction(
 	routes: ReturnType<typeof createOidcAuth>['routes'],
+	loginPath = '/api/auth/login',
 ): Promise<string> {
-	const login = await routes.request('/api/auth/login');
+	const login = await routes.request(loginPath);
 	expect(login.status).toBe(302);
 	return cookiePair(login, TXN_COOKIE);
 }
@@ -159,6 +165,74 @@ describe('normalizeEmailDomains', () => {
 
 	it('returns an empty array for undefined', () => {
 		expect(normalizeEmailDomains(undefined)).toEqual([]);
+	});
+});
+
+describe('sanitizeReturnTo', () => {
+	it('accepts a same-origin absolute path', () => {
+		expect(sanitizeReturnTo('/p/proj-1/notebooks/nb-1')).toBe('/p/proj-1/notebooks/nb-1');
+	});
+
+	it('keeps the query string and hash', () => {
+		expect(sanitizeReturnTo('/p/proj-1?tab=files#cell-3')).toBe('/p/proj-1?tab=files#cell-3');
+	});
+
+	it('accepts the root path', () => {
+		expect(sanitizeReturnTo('/')).toBe('/');
+	});
+
+	it('rejects empty, null, and undefined', () => {
+		expect(sanitizeReturnTo('')).toBeNull();
+		expect(sanitizeReturnTo(null)).toBeNull();
+		expect(sanitizeReturnTo(undefined)).toBeNull();
+	});
+
+	it('rejects absolute URLs and bare hostnames', () => {
+		expect(sanitizeReturnTo('https://evil.com/phish')).toBeNull();
+		expect(sanitizeReturnTo('http://evil.com')).toBeNull();
+		expect(sanitizeReturnTo('evil.com/phish')).toBeNull();
+	});
+
+	it('rejects dangerous schemes', () => {
+		expect(sanitizeReturnTo('javascript:alert(1)')).toBeNull();
+		expect(sanitizeReturnTo('data:text/html,x')).toBeNull();
+	});
+
+	it('rejects scheme-relative //host redirects', () => {
+		expect(sanitizeReturnTo('//evil.com')).toBeNull();
+		expect(sanitizeReturnTo('//evil.com/phish')).toBeNull();
+	});
+
+	it('rejects backslash variants browsers normalize to //', () => {
+		expect(sanitizeReturnTo('/\\evil.com')).toBeNull();
+		expect(sanitizeReturnTo('\\\\evil.com')).toBeNull();
+		expect(sanitizeReturnTo('/p\\x')).toBeNull();
+	});
+
+	it('rejects paths whose dot-segment normalization escapes the origin', () => {
+		expect(sanitizeReturnTo('/..//evil.com')).toBeNull();
+		expect(sanitizeReturnTo('/a/..//evil.com')).toBeNull();
+	});
+
+	it('normalizes benign dot segments', () => {
+		expect(sanitizeReturnTo('/a/../b')).toBe('/b');
+	});
+
+	it('rejects control characters', () => {
+		expect(sanitizeReturnTo('/p\u0000x')).toBeNull();
+		expect(sanitizeReturnTo('/p\nx')).toBeNull();
+		expect(sanitizeReturnTo('/p\u007fx')).toBeNull();
+	});
+
+	it('rejects API paths (would loop back into the auth routes)', () => {
+		expect(sanitizeReturnTo('/api/auth/login')).toBeNull();
+		expect(sanitizeReturnTo('/api')).toBeNull();
+		// ...but only the /api segment itself, not a lookalike prefix.
+		expect(sanitizeReturnTo('/apifoo')).toBe('/apifoo');
+	});
+
+	it('rejects over-length values instead of truncating', () => {
+		expect(sanitizeReturnTo(`/${'a'.repeat(600)}`)).toBeNull();
 	});
 });
 
@@ -303,6 +377,88 @@ describe('OIDC routes', () => {
 			name: 'Ada Lovelace',
 		});
 		expect(res.headers.get('set-cookie') ?? '').toContain(`${TXN_COOKIE}=`);
+	});
+
+	it('returns to the redirect_url deep link after a successful callback', async () => {
+		const { routes } = makeOidc({ postLoginRedirect: '/app' });
+		const deepLink = '/p/proj-1/notebooks/nb-1?tab=files#cell-3';
+		const txn = await beginOidcTransaction(
+			routes,
+			`/api/auth/login?redirect_url=${encodeURIComponent(deepLink)}`,
+		);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe(deepLink);
+		expect(res.headers.get('set-cookie') ?? '').toMatch(/mh_session=[^;,]+/);
+	});
+
+	it.each(['https://evil.com/phish', '//evil.com', '/\\evil.com', '/..//evil.com'])(
+		'ignores a hostile redirect_url (%s) and falls back to the post-login redirect',
+		async (hostile) => {
+			const { routes } = makeOidc();
+			const txn = await beginOidcTransaction(
+				routes,
+				`/api/auth/login?redirect_url=${encodeURIComponent(hostile)}`,
+			);
+
+			const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+				headers: { cookie: txn },
+			});
+
+			expect(res.status).toBe(302);
+			expect(res.headers.get('location')).toBe('/');
+		},
+	);
+
+	it('does not leak redirect_url to the identity provider', async () => {
+		const { routes } = makeOidc();
+
+		const res = await routes.request('/api/auth/login?redirect_url=%2Fp%2Fproj-1');
+		const location = new URL(res.headers.get('location') ?? '');
+
+		expect(location.origin + location.pathname).toBe('https://issuer.example.com/authorize');
+		expect(location.searchParams.has('redirect_url')).toBe(false);
+		expect(location.searchParams.get('state')).toBe('state-1');
+	});
+
+	it('carries auth_error back to the deep link when the callback rejects the user', async () => {
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 'user@example.org',
+			email_verified: true,
+		});
+		const { routes } = makeOidc({ allowedEmailDomains: ['example.com'] });
+		const txn = await beginOidcTransaction(routes, '/api/auth/login?redirect_url=%2Fp%2Fproj-1');
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe('/p/proj-1?auth_error=domain_not_allowed');
+		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+	});
+
+	it('appends auth_error with & when the deep link already has a query', async () => {
+		oauthMock.validateAuthResponse.mockImplementation(() => {
+			throw new Error('provider rejected the callback');
+		});
+		const { routes } = makeOidc();
+		const txn = await beginOidcTransaction(
+			routes,
+			`/api/auth/login?redirect_url=${encodeURIComponent('/p/proj-1?tab=files')}`,
+		);
+
+		const res = await routes.request('/api/auth/callback?error=access_denied&state=state-1', {
+			headers: { cookie: txn },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe('/p/proj-1?tab=files&auth_error=auth_failed');
 	});
 
 	it('rejects a restricted-domain callback when the email is unverified', async () => {
@@ -518,12 +674,18 @@ describe('OIDC authenticate (cookie session)', () => {
 
 describe('OIDC callback integrity (security)', () => {
 	/** Mint a transaction cookie the way `/api/auth/login` does, with a chosen secret. */
-	async function signTxn(opts: { secret: string; verifier?: string; state?: string }) {
+	async function signTxn(opts: {
+		secret: string;
+		verifier?: string;
+		state?: string;
+		returnTo?: string;
+	}) {
 		const secret = new TextEncoder().encode(opts.secret);
 		return new SignJWT({
 			verifier: opts.verifier ?? 'verifier-1',
 			state: opts.state ?? 'state-1',
 			nonce: 'nonce-1',
+			returnTo: opts.returnTo ?? null,
 		})
 			.setProtectedHeader({ alg: 'HS256' })
 			.setIssuedAt()
@@ -545,6 +707,21 @@ describe('OIDC callback integrity (security)', () => {
 		expect(res.status).toBe(302);
 		expect(res.headers.get('location')).toBe('/?auth_error=session_expired');
 		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+	});
+
+	// Defense in depth: the login route already sanitizes before signing, but a
+	// hostile returnTo inside a validly-signed txn cookie (e.g. minted before a
+	// sanitizer fix) must still be re-sanitized at redirect time.
+	it('re-sanitizes returnTo from the transaction cookie before redirecting', async () => {
+		const { routes } = makeOidc();
+		const txn = await signTxn({ secret: SESSION_SECRET, returnTo: 'https://evil.com/phish' });
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: `${TXN_COOKIE}=${txn}` },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe('/');
 	});
 
 	it('fails auth_failed when the ID token has a sub but no email', async () => {
