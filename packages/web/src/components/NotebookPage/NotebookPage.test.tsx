@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotebookPage } from './NotebookPage';
+import { ThemeProvider } from '@/context/ThemeContext';
 import type { Session } from '@/types';
 
 const PID = 'proj-x';
@@ -121,7 +122,9 @@ function renderPage(variant: 'edit' | 'app' = 'edit') {
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<MemoryRouter initialEntries={[path]}>
 			<QueryClientProvider client={client}>
-				<Suspense fallback={<div>loading</div>}>{children}</Suspense>
+				<ThemeProvider>
+					<Suspense fallback={<div>loading</div>}>{children}</Suspense>
+				</ThemeProvider>
 			</QueryClientProvider>
 		</MemoryRouter>
 	);
@@ -140,6 +143,9 @@ const sessionPosts = (impl: ReturnType<typeof makeFetch>) =>
 	);
 
 beforeEach(() => {
+	// The theme baked into the kernel iframe URL reads from localStorage; clear it
+	// so each test resolves the default (light) unless it opts into dark.
+	localStorage.clear();
 	// jsdom has no matchMedia; Tooltip's mobile check needs it.
 	vi.stubGlobal('matchMedia', (query: string) => ({
 		matches: false,
@@ -165,12 +171,24 @@ describe('NotebookPage viewer modes', () => {
 
 		await waitFor(() =>
 			expect(
-				container.querySelector('iframe[src="https://sandbox.example/kernel"]'),
+				container.querySelector('iframe[src="https://sandbox.example/kernel?theme=light"]'),
 			).not.toBeNull(),
 		);
 		expect(document.title).toBe('Forecast · marimohub');
 		expect(sessionPosts(impl)).toHaveLength(1);
 		expect(screen.queryByText(/won't be saved/)).toBeNull();
+	});
+
+	it('dark theme: forces the embedded app onto ?theme=dark', async () => {
+		localStorage.setItem('marimohub-theme', 'dark');
+		makeFetch({ role: 'editor' });
+		const { container } = renderPage();
+
+		await waitFor(() =>
+			expect(
+				container.querySelector('iframe[src="https://sandbox.example/kernel?theme=dark"]'),
+			).not.toBeNull(),
+		);
 	});
 
 	it('viewer + static: renders the snapshot sandboxed, never starts a session', async () => {
@@ -215,7 +233,9 @@ describe('NotebookPage viewer modes', () => {
 		const { container } = renderPage();
 
 		await waitFor(() => expect(screen.getByText(/won't be saved/)).toBeInTheDocument());
-		expect(container.querySelector('iframe[src="https://sandbox.example/kernel"]')).not.toBeNull();
+		expect(
+			container.querySelector('iframe[src="https://sandbox.example/kernel?theme=light"]'),
+		).not.toBeNull();
 		expect(sessionPosts(impl)).toHaveLength(1);
 	});
 });
@@ -230,7 +250,7 @@ describe('NotebookPage app variant', () => {
 
 		await waitFor(() =>
 			expect(
-				container.querySelector('iframe[src="https://sandbox.example/kernel"]'),
+				container.querySelector('iframe[src="https://sandbox.example/kernel?theme=light"]'),
 			).not.toBeNull(),
 		);
 		const [, init] = sessionPosts(impl)[0];
@@ -286,7 +306,7 @@ describe('NotebookPage app variant', () => {
 
 		await waitFor(() =>
 			expect(
-				container.querySelector('iframe[src="https://sandbox.example/kernel"]'),
+				container.querySelector('iframe[src="https://sandbox.example/kernel?theme=light"]'),
 			).not.toBeNull(),
 		);
 		expect(sessionPosts(impl)).toHaveLength(1);

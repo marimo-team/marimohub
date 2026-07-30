@@ -27,6 +27,8 @@ import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
 import { isAppStale } from '@/components/Project/AppSessionIndicator';
 import { appConnectionHint, sessionsByNotebook } from '@/lib/sessions';
+import { useTheme } from '@/context/ThemeContext';
+import type { Theme } from '@/context/ThemeContext';
 
 /** Copy for the app page's terminal panel, keyed by how the session ended. */
 function endedPanel(ended: SessionEnded): { title: string; message: string; canRestart: boolean } {
@@ -46,6 +48,21 @@ function endedPanel(ended: SessionEnded): { title: string; message: string; canR
 	}
 	if (ended === 'failed') return stopped('The app crashed.');
 	return stopped('The app is no longer running.');
+}
+
+/**
+ * Point the embedded marimo app at the marimohub theme via its `?theme=` query
+ * param (marimo-team/marimo#10196). The origin base lets a relative proxy URL
+ * resolve; `theme` is already `'light' | 'dark'`.
+ */
+function withThemeParam(url: string, theme: Theme): string {
+	try {
+		const parsed = new URL(url, window.location.origin);
+		parsed.searchParams.set('theme', theme);
+		return parsed.toString();
+	} catch {
+		return url;
+	}
 }
 
 export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' }) {
@@ -86,6 +103,16 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 			enabled: isApp || !isViewer || viewerHasEditKernel,
 			mode: isApp ? 'app' : 'edit',
 		});
+
+	// Freeze the theme when the URL is first established, not on every toggle:
+	// marimo reads `?theme=` only on load, so re-deriving it live would reload
+	// (and reset) the running app. Restart mints a fresh URL and re-reads it.
+	const { theme } = useTheme();
+	const iframeSrc = useMemo(
+		() => (sandboxUrl ? withThemeParam(sandboxUrl, theme) : undefined),
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[sandboxUrl],
+	);
 
 	// Metadata for the "created by" line — loaded lazily so it never blocks the
 	// kernel from starting. The author id is resolved to a name via the directory.
@@ -256,7 +283,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					<div className="flex-1 overflow-hidden">
 						<iframe
 							className="size-full border-0"
-							src={sandboxUrl}
+							src={iframeSrc}
 							sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
 							allow="clipboard-read; clipboard-write"
 							title={title}
