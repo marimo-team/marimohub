@@ -3,7 +3,7 @@
  *
  * Notebook kernels run untrusted user code, so they never hold the real upstream
  * provider key — only a short-lived, session-scoped token marimohub mints at
- * provision time (see `aiConfigToSessionEnv`). This route verifies that token,
+ * provision time (see `marimoAiContributor`). This route verifies that token,
  * then forwards the request to the configured upstream with the real key,
  * streaming the response straight back. It authenticates by the token alone, so
  * it lives OUTSIDE the `/api/v1/*` cookie-auth + CSRF guards.

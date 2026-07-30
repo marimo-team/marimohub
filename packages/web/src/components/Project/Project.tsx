@@ -106,8 +106,10 @@ const projectSchema = z.object({
 });
 const notebookNameSchema = z.object({ name: requiredText('Notebook name'), baseImage: z.string() });
 
-const NEW_NOTEBOOK_CODE = (name: string) =>
-	`import marimo\n\napp = marimo.App()\n\n\n@app.cell\ndef _():\n    import marimo as mo\n    return (mo,)\n\n\n@app.cell(hide_code=True)\ndef _(mo):\n    mo.md(r"""# ${name}""")\n    return\n\n\nif __name__ == "__main__":\n    app.run()\n`;
+const NEW_NOTEBOOK_CODE = (name: string) => {
+	const heading = JSON.stringify(`# ${name}`);
+	return `import marimo\n\napp = marimo.App(width="medium", sql_output="native")\n\n\n@app.cell\ndef _():\n    import marimo as mo\n    return (mo,)\n\n\n@app.cell(hide_code=True)\ndef _(mo):\n    mo.md(${heading})\n    return\n\n\nif __name__ == "__main__":\n    app.run()\n`;
+};
 
 export function Project() {
 	const { pid } = useParams<{ pid: string }>();

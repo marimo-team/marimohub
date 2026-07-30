@@ -80,8 +80,8 @@ export interface SessionModePolicy {
 	 * sandbox must not write through to the workspace mirror.
 	 */
 	workspaceLoad: 'source-policy' | 'copy-only';
-	/** Inject the marimo editor's AI config (meaningless without an editor surface). */
-	injectEditorAi: boolean;
+	/** App sessions skip this because `marimo run` has no editor surface. */
+	injectEditorConfig: boolean;
 	/** Anchored by the per-notebook claim object (`claimApp`/`releaseApp`). */
 	singleton: boolean;
 	/**
@@ -105,7 +105,7 @@ export const MODE_POLICY: Record<SessionMode, SessionModePolicy> = {
 		capScope: 'user',
 		persistsEdits: true,
 		workspaceLoad: 'source-policy',
-		injectEditorAi: true,
+		injectEditorConfig: true,
 		singleton: false,
 		viewerSession: 'ephemeral',
 	},
@@ -120,7 +120,7 @@ export const MODE_POLICY: Record<SessionMode, SessionModePolicy> = {
 		capScope: 'project',
 		persistsEdits: false,
 		workspaceLoad: 'copy-only',
-		injectEditorAi: false,
+		injectEditorConfig: false,
 		singleton: true,
 		viewerSession: 'shared',
 	},

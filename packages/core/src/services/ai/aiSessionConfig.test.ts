@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { parse } from 'smol-toml';
 import { Seconds } from '../../duration';
 import { toBase64Url, utf8ToBase64Url } from '../../internal/base64url';
 import { hmacSha256 } from '../../internal/hmac';
+import { assembleMarimoToml } from '../marimoConfig';
 import {
-	aiConfigToSessionEnv,
 	buildMarimoAiToml,
+	marimoAiContributor,
 	MARIMOHUB_AI_PROVIDER,
 	mintAiSessionToken,
 	verifyAiSessionToken,
@@ -50,8 +52,9 @@ describe('buildMarimoAiToml', () => {
 			model: 'm',
 			rules: 'be "concise"',
 		});
-		expect(toml).toContain('api_key = "a\\"b\\\\c"');
-		expect(toml).toContain('rules = "be \\"concise\\""');
+		const config = parse(toml);
+		expect(config.ai).toMatchObject({ rules: 'be "concise"' });
+		expect(config.ai).toHaveProperty(`custom_providers.${MARIMOHUB_AI_PROVIDER}.api_key`, 'a"b\\c');
 	});
 
 	it('omits optional fields when absent', () => {
@@ -67,28 +70,23 @@ describe('buildMarimoAiToml', () => {
 	});
 
 	it('escapes newline, carriage-return, and tab in rules (no TOML string break-out)', () => {
+		const rules = 'line1\nline2\rline3\tcol';
 		const toml = buildMarimoAiToml({
 			baseUrl: 'u',
 			apiKey: 'k',
 			model: 'm',
-			rules: 'line1\nline2\rline3\tcol',
+			rules,
 		});
-		expect(toml).toContain('rules = "line1\\nline2\\rline3\\tcol"');
-		// The raw control chars must NOT appear inside the emitted rules string.
-		expect(toml).not.toContain('line1\nline2');
+		expect(parse(toml).ai).toMatchObject({ rules });
 	});
 });
 
-describe('aiConfigToSessionEnv', () => {
-	it('writes marimo.toml under XDG_CONFIG_HOME outside the mount path', () => {
-		const env = aiConfigToSessionEnv(
-			{ baseUrl: 'u', apiKey: 'k', model: 'm' },
-			'/opt/marimohub-config/',
-		);
-		expect(env.vars.XDG_CONFIG_HOME).toBe('/opt/marimohub-config');
-		expect(env.files).toHaveLength(1);
-		expect(env.files[0].path).toBe('/opt/marimohub-config/marimo/marimo.toml');
-		expect(env.files[0].content).toContain('[ai.models]');
+describe('marimoAiContributor', () => {
+	it('produces the same [ai] sections as buildMarimoAiToml when assembled alone', () => {
+		const config = { baseUrl: 'https://app.example/api/ai/v1', apiKey: 'mh_token', model: 'm' };
+		const assembled = assembleMarimoToml([marimoAiContributor(config)]);
+		expect(assembled).toBe(buildMarimoAiToml(config));
+		expect(assembled).toContain(`[ai.custom_providers.${MARIMOHUB_AI_PROVIDER}]`);
 	});
 });
 

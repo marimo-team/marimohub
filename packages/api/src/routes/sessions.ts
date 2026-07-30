@@ -1,6 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import type {
 	AuthUser,
+	MarimoConfigContributor,
 	Project,
 	ProjectId,
 	SessionEnv,
@@ -10,13 +11,16 @@ import type {
 	UserId,
 } from '@marimo-hub/core';
 import {
-	aiConfigToSessionEnv,
 	BadRequestError,
 	ConflictError,
 	createSandboxId,
+	DEFAULT_INJECTED_CONFIG_DIR,
 	DomainError,
 	effectiveRole,
 	exchangeFederatedStorageEnv,
+	marimoAiContributor,
+	marimoConfigToSessionEnv,
+	marimoNotebookDefaults,
 	mintAiSessionToken,
 	NotFoundError,
 	paths,
@@ -57,16 +61,9 @@ import {
 } from '../shared';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
 
-/**
- * Compose two sessionEnv producers (e.g. WIF + managed AI): concat `files`,
- * spread-merge `vars`. Either side may be undefined.
- */
-function mergeSessionEnv(
-	base: SessionEnv | undefined,
-	add: { files: { path: string; content: string }[]; vars: Record<string, string> },
-): SessionEnv {
+function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): SessionEnv {
 	return {
-		files: [...(base?.files ?? []), ...add.files],
+		files: [...(base?.files ?? []), ...(add.files ?? [])],
 		vars: { ...base?.vars, ...add.vars },
 	};
 }
@@ -601,42 +598,43 @@ app.openapi(createSession, async (c) => {
 						}
 					};
 
-					// Managed AI: best-effort session-scoped token + marimo AI config pointed
-					// at our proxy. A mint failure yields no AI config, never a failed kernel.
-					// Skipped for apps: the injected config drives the *editor's* AI
-					// assistant, and `marimo run` has no editor surface.
-					const resolveAiEnv = async () => {
-						if (!deps.ai || !MODE_POLICY[mode].injectEditorAi) return;
-						try {
-							const token = await mintAiSessionToken(
-								deps.ai.signingSecret,
-								{
-									projectId: pid,
-									notebookId: nid,
-									sessionId: session!.session_id,
-									userId: user.id,
-								},
-								{ ttlSeconds: deps.ai.tokenTtlSeconds },
-							);
-							return aiConfigToSessionEnv(
-								{
-									baseUrl: `${appBaseUrl}/api/ai/v1`,
-									apiKey: token,
-									model: deps.ai.model,
-									enabled: true,
-									maxTokens: deps.ai.maxTokens,
-									rules: deps.ai.rules,
-								},
-								deps.ai.xdgPath,
-							);
-						} catch (err) {
-							observer.tag('ai_inject_failed', true);
-							observer.tag(
-								'ai_inject_error',
-								err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-							);
-							return;
+					const resolveMarimoConfigEnv = async () => {
+						if (!MODE_POLICY[mode].injectEditorConfig) return;
+						const contributors: MarimoConfigContributor[] = [marimoNotebookDefaults];
+						if (deps.ai) {
+							try {
+								const token = await mintAiSessionToken(
+									deps.ai.signingSecret,
+									{
+										projectId: pid,
+										notebookId: nid,
+										sessionId: session!.session_id,
+										userId: user.id,
+									},
+									{ ttlSeconds: deps.ai.tokenTtlSeconds },
+								);
+								contributors.push(
+									marimoAiContributor({
+										baseUrl: `${appBaseUrl}/api/ai/v1`,
+										apiKey: token,
+										model: deps.ai.model,
+										enabled: true,
+										maxTokens: deps.ai.maxTokens,
+										rules: deps.ai.rules,
+									}),
+								);
+							} catch (err) {
+								observer.tag('ai_inject_failed', true);
+								observer.tag(
+									'ai_inject_error',
+									err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+								);
+							}
 						}
+						return marimoConfigToSessionEnv(
+							deps.ai?.xdgPath ?? DEFAULT_INJECTED_CONFIG_DIR,
+							contributors,
+						);
 					};
 
 					// Project secrets: unlike WIF/AI, this FAILS CLOSED — a key the author
@@ -664,16 +662,16 @@ app.openapi(createSession, async (c) => {
 					};
 
 					// The three sources are independent, so resolve them together. Secrets are
-					// the base; the system/WIF/AI vars win a name collision, so a user secret
-					// can never shadow them.
+					// the base; the system/WIF/config vars win a name collision, so a user
+					// secret can never shadow them.
 					const resolveSessionEnv = async (): Promise<SessionEnv | undefined> => {
-						const [wifVars, aiEnv, secretVars] = await Promise.all([
+						const [wifVars, marimoEnv, secretVars] = await Promise.all([
 							resolveWifVars(),
-							resolveAiEnv(),
+							resolveMarimoConfigEnv(),
 							resolveSecretVars(),
 						]);
 						let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-						if (aiEnv) env = mergeSessionEnv(env, aiEnv);
+						if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
 						if (secretVars) {
 							env = { files: env?.files ?? [], vars: { ...secretVars, ...env?.vars } };
 						}

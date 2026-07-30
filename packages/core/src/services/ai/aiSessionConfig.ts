@@ -12,6 +12,8 @@
 import { Millis, Seconds } from '../../duration';
 import { fromBase64Url, toBase64Url, utf8ToBase64Url } from '../../internal/base64url';
 import { hmacSha256, timingSafeEqual } from '../../internal/hmac';
+import { serializeMarimoToml } from '../marimoConfig';
+import type { MarimoConfigContributor, TomlTable } from '../marimoConfig';
 
 /** The marimo custom-provider name our config registers (routes `<name>/<model>`). */
 export const MARIMOHUB_AI_PROVIDER = 'marimohub';
@@ -31,11 +33,6 @@ export interface AiSessionConfig {
 	rules?: string;
 }
 
-export interface SessionEnvFragment {
-	files: { path: string; content: string }[];
-	vars: Record<string, string>;
-}
-
 /** Claims carried by an AI session token; `sessionId` is the JWT `sub`. */
 export interface AiTokenClaims {
 	projectId: string;
@@ -44,58 +41,37 @@ export interface AiTokenClaims {
 	userId: string;
 }
 
-/** Escape a value into a TOML basic string (double-quoted). */
-function tomlString(value: string): string {
-	const escaped = value
-		.replaceAll('\\', '\\\\')
-		.replaceAll('"', '\\"')
-		.replaceAll('\n', '\\n')
-		.replaceAll('\r', '\\r')
-		.replaceAll('\t', '\\t');
-	return `"${escaped}"`;
-}
-
 /**
- * Render the marimo `[ai]` config that points a named custom provider at the
- * proxy. A named provider (NOT `[ai.open_ai]`) avoids polluting the editor's
- * default OpenAI model list with entries that don't route to the proxy. It also
- * pins marimo to pydantic-ai's `OpenAIChatModel` (`POST /v1/chat/completions`);
- * the built-in `[ai.open_ai]` provider would use `OpenAIResponsesModel`
- * (`POST /v1/responses`) instead — the proxy handles both, but the custom provider
- * is the tested path.
+ * The marimo `[ai]` config as a mergeable fragment: a named custom provider
+ * pointed at the proxy. A named provider (NOT `[ai.open_ai]`) avoids polluting
+ * the editor's default OpenAI model list with entries that don't route to the
+ * proxy. It also pins marimo to pydantic-ai's `OpenAIChatModel`
+ * (`POST /v1/chat/completions`); the built-in `[ai.open_ai]` provider would use
+ * `OpenAIResponsesModel` (`POST /v1/responses`) instead — the proxy handles both,
+ * but the custom provider is the tested path.
  */
-export function buildMarimoAiToml(config: AiSessionConfig): string {
+function aiConfigTable(config: AiSessionConfig): TomlTable {
 	const modelRef = `${MARIMOHUB_AI_PROVIDER}/${config.model}`;
-	const lines = ['[ai]', `enabled = ${config.enabled === false ? 'false' : 'true'}`];
-	if (config.maxTokens !== undefined) lines.push(`max_tokens = ${config.maxTokens}`);
-	if (config.rules) lines.push(`rules = ${tomlString(config.rules)}`);
-	lines.push(
-		'',
-		'[ai.models]',
-		`chat_model = ${tomlString(modelRef)}`,
-		`edit_model = ${tomlString(modelRef)}`,
-		`autocomplete_model = ${tomlString(modelRef)}`,
-		'',
-		`[ai.custom_providers.${MARIMOHUB_AI_PROVIDER}]`,
-		`base_url = ${tomlString(config.baseUrl)}`,
-		`api_key = ${tomlString(config.apiKey)}`,
-		'',
-	);
-	return lines.join('\n');
+	const ai: TomlTable = { enabled: config.enabled !== false };
+	if (config.maxTokens !== undefined) ai.max_tokens = config.maxTokens;
+	if (config.rules) ai.rules = config.rules;
+	ai.models = {
+		chat_model: modelRef,
+		edit_model: modelRef,
+		autocomplete_model: modelRef,
+	};
+	ai.custom_providers = {
+		[MARIMOHUB_AI_PROVIDER]: { base_url: config.baseUrl, api_key: config.apiKey },
+	};
+	return { ai };
 }
 
-/**
- * Shape the marimo config as a sandbox env fragment: a `marimo.toml` under an
- * XDG config dir plus `XDG_CONFIG_HOME` pointing at it. The dir lives OUTSIDE the
- * notebook's mount path, so the token/url are never read back into the committed
- * `pyproject.toml` or captured into the workspace.
- */
-export function aiConfigToSessionEnv(config: AiSessionConfig, xdgPath: string): SessionEnvFragment {
-	const dir = xdgPath.replace(/\/+$/, '');
-	return {
-		files: [{ path: `${dir}/marimo/marimo.toml`, content: buildMarimoAiToml(config) }],
-		vars: { XDG_CONFIG_HOME: dir },
-	};
+export function buildMarimoAiToml(config: AiSessionConfig): string {
+	return serializeMarimoToml(aiConfigTable(config));
+}
+
+export function marimoAiContributor(config: AiSessionConfig): MarimoConfigContributor {
+	return () => aiConfigTable(config);
 }
 
 /** Mint a short-lived HS256 JWT scoped to one session, signed with `secret`. */
