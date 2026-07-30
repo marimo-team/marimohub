@@ -4,6 +4,7 @@ import {
 	assembleMarimoToml,
 	marimoConfigToSessionEnv,
 	marimoNotebookDefaults,
+	marimoSharingDisabled,
 	serializeMarimoToml,
 } from './marimoConfig';
 import type { MarimoConfigContributor } from './marimoConfig';
@@ -90,6 +91,14 @@ describe('marimoNotebookDefaults', () => {
 		expect(parse(assembleMarimoToml([marimoNotebookDefaults]))).toEqual({
 			display: { default_width: 'medium' },
 			runtime: { default_sql_output: 'native' },
+		});
+	});
+});
+
+describe('marimoSharingDisabled', () => {
+	it('turns off every sharing surface', () => {
+		expect(parse(assembleMarimoToml([marimoSharingDisabled]))).toEqual({
+			sharing: { html: false, wasm: false, molab: false },
 		});
 	});
 });

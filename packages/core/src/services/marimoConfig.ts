@@ -44,6 +44,11 @@ export const marimoNotebookDefaults: MarimoConfigContributor = () => ({
 	runtime: { default_sql_output: 'native' },
 });
 
+// marimo's built-in sharing (HTML/WASM export, molab) publishes outside the deployment.
+export const marimoSharingDisabled: MarimoConfigContributor = () => ({
+	sharing: { html: false, wasm: false, molab: false },
+});
+
 export function marimoConfigToSessionEnv(
 	contributors: readonly MarimoConfigContributor[],
 ): SessionEnv {

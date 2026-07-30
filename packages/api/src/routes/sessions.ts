@@ -20,6 +20,7 @@ import {
 	marimoAiContributor,
 	marimoConfigToSessionEnv,
 	marimoNotebookDefaults,
+	marimoSharingDisabled,
 	mintAiSessionToken,
 	NotFoundError,
 	paths,
@@ -656,7 +657,10 @@ app.openapi(createSession, async (c) => {
 
 					const resolveMarimoConfigEnv = async () => {
 						if (!MODE_POLICY[mode].injectEditorConfig) return;
-						const contributors: MarimoConfigContributor[] = [marimoNotebookDefaults];
+						const contributors: MarimoConfigContributor[] = [
+							marimoNotebookDefaults,
+							marimoSharingDisabled,
+						];
 						if (deps.ai) {
 							try {
 								const token = await mintAiSessionToken(
