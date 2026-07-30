@@ -105,6 +105,27 @@ describe('Session routes', () => {
 		expect(data.error).toBeUndefined();
 	});
 
+	it('injects notebook defaults into an edit session without managed AI', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(instance),
+		}).request;
+
+		await expectOk<any>(await request('POST', sessionsPath()));
+
+		const config = calls.writeFiles
+			.flat()
+			.find((file) => file.path === '/tmp/marimohub-config/marimo/marimo.toml');
+		expect(config?.content).toContain('default_width = "medium"');
+		expect(config?.content).toContain('default_sql_output = "native"');
+		expect(config?.content).not.toContain('[ai]');
+		expect(calls.setEnvVars).toContainEqual({
+			XDG_CONFIG_HOME: '/tmp/marimohub-config',
+		});
+	});
+
 	describe('base image resolution', () => {
 		function imageApi(compute: ReturnType<typeof makeFakeCompute>) {
 			return createTestApi({
@@ -760,7 +781,7 @@ describe('Session routes', () => {
 			}).request;
 
 			await expectOk<any>(await req('POST', sessionsPath()));
-			expect(calls.setEnvVars).toHaveLength(0);
+			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('AWS_ACCESS_KEY_ID');
 		});
 
 		it('still provisions when the credential exchange fails (non-fatal)', async () => {
@@ -777,7 +798,7 @@ describe('Session routes', () => {
 
 			const data = await expectOk<any>(await req('POST', sessionsPath()));
 			expect(data.status).toBe('running');
-			expect(calls.setEnvVars).toHaveLength(0);
+			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('AWS_ACCESS_KEY_ID');
 		});
 
 		it("never injects creds into a viewer's ephemeral session, even when opted in", async () => {
@@ -795,7 +816,7 @@ describe('Session routes', () => {
 
 			const data = await expectOk<any>(await req('POST', sessionsPath()));
 			expect(data.ephemeral).toBe(true);
-			expect(calls.setEnvVars).toHaveLength(0);
+			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('AWS_ACCESS_KEY_ID');
 		});
 
 		it('does not inject creds when WIF is unconfigured at the deployment', async () => {
@@ -808,7 +829,7 @@ describe('Session routes', () => {
 			}).request;
 
 			await expectOk<any>(await req('POST', sessionsPath()));
-			expect(calls.setEnvVars).toHaveLength(0);
+			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('AWS_ACCESS_KEY_ID');
 		});
 	});
 
@@ -956,7 +977,7 @@ describe('Session routes', () => {
 
 			const data = await expectOk<any>(await req('POST', sessionsPath()));
 			expect(data.ephemeral).toBe(true);
-			expect(calls.setEnvVars).toHaveLength(0);
+			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('MY_SECRET');
 		});
 	});
 });

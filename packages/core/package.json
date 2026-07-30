@@ -24,6 +24,7 @@
 	},
 	"dependencies": {
 		"better-all": "catalog:",
+		"smol-toml": "catalog:",
 		"ulidx": "catalog:",
 		"zod": "catalog:"
 	},

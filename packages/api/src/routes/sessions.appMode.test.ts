@@ -174,7 +174,7 @@ describe('Session routes (app mode)', () => {
 		expect(fake.calls.startProcess[0].cmd).not.toContain('--convert');
 	});
 
-	it('does not inject managed-AI config into an app session', async () => {
+	it('merges managed AI into edit config but injects no config into an app session', async () => {
 		const ai = {
 			upstreamBaseUrl: 'https://ai.example',
 			upstreamApiKey: 'k',
@@ -190,7 +190,13 @@ describe('Session routes (app mode)', () => {
 			deps: { ai },
 		});
 		await expectOk<any>(await editApi.request('POST', sessionsPath()));
-		expect(editFake.calls.writeFiles.flat().some((f) => f.path.startsWith('/xdg'))).toBe(true);
+		const editConfig = editFake.calls.writeFiles
+			.flat()
+			.find((file) => file.path === '/xdg/marimo/marimo.toml');
+		expect(editConfig?.content).toContain('default_width = "medium"');
+		expect(editConfig?.content).toContain('default_sql_output = "native"');
+		expect(editConfig?.content).toContain('[ai]');
+		expect(editConfig?.content).toContain('[ai.custom_providers.marimohub]');
 
 		const runFake = makeFakeSandbox();
 		const runApi = createTestApi({
@@ -200,10 +206,50 @@ describe('Session routes (app mode)', () => {
 			deps: { ai },
 		});
 		await expectOk<any>(await runApi.request('POST', sessionsPath(), { mode: 'app' }));
-		// The copy-only workspace load also uses writeFiles; only the AI config
-		// (under the XDG path) must be absent.
-		expect(runFake.calls.writeFiles.flat().some((f) => f.path.startsWith('/xdg'))).toBe(false);
+		expect(
+			runFake.calls.writeFiles.flat().some((file) => file.path.endsWith('/marimo/marimo.toml')),
+		).toBe(false);
+		expect(runFake.calls.setEnvVars.flatMap(Object.keys)).not.toContain('XDG_CONFIG_HOME');
 	});
+
+	it.each(['', 'relative/path', '/'])(
+		'falls back to default-only editor config when managed AI uses invalid XDG path %j',
+		async (xdgPath) => {
+			const fake = makeFakeSandbox();
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(fake.instance),
+				deps: {
+					ai: {
+						upstreamBaseUrl: 'https://ai.example',
+						upstreamApiKey: 'k',
+						model: 'gpt-test',
+						signingSecret: 's'.repeat(32),
+						xdgPath,
+					},
+				},
+			});
+
+			const session = await expectOk<any>(await api.request('POST', sessionsPath()));
+
+			expect(session.status).toBe('running');
+			const configFiles = fake.calls.writeFiles
+				.flat()
+				.filter((file) => file.path.endsWith('/marimo/marimo.toml'));
+			expect(configFiles).toEqual([
+				expect.objectContaining({
+					path: '/tmp/marimohub-config/marimo/marimo.toml',
+				}),
+			]);
+			expect(configFiles[0].content).toContain('default_width = "medium"');
+			expect(configFiles[0].content).toContain('default_sql_output = "native"');
+			expect(configFiles[0].content).not.toContain('[ai]');
+			expect(fake.calls.setEnvVars).toContainEqual({
+				XDG_CONFIG_HOME: '/tmp/marimohub-config',
+			});
+		},
+	);
 
 	describe('viewer admission per MARIMOHUB_VIEWER_MODE', () => {
 		const viewerApi = (viewerMode?: 'static' | 'applications' | 'ephemeral-sandbox') =>

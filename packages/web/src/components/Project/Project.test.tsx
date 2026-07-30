@@ -215,6 +215,26 @@ describe('Project — Create Notebook', () => {
 			expect(post?.body).toMatchObject({ title: 'Churn', description: 'Churn' });
 			const code = (post?.body as { code?: string } | undefined)?.code;
 			expect(code).toContain('import marimo');
+			expect(code).toContain('marimo.App(width="medium", sql_output="native")');
+			expect(code).toContain('mo.md("# Churn")');
+		});
+	});
+
+	it('quotes the notebook name safely in the generated Python', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch();
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'New Notebook' }));
+		const dialog = screen.getByRole('dialog');
+		await user.type(within(dialog).getByLabelText('Notebook Name'), 'Quote"""Break');
+		await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+		await waitFor(() => {
+			const post = calls.find((call) => call.method === 'POST');
+			const code = (post?.body as { code?: string } | undefined)?.code;
+			expect(code).toContain('mo.md("# Quote\\\"\\\"\\\"Break")');
+			expect(code).not.toContain('r"""');
 		});
 	});
 

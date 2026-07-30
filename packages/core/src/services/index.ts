@@ -101,13 +101,20 @@ export type { WifClaims, JwksKey } from './identity/WorkloadIdentityIssuer';
 export { s3CredsToEnv } from './identity/s3CredsEnv';
 export { exchangeFederatedStorageEnv, projectSubject } from './identity/federation';
 export {
-	aiConfigToSessionEnv,
 	buildMarimoAiToml,
+	marimoAiContributor,
 	mintAiSessionToken,
 	verifyAiSessionToken,
 	MARIMOHUB_AI_PROVIDER,
 } from './ai/aiSessionConfig';
-export type { AiSessionConfig, AiTokenClaims, SessionEnvFragment } from './ai/aiSessionConfig';
+export type { AiSessionConfig, AiTokenClaims } from './ai/aiSessionConfig';
+export {
+	assembleMarimoToml,
+	DEFAULT_INJECTED_CONFIG_DIR,
+	marimoConfigToSessionEnv,
+	marimoNotebookDefaults,
+} from './marimoConfig';
+export type { MarimoConfigContributor } from './marimoConfig';
 export {
 	captureFilesystemSnapshot,
 	createOrRestoreSandbox,
