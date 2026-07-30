@@ -3,7 +3,9 @@ import {
 	ComputeProfileConfigError,
 	hasConfiguredResources,
 	parseComputeProfiles,
+	parseComputeProfileOverride,
 	resolveResources,
+	supportsComputeProfiles,
 	unsupportedBackendNotice,
 } from './computeProfiles';
 import { isConfigError } from './errors';
@@ -137,11 +139,35 @@ describe('parseComputeProfiles', () => {
 	});
 });
 
+describe('parseComputeProfileOverride', () => {
+	it('defaults to none and accepts editors', () => {
+		expect(parseComputeProfileOverride(undefined)).toBe('none');
+		expect(parseComputeProfileOverride('')).toBe('none');
+		expect(parseComputeProfileOverride('none')).toBe('none');
+		expect(parseComputeProfileOverride('editors')).toBe('editors');
+	});
+
+	it('rejects unknown values', () => {
+		expect(() => parseComputeProfileOverride('all')).toThrow(/MARIMOHUB_COMPUTE_PROFILE_OVERRIDE/);
+	});
+});
+
 describe('unsupportedBackendNotice', () => {
 	it('returns a notice only when non-empty resources are configured', () => {
 		const configured = parseComputeProfiles('small:cpu=1');
 		expect(unsupportedBackendNotice('e2b', configured)).toContain('ignored');
 		expect(unsupportedBackendNotice('e2b', parseComputeProfiles(undefined))).toBeUndefined();
 		expect(unsupportedBackendNotice('local', parseComputeProfiles('bare'))).toBeUndefined();
+	});
+});
+
+describe('supportsComputeProfiles', () => {
+	it('only enables profile UX for adapters that apply resource requests', () => {
+		expect(supportsComputeProfiles('docker')).toBe(true);
+		expect(supportsComputeProfiles('coreweave')).toBe(true);
+		expect(supportsComputeProfiles('e2b')).toBe(false);
+		expect(supportsComputeProfiles('cloudflare')).toBe(false);
+		expect(supportsComputeProfiles('local')).toBe(false);
+		expect(supportsComputeProfiles('none')).toBe(false);
 	});
 });

@@ -22,6 +22,7 @@ export interface CreateSyncedNotebookInput {
 	readme?: string;
 	runtime?: { python_version?: string; marimo_version?: string };
 	base_image?: string;
+	compute_profile?: string;
 }
 
 export interface SyncNotebookInput {

@@ -13,6 +13,8 @@ export interface ComputeProfilesConfig {
 	readonly defaultProfile: ComputeProfile | undefined;
 }
 
+export type ComputeProfileOverride = 'none' | 'editors';
+
 export class ComputeProfileConfigError extends ConfigError {
 	constructor(
 		message: string,
@@ -43,6 +45,11 @@ const MAX_CPU_CORES = 4096;
 const MAX_MEMORY_BYTES = 64 * 1024 ** 4;
 const MIN_CPU_CORES = 0.001;
 const MIN_MEMORY_BYTES = 1024 ** 2;
+const PROFILE_BACKENDS = new Set(['docker', 'podman', 'kubernetes', 'modal', 'coreweave', 'wandb']);
+
+export function supportsComputeProfiles(backend: string): boolean {
+	return PROFILE_BACKENDS.has(backend);
+}
 
 function parseCpu(value: string, profile: string): number {
 	if (!/^\d+(?:\.\d+)?$/.test(value)) {
@@ -191,6 +198,19 @@ export function resolveResources(config: ComputeProfilesConfig): ComputeResource
 	return config.defaultProfile?.resources ?? {};
 }
 
+export function parseComputeProfileOverride(raw: string | undefined): ComputeProfileOverride {
+	if (raw === undefined || raw.trim() === '' || raw === 'none') return 'none';
+	if (raw === 'editors') return 'editors';
+	throw new ConfigError(
+		`Invalid MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: ${raw} (expected none or editors)`,
+		{
+			variable: 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE',
+			remediation: 'Use none or editors.',
+			docs: 'docs/configuration.md#compute',
+		},
+	);
+}
+
 export function hasConfiguredResources(config: ComputeProfilesConfig): boolean {
 	return config.profiles.some(
 		(profile) => profile.resources.cpu !== undefined || profile.resources.memoryBytes !== undefined,
@@ -201,7 +221,7 @@ export function unsupportedBackendNotice(
 	backend: string,
 	config: ComputeProfilesConfig,
 ): string | undefined {
-	if (!hasConfiguredResources(config)) return undefined;
+	if (supportsComputeProfiles(backend) || !hasConfiguredResources(config)) return undefined;
 	const backendConfigHint =
 		backend === 'e2b' || backend === 'cloudflare'
 			? ' Backend-specific MARIMOHUB_COMPUTE_* settings remain authoritative.'

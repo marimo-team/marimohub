@@ -111,7 +111,7 @@ spec:
           containerPort: {{ $v.containerPort }}
       {{- end }}
       envFrom:
-        {{- if or $v.config $v.compute.profiles }}
+        {{- if or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") }}
         - configMapRef:
             name: {{ include "marimohub.fullname" $root }}-config
         {{- end }}

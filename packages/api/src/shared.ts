@@ -530,6 +530,8 @@ export const SnapshotNotebookEntrySchema = z
 		updated_at: dt(),
 		tags: z.array(z.string()),
 		last_run_at: nullableDt(),
+		/** The notebook's non-default compute profile; absent = deployment default. */
+		compute_profile: z.string().optional(),
 	})
 	.openapi('SnapshotNotebookEntry');
 
@@ -569,6 +571,8 @@ export const NotebookMetaResponseSchema = z
 		runtime: RuntimeResponseSchema.optional(),
 		/** The notebook's chosen sandbox image; absent = the deployment default. */
 		base_image: z.string().optional(),
+		/** The notebook's non-default compute profile; absent = deployment default. */
+		compute_profile: z.string().optional(),
 	})
 	.openapi('NotebookMeta');
 
@@ -678,6 +682,17 @@ export const SessionResponseSchema = z
 		 */
 		active_connections: z.number().optional(),
 		connections_checked_at: dt().optional(),
+		/** Named compute profile used to provision the sandbox. */
+		compute_profile: z.string().optional(),
+		/** CPU and memory resolved when the session was provisioned. */
+		compute_resources: z
+			.object({
+				cpu: z.number().optional(),
+				memory_bytes: z.number().optional(),
+			})
+			.optional(),
+		/** The session booted from a provider snapshot whose resources are immutable. */
+		compute_from_snapshot: z.boolean().optional(),
 		/** Why the session went `failed` (sanitized); absent unless it failed. */
 		error: z.object({ code: z.string(), message: z.string() }).optional(),
 	})
@@ -761,5 +776,13 @@ export const CapabilitiesResponseSchema = z
 		 * the deployment offers no image choice (single image or imageless backend).
 		 */
 		sandbox_images: z.array(z.string()),
+		compute_profiles: z.array(
+			z.object({
+				name: z.string(),
+				cpu: z.number().optional(),
+				memory_bytes: z.number().optional(),
+			}),
+		),
+		compute_profile_override: z.enum(['none', 'editors']),
 	})
 	.openapi('Capabilities');

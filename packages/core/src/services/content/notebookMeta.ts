@@ -12,6 +12,7 @@ interface BuildNotebookMetaArgs {
 	tags?: string[];
 	runtime?: NotebookMeta['runtime'];
 	baseImage?: string;
+	computeProfile?: string;
 }
 
 /**
@@ -33,6 +34,7 @@ export function buildNotebookMeta(args: BuildNotebookMetaArgs): NotebookMeta {
 		tags: args.tags ?? [],
 		runtime: args.runtime,
 		base_image: args.baseImage,
+		compute_profile: args.computeProfile,
 	};
 }
 
@@ -89,6 +91,7 @@ export function buildNotebookEntry(
 		updated_at: meta.updated_at,
 		tags: meta.tags,
 		last_run_at: null,
+		compute_profile: meta.compute_profile,
 		key_prefix: keyPrefix,
 	};
 }

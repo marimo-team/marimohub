@@ -98,6 +98,12 @@ app.openapi(capabilitiesRoute, (c) => {
 			max_page_size: MAX_PAGE_SIZE,
 		},
 		sandbox_images: deps.sandbox.images ?? [],
+		compute_profiles: (deps.sandbox.computeProfiles ?? []).map((profile) => ({
+			name: profile.name,
+			cpu: profile.resources.cpu,
+			memory_bytes: profile.resources.memoryBytes,
+		})),
+		compute_profile_override: deps.sandbox.computeProfileOverride ?? 'none',
 	});
 });
 

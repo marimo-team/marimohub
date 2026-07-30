@@ -234,8 +234,17 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_PROFILES',
 						name: 'Compute profiles',
 						description:
-							'Ordered named CPU/memory profiles (`name:cpu=<cores>;mem=<Mi|Gi|Ti>`). The first profile is applied to new sandboxes by Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B.',
+							'Ordered named CPU/memory profiles (`name:cpu=<cores>;mem=<Mi|Gi|Ti>`). The first is the default; supported backends apply the notebook choice when overrides are enabled.',
 						example: 'small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE',
+						name: 'Compute profile override',
+						description:
+							'Whether editors may choose a non-default compute profile per notebook (`none` or `editors`).',
+						example: 'editors',
+						default: 'none',
 						optIn: true,
 					},
 					{

@@ -40,7 +40,7 @@ import {
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
 import { errorMetadata } from '../log';
-import type { ApiDeps, PolicyConfig } from '../context';
+import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
 	assertSessionAccess,
 	assertSessionControl,
@@ -106,6 +106,8 @@ const SessionCreateBodySchema = z
 		 * `ephemeral-sandbox`, `edit` under `ephemeral-sandbox` only.
 		 */
 		mode: z.enum(SESSION_MODES).optional(),
+		/** One-shot fallback that does not change notebook metadata. */
+		compute_profile: z.literal('default').optional(),
 	})
 	.openapi('SessionCreateBody');
 
@@ -216,6 +218,9 @@ function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean }) 
 		source_version_id: s.source_version_id,
 		active_connections: s.active_connections,
 		connections_checked_at: s.connections_checked_at,
+		compute_profile: s.compute_profile,
+		compute_resources: s.compute_resources,
+		compute_from_snapshot: s.compute_from_snapshot,
 		// A provision failure's message can name the sandbox host — the very thing
 		// withholding `sandbox_url` protects — so it rides the same grant.
 		error: can.attach ? s.error : undefined,
@@ -258,13 +263,40 @@ function authorizeSessionStart(
 	user: AuthUser,
 	mode: SessionMode,
 	policy: PolicyConfig,
-): { ephemeral: boolean } {
+): { ephemeral: boolean; profileOverrideEligible: boolean } {
 	const role = effectiveRole(project, user, policy.defaultRole);
 	if (!canStartSessionMode({ role, viewerMode: policy.viewerMode }, mode)) {
 		// Throws the canonical editor-gate 403 (canStart admits every editor+).
 		requireRole(project, user, 'editor', policy.defaultRole);
 	}
-	return { ephemeral: role === 'viewer' && MODE_POLICY[mode].viewerSession === 'ephemeral' };
+	const ephemeral = role === 'viewer' && MODE_POLICY[mode].viewerSession === 'ephemeral';
+	return {
+		ephemeral,
+		// The notebook's configured profile applies to every editor/admin session and
+		// to any shared (non-ephemeral) session: a shared app is the notebook's app and
+		// must provision identically no matter who starts it. Only a viewer's own
+		// ephemeral throwaway is forced onto the deployment default.
+		profileOverrideEligible: !ephemeral,
+	};
+}
+
+function resolveComputeProfile(
+	sandbox: SandboxConfig,
+	storedName: string | undefined,
+	allowOverride: boolean,
+	onFallback: (message: string) => void,
+): { name: string | undefined; resources: NonNullable<SandboxConfig['resources']> } {
+	const fallback = sandbox.computeProfiles?.[0] ?? {
+		name: sandbox.computeProfile,
+		resources: sandbox.resources ?? {},
+	};
+	if (!allowOverride || !storedName) return fallback;
+	const selected = sandbox.computeProfiles?.find((profile) => profile.name === storedName);
+	if (selected) return selected;
+	onFallback(
+		`Compute profile "${storedName}" is no longer configured; using default "${fallback.name ?? 'adapter default'}"`,
+	);
+	return fallback;
 }
 
 const CAP_REACHED = {
@@ -400,7 +432,8 @@ app.openapi(createSession, async (c) => {
 	const { sessions, projects, notebooks } = deps.services;
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	const mode: SessionMode = c.req.valid('json')?.mode ?? 'edit';
+	const body = c.req.valid('json');
+	const mode: SessionMode = body?.mode ?? 'edit';
 
 	// Starting a session runs code — see authorizeSessionStart for the matrix.
 	// The loaded project is reused below (federation opt-in), not re-fetched.
@@ -410,7 +443,12 @@ app.openapi(createSession, async (c) => {
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
-	const { ephemeral } = authorizeSessionStart(project, user, mode, deps.policy);
+	const { ephemeral, profileOverrideEligible } = authorizeSessionStart(
+		project,
+		user,
+		mode,
+		deps.policy,
+	);
 	const grants = (s: Session) => sessionGrantsFor(project, user, s, deps.policy);
 
 	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
@@ -448,6 +486,12 @@ app.openapi(createSession, async (c) => {
 	// rather than blocking the session.
 	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], (msg) =>
 		console.warn(`[session] ${msg} (project=${pid} notebook=${nid})`),
+	);
+	const requestedComputeProfile = resolveComputeProfile(
+		sandbox,
+		body?.compute_profile === 'default' ? undefined : notebook.meta.compute_profile,
+		sandbox.computeProfileOverride === 'editors' && profileOverrideEligible,
+		(msg) => console.warn(`[session] ${msg} (project=${pid} notebook=${nid})`),
 	);
 	const provisioner = new SandboxProvisioner(compute);
 
@@ -503,9 +547,21 @@ app.openapi(createSession, async (c) => {
 
 	// createApi defaults this; the fallback satisfies the type for direct callers.
 	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
-	const restoreFilesystemSnapshotId = workspacePolicy.restoreFilesystemSnapshot
+	const restoreFilesystemSnapshot = workspacePolicy.restoreFilesystemSnapshot
 		? await resolveRestoreSnapshot(compute, notebooks, pid, nid)
 		: undefined;
+	const appliedComputeProfile = restoreFilesystemSnapshot
+		? {
+				name: restoreFilesystemSnapshot.compute_profile,
+				resources: restoreFilesystemSnapshot.compute_resources,
+			}
+		: {
+				name: requestedComputeProfile.name,
+				resources: {
+					cpu: requestedComputeProfile.resources.cpu,
+					memory_bytes: requestedComputeProfile.resources.memoryBytes,
+				},
+			};
 
 	const hostname = sandbox.hostname || new URL(c.req.url).hostname;
 	// App origin for building proxy-mode client URLs; falls back to this request.
@@ -539,7 +595,9 @@ app.openapi(createSession, async (c) => {
 					project_id: pid,
 					user_id: user.id,
 					sandbox_id: sandboxId,
-					compute_profile: sandbox.computeProfile,
+					compute_profile: appliedComputeProfile.name,
+					compute_resources: appliedComputeProfile.resources,
+					compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
 					ephemeral,
 					mode,
 					source_version_id: sourceVersionId,
@@ -698,9 +756,9 @@ app.openapi(createSession, async (c) => {
 						workdir: sandbox.workdir,
 						assetUrl: sandbox.assetUrl,
 						baseUrl,
-						restoreFilesystemSnapshotId,
+						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
 						image,
-						resources: sandbox.resources,
+						resources: requestedComputeProfile.resources,
 						sessionEnv,
 						entryNotebook: workspacePolicy.entryNotebook,
 						launchMode: mode,

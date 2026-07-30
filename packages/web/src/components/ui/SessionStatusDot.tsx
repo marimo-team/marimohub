@@ -6,12 +6,19 @@ import { StatusDot } from './StatusDot';
 import { Popover } from './Popover';
 import { Skeleton } from './Skeleton';
 import { UserLabel } from './UserLabel';
+import {
+	computeProfileResources,
+	computeResourcesEqual,
+} from '@/components/Notebook/ComputeProfileSelect';
+import type { ComputeProfile } from '@/components/Notebook/ComputeProfileSelect';
 
 interface SessionStatusDotProps {
 	/** The notebook's most-alive session, or undefined when stopped. */
 	session: Session | undefined;
 	/** Sessions still loading: show a placeholder dot rather than nothing. */
 	loading?: boolean;
+	profiles?: ComputeProfile[];
+	selectedProfileName?: string;
 }
 
 // Maps a runtime status to the dot's color + label. Stopped notebooks (no active
@@ -30,11 +37,36 @@ const STATUS_DOT: Partial<
  * long it has been up. Mounted only while the popover is open, so its 1s ticker
  * runs only then.
  */
-function SessionDetails({ session, label }: { session: Session; label: string }) {
+function SessionDetails({
+	session,
+	label,
+	profiles,
+	selectedProfileName,
+}: {
+	session: Session;
+	label: string;
+	profiles: ComputeProfile[];
+	selectedProfileName?: string;
+}) {
 	const now = useNow();
 	const { data: users } = useUsersQuery([session.user_id]);
 	const user = users?.[session.user_id];
 	const showDuration = session.status === 'running';
+	const runningProfile = profiles.find((profile) => profile.name === session.compute_profile);
+	const selectedProfile =
+		profiles.find((profile) => profile.name === selectedProfileName) ?? profiles[0];
+	const runningResources = session.compute_resources ?? runningProfile;
+	const pending =
+		!!selectedProfile &&
+		!!session.compute_profile &&
+		(session.compute_profile !== selectedProfile.name ||
+			!computeResourcesEqual(session.compute_resources, selectedProfile));
+	const runningLabel = session.compute_profile
+		? `${session.compute_profile} — ${computeProfileResources(runningResources ?? {})}`
+		: undefined;
+	const selectedLabel = selectedProfile
+		? `${selectedProfile.name} — ${computeProfileResources(selectedProfile)}`
+		: undefined;
 
 	return (
 		<div className="flex min-w-[12rem] flex-col gap-2 text-xs">
@@ -50,6 +82,18 @@ function SessionDetails({ session, label }: { session: Session; label: string })
 				</dd>
 				<dt>Started</dt>
 				<dd className="text-foreground">{formatRelative(session.started_at, now)}</dd>
+				{runningLabel && (
+					<>
+						<dt>{pending ? 'Running' : 'Compute'}</dt>
+						<dd className="text-foreground">{runningLabel}</dd>
+					</>
+				)}
+				{pending && selectedLabel && (
+					<>
+						<dt>Next</dt>
+						<dd className="text-foreground">{selectedLabel}</dd>
+					</>
+				)}
 				{showDuration && (
 					<>
 						<dt>Running for</dt>
@@ -59,6 +103,15 @@ function SessionDetails({ session, label }: { session: Session; label: string })
 					</>
 				)}
 			</dl>
+			{pending && (
+				<span className="w-fit rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-400">
+					{session.compute_from_snapshot
+						? 'applies after snapshot is dropped'
+						: session.compute_profile === selectedProfile?.name
+							? 'profile updated — restart to apply'
+							: `${selectedProfile?.name} on next restart`}
+				</span>
+			)}
 		</div>
 	);
 }
@@ -68,7 +121,12 @@ function SessionDetails({ session, label }: { session: Session; label: string })
  * opens a popover with the session's attribution (who started it, when, and how
  * long it's been running). Renders nothing for stopped notebooks.
  */
-export function SessionStatusDot({ session, loading }: SessionStatusDotProps) {
+export function SessionStatusDot({
+	session,
+	loading,
+	profiles = [],
+	selectedProfileName,
+}: SessionStatusDotProps) {
 	const dot = session ? STATUS_DOT[session.status] : undefined;
 	// Before the first poll we can't tell stopped from running; hold a placeholder.
 	if (loading && !session) return <Skeleton className="size-2 rounded-full" />;
@@ -81,7 +139,12 @@ export function SessionStatusDot({ session, loading }: SessionStatusDotProps) {
 			trigger={<StatusDot className={dot.className} pulse={dot.pulse} />}
 			triggerClassName="cursor-pointer rounded-full"
 		>
-			<SessionDetails session={session} label={dot.label} />
+			<SessionDetails
+				session={session}
+				label={dot.label}
+				profiles={profiles}
+				selectedProfileName={selectedProfileName}
+			/>
 		</Popover>
 	);
 }

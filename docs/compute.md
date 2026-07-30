@@ -56,6 +56,8 @@ Operators can define named CPU and memory profiles in an ordered list:
 
 ```bash
 MARIMOHUB_COMPUTE_PROFILES="small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi"
+# Optional: let editors choose a profile per notebook.
+MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 ```
 
 - The first profile is the default and applies to every new sandbox. Reordering
@@ -63,10 +65,22 @@ MARIMOHUB_COMPUTE_PROFILES="small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi"
 - Profile names are stable identifiers. Renaming is remove-and-add; CPU and
   memory values under an existing name can be changed freely.
 - Changes apply on the next session start. Running kernels keep their current
-  resources.
+  resources. The session details show both the running and selected profile
+  until the restart.
+- With `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors`, editors can choose a
+  non-default profile per notebook. The choice falls back to the first profile
+  if that profile is later removed; the stored name is retained in case the
+  operator restores it. A viewer's own ephemeral edit kernel always uses the
+  default, but the shared notebook app runs the notebook's chosen profile
+  regardless of who starts it.
+- A failed non-default start can be retried once on Default without changing
+  the notebook's stored choice.
+- A filesystem snapshot restores with the resources it was captured on. The
+  session details identify snapshot-backed compute until a fresh sandbox is
+  started.
 - Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B apply profiles. E2B,
-  Cloudflare, local, and none ignore them and log a startup warning; their
-  existing backend-specific sizing remains unchanged.
+  Cloudflare, local, and none ignore them, hide the feature from the UI, and log
+  a startup warning; their existing backend-specific sizing remains unchanged.
 
 Docker and Podman enforce each container's limits but have no admission control.
 Ensure the host can accommodate the expected concurrency; N concurrent

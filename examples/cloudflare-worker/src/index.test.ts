@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe('Cloudflare Worker configuration', () => {
-	it('persists the configured default profile name while warning that resources are ignored', () => {
+	it('hides configured profiles while warning that Cloudflare ignores them', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const deps = buildDeps(new Request('https://hub.example.com'), {
 			AUTH_MODE: 'dev',
@@ -29,7 +29,9 @@ describe('Cloudflare Worker configuration', () => {
 			MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=1;mem=2Gi,large:cpu=4;mem=8Gi',
 		} as unknown as Env);
 
-		expect(deps.sandbox.computeProfile).toBe('small');
+		expect(deps.sandbox.computeProfile).toBeUndefined();
+		expect(deps.sandbox.computeProfiles).toEqual([]);
+		expect(deps.sandbox.computeProfileOverride).toBe('none');
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('profiles are ignored'));
 	});
 });

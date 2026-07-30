@@ -1,4 +1,4 @@
-{{- if or .Values.config .Values.compute.profiles }}
+{{- if or .Values.config .Values.compute.profiles (ne .Values.compute.profileOverride "none") }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,5 +13,8 @@ data:
   {{- end }}
   {{- with .Values.compute.profiles }}
   MARIMOHUB_COMPUTE_PROFILES: {{ . | quote }}
+  {{- end }}
+  {{- if ne .Values.compute.profileOverride "none" }}
+  MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: {{ .Values.compute.profileOverride | quote }}
   {{- end }}
 {{- end }}

@@ -17,6 +17,7 @@ import { CloudflareAccessAuthenticator } from '@marimo-hub/auth-cloudflare-acces
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
 import { CloudflareSandboxProvider, ContainerProxy, Sandbox } from '@marimo-hub/compute-cloudflare';
 import {
+	parseComputeProfileOverride,
 	parseComputeProfiles,
 	unsupportedBackendNotice,
 } from '@marimo-hub/config/compute-profiles';
@@ -33,6 +34,7 @@ let warnedAboutComputeProfiles = false;
 export function buildDeps(request: Request, env: Env): ApiDeps {
 	const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
+	parseComputeProfileOverride(env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE);
 	const profileNotice = unsupportedBackendNotice('cloudflare', computeProfiles);
 	if (profileNotice && !warnedAboutComputeProfiles) {
 		console.warn(profileNotice);
@@ -119,7 +121,8 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 			// subdomain exposure on a dedicated isolated domain.
 			hostname: sandboxHostname ?? '',
 			workdir: env.SANDBOX_WORKDIR || '/workspace',
-			computeProfile: computeProfiles.defaultProfile?.name,
+			computeProfiles: [],
+			computeProfileOverride: 'none',
 			// Which sandbox working-dir files survive a session. `source` persists only
 			// the source files; `workspace` also captures runtime files (e.g. generated
 			// data) into the notebook workspace on teardown and restores them next time.

@@ -17,6 +17,7 @@ declare global {
 		SANDBOX_HOSTNAME?: string;
 		SANDBOX_WORKDIR?: string;
 		MARIMOHUB_COMPUTE_PROFILES?: string;
+		MARIMOHUB_COMPUTE_PROFILE_OVERRIDE?: 'none' | 'editors';
 		// Opt-in E2B compute (see src/e2b.ts). E2B_API_KEY is a wrangler secret.
 		E2B_API_KEY?: string;
 		E2B_TEMPLATE?: string;

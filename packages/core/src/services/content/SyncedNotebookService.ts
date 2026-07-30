@@ -73,6 +73,7 @@ export class SyncedNotebookService {
 			tags: input.tags,
 			runtime: input.runtime,
 			baseImage: input.base_image,
+			computeProfile: input.compute_profile,
 		});
 
 		const tokenRecord = await createSyncTokenRecord(syncToken, now);

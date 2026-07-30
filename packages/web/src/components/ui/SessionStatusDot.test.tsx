@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session } from '@/types';
 import { SessionStatusDot } from './SessionStatusDot';
+import type { ComputeProfile } from '@/components/Notebook/ComputeProfileSelect';
 
 function makeSession(status: Session['status']): Session {
 	return {
@@ -20,7 +21,11 @@ function makeSession(status: Session['status']): Session {
 	};
 }
 
-function renderDot(session: Session | undefined) {
+function renderDot(
+	session: Session | undefined,
+	profiles: ComputeProfile[] = [],
+	selectedProfileName?: string,
+) {
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(
@@ -34,7 +39,14 @@ function renderDot(session: Session | undefined) {
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={client}>{children}</QueryClientProvider>
 	);
-	return render(<SessionStatusDot session={session} />, { wrapper });
+	return render(
+		<SessionStatusDot
+			session={session}
+			profiles={profiles}
+			selectedProfileName={selectedProfileName}
+		/>,
+		{ wrapper },
+	);
 }
 
 /** The status dot lives inside the popover trigger button. */
@@ -80,6 +92,71 @@ describe('SessionStatusDot', () => {
 
 		await user.click(screen.getByRole('button'));
 		expect(await screen.findByText('Started by')).toBeInTheDocument();
+	});
+
+	it('shows the session compute profile in details', async () => {
+		const user = userEvent.setup();
+		renderDot({ ...makeSession('running'), compute_profile: 'large' });
+
+		await user.click(screen.getByRole('button'));
+		expect(await screen.findByText('Compute')).toBeInTheDocument();
+		expect(screen.getByText('large — platform default')).toBeInTheDocument();
+	});
+
+	it('shows current and next compute when the selected profile changed', async () => {
+		const user = userEvent.setup();
+		renderDot(
+			{
+				...makeSession('running'),
+				compute_profile: 'small',
+				compute_resources: { cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+			},
+			[
+				{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+				{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+			],
+			'large',
+		);
+
+		await user.click(screen.getByRole('button'));
+		expect(await screen.findByText('small — 1 CPU · 2 Gi')).toBeInTheDocument();
+		expect(screen.getByText('large — 8 CPU · 32 Gi')).toBeInTheDocument();
+		expect(screen.getByText('large on next restart')).toBeInTheDocument();
+	});
+
+	it('detects edited resources under the same profile name', async () => {
+		const user = userEvent.setup();
+		renderDot(
+			{
+				...makeSession('running'),
+				compute_profile: 'small',
+				compute_resources: { cpu: 1 },
+			},
+			[{ name: 'small', cpu: 2 }],
+			'small',
+		);
+
+		await user.click(screen.getByRole('button'));
+		expect(await screen.findByText('small — 1 CPU')).toBeInTheDocument();
+		expect(screen.getByText('small — 2 CPU')).toBeInTheDocument();
+		expect(screen.getByText('profile updated — restart to apply')).toBeInTheDocument();
+	});
+
+	it('uses snapshot-specific pending copy for restored sessions', async () => {
+		const user = userEvent.setup();
+		renderDot(
+			{
+				...makeSession('running'),
+				compute_profile: 'small',
+				compute_resources: { cpu: 1 },
+				compute_from_snapshot: true,
+			},
+			[{ name: 'small', cpu: 2 }],
+			'small',
+		);
+
+		await user.click(screen.getByRole('button'));
+		expect(await screen.findByText('applies after snapshot is dropped')).toBeInTheDocument();
 	});
 
 	it.each(['terminated', 'expired'] as const)(

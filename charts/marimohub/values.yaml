@@ -21,6 +21,7 @@ replicaCount: 2
 # compute backend's existing defaults unchanged.
 compute:
   profiles: ''
+  profileOverride: none
 
 # Singleton session reaper. Exactly one must run; the chart pins it to one
 # replica + Recreate. Don't scale it.

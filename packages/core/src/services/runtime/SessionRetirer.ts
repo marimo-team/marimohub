@@ -97,7 +97,11 @@ export class SessionRetirer {
 				session.user_id,
 				this.deps.persistWorkspace,
 				this.deps.workdir,
-				{ persistEdits: sessionPersistsEdits(session) },
+				{
+					persistEdits: sessionPersistsEdits(session),
+					computeProfile: session.compute_profile,
+					computeResources: session.compute_resources,
+				},
 			);
 		} catch {
 			await sandbox.destroy().catch(() => {});

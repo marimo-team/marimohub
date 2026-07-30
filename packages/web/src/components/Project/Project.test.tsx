@@ -71,6 +71,8 @@ function makeFetch(
 			return jsonOk({ ...notebook(), id: 'nb-copy', title: 'Forecast (copy)' });
 		if (method === 'POST' && url.endsWith(`/projects/${PID}/notebooks/nb-1/sync-token/rotate`))
 			return jsonOk({ sync_token: 'rotated-token' });
+		if (method === 'PATCH' && url.endsWith(`/projects/${PID}/notebooks/nb-1`))
+			return jsonOk({ ...notebook(), compute_profile: body?.compute_profile });
 		if (method === 'PATCH' && url.endsWith(`/projects/${PID}/notebooks/nb-1/source`))
 			return jsonOk({ source: body });
 		if (method === 'DELETE' && url.endsWith(`/projects/${PID}/notebooks/nb-1/sessions/sess-1`))
@@ -238,6 +240,35 @@ describe('Project — Create Notebook', () => {
 		});
 	});
 
+	it('stores the selected compute profile when creating a notebook', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			role: 'editor',
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [
+					{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+					{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+				],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'New Notebook' }));
+		const dialog = screen.getByRole('dialog');
+		await user.type(within(dialog).getByLabelText('Notebook Name'), 'Churn');
+		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+		await waitFor(() => {
+			const post = calls.find(
+				(call) => call.method === 'POST' && call.url.endsWith(`/projects/${PID}/notebooks`),
+			);
+			expect(post?.body).toMatchObject({ compute_profile: 'large' });
+		});
+	});
+
 	it('uploads a .py file, auto-fills the name, and POSTs the file contents', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
@@ -327,6 +358,68 @@ describe('Project — Notebook Actions', () => {
 		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
 		expect(await screen.findByText('Rename')).toBeInTheDocument();
 		expect(screen.queryByText('Change base image')).not.toBeInTheDocument();
+	});
+
+	it('does not clutter the notebook list when there is only one compute profile', async () => {
+		makeFetch({
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 }],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		expect(screen.queryByText('small')).not.toBeInTheDocument();
+	});
+
+	it('lets editors change compute from the notebook overflow menu', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			role: 'editor',
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [
+					{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+					{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+				],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Change compute…');
+		const dialog = await screen.findByRole('dialog');
+		expect(within(dialog).getByRole('radio', { name: /Default \(small\)/ })).toBeChecked();
+		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+		await waitFor(() =>
+			expect(
+				calls.some(
+					(call) =>
+						call.method === 'PATCH' &&
+						call.url.endsWith('/notebooks/nb-1') &&
+						(call.body as { compute_profile?: string })?.compute_profile === 'large',
+				),
+			).toBe(true),
+		);
+	});
+
+	it('hides the change-compute action when overrides are disabled', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [{ name: 'small' }, { name: 'large' }],
+				compute_profile_override: 'none',
+			},
+		});
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		expect(await screen.findByText('Rename')).toBeInTheDocument();
+		expect(screen.queryByText('Change compute…')).not.toBeInTheDocument();
 	});
 
 	it('duplicates a notebook from the overflow menu', async () => {

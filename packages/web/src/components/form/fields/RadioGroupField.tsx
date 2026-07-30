@@ -6,6 +6,7 @@ export interface RadioGroupFieldOption {
 	value: string;
 	label: string;
 	description?: string;
+	isDisabled?: boolean;
 }
 
 export interface RadioGroupFieldProps {
@@ -25,13 +26,14 @@ export function RadioGroupField({ label, options }: RadioGroupFieldProps) {
 			{label && <Label className="text-xs font-medium text-muted-foreground">{label}</Label>}
 			<div className="flex flex-col gap-1">
 				{options.map((option) => (
-					<RadioField key={option.value} value={option.value}>
+					<RadioField key={option.value} value={option.value} isDisabled={option.isDisabled}>
 						<RadioButton
 							className={({ isSelected, isFocusVisible }) =>
 								cn(
 									'flex w-full cursor-pointer items-start gap-2.5 rounded-md border border-input px-3 py-2 text-sm transition-colors',
 									isSelected ? 'border-primary bg-primary/5' : 'hover:bg-muted/50',
 									isFocusVisible && 'ring-2 ring-ring ring-offset-2 ring-offset-background',
+									option.isDisabled && 'cursor-not-allowed opacity-60',
 								)
 							}
 						>

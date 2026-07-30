@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
-import { useStartSession, useStopSession } from '@/api/hooks';
+import { useStartSession, useStartSessionWithDefault, useStopSession } from '@/api/hooks';
 import { isNotFoundError } from '@/api/request';
 import { useGeneration } from '@/hooks/useGeneration';
 import { useInterval } from '@/hooks/useInterval';
@@ -53,6 +53,7 @@ export interface NotebookSession {
 	ended: SessionEnded | null;
 	/** (Re)start the session — fired once on mount and again by the retry button. */
 	start: () => void;
+	startWithDefault: () => void;
 	/** Stop the current session (saves files, tears down the sandbox). */
 	stop: () => void;
 	/** Stop (if live) then start fresh — the staleness banner's "Restart app". */
@@ -82,6 +83,7 @@ export function useNotebookSession(
 	{ enabled = true, mode = 'edit' }: { enabled?: boolean; mode?: 'edit' | 'app' } = {},
 ): NotebookSession {
 	const startSession = useStartSession(projectId, notebookId, mode);
+	const startDefaultSession = useStartSessionWithDefault(projectId, notebookId, mode);
 	const stopSession = useStopSession(projectId, notebookId);
 
 	const [session, setSession] = useState<Session | null>(null);
@@ -115,25 +117,34 @@ export function useNotebookSession(
 		else setError({ message: 'You no longer have access to this session.', code: 'FORBIDDEN' });
 	}, [mode, commitSession]);
 
+	const startWithMutation = useCallback(
+		(mutation: typeof startSession) => {
+			const gen = generation.bump();
+			setError(null);
+			setEnded(null);
+			mutation.mutate(undefined, {
+				onSuccess: (data) => {
+					if (!generation.isCurrent(gen)) return;
+					if (data.status === 'running' && !data.sandbox_url) {
+						concludeAccessLost();
+						return;
+					}
+					commitSession(data);
+				},
+				onError: (err) => {
+					if (!generation.isCurrent(gen)) return;
+					setError(toSessionError(err));
+				},
+			});
+		},
+		[concludeAccessLost, commitSession, generation],
+	);
 	const start = useCallback(() => {
-		const gen = generation.bump();
-		setError(null);
-		setEnded(null);
-		startSession.mutate(undefined, {
-			onSuccess: (data) => {
-				if (!generation.isCurrent(gen)) return;
-				if (data.status === 'running' && !data.sandbox_url) {
-					concludeAccessLost();
-					return;
-				}
-				commitSession(data);
-			},
-			onError: (err) => {
-				if (!generation.isCurrent(gen)) return;
-				setError(toSessionError(err));
-			},
-		});
-	}, [startSession, concludeAccessLost, commitSession, generation]);
+		startWithMutation(startSession);
+	}, [startWithMutation, startSession]);
+	const startWithDefault = useCallback(() => {
+		startWithMutation(startDefaultSession);
+	}, [startWithMutation, startDefaultSession]);
 
 	const stop = useCallback(() => {
 		const s = sessionRef.current;
@@ -344,6 +355,7 @@ export function useNotebookSession(
 		sandboxUrl: isRunning ? session?.sandbox_url : undefined,
 		ended,
 		start,
+		startWithDefault,
 		stop,
 		restart,
 	};

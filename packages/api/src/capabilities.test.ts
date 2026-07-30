@@ -108,6 +108,31 @@ describe('GET /api/v1/capabilities', () => {
 		).toMatchObject({ sandbox_images: ['img-a', 'img-b'] });
 	});
 
+	it('reports compute profiles and the editor override policy', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
+		deps.sandbox.computeProfiles = [
+			{ name: 'small', resources: { cpu: 1, memoryBytes: 2 * 1024 ** 3 } },
+			{ name: 'large', resources: { cpu: 8 } },
+		];
+		deps.sandbox.computeProfileOverride = 'editors';
+
+		expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
+			compute_profiles: [
+				{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+				{ name: 'large', cpu: 8 },
+			],
+			compute_profile_override: 'editors',
+		});
+	});
+
+	it('defaults compute profile capabilities to no profiles and no overrides', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
+		expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
+			compute_profiles: [],
+			compute_profile_override: 'none',
+		});
+	});
+
 	it('requires authentication (not a public endpoint)', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { wif: stubWif });
 		const res = await createApi(deps).request('/api/v1/capabilities');

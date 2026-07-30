@@ -185,7 +185,7 @@ describe('Session routes', () => {
 		});
 	});
 
-	it('passes default profile resources and records the profile name internally', async () => {
+	it('passes default profile resources and returns the recorded profile name', async () => {
 		const compute = makeFakeCompute();
 		const request = createTestApi({
 			bucket,
@@ -208,9 +208,242 @@ describe('Session routes', () => {
 			cpu: 0.5,
 			memoryBytes: 512 * 1024 ** 2,
 		});
-		expect(data.compute_profile).toBeUndefined();
+		expect(data.compute_profile).toBe('small');
+		expect(data.compute_resources).toEqual({
+			cpu: 0.5,
+			memory_bytes: 512 * 1024 ** 2,
+		});
+		expect(data.compute_from_snapshot).toBeUndefined();
 		const stored = await createServices(bucket).sessions.getSession(pid, data.session_id);
 		expect(stored.compute_profile).toBe('small');
+		expect(stored.compute_resources).toEqual({
+			cpu: 0.5,
+			memory_bytes: 512 * 1024 ** 2,
+		});
+	});
+
+	it('provisions an editor session with the notebook compute profile override', async () => {
+		await createServices(bucket).notebooks.updateNotebook(
+			pid,
+			nid,
+			{ compute_profile: 'large' },
+			ACTOR,
+		);
+		const compute = makeFakeCompute();
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: {
+				sandbox: {
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'source',
+					computeProfiles: [
+						{ name: 'small', resources: { cpu: 1 } },
+						{ name: 'large', resources: { cpu: 8, memoryBytes: 16 * 1024 ** 3 } },
+					],
+					computeProfileOverride: 'editors',
+				},
+			},
+		}).request;
+
+		const data = await expectOk<any>(await request('POST', sessionsPath()));
+		expect(data.compute_profile).toBe('large');
+		expect(compute.lastCreateOptions?.resources).toEqual({
+			cpu: 8,
+			memoryBytes: 16 * 1024 ** 3,
+		});
+	});
+
+	it('retries once with Default without changing the notebook profile', async () => {
+		const services = createServices(bucket);
+		await services.notebooks.updateNotebook(pid, nid, { compute_profile: 'large' }, ACTOR);
+		const compute = makeFakeCompute();
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: {
+				sandbox: {
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'source',
+					computeProfiles: [
+						{ name: 'small', resources: { cpu: 1 } },
+						{ name: 'large', resources: { cpu: 8 } },
+					],
+					computeProfileOverride: 'editors',
+				},
+			},
+		}).request;
+
+		const data = await expectOk<any>(
+			await request('POST', sessionsPath(), { compute_profile: 'default' }),
+		);
+		expect(data.compute_profile).toBe('small');
+		expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 1 });
+		expect((await services.notebooks.getNotebook(pid, nid)).meta.compute_profile).toBe('large');
+	});
+
+	it('reports the compute provenance restored from a filesystem snapshot', async () => {
+		const services = createServices(bucket);
+		await services.notebooks.updateNotebook(pid, nid, { compute_profile: 'large' }, ACTOR);
+		await services.notebooks.setFsSnapshot(pid, nid, {
+			snapshot_id: 'snap-old',
+			captured_at: '2026-07-01T00:00:00.000Z',
+			compute_profile: 'small',
+			compute_resources: { cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+		});
+		const { instance } = makeFakeSandbox();
+		const restored: string[] = [];
+		const compute = {
+			...fakeComputeFrom(instance),
+			filesystemSnapshotsEnabled: true,
+			createFromSnapshot(_id: string, snapshotId: string) {
+				restored.push(snapshotId);
+				return instance;
+			},
+			async captureSnapshot() {
+				return { snapshotId: 'unused' };
+			},
+			async deleteSnapshot() {},
+		};
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: {
+				sandbox: {
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'source',
+					computeProfiles: [
+						{ name: 'small', resources: { cpu: 2, memoryBytes: 4 * 1024 ** 3 } },
+						{ name: 'large', resources: { cpu: 8 } },
+					],
+					computeProfileOverride: 'editors',
+				},
+			},
+		}).request;
+
+		const data = await expectOk<any>(await request('POST', sessionsPath()));
+		expect(restored).toEqual(['snap-old']);
+		expect(data.compute_profile).toBe('small');
+		expect(data.compute_resources).toEqual({
+			cpu: 1,
+			memory_bytes: 2 * 1024 ** 3,
+		});
+		expect(data.compute_from_snapshot).toBe(true);
+	});
+
+	it('falls back when a stored compute profile is no longer configured', async () => {
+		await createServices(bucket).notebooks.updateNotebook(
+			pid,
+			nid,
+			{ compute_profile: 'removed' },
+			ACTOR,
+		);
+		const compute = makeFakeCompute();
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			const request = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute,
+				deps: {
+					sandbox: {
+						bucket: { name: 'test', endpoint: '' },
+						hostname: 'localhost',
+						workdir: '/workspace',
+						persistWorkspace: 'source',
+						computeProfiles: [{ name: 'small', resources: { cpu: 1 } }],
+						computeProfileOverride: 'editors',
+					},
+				},
+			}).request;
+
+			const data = await expectOk<any>(await request('POST', sessionsPath()));
+			expect(data.compute_profile).toBe('small');
+			expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 1 });
+			expect(warn.mock.calls.some((call) => String(call[0]).includes('removed'))).toBe(true);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('forces a viewer ephemeral edit session onto the default compute profile', async () => {
+		await createServices(bucket).notebooks.updateNotebook(
+			pid,
+			nid,
+			{ compute_profile: 'large' },
+			ACTOR,
+		);
+		const compute = makeFakeCompute();
+		const request = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute,
+			deps: {
+				sandbox: {
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'source',
+					computeProfiles: [
+						{ name: 'small', resources: { cpu: 1 } },
+						{ name: 'large', resources: { cpu: 8 } },
+					],
+					computeProfileOverride: 'editors',
+				},
+				policy: { defaultRole: 'viewer', viewerMode: 'ephemeral-sandbox' },
+			},
+		}).request;
+
+		const data = await expectOk<any>(await request('POST', sessionsPath()));
+		expect(data.compute_profile).toBe('small');
+		expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 1 });
+	});
+
+	it('provisions a viewer-started shared app with the notebook compute profile', async () => {
+		await createServices(bucket).notebooks.updateNotebook(
+			pid,
+			nid,
+			{ compute_profile: 'large' },
+			ACTOR,
+		);
+		const compute = makeFakeCompute();
+		const request = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute,
+			deps: {
+				sandbox: {
+					bucket: { name: 'test', endpoint: '' },
+					hostname: 'localhost',
+					workdir: '/workspace',
+					persistWorkspace: 'source',
+					computeProfiles: [
+						{ name: 'small', resources: { cpu: 1 } },
+						{ name: 'large', resources: { cpu: 8, memoryBytes: 16 * 1024 ** 3 } },
+					],
+					computeProfileOverride: 'editors',
+				},
+				policy: { defaultRole: 'viewer', viewerMode: 'applications' },
+			},
+		}).request;
+
+		// The shared app is the notebook's app: it must run the author's profile even
+		// though a viewer started it (unlike a viewer's own ephemeral edit kernel).
+		const data = await expectOk<any>(await request('POST', sessionsPath(), { mode: 'app' }));
+		expect(data.compute_profile).toBe('large');
+		expect(compute.lastCreateOptions?.resources).toEqual({
+			cpu: 8,
+			memoryBytes: 16 * 1024 ** 3,
+		});
 	});
 
 	it('POST /sessions stamps expires_at from the session lifetime when configured', async () => {

@@ -13,6 +13,7 @@ ingress:
 
 compute:
   profiles: small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi
+  profileOverride: editors
 
 config:
   MARIMOHUB_STORAGE_BACKEND: s3

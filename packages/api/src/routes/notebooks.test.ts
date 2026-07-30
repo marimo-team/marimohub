@@ -167,6 +167,114 @@ describe('Notebook routes', () => {
 		});
 	});
 
+	describe('compute profile selection', () => {
+		const profiles = [
+			{ name: 'small', resources: { cpu: 1 } },
+			{ name: 'large', resources: { cpu: 4 } },
+		];
+
+		function profileApi(override: 'none' | 'editors' = 'editors') {
+			return createTestApi({
+				bucket,
+				deps: {
+					sandbox: {
+						bucket: { name: 'test', endpoint: '' },
+						hostname: 'localhost',
+						workdir: '/workspace',
+						persistWorkspace: 'source',
+						computeProfiles: profiles,
+						computeProfileOverride: override,
+					},
+				},
+			}).request;
+		}
+
+		it('persists non-default choices and exposes them in notebook lists', async () => {
+			const req = profileApi();
+			const chosen = await expectOk<any>(
+				await req('POST', nb(''), {
+					title: 'Large',
+					description: 'D',
+					code: 'x = 1',
+					compute_profile: 'large',
+				}),
+				201,
+			);
+			expect(chosen.compute_profile).toBe('large');
+
+			const listed = await expectPage<any>(await req('GET', nb('')));
+			expect(listed.find((item) => item.id === chosen.id)?.compute_profile).toBe('large');
+		});
+
+		it('normalizes the default profile and supports set and clear', async () => {
+			const req = profileApi();
+			const created = await expectOk<any>(
+				await req('POST', nb(''), {
+					title: 'Default',
+					description: 'D',
+					code: 'x = 1',
+					compute_profile: 'small',
+				}),
+				201,
+			);
+			expect(created.compute_profile).toBeUndefined();
+
+			const path = nb(`/${created.id}`);
+			const set = await expectOk<any>(await req('PATCH', path, { compute_profile: 'large' }));
+			expect(set.compute_profile).toBe('large');
+			const cleared = await expectOk<any>(await req('PATCH', path, { compute_profile: 'default' }));
+			expect(cleared.compute_profile).toBeUndefined();
+		});
+
+		it('rejects unknown profiles and disabled overrides', async () => {
+			const body = {
+				title: 'NB',
+				description: 'D',
+				code: 'x = 1',
+				compute_profile: 'large',
+			};
+			await expectError(await profileApi()('POST', nb(''), { ...body, compute_profile: 'x' }), 400);
+			await expectError(await profileApi('none')('POST', nb(''), body), 400);
+			await expectError(
+				await profileApi('none')('POST', nb(''), {
+					...body,
+					compute_profile: 'default',
+				}),
+				400,
+			);
+		});
+
+		it('treats a non-default profile named "default" as selectable, not the clear sentinel', async () => {
+			const req = createTestApi({
+				bucket,
+				deps: {
+					sandbox: {
+						bucket: { name: 'test', endpoint: '' },
+						hostname: 'localhost',
+						workdir: '/workspace',
+						persistWorkspace: 'source',
+						computeProfiles: [
+							{ name: 'small', resources: { cpu: 1 } },
+							{ name: 'default', resources: { cpu: 4 } },
+						],
+						computeProfileOverride: 'editors',
+					},
+				},
+			}).request;
+
+			const created = await expectOk<any>(
+				await req('POST', nb(''), {
+					title: 'NB',
+					description: 'D',
+					code: 'x = 1',
+					compute_profile: 'default',
+				}),
+				201,
+			);
+			expect(created.compute_profile).toBe('default');
+		});
+	});
+
 	it('POST /git creates a git-synced draft notebook with sync credentials', async () => {
 		const data = await expectOk<any>(
 			await request('POST', nb('/git'), {
