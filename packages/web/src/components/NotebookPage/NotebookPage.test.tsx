@@ -45,6 +45,9 @@ interface FetchOptions {
 	headVersion?: string;
 	/** When set, POST .../sessions fails with this error code at this status. */
 	createError?: { code: string; message: string; status: number };
+	computeProfiles?: { name: string; cpu?: number; memory_bytes?: number }[];
+	computeProfile?: string;
+	computeProfileOverride?: 'none' | 'editors';
 }
 
 /** Route every request the page makes to a canned response; return the fetch spy. */
@@ -85,7 +88,12 @@ function makeFetch(opts: FetchOptions) {
 		}
 		if (url.endsWith(`/notebooks/${NID}`)) {
 			return ok({
-				meta: { id: NID, title: 'Forecast', author: 'me' },
+				meta: {
+					id: NID,
+					title: 'Forecast',
+					author: 'me',
+					...(opts.computeProfile ? { compute_profile: opts.computeProfile } : {}),
+				},
 				source: { type: 'local', current_version_id: opts.headVersion ?? 'ver-head' },
 			});
 		}
@@ -101,6 +109,8 @@ function makeFetch(opts: FetchOptions) {
 							? ['app']
 							: [],
 				limits: {},
+				compute_profiles: opts.computeProfiles ?? [],
+				compute_profile_override: opts.computeProfileOverride ?? 'none',
 			});
 		}
 		if (url.includes('/users')) return ok({});
@@ -189,6 +199,22 @@ describe('NotebookPage viewer modes', () => {
 				container.querySelector('iframe[src="https://sandbox.example/kernel?theme=dark"]'),
 			).not.toBeNull(),
 		);
+	});
+
+	it('shows the selected compute profile in the header', async () => {
+		makeFetch({
+			role: 'editor',
+			session: runningSession({ compute_profile: 'large' }),
+			computeProfile: 'large',
+			computeProfileOverride: 'editors',
+			computeProfiles: [
+				{ name: 'small', cpu: 1 },
+				{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+			],
+		});
+		renderPage();
+
+		expect(await screen.findByText('large — 8 CPU · 32 Gi')).toBeInTheDocument();
 	});
 
 	it('viewer + static: renders the snapshot sandboxed, never starts a session', async () => {
@@ -382,14 +408,72 @@ describe('NotebookPage app variant', () => {
 	it('a viewer’s 403 renders the error panel without a Retry button', async () => {
 		const impl = makeFetch({
 			role: 'viewer',
+			computeProfile: 'large',
+			computeProfileOverride: 'editors',
+			computeProfiles: [
+				{ name: 'small', cpu: 1 },
+				{ name: 'large', cpu: 8 },
+			],
 			createError: { code: 'FORBIDDEN', message: "Requires 'editor' role", status: 403 },
 		});
 		renderPage('app');
 
 		await waitFor(() => expect(screen.getByText(/Requires 'editor' role/)).toBeInTheDocument());
 		expect(screen.queryByText('Retry')).toBeNull();
+		expect(screen.queryByText('Retry with Default')).toBeNull();
 		expect(screen.getByText('Back')).toBeInTheDocument();
 		// The doomed request fired once — no loop.
 		expect(sessionPosts(impl)).toHaveLength(1);
+	});
+
+	it('does not offer a Default bypass for a failed shared app', async () => {
+		makeFetch({
+			role: 'viewer',
+			viewerMode: 'applications',
+			computeProfile: 'large',
+			computeProfileOverride: 'editors',
+			computeProfiles: [
+				{ name: 'small', cpu: 1 },
+				{ name: 'large', cpu: 8 },
+			],
+			createError: {
+				code: 'RESOURCE_EXHAUSTED',
+				message: 'No nodes can schedule this profile',
+				status: 429,
+			},
+		});
+		renderPage('app');
+
+		expect(await screen.findByText('No nodes can schedule this profile')).toBeInTheDocument();
+		expect(screen.queryByText('Retry with Default')).toBeNull();
+		expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+	});
+
+	it('offers a one-shot Retry with Default without replacing the stored profile', async () => {
+		const user = userEvent.setup();
+		const impl = makeFetch({
+			role: 'editor',
+			computeProfile: 'large',
+			computeProfileOverride: 'editors',
+			computeProfiles: [
+				{ name: 'small', cpu: 1 },
+				{ name: 'large', cpu: 8 },
+			],
+			createError: {
+				code: 'RESOURCE_EXHAUSTED',
+				message: 'No nodes can schedule this profile',
+				status: 429,
+			},
+		});
+		renderPage();
+
+		expect(await screen.findByText('No nodes can schedule this profile')).toBeInTheDocument();
+		expect(screen.queryByText(/a larger profile may be needed/)).not.toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Retry with Default' }));
+
+		await waitFor(() => expect(sessionPosts(impl)).toHaveLength(2));
+		const retryBody = sessionPosts(impl)[1][1]?.body;
+		expect(JSON.parse(String(retryBody))).toEqual({ compute_profile: 'default' });
+		expect(screen.queryByRole('button', { name: 'Retry with Default' })).toBeNull();
 	});
 });

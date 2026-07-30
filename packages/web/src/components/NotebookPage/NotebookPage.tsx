@@ -24,6 +24,8 @@ import type { SessionEnded } from '@/hooks/useNotebookSession';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
+import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
+import { ComputeProfileIndicator } from '@/components/Notebook/ComputeProfileIndicator';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
 import { isAppStale } from '@/components/Project/AppSessionIndicator';
 import { appConnectionHint, sessionsByNotebook } from '@/lib/sessions';
@@ -98,11 +100,22 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const staticView = !isApp && isViewer && viewerGrants !== undefined && !viewerHasEditKernel;
 	const resolvingMode = !isApp && isViewer && viewerGrants === undefined;
 
-	const { session, error, isProvisioning, isRunning, sandboxUrl, ended, start, stop, restart } =
-		useNotebookSession(pid!, nid!, {
-			enabled: isApp || !isViewer || viewerHasEditKernel,
-			mode: isApp ? 'app' : 'edit',
-		});
+	const {
+		session,
+		error,
+		isProvisioning,
+		isRunning,
+		sandboxUrl,
+		ended,
+		start,
+		startWithDefault,
+		defaultRetryAttempted,
+		stop,
+		restart,
+	} = useNotebookSession(pid!, nid!, {
+		enabled: isApp || !isViewer || viewerHasEditKernel,
+		mode: isApp ? 'app' : 'edit',
+	});
 
 	// Freeze the theme when the URL is first established, not on every toggle:
 	// marimo reads `?theme=` only on load, so re-deriving it live would reload
@@ -144,6 +157,26 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	// fail again, so the button is dropped (no retry loop, manual or otherwise).
 	const showRetry = error?.code !== 'FORBIDDEN';
 	const terminal = isApp && ended && !isProvisioning ? endedPanel(ended) : null;
+	const computeProfiles = capabilities?.compute_profiles ?? [];
+	const computeOverrideApplies =
+		capabilities?.compute_profile_override === 'editors' && (!isViewer || isApp);
+	const selectedComputeProfile = effectiveComputeProfile(
+		computeProfiles,
+		notebook?.meta.compute_profile,
+		computeOverrideApplies,
+	);
+	const canRetryWithDefault =
+		!isApp &&
+		!!selectedComputeProfile &&
+		selectedComputeProfile.name !== computeProfiles[0]?.name &&
+		!session &&
+		showRetry &&
+		!defaultRetryAttempted;
+	const showProfileSizeHint =
+		!!selectedComputeProfile &&
+		computeProfiles.length > 0 &&
+		error?.kind === 'startup' &&
+		error.generic === true;
 
 	const backToProject = () => {
 		void navigate(`/projects/${pid}`);
@@ -197,12 +230,30 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					</span>
 				)}
 				<div className="ml-auto flex items-center gap-2">
+					{!staticView && (
+						<ComputeProfileIndicator
+							profiles={computeProfiles}
+							storedName={notebook?.meta.compute_profile}
+							allowOverride={computeOverrideApplies}
+							hint={
+								isViewer && !isApp
+									? 'Shared views run on default compute'
+									: !computeOverrideApplies && computeProfiles.length > 1
+										? 'Managed by your operator'
+										: undefined
+							}
+						/>
+					)}
 					{error ? (
 						<Tooltip content="Error">
 							<StatusDot className="bg-destructive" />
 						</Tooltip>
 					) : session ? (
-						<SessionStatusDot session={session} />
+						<SessionStatusDot
+							session={session}
+							profiles={computeProfiles}
+							selectedProfileName={selectedComputeProfile?.name}
+						/>
 					) : (
 						isProvisioning && (
 							<Tooltip content="Starting">
@@ -323,9 +374,20 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 			{error && !ended && (
 				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
 					<p className="max-w-md text-sm text-destructive">{error.message}</p>
+					{showProfileSizeHint && (
+						<p className="max-w-md text-xs text-muted-foreground">
+							This notebook uses profile {selectedComputeProfile.name} — a larger profile may be
+							needed.
+						</p>
+					)}
 					<div className="flex gap-2">
+						{canRetryWithDefault && (
+							<Button variant="primary" onPress={startWithDefault}>
+								Retry with Default
+							</Button>
+						)}
 						{showRetry && (
-							<Button variant="primary" onPress={start}>
+							<Button variant={canRetryWithDefault ? 'default' : 'primary'} onPress={start}>
 								Retry
 							</Button>
 						)}

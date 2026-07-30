@@ -103,7 +103,7 @@ describe('filesystemSnapshots', () => {
 	});
 
 	describe('resolveRestoreSnapshot', () => {
-		it('returns the stored pointer id for a capable provider', async () => {
+		it('returns the stored snapshot metadata for a capable provider', async () => {
 			const env = await setupTestEnv();
 			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
 			const nb = await env.notebooks.createNotebook(
@@ -117,9 +117,10 @@ describe('filesystemSnapshots', () => {
 			});
 
 			const provider = snapshotProvider(makeFakeSandbox().instance);
-			expect(await resolveRestoreSnapshot(provider, env.notebooks, project.id, nb.id)).toBe(
-				'snap_1',
-			);
+			expect(await resolveRestoreSnapshot(provider, env.notebooks, project.id, nb.id)).toEqual({
+				snapshot_id: 'snap_1',
+				captured_at: '2020-01-01T00:00:00.000Z',
+			});
 		});
 
 		it('returns undefined when capable but no pointer exists', async () => {
@@ -170,6 +171,29 @@ describe('filesystemSnapshots', () => {
 
 			expect((await env.notebooks.getFsSnapshot(project.id, nb.id))?.snapshot_id).toBe('snap_new');
 			expect(provider.deleted).toEqual(['snap_old']);
+		});
+
+		it('persists the compute profile and resolved resources used by the snapshot', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const nb = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: 'd', code: 'c' },
+				ACTOR,
+			);
+			const { instance } = makeFakeSandbox();
+			const provider = snapshotProvider(instance, { captureId: 'snap_new' });
+
+			await captureFilesystemSnapshot(provider, env.notebooks, instance, project.id, nb.id, {
+				compute_profile: 'large',
+				compute_resources: { cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+			});
+
+			expect(await env.notebooks.getFsSnapshot(project.id, nb.id)).toMatchObject({
+				snapshot_id: 'snap_new',
+				compute_profile: 'large',
+				compute_resources: { cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+			});
 		});
 
 		it('is a no-op for a provider without the capability', async () => {

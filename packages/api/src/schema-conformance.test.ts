@@ -130,7 +130,6 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'runtime',
 			'sandbox_id',
 			'sandbox_origin_url',
-			'compute_profile',
 			'used_fallback',
 			'expires_at',
 			'last_snapshot_at',

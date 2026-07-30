@@ -8,6 +8,7 @@ import {
 	jsonContent,
 	MeResponseSchema,
 	ok,
+	toComputeResourcesResponse,
 } from '../shared';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../pagination';
 
@@ -98,6 +99,11 @@ app.openapi(capabilitiesRoute, (c) => {
 			max_page_size: MAX_PAGE_SIZE,
 		},
 		sandbox_images: deps.sandbox.images ?? [],
+		compute_profiles: (deps.sandbox.computeProfiles ?? []).map((profile) => ({
+			name: profile.name,
+			...toComputeResourcesResponse(profile.resources),
+		})),
+		compute_profile_override: deps.sandbox.computeProfileOverride ?? 'none',
 	});
 });
 

@@ -32,6 +32,8 @@ export interface CreateSessionInput {
 	sandbox_id?: SandboxId;
 	sandbox_url?: string;
 	compute_profile?: string;
+	compute_resources?: Session['compute_resources'];
+	compute_from_snapshot?: boolean;
 	/** Viewer session whose edits are discarded at teardown (see SessionSchema). */
 	ephemeral?: boolean;
 	/** `edit` (default) or `app` (the shared singleton; see SessionSchema). */
@@ -108,6 +110,8 @@ export class SessionService {
 			sandbox_id: input.sandbox_id,
 			sandbox_url: input.sandbox_url,
 			compute_profile: input.compute_profile,
+			compute_resources: input.compute_resources,
+			...(input.compute_from_snapshot ? { compute_from_snapshot: true } : {}),
 		};
 
 		await this.bucket.put(paths.session(input.project_id, sessionId), JSON.stringify(session));

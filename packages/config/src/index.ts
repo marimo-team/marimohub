@@ -27,8 +27,10 @@ import { makeAi } from './ai';
 import { makeAuth } from './auth';
 import { makeCompute, resolveSandboxImages } from './compute';
 import {
+	parseComputeProfileOverride,
 	parseComputeProfiles,
 	resolveResources,
+	supportsComputeProfiles,
 	unsupportedBackendNotice,
 } from './computeProfiles';
 import { makeSecrets } from './secrets';
@@ -45,11 +47,18 @@ export type { ConfigErrorOptions } from './errors';
 export {
 	ComputeProfileConfigError,
 	hasConfiguredResources,
+	parseComputeProfileOverride,
 	parseComputeProfiles,
 	resolveResources,
+	supportsComputeProfiles,
 	unsupportedBackendNotice,
 } from './computeProfiles';
-export type { ComputeProfile, ComputeProfilesConfig, ComputeResources } from './computeProfiles';
+export type {
+	ComputeProfile,
+	ComputeProfileOverride,
+	ComputeProfilesConfig,
+	ComputeResources,
+} from './computeProfiles';
 
 const warnedUnsupportedProfileBackends = new Set<string>();
 
@@ -275,14 +284,18 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 	const sessionLifetime = parseSessionLifetime(env);
 	const sandboxImages = resolveSandboxImages(env);
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
-	const computeResources = resolveResources(computeProfiles);
 	const computeBackend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset';
-	const profileNotice = unsupportedBackendNotice(computeBackend, computeProfiles);
-	if (
-		profileNotice &&
-		['e2b', 'cloudflare', 'local', 'none', 'noop'].includes(computeBackend) &&
-		!warnedUnsupportedProfileBackends.has(computeBackend)
-	) {
+	const profilesSupported = supportsComputeProfiles(computeBackend);
+	const computeResources = profilesSupported ? resolveResources(computeProfiles) : {};
+	const computeProfileOverride = parseComputeProfileOverride(
+		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
+	);
+	const profileNotice = unsupportedBackendNotice(
+		computeBackend,
+		computeProfiles,
+		computeProfileOverride,
+	);
+	if (profileNotice && !warnedUnsupportedProfileBackends.has(computeBackend)) {
 		console.warn(profileNotice);
 		warnedUnsupportedProfileBackends.add(computeBackend);
 	}
@@ -311,7 +324,9 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 			sessionLifetime,
 			images: sandboxImages,
 			resources: computeResources,
-			computeProfile: computeProfiles.defaultProfile?.name,
+			computeProfile: profilesSupported ? computeProfiles.defaultProfile?.name : undefined,
+			computeProfiles: profilesSupported ? [...computeProfiles.profiles] : [],
+			computeProfileOverride: profilesSupported ? computeProfileOverride : 'none',
 		},
 		policy: {
 			defaultRole: parseDefaultRole(env),

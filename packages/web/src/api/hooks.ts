@@ -372,7 +372,13 @@ export function useNotebookQuery(
 
 export function useCreateNotebook(projectId: string) {
 	return useApiMutation(
-		(body: { title: string; description: string; code: string; base_image?: string }) =>
+		(body: {
+			title: string;
+			description: string;
+			code: string;
+			base_image?: string;
+			compute_profile?: string;
+		}) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks', {
 					params: { path: { pid: projectId } },
@@ -458,7 +464,15 @@ export function useUpdateGitSource(projectId: string) {
 
 export function useUpdateNotebook(projectId: string) {
 	return useApiMutation(
-		({ notebookId, ...body }: { notebookId: string; title?: string; base_image?: string | null }) =>
+		({
+			notebookId,
+			...body
+		}: {
+			notebookId: string;
+			title?: string;
+			base_image?: string | null;
+			compute_profile?: string | null;
+		}) =>
 			apiData(
 				apiClient.PATCH('/api/v1/projects/{pid}/notebooks/{nid}', {
 					params: { path: { pid: projectId, nid: notebookId } },
@@ -641,13 +655,22 @@ const SESSION_LIFECYCLE_TIMEOUT_MS = 150_000; // 2.5 minutes
  * the pre-`mode` client) and `{ mode: "app" }` for the shared app singleton —
  * the server attaches ANY editor to the notebook's running app.
  */
-function startSessionRequest(projectId: string, notebookId: string, mode: 'edit' | 'app') {
+function startSessionRequest(
+	projectId: string,
+	notebookId: string,
+	mode: 'edit' | 'app',
+	computeProfile?: 'default',
+) {
 	const params = { path: { pid: projectId, nid: notebookId } };
+	const body = {
+		...(mode === 'app' ? { mode } : {}),
+		...(computeProfile ? { compute_profile: computeProfile } : {}),
+	};
 	return apiData(
-		mode === 'app'
+		Object.keys(body).length > 0
 			? apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
 					params,
-					body: { mode },
+					body,
 					timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
 				})
 			: apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions', {
@@ -668,34 +691,59 @@ function stopSessionRequest(projectId: string, notebookId: string, sessionId: st
 	);
 }
 
+function useStartSessionRequest(
+	projectId: string,
+	notebookId: string,
+	mode: 'edit' | 'app',
+	computeProfile?: 'default',
+) {
+	return useMutation({
+		mutationFn: () => startSessionRequest(projectId, notebookId, mode, computeProfile),
+	});
+}
+
 export function useStartSession(
 	projectId: string,
 	notebookId: string,
 	mode: 'edit' | 'app' = 'edit',
 ) {
-	return useMutation({
-		mutationFn: () => startSessionRequest(projectId, notebookId, mode),
-	});
+	return useStartSessionRequest(projectId, notebookId, mode);
 }
 
-/**
- * Restart the shared app: stop the given session, then start a fresh one (which
- * picks up the notebook's current head — the staleness banner's action). The
- * stop is awaited so the fresh create can't reuse the dying sandbox.
- */
+export function useStartSessionWithDefault(
+	projectId: string,
+	notebookId: string,
+	mode: 'edit' | 'app' = 'edit',
+) {
+	return useStartSessionRequest(projectId, notebookId, mode, 'default');
+}
+
+async function restartSessionRequest(
+	projectId: string,
+	notebookId: string,
+	sessionId: string,
+	mode: 'edit' | 'app',
+) {
+	try {
+		await stopSessionRequest(projectId, notebookId, sessionId);
+	} catch (err) {
+		// A reaped session is already stopped, so the requested restart can continue.
+		if (!isNotFoundError(err)) throw err;
+	}
+	return startSessionRequest(projectId, notebookId, mode);
+}
+
 export function useRestartApp(projectId: string, notebookId: string) {
 	return useApiMutation(
-		async (sessionId: string) => {
-			try {
-				await stopSessionRequest(projectId, notebookId, sessionId);
-			} catch (err) {
-				// Already gone (stopped/reaped underneath us): the restart intent
-				// still holds, so proceed to the fresh start.
-				if (!isNotFoundError(err)) throw err;
-			}
-			return startSessionRequest(projectId, notebookId, 'app');
-		},
-		// Refresh the status indicators right away rather than waiting for the poll.
+		(sessionId: string) => restartSessionRequest(projectId, notebookId, sessionId, 'app'),
+		() => [sessionKeys.listByProject(projectId)],
+	);
+}
+
+export function useRestartSession(projectId: string) {
+	return useApiMutation(
+		({ notebookId, sessionId }: { notebookId: string; sessionId: string }) =>
+			restartSessionRequest(projectId, notebookId, sessionId, 'edit'),
 		() => [sessionKeys.listByProject(projectId)],
 	);
 }

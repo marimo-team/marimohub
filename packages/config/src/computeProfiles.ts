@@ -1,5 +1,6 @@
 import type { ComputeResources } from '@marimo-hub/core';
 import { ConfigError } from './errors';
+import { CONFIG_SPEC } from './spec';
 
 export type { ComputeResources } from '@marimo-hub/core';
 
@@ -12,6 +13,8 @@ export interface ComputeProfilesConfig {
 	readonly profiles: readonly ComputeProfile[];
 	readonly defaultProfile: ComputeProfile | undefined;
 }
+
+export type ComputeProfileOverride = 'none' | 'editors';
 
 export class ComputeProfileConfigError extends ConfigError {
 	constructor(
@@ -43,6 +46,15 @@ const MAX_CPU_CORES = 4096;
 const MAX_MEMORY_BYTES = 64 * 1024 ** 4;
 const MIN_CPU_CORES = 0.001;
 const MIN_MEMORY_BYTES = 1024 ** 2;
+const COMPUTE_BACKENDS =
+	CONFIG_SPEC.find((group) => group.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? [];
+
+export function supportsComputeProfiles(backend: string): boolean {
+	return (
+		COMPUTE_BACKENDS.find((candidate) => candidate.selectorValue === backend)
+			?.supportsComputeProfiles === true
+	);
+}
 
 function parseCpu(value: string, profile: string): number {
 	if (!/^\d+(?:\.\d+)?$/.test(value)) {
@@ -191,6 +203,19 @@ export function resolveResources(config: ComputeProfilesConfig): ComputeResource
 	return config.defaultProfile?.resources ?? {};
 }
 
+export function parseComputeProfileOverride(raw: string | undefined): ComputeProfileOverride {
+	if (raw === undefined || raw.trim() === '' || raw === 'none') return 'none';
+	if (raw === 'editors') return 'editors';
+	throw new ConfigError(
+		`Invalid MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: ${raw} (expected none or editors)`,
+		{
+			variable: 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE',
+			remediation: 'Use none or editors.',
+			docs: 'docs/configuration.md#compute',
+		},
+	);
+}
+
 export function hasConfiguredResources(config: ComputeProfilesConfig): boolean {
 	return config.profiles.some(
 		(profile) => profile.resources.cpu !== undefined || profile.resources.memoryBytes !== undefined,
@@ -200,14 +225,31 @@ export function hasConfiguredResources(config: ComputeProfilesConfig): boolean {
 export function unsupportedBackendNotice(
 	backend: string,
 	config: ComputeProfilesConfig,
+	override: ComputeProfileOverride = 'none',
 ): string | undefined {
-	if (!hasConfiguredResources(config)) return undefined;
+	const profilesConfigured = hasConfiguredResources(config);
+	const overrideConfigured = override !== 'none';
+	if (supportsComputeProfiles(backend) || (!profilesConfigured && !overrideConfigured)) {
+		return undefined;
+	}
 	const backendConfigHint =
 		backend === 'e2b' || backend === 'cloudflare'
 			? ' Backend-specific MARIMOHUB_COMPUTE_* settings remain authoritative.'
 			: '';
+	const ignoredSettings = [
+		profilesConfigured ? 'MARIMOHUB_COMPUTE_PROFILES' : undefined,
+		overrideConfigured ? 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE' : undefined,
+	].filter((setting): setting is string => setting !== undefined);
+	const ignoredDescription =
+		profilesConfigured && overrideConfigured
+			? 'profiles and the override policy are ignored'
+			: profilesConfigured
+				? 'profiles are ignored'
+				: 'the override policy is ignored';
 	return (
-		`MARIMOHUB_COMPUTE_PROFILES is set but the ${JSON.stringify(backend)} compute backend ` +
-		`does not apply cpu/mem profiles; profiles are ignored.${backendConfigHint}`
+		`${ignoredSettings.join(' and ')} ${
+			ignoredSettings.length === 1 ? 'is' : 'are'
+		} set but the ${JSON.stringify(backend)} compute backend does not apply compute profiles; ` +
+		`${ignoredDescription}.${backendConfigHint}`
 	);
 }

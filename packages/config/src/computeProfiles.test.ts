@@ -3,7 +3,9 @@ import {
 	ComputeProfileConfigError,
 	hasConfiguredResources,
 	parseComputeProfiles,
+	parseComputeProfileOverride,
 	resolveResources,
+	supportsComputeProfiles,
 	unsupportedBackendNotice,
 } from './computeProfiles';
 import { isConfigError } from './errors';
@@ -137,11 +139,41 @@ describe('parseComputeProfiles', () => {
 	});
 });
 
+describe('parseComputeProfileOverride', () => {
+	it('defaults to none and accepts editors', () => {
+		expect(parseComputeProfileOverride(undefined)).toBe('none');
+		expect(parseComputeProfileOverride('')).toBe('none');
+		expect(parseComputeProfileOverride('none')).toBe('none');
+		expect(parseComputeProfileOverride('editors')).toBe('editors');
+	});
+
+	it('rejects unknown values', () => {
+		expect(() => parseComputeProfileOverride('all')).toThrow(/MARIMOHUB_COMPUTE_PROFILE_OVERRIDE/);
+	});
+});
+
 describe('unsupportedBackendNotice', () => {
 	it('returns a notice only when non-empty resources are configured', () => {
 		const configured = parseComputeProfiles('small:cpu=1');
 		expect(unsupportedBackendNotice('e2b', configured)).toContain('ignored');
 		expect(unsupportedBackendNotice('e2b', parseComputeProfiles(undefined))).toBeUndefined();
 		expect(unsupportedBackendNotice('local', parseComputeProfiles('bare'))).toBeUndefined();
+	});
+
+	it('includes an ignored editor-override policy even without resource values', () => {
+		const notice = unsupportedBackendNotice('local', parseComputeProfiles(undefined), 'editors');
+		expect(notice).toContain('MARIMOHUB_COMPUTE_PROFILE_OVERRIDE');
+		expect(notice).toContain('ignored');
+	});
+});
+
+describe('supportsComputeProfiles', () => {
+	it('only enables profile UX for adapters that apply resource requests', () => {
+		for (const backend of ['coreweave', 'wandb', 'modal', 'docker', 'podman', 'kubernetes']) {
+			expect(supportsComputeProfiles(backend), backend).toBe(true);
+		}
+		for (const backend of ['e2b', 'cloudflare', 'local', 'none', 'noop', 'unknown']) {
+			expect(supportsComputeProfiles(backend), backend).toBe(false);
+		}
 	});
 });

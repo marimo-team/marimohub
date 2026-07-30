@@ -547,7 +547,11 @@ export class SandboxProvisioner {
 		actor: UserId,
 		persistWorkspace: 'source' | 'workspace',
 		workdir: string = DEFAULT_WORKDIR,
-		opts?: { persistEdits?: boolean },
+		opts?: {
+			persistEdits?: boolean;
+			computeProfile?: string;
+			computeResources?: { cpu?: number; memory_bytes?: number };
+		},
 	): Promise<void> {
 		// `captureSession` owns the persistence checks: false = an ephemeral session
 		// or a synced/remote source, whose edits (and filesystem snapshot) are never
@@ -574,7 +578,10 @@ export class SandboxProvisioner {
 			// sandbox RPCs: a transient gRPC stream reset here must not reject teardown,
 			// and destroy must run regardless so the sandbox cannot linger and bill.
 			try {
-				await captureFilesystemSnapshot(this.provider, notebooks, sandbox, projectId, notebookId);
+				await captureFilesystemSnapshot(this.provider, notebooks, sandbox, projectId, notebookId, {
+					compute_profile: opts?.computeProfile,
+					compute_resources: opts?.computeResources,
+				});
 			} catch (err) {
 				console.error(
 					`captureFilesystemSnapshot failed during teardown for notebook ${notebookId}:`,

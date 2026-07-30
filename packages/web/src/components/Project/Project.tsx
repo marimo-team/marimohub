@@ -9,6 +9,7 @@ import {
 	ChevronDown,
 	Container,
 	Copy,
+	Cpu,
 	Download,
 	FileText,
 	FolderArchive,
@@ -63,6 +64,7 @@ import {
 	useDeleteProject,
 	useProjectSessionsQuery,
 	useRestartApp,
+	useRestartSession,
 	useStopSession,
 	useUsersQuery,
 	useCapabilitiesQuery,
@@ -73,6 +75,11 @@ import { ProjectSecretsDialog } from './ProjectSecretsDialog';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { ChangeBaseImageDialog } from '@/components/Notebook/ChangeBaseImageDialog';
 import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/baseImage';
+import { ChangeComputeProfileDialog } from '@/components/Notebook/ChangeComputeProfileDialog';
+import {
+	computeProfileOptions,
+	DEFAULT_COMPUTE_PROFILE,
+} from '@/components/Notebook/computeProfiles';
 import { SyncedNotebookDialog } from '@/components/Notebook/SyncedNotebookDialog';
 import type { SyncedNotebookCreated } from '@/components/Notebook/SyncedNotebookDialog';
 import { SyncSettingsDialog } from '@/components/Notebook/SyncSettingsDialog';
@@ -80,7 +87,7 @@ import { VersionHistoryDialog } from '@/components/Notebook/VersionHistoryDialog
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useSearchField } from '@/hooks/useSearchField';
-import { toastError } from '@/lib/errors';
+import { errorMessage, toastError } from '@/lib/errors';
 import { filterBySearch } from '@/lib/search';
 import { formatRelative } from '@/lib/time';
 import { syncUrl } from '@/lib/links';
@@ -104,7 +111,11 @@ const projectSchema = z.object({
 	name: requiredText('Project name'),
 	description: optionalText(),
 });
-const notebookNameSchema = z.object({ name: requiredText('Notebook name'), baseImage: z.string() });
+const notebookNameSchema = z.object({
+	name: requiredText('Notebook name'),
+	baseImage: z.string(),
+	computeProfile: z.string(),
+});
 
 const NEW_NOTEBOOK_CODE = (name: string) => {
 	const heading = JSON.stringify(`# ${name}`);
@@ -124,6 +135,7 @@ export function Project() {
 	const deleteModal = useDialogTarget<NotebookEntry>();
 	const renameModal = useDialogTarget<NotebookEntry>();
 	const baseImageModal = useDialogTarget<NotebookEntry>();
+	const computeProfileModal = useDialogTarget<NotebookEntry>();
 	const historyModal = useDialogTarget<NotebookEntry>();
 	const syncedCreateModal = useDisclosure();
 	const syncSettings = useDialogTarget<{ notebookId: string; title: string; token?: string }>();
@@ -152,13 +164,17 @@ export function Project() {
 	const updateProject = useUpdateProject();
 	const deleteProject = useDeleteProject();
 	const { data: capabilities } = useCapabilitiesQuery();
-	// The picker only appears when there is an actual choice to make.
 	const sandboxImages = capabilities?.sandbox_images ?? [];
 	const offersImageChoice = sandboxImages.length > 1;
+	const computeProfiles = capabilities?.compute_profiles ?? [];
+	const canChooseComputeProfile =
+		capabilities?.compute_profile_override === 'editors' && project.your_role !== 'viewer';
+	const offersComputeChoice = canChooseComputeProfile && computeProfiles.length > 1;
 	// Re-bound each render to the notebook in the stop dialog; only fired on confirm.
 	const stopSession = useStopSession(pid!, stopModal.target?.notebook.id ?? '');
 	const stopAppSession = useStopSession(pid!, appModal.target?.notebook.id ?? '');
 	const restartAppSession = useRestartApp(pid!, appModal.target?.notebook.id ?? '');
+	const restartComputeSession = useRestartSession(pid!);
 	// Per-session actions render from the server-evaluated `session.can` grants.
 	// Start has no session to carry grants, so it derives from the evaluated
 	// admission row in capabilities. The server enforces all of it regardless.
@@ -208,7 +224,11 @@ export function Project() {
 	useSeedOnOpen(deleteProjectForm, deleteProjectModal.isOpen, { confirmName: '' });
 
 	const createNotebookForm = useAppForm({
-		defaultValues: { name: '', baseImage: DEFAULT_BASE_IMAGE },
+		defaultValues: {
+			name: '',
+			baseImage: DEFAULT_BASE_IMAGE,
+			computeProfile: DEFAULT_COMPUTE_PROFILE,
+		},
 		validators: schemaValidators(notebookNameSchema),
 		onSubmit: async ({ value }) => {
 			const name = value.name.trim();
@@ -218,6 +238,9 @@ export function Project() {
 					description: name,
 					code: uploadedCode ?? NEW_NOTEBOOK_CODE(name),
 					...(value.baseImage !== DEFAULT_BASE_IMAGE ? { base_image: value.baseImage } : {}),
+					...(value.computeProfile !== DEFAULT_COMPUTE_PROFILE
+						? { compute_profile: value.computeProfile }
+						: {}),
 				});
 				toast.success(`Created "${name}"`);
 				closeCreateModal();
@@ -229,6 +252,7 @@ export function Project() {
 	useSeedOnOpen(createNotebookForm, uploadModal.isOpen, {
 		name: '',
 		baseImage: DEFAULT_BASE_IMAGE,
+		computeProfile: DEFAULT_COMPUTE_PROFILE,
 	});
 
 	const handleSaveSecrets = (enabled: boolean) => {
@@ -248,6 +272,13 @@ export function Project() {
 
 	// Map each notebook to its "most alive" session so a row shows the strongest state.
 	const sessionByNotebook = useMemo(() => sessionsByNotebook(sessions), [sessions]);
+	const computeTarget = computeProfileModal.target;
+	const computeLive = computeTarget ? sessionByNotebook.get(computeTarget.id) : undefined;
+	const computeRestartSession = computeLive?.edit?.can?.stop
+		? computeLive.edit
+		: computeLive?.app?.can?.stop
+			? computeLive.app
+			: undefined;
 
 	// Resolve every author (and session starter) shown on the page in one batch,
 	// so opaque user ids render as names.
@@ -345,6 +376,25 @@ export function Project() {
 		});
 	};
 
+	const handleComputeRestart = () => {
+		if (!computeTarget || !computeRestartSession) return;
+		if (computeRestartSession.mode === 'app') {
+			appModal.open({
+				action: 'restart',
+				notebook: computeTarget,
+				session: computeRestartSession,
+			});
+			return;
+		}
+		void restartComputeSession
+			.mutateAsync({
+				notebookId: computeTarget.id,
+				sessionId: computeRestartSession.session_id,
+			})
+			.then(() => toast.success(`Restarted the session for "${computeTarget.title}"`))
+			.catch((error) => toast.error(errorMessage(error)));
+	};
+
 	const handleSyncedCreated = (result: SyncedNotebookCreated) => {
 		syncedCreateModal.close();
 		syncSettings.open({
@@ -387,6 +437,9 @@ export function Project() {
 		})(),
 		...(offersImageChoice
 			? [{ id: 'change-image', label: 'Change base image', icon: <Container className="size-4" /> }]
+			: []),
+		...(offersComputeChoice
+			? [{ id: 'change-compute', label: 'Change compute…', icon: <Cpu className="size-4" /> }]
 			: []),
 		{ id: 'history', label: 'Version history', icon: <History className="size-4" /> },
 		...(nb.source_type === 'git'
@@ -555,6 +608,7 @@ export function Project() {
 													const app = sessionByNotebook.get(nb.id)?.app;
 													if (app) appModal.open({ action: 'stop', notebook: nb, session: app });
 												} else if (key === 'change-image') baseImageModal.open(nb);
+												else if (key === 'change-compute') computeProfileModal.open(nb);
 												else if (key === 'history') historyModal.open(nb);
 												else if (key === 'sync-settings')
 													syncSettings.open({ notebookId: nb.id, title: nb.title });
@@ -591,6 +645,9 @@ export function Project() {
 											canControl={!!live.app.can?.stop}
 											canOpen={!!live.app.can?.attach}
 											editActive={!!live.edit}
+											profiles={computeProfiles}
+											allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
+											selectedProfileName={nb.compute_profile}
 											onStop={() =>
 												appModal.open({ action: 'stop', notebook: nb, session: live.app! })
 											}
@@ -599,7 +656,14 @@ export function Project() {
 											}
 										/>
 									)}
-									<SessionStatusDot session={live?.edit} loading={sessionsLoading} />
+									<SessionStatusDot
+										session={live?.edit}
+										loading={sessionsLoading}
+										profiles={computeProfiles}
+										selectedProfileName={
+											canChooseComputeProfile ? nb.compute_profile : computeProfiles[0]?.name
+										}
+									/>
 									<span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
 										<span className="text-muted-foreground/70">by</span>
 										<UserLabel
@@ -639,6 +703,16 @@ export function Project() {
 					<createNotebookForm.AppField name="baseImage">
 						{(f) => (
 							<f.RadioGroupField label="Base image" options={baseImageOptions(sandboxImages)} />
+						)}
+					</createNotebookForm.AppField>
+				)}
+				{offersComputeChoice && (
+					<createNotebookForm.AppField name="computeProfile">
+						{(field) => (
+							<field.RadioGroupField
+								label="Compute"
+								options={computeProfileOptions(computeProfiles)}
+							/>
 						)}
 					</createNotebookForm.AppField>
 				)}
@@ -683,6 +757,28 @@ export function Project() {
 					onClose={baseImageModal.close}
 					projectId={pid!}
 					notebook={baseImageModal.target}
+				/>
+			)}
+
+			{computeProfileModal.target && (
+				<ChangeComputeProfileDialog
+					isOpen={computeProfileModal.isOpen}
+					onClose={computeProfileModal.close}
+					projectId={pid!}
+					notebook={computeProfileModal.target}
+					restartAction={
+						computeRestartSession
+							? {
+									label:
+										computeRestartSession.mode === 'app'
+											? 'Restart app'
+											: computeLive?.app?.can?.stop
+												? 'Restart edit session'
+												: 'Restart session',
+									onRestart: handleComputeRestart,
+								}
+							: undefined
+					}
 				/>
 			)}
 

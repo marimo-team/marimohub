@@ -48,9 +48,9 @@ export async function resolveRestoreSnapshot(
 	notebooks: NotebookService,
 	projectId: ProjectId,
 	notebookId: NotebookId,
-): Promise<string | undefined> {
+): Promise<FsSnapshot | undefined> {
 	if (!asFilesystemSnapshots(provider)) return undefined;
-	return (await notebooks.getFsSnapshot(projectId, notebookId))?.snapshot_id;
+	return (await notebooks.getFsSnapshot(projectId, notebookId)) ?? undefined;
 }
 
 /**
@@ -65,6 +65,7 @@ export async function captureFilesystemSnapshot(
 	sandbox: SandboxInstance,
 	projectId: ProjectId,
 	notebookId: NotebookId,
+	compute?: Pick<FsSnapshot, 'compute_profile' | 'compute_resources'>,
 ): Promise<void> {
 	const fs = asFilesystemSnapshots(provider);
 	if (!fs) return;
@@ -74,6 +75,7 @@ export async function captureFilesystemSnapshot(
 			snapshot_id: snapshotId,
 			captured_at: new Date().toISOString(),
 			...(sizeBytes !== undefined ? { size_bytes: sizeBytes } : {}),
+			...compute,
 		});
 		if (previous && previous.snapshot_id !== snapshotId) {
 			await fs.deleteSnapshot(previous.snapshot_id); // latest-wins GC

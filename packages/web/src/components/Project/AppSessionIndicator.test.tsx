@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session } from '@/types';
+import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 import { AppSessionIndicator, isAppStale } from './AppSessionIndicator';
 
 function makeAppSession(overrides: Partial<Session> = {}): Session {
@@ -28,21 +29,45 @@ function renderIndicator(
 		canOpen = false,
 		editActive = false,
 		headVersion = 'ver-head',
+		profiles = [],
+		computeProfile,
+		allowComputeOverride = false,
+		selectedProfileName,
+		notebookError = false,
 	}: {
 		canControl?: boolean;
 		canOpen?: boolean;
 		editActive?: boolean;
 		/** A function to model a head that moves between popover opens. */
 		headVersion?: string | (() => string);
+		profiles?: ComputeProfile[];
+		computeProfile?: string;
+		allowComputeOverride?: boolean;
+		selectedProfileName?: string;
+		notebookError?: boolean;
 	} = {},
 ) {
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (input: RequestInfo | URL) => {
 			const url = String(input);
+			if (notebookError && url.includes('/notebooks/')) {
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'INTERNAL_ERROR', message: 'notebook unavailable' },
+					}),
+					{ status: 500, headers: { 'content-type': 'application/json' } },
+				);
+			}
 			const body = url.includes('/notebooks/')
 				? {
-						meta: { id: 'nb-1', title: 'NB', author: 'user_1' },
+						meta: {
+							id: 'nb-1',
+							title: 'NB',
+							author: 'user_1',
+							...(computeProfile ? { compute_profile: computeProfile } : {}),
+						},
 						source: {
 							type: 'local',
 							current_version_id: typeof headVersion === 'function' ? headVersion() : headVersion,
@@ -64,6 +89,9 @@ function renderIndicator(
 			canControl={canControl}
 			canOpen={canOpen}
 			editActive={editActive}
+			profiles={profiles}
+			allowComputeOverride={allowComputeOverride}
+			selectedProfileName={selectedProfileName}
 			onStop={vi.fn()}
 			onRestart={vi.fn()}
 		/>,
@@ -156,6 +184,50 @@ describe('AppSessionIndicator', () => {
 		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();
 	});
 
+	it('uses the shared compute drift presentation', async () => {
+		renderIndicator(
+			makeAppSession({
+				compute_profile: 'small',
+				compute_resources: { cpu: 1 },
+			}),
+			{
+				profiles: [
+					{ name: 'small', cpu: 1 },
+					{ name: 'large', cpu: 8 },
+				],
+				computeProfile: 'large',
+				allowComputeOverride: true,
+			},
+		);
+		await userEvent.click(screen.getByRole('button'));
+
+		expect(await screen.findByText('small — 1 CPU')).toBeInTheDocument();
+		expect(screen.getByText('large — 8 CPU')).toBeInTheDocument();
+		expect(screen.getByText('large on next restart')).toBeInTheDocument();
+	});
+
+	it('uses row metadata while notebook detail is unavailable', async () => {
+		renderIndicator(
+			makeAppSession({
+				compute_profile: 'small',
+				compute_resources: { cpu: 1 },
+			}),
+			{
+				profiles: [
+					{ name: 'small', cpu: 1 },
+					{ name: 'large', cpu: 8 },
+				],
+				selectedProfileName: 'large',
+				allowComputeOverride: true,
+				notebookError: true,
+			},
+		);
+		await userEvent.click(screen.getByRole('button'));
+
+		expect(await screen.findByText('large — 8 CPU')).toBeInTheDocument();
+		expect(screen.getByText('large on next restart')).toBeInTheDocument();
+	});
+
 	// A version committed server-side (an edit session ending) invalidates
 	// nothing on the client, so a cached head would hide the hint for 5 minutes.
 	it('re-reads the notebook head each time the popover opens', async () => {
@@ -166,11 +238,13 @@ describe('AppSessionIndicator', () => {
 		const trigger = screen.getByRole('button');
 
 		await userEvent.click(trigger);
-		expect(await screen.findByText('App running')).toBeInTheDocument();
+		expect(await screen.findByRole('button', { name: 'Restart' })).toBeInTheDocument();
 		expect(screen.queryByText(/Restart to update/)).toBeNull();
 
 		await userEvent.keyboard('{Escape}');
-		await waitFor(() => expect(screen.queryByText('App running')).toBeNull());
+		await waitFor(() =>
+			expect(screen.queryByRole('button', { name: 'Restart' })).not.toBeInTheDocument(),
+		);
 
 		head = 'ver-next';
 		await userEvent.click(trigger);

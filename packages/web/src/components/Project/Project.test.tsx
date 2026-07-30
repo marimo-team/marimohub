@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Project } from './Project';
-import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import type { NotebookEntry, ProjectDetail, Session } from '@/types';
 
 const PID = 'proj-x';
@@ -47,6 +48,7 @@ function makeFetch(
 		sessions?: Session[];
 		capabilities?: unknown;
 		role?: 'admin' | 'editor' | 'viewer';
+		sessionDeleteError?: boolean;
 	} = {},
 ) {
 	const notebooks = options.notebooks ?? [notebook()];
@@ -71,10 +73,20 @@ function makeFetch(
 			return jsonOk({ ...notebook(), id: 'nb-copy', title: 'Forecast (copy)' });
 		if (method === 'POST' && url.endsWith(`/projects/${PID}/notebooks/nb-1/sync-token/rotate`))
 			return jsonOk({ sync_token: 'rotated-token' });
+		if (method === 'PATCH' && url.endsWith(`/projects/${PID}/notebooks/nb-1`))
+			return jsonOk({ ...notebook(), compute_profile: body?.compute_profile });
 		if (method === 'PATCH' && url.endsWith(`/projects/${PID}/notebooks/nb-1/source`))
 			return jsonOk({ source: body });
-		if (method === 'DELETE' && url.endsWith(`/projects/${PID}/notebooks/nb-1/sessions/sess-1`))
+		if (method === 'DELETE' && url.includes(`/projects/${PID}/notebooks/nb-1/sessions/`)) {
+			if (options.sessionDeleteError) return jsonError('INTERNAL_ERROR', 'restart failed');
 			return jsonOk(null);
+		}
+		if (method === 'POST' && url.endsWith(`/projects/${PID}/notebooks/nb-1/sessions`))
+			return jsonOk({
+				...runningSession(),
+				session_id: 'sess-restarted',
+				mode: body?.mode ?? 'edit',
+			});
 		if (method === 'GET' && url.endsWith(`/projects/${PID}/notebooks/nb-1`))
 			return jsonOk({
 				meta: notebook(),
@@ -142,6 +154,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
 });
 
 describe('Project — Delete Project (type-to-confirm)', () => {
@@ -238,6 +251,35 @@ describe('Project — Create Notebook', () => {
 		});
 	});
 
+	it('stores the selected compute profile when creating a notebook', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			role: 'editor',
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [
+					{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+					{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+				],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'New Notebook' }));
+		const dialog = screen.getByRole('dialog');
+		await user.type(within(dialog).getByLabelText('Notebook Name'), 'Churn');
+		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+		await waitFor(() => {
+			const post = calls.find(
+				(call) => call.method === 'POST' && call.url.endsWith(`/projects/${PID}/notebooks`),
+			);
+			expect(post?.body).toMatchObject({ compute_profile: 'large' });
+		});
+	});
+
 	it('uploads a .py file, auto-fills the name, and POSTs the file contents', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
@@ -327,6 +369,150 @@ describe('Project — Notebook Actions', () => {
 		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
 		expect(await screen.findByText('Rename')).toBeInTheDocument();
 		expect(screen.queryByText('Change base image')).not.toBeInTheDocument();
+	});
+
+	it('does not clutter the notebook list when there is only one compute profile', async () => {
+		makeFetch({
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 }],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		expect(screen.queryByText('small')).not.toBeInTheDocument();
+	});
+
+	it('lets editors change compute from the notebook overflow menu', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			role: 'editor',
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [
+					{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
+					{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+				],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Change compute…');
+		const dialog = await screen.findByRole('dialog');
+		expect(within(dialog).getByRole('radio', { name: /Default \(small\)/ })).toBeChecked();
+		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+		await waitFor(() =>
+			expect(
+				calls.some(
+					(call) =>
+						call.method === 'PATCH' &&
+						call.url.endsWith('/notebooks/nb-1') &&
+						(call.body as { compute_profile?: string })?.compute_profile === 'large',
+				),
+			).toBe(true),
+		);
+	});
+
+	it('labels and restarts the edit session when edit and app are both live', async () => {
+		const user = userEvent.setup();
+		const toastSuccess = vi.spyOn(toast, 'success');
+		const calls = makeFetch({
+			role: 'editor',
+			sessions: [
+				{
+					...runningSession(),
+					session_id: 'sess-edit',
+					mode: 'edit',
+					can: { attach: true, stop: true },
+				} as Session,
+				{
+					...runningSession(),
+					session_id: 'sess-app',
+					mode: 'app',
+					can: { attach: true, stop: true },
+				} as Session,
+			],
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [
+					{ name: 'small', cpu: 1 },
+					{ name: 'large', cpu: 8 },
+				],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Change compute…');
+		const dialog = await screen.findByRole('dialog');
+		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+		await user.click(await screen.findByRole('button', { name: 'Restart edit session' }));
+
+		await waitFor(() =>
+			expect(
+				calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-edit')),
+			).toBe(true),
+		);
+		expect(calls.some((call) => call.url.endsWith('/sessions/sess-app'))).toBe(false);
+		await waitFor(() => {
+			expect(toastSuccess).toHaveBeenCalledWith('Restarted the session for "Forecast"');
+		});
+	});
+
+	it('surfaces an edit-session restart failure from the compute toast', async () => {
+		const user = userEvent.setup();
+		const toastError = vi.spyOn(toast, 'error');
+		const calls = makeFetch({
+			role: 'editor',
+			sessionDeleteError: true,
+			sessions: [
+				{
+					...runningSession(),
+					mode: 'edit',
+					can: { attach: true, stop: true },
+				} as Session,
+			],
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [{ name: 'small' }, { name: 'large' }],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Change compute…');
+		const dialog = await screen.findByRole('dialog');
+		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+		await user.click(await screen.findByRole('button', { name: 'Restart session' }));
+
+		await waitFor(() => {
+			expect(
+				calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-1')),
+			).toBe(true);
+			expect(toastError).toHaveBeenCalledWith('restart failed');
+		});
+	});
+
+	it('hides the change-compute action when overrides are disabled', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			capabilities: {
+				federation: { available: false },
+				compute_profiles: [{ name: 'small' }, { name: 'large' }],
+				compute_profile_override: 'none',
+			},
+		});
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		expect(await screen.findByText('Rename')).toBeInTheDocument();
+		expect(screen.queryByText('Change compute…')).not.toBeInTheDocument();
 	});
 
 	it('duplicates a notebook from the overflow menu', async () => {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
-import { useStartSession, useStopSession } from '@/api/hooks';
+import { useStartSession, useStartSessionWithDefault, useStopSession } from '@/api/hooks';
 import { isNotFoundError } from '@/api/request';
 import { useGeneration } from '@/hooks/useGeneration';
 import { useInterval } from '@/hooks/useInterval';
@@ -25,10 +25,16 @@ export interface SessionError {
 	message: string;
 	/** The API error code (e.g. `FORBIDDEN`), when the failure was an API error. */
 	code?: string;
+	kind: 'request' | 'startup' | 'access';
+	generic?: boolean;
 }
 
 function toSessionError(err: Error): SessionError {
-	return { message: err.message, code: err instanceof ApiRequestError ? err.code : undefined };
+	return {
+		message: err.message,
+		code: err instanceof ApiRequestError ? err.code : undefined,
+		kind: 'request',
+	};
 }
 
 /** Why a watched session stopped being renderable — see `ended` below. */
@@ -53,6 +59,8 @@ export interface NotebookSession {
 	ended: SessionEnded | null;
 	/** (Re)start the session — fired once on mount and again by the retry button. */
 	start: () => void;
+	startWithDefault: () => void;
+	defaultRetryAttempted: boolean;
 	/** Stop the current session (saves files, tears down the sandbox). */
 	stop: () => void;
 	/** Stop (if live) then start fresh — the staleness banner's "Restart app". */
@@ -82,11 +90,13 @@ export function useNotebookSession(
 	{ enabled = true, mode = 'edit' }: { enabled?: boolean; mode?: 'edit' | 'app' } = {},
 ): NotebookSession {
 	const startSession = useStartSession(projectId, notebookId, mode);
+	const startDefaultSession = useStartSessionWithDefault(projectId, notebookId, mode);
 	const stopSession = useStopSession(projectId, notebookId);
 
 	const [session, setSession] = useState<Session | null>(null);
 	const [error, setError] = useState<SessionError | null>(null);
 	const [ended, setEnded] = useState<SessionEnded | null>(null);
+	const [defaultRetryAttempted, setDefaultRetryAttempted] = useState(false);
 	// True while a restart's stop half runs (which can take tens of seconds for a
 	// real save-and-destroy) — the page would otherwise render nothing: no
 	// session, no error, and neither mutation pending yet.
@@ -112,28 +122,43 @@ export function useNotebookSession(
 	const concludeAccessLost = useCallback(() => {
 		commitSession(null);
 		if (mode === 'app') setEnded('access_lost');
-		else setError({ message: 'You no longer have access to this session.', code: 'FORBIDDEN' });
+		else
+			setError({
+				message: 'You no longer have access to this session.',
+				code: 'FORBIDDEN',
+				kind: 'access',
+			});
 	}, [mode, commitSession]);
 
+	const startWithMutation = useCallback(
+		(mutation: typeof startSession) => {
+			const gen = generation.bump();
+			setError(null);
+			setEnded(null);
+			mutation.mutate(undefined, {
+				onSuccess: (data) => {
+					if (!generation.isCurrent(gen)) return;
+					if (data.status === 'running' && !data.sandbox_url) {
+						concludeAccessLost();
+						return;
+					}
+					commitSession(data);
+				},
+				onError: (err) => {
+					if (!generation.isCurrent(gen)) return;
+					setError(toSessionError(err));
+				},
+			});
+		},
+		[concludeAccessLost, commitSession, generation],
+	);
 	const start = useCallback(() => {
-		const gen = generation.bump();
-		setError(null);
-		setEnded(null);
-		startSession.mutate(undefined, {
-			onSuccess: (data) => {
-				if (!generation.isCurrent(gen)) return;
-				if (data.status === 'running' && !data.sandbox_url) {
-					concludeAccessLost();
-					return;
-				}
-				commitSession(data);
-			},
-			onError: (err) => {
-				if (!generation.isCurrent(gen)) return;
-				setError(toSessionError(err));
-			},
-		});
-	}, [startSession, concludeAccessLost, commitSession, generation]);
+		startWithMutation(startSession);
+	}, [startWithMutation, startSession]);
+	const startWithDefault = useCallback(() => {
+		setDefaultRetryAttempted(true);
+		startWithMutation(startDefaultSession);
+	}, [startWithMutation, startDefaultSession]);
 
 	const stop = useCallback(() => {
 		const s = sessionRef.current;
@@ -193,8 +218,17 @@ export function useNotebookSession(
 		mode === 'app' ? 'The app failed to start.' : 'The kernel failed to start.';
 
 	const failStart = useCallback(
-		(code?: string) => {
-			setError({ message: startFailedMessage, ...(code ? { code } : {}) });
+		(failure?: Session['error'], code?: string) => {
+			setError(
+				failure
+					? { message: failure.message, code: failure.code, kind: 'startup' }
+					: {
+							message: startFailedMessage,
+							...(code ? { code } : {}),
+							kind: 'startup',
+							generic: true,
+						},
+			);
 			commitSession(null);
 		},
 		[startFailedMessage, commitSession],
@@ -240,11 +274,11 @@ export function useNotebookSession(
 					} else if (next.status === 'running') {
 						commitSession(next);
 					} else if (next.status !== 'starting' && next.status !== 'terminating') {
-						failStart();
+						failStart(next.error);
 					}
 				},
 				// The record vanished mid-start (reaped, or the notebook deleted).
-				() => failStart('NOT_FOUND'),
+				() => failStart(undefined, 'NOT_FOUND'),
 			);
 		},
 		session?.status === 'starting' ? START_POLL_INTERVAL_MS : null,
@@ -333,7 +367,11 @@ export function useNotebookSession(
 		session?.status === 'running' ? HEARTBEAT_INTERVAL_MS : null,
 	);
 
-	const isProvisioning = restarting || startSession.isPending || session?.status === 'starting';
+	const isProvisioning =
+		restarting ||
+		startSession.isPending ||
+		startDefaultSession.isPending ||
+		session?.status === 'starting';
 	const isRunning = session?.status === 'running' && !!session.sandbox_url;
 
 	return {
@@ -344,6 +382,8 @@ export function useNotebookSession(
 		sandboxUrl: isRunning ? session?.sandbox_url : undefined,
 		ended,
 		start,
+		startWithDefault,
+		defaultRetryAttempted,
 		stop,
 		restart,
 	};

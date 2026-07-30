@@ -53,6 +53,7 @@ export interface CreateNotebookInput {
 	deps?: string;
 	runtime?: { python_version?: string; marimo_version?: string };
 	base_image?: string;
+	compute_profile?: string;
 }
 
 export interface UpdateNotebookInput {
@@ -65,6 +66,8 @@ export interface UpdateNotebookInput {
 	message?: string;
 	/** `null` clears the choice back to the deployment default; `undefined` leaves it unchanged. */
 	base_image?: string | null;
+	/** `null` clears the choice back to the deployment default; `undefined` leaves it unchanged. */
+	compute_profile?: string | null;
 }
 
 export interface NotebookDetail {
@@ -237,6 +240,7 @@ export class NotebookService {
 			tags: input.tags,
 			runtime: input.runtime,
 			baseImage: input.base_image,
+			computeProfile: input.compute_profile,
 		});
 
 		const source = localSource(versionId);
@@ -333,6 +337,7 @@ export class NotebookService {
 				deps,
 				runtime: meta.runtime,
 				base_image: meta.base_image,
+				compute_profile: meta.compute_profile,
 			},
 			actor,
 		);
@@ -372,6 +377,10 @@ export class NotebookService {
 			// null clears back to the deployment default (the key is dropped from
 			// the written JSON); undefined leaves the stored choice as-is.
 			base_image: input.base_image === null ? undefined : (input.base_image ?? existing.base_image),
+			compute_profile:
+				input.compute_profile === null
+					? undefined
+					: (input.compute_profile ?? existing.compute_profile),
 			updated_at: now,
 		};
 
@@ -428,6 +437,7 @@ export class NotebookService {
 				title: updated.title,
 				description: updated.description,
 				tags: updated.tags,
+				compute_profile: updated.compute_profile,
 				updated_at: now,
 			}),
 			() => ({ updated_at: now }),

@@ -101,6 +101,39 @@ describe('useNotebookSession', () => {
 		expect(result.current.isRunning).toBe(false);
 	});
 
+	it('keeps provisioning visible during the one-shot Default retry', async () => {
+		let postCount = 0;
+		let resolveDefault!: (response: Response) => void;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method !== 'POST') throw new Error('unexpected request');
+				postCount += 1;
+				if (postCount === 1) return jsonError('RESOURCE_EXHAUSTED', 'profile too large', 429);
+				return new Promise<Response>((resolve) => {
+					resolveDefault = resolve;
+				});
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.error?.message).toBe('profile too large'));
+
+		act(() => result.current.startWithDefault());
+		expect(result.current.defaultRetryAttempted).toBe(true);
+		expect(result.current.isProvisioning).toBe(true);
+		await waitFor(() => expect(postCount).toBe(2));
+
+		await act(async () => {
+			resolveDefault(jsonError('RESOURCE_EXHAUSTED', 'default unavailable', 429));
+		});
+		await waitFor(() => expect(result.current.error?.message).toBe('default unavailable'));
+		expect(result.current.isProvisioning).toBe(false);
+		expect(result.current.defaultRetryAttempted).toBe(true);
+	});
+
 	it('stop() clears local state and issues a DELETE', async () => {
 		const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
 			init?.method === 'DELETE' ? jsonOk(null) : jsonOk(makeSession()),
@@ -187,6 +220,47 @@ describe('useNotebookSession', () => {
 		});
 
 		expect(result.current.error?.message).toBe('The kernel failed to start.');
+		expect(result.current.error).toMatchObject({ kind: 'startup', generic: true });
+		expect(result.current.session).toBeNull();
+	});
+
+	it('preserves the structured failure from a polled starting session', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') {
+					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+				}
+				if (String(url).endsWith('/sessions/sess-1')) {
+					return jsonOk(
+						makeSession({
+							status: 'failed',
+							sandbox_url: undefined,
+							error: {
+								code: 'RESOURCE_EXHAUSTED',
+								message: 'No nodes can schedule this profile',
+							},
+						}),
+					);
+				}
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+			toaster: false,
+		});
+		await settleHook();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2_000);
+		});
+
+		expect(result.current.error).toEqual({
+			code: 'RESOURCE_EXHAUSTED',
+			message: 'No nodes can schedule this profile',
+			kind: 'startup',
+		});
 		expect(result.current.session).toBeNull();
 	});
 

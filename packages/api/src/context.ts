@@ -56,6 +56,11 @@ export interface SessionLifetimeConfig {
 	sweepIntervalMs: Millis;
 }
 
+export interface SandboxComputeProfile {
+	name: string;
+	resources: ComputeResources;
+}
+
 /** Everything about how a notebook sandbox is mounted, exposed, and persisted. */
 export interface SandboxConfig {
 	/** Bucket connection info the sandbox mounts for notebook files (was `c.env.R2_*`). */
@@ -113,6 +118,10 @@ export interface SandboxConfig {
 	resources?: ComputeResources;
 	/** Name of the default compute profile, persisted on newly-created sessions. */
 	computeProfile?: string;
+	/** Ordered profiles available to session provisioning; the first is the default. */
+	computeProfiles?: SandboxComputeProfile[];
+	/** Whether editors may persist a non-default profile on a notebook. */
+	computeProfileOverride?: 'none' | 'editors';
 }
 
 /**

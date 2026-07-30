@@ -1151,6 +1151,8 @@ export interface paths {
 						};
 						/** @example ghcr.io/orgname/marimo-gpu:latest */
 						base_image?: string;
+						/** @example large */
+						compute_profile?: string;
 					};
 				};
 			};
@@ -1274,6 +1276,7 @@ export interface paths {
 							marimo_version?: string;
 						};
 						base_image?: string;
+						compute_profile?: string;
 					};
 				};
 			};
@@ -1773,6 +1776,7 @@ export interface paths {
 						/** @example Add regional breakdown */
 						message?: string;
 						base_image?: string | null;
+						compute_profile?: string | null;
 					};
 				};
 			};
@@ -3648,6 +3652,15 @@ export interface components {
 				max_page_size: number;
 			};
 			sandbox_images: string[];
+			compute_profiles: (components['schemas']['ComputeResources'] & {
+				name: string;
+			})[];
+			/** @enum {string} */
+			compute_profile_override: 'none' | 'editors';
+		};
+		ComputeResources: {
+			cpu?: number;
+			memory_bytes?: number;
 		};
 		ProjectPage: {
 			items: components['schemas']['SnapshotProjectEntry'][];
@@ -3756,6 +3769,7 @@ export interface components {
 			 * @example 2025-03-05T14:00:00Z
 			 */
 			last_run_at: string | null;
+			compute_profile?: string;
 		};
 		NotebookMeta: {
 			id: string;
@@ -3786,6 +3800,7 @@ export interface components {
 				marimo_version?: string;
 			};
 			base_image?: string;
+			compute_profile?: string;
 		};
 		GitNotebookCreateResult: {
 			notebook: components['schemas']['NotebookMeta'];
@@ -3895,6 +3910,9 @@ export interface components {
 			 * @example 2025-03-05T14:00:00Z
 			 */
 			connections_checked_at?: string;
+			compute_profile?: string;
+			compute_resources?: components['schemas']['ComputeResources'];
+			compute_from_snapshot?: boolean;
 			error?: {
 				code: string;
 				message: string;
@@ -3906,6 +3924,8 @@ export interface components {
 		SessionCreateBody: {
 			/** @enum {string} */
 			mode?: 'edit' | 'app';
+			/** @enum {string} */
+			compute_profile?: 'default';
 		};
 		SecretEntry: {
 			name: string;

@@ -101,7 +101,7 @@ export type Catalog = z.infer<typeof CatalogSchema>;
 
 // --- Snapshot ---
 
-export const SnapshotNotebookEntrySchema = z.object({
+export const SnapshotNotebookEntrySchema = z.looseObject({
 	id: NotebookIdSchema,
 	title: z.string(),
 	description: z.string(),
@@ -112,6 +112,7 @@ export const SnapshotNotebookEntrySchema = z.object({
 	updated_at: z.iso.datetime(),
 	tags: z.array(z.string()),
 	last_run_at: z.iso.datetime().nullable(),
+	compute_profile: z.string().optional(),
 	key_prefix: z.string(),
 });
 
@@ -154,7 +155,20 @@ export type SnapshotProjectEntry = z.infer<typeof SnapshotProjectEntrySchema>;
 
 // Public API shapes: `key_prefix` is an internal physical path and is never
 // exposed to clients. The stored snapshot keeps it; the API strips it.
-export type PublicNotebookEntry = Omit<SnapshotNotebookEntry, 'key_prefix'>;
+export type PublicNotebookEntry = Pick<
+	SnapshotNotebookEntry,
+	| 'id'
+	| 'title'
+	| 'description'
+	| 'status'
+	| 'source_type'
+	| 'author'
+	| 'created_at'
+	| 'updated_at'
+	| 'tags'
+	| 'last_run_at'
+	| 'compute_profile'
+>;
 
 // The project-list entry drops the nested `notebooks` array entirely: it is
 // unbounded (a project can hold thousands of notebooks) and would let one row
@@ -176,8 +190,19 @@ export type PublicProjectEntry = Pick<
 >;
 
 export function toPublicNotebookEntry(entry: SnapshotNotebookEntry): PublicNotebookEntry {
-	const { key_prefix: _key_prefix, ...rest } = entry;
-	return rest;
+	return {
+		id: entry.id,
+		title: entry.title,
+		description: entry.description,
+		status: entry.status,
+		source_type: entry.source_type,
+		author: entry.author,
+		created_at: entry.created_at,
+		updated_at: entry.updated_at,
+		tags: entry.tags,
+		last_run_at: entry.last_run_at,
+		compute_profile: entry.compute_profile,
+	};
 }
 
 // Explicit pick (not a rest-spread): the entry schema is loose, so unknown keys
@@ -307,6 +332,9 @@ export const NotebookMetaSchema = z.object({
 	// persisted; session start resolves it against the configured list and falls
 	// back to the default when the image is no longer offered.
 	base_image: z.string().optional(),
+	// Absent = the deployment's default compute profile. Only a non-default
+	// choice is persisted.
+	compute_profile: z.string().optional(),
 });
 
 export type NotebookMeta = z.infer<typeof NotebookMetaSchema>;
@@ -409,10 +437,19 @@ export function toPublicVersion(version: Version): PublicVersion {
 // ULID). No `provider` field: the capability gate (`asFilesystemSnapshots`)
 // already ensures only a snapshot-capable backend reads or writes this pointer,
 // so a backend switch ignores it.
+export const ComputeResourceRecordSchema = z.object({
+	cpu: z.number().optional(),
+	memory_bytes: z.number().optional(),
+});
+
+export type ComputeResourceRecord = z.infer<typeof ComputeResourceRecordSchema>;
+
 export const FsSnapshotSchema = z.object({
 	snapshot_id: z.string(),
 	captured_at: z.iso.datetime(),
 	size_bytes: z.number().int().nonnegative().optional(),
+	compute_profile: z.string().optional(),
+	compute_resources: ComputeResourceRecordSchema.optional(),
 });
 
 export type FsSnapshot = z.infer<typeof FsSnapshotSchema>;
@@ -475,6 +512,8 @@ export const SessionSchema = z.object({
 	sandbox_id: SandboxIdSchema.optional(),
 	sandbox_url: z.string().optional(),
 	compute_profile: z.string().optional(),
+	compute_resources: ComputeResourceRecordSchema.optional(),
+	compute_from_snapshot: z.boolean().optional(),
 	/**
 	 * Server-reachable kernel endpoint, persisted only in `proxy` exposure mode so
 	 * the app's `/proxy/*` forwarder can reach the kernel. Distinct from

@@ -34,6 +34,8 @@ export interface ConfigBackend {
 	selectorValue?: string;
 	/** Optional note shown under the backend heading. */
 	description?: string;
+	/** Whether this compute backend applies per-sandbox CPU and memory requests. */
+	supportsComputeProfiles?: boolean;
 	vars: ConfigVar[];
 }
 
@@ -234,8 +236,17 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_PROFILES',
 						name: 'Compute profiles',
 						description:
-							'Ordered named CPU/memory profiles (`name:cpu=<cores>;mem=<Mi|Gi|Ti>`). The first profile is applied to new sandboxes by Docker, Podman, Kubernetes, Modal, CoreWeave, and W&B.',
+							'Ordered named CPU/memory profiles (`name:cpu=<cores>;mem=<Mi|Gi|Ti>`). The first is the default; supported backends apply the notebook choice when overrides are enabled.',
 						example: 'small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE',
+						name: 'Compute profile override',
+						description:
+							'Whether editors may choose a non-default compute profile per notebook (`none` or `editors`).',
+						example: 'editors',
+						default: 'none',
 						optIn: true,
 					},
 					{
@@ -270,6 +281,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'CoreWeave Sandbox',
 				selectorValue: 'coreweave',
+				supportsComputeProfiles: true,
 				description: 'CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK.',
 				vars: [
 					{
@@ -367,6 +379,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'W&B Sandboxes',
 				selectorValue: 'wandb',
+				supportsComputeProfiles: true,
 				description:
 					'CoreWeave Sandboxes via the W&B (Weights & Biases) gateway — the `coreweave` backend authenticated with a W&B API key. Kernel URLs are resolved automatically: the managed runner assigns each sandbox a public IP served over plain HTTP, so no sandbox hostname is needed. Profile/placement overrides, GPU requests, egress overrides, and CAIOS vending are not available through the gateway; use hub-minted WIF (docs/workload-identity-federation.md) for bucket access.',
 				vars: [
@@ -414,6 +427,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'Modal',
 				selectorValue: 'modal',
+				supportsComputeProfiles: true,
 				description: 'Modal sandboxes.',
 				vars: [
 					{
@@ -442,6 +456,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'Docker',
 				selectorValue: 'docker',
+				supportsComputeProfiles: true,
 				description:
 					'Runs each kernel in a container on a Docker daemon (local socket or remote `DOCKER_HOST`). Uses the shared `MARIMOHUB_COMPUTE_IMAGE`.',
 				vars: [
@@ -468,6 +483,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'Podman',
 				selectorValue: 'podman',
+				supportsComputeProfiles: true,
 				description:
 					'Runs each kernel in a container through the Podman CLI. Supports local, rootless, or remote Podman when the server user has a configured connection. Uses the shared `MARIMOHUB_COMPUTE_IMAGE`.',
 				vars: [
@@ -535,6 +551,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'Kubernetes',
 				selectorValue: 'kubernetes',
+				supportsComputeProfiles: true,
 				description:
 					'Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class + wildcard-cert TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.',
 				vars: [

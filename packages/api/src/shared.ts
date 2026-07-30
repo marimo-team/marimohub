@@ -23,6 +23,7 @@ import {
 } from '@marimo-hub/core';
 import type {
 	AuthSubject,
+	ComputeResources,
 	Project,
 	ProjectService,
 	Role,
@@ -530,6 +531,8 @@ export const SnapshotNotebookEntrySchema = z
 		updated_at: dt(),
 		tags: z.array(z.string()),
 		last_run_at: nullableDt(),
+		/** The notebook's non-default compute profile; absent = deployment default. */
+		compute_profile: z.string().optional(),
 	})
 	.openapi('SnapshotNotebookEntry');
 
@@ -569,6 +572,8 @@ export const NotebookMetaResponseSchema = z
 		runtime: RuntimeResponseSchema.optional(),
 		/** The notebook's chosen sandbox image; absent = the deployment default. */
 		base_image: z.string().optional(),
+		/** The notebook's non-default compute profile; absent = deployment default. */
+		compute_profile: z.string().optional(),
 	})
 	.openapi('NotebookMeta');
 
@@ -629,6 +634,23 @@ export const NotebookVersionResponseSchema = z
 	})
 	.openapi('NotebookVersion');
 
+export const ComputeResourcesResponseSchema = z
+	.object({
+		cpu: z.number().optional(),
+		memory_bytes: z.number().optional(),
+	})
+	.openapi('ComputeResources');
+
+export function toComputeResourcesResponse(
+	resources: ComputeResources | undefined,
+): z.infer<typeof ComputeResourcesResponseSchema> | undefined {
+	if (!resources) return undefined;
+	return {
+		cpu: resources.cpu,
+		memory_bytes: resources.memoryBytes,
+	};
+}
+
 export const SessionResponseSchema = z
 	.object({
 		session_id: z.string(),
@@ -678,6 +700,12 @@ export const SessionResponseSchema = z
 		 */
 		active_connections: z.number().optional(),
 		connections_checked_at: dt().optional(),
+		/** Named compute profile used to provision the sandbox. */
+		compute_profile: z.string().optional(),
+		/** CPU and memory resolved when the session was provisioned. */
+		compute_resources: ComputeResourcesResponseSchema.optional(),
+		/** The session booted from a provider snapshot whose resources are immutable. */
+		compute_from_snapshot: z.boolean().optional(),
 		/** Why the session went `failed` (sanitized); absent unless it failed. */
 		error: z.object({ code: z.string(), message: z.string() }).optional(),
 	})
@@ -761,5 +789,11 @@ export const CapabilitiesResponseSchema = z
 		 * the deployment offers no image choice (single image or imageless backend).
 		 */
 		sandbox_images: z.array(z.string()),
+		compute_profiles: z.array(
+			ComputeResourcesResponseSchema.extend({
+				name: z.string(),
+			}),
+		),
+		compute_profile_override: z.enum(['none', 'editors']),
 	})
 	.openapi('Capabilities');

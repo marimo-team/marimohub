@@ -37,7 +37,7 @@ import {
 	SuccessResponseSchema,
 } from '../shared';
 import { idempotentCreate } from '../idempotency';
-import type { HonoEnv } from '../context';
+import type { HonoEnv, SandboxConfig } from '../context';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
 
 // --- Request body schemas ---
@@ -58,6 +58,7 @@ const CreateNotebookBody = z.object({
 		.min(1)
 		.optional()
 		.openapi({ example: 'ghcr.io/orgname/marimo-gpu:latest' }),
+	compute_profile: z.string().min(1).optional().openapi({ example: 'large' }),
 });
 
 const CreateGitNotebookBody = z.object({
@@ -76,6 +77,7 @@ const CreateGitNotebookBody = z.object({
 	readme: z.string().optional(),
 	runtime: RuntimeResponseSchema.optional(),
 	base_image: z.string().min(1).optional(),
+	compute_profile: z.string().min(1).optional(),
 });
 
 const SyncTokenResponseSchema = z
@@ -110,6 +112,8 @@ const UpdateNotebookBody = z.object({
 	message: z.string().optional().openapi({ example: 'Add regional breakdown' }),
 	// null clears the choice back to the deployment default.
 	base_image: z.string().min(1).nullable().optional(),
+	// null clears the choice back to the deployment default.
+	compute_profile: z.string().min(1).nullable().optional(),
 });
 
 const DuplicateNotebookBody = z.object({
@@ -133,6 +137,31 @@ function checkBaseImage(
 			images?.length
 				? `Unknown base image "${value}"; valid options: default, ${images.join(', ')}`
 				: 'This deployment does not offer base image selection',
+		);
+	}
+	return value;
+}
+
+function checkComputeProfile(
+	sandbox: SandboxConfig,
+	value: string | null | undefined,
+): string | null | undefined {
+	if (value === undefined) return value;
+	const profiles = sandbox.computeProfiles ?? [];
+	if (sandbox.computeProfileOverride !== 'editors') {
+		throw new BadRequestError('This deployment does not allow compute profile selection');
+	}
+	if (value === null) return value;
+	const known = profiles.some((profile) => profile.name === value);
+	// Selecting the default clears the stored choice. `default` is the sentinel for
+	// "deployment default"; it only clears when no configured profile is literally
+	// named `default`, so such a profile stays selectable in its own right.
+	if (value === profiles[0]?.name || (value === 'default' && !known)) return null;
+	if (!known) {
+		throw new BadRequestError(
+			profiles.length > 0
+				? `Unknown compute profile "${value}"; valid options: default, ${profiles.map((profile) => profile.name).join(', ')}`
+				: 'This deployment does not offer compute profile selection',
 		);
 	}
 	return value;
@@ -432,7 +461,12 @@ app.openapi(createNotebook, async (c) => {
 		// Validated inside the idempotency wrapper: a replay of a recorded create
 		// returns the cached notebook even if the image list changed since.
 		const base_image = checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined;
-		const meta = await notebooks.createNotebook(pid, { ...body, base_image }, user.id);
+		const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined;
+		const meta = await notebooks.createNotebook(
+			pid,
+			{ ...body, base_image, compute_profile },
+			user.id,
+		);
 		return toPublicNotebookMeta(meta);
 	});
 	return c.json({ success: true, data }, 201);
@@ -446,7 +480,12 @@ app.openapi(createGitNotebook, async (c) => {
 	await assertProjectRole(projects, pid, user, 'editor', deps.policy.defaultRole);
 	const body = c.req.valid('json');
 	const base_image = checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined;
-	const { meta, sync_token } = await notebooks.synced.create(pid, { ...body, base_image }, user.id);
+	const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined;
+	const { meta, sync_token } = await notebooks.synced.create(
+		pid,
+		{ ...body, base_image, compute_profile },
+		user.id,
+	);
 	return c.json(
 		{
 			success: true,
@@ -515,10 +554,11 @@ app.openapi(updateNotebook, async (c) => {
 	await assertProjectRole(projects, pid, user, 'editor', deps.policy.defaultRole);
 	const body = c.req.valid('json');
 	const base_image = checkBaseImage(deps.sandbox.images, body.base_image);
+	const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile);
 	const meta = await notebooks.updateNotebook(
 		pid,
 		nid,
-		{ ...body, base_image },
+		{ ...body, base_image, compute_profile },
 		user.id,
 		ifMatchToken(c),
 	);

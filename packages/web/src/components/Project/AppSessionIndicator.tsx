@@ -5,6 +5,11 @@ import { Button, Popover, UserLabel } from '@/components/ui';
 import { useNow } from '@/hooks/useNow';
 import { cn } from '@/lib/utils';
 import { formatDuration, formatRelative } from '@/lib/time';
+import {
+	computeSessionPresentation,
+	effectiveComputeProfile,
+} from '@/components/Notebook/computeProfiles';
+import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 
 // App-indicator treatment per status: an AppWindow glyph colored like the
 // kernel dot, so the row reads "per-user edit dot + shared app glyph".
@@ -42,6 +47,9 @@ function AppSessionDetails({
 	editActive,
 	onStop,
 	onRestart,
+	profiles,
+	allowComputeOverride,
+	selectedProfileName,
 }: {
 	session: Session;
 	label: string;
@@ -50,6 +58,9 @@ function AppSessionDetails({
 	editActive: boolean;
 	onStop: () => void;
 	onRestart: () => void;
+	profiles: ComputeProfile[];
+	allowComputeOverride: boolean;
+	selectedProfileName?: string;
 }) {
 	const now = useNow();
 	const { data: users } = useUsersQuery([session.user_id]);
@@ -63,6 +74,13 @@ function AppSessionDetails({
 	// Suppressed while the notebook is being edited — the head is still moving.
 	const stale = !editActive && isAppStale(session, notebook?.source.current_version_id);
 	const connections = session.active_connections;
+	const storedProfileName = notebook ? notebook.meta.compute_profile : selectedProfileName;
+	const selectedProfile = effectiveComputeProfile(
+		profiles,
+		storedProfileName,
+		allowComputeOverride,
+	);
+	const compute = computeSessionPresentation(session, profiles, selectedProfile);
 
 	return (
 		<div className="flex min-w-[13rem] flex-col gap-2 text-xs">
@@ -92,7 +110,25 @@ function AppSessionDetails({
 						<dd className="text-foreground tabular-nums">~{connections}</dd>
 					</>
 				)}
+				{compute.runningLabel && (
+					<>
+						<dt>{compute.pending ? 'Running' : 'Compute'}</dt>
+						<dd className="text-foreground">{compute.runningLabel}</dd>
+					</>
+				)}
+				{compute.pending && compute.selectedLabel && (
+					<>
+						<dt>Next</dt>
+						<dd className="text-foreground">{compute.selectedLabel}</dd>
+					</>
+				)}
 			</dl>
+			{compute.pendingMessage && (
+				<p className="text-amber-600 dark:text-amber-500">{compute.pendingMessage}</p>
+			)}
+			{compute.snapshotMessage && (
+				<p className="text-amber-600 dark:text-amber-500">{compute.snapshotMessage}</p>
+			)}
 			{stale && (
 				<p className="text-amber-600 dark:text-amber-500">
 					The notebook has changed since this app started. Restart to update.
@@ -138,6 +174,9 @@ export function AppSessionIndicator({
 	editActive = false,
 	onStop,
 	onRestart,
+	profiles = [],
+	allowComputeOverride = false,
+	selectedProfileName,
 }: {
 	session: Session;
 	/** Editors may stop/restart the shared app; viewers only see its state. */
@@ -148,6 +187,9 @@ export function AppSessionIndicator({
 	editActive?: boolean;
 	onStop: () => void;
 	onRestart: () => void;
+	profiles?: ComputeProfile[];
+	allowComputeOverride?: boolean;
+	selectedProfileName?: string;
 }) {
 	const status = APP_STATUS[session.status];
 	if (!status) return null;
@@ -169,6 +211,9 @@ export function AppSessionIndicator({
 				editActive={editActive}
 				onStop={onStop}
 				onRestart={onRestart}
+				profiles={profiles}
+				allowComputeOverride={allowComputeOverride}
+				selectedProfileName={selectedProfileName}
 			/>
 		</Popover>
 	);

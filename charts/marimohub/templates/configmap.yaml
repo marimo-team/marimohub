@@ -1,4 +1,4 @@
-{{- if or .Values.config .Values.compute.profiles }}
+{{- if or .Values.config .Values.compute.profiles (ne .Values.compute.profileOverride "none") }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -7,11 +7,17 @@ metadata:
     {{- include "marimohub.labels" . | nindent 4 }}
 data:
   {{- range $k, $v := .Values.config }}
-  {{- if not (and $.Values.compute.profiles (eq $k "MARIMOHUB_COMPUTE_PROFILES")) }}
+  {{- if not (or
+    (and $.Values.compute.profiles (eq $k "MARIMOHUB_COMPUTE_PROFILES"))
+    (and (ne $.Values.compute.profileOverride "none") (eq $k "MARIMOHUB_COMPUTE_PROFILE_OVERRIDE"))
+  ) }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
   {{- end }}
   {{- with .Values.compute.profiles }}
   MARIMOHUB_COMPUTE_PROFILES: {{ . | quote }}
+  {{- end }}
+  {{- if ne .Values.compute.profileOverride "none" }}
+  MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: {{ .Values.compute.profileOverride | quote }}
   {{- end }}
 {{- end }}

@@ -194,6 +194,22 @@ components:
           type: array
           items:
             type: string
+        compute_profiles:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/ComputeResources'
+              - type: object
+                properties:
+                  name:
+                    type: string
+                required:
+                  - name
+        compute_profile_override:
+          type: string
+          enum:
+            - none
+            - editors
       required:
         - federation
         - viewer_mode
@@ -201,6 +217,15 @@ components:
         - default_role
         - limits
         - sandbox_images
+        - compute_profiles
+        - compute_profile_override
+    ComputeResources:
+      type: object
+      properties:
+        cpu:
+          type: number
+        memory_bytes:
+          type: number
     ProjectPage:
       type: object
       properties:
@@ -420,6 +445,8 @@ components:
             - 'null'
           format: date-time
           example: 2025-03-05T14:00:00Z
+        compute_profile:
+          type: string
       required:
         - id
         - title
@@ -477,6 +504,8 @@ components:
             marimo_version:
               type: string
         base_image:
+          type: string
+        compute_profile:
           type: string
       required:
         - id
@@ -730,6 +759,12 @@ components:
           type: string
           format: date-time
           example: 2025-03-05T14:00:00Z
+        compute_profile:
+          type: string
+        compute_resources:
+          $ref: '#/components/schemas/ComputeResources'
+        compute_from_snapshot:
+          type: boolean
         error:
           type: object
           properties:
@@ -767,6 +802,10 @@ components:
           enum:
             - edit
             - app
+        compute_profile:
+          type: string
+          enum:
+            - default
     SecretEntry:
       type: object
       properties:
@@ -1936,6 +1975,10 @@ paths:
                   type: string
                   minLength: 1
                   example: ghcr.io/orgname/marimo-gpu:latest
+                compute_profile:
+                  type: string
+                  minLength: 1
+                  example: large
               required:
                 - title
                 - description
@@ -2058,6 +2101,9 @@ paths:
                     marimo_version:
                       type: string
                 base_image:
+                  type: string
+                  minLength: 1
+                compute_profile:
                   type: string
                   minLength: 1
               required:
@@ -2499,6 +2545,11 @@ paths:
                   type: string
                   example: Add regional breakdown
                 base_image:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                compute_profile:
                   type:
                     - string
                     - 'null'

@@ -61,6 +61,32 @@ describe('createFromEnv auth backend selection', () => {
 			memoryBytes: 512 * 1024 ** 2,
 		});
 		expect(deps.sandbox.computeProfile).toBe('small');
+		expect(deps.sandbox.computeProfiles).toEqual([
+			{ name: 'small', resources: { cpu: 0.5, memoryBytes: 512 * 1024 ** 2 } },
+			{ name: 'large', resources: { cpu: 4, memoryBytes: 8 * 1024 ** 3 } },
+		]);
+		expect(deps.sandbox.computeProfileOverride).toBe('none');
+	});
+
+	it('enables editor profile overrides explicitly', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_COMPUTE_BACKEND: 'docker',
+			MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=1,large:cpu=4',
+			MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: 'editors',
+		});
+		expect(deps.sandbox.computeProfileOverride).toBe('editors');
+	});
+
+	it('rejects an invalid compute profile override policy', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: 'everyone',
+			}),
+		).toThrow(/MARIMOHUB_COMPUTE_PROFILE_OVERRIDE/);
 	});
 
 	it('warns once at startup when the selected backend ignores configured resources', () => {
@@ -84,6 +110,39 @@ describe('createFromEnv auth backend selection', () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+
+	it('warns when an unsupported backend ignores the editor override policy', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_COMPUTE_BACKEND: 'local',
+				MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: 'editors',
+			});
+			expect(
+				warn.mock.calls.some((call) =>
+					String(call[0]).includes('MARIMOHUB_COMPUTE_PROFILE_OVERRIDE'),
+				),
+			).toBe(true);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('hides configured profiles when the selected backend does not support them', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=1,large:cpu=4',
+			MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: 'editors',
+		});
+
+		expect(deps.sandbox.resources).toEqual({});
+		expect(deps.sandbox.computeProfile).toBeUndefined();
+		expect(deps.sandbox.computeProfiles).toEqual([]);
+		expect(deps.sandbox.computeProfileOverride).toBe('none');
 	});
 
 	it('throws on an unknown backend', () => {
