@@ -59,4 +59,11 @@ describe('buildMarimoLaunch', () => {
 		const { start } = buildMarimoLaunch({ ...BASE, mode: 'app', notebookFile: 'apps/my app.py' });
 		expect(start).toContain("'apps/my app.py'");
 	});
+
+	it('initializes a fresh project with marimohub metadata', () => {
+		const [setup] = buildMarimoLaunch(BASE).setup;
+		expect(setup).toContain('uv init');
+		expect(setup).toContain('--name notebook');
+		expect(setup).toContain('--description "Built in marimohub"');
+	});
 });
