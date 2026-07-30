@@ -3,6 +3,7 @@ import type {
 	AuthUser,
 	Project,
 	ProjectId,
+	MarimoConfigContributor,
 	SessionEnv,
 	Session,
 	SessionId,
@@ -13,7 +14,6 @@ import {
 	BadRequestError,
 	ConflictError,
 	createSandboxId,
-	DEFAULT_INJECTED_CONFIG_DIR,
 	DomainError,
 	effectiveRole,
 	exchangeFederatedStorageEnv,
@@ -599,43 +599,38 @@ app.openapi(createSession, async (c) => {
 
 					const resolveMarimoConfigEnv = async () => {
 						if (!MODE_POLICY[mode].injectEditorConfig) return;
-						if (!deps.ai) {
-							return marimoConfigToSessionEnv(DEFAULT_INJECTED_CONFIG_DIR, [
-								marimoNotebookDefaults,
-							]);
+						const contributors: MarimoConfigContributor[] = [marimoNotebookDefaults];
+						if (deps.ai) {
+							try {
+								const token = await mintAiSessionToken(
+									deps.ai.signingSecret,
+									{
+										projectId: pid,
+										notebookId: nid,
+										sessionId: session!.session_id,
+										userId: user.id,
+									},
+									{ ttlSeconds: deps.ai.tokenTtlSeconds },
+								);
+								contributors.push(
+									marimoAiContributor({
+										baseUrl: `${appBaseUrl}/api/ai/v1`,
+										apiKey: token,
+										model: deps.ai.model,
+										enabled: true,
+										maxTokens: deps.ai.maxTokens,
+										rules: deps.ai.rules,
+									}),
+								);
+							} catch (err) {
+								observer.tag('ai_inject_failed', true);
+								observer.tag(
+									'ai_inject_error',
+									err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+								);
+							}
 						}
-						try {
-							const token = await mintAiSessionToken(
-								deps.ai.signingSecret,
-								{
-									projectId: pid,
-									notebookId: nid,
-									sessionId: session!.session_id,
-									userId: user.id,
-								},
-								{ ttlSeconds: deps.ai.tokenTtlSeconds },
-							);
-							return marimoConfigToSessionEnv(deps.ai.xdgPath, [
-								marimoNotebookDefaults,
-								marimoAiContributor({
-									baseUrl: `${appBaseUrl}/api/ai/v1`,
-									apiKey: token,
-									model: deps.ai.model,
-									enabled: true,
-									maxTokens: deps.ai.maxTokens,
-									rules: deps.ai.rules,
-								}),
-							]);
-						} catch (err) {
-							observer.tag('ai_inject_failed', true);
-							observer.tag(
-								'ai_inject_error',
-								err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-							);
-							return marimoConfigToSessionEnv(DEFAULT_INJECTED_CONFIG_DIR, [
-								marimoNotebookDefaults,
-							]);
-						}
+						return marimoConfigToSessionEnv(contributors);
 					};
 
 					// Project secrets: unlike WIF/AI, this FAILS CLOSED — a key the author

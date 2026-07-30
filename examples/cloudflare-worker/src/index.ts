@@ -87,7 +87,6 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 					upstreamApiKey: env.AI_UPSTREAM_API_KEY,
 					model: env.AI_MODEL,
 					signingSecret: env.AI_SESSION_SECRET,
-					xdgPath: '/tmp/marimohub-config',
 					upstreamProject: env.AI_UPSTREAM_PROJECT,
 				}
 			: undefined;

@@ -381,7 +381,6 @@ Fronts any OpenAI-compatible upstream (OpenAI, OpenRouter, LiteLLM, or Anthropic
 | `MARIMOHUB_AI_MAX_TOKENS` | Optional `[ai] max_tokens` written into the injected notebook config. | — | — | `4096` |
 | `MARIMOHUB_AI_RULES` | Optional `[ai] rules` (custom assistant instructions). | — | — | `Prefer polars over pandas.` |
 | `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | Per-session token lifetime in seconds. | — | `3600` | — |
-| `MARIMOHUB_AI_XDG_PATH` | Where the injected `marimo.toml` lives in the sandbox (an XDG config dir, kept outside the notebook’s mount path so the token is never committed). Must be writable by the non-root sandbox user. | — | `/tmp/marimohub-config` | — |
 
 ## Project secrets
 

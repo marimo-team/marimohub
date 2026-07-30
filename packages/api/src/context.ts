@@ -135,8 +135,6 @@ export interface AiProxyConfig {
 	model: string;
 	/** Secret used to sign/verify the per-session token (the auth session secret). */
 	signingSecret: string;
-	/** Where the injected `marimo.toml` lives (XDG config dir, outside the mount path). */
-	xdgPath: string;
 	/** Optional allowlist of upstream model ids; off-list requests fall back to `model`. */
 	allowedModels?: string[];
 	maxTokens?: number;

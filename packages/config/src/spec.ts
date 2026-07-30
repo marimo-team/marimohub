@@ -1087,13 +1087,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description: 'Per-session token lifetime in seconds.',
 						default: '3600',
 					},
-					{
-						id: 'MARIMOHUB_AI_XDG_PATH',
-						name: 'Injected config dir',
-						description:
-							'Where the injected `marimo.toml` lives in the sandbox (an XDG config dir, kept outside the notebook’s mount path so the token is never committed). Must be writable by the non-root sandbox user.',
-						default: '/tmp/marimohub-config',
-					},
 				],
 			},
 		],

@@ -32,7 +32,6 @@ The full set of variables:
 | `MARIMOHUB_AI_MAX_TOKENS`        | no       | `[ai] max_tokens` written into the notebook config.                                                                  |
 | `MARIMOHUB_AI_RULES`             | no       | `[ai] rules` — custom assistant instructions.                                                                        |
 | `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | no       | Session-token lifetime in seconds (default 3600).                                                                    |
-| `MARIMOHUB_AI_XDG_PATH`          | no       | Where the injected `marimo.toml` lives (default `/tmp/marimohub-config`; must be writable by the sandbox user).      |
 
 Managed AI also requires `MARIMOHUB_AUTH_SESSION_SECRET` — the per-session tokens
 are signed with it (the same secret that signs login cookies).
@@ -52,10 +51,10 @@ provider's base and `MARIMOHUB_AI_MODEL` to one of its model ids:
 
 ## How it works
 
-1. **Inject.** At session start, marimohub writes a `marimo.toml` into the sandbox
-   (in an XDG config dir, outside the notebook's files) that registers a custom AI
-   provider pointed at marimohub's own proxy, using a short-lived, session-scoped
-   token as the `api_key`.
+1. **Inject.** At session start, marimohub sets `XDG_CONFIG_HOME` and writes a
+   `marimo.toml` into that sandbox-local config directory, outside the notebook's
+   files. The config registers a custom AI provider pointed at marimohub's own
+   proxy using a short-lived, session-scoped token as the `api_key`.
 2. **Proxy.** marimohub hosts an OpenAI-compatible endpoint at `/api/ai/v1`. It
    verifies the session token, then forwards the request to your upstream with the
    **real** key (held server-side), streaming the response back.

@@ -11,9 +11,6 @@ import { parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 
-// `/tmp` so the non-root sandbox user can always write the injected config, and
-// it stays outside the mount path (never committed/captured).
-const DEFAULT_XDG_PATH = '/tmp/marimohub-config';
 const DOCS = 'docs/ai.md';
 
 export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
@@ -68,7 +65,6 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 				docs: DOCS,
 			}),
 			signingSecret,
-			xdgPath: env.MARIMOHUB_AI_XDG_PATH ?? DEFAULT_XDG_PATH,
 			allowedModels: parseList(env.MARIMOHUB_AI_ALLOWED_MODELS),
 			maxTokens: parseIntEnv(env, 'MARIMOHUB_AI_MAX_TOKENS'),
 			rules: env.MARIMOHUB_AI_RULES,

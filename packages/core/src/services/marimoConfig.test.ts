@@ -95,20 +95,14 @@ describe('marimoNotebookDefaults', () => {
 });
 
 describe('marimoConfigToSessionEnv', () => {
-	it('writes marimo.toml under XDG_CONFIG_HOME (trailing slash trimmed)', () => {
-		const env = marimoConfigToSessionEnv('/opt/marimohub-config///', [marimoNotebookDefaults]);
-		expect(env.vars.XDG_CONFIG_HOME).toBe('/opt/marimohub-config');
+	it('writes marimo.toml under the injected XDG_CONFIG_HOME', () => {
+		const env = marimoConfigToSessionEnv([marimoNotebookDefaults]);
+		expect(env.vars.XDG_CONFIG_HOME).toBe('/tmp/marimohub-config');
 		expect(env.files).toHaveLength(1);
-		expect(env.files[0].path).toBe('/opt/marimohub-config/marimo/marimo.toml');
+		expect(env.files[0].path).toBe('/tmp/marimohub-config/marimo/marimo.toml');
 		expect(parse(env.files[0].content)).toEqual({
 			display: { default_width: 'medium' },
 			runtime: { default_sql_output: 'native' },
 		});
-	});
-
-	it.each(['', '/', 'relative/path'])('rejects invalid XDG config path %j', (path) => {
-		expect(() => marimoConfigToSessionEnv(path, [])).toThrow(
-			'XDG config path must be an absolute, non-root path',
-		);
 	});
 });
