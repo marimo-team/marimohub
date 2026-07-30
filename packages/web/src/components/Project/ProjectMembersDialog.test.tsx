@@ -5,7 +5,9 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
-import type { Capabilities, ProjectDetail, ProjectMember, ResolvedUser } from '@/types';
+import { AuthProvider } from '@/context/AuthContext';
+import { userKeys } from '@/api/queryKeys';
+import type { Capabilities, ProjectDetail, ProjectMember, ResolvedUser, User } from '@/types';
 
 const PID = 'proj-1';
 const OWNER = 'u-owner';
@@ -13,7 +15,13 @@ const EDITOR = 'u-edit';
 const INVITED = 'pending@x.io';
 
 const project = (yourRole: ProjectDetail['your_role']): ProjectDetail =>
-	({ id: PID, name: 'Sales', owner: OWNER, your_role: yourRole }) as ProjectDetail;
+	({
+		id: PID,
+		name: 'Sales',
+		owner: OWNER,
+		members: MEMBERS,
+		your_role: yourRole,
+	}) as ProjectDetail;
 
 const MEMBERS: ProjectMember[] = [
 	{ user_id: OWNER, role: 'admin' },
@@ -21,12 +29,14 @@ const MEMBERS: ProjectMember[] = [
 	{ email: INVITED, role: 'viewer' },
 ];
 
-const DIRECTORY = {
+const DIRECTORY: Record<string, ResolvedUser> = {
 	[OWNER]: { id: OWNER, email: 'olive@x.io', name: 'Olive Owner' },
 	[EDITOR]: { id: EDITOR, email: 'eddie@x.io', name: 'Eddie Editor' },
 };
 
 const NINA: ResolvedUser = { id: 'u-nina', email: 'nina@x.io', name: 'Nina New' };
+const OWNER_USER: User = { id: OWNER, email: DIRECTORY[OWNER].email, logout_url: null };
+let currentTestUser = OWNER_USER;
 
 const CAPABILITIES = {
 	federation: { available: false },
@@ -55,11 +65,18 @@ function makeFetch({
 	addResponse,
 	searchResults = [NINA],
 	capabilities = CAPABILITIES,
+	currentUser = OWNER_USER,
+	members = MEMBERS,
+	directory = DIRECTORY,
 }: {
 	addResponse?: Response;
 	searchResults?: ResolvedUser[];
 	capabilities?: Capabilities;
+	currentUser?: User;
+	members?: ProjectMember[];
+	directory?: Record<string, ResolvedUser>;
 } = {}) {
+	currentTestUser = currentUser;
 	const calls: { url: string; method: string; body: unknown }[] = [];
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
@@ -73,10 +90,11 @@ function makeFetch({
 			return addResponse ?? ok(project('admin'));
 		if (method === 'PUT' && url.includes(`/projects/${PID}/members/`)) return ok(project('admin'));
 		if (method === 'DELETE' && url.includes(`/projects/${PID}/members/`)) return ok(null);
-		if (url.includes(`/projects/${PID}/members`)) return ok(MEMBERS);
+		if (url.includes(`/projects/${PID}/members`)) return ok(members);
+		if (url.endsWith('/api/v1/me')) return ok(currentUser);
 		if (url.includes('/capabilities')) return ok(capabilities);
 		if (url.includes('/users/search')) return ok(searchResults);
-		if (url.includes('/users')) return ok(DIRECTORY);
+		if (url.includes('/users')) return ok(directory);
 		throw new Error(`unexpected fetch: ${method} ${url}`);
 	});
 	vi.stubGlobal('fetch', impl);
@@ -85,10 +103,11 @@ function makeFetch({
 
 async function renderDialog(yourRole: ProjectDetail['your_role']) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	client.setQueryData(userKeys.me(), currentTestUser);
 	const onClose = vi.fn();
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={client}>
-			{children}
+			<AuthProvider>{children}</AuthProvider>
 			<Toaster />
 		</QueryClientProvider>
 	);
@@ -129,9 +148,13 @@ describe('ProjectMembersDialog — admin', () => {
 		makeFetch();
 		await renderDialog('admin');
 
-		expect(screen.getByText('Olive Owner')).toBeInTheDocument();
+		expect(screen.getAllByText('Olive Owner')).toHaveLength(2);
+		expect(screen.getByText('Project owner')).toBeInTheDocument();
+		expect(screen.getByLabelText('Your role: Admin')).toBeInTheDocument();
+		expect(screen.getByText('You')).toBeInTheDocument();
 		// The owner's membership is fixed: no role select, no remove button.
-		expect(screen.getByText(/owner · admin/)).toBeInTheDocument();
+		expect(screen.getByText('Owner')).toBeInTheDocument();
+		expect(screen.getByLabelText(`Role for ${OWNER}: Admin`)).toBeInTheDocument();
 		expect(screen.queryByRole('combobox', { name: `Role for ${OWNER}` })).not.toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: `Remove ${OWNER}` })).not.toBeInTheDocument();
 
@@ -145,7 +168,7 @@ describe('ProjectMembersDialog — admin', () => {
 		await renderDialog('admin');
 
 		expect(screen.getByText(INVITED)).toBeInTheDocument();
-		expect(screen.getByText('invited')).toBeInTheDocument();
+		expect(screen.getByText('Invited')).toBeInTheDocument();
 		expect(screen.getByRole('combobox', { name: `Role for ${INVITED}` })).toHaveValue('viewer');
 	});
 
@@ -218,7 +241,7 @@ describe('ProjectMembersDialog — admin', () => {
 		await renderDialog('admin');
 
 		await user.type(screen.getByRole('combobox', { name: 'Search users' }), 'u');
-		expect(await screen.findByText('Type at least two characters to search')).toBeInTheDocument();
+		expect(await screen.findByText('Type at least 2 characters to search')).toBeInTheDocument();
 		expect(screen.queryByRole('option', { name: /by user id|Invite/ })).not.toBeInTheDocument();
 	});
 
@@ -300,7 +323,7 @@ describe('ProjectMembersDialog — admin', () => {
 		await pickOption(user, 'u-dup', /Add "u-dup" by user id/);
 
 		expect(await screen.findByText(/already a member/)).toBeInTheDocument();
-		expect(screen.getByRole('dialog', { name: 'Members' })).toBeInTheDocument();
+		expect(screen.getByRole('dialog', { name: 'Project Access' })).toBeInTheDocument();
 	});
 
 	it('describes a members-only deployment (default_role null)', async () => {
@@ -318,12 +341,82 @@ describe('ProjectMembersDialog — admin', () => {
 
 describe('ProjectMembersDialog — non-admin', () => {
 	it('renders a read-only list: no role selects, no remove, no add picker', async () => {
-		makeFetch();
+		makeFetch({
+			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null },
+			directory: {
+				...DIRECTORY,
+				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
+			},
+		});
 		await renderDialog('viewer');
 
 		expect(screen.getByText('Olive Owner')).toBeInTheDocument();
-		expect(screen.getByText('editor')).toBeInTheDocument();
+		expect(screen.getByLabelText(`Role for ${EDITOR}: Editor`)).toBeInTheDocument();
 		expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+	});
+});
+
+describe('ProjectMembersDialog — current access', () => {
+	it('recognizes the current user through a matching email invite', async () => {
+		makeFetch({
+			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null },
+			directory: {
+				...DIRECTORY,
+				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
+			},
+		});
+		await renderDialog('viewer');
+
+		expect(screen.getByText('Project member')).toBeInTheDocument();
+		expect(screen.getByText('You')).toBeInTheDocument();
+		expect(screen.getByLabelText('Your role: Viewer')).toBeInTheDocument();
+	});
+
+	it('shows default access without inserting a synthetic member row', async () => {
+		makeFetch({
+			currentUser: { id: NINA.id, email: NINA.email, logout_url: null },
+			capabilities: { ...CAPABILITIES, default_role: 'editor' } as Capabilities,
+			directory: { ...DIRECTORY, [NINA.id]: NINA },
+		});
+		await renderDialog('editor');
+
+		expect(screen.getByText('Default access')).toBeInTheDocument();
+		expect(screen.getByLabelText('Your role: Editor')).toBeInTheDocument();
+		expect(screen.queryByText('You')).not.toBeInTheDocument();
+		expect(screen.getAllByTestId('member-row')).toHaveLength(MEMBERS.length);
+	});
+
+	it('shows owner access when a legacy roster omits the owner row', async () => {
+		const members = MEMBERS.filter((member) => member.user_id !== OWNER);
+		makeFetch({ members });
+		await renderDialog('admin');
+
+		expect(screen.getByText('Project owner')).toBeInTheDocument();
+		expect(screen.getByLabelText('Your role: Admin')).toBeInTheDocument();
+		expect(screen.queryByText('You')).not.toBeInTheDocument();
+		expect(screen.getAllByTestId('member-row')).toHaveLength(members.length);
+	});
+
+	it('shows deployment-aware role details on focus', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null },
+			capabilities: {
+				...CAPABILITIES,
+				viewer_mode: 'ephemeral-sandbox',
+			} as Capabilities,
+			directory: {
+				...DIRECTORY,
+				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
+			},
+		});
+		await renderDialog('viewer');
+
+		const role = screen.getByLabelText('Your role: Viewer');
+		await user.tab();
+		await user.tab();
+		expect(role).toHaveFocus();
+		expect(await screen.findByText(/temporary sandbox/)).toBeInTheDocument();
 	});
 });
