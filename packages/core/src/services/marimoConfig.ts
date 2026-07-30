@@ -4,7 +4,7 @@ import type { SessionEnv } from './runtime/SandboxProvisioner';
 
 export type MarimoConfigContributor = () => TomlTable;
 
-export const DEFAULT_INJECTED_CONFIG_DIR = '/tmp/marimohub-config';
+const XDG_CONFIG_HOME = '/tmp/marimohub-config';
 
 function isTomlTable(value: TomlValue | undefined): value is TomlTable {
 	return (
@@ -45,15 +45,15 @@ export const marimoNotebookDefaults: MarimoConfigContributor = () => ({
 });
 
 export function marimoConfigToSessionEnv(
-	xdgPath: string,
 	contributors: readonly MarimoConfigContributor[],
 ): SessionEnv {
-	const dir = xdgPath.replace(/\/+$/, '');
-	if (!dir.startsWith('/')) {
-		throw new TypeError('XDG config path must be an absolute, non-root path');
-	}
 	return {
-		files: [{ path: `${dir}/marimo/marimo.toml`, content: assembleMarimoToml(contributors) }],
-		vars: { XDG_CONFIG_HOME: dir },
+		files: [
+			{
+				path: `${XDG_CONFIG_HOME}/marimo/marimo.toml`,
+				content: assembleMarimoToml(contributors),
+			},
+		],
+		vars: { XDG_CONFIG_HOME },
 	};
 }

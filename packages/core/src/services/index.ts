@@ -110,7 +110,6 @@ export {
 export type { AiSessionConfig, AiTokenClaims } from './ai/aiSessionConfig';
 export {
 	assembleMarimoToml,
-	DEFAULT_INJECTED_CONFIG_DIR,
 	marimoConfigToSessionEnv,
 	marimoNotebookDefaults,
 } from './marimoConfig';

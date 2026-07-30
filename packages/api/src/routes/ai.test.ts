@@ -11,7 +11,6 @@ const AI: ApiDeps['ai'] = {
 	upstreamApiKey: 'real-key',
 	model: 'gpt-4o-mini',
 	signingSecret: SECRET,
-	xdgPath: '/opt/marimohub-config',
 };
 
 function app(overrides: Partial<ApiDeps> = {}) {
