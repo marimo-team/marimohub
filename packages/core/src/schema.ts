@@ -15,6 +15,7 @@ import {
 	SessionId,
 	SandboxId,
 	TokenId,
+	IntegrationId,
 	UserId,
 } from './ids';
 
@@ -82,6 +83,7 @@ export const VersionIdSchema = z.string().refine(VersionId.is);
 export const SessionIdSchema = z.string().refine(SessionId.is);
 export const SandboxIdSchema = z.string().refine(SandboxId.is);
 export const TokenIdSchema = z.string().refine(TokenId.is);
+export const IntegrationIdSchema = z.string().refine(IntegrationId.is);
 // User ids (`author`/`owner`/`user_id`/`actor` foreign keys) are the opaque auth
 // `sub`. UserId.is only checks non-empty, so this brands without imposing a
 // format the identity provider doesn't guarantee.
@@ -457,9 +459,53 @@ export const FsSnapshotSchema = z.object({
 
 export type FsSnapshot = z.infer<typeof FsSnapshotSchema>;
 
+// --- Integration ---
+
+// Mutable CAS-managed head; IntegrationVersionRecord objects are immutable.
+export const IntegrationRecordSchema = z.looseObject({
+	id: IntegrationIdSchema,
+	project_id: ProjectIdSchema,
+	/** Stable registry discriminator; changing it requires a migration. */
+	kind: z.string(),
+	/** Instance name used to derive rendered paths and environment variables. */
+	name: z.string(),
+	/** Disabled integrations are omitted from session rendering. */
+	enabled: z.boolean(),
+	current_version: z.number().int().positive(),
+	created_by: UserIdSchema,
+	created_at: z.iso.datetime(),
+	updated_at: z.iso.datetime(),
+});
+
+export type IntegrationRecord = z.infer<typeof IntegrationRecordSchema>;
+
+/** Storage schema version for immutable integration config records. */
+export const CURRENT_INTEGRATION_CONFIG_VERSION = 1;
+
+export const IntegrationVersionRecordSchema = z.object({
+	schema_version: SchemaVersionSchema,
+	version: z.number().int().positive(),
+	kind: z.string(),
+	/** Kind schema version used to select the migration chain. */
+	kind_schema_version: z.number().int().positive(),
+	/** Config with secret fields replaced by encrypted envelopes. */
+	config: z.record(z.string(), z.unknown()),
+	created_by: UserIdSchema,
+	created_at: z.iso.datetime(),
+	change_note: z.string().optional(),
+});
+
+export type IntegrationVersionRecord = z.infer<typeof IntegrationVersionRecordSchema>;
+
 // --- Session ---
 
-export const SessionSchema = z.object({
+// `looseObject` for the same rolling-deploy reason as TokenSchema: every status
+// change is a CAS read-modify-write of the whole record, so a strict parse on an
+// older replica would strip fields a newer replica wrote (e.g. the `integrations`
+// audit pin) and silently rewrite the record without them on the next heartbeat.
+// The API projection (`toSessionResponse` in routes/sessions.ts) is an explicit
+// pick, so preserved unknown keys never leak into a response.
+export const SessionSchema = z.looseObject({
 	session_id: SessionIdSchema,
 	notebook_id: NotebookIdSchema,
 	project_id: ProjectIdSchema,
@@ -533,6 +579,21 @@ export const SessionSchema = z.object({
 	 * and it NEVER carries secret material (see the projection in `sessions.ts`).
 	 */
 	error: z.object({ code: z.string(), message: z.string() }).optional(),
+	/**
+	 * The audit pin: exactly which integration config versions rendered into this
+	 * sandbox at provision. Written once at `setRunning`, never mutated. Absent =
+	 * none rendered (or the record predates integrations).
+	 */
+	integrations: z
+		.array(
+			z.object({
+				id: IntegrationIdSchema,
+				name: z.string(),
+				kind: z.string(),
+				version: z.number().int().positive(),
+			}),
+		)
+		.optional(),
 });
 
 export type Session = z.infer<typeof SessionSchema>;

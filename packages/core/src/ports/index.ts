@@ -5,3 +5,4 @@ export * from './auth';
 export * from './metrics';
 export * from './credentialBroker';
 export * from './secrets';
+export * from './integrations';

@@ -758,6 +758,9 @@ importers:
       ulidx:
         specifier: 'catalog:'
         version: 2.4.1
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.0
       zod:
         specifier: 'catalog:'
         version: 4.4.3

@@ -3201,6 +3201,715 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/integrations/kinds': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List available integration kinds (schemas drive the config forms) */
+		get: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path?: never;
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Registered integration kinds */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['IntegrationKind'][];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/integrations': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List a project's integrations */
+		get: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Integration instances (no config) */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['IntegrationEntry'][];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		/** Create an integration (admin only) */
+		post: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+				};
+				cookie?: never;
+			};
+			requestBody: {
+				content: {
+					'application/json': {
+						kind: string;
+						/** @example prod */
+						name: string;
+						config: {
+							[key: string]: unknown;
+						};
+						change_note?: string;
+					};
+				};
+			};
+			responses: {
+				/** @description Integration created (config redacted) */
+				201: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['IntegrationDetail'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/integrations/{iid}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get an integration with its redacted config */
+		get: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+					iid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Integration detail (config redacted) */
+				200: {
+					headers: {
+						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+						ETag: string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['IntegrationDetail'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
+		/** Delete an integration and its version history (admin only) */
+		delete: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+					iid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Integration deleted */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['SuccessResponse'];
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		options?: never;
+		head?: never;
+		/** Update an integration (admin only); a config change appends a version */
+		patch: {
+			parameters: {
+				query?: never;
+				header?: {
+					'if-match'?: string;
+				};
+				path: {
+					pid: string;
+					iid: string;
+				};
+				cookie?: never;
+			};
+			requestBody: {
+				content: {
+					'application/json': {
+						name?: string;
+						enabled?: boolean;
+						config?: {
+							[key: string]: unknown;
+						};
+						change_note?: string;
+					};
+				};
+			};
+			responses: {
+				/** @description Integration updated (config redacted) */
+				200: {
+					headers: {
+						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+						ETag: string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['IntegrationDetail'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Precondition failed (If-Match did not match the current version) */
+				412: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/integrations/{iid}/versions': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List an integration's config versions (metadata only) */
+		get: {
+			parameters: {
+				query?: {
+					limit?: number;
+					cursor?: string;
+				};
+				header?: never;
+				path: {
+					pid: string;
+					iid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Version history, newest first */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['IntegrationVersionPage'];
+						};
+					};
+				};
+				/** @description Bad request */
+				400: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/integrations/test': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Probe connectivity for an unsaved config or a stored instance (admin only) */
+		post: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+				};
+				cookie?: never;
+			};
+			requestBody: {
+				content: {
+					'application/json': components['schemas']['IntegrationTestRequest'];
+				};
+			};
+			responses: {
+				/** @description Probe outcome (never secret material) */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['IntegrationTestResult'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/users/search': {
 		parameters: {
 			query?: never;
@@ -3639,6 +4348,9 @@ export interface components {
 			federation: {
 				available: boolean;
 			};
+			integrations: {
+				available: boolean;
+			};
 			/** @enum {string} */
 			viewer_mode: 'static' | 'applications' | 'ephemeral-sandbox';
 			viewer_session_modes: ('edit' | 'app')[];
@@ -3915,6 +4627,12 @@ export interface components {
 			compute_profile?: string;
 			compute_resources?: components['schemas']['ComputeResources'];
 			compute_from_snapshot?: boolean;
+			integrations?: {
+				id: string;
+				name: string;
+				kind: string;
+				version: number;
+			}[];
 			error?: {
 				code: string;
 				message: string;
@@ -3967,6 +4685,73 @@ export interface components {
 			ok: boolean;
 			reason?: string;
 		};
+		IntegrationKind: {
+			/** @example postgres */
+			kind: string;
+			title: string;
+			description: string;
+			/** @enum {string} */
+			category: 'database' | 'catalog' | 'engine' | 'storage' | 'other';
+			schema_version: number;
+			json_schema: {
+				[key: string]: unknown;
+			};
+			ui_hints: {
+				[key: string]: {
+					/** @enum {string} */
+					widget?: 'text' | 'password' | 'textarea' | 'select' | 'toggle' | 'number' | 'kv-pairs';
+					placeholder?: string;
+					group?: string;
+					order?: number;
+					advanced?: boolean;
+					docs_url?: string;
+				};
+			};
+			supports_test: boolean;
+			requirements: string[];
+		};
+		IntegrationEntry: {
+			id: string;
+			kind: string;
+			name: string;
+			enabled: boolean;
+			current_version: number;
+			created_by: string;
+			created_at: string;
+			updated_at: string;
+		};
+		IntegrationDetail: components['schemas']['IntegrationEntry'] & {
+			config: {
+				[key: string]: unknown;
+			};
+			change_note?: string;
+		};
+		IntegrationVersionPage: {
+			items: components['schemas']['IntegrationVersion'][];
+			next_cursor: string | null;
+		};
+		IntegrationVersion: {
+			version: number;
+			kind_schema_version: number;
+			created_by: string;
+			created_at: string;
+			change_note?: string;
+		};
+		IntegrationTestResult: {
+			ok: boolean;
+			latency_ms?: number;
+			details?: string;
+		};
+		IntegrationTestRequest:
+			| {
+					kind: string;
+					config: {
+						[key: string]: unknown;
+					};
+			  }
+			| {
+					id: string;
+			  };
 		User: {
 			id: string;
 			email: string;

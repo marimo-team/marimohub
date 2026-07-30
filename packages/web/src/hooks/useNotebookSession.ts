@@ -97,6 +97,9 @@ export function useNotebookSession(
 	const [error, setError] = useState<SessionError | null>(null);
 	const [ended, setEnded] = useState<SessionEnded | null>(null);
 	const [defaultRetryAttempted, setDefaultRetryAttempted] = useState(false);
+	// StrictMode can orphan the mutation observer during its mount/remount cycle,
+	// leaving `startSession.isPending` stuck. Track this request independently.
+	const [starting, setStarting] = useState(false);
 	// True while a restart's stop half runs (which can take tens of seconds for a
 	// real save-and-destroy) — the page would otherwise render nothing: no
 	// session, no error, and neither mutation pending yet.
@@ -135,20 +138,23 @@ export function useNotebookSession(
 			const gen = generation.bump();
 			setError(null);
 			setEnded(null);
-			mutation.mutate(undefined, {
-				onSuccess: (data) => {
+			setStarting(true);
+			void mutation.mutateAsync().then(
+				(data) => {
 					if (!generation.isCurrent(gen)) return;
+					setStarting(false);
 					if (data.status === 'running' && !data.sandbox_url) {
 						concludeAccessLost();
 						return;
 					}
 					commitSession(data);
 				},
-				onError: (err) => {
+				(err) => {
 					if (!generation.isCurrent(gen)) return;
+					setStarting(false);
 					setError(toSessionError(err));
 				},
-			});
+			);
 		},
 		[concludeAccessLost, commitSession, generation],
 	);
@@ -164,6 +170,7 @@ export function useNotebookSession(
 		const s = sessionRef.current;
 		if (s) {
 			generation.bump();
+			setStarting(false);
 			stopSession.mutate(s.session_id);
 			commitSession(null);
 		}
@@ -367,11 +374,7 @@ export function useNotebookSession(
 		session?.status === 'running' ? HEARTBEAT_INTERVAL_MS : null,
 	);
 
-	const isProvisioning =
-		restarting ||
-		startSession.isPending ||
-		startDefaultSession.isPending ||
-		session?.status === 'starting';
+	const isProvisioning = restarting || starting || session?.status === 'starting';
 	const isRunning = session?.status === 'running' && !!session.sandbox_url;
 
 	return {

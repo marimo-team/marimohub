@@ -63,15 +63,15 @@ user.
 
 ## Run the server manually
 
-Use a `.env` file only when you want to run the server outside the root
-`pnpm dev` script.
+The root `pnpm dev` script loads `apps/server/.env` when that file exists. Copy
+the example when you want persistent local overrides:
 
 ```bash
-cp apps/server/.env.example .env
+cp apps/server/.env.example apps/server/.env
 ```
 
-Then set the same local backend variables shown above and run the server command
-you are testing.
+The script's in-memory storage, local compute, and development-auth defaults
+take precedence over the file.
 
 ## Validate the local run
 

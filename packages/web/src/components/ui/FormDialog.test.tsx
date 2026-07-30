@@ -29,6 +29,14 @@ describe('FormDialog', () => {
 		expect(screen.getByLabelText('Project Name')).toBeInTheDocument();
 	});
 
+	it('keeps long dialog content inside a scrollable viewport region', () => {
+		setup();
+		const dialog = screen.getByRole('dialog');
+		expect(dialog).toHaveClass('max-h-[calc(100dvh-2rem)]', 'flex', 'flex-col');
+		const scrollRegion = dialog.querySelector('.overflow-y-auto');
+		expect(scrollRegion).toContainElement(screen.getByLabelText('Project Name'));
+	});
+
 	it('fires onSubmit when the submit button is pressed', async () => {
 		const user = userEvent.setup();
 		const { onSubmit } = setup();

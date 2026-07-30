@@ -8,9 +8,12 @@
 import { createApi } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
 import {
+	AesGcmSecretCodec,
 	composeAuthenticators,
 	createServices,
+	defaultRegistry,
 	MaintenanceLock,
+	ProjectIntegrationsStore,
 	ReconciliationService,
 } from '@marimo-hub/core';
 import { CloudflareAccessAuthenticator } from '@marimo-hub/auth-cloudflare-access';
@@ -102,6 +105,14 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 		// deployment; other requests resolve through the adapter selected above.
 		authenticator: composeAuthenticators(services.tokens, authenticator),
 		ai,
+		// Secret-free integrations work without a KEK; secret fields require SECRETS_KEK.
+		// No `probe` — Workers lack the DNS hooks the guarded egress policy needs,
+		// so connection testing stays disabled here.
+		integrations: new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec: env.SECRETS_KEK ? new AesGcmSecretCodec({ kek: env.SECRETS_KEK }) : undefined,
+		}),
 		sandbox: {
 			// Default: credential-less R2 binding mount (no endpoint/secrets) — the
 			// sandbox mounts the bucket by Worker binding name. Set R2_S3_ENDPOINT to

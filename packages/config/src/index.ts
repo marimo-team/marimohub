@@ -34,6 +34,7 @@ import {
 	supportsComputeProfiles,
 	unsupportedBackendNotice,
 } from './computeProfiles';
+import { makeIntegrations } from './integrations';
 import { makeSecrets } from './secrets';
 import { makeStorage, makeSandboxBucketConfig } from './storage';
 import { makeWif } from './wif';
@@ -342,6 +343,8 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 		...makeAi(env),
 		// Project secrets (no-op unless MARIMOHUB_SECRETS_BACKEND is configured).
 		...makeSecrets(env, bucket),
+		// Integrations are enabled by default; MARIMOHUB_INTEGRATIONS=off removes the capability.
+		...makeIntegrations(env, bucket, metrics),
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time
 		// (Dockerfile ARG → ENV); everything else is inferred from the live config +

@@ -7,6 +7,7 @@ import type {
 	ComputeResources,
 	createServices,
 	FederationTarget,
+	IntegrationsProvider,
 	KernelProbe,
 	Millis,
 	PreflightReport,
@@ -254,6 +255,8 @@ export interface ApiDeps {
 	 * (reference). Absent disables the feature (the routes 404, nothing is injected).
 	 */
 	secrets?: SecretsProvider;
+	/** Optional project integration provider; absence disables its routes and injection. */
+	integrations?: IntegrationsProvider;
 	/**
 	 * Build/deploy identity surfaced read-only by `GET /api/v1/version` (the UI's
 	 * footer info popover). Baked into the image at build time and read from env

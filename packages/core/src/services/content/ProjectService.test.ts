@@ -408,10 +408,28 @@ describe('ProjectService', () => {
 
 		it('removes the entire subtree of a soft-deleted project', async () => {
 			const doomed = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
+			const survivor = await projects.createProject({ name: 'Survivor', description: 'D' }, ACTOR);
 			await notebooks.createNotebook(
 				doomed.id,
 				{ title: 'NB', description: 'D', code: 'v1', deps: 'd', readme: '# r' },
 				ACTOR,
+			);
+			const integrationId = 'intg-0000000000000001' as never;
+			await bucket.put(
+				paths.project(doomed.id).integration(integrationId).head,
+				JSON.stringify({ marker: 'doomed integration' }),
+			);
+			await bucket.put(
+				paths.project(doomed.id).integration(integrationId).version(1),
+				JSON.stringify({ marker: 'doomed version' }),
+			);
+			await bucket.put(
+				paths.project(doomed.id).integrationNameClaim('prod'),
+				JSON.stringify({ integration_id: integrationId }),
+			);
+			await bucket.put(
+				paths.project(survivor.id).integration(integrationId).head,
+				JSON.stringify({ marker: 'survivor integration' }),
 			);
 
 			await projects.deleteProject(doomed.id, ACTOR);
@@ -419,6 +437,9 @@ describe('ProjectService', () => {
 
 			expect(await listAllKeys(bucket, `projects/${doomed.id}/`)).toEqual([]);
 			expect(await bucket.get(`projects/${doomed.id}/project.json`)).toBeNull();
+			expect(
+				await bucket.get(paths.project(survivor.id).integration(integrationId).head),
+			).not.toBeNull();
 		});
 
 		it('removes every app claim, including ones the per-notebook cleanup left behind', async () => {

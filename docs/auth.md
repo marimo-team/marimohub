@@ -159,9 +159,9 @@ A logged-in user who is not the owner or a member falls back to
 `MARIMOHUB_SUPER_ADMINS` is a comma-separated list of operators who are treated
 as `admin` on **every** project, regardless of membership or
 `MARIMOHUB_DEFAULT_ROLE`. A super admin can see and list all projects (even under
-`MARIMOHUB_DEFAULT_ROLE=none`), read and write every notebook and secret, control
-any session, and read the audit trail. It is the one grant that overrides the
-per-project role model.
+`MARIMOHUB_DEFAULT_ROLE=none`), read and write every notebook, secret, and
+[integration](./integrations.md), control any session, and read the audit trail.
+It is the one grant that overrides the per-project role model.
 
 An entry containing `@` matches the caller's login email, case-insensitively;
 any other entry matches the user id (the IdP `sub`) exactly. The two namespaces

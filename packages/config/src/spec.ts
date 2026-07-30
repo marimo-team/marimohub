@@ -1137,8 +1137,23 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Bucket-backed store',
 				selectorValue: 'bucket',
 				description:
-					'Persist secret entries in the deployment bucket (`projects/{pid}/secrets/`). Reference entries store only a pointer; enable an external-manager backend below to resolve them. Managed (encrypted-in-bucket) values require a codec that is configured separately.',
-				vars: [],
+					'Persist secret entries in the deployment bucket (`projects/{pid}/secrets/`). Reference entries store only a pointer; enable an external-manager backend below to resolve them. Managed (encrypted-in-bucket) values require the KEK below.',
+				vars: [
+					{
+						id: 'MARIMOHUB_SECRETS_KEK',
+						name: 'Managed-secret KEK',
+						description:
+							'Operator-held key material (≥ 32 chars, high-entropy) for `managed` values and integration secret fields: the hub derives a per-object AES-256-GCM key from it, so the bucket only ever sees ciphertext. Unset disables managed values (references still work). Losing it makes existing managed values unrecoverable.',
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_SECRETS_KEK_ID',
+						name: 'KEK label',
+						description:
+							'Optional label stamped on envelopes so a KEK swap fails with "unknown KEK" instead of a bare cipher error. Defaults to a fingerprint of the KEK.',
+						optIn: true,
+					},
+				],
 			},
 			{
 				name: 'AWS Secrets Manager (reference)',
@@ -1186,6 +1201,36 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'arn:aws:iam::123456789012:role/marimohub-secrets',
 					},
 				],
+			},
+		],
+	},
+	{
+		name: 'Project integrations',
+		selector: 'MARIMOHUB_INTEGRATIONS',
+		selectorDefault: 'off',
+		description:
+			'Versioned, project-scoped data-source configs (PostgreSQL, PyIceberg REST/SQL/Hive/Glue/DynamoDB/BigQuery catalogs, Trino, PySpark over Spark Connect, custom env) that project admins register once and every session in the project receives as env vars + files. The hub injects connection config, not Python libraries — each kind lists the packages its contract assumes, added per notebook. Opt-in (`on`): enable only after every replica runs a release that preserves unknown session fields, so a rolling deploy cannot strip the session audit pin (see the two-phase policy in development_docs/migrations.md); it otherwise needs nothing but the deployment bucket. Secret config fields (passwords, tokens) are encrypted with the managed-secret KEK (`MARIMOHUB_SECRETS_KEK`); without it, only secret-free configs can be saved. A render failure fails the session closed (disable the broken integration to unblock). See docs/integrations.md.',
+		backends: [
+			{
+				name: 'On',
+				selectorValue: 'on',
+				description:
+					'Integrations CRUD + session injection enabled, stored under `projects/{pid}/integrations/`.',
+				vars: [
+					{
+						id: 'MARIMOHUB_INTEGRATIONS_PROBE',
+						name: 'Connection-test egress policy',
+						description:
+							'Policy for the "Test connection" probe, which makes server-side HTTP requests to admin-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`).',
+						default: 'guarded',
+					},
+				],
+			},
+			{
+				name: 'Off',
+				selectorValue: 'off',
+				description: 'No integrations. The routes 404 and nothing is injected.',
+				vars: [],
 			},
 		],
 	},

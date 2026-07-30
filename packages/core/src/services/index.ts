@@ -30,7 +30,33 @@ export type {
 export { ProjectService } from './content/ProjectService';
 export { ProjectSecretsStore } from './secrets/ProjectSecretsStore';
 export type { ProjectSecretsStoreOptions } from './secrets/ProjectSecretsStore';
+export { AesGcmSecretCodec } from './secrets/AesGcmSecretCodec';
+export type { AesGcmSecretCodecOptions } from './secrets/AesGcmSecretCodec';
 export { assertValidSecretName } from './secrets/secretName';
+export { ProjectIntegrationsStore } from './integrations/ProjectIntegrationsStore';
+export type { ProjectIntegrationsStoreOptions } from './integrations/ProjectIntegrationsStore';
+export { IntegrationRegistry } from './integrations/registry';
+export { defineIntegration, envSegment } from './integrations/sdk';
+export type { IntegrationDefinition, RenderInput, RenderOutput } from './integrations/sdk';
+export { SECRET_MARK, zSecret } from './integrations/secretFields';
+export {
+	assertValidIntegrationName,
+	INTEGRATIONS_DIR,
+	INTEGRATIONS_DIR_ENV,
+} from './integrations/bundle';
+export {
+	customEnv,
+	defaultRegistry,
+	icebergBigQuery,
+	icebergDynamoDb,
+	icebergGlue,
+	icebergHive,
+	icebergRest,
+	icebergSql,
+	postgres,
+	pyspark,
+	trino,
+} from './integrations/kinds';
 export { ReconciliationService } from './runtime/ReconciliationService';
 export type { ReconcileResult } from './runtime/ReconciliationService';
 export { kernelActiveConnections, SessionLifecycleService } from './runtime/sessionLifecycle';

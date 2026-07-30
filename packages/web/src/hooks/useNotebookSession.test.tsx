@@ -51,6 +51,21 @@ describe('useNotebookSession', () => {
 		expect(init?.method).toBe('POST');
 	});
 
+	it('reaches running under StrictMode (mount effect fires twice)', async () => {
+		const fetchMock = vi.fn(async () => jsonOk(makeSession()));
+		vi.stubGlobal('fetch', fetchMock);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+			toaster: false,
+			reactStrictMode: true,
+		});
+
+		await waitFor(() => expect(result.current.isRunning).toBe(true));
+		expect(result.current.isProvisioning).toBe(false);
+		expect(result.current.sandboxUrl).toBe('https://sandbox.example/kernel');
+		expect(result.current.error).toBeNull();
+	});
+
 	it('holds the auto-start while enabled is false, then starts once when it flips true', async () => {
 		const fetchMock = vi.fn(async () => jsonOk(makeSession()));
 		vi.stubGlobal('fetch', fetchMock);

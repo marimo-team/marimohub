@@ -2,6 +2,8 @@ import { stringify } from 'smol-toml';
 import type { TomlTable, TomlValue } from 'smol-toml';
 import type { SessionEnv } from './runtime/SandboxProvisioner';
 
+// Contributors (aiSessionConfig) type their tables against this re-export so
+// the smol-toml dependency stays confined to this module.
 export type { TomlTable };
 
 export type MarimoConfigContributor = () => TomlTable;

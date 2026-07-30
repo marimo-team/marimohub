@@ -26,7 +26,8 @@ any change.
   — sits behind a TypeScript interface (a _port_). The domain depends on the
   interface, never on a vendor SDK.
 - **`packages/core`** holds the domain model, services, and the port interfaces.
-  It imports **no vendor SDK** (its only deps are `ulidx` and `zod`).
+  It imports **no vendor SDK** (its only deps are the generic utilities `ulidx`,
+  `zod`, and `better-all`).
 - **Adapters** (`packages/storage-*`, `packages/compute-*`, `packages/auth-*`)
   implement the ports. `packages/api` wires the services to Hono/OpenAPI routes
   via `@hono/zod-openapi`.
@@ -58,7 +59,10 @@ the only places concrete adapters are imported. **Reject PRs that violate this**
   assertions (`expectExecResult`, `expectFileResult`) are exported from
   `@marimo-hub/core/testing` — prefer them over hand-rolled `{ success, … }` checks.
 - **API response envelope** is always `{ success: true, data }` or
-  `{ success: false, error: { code, message } }` (see `packages/api/src`).
+  `{ success: false, error: { code, message } }` (see `packages/api/src`). Sole
+  exception: routes serving raw content (e.g. the notebook HTML snapshot at
+  `GET …/notebooks/{nid}/html`) return the bytes directly on success; their
+  errors still use the envelope.
 - **Frontend** (`packages/web`) is a React 19 SPA using Tailwind v4
   (`@tailwindcss/vite`) with shadcn-style UI (`class-variance-authority`,
   `clsx`, `tailwind-merge`, `lucide-react`, `sonner`) plus
@@ -77,12 +81,24 @@ the only places concrete adapters are imported. **Reject PRs that violate this**
 
 ## Key invariant
 
-`_system/catalog.json` (see `packages/core/src/paths.ts`) is the only object
-mutated in place. All writes to it go through `CatalogService.mutateSnapshot`
+`_system/catalog.json` (see `packages/core/src/paths.ts`) is the only object in
+the content store mutated in place. All writes to it go through
+`CatalogService.mutateSnapshot`
 (`packages/core/src/services/catalog/CatalogService.ts`), which performs a
-compare-and-swap on the object's ETag (conditional PUT) with retry. Everything
-else in the store is immutable or append-only. Do not write the catalog pointer
-by any other path. See [`development_docs/bucket_spec.md`](./development_docs/bucket_spec.md).
+compare-and-swap on the object's ETag (conditional PUT) with retry. Two other
+CAS-managed pointers exist, each with a single writer: the per-notebook app
+claim (`_system/apps/{pid}/{nid}.json`), written ONLY via
+`SessionService.claimApp`/`releaseApp`, and the per-integration head
+(`projects/{pid}/integrations/{iid}/integration.json`), written ONLY by
+`ProjectIntegrationsStore` — which also solely owns its immutable
+`versions/{n}.json` history (create-if-absent) and the per-name uniqueness
+claim `integrations/_names/{name}.json` (the app-claim pattern) — sole
+exception: deleting the owning notebook or project also deletes its
+claim/integration object(s) as cleanup. Everything else in
+the store is immutable, append-only, or an operational record (sessions,
+identities, tokens, secrets). Do not write the catalog pointer, the app claim,
+or an integration head by any other path.
+See [`development_docs/bucket_spec.md`](./development_docs/bucket_spec.md).
 
 ## Outstanding work
 

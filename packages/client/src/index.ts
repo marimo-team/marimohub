@@ -24,6 +24,16 @@ export type Session = components['schemas']['Session'];
 export type SecretEntry = components['schemas']['SecretEntry'];
 /** The create/overwrite payload for a project secret. */
 export type SecretInput = components['schemas']['SecretInput'];
+/** An integration kind's catalog card and config form schema. */
+export type IntegrationKind = components['schemas']['IntegrationKind'];
+/** A project integration list item without config. */
+export type IntegrationEntry = components['schemas']['IntegrationEntry'];
+/** An integration with its current, redacted config. */
+export type IntegrationDetail = components['schemas']['IntegrationDetail'];
+/** Metadata for one immutable config revision. */
+export type IntegrationVersion = components['schemas']['IntegrationVersion'];
+/** Result of an integration connectivity probe. */
+export type IntegrationTestResult = components['schemas']['IntegrationTestResult'];
 /** A single saved notebook revision (was `Version`). */
 export type NotebookVersion = components['schemas']['NotebookVersion'];
 /** Read-only deployment metadata from `GET /api/v1/version`. */
@@ -118,6 +128,11 @@ export type ApiData<T> = T extends { success: true; data: infer Data }
 		? void
 		: never;
 
+export interface ApiDataWithResponse<T> {
+	data: ApiData<T>;
+	response: Response;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -143,8 +158,9 @@ function unwrapEnvelope<T>(value: T, status: number): ApiData<T> {
 	return value.data as ApiData<T>;
 }
 
-/** Unwrap the API envelope and normalize API, transport, and parse failures. */
-export async function apiData<T>(request: Promise<FetchResult<T>>): Promise<ApiData<T>> {
+export async function apiDataWithResponse<T>(
+	request: Promise<FetchResult<T>>,
+): Promise<ApiDataWithResponse<T>> {
 	let result: FetchResult<T>;
 	try {
 		result = await request;
@@ -159,8 +175,19 @@ export async function apiData<T>(request: Promise<FetchResult<T>>): Promise<ApiD
 	}
 
 	if (result.error !== undefined) {
-		return unwrapEnvelope(result.error, result.response.status);
+		return {
+			data: unwrapEnvelope(result.error, result.response.status),
+			response: result.response,
+		};
 	}
 
-	return unwrapEnvelope(result.data, result.response.status);
+	return {
+		data: unwrapEnvelope(result.data, result.response.status),
+		response: result.response,
+	};
+}
+
+/** Unwrap the API envelope and normalize API, transport, and parse failures. */
+export async function apiData<T>(request: Promise<FetchResult<T>>): Promise<ApiData<T>> {
+	return (await apiDataWithResponse(request)).data;
 }

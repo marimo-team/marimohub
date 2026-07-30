@@ -41,7 +41,7 @@ export function SearchField({
 				ref={inputRef}
 				placeholder={placeholder}
 				className={cn(
-					'h-10 w-full rounded-lg border border-input bg-card pl-9 pr-9 text-sm text-foreground shadow-xs transition-all',
+					'h-10 w-full rounded-lg border border-input bg-card pl-9 pr-9 text-sm text-foreground shadow-xs transition-[border-color,box-shadow]',
 					'placeholder:text-muted-foreground hover:border-ring/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
 					'[&::-webkit-search-cancel-button]:appearance-none',
 				)}

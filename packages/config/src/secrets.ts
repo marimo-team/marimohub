@@ -6,8 +6,8 @@
  * Managed (encrypted-in-bucket) entries attach a codec when configured; the store
  * works reference-only without one.
  */
-import { ProjectSecretsStore } from '@marimo-hub/core';
-import type { Bucket, SecretResolver } from '@marimo-hub/core';
+import { AesGcmSecretCodec, ProjectSecretsStore } from '@marimo-hub/core';
+import type { Bucket, ManagedSecretCodec, SecretResolver } from '@marimo-hub/core';
 import { createAwsSecretsManagerResolver } from '@marimo-hub/secrets-aws';
 import type { ApiDeps } from '@marimo-hub/api';
 import { parseIntEnv } from './env';
@@ -30,7 +30,27 @@ export function makeSecrets(env: Env, bucket: Bucket): Pick<ApiDeps, 'secrets'> 
 	const aws = makeAwsResolver(env);
 	if (aws) resolvers.push(aws);
 
-	return { secrets: new ProjectSecretsStore({ bucket, resolvers }) };
+	return {
+		secrets: new ProjectSecretsStore({ bucket, resolvers, managed: makeManagedCodec(env) }),
+	};
+}
+
+/**
+ * Encrypted-in-bucket codec for `managed` entries, from `MARIMOHUB_SECRETS_KEK`.
+ * Shared with the integrations store (secret config fields use the same codec).
+ * Unset → undefined: managed values are rejected with a clear error at write time.
+ */
+export function makeManagedCodec(env: Env): ManagedSecretCodec | undefined {
+	const kek = env.MARIMOHUB_SECRETS_KEK?.trim();
+	if (!kek) return undefined;
+	try {
+		return new AesGcmSecretCodec({ kek, kekId: env.MARIMOHUB_SECRETS_KEK_ID?.trim() });
+	} catch (err) {
+		throw new ConfigError(err instanceof Error ? err.message : String(err), {
+			variable: 'MARIMOHUB_SECRETS_KEK',
+			docs: DOCS,
+		});
+	}
 }
 
 /**

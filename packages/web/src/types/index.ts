@@ -20,6 +20,10 @@ import type {
 	DeploymentInfo as ClientDeploymentInfo,
 	User as ClientUser,
 	SecretEntry as ClientSecretEntry,
+	IntegrationKind as ClientIntegrationKind,
+	IntegrationEntry as ClientIntegrationEntry,
+	IntegrationDetail as ClientIntegrationDetail,
+	IntegrationTestResult as ClientIntegrationTestResult,
 	ResolvedUser as ClientResolvedUser,
 	ApiToken as ClientApiToken,
 	ApiTokenCreated as ClientApiTokenCreated,
@@ -52,6 +56,14 @@ export type SyncToken = ClientSyncToken;
 export type Session = ClientSession;
 /** A project secret entry (metadata only — never a managed value). */
 export type SecretEntry = ClientSecretEntry;
+/** An integration kind's catalog card + JSON Schema for its config form. */
+export type IntegrationKind = ClientIntegrationKind;
+/** A project integration list item (no config). */
+export type IntegrationEntry = ClientIntegrationEntry;
+/** An integration with its redacted config. */
+export type IntegrationDetail = ClientIntegrationDetail;
+/** Outcome of the integration "Test" probe. */
+export type IntegrationTestResult = ClientIntegrationTestResult;
 /** A resolved user identity ({ id, email, name }) from `GET /api/v1/users`. */
 export type ResolvedUser = ClientResolvedUser;
 /** A personal access token's metadata (never the secret). */
