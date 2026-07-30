@@ -450,7 +450,7 @@ export function Project() {
 							{project.name}
 						</h1>
 						{/* Subtle project-level actions — uncommon, so kept low-emphasis. */}
-						<IconButton label="Members" tooltip="Members" onPress={membersModal.open}>
+						<IconButton label="Project access" tooltip="Project access" onPress={membersModal.open}>
 							<Users className="size-4" />
 						</IconButton>
 						<IconButton

@@ -23,9 +23,10 @@ import {
 import type { UserDirectory } from '@/api/hooks';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
+import { useAuth } from '@/context/AuthContext';
 import { toastError } from '@/lib/errors';
 import { defaultAccessSummary, ROLES, roleDescriptions } from '@/lib/roles';
-import type { ProjectDetail, ProjectMember, ProjectRole, ResolvedUser } from '@/types';
+import type { ProjectDetail, ProjectMember, ProjectRole, ResolvedUser, User } from '@/types';
 
 // Same validator the server's AddMemberBody uses, so the picker never offers
 // an "Invite by email" option the API would 422.
@@ -34,6 +35,44 @@ const isEmail = (value: string) => z.email().safeParse(value).success;
 /** The identifier the API keys a member row by: user id, or invite email. */
 function memberKey(member: ProjectMember): string {
 	return member.user_id ?? member.email ?? '';
+}
+
+function isCurrentUser(member: ProjectMember, user: User): boolean {
+	return (
+		member.user_id === user.id ||
+		(member.email !== undefined && member.email.toLowerCase() === user.email.toLowerCase())
+	);
+}
+
+function roleLabel(role: ProjectRole): string {
+	return role[0].toUpperCase() + role.slice(1);
+}
+
+interface RoleBadgeProps {
+	value: ProjectRole;
+	descriptions: Record<ProjectRole, string>;
+	label: string;
+}
+
+function RoleBadge({ value, descriptions, label }: RoleBadgeProps) {
+	return (
+		<Tooltip
+			content={
+				<div className="flex max-w-72 flex-col gap-1">
+					<span className="font-semibold">{roleLabel(value)}</span>
+					<span>{descriptions[value]}</span>
+				</div>
+			}
+		>
+			<button
+				type="button"
+				aria-label={`${label}: ${roleLabel(value)}`}
+				className="inline-flex h-7 shrink-0 cursor-help items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 text-xs font-medium text-primary outline-none transition-colors hover:border-primary/40 hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+			>
+				{roleLabel(value)}
+			</button>
+		</Tooltip>
+	);
 }
 
 interface RoleSelectProps {
@@ -65,7 +104,7 @@ function RoleSelect({ label, value, onChange, descriptions, disabled }: RoleSele
 			>
 				{ROLES.map((role) => (
 					<option key={role} value={role}>
-						{role}
+						{roleLabel(role)}
 					</option>
 				))}
 			</select>
@@ -179,17 +218,17 @@ function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: Add
 
 	return (
 		<div className="flex flex-col gap-3 border-t pt-4">
-			<span className="text-xs font-semibold">Add member</span>
+			<span className="text-xs font-semibold">Add Member</span>
 			<ComboBox
 				aria-label="Search users"
-				placeholder="Search by name or email, or paste a user id"
+				placeholder="Search by name or email, or paste a user ID…"
 				inputValue={query}
 				onInputChange={setQuery}
 				options={options}
 				isDisabled={isPending}
 				emptyState={
 					debounced.trim().length < 2
-						? 'Type at least two characters to search'
+						? 'Type at least 2 characters to search'
 						: search.isFetching
 							? 'Searching…'
 							: 'No matching users'
@@ -235,11 +274,14 @@ export interface ProjectMembersDialogProps {
  * or removing the owner, so the UI doesn't offer it.
  */
 export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMembersDialogProps) {
+	const { user } = useAuth();
 	const isAdmin = project.your_role === 'admin';
 	const { data: members, isLoading } = useProjectMembersQuery(project.id);
-	const { data: users, isLoading: usersLoading } = useUsersQuery(
-		(members ?? []).map((m) => m.user_id),
-	);
+	const visibleMembers = members ?? project.members ?? [];
+	const { data: users, isLoading: usersLoading } = useUsersQuery([
+		...visibleMembers.map((m) => m.user_id),
+		user?.id,
+	]);
 	const { data: capabilities } = useCapabilitiesQuery();
 	const descriptions = roleDescriptions(capabilities);
 	const accessSummary = defaultAccessSummary(capabilities);
@@ -247,6 +289,17 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 	const updateRole = useUpdateMemberRole(project.id);
 	const removeMember = useRemoveMember(project.id);
 	const confirmRemove = useDialogTarget<ProjectMember>();
+	const currentUserIsMember = user
+		? visibleMembers.some((member) => isCurrentUser(member, user))
+		: false;
+	const accessSource =
+		user?.id === project.owner
+			? 'Project owner'
+			: currentUserIsMember
+				? 'Project member'
+				: 'Default access';
+	const currentIdentity = user ? users?.[user.id] : undefined;
+	const currentDisplayName = currentIdentity?.name || user?.email || 'You';
 
 	const handleAdd = async (choice: MemberChoice, role: ProjectRole) => {
 		try {
@@ -290,80 +343,173 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 
 	return (
 		<>
-			<DialogModal isOpen={isOpen} onClose={onClose} title="Members" width="md">
-				<div className="flex flex-col gap-4 text-sm">
-					{isLoading ? (
-						<p className="text-muted-foreground">Loading members...</p>
-					) : (
-						<ul className="flex flex-col divide-y">
-							{(members ?? []).map((member) => {
-								const key = memberKey(member);
-								const isOwner = member.user_id === project.owner;
-								return (
-									<li
-										key={key}
-										data-testid="member-row"
-										className="flex items-center justify-between gap-3 py-2"
+			<DialogModal isOpen={isOpen} onClose={onClose} title="Project Access" width="lg">
+				<div className="max-h-[70dvh] overflow-y-auto overscroll-contain pr-1">
+					<div className="flex flex-col gap-5 text-sm">
+						<section
+							aria-labelledby="your-access-heading"
+							className="rounded-lg border bg-muted/40 p-3.5"
+						>
+							<div className="flex flex-wrap items-center justify-between gap-3">
+								<div className="flex min-w-0 items-center gap-3">
+									<span
+										aria-hidden="true"
+										className="flex size-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-teal-500/15 to-teal-600/25 text-xs font-semibold text-primary ring-1 ring-primary/20"
 									>
-										{member.user_id ? (
-											<UserLabel
-												user={users?.[member.user_id]}
-												fallbackId={member.user_id}
-												loading={usersLoading}
-												className="min-w-0 flex-1"
-											/>
-										) : (
-											<span className="flex min-w-0 flex-1 items-center gap-2">
-												<span className="truncate">{member.email}</span>
-												<Tooltip content="Invited by email — becomes active when they first sign in">
-													<span className="shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-														invited
+										{currentDisplayName.charAt(0).toUpperCase()}
+									</span>
+									<div className="min-w-0">
+										<h3
+											id="your-access-heading"
+											className="text-xs font-semibold text-muted-foreground"
+										>
+											Your Access
+										</h3>
+										<p className="truncate font-medium">{currentDisplayName}</p>
+										<p className="truncate text-xs text-muted-foreground">
+											{currentIdentity?.name && user?.email ? (
+												<>
+													<span translate="no">{user.email}</span>
+													<span aria-hidden="true"> · </span>
+												</>
+											) : null}
+											{accessSource}
+										</p>
+									</div>
+								</div>
+								{project.your_role ? (
+									<RoleBadge
+										value={project.your_role}
+										descriptions={descriptions}
+										label="Your role"
+									/>
+								) : (
+									<span className="text-xs text-muted-foreground">No Project Role</span>
+								)}
+							</div>
+						</section>
+
+						<section aria-labelledby="members-heading" className="flex flex-col gap-2">
+							<div className="flex items-baseline justify-between gap-3">
+								<h3 id="members-heading" className="text-xs font-semibold">
+									Members
+								</h3>
+								{!isLoading && (
+									<span className="text-xs text-muted-foreground">{visibleMembers.length}</span>
+								)}
+							</div>
+
+							{isLoading ? (
+								<p className="py-2 text-muted-foreground">Loading members…</p>
+							) : visibleMembers.length === 0 ? (
+								<p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+									No explicit project members
+								</p>
+							) : (
+								<ul className="flex flex-col divide-y">
+									{visibleMembers.map((member) => {
+										const key = memberKey(member);
+										const isOwner = member.user_id === project.owner;
+										const isYou = user ? isCurrentUser(member, user) : false;
+										return (
+											<li
+												key={key}
+												data-testid="member-row"
+												className="flex min-w-0 items-center justify-between gap-3 py-2.5"
+											>
+												<span className="flex min-w-0 flex-1 items-center gap-2">
+													{member.user_id ? (
+														<UserLabel
+															user={users?.[member.user_id]}
+															fallbackId={member.user_id}
+															loading={usersLoading}
+															className="min-w-0"
+														/>
+													) : (
+														<>
+															<span className="truncate" translate="no">
+																{member.email}
+															</span>
+															<Tooltip content="Invited by email — becomes active when they first sign in">
+																<button
+																	type="button"
+																	aria-label={`Pending invitation for ${member.email}`}
+																	className="shrink-0 cursor-help rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+																>
+																	Invited
+																</button>
+															</Tooltip>
+														</>
+													)}
+													{isYou && (
+														<span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+															You
+														</span>
+													)}
+												</span>
+												{isOwner ? (
+													<span className="flex shrink-0 items-center gap-2">
+														<span className="text-xs text-muted-foreground">Owner</span>
+														<RoleBadge
+															value="admin"
+															descriptions={descriptions}
+															label={`Role for ${key}`}
+														/>
 													</span>
-												</Tooltip>
-											</span>
-										)}
-										{isOwner ? (
-											<span className="shrink-0 text-xs text-muted-foreground">
-												owner · {member.role}
-											</span>
-										) : isAdmin ? (
-											<span className="flex shrink-0 items-center gap-1.5">
-												<RoleSelect
-													label={`Role for ${key}`}
-													value={member.role}
-													onChange={(role) => handleRoleChange(member, role)}
-													descriptions={descriptions}
-													disabled={updateRole.isPending}
-												/>
-												<IconButton
-													label={`Remove ${key}`}
-													tooltip="Remove member"
-													tone="danger"
-													onPress={() => confirmRemove.open(member)}
-												>
-													<Trash2 className="size-4" />
-												</IconButton>
-											</span>
-										) : (
-											<span className="shrink-0 text-xs text-muted-foreground">{member.role}</span>
-										)}
-									</li>
-								);
-							})}
-						</ul>
-					)}
+												) : isAdmin ? (
+													<span className="flex shrink-0 items-center gap-1.5">
+														<RoleSelect
+															label={`Role for ${key}`}
+															value={member.role}
+															onChange={(role) => handleRoleChange(member, role)}
+															descriptions={descriptions}
+															disabled={updateRole.isPending}
+														/>
+														<IconButton
+															label={`Remove ${key}`}
+															tooltip="Remove member"
+															tone="danger"
+															onPress={() => confirmRemove.open(member)}
+														>
+															<Trash2 className="size-4" />
+														</IconButton>
+													</span>
+												) : (
+													<RoleBadge
+														value={member.role}
+														descriptions={descriptions}
+														label={`Role for ${key}`}
+													/>
+												)}
+											</li>
+										);
+									})}
+								</ul>
+							)}
 
-					{accessSummary && <p className="text-xs text-muted-foreground">{accessSummary}</p>}
+							{isAdmin && (
+								<AddMemberPicker
+									members={visibleMembers}
+									users={users}
+									descriptions={descriptions}
+									onAdd={handleAdd}
+									isPending={addMember.isPending}
+								/>
+							)}
+						</section>
 
-					{isAdmin && (
-						<AddMemberPicker
-							members={members ?? []}
-							users={users}
-							descriptions={descriptions}
-							onAdd={handleAdd}
-							isPending={addMember.isPending}
-						/>
-					)}
+						{accessSummary && (
+							<section
+								aria-labelledby="default-access-heading"
+								className="rounded-lg border bg-card p-3"
+							>
+								<h3 id="default-access-heading" className="mb-1 text-xs font-semibold">
+									Default Access
+								</h3>
+								<p className="text-xs leading-relaxed text-muted-foreground">{accessSummary}</p>
+							</section>
+						)}
+					</div>
 				</div>
 			</DialogModal>
 
