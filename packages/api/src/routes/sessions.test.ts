@@ -131,6 +131,10 @@ describe('Session routes', () => {
 			.find((file) => file.path === '/tmp/marimohub-config/marimo/marimo.toml');
 		expect(config?.content).toContain('default_width = "medium"');
 		expect(config?.content).toContain('default_sql_output = "native"');
+		expect(config?.content).toContain('[sharing]');
+		expect(config?.content).toContain('html = false');
+		expect(config?.content).toContain('wasm = false');
+		expect(config?.content).toContain('molab = false');
 		expect(config?.content).not.toContain('[ai]');
 		expect(calls.setEnvVars).toContainEqual({
 			XDG_CONFIG_HOME: '/tmp/marimohub-config',

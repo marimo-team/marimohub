@@ -112,6 +112,7 @@ export {
 	assembleMarimoToml,
 	marimoConfigToSessionEnv,
 	marimoNotebookDefaults,
+	marimoSharingDisabled,
 } from './marimoConfig';
 export type { MarimoConfigContributor } from './marimoConfig';
 export {
