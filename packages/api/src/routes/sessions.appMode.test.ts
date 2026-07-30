@@ -212,6 +212,45 @@ describe('Session routes (app mode)', () => {
 		expect(runFake.calls.setEnvVars.flatMap(Object.keys)).not.toContain('XDG_CONFIG_HOME');
 	});
 
+	it.each(['', 'relative/path', '/'])(
+		'falls back to default-only editor config when managed AI uses invalid XDG path %j',
+		async (xdgPath) => {
+			const fake = makeFakeSandbox();
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(fake.instance),
+				deps: {
+					ai: {
+						upstreamBaseUrl: 'https://ai.example',
+						upstreamApiKey: 'k',
+						model: 'gpt-test',
+						signingSecret: 's'.repeat(32),
+						xdgPath,
+					},
+				},
+			});
+
+			const session = await expectOk<any>(await api.request('POST', sessionsPath()));
+
+			expect(session.status).toBe('running');
+			const configFiles = fake.calls.writeFiles
+				.flat()
+				.filter((file) => file.path.endsWith('/marimo/marimo.toml'));
+			expect(configFiles).toEqual([
+				expect.objectContaining({
+					path: '/tmp/marimohub-config/marimo/marimo.toml',
+				}),
+			]);
+			expect(configFiles[0].content).toContain('default_width = "medium"');
+			expect(configFiles[0].content).toContain('default_sql_output = "native"');
+			expect(configFiles[0].content).not.toContain('[ai]');
+			expect(fake.calls.setEnvVars).toContainEqual({
+				XDG_CONFIG_HOME: '/tmp/marimohub-config',
+			});
+		},
+	);
+
 	describe('viewer admission per MARIMOHUB_VIEWER_MODE', () => {
 		const viewerApi = (viewerMode?: 'static' | 'applications' | 'ephemeral-sandbox') =>
 			createTestApi({
