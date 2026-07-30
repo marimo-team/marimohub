@@ -62,6 +62,47 @@ export interface OidcConfig {
 const SESSION_COOKIE = 'mh_session';
 const TXN_COOKIE = 'mh_oidc_txn';
 
+/** Generous bound for an in-app deep link; anything longer is dropped, not truncated. */
+const MAX_RETURN_TO_LENGTH = 512;
+
+/**
+ * Validate a client-supplied post-login destination (`?redirect_url=` on the
+ * login route) down to a same-origin absolute path, or null if it is anything
+ * else. This is the open-redirect guard: the value is attacker-controllable (a
+ * phisher can send a victim a crafted /api/auth/login link), so it must never
+ * be able to leave this origin. Rejected here:
+ *
+ * - absolute URLs and scheme-relative `//evil.com` (and `/\evil.com` — browsers
+ *   normalize `\` to `/` in URLs, so a backslash anywhere is rejected outright)
+ * - schemes like `javascript:`/`data:` (no leading `/`)
+ * - control characters (header/URL smuggling)
+ * - paths that URL-normalize back OUT to another origin (`/..//evil.com`
+ *   dot-segment-normalizes to `//evil.com`)
+ * - `/api/…` paths (would loop straight back into the auth routes, and there is
+ *   no UI there)
+ *
+ * Exported for direct unit testing.
+ */
+export function sanitizeReturnTo(value: string | null | undefined): string | null {
+	if (!value || value.length > MAX_RETURN_TO_LENGTH) return null;
+	if (!value.startsWith('/') || value.startsWith('//')) return null;
+	// eslint-disable-next-line no-control-regex
+	if (/[\\\u0000-\u001f\u007f]/.test(value)) return null;
+	let url: URL;
+	try {
+		url = new URL(value, 'http://marimohub.invalid');
+	} catch {
+		return null;
+	}
+	if (url.origin !== 'http://marimohub.invalid') return null;
+	const path = url.pathname + url.search + url.hash;
+	// Dot-segment normalization can surface a scheme-relative `//` prefix that the
+	// prefix check above did not see (e.g. `/..//evil.com`).
+	if (!path.startsWith('/') || path.startsWith('//')) return null;
+	if (path === '/api' || path.startsWith('/api/')) return null;
+	return path;
+}
+
 /**
  * Normalize an email-domain allowlist: lowercase, trimmed, leading-`@` stripped,
  * blanks dropped. Exported for direct unit testing of the (otherwise network-gated)
@@ -152,12 +193,20 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	 * with a dead-end URL. Instead we clear the in-flight transaction cookie and
 	 * bounce to the post-login target with an `auth_error` code that the sign-in
 	 * screen turns into a friendly, actionable message (e.g. "domain not allowed").
-	 * No session cookie is set, so the user stays unauthenticated.
+	 * No session cookie is set, so the user stays unauthenticated. When the
+	 * transaction carried a `returnTo` deep link, the error bounces there instead
+	 * of `/` so a retry from the sign-in screen keeps the destination.
 	 */
-	function callbackError(c: Context, code: string): Response {
+	function callbackError(c: Context, code: string, returnTo?: string | null): Response {
 		deleteCookie(c, TXN_COOKIE, { path: '/' });
-		const sep = postLoginRedirect.includes('?') ? '&' : '?';
-		return c.redirect(`${postLoginRedirect}${sep}auth_error=${code}`);
+		const target = returnTo ?? postLoginRedirect;
+		// `auth_error` must land in the query string, before any `#fragment` — the
+		// sign-in screen reads it via useSearchParams(), which never sees the hash.
+		const hashIndex = target.indexOf('#');
+		const base = hashIndex === -1 ? target : target.slice(0, hashIndex);
+		const hash = hashIndex === -1 ? '' : target.slice(hashIndex);
+		const sep = base.includes('?') ? '&' : '?';
+		return c.redirect(`${base}${sep}auth_error=${code}${hash}`);
 	}
 
 	const routes = new Hono();
@@ -168,9 +217,13 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		const codeChallenge = await oauth.calculatePKCECodeChallenge(codeVerifier);
 		const state = oauth.generateRandomState();
 		const nonce = oauth.generateRandomNonce();
+		// The post-login deep link rides in the SIGNED transaction cookie — never
+		// through the IdP round-trip — so it cannot be tampered with mid-flow.
+		// Anything that fails the open-redirect sanitizer is silently dropped.
+		const returnTo = sanitizeReturnTo(c.req.query('redirect_url'));
 
 		// Stash the PKCE/transaction values in a short-lived signed cookie.
-		const txn = await new SignJWT({ verifier: codeVerifier, state, nonce })
+		const txn = await new SignJWT({ verifier: codeVerifier, state, nonce, returnTo })
 			.setProtectedHeader({ alg: 'HS256' })
 			.setIssuedAt()
 			.setExpirationTime('10m')
@@ -217,12 +270,16 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		let verifier: string;
 		let expectedState: string | undefined;
 		let expectedNonce: string | undefined;
+		let returnTo: string | null = null;
 		try {
 			const { payload } = await jwtVerify(txnCookie, secret);
 			if (typeof payload.verifier !== 'string') throw new Error('missing verifier');
 			verifier = payload.verifier;
 			expectedState = typeof payload.state === 'string' ? payload.state : undefined;
 			expectedNonce = typeof payload.nonce === 'string' ? payload.nonce : undefined;
+			// Re-sanitize on the way out (defense in depth): the cookie is signed, but
+			// the redirect below must hold even if the sanitizer or signing changes.
+			returnTo = sanitizeReturnTo(typeof payload.returnTo === 'string' ? payload.returnTo : null);
 		} catch {
 			return callbackError(c, 'session_expired');
 		}
@@ -248,11 +305,11 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			});
 			claims = oauth.getValidatedIdTokenClaims(result);
 		} catch {
-			return callbackError(c, 'auth_failed');
+			return callbackError(c, 'auth_failed', returnTo);
 		}
 
 		if (!claims?.sub || typeof claims.email !== 'string') {
-			return callbackError(c, 'auth_failed');
+			return callbackError(c, 'auth_failed', returnTo);
 		}
 
 		// The email is an authorization credential (project email-invites match on
@@ -262,17 +319,17 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		// here — rejecting absence would break IdPs that never send it — but the
 		// domain-allowlist branch below stays strict and demands `true`.
 		if (claims.email_verified === false) {
-			return callbackError(c, 'email_not_verified');
+			return callbackError(c, 'email_not_verified', returnTo);
 		}
 
 		if (restrictDomains) {
 			// Require a provider-verified address before trusting its domain — an
 			// unverified email could carry an attacker-chosen `@marimo.io` value.
 			if (claims.email_verified !== true) {
-				return callbackError(c, 'email_not_verified');
+				return callbackError(c, 'email_not_verified', returnTo);
 			}
 			if (!emailDomainAllowed(claims.email, allowedDomains)) {
-				return callbackError(c, 'domain_not_allowed');
+				return callbackError(c, 'domain_not_allowed', returnTo);
 			}
 		}
 
@@ -288,7 +345,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			maxAge: sessionTtl,
 		});
 		deleteCookie(c, TXN_COOKIE, { path: '/' });
-		return c.redirect(postLoginRedirect);
+		return c.redirect(returnTo ?? postLoginRedirect);
 	});
 
 	routes.get('/api/auth/logout', async (c) => {
