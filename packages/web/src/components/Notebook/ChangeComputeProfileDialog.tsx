@@ -2,18 +2,19 @@ import { AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { FormDialog, useAppForm, useSeedOnOpen } from '@/components/form';
 import { useCapabilitiesQuery, useNotebookQuery, useUpdateNotebook } from '@/api/hooks';
-import type { RadioGroupFieldOption } from '@/components/form/fields/RadioGroupField';
-import { computeProfileResources } from './ComputeProfileSelect';
-
-export const DEFAULT_COMPUTE_PROFILE = '__marimohub_default_compute__';
+import { toastError } from '@/lib/errors';
+import {
+	computeProfileOptions,
+	computeProfilePickerValue,
+	DEFAULT_COMPUTE_PROFILE,
+} from './computeProfiles';
 
 interface ChangeComputeProfileDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
 	projectId: string;
 	notebook: { id: string; title: string };
-	canRestart?: boolean;
-	onRestart?: () => void;
+	restartAction?: { label: string; onRestart: () => void };
 }
 
 export function ChangeComputeProfileDialog({
@@ -21,39 +22,15 @@ export function ChangeComputeProfileDialog({
 	onClose,
 	projectId,
 	notebook,
-	canRestart = false,
-	onRestart,
+	restartAction,
 }: ChangeComputeProfileDialogProps) {
 	const { data: capabilities } = useCapabilitiesQuery();
 	const profiles = capabilities?.compute_profiles ?? [];
 	const detail = useNotebookQuery(projectId, notebook.id);
 	const stored = detail.data?.meta.compute_profile;
-	const current = stored ?? DEFAULT_COMPUTE_PROFILE;
+	const current = computeProfilePickerValue(profiles, stored);
 	const stale = !!stored && !profiles.some((profile) => profile.name === stored);
-	const options: RadioGroupFieldOption[] = profiles[0]
-		? [
-				{
-					value: DEFAULT_COMPUTE_PROFILE,
-					label: `Default (${profiles[0].name})`,
-					description: computeProfileResources(profiles[0]),
-				},
-				...profiles.slice(1).map((profile) => ({
-					value: profile.name,
-					label: profile.name,
-					description: computeProfileResources(profile),
-				})),
-				...(stale
-					? [
-							{
-								value: stored,
-								label: `${stored} (unavailable)`,
-								description: 'Removed by your operator',
-								isDisabled: true,
-							},
-						]
-					: []),
-			]
-		: [];
+	const options = computeProfileOptions(profiles, stored);
 	const updateNotebook = useUpdateNotebook(projectId);
 	const form = useAppForm({
 		defaultValues: { computeProfile: current },
@@ -67,18 +44,18 @@ export function ChangeComputeProfileDialog({
 				const selectedName = choice ?? profiles[0]?.name ?? 'default';
 				toast.success(
 					`Compute set to ${selectedName}. Applies when the notebook session restarts.`,
-					canRestart && onRestart
+					restartAction
 						? {
 								action: {
-									label: 'Restart session',
-									onClick: onRestart,
+									label: restartAction.label,
+									onClick: restartAction.onRestart,
 								},
 							}
 						: undefined,
 				);
 				onClose();
 			} catch (err) {
-				toast.error((err as Error).message);
+				toastError(err);
 			}
 		},
 	});
@@ -89,6 +66,7 @@ export function ChangeComputeProfileDialog({
 			form={form}
 			isPending={updateNotebook.isPending}
 			submitDisabled={!detail.isSuccess}
+			requireDirty
 			isOpen={isOpen}
 			onClose={onClose}
 			title="Change Compute"

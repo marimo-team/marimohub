@@ -718,38 +718,32 @@ export function useStartSessionWithDefault(
 	return useStartSessionRequest(projectId, notebookId, mode, 'default');
 }
 
-/**
- * Restart the shared app: stop the given session, then start a fresh one (which
- * picks up the notebook's current head — the staleness banner's action). The
- * stop is awaited so the fresh create can't reuse the dying sandbox.
- */
+async function restartSessionRequest(
+	projectId: string,
+	notebookId: string,
+	sessionId: string,
+	mode: 'edit' | 'app',
+) {
+	try {
+		await stopSessionRequest(projectId, notebookId, sessionId);
+	} catch (err) {
+		// A reaped session is already stopped, so the requested restart can continue.
+		if (!isNotFoundError(err)) throw err;
+	}
+	return startSessionRequest(projectId, notebookId, mode);
+}
+
 export function useRestartApp(projectId: string, notebookId: string) {
 	return useApiMutation(
-		async (sessionId: string) => {
-			try {
-				await stopSessionRequest(projectId, notebookId, sessionId);
-			} catch (err) {
-				// Already gone (stopped/reaped underneath us): the restart intent
-				// still holds, so proceed to the fresh start.
-				if (!isNotFoundError(err)) throw err;
-			}
-			return startSessionRequest(projectId, notebookId, 'app');
-		},
-		// Refresh the status indicators right away rather than waiting for the poll.
+		(sessionId: string) => restartSessionRequest(projectId, notebookId, sessionId, 'app'),
 		() => [sessionKeys.listByProject(projectId)],
 	);
 }
 
-export function useRestartSession(projectId: string, notebookId: string) {
+export function useRestartSession(projectId: string) {
 	return useApiMutation(
-		async (sessionId: string) => {
-			try {
-				await stopSessionRequest(projectId, notebookId, sessionId);
-			} catch (err) {
-				if (!isNotFoundError(err)) throw err;
-			}
-			return startSessionRequest(projectId, notebookId, 'edit');
-		},
+		({ notebookId, sessionId }: { notebookId: string; sessionId: string }) =>
+			restartSessionRequest(projectId, notebookId, sessionId, 'edit'),
 		() => [sessionKeys.listByProject(projectId)],
 	);
 }

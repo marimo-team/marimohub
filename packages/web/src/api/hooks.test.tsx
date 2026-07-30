@@ -8,6 +8,7 @@ import {
 	useNotebookHtmlQuery,
 	useProjectSecretsQuery,
 	useRestartApp,
+	useRestartSession,
 	useStartSession,
 	useUpdateGitSource,
 	useUpdateNotebook,
@@ -296,7 +297,24 @@ describe('useStartSession', () => {
 	});
 });
 
-describe('useRestartApp', () => {
+describe.each([
+	{
+		label: 'app',
+		useRestart: () => {
+			const mutation = useRestartApp(PID, NID);
+			return () => mutation.mutateAsync('sess-1');
+		},
+		expectedBody: '{"mode":"app"}',
+	},
+	{
+		label: 'edit',
+		useRestart: () => {
+			const mutation = useRestartSession(PID);
+			return () => mutation.mutateAsync({ notebookId: NID, sessionId: 'sess-1' });
+		},
+		expectedBody: '',
+	},
+])('$label session restart', ({ useRestart, expectedBody }) => {
 	const sessionsPath = `/api/v1/projects/${PID}/notebooks/${NID}/sessions`;
 
 	function restartFetch(stop: () => Promise<Response>) {
@@ -310,31 +328,31 @@ describe('useRestartApp', () => {
 		});
 	}
 
-	it('stops the old session, then starts a fresh app session', async () => {
+	it('stops the old session, then starts a fresh session', async () => {
 		const fetchMock = restartFetch(async () => jsonOk(undefined));
 
-		const { result, client } = renderHookWithClient(() => useRestartApp(PID, NID), {
+		const { result, client } = renderHookWithClient(useRestart, {
 			toaster: false,
 		});
 		const spy = vi.spyOn(client, 'invalidateQueries');
 
 		await act(async () => {
-			await result.current.mutateAsync('sess-1');
+			await result.current();
 		});
 
 		const methods = fetchMock.mock.calls.map(([url, init]) => `${init?.method} ${requestUrl(url)}`);
 		expect(methods).toEqual([`DELETE ${sessionsPath}/sess-1`, `POST ${sessionsPath}`]);
-		expect(await requestOf(fetchMock, 1).clone().text()).toBe('{"mode":"app"}');
+		expect(await requestOf(fetchMock, 1).clone().text()).toBe(expectedBody);
 		expect(invalidatedKeys(spy)).toEqual([sessionKeys.listByProject(PID)]);
 	});
 
 	it('still starts when the old session is already gone (404)', async () => {
 		const fetchMock = restartFetch(async () => jsonError('NOT_FOUND', 'Session not found', 404));
 
-		const { result } = renderHookWithClient(() => useRestartApp(PID, NID), { toaster: false });
+		const { result } = renderHookWithClient(useRestart, { toaster: false });
 		let started: { session_id?: string } | undefined;
 		await act(async () => {
-			started = await result.current.mutateAsync('sess-1');
+			started = await result.current();
 		});
 
 		expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -344,13 +362,13 @@ describe('useRestartApp', () => {
 	it('aborts without starting when the stop fails for any other reason', async () => {
 		const fetchMock = restartFetch(async () => jsonError('INTERNAL_ERROR', 'teardown failed', 500));
 
-		const { result, client } = renderHookWithClient(() => useRestartApp(PID, NID), {
+		const { result, client } = renderHookWithClient(useRestart, {
 			toaster: false,
 		});
 		const spy = vi.spyOn(client, 'invalidateQueries');
 
 		await act(async () => {
-			await expect(result.current.mutateAsync('sess-1')).rejects.toThrow('teardown failed');
+			await expect(result.current()).rejects.toThrow('teardown failed');
 		});
 
 		// A restart that half-ran (stopped, never started) is worse than one that failed.

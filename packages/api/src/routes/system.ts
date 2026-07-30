@@ -8,6 +8,7 @@ import {
 	jsonContent,
 	MeResponseSchema,
 	ok,
+	toComputeResourcesResponse,
 } from '../shared';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../pagination';
 
@@ -100,8 +101,7 @@ app.openapi(capabilitiesRoute, (c) => {
 		sandbox_images: deps.sandbox.images ?? [],
 		compute_profiles: (deps.sandbox.computeProfiles ?? []).map((profile) => ({
 			name: profile.name,
-			cpu: profile.resources.cpu,
-			memory_bytes: profile.resources.memoryBytes,
+			...toComputeResourcesResponse(profile.resources),
 		})),
 		compute_profile_override: deps.sandbox.computeProfileOverride ?? 'none',
 	});

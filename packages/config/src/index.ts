@@ -290,12 +290,12 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
 	);
-	const profileNotice = unsupportedBackendNotice(computeBackend, computeProfiles);
-	if (
-		profileNotice &&
-		['e2b', 'cloudflare', 'local', 'none', 'noop'].includes(computeBackend) &&
-		!warnedUnsupportedProfileBackends.has(computeBackend)
-	) {
+	const profileNotice = unsupportedBackendNotice(
+		computeBackend,
+		computeProfiles,
+		computeProfileOverride,
+	);
+	if (profileNotice && !warnedUnsupportedProfileBackends.has(computeBackend)) {
 		console.warn(profileNotice);
 		warnedUnsupportedProfileBackends.add(computeBackend);
 	}

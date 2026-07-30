@@ -23,6 +23,7 @@ import {
 } from '@marimo-hub/core';
 import type {
 	AuthSubject,
+	ComputeResources,
 	Project,
 	ProjectService,
 	Role,
@@ -633,6 +634,23 @@ export const NotebookVersionResponseSchema = z
 	})
 	.openapi('NotebookVersion');
 
+export const ComputeResourcesResponseSchema = z
+	.object({
+		cpu: z.number().optional(),
+		memory_bytes: z.number().optional(),
+	})
+	.openapi('ComputeResources');
+
+export function toComputeResourcesResponse(
+	resources: ComputeResources | undefined,
+): z.infer<typeof ComputeResourcesResponseSchema> | undefined {
+	if (!resources) return undefined;
+	return {
+		cpu: resources.cpu,
+		memory_bytes: resources.memoryBytes,
+	};
+}
+
 export const SessionResponseSchema = z
 	.object({
 		session_id: z.string(),
@@ -685,12 +703,7 @@ export const SessionResponseSchema = z
 		/** Named compute profile used to provision the sandbox. */
 		compute_profile: z.string().optional(),
 		/** CPU and memory resolved when the session was provisioned. */
-		compute_resources: z
-			.object({
-				cpu: z.number().optional(),
-				memory_bytes: z.number().optional(),
-			})
-			.optional(),
+		compute_resources: ComputeResourcesResponseSchema.optional(),
 		/** The session booted from a provider snapshot whose resources are immutable. */
 		compute_from_snapshot: z.boolean().optional(),
 		/** Why the session went `failed` (sanitized); absent unless it failed. */
@@ -777,10 +790,8 @@ export const CapabilitiesResponseSchema = z
 		 */
 		sandbox_images: z.array(z.string()),
 		compute_profiles: z.array(
-			z.object({
+			ComputeResourcesResponseSchema.extend({
 				name: z.string(),
-				cpu: z.number().optional(),
-				memory_bytes: z.number().optional(),
 			}),
 		),
 		compute_profile_override: z.enum(['none', 'editors']),

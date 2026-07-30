@@ -159,15 +159,21 @@ describe('unsupportedBackendNotice', () => {
 		expect(unsupportedBackendNotice('e2b', parseComputeProfiles(undefined))).toBeUndefined();
 		expect(unsupportedBackendNotice('local', parseComputeProfiles('bare'))).toBeUndefined();
 	});
+
+	it('includes an ignored editor-override policy even without resource values', () => {
+		const notice = unsupportedBackendNotice('local', parseComputeProfiles(undefined), 'editors');
+		expect(notice).toContain('MARIMOHUB_COMPUTE_PROFILE_OVERRIDE');
+		expect(notice).toContain('ignored');
+	});
 });
 
 describe('supportsComputeProfiles', () => {
 	it('only enables profile UX for adapters that apply resource requests', () => {
-		expect(supportsComputeProfiles('docker')).toBe(true);
-		expect(supportsComputeProfiles('coreweave')).toBe(true);
-		expect(supportsComputeProfiles('e2b')).toBe(false);
-		expect(supportsComputeProfiles('cloudflare')).toBe(false);
-		expect(supportsComputeProfiles('local')).toBe(false);
-		expect(supportsComputeProfiles('none')).toBe(false);
+		for (const backend of ['coreweave', 'wandb', 'modal', 'docker', 'podman', 'kubernetes']) {
+			expect(supportsComputeProfiles(backend), backend).toBe(true);
+		}
+		for (const backend of ['e2b', 'cloudflare', 'local', 'none', 'noop', 'unknown']) {
+			expect(supportsComputeProfiles(backend), backend).toBe(false);
+		}
 	});
 });

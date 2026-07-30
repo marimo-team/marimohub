@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session } from '@/types';
 import { SessionStatusDot } from './SessionStatusDot';
-import type { ComputeProfile } from '@/components/Notebook/ComputeProfileSelect';
+import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 
 function makeSession(status: Session['status']): Session {
 	return {
@@ -96,7 +96,11 @@ describe('SessionStatusDot', () => {
 
 	it('shows the session compute profile in details', async () => {
 		const user = userEvent.setup();
-		renderDot({ ...makeSession('running'), compute_profile: 'large' });
+		renderDot(
+			{ ...makeSession('running'), compute_profile: 'large', compute_resources: {} },
+			[{ name: 'large' }],
+			'large',
+		);
 
 		await user.click(screen.getByRole('button'));
 		expect(await screen.findByText('Compute')).toBeInTheDocument();
@@ -157,6 +161,33 @@ describe('SessionStatusDot', () => {
 
 		await user.click(screen.getByRole('button'));
 		expect(await screen.findByText('applies after snapshot is dropped')).toBeInTheDocument();
+	});
+
+	it('identifies restored compute even when the selected resources are unchanged', async () => {
+		const user = userEvent.setup();
+		renderDot(
+			{
+				...makeSession('running'),
+				compute_profile: 'small',
+				compute_resources: { cpu: 1 },
+				compute_from_snapshot: true,
+			},
+			[{ name: 'small', cpu: 1 }],
+			'small',
+		);
+
+		await user.click(screen.getByRole('button'));
+		expect(await screen.findByText('running from snapshot')).toBeInTheDocument();
+	});
+
+	it('does not silently treat a legacy session with unknown resources as current', async () => {
+		const user = userEvent.setup();
+		renderDot(makeSession('running'), [{ name: 'small', cpu: 1 }], 'small');
+
+		await user.click(screen.getByRole('button'));
+		expect(await screen.findByText('resources unavailable')).toBeInTheDocument();
+		expect(screen.getByText('small — 1 CPU')).toBeInTheDocument();
+		expect(screen.getByText('running resources unknown — restart to apply')).toBeInTheDocument();
 	});
 
 	it.each(['terminated', 'expired'] as const)(

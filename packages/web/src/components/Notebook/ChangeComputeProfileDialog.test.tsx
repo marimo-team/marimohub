@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -42,7 +43,7 @@ function makeFetch(currentComputeProfile?: string) {
 
 function renderDialog(
 	fetchImpl: ReturnType<typeof makeFetch>,
-	options: { canRestart?: boolean; onRestart?: () => void } = {},
+	options: { restartLabel?: string; onRestart?: () => void } = {},
 ) {
 	vi.stubGlobal('fetch', fetchImpl);
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -53,17 +54,26 @@ function renderDialog(
 			<Toaster />
 		</QueryClientProvider>
 	);
-	render(
-		<ChangeComputeProfileDialog
-			isOpen
-			onClose={onClose}
-			projectId="proj-x"
-			notebook={{ id: 'nb-1', title: 'My NB' }}
-			canRestart={options.canRestart}
-			onRestart={options.onRestart}
-		/>,
-		{ wrapper },
-	);
+	function Harness() {
+		const [isOpen, setIsOpen] = useState(true);
+		return (
+			<ChangeComputeProfileDialog
+				isOpen={isOpen}
+				onClose={() => {
+					onClose();
+					setIsOpen(false);
+				}}
+				projectId="proj-x"
+				notebook={{ id: 'nb-1', title: 'My NB' }}
+				restartAction={
+					options.onRestart
+						? { label: options.restartLabel ?? 'Restart session', onRestart: options.onRestart }
+						: undefined
+				}
+			/>
+		);
+	}
+	render(<Harness />, { wrapper });
 	return { onClose };
 }
 
@@ -85,19 +95,24 @@ describe('ChangeComputeProfileDialog', () => {
 	});
 
 	it('keeps a removed stored profile visible but disabled', async () => {
+		const user = userEvent.setup();
 		renderDialog(makeFetch('gpu-big'));
 
 		const stale = await screen.findByRole('radio', { name: /gpu-big \(unavailable\)/ });
 		expect(stale).toBeChecked();
 		expect(stale).toBeDisabled();
 		expect(screen.getByText(/removed by your operator/)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+		await user.click(screen.getByRole('radio', { name: /Default \(small\)/ }));
+		expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
 	});
 
 	it('PATCHes null for Default and offers restart from the confirmation toast', async () => {
 		const user = userEvent.setup();
 		const fetchImpl = makeFetch('large');
 		const onRestart = vi.fn();
-		const { onClose } = renderDialog(fetchImpl, { canRestart: true, onRestart });
+		const { onClose } = renderDialog(fetchImpl, { onRestart });
 
 		await waitFor(() => expect(screen.getByRole('radio', { name: /large/ })).toBeChecked());
 		await user.click(screen.getByRole('radio', { name: /Default \(small\)/ }));
@@ -106,9 +121,7 @@ describe('ChangeComputeProfileDialog', () => {
 		const call = patchCall(fetchImpl);
 		expect(JSON.parse(call![1]!.body as string)).toEqual({ compute_profile: null });
 		expect(onClose).toHaveBeenCalled();
-		const restart = (await screen.findByText('Restart session')).closest('button');
-		expect(restart).not.toBeNull();
-		restart!.click();
+		await user.click(await screen.findByRole('button', { name: 'Restart session' }));
 		expect(onRestart).toHaveBeenCalled();
 	});
 });

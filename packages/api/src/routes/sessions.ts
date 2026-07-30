@@ -57,6 +57,7 @@ import {
 	SessionResponseSchema,
 	sessionRetirer,
 	SuccessResponseSchema,
+	toComputeResourcesResponse,
 } from '../shared';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
 
@@ -487,9 +488,10 @@ app.openapi(createSession, async (c) => {
 	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], (msg) =>
 		console.warn(`[session] ${msg} (project=${pid} notebook=${nid})`),
 	);
+	const retryWithDefault = mode === 'edit' && body?.compute_profile === 'default';
 	const requestedComputeProfile = resolveComputeProfile(
 		sandbox,
-		body?.compute_profile === 'default' ? undefined : notebook.meta.compute_profile,
+		retryWithDefault ? undefined : notebook.meta.compute_profile,
 		sandbox.computeProfileOverride === 'editors' && profileOverrideEligible,
 		(msg) => console.warn(`[session] ${msg} (project=${pid} notebook=${nid})`),
 	);
@@ -557,10 +559,7 @@ app.openapi(createSession, async (c) => {
 			}
 		: {
 				name: requestedComputeProfile.name,
-				resources: {
-					cpu: requestedComputeProfile.resources.cpu,
-					memory_bytes: requestedComputeProfile.resources.memoryBytes,
-				},
+				resources: toComputeResourcesResponse(requestedComputeProfile.resources),
 			};
 
 	const hostname = sandbox.hostname || new URL(c.req.url).hostname;

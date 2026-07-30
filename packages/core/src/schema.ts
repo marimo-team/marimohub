@@ -437,17 +437,19 @@ export function toPublicVersion(version: Version): PublicVersion {
 // ULID). No `provider` field: the capability gate (`asFilesystemSnapshots`)
 // already ensures only a snapshot-capable backend reads or writes this pointer,
 // so a backend switch ignores it.
+export const ComputeResourceRecordSchema = z.object({
+	cpu: z.number().optional(),
+	memory_bytes: z.number().optional(),
+});
+
+export type ComputeResourceRecord = z.infer<typeof ComputeResourceRecordSchema>;
+
 export const FsSnapshotSchema = z.object({
 	snapshot_id: z.string(),
 	captured_at: z.iso.datetime(),
 	size_bytes: z.number().int().nonnegative().optional(),
 	compute_profile: z.string().optional(),
-	compute_resources: z
-		.object({
-			cpu: z.number().optional(),
-			memory_bytes: z.number().optional(),
-		})
-		.optional(),
+	compute_resources: ComputeResourceRecordSchema.optional(),
 });
 
 export type FsSnapshot = z.infer<typeof FsSnapshotSchema>;
@@ -510,12 +512,7 @@ export const SessionSchema = z.object({
 	sandbox_id: SandboxIdSchema.optional(),
 	sandbox_url: z.string().optional(),
 	compute_profile: z.string().optional(),
-	compute_resources: z
-		.object({
-			cpu: z.number().optional(),
-			memory_bytes: z.number().optional(),
-		})
-		.optional(),
+	compute_resources: ComputeResourceRecordSchema.optional(),
 	compute_from_snapshot: z.boolean().optional(),
 	/**
 	 * Server-reachable kernel endpoint, persisted only in `proxy` exposure mode so

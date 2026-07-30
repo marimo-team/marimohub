@@ -6,11 +6,10 @@ import { useNow } from '@/hooks/useNow';
 import { cn } from '@/lib/utils';
 import { formatDuration, formatRelative } from '@/lib/time';
 import {
-	computeProfileResources,
-	computeResourcesEqual,
+	computeSessionPresentation,
 	effectiveComputeProfile,
-} from '@/components/Notebook/ComputeProfileSelect';
-import type { ComputeProfile } from '@/components/Notebook/ComputeProfileSelect';
+} from '@/components/Notebook/computeProfiles';
+import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 
 // App-indicator treatment per status: an AppWindow glyph colored like the
 // kernel dot, so the row reads "per-user edit dot + shared app glyph".
@@ -50,6 +49,7 @@ function AppSessionDetails({
 	onRestart,
 	profiles,
 	allowComputeOverride,
+	selectedProfileName,
 }: {
 	session: Session;
 	label: string;
@@ -60,6 +60,7 @@ function AppSessionDetails({
 	onRestart: () => void;
 	profiles: ComputeProfile[];
 	allowComputeOverride: boolean;
+	selectedProfileName?: string;
 }) {
 	const now = useNow();
 	const { data: users } = useUsersQuery([session.user_id]);
@@ -73,18 +74,13 @@ function AppSessionDetails({
 	// Suppressed while the notebook is being edited — the head is still moving.
 	const stale = !editActive && isAppStale(session, notebook?.source.current_version_id);
 	const connections = session.active_connections;
+	const storedProfileName = notebook ? notebook.meta.compute_profile : selectedProfileName;
 	const selectedProfile = effectiveComputeProfile(
 		profiles,
-		notebook?.meta.compute_profile,
+		storedProfileName,
 		allowComputeOverride,
 	);
-	const runningProfile = profiles.find((profile) => profile.name === session.compute_profile);
-	const runningResources = session.compute_resources ?? runningProfile;
-	const computePending =
-		!!selectedProfile &&
-		!!session.compute_profile &&
-		(session.compute_profile !== selectedProfile.name ||
-			!computeResourcesEqual(session.compute_resources, selectedProfile));
+	const compute = computeSessionPresentation(session, profiles, selectedProfile);
 
 	return (
 		<div className="flex min-w-[13rem] flex-col gap-2 text-xs">
@@ -114,31 +110,24 @@ function AppSessionDetails({
 						<dd className="text-foreground tabular-nums">~{connections}</dd>
 					</>
 				)}
-				{session.compute_profile && (
+				{compute.runningLabel && (
 					<>
-						<dt>{computePending ? 'Running' : 'Compute'}</dt>
-						<dd className="text-foreground">
-							{session.compute_profile} — {computeProfileResources(runningResources ?? {})}
-						</dd>
+						<dt>{compute.pending ? 'Running' : 'Compute'}</dt>
+						<dd className="text-foreground">{compute.runningLabel}</dd>
 					</>
 				)}
-				{computePending && selectedProfile && (
+				{compute.pending && compute.selectedLabel && (
 					<>
 						<dt>Next</dt>
-						<dd className="text-foreground">
-							{selectedProfile.name} — {computeProfileResources(selectedProfile)}
-						</dd>
+						<dd className="text-foreground">{compute.selectedLabel}</dd>
 					</>
 				)}
 			</dl>
-			{computePending && (
-				<p className="text-amber-600 dark:text-amber-500">
-					{session.compute_from_snapshot
-						? 'Compute changes apply after the snapshot is dropped.'
-						: session.compute_profile === selectedProfile?.name
-							? 'The profile was updated. Restart to apply it.'
-							: `${selectedProfile?.name} applies on next restart.`}
-				</p>
+			{compute.pendingMessage && (
+				<p className="text-amber-600 dark:text-amber-500">{compute.pendingMessage}</p>
+			)}
+			{compute.snapshotMessage && (
+				<p className="text-amber-600 dark:text-amber-500">{compute.snapshotMessage}</p>
 			)}
 			{stale && (
 				<p className="text-amber-600 dark:text-amber-500">
@@ -187,6 +176,7 @@ export function AppSessionIndicator({
 	onRestart,
 	profiles = [],
 	allowComputeOverride = false,
+	selectedProfileName,
 }: {
 	session: Session;
 	/** Editors may stop/restart the shared app; viewers only see its state. */
@@ -199,6 +189,7 @@ export function AppSessionIndicator({
 	onRestart: () => void;
 	profiles?: ComputeProfile[];
 	allowComputeOverride?: boolean;
+	selectedProfileName?: string;
 }) {
 	const status = APP_STATUS[session.status];
 	if (!status) return null;
@@ -222,6 +213,7 @@ export function AppSessionIndicator({
 				onRestart={onRestart}
 				profiles={profiles}
 				allowComputeOverride={allowComputeOverride}
+				selectedProfileName={selectedProfileName}
 			/>
 		</Popover>
 	);

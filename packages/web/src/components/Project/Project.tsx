@@ -75,11 +75,11 @@ import { ProjectSecretsDialog } from './ProjectSecretsDialog';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { ChangeBaseImageDialog } from '@/components/Notebook/ChangeBaseImageDialog';
 import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/baseImage';
+import { ChangeComputeProfileDialog } from '@/components/Notebook/ChangeComputeProfileDialog';
 import {
-	ChangeComputeProfileDialog,
+	computeProfileOptions,
 	DEFAULT_COMPUTE_PROFILE,
-} from '@/components/Notebook/ChangeComputeProfileDialog';
-import { computeProfileResources } from '@/components/Notebook/ComputeProfileSelect';
+} from '@/components/Notebook/computeProfiles';
 import { SyncedNotebookDialog } from '@/components/Notebook/SyncedNotebookDialog';
 import type { SyncedNotebookCreated } from '@/components/Notebook/SyncedNotebookDialog';
 import { SyncSettingsDialog } from '@/components/Notebook/SyncSettingsDialog';
@@ -87,7 +87,7 @@ import { VersionHistoryDialog } from '@/components/Notebook/VersionHistoryDialog
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useSearchField } from '@/hooks/useSearchField';
-import { toastError } from '@/lib/errors';
+import { errorMessage, toastError } from '@/lib/errors';
 import { filterBySearch } from '@/lib/search';
 import { formatRelative } from '@/lib/time';
 import { syncUrl } from '@/lib/links';
@@ -174,7 +174,7 @@ export function Project() {
 	const stopSession = useStopSession(pid!, stopModal.target?.notebook.id ?? '');
 	const stopAppSession = useStopSession(pid!, appModal.target?.notebook.id ?? '');
 	const restartAppSession = useRestartApp(pid!, appModal.target?.notebook.id ?? '');
-	const restartComputeSession = useRestartSession(pid!, computeProfileModal.target?.id ?? '');
+	const restartComputeSession = useRestartSession(pid!);
 	// Per-session actions render from the server-evaluated `session.can` grants.
 	// Start has no session to carry grants, so it derives from the evaluated
 	// admission row in capabilities. The server enforces all of it regardless.
@@ -272,6 +272,13 @@ export function Project() {
 
 	// Map each notebook to its "most alive" session so a row shows the strongest state.
 	const sessionByNotebook = useMemo(() => sessionsByNotebook(sessions), [sessions]);
+	const computeTarget = computeProfileModal.target;
+	const computeLive = computeTarget ? sessionByNotebook.get(computeTarget.id) : undefined;
+	const computeRestartSession = computeLive?.edit?.can?.stop
+		? computeLive.edit
+		: computeLive?.app?.can?.stop
+			? computeLive.app
+			: undefined;
 
 	// Resolve every author (and session starter) shown on the page in one batch,
 	// so opaque user ids render as names.
@@ -367,6 +374,25 @@ export function Project() {
 			},
 			onError: toastError,
 		});
+	};
+
+	const handleComputeRestart = () => {
+		if (!computeTarget || !computeRestartSession) return;
+		if (computeRestartSession.mode === 'app') {
+			appModal.open({
+				action: 'restart',
+				notebook: computeTarget,
+				session: computeRestartSession,
+			});
+			return;
+		}
+		void restartComputeSession
+			.mutateAsync({
+				notebookId: computeTarget.id,
+				sessionId: computeRestartSession.session_id,
+			})
+			.then(() => toast.success(`Restarted the session for "${computeTarget.title}"`))
+			.catch((error) => toast.error(errorMessage(error)));
 	};
 
 	const handleSyncedCreated = (result: SyncedNotebookCreated) => {
@@ -621,6 +647,7 @@ export function Project() {
 											editActive={!!live.edit}
 											profiles={computeProfiles}
 											allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
+											selectedProfileName={nb.compute_profile}
 											onStop={() =>
 												appModal.open({ action: 'stop', notebook: nb, session: live.app! })
 											}
@@ -684,18 +711,7 @@ export function Project() {
 						{(field) => (
 							<field.RadioGroupField
 								label="Compute"
-								options={[
-									{
-										value: DEFAULT_COMPUTE_PROFILE,
-										label: `Default (${computeProfiles[0].name})`,
-										description: computeProfileResources(computeProfiles[0]),
-									},
-									...computeProfiles.slice(1).map((profile) => ({
-										value: profile.name,
-										label: profile.name,
-										description: computeProfileResources(profile),
-									})),
-								]}
+								options={computeProfileOptions(computeProfiles)}
 							/>
 						)}
 					</createNotebookForm.AppField>
@@ -750,22 +766,19 @@ export function Project() {
 					onClose={computeProfileModal.close}
 					projectId={pid!}
 					notebook={computeProfileModal.target}
-					canRestart={
-						!!sessionByNotebook.get(computeProfileModal.target.id)?.edit?.can?.stop ||
-						!!sessionByNotebook.get(computeProfileModal.target.id)?.app?.can?.stop
+					restartAction={
+						computeRestartSession
+							? {
+									label:
+										computeRestartSession.mode === 'app'
+											? 'Restart app'
+											: computeLive?.app?.can?.stop
+												? 'Restart edit session'
+												: 'Restart session',
+									onRestart: handleComputeRestart,
+								}
+							: undefined
 					}
-					onRestart={() => {
-						const live = sessionByNotebook.get(computeProfileModal.target!.id);
-						if (live?.edit?.can?.stop) {
-							restartComputeSession.mutate(live.edit.session_id);
-						} else if (live?.app?.can?.stop) {
-							appModal.open({
-								action: 'restart',
-								notebook: computeProfileModal.target!,
-								session: live.app,
-							});
-						}
-					}}
 				/>
 			)}
 

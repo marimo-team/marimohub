@@ -3652,13 +3652,15 @@ export interface components {
 				max_page_size: number;
 			};
 			sandbox_images: string[];
-			compute_profiles: {
+			compute_profiles: (components['schemas']['ComputeResources'] & {
 				name: string;
-				cpu?: number;
-				memory_bytes?: number;
-			}[];
+			})[];
 			/** @enum {string} */
 			compute_profile_override: 'none' | 'editors';
+		};
+		ComputeResources: {
+			cpu?: number;
+			memory_bytes?: number;
 		};
 		ProjectPage: {
 			items: components['schemas']['SnapshotProjectEntry'][];
@@ -3909,10 +3911,7 @@ export interface components {
 			 */
 			connections_checked_at?: string;
 			compute_profile?: string;
-			compute_resources?: {
-				cpu?: number;
-				memory_bytes?: number;
-			};
+			compute_resources?: components['schemas']['ComputeResources'];
 			compute_from_snapshot?: boolean;
 			error?: {
 				code: string;

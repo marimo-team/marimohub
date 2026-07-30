@@ -24,10 +24,8 @@ import type { SessionEnded } from '@/hooks/useNotebookSession';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
-import {
-	ComputeProfileIndicator,
-	effectiveComputeProfile,
-} from '@/components/Notebook/ComputeProfileSelect';
+import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
+import { ComputeProfileIndicator } from '@/components/Notebook/ComputeProfileIndicator';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
 import { isAppStale } from '@/components/Project/AppSessionIndicator';
 import { appConnectionHint, sessionsByNotebook } from '@/lib/sessions';
@@ -111,6 +109,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 		ended,
 		start,
 		startWithDefault,
+		defaultRetryAttempted,
 		stop,
 		restart,
 	} = useNotebookSession(pid!, nid!, {
@@ -160,22 +159,24 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const terminal = isApp && ended && !isProvisioning ? endedPanel(ended) : null;
 	const computeProfiles = capabilities?.compute_profiles ?? [];
 	const computeOverrideApplies =
-		capabilities?.compute_profile_override === 'editors' &&
-		(!isViewer || (isApp && !session?.ephemeral));
+		capabilities?.compute_profile_override === 'editors' && (!isViewer || isApp);
 	const selectedComputeProfile = effectiveComputeProfile(
 		computeProfiles,
 		notebook?.meta.compute_profile,
 		computeOverrideApplies,
 	);
 	const canRetryWithDefault =
+		!isApp &&
 		!!selectedComputeProfile &&
 		selectedComputeProfile.name !== computeProfiles[0]?.name &&
-		!session;
+		!session &&
+		showRetry &&
+		!defaultRetryAttempted;
 	const showProfileSizeHint =
 		!!selectedComputeProfile &&
 		computeProfiles.length > 0 &&
-		(error?.message === 'The kernel failed to start.' ||
-			error?.message === 'The app failed to start.');
+		error?.kind === 'startup' &&
+		error.generic === true;
 
 	const backToProject = () => {
 		void navigate(`/projects/${pid}`);

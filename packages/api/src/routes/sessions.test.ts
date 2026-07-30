@@ -6,7 +6,7 @@ import {
 	Millis,
 	ProjectSecretsStore,
 } from '@marimo-hub/core';
-import type { NotebookId, ProjectId, SessionId } from '@marimo-hub/core';
+import type { NotebookId, ProjectId, Session, SessionId } from '@marimo-hub/core';
 import {
 	ACTOR,
 	fakeComputeFrom,
@@ -25,6 +25,10 @@ import {
 } from '../testing';
 
 const STRANGER = uid('user_stranger');
+type ApiSession = Session & {
+	can: { attach: boolean; stop: boolean };
+	reused?: boolean;
+};
 
 describe('Session routes', () => {
 	let bucket: MemoryBucket;
@@ -56,9 +60,16 @@ describe('Session routes', () => {
 	});
 
 	const sessionsPath = (suffix = '') => `/projects/${pid}/notebooks/${nid}/sessions${suffix}`;
+	const sandboxConfig = (overrides: Partial<ApiDeps['sandbox']> = {}): ApiDeps['sandbox'] => ({
+		bucket: { name: 'test', endpoint: '' },
+		hostname: 'localhost',
+		workdir: '/workspace',
+		persistWorkspace: 'source',
+		...overrides,
+	});
 
 	async function startSession(): Promise<string> {
-		const data = await expectOk<any>(await owner('POST', sessionsPath()));
+		const data = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
 		return data.session_id as string;
 	}
 
@@ -93,7 +104,7 @@ describe('Session routes', () => {
 	});
 
 	it('POST /sessions as the owner (editor) creates a running session', async () => {
-		const data = await expectOk<any>(await owner('POST', sessionsPath()));
+		const data = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
 		expect(data.session_id).toMatch(/^sess-/);
 		expect(data.status).toBe('running');
 		expect(data.project_id).toBe(pid);
@@ -133,20 +144,16 @@ describe('Session routes', () => {
 				userId: ACTOR,
 				compute,
 				deps: {
-					sandbox: {
-						bucket: { name: 'test', endpoint: '' },
-						hostname: 'localhost',
-						workdir: '/workspace',
-						persistWorkspace: 'source',
+					sandbox: sandboxConfig({
 						images: ['img-a', 'img-b'],
-					},
+					}),
 				},
 			}).request;
 		}
 
 		it('provisions with the default (first) image when the notebook stores no choice', async () => {
 			const compute = makeFakeCompute();
-			await expectOk<any>(await imageApi(compute)('POST', sessionsPath()));
+			await expectOk<ApiSession>(await imageApi(compute)('POST', sessionsPath()));
 			expect(compute.lastCreateOptions).toMatchObject({ image: 'img-a' });
 		});
 
@@ -155,7 +162,7 @@ describe('Session routes', () => {
 			await services.notebooks.updateNotebook(pid, nid, { base_image: 'img-b' }, ACTOR);
 
 			const compute = makeFakeCompute();
-			await expectOk<any>(await imageApi(compute)('POST', sessionsPath()));
+			await expectOk<ApiSession>(await imageApi(compute)('POST', sessionsPath()));
 			expect(compute.lastCreateOptions).toMatchObject({ image: 'img-b' });
 		});
 
@@ -169,7 +176,7 @@ describe('Session routes', () => {
 			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 			try {
 				const compute = makeFakeCompute();
-				await expectOk<any>(await imageApi(compute)('POST', sessionsPath()));
+				await expectOk<ApiSession>(await imageApi(compute)('POST', sessionsPath()));
 				expect(compute.lastCreateOptions).toMatchObject({ image: 'img-a' });
 				expect(warn.mock.calls.some((c) => String(c[0]).includes('img-gone'))).toBe(true);
 			} finally {
@@ -180,7 +187,7 @@ describe('Session routes', () => {
 		it('passes no image when the deployment configures none', async () => {
 			const compute = makeFakeCompute();
 			const req = createTestApi({ bucket, userId: ACTOR, compute }).request;
-			await expectOk<any>(await req('POST', sessionsPath()));
+			await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(compute.lastCreateOptions?.image).toBeUndefined();
 		});
 	});
@@ -192,18 +199,14 @@ describe('Session routes', () => {
 			userId: ACTOR,
 			compute,
 			deps: {
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
+				sandbox: sandboxConfig({
 					resources: { cpu: 0.5, memoryBytes: 512 * 1024 ** 2 },
 					computeProfile: 'small',
-				},
+				}),
 			},
 		}).request;
 
-		const data = await expectOk<any>(await request('POST', sessionsPath()));
+		const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 		expect(compute.lastCreateOptions?.resources).toEqual({
 			cpu: 0.5,
 			memoryBytes: 512 * 1024 ** 2,
@@ -235,21 +238,17 @@ describe('Session routes', () => {
 			userId: ACTOR,
 			compute,
 			deps: {
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
+				sandbox: sandboxConfig({
 					computeProfiles: [
 						{ name: 'small', resources: { cpu: 1 } },
 						{ name: 'large', resources: { cpu: 8, memoryBytes: 16 * 1024 ** 3 } },
 					],
 					computeProfileOverride: 'editors',
-				},
+				}),
 			},
 		}).request;
 
-		const data = await expectOk<any>(await request('POST', sessionsPath()));
+		const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 		expect(data.compute_profile).toBe('large');
 		expect(compute.lastCreateOptions?.resources).toEqual({
 			cpu: 8,
@@ -266,26 +265,51 @@ describe('Session routes', () => {
 			userId: ACTOR,
 			compute,
 			deps: {
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
+				sandbox: sandboxConfig({
 					computeProfiles: [
 						{ name: 'small', resources: { cpu: 1 } },
 						{ name: 'large', resources: { cpu: 8 } },
 					],
 					computeProfileOverride: 'editors',
-				},
+				}),
 			},
 		}).request;
 
-		const data = await expectOk<any>(
+		const data = await expectOk<ApiSession>(
 			await request('POST', sessionsPath(), { compute_profile: 'default' }),
 		);
 		expect(data.compute_profile).toBe('small');
 		expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 1 });
 		expect((await services.notebooks.getNotebook(pid, nid)).meta.compute_profile).toBe('large');
+	});
+
+	it('does not let a shared-app request bypass the notebook profile with Default', async () => {
+		const services = createServices(bucket);
+		await services.notebooks.updateNotebook(pid, nid, { compute_profile: 'large' }, ACTOR);
+		const compute = makeFakeCompute();
+		const request = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: {
+				sandbox: sandboxConfig({
+					computeProfiles: [
+						{ name: 'small', resources: { cpu: 1 } },
+						{ name: 'large', resources: { cpu: 8 } },
+					],
+					computeProfileOverride: 'editors',
+				}),
+			},
+		}).request;
+
+		const data = await expectOk<ApiSession>(
+			await request('POST', sessionsPath(), {
+				mode: 'app',
+				compute_profile: 'default',
+			}),
+		);
+		expect(data.compute_profile).toBe('large');
+		expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 8 });
 	});
 
 	it('reports the compute provenance restored from a filesystem snapshot', async () => {
@@ -316,21 +340,17 @@ describe('Session routes', () => {
 			userId: ACTOR,
 			compute,
 			deps: {
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
+				sandbox: sandboxConfig({
 					computeProfiles: [
 						{ name: 'small', resources: { cpu: 2, memoryBytes: 4 * 1024 ** 3 } },
 						{ name: 'large', resources: { cpu: 8 } },
 					],
 					computeProfileOverride: 'editors',
-				},
+				}),
 			},
 		}).request;
 
-		const data = await expectOk<any>(await request('POST', sessionsPath()));
+		const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 		expect(restored).toEqual(['snap-old']);
 		expect(data.compute_profile).toBe('small');
 		expect(data.compute_resources).toEqual({
@@ -355,18 +375,14 @@ describe('Session routes', () => {
 				userId: ACTOR,
 				compute,
 				deps: {
-					sandbox: {
-						bucket: { name: 'test', endpoint: '' },
-						hostname: 'localhost',
-						workdir: '/workspace',
-						persistWorkspace: 'source',
+					sandbox: sandboxConfig({
 						computeProfiles: [{ name: 'small', resources: { cpu: 1 } }],
 						computeProfileOverride: 'editors',
-					},
+					}),
 				},
 			}).request;
 
-			const data = await expectOk<any>(await request('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 			expect(data.compute_profile).toBe('small');
 			expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 1 });
 			expect(warn.mock.calls.some((call) => String(call[0]).includes('removed'))).toBe(true);
@@ -388,22 +404,18 @@ describe('Session routes', () => {
 			userId: STRANGER,
 			compute,
 			deps: {
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
+				sandbox: sandboxConfig({
 					computeProfiles: [
 						{ name: 'small', resources: { cpu: 1 } },
 						{ name: 'large', resources: { cpu: 8 } },
 					],
 					computeProfileOverride: 'editors',
-				},
+				}),
 				policy: { defaultRole: 'viewer', viewerMode: 'ephemeral-sandbox' },
 			},
 		}).request;
 
-		const data = await expectOk<any>(await request('POST', sessionsPath()));
+		const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 		expect(data.compute_profile).toBe('small');
 		expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 1 });
 	});
@@ -421,24 +433,20 @@ describe('Session routes', () => {
 			userId: STRANGER,
 			compute,
 			deps: {
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
+				sandbox: sandboxConfig({
 					computeProfiles: [
 						{ name: 'small', resources: { cpu: 1 } },
 						{ name: 'large', resources: { cpu: 8, memoryBytes: 16 * 1024 ** 3 } },
 					],
 					computeProfileOverride: 'editors',
-				},
+				}),
 				policy: { defaultRole: 'viewer', viewerMode: 'applications' },
 			},
 		}).request;
 
 		// The shared app is the notebook's app: it must run the author's profile even
 		// though a viewer started it (unlike a viewer's own ephemeral edit kernel).
-		const data = await expectOk<any>(await request('POST', sessionsPath(), { mode: 'app' }));
+		const data = await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode: 'app' }));
 		expect(data.compute_profile).toBe('large');
 		expect(compute.lastCreateOptions?.resources).toEqual({
 			cpu: 8,
@@ -470,7 +478,7 @@ describe('Session routes', () => {
 		}).request;
 
 		const before = Date.now();
-		const data = await expectOk<any>(await withLifetime('POST', sessionsPath()));
+		const data = await expectOk<ApiSession>(await withLifetime('POST', sessionsPath()));
 		// Internal field: not in the response, but stamped on the stored record.
 		expect(data.expires_at).toBeUndefined();
 		const stored = await createServices(bucket).sessions.getSession(pid, data.session_id);
@@ -569,7 +577,7 @@ describe('Session routes', () => {
 
 	it('POST /sessions/{sid}/heartbeat happy path as the owner returns 200', async () => {
 		const sid = await startSession();
-		const data = await expectOk<any>(await owner('POST', sessionsPath(`/${sid}/heartbeat`)));
+		const data = await expectOk<ApiSession>(await owner('POST', sessionsPath(`/${sid}/heartbeat`)));
 		expect(data.session_id).toBe(sid);
 		expect(data.status).toBe('running');
 	});
@@ -594,7 +602,7 @@ describe('Session routes', () => {
 			}),
 		}).request;
 
-		const start = await expectOk<any>(await editing('POST', sessionsPath()));
+		const start = await expectOk<ApiSession>(await editing('POST', sessionsPath()));
 		await expectOk(await editing('DELETE', sessionsPath(`/${start.session_id}`)));
 
 		// Teardown cut a new version carrying the edit, plus the HTML + session snapshots.
@@ -661,9 +669,9 @@ describe('Session routes', () => {
 
 	it('POST /sessions resumes an existing running session instead of provisioning anew', async () => {
 		// First open provisions a sandbox.
-		const first = await expectOk<any>(await owner('POST', sessionsPath()));
+		const first = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
 		// Re-opening the same notebook resumes the SAME session (no second sandbox).
-		const second = await expectOk<any>(await owner('POST', sessionsPath()));
+		const second = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
 
 		expect(second.session_id).toBe(first.session_id);
 		expect(second.sandbox_url).toBe(first.sandbox_url);
@@ -688,7 +696,7 @@ describe('Session routes', () => {
 
 		const ids = new Set<string>();
 		for (let i = 0; i < 10; i++) {
-			const data = await expectOk<any>(await capped('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await capped('POST', sessionsPath()));
 			ids.add(data.session_id);
 		}
 		expect(ids.size).toBe(1); // every refresh resolved to the same session
@@ -706,13 +714,13 @@ describe('Session routes', () => {
 			}).request;
 
 			// First open provisions a sandbox and goes running.
-			const first = await expectOk<any>(await app('POST', sessionsPath()));
+			const first = await expectOk<ApiSession>(await app('POST', sessionsPath()));
 			expect(first.status).toBe('running');
 			const startProcesses = calls.startProcess.length;
 
 			// Reconnect: the kernel probes `dead`, so the wedged session is retired and a
 			// NEW sandbox is provisioned (a new session id) instead of serving a 502.
-			const second = await expectOk<any>(await app('POST', sessionsPath()));
+			const second = await expectOk<ApiSession>(await app('POST', sessionsPath()));
 			expect(second.status).toBe('running');
 			expect(second.session_id).not.toBe(first.session_id);
 
@@ -736,9 +744,9 @@ describe('Session routes', () => {
 				deps: { kernelProbe: async () => 'alive' as const },
 			}).request;
 
-			const first = await expectOk<any>(await app('POST', sessionsPath()));
+			const first = await expectOk<ApiSession>(await app('POST', sessionsPath()));
 			const startProcesses = calls.startProcess.length;
-			const second = await expectOk<any>(await app('POST', sessionsPath()));
+			const second = await expectOk<ApiSession>(await app('POST', sessionsPath()));
 
 			expect(second.session_id).toBe(first.session_id);
 			expect(calls.startProcess.length).toBe(startProcesses); // no reprovision
@@ -761,7 +769,7 @@ describe('Session routes', () => {
 				user_id: ACTOR,
 			});
 
-			const data = await expectOk<any>(await app('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await app('POST', sessionsPath()));
 			expect(data.status).toBe('starting');
 			expect(probe).not.toHaveBeenCalled();
 		});
@@ -770,7 +778,7 @@ describe('Session routes', () => {
 	it('GET /sessions/{sid} returns status; DELETE drives it to terminated', async () => {
 		const sid = await startSession();
 
-		const running = await expectOk<any>(await owner('GET', sessionsPath(`/${sid}`)));
+		const running = await expectOk<ApiSession>(await owner('GET', sessionsPath(`/${sid}`)));
 		expect(running.status).toBe('running');
 
 		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)));
@@ -779,7 +787,7 @@ describe('Session routes', () => {
 		expect((await createServices(bucket).sessions.getSession(pid, sid as never)).status).toBe(
 			'terminated',
 		);
-		const after = await expectOk<any>(await owner('GET', sessionsPath(`/${sid}`)));
+		const after = await expectOk<ApiSession>(await owner('GET', sessionsPath(`/${sid}`)));
 		expect(after.status).toBe('terminated');
 	});
 
@@ -852,7 +860,7 @@ describe('Session routes', () => {
 
 		it('ephemeral-sandbox: a viewer gets a running session stamped ephemeral', async () => {
 			const viewer = viewerModeApi(VIEWER, 'ephemeral-sandbox');
-			const data = await expectOk<any>(await viewer('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await viewer('POST', sessionsPath()));
 			expect(data.status).toBe('running');
 			expect(data.ephemeral).toBe(true);
 			expect(data.user_id).toBe(VIEWER);
@@ -863,13 +871,13 @@ describe('Session routes', () => {
 
 		it('an editor session stays persisting even in ephemeral-sandbox mode', async () => {
 			const editor = viewerModeApi(ACTOR, 'ephemeral-sandbox');
-			const data = await expectOk<any>(await editor('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await editor('POST', sessionsPath()));
 			expect(data.ephemeral).toBeUndefined();
 		});
 
 		it('a viewer can heartbeat and stop their OWN ephemeral session; another viewer cannot', async () => {
 			const viewer = viewerModeApi(VIEWER, 'ephemeral-sandbox');
-			const { session_id: sid } = await expectOk<any>(await viewer('POST', sessionsPath()));
+			const { session_id: sid } = await expectOk<ApiSession>(await viewer('POST', sessionsPath()));
 
 			await expectOk(await viewer('POST', sessionsPath(`/${sid}/heartbeat`)));
 
@@ -886,7 +894,7 @@ describe('Session routes', () => {
 			const { instance, calls } = makeFakeSandbox();
 			const viewer = viewerModeApi(VIEWER, 'ephemeral-sandbox', fakeComputeFrom(instance));
 
-			const data = await expectOk<any>(await viewer('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await viewer('POST', sessionsPath()));
 			expect(data.ephemeral).toBe(true);
 			expect(calls.mountBucket).toHaveLength(0);
 			// Copy-only: the workspace is written in (batched), never mounted.
@@ -895,7 +903,7 @@ describe('Session routes', () => {
 
 		it('revoking the viewer role cuts heartbeat/stop of a live ephemeral session', async () => {
 			const viewer = viewerModeApi(VIEWER, 'ephemeral-sandbox');
-			const { session_id: sid } = await expectOk<any>(await viewer('POST', sessionsPath()));
+			const { session_id: sid } = await expectOk<ApiSession>(await viewer('POST', sessionsPath()));
 
 			// Same user, but the deployment no longer grants them any role (e.g. the
 			// default role was dropped / membership revoked): ownership alone must
@@ -913,7 +921,7 @@ describe('Session routes', () => {
 
 		it('a role change retires the old-class session instead of reusing it', async () => {
 			const viewer = viewerModeApi(VIEWER, 'ephemeral-sandbox');
-			const first = await expectOk<any>(await viewer('POST', sessionsPath()));
+			const first = await expectOk<ApiSession>(await viewer('POST', sessionsPath()));
 			expect(first.ephemeral).toBe(true);
 
 			// Promoted to editor (default role now editor): the ephemeral session must
@@ -924,7 +932,7 @@ describe('Session routes', () => {
 				compute: makeFakeCompute(),
 				deps: { policy: { defaultRole: 'editor', viewerMode: 'ephemeral-sandbox' } },
 			}).request;
-			const second = await expectOk<any>(await editor('POST', sessionsPath()));
+			const second = await expectOk<ApiSession>(await editor('POST', sessionsPath()));
 			expect(second.reused).toBe(false);
 			expect(second.session_id).not.toBe(first.session_id);
 			expect(second.ephemeral).toBeUndefined();
@@ -948,7 +956,7 @@ describe('Session routes', () => {
 				},
 			});
 			const viewer = viewerModeApi(VIEWER, 'ephemeral-sandbox', compute);
-			const { session_id: sid } = await expectOk<any>(await viewer('POST', sessionsPath()));
+			const { session_id: sid } = await expectOk<ApiSession>(await viewer('POST', sessionsPath()));
 
 			await expectOk(await viewer('DELETE', sessionsPath(`/${sid}`)));
 
@@ -992,7 +1000,7 @@ describe('Session routes', () => {
 				deps: wifDeps(goodExchange),
 			}).request;
 
-			const data = await expectOk<any>(await req('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(data.status).toBe('running');
 			expect(calls.setEnvVars).toHaveLength(1);
 			expect(calls.setEnvVars[0]).toMatchObject({
@@ -1013,7 +1021,7 @@ describe('Session routes', () => {
 				deps: wifDeps(goodExchange),
 			}).request;
 
-			await expectOk<any>(await req('POST', sessionsPath()));
+			await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('AWS_ACCESS_KEY_ID');
 		});
 
@@ -1029,7 +1037,7 @@ describe('Session routes', () => {
 				}),
 			}).request;
 
-			const data = await expectOk<any>(await req('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(data.status).toBe('running');
 			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('AWS_ACCESS_KEY_ID');
 		});
@@ -1047,7 +1055,7 @@ describe('Session routes', () => {
 				},
 			}).request;
 
-			const data = await expectOk<any>(await req('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(data.ephemeral).toBe(true);
 			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('AWS_ACCESS_KEY_ID');
 		});
@@ -1061,7 +1069,7 @@ describe('Session routes', () => {
 				compute: fakeComputeFrom(instance),
 			}).request;
 
-			await expectOk<any>(await req('POST', sessionsPath()));
+			await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('AWS_ACCESS_KEY_ID');
 		});
 	});
@@ -1122,7 +1130,7 @@ describe('Session routes', () => {
 				deps: { secrets },
 			}).request;
 
-			await expectOk<any>(await req('POST', sessionsPath()));
+			await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(calls.setEnvVars).toHaveLength(1);
 			expect(calls.setEnvVars[0]).toMatchObject({ MY_SECRET: 'resolved:prod/x' });
 		});
@@ -1148,7 +1156,7 @@ describe('Session routes', () => {
 				deps: { secrets },
 			}).request;
 
-			await expectOk<any>(await req('POST', sessionsPath()));
+			await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(calls.setEnvVars[0]).toMatchObject({ API_KEY: 'a', DB_URL: 'b' });
 		});
 
@@ -1169,7 +1177,7 @@ describe('Session routes', () => {
 				},
 			}).request;
 
-			await expectOk<any>(await req('POST', sessionsPath()));
+			await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(calls.setEnvVars[0]).toMatchObject({ AWS_REGION: 'us-east-1', SAFE: 'ok' });
 		});
 
@@ -1208,7 +1216,7 @@ describe('Session routes', () => {
 				deps: { secrets, policy: { defaultRole: 'viewer', viewerMode: 'ephemeral-sandbox' } },
 			}).request;
 
-			const data = await expectOk<any>(await req('POST', sessionsPath()));
+			const data = await expectOk<ApiSession>(await req('POST', sessionsPath()));
 			expect(data.ephemeral).toBe(true);
 			expect(calls.setEnvVars.flatMap(Object.keys)).not.toContain('MY_SECRET');
 		});

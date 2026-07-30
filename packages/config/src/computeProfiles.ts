@@ -1,5 +1,6 @@
 import type { ComputeResources } from '@marimo-hub/core';
 import { ConfigError } from './errors';
+import { CONFIG_SPEC } from './spec';
 
 export type { ComputeResources } from '@marimo-hub/core';
 
@@ -45,10 +46,14 @@ const MAX_CPU_CORES = 4096;
 const MAX_MEMORY_BYTES = 64 * 1024 ** 4;
 const MIN_CPU_CORES = 0.001;
 const MIN_MEMORY_BYTES = 1024 ** 2;
-const PROFILE_BACKENDS = new Set(['docker', 'podman', 'kubernetes', 'modal', 'coreweave', 'wandb']);
+const COMPUTE_BACKENDS =
+	CONFIG_SPEC.find((group) => group.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? [];
 
 export function supportsComputeProfiles(backend: string): boolean {
-	return PROFILE_BACKENDS.has(backend);
+	return (
+		COMPUTE_BACKENDS.find((candidate) => candidate.selectorValue === backend)
+			?.supportsComputeProfiles === true
+	);
 }
 
 function parseCpu(value: string, profile: string): number {
@@ -220,14 +225,31 @@ export function hasConfiguredResources(config: ComputeProfilesConfig): boolean {
 export function unsupportedBackendNotice(
 	backend: string,
 	config: ComputeProfilesConfig,
+	override: ComputeProfileOverride = 'none',
 ): string | undefined {
-	if (supportsComputeProfiles(backend) || !hasConfiguredResources(config)) return undefined;
+	const profilesConfigured = hasConfiguredResources(config);
+	const overrideConfigured = override !== 'none';
+	if (supportsComputeProfiles(backend) || (!profilesConfigured && !overrideConfigured)) {
+		return undefined;
+	}
 	const backendConfigHint =
 		backend === 'e2b' || backend === 'cloudflare'
 			? ' Backend-specific MARIMOHUB_COMPUTE_* settings remain authoritative.'
 			: '';
+	const ignoredSettings = [
+		profilesConfigured ? 'MARIMOHUB_COMPUTE_PROFILES' : undefined,
+		overrideConfigured ? 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE' : undefined,
+	].filter((setting): setting is string => setting !== undefined);
+	const ignoredDescription =
+		profilesConfigured && overrideConfigured
+			? 'profiles and the override policy are ignored'
+			: profilesConfigured
+				? 'profiles are ignored'
+				: 'the override policy is ignored';
 	return (
-		`MARIMOHUB_COMPUTE_PROFILES is set but the ${JSON.stringify(backend)} compute backend ` +
-		`does not apply cpu/mem profiles; profiles are ignored.${backendConfigHint}`
+		`${ignoredSettings.join(' and ')} ${
+			ignoredSettings.length === 1 ? 'is' : 'are'
+		} set but the ${JSON.stringify(backend)} compute backend does not apply compute profiles; ` +
+		`${ignoredDescription}.${backendConfigHint}`
 	);
 }

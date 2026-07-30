@@ -73,8 +73,9 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
   operator restores it. A viewer's own ephemeral edit kernel always uses the
   default, but the shared notebook app runs the notebook's chosen profile
   regardless of who starts it.
-- A failed non-default start can be retried once on Default without changing
-  the notebook's stored choice.
+- A failed non-default personal edit session can be retried once on Default
+  without changing the notebook's stored choice. Shared apps always use the
+  notebook's selected profile.
 - A filesystem snapshot restores with the resources it was captured on. The
   session details identify snapshot-backed compute until a fresh sandbox is
   started.

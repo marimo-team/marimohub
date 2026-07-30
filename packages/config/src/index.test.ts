@@ -112,6 +112,25 @@ describe('createFromEnv auth backend selection', () => {
 		}
 	});
 
+	it('warns when an unsupported backend ignores the editor override policy', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_COMPUTE_BACKEND: 'local',
+				MARIMOHUB_COMPUTE_PROFILE_OVERRIDE: 'editors',
+			});
+			expect(
+				warn.mock.calls.some((call) =>
+					String(call[0]).includes('MARIMOHUB_COMPUTE_PROFILE_OVERRIDE'),
+				),
+			).toBe(true);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
 	it('hides configured profiles when the selected backend does not support them', () => {
 		const deps = createFromEnv({
 			...baseEnv,

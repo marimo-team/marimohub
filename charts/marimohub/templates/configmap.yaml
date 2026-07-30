@@ -7,7 +7,10 @@ metadata:
     {{- include "marimohub.labels" . | nindent 4 }}
 data:
   {{- range $k, $v := .Values.config }}
-  {{- if not (and $.Values.compute.profiles (eq $k "MARIMOHUB_COMPUTE_PROFILES")) }}
+  {{- if not (or
+    (and $.Values.compute.profiles (eq $k "MARIMOHUB_COMPUTE_PROFILES"))
+    (and (ne $.Values.compute.profileOverride "none") (eq $k "MARIMOHUB_COMPUTE_PROFILE_OVERRIDE"))
+  ) }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
   {{- end }}

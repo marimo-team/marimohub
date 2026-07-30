@@ -6,11 +6,8 @@ import { StatusDot } from './StatusDot';
 import { Popover } from './Popover';
 import { Skeleton } from './Skeleton';
 import { UserLabel } from './UserLabel';
-import {
-	computeProfileResources,
-	computeResourcesEqual,
-} from '@/components/Notebook/ComputeProfileSelect';
-import type { ComputeProfile } from '@/components/Notebook/ComputeProfileSelect';
+import { computeSessionPresentation } from '@/components/Notebook/computeProfiles';
+import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 
 interface SessionStatusDotProps {
 	/** The notebook's most-alive session, or undefined when stopped. */
@@ -52,21 +49,9 @@ function SessionDetails({
 	const { data: users } = useUsersQuery([session.user_id]);
 	const user = users?.[session.user_id];
 	const showDuration = session.status === 'running';
-	const runningProfile = profiles.find((profile) => profile.name === session.compute_profile);
 	const selectedProfile =
 		profiles.find((profile) => profile.name === selectedProfileName) ?? profiles[0];
-	const runningResources = session.compute_resources ?? runningProfile;
-	const pending =
-		!!selectedProfile &&
-		!!session.compute_profile &&
-		(session.compute_profile !== selectedProfile.name ||
-			!computeResourcesEqual(session.compute_resources, selectedProfile));
-	const runningLabel = session.compute_profile
-		? `${session.compute_profile} — ${computeProfileResources(runningResources ?? {})}`
-		: undefined;
-	const selectedLabel = selectedProfile
-		? `${selectedProfile.name} — ${computeProfileResources(selectedProfile)}`
-		: undefined;
+	const compute = computeSessionPresentation(session, profiles, selectedProfile);
 
 	return (
 		<div className="flex min-w-[12rem] flex-col gap-2 text-xs">
@@ -82,16 +67,16 @@ function SessionDetails({
 				</dd>
 				<dt>Started</dt>
 				<dd className="text-foreground">{formatRelative(session.started_at, now)}</dd>
-				{runningLabel && (
+				{compute.runningLabel && (
 					<>
-						<dt>{pending ? 'Running' : 'Compute'}</dt>
-						<dd className="text-foreground">{runningLabel}</dd>
+						<dt>{compute.pending ? 'Running' : 'Compute'}</dt>
+						<dd className="text-foreground">{compute.runningLabel}</dd>
 					</>
 				)}
-				{pending && selectedLabel && (
+				{compute.pending && compute.selectedLabel && (
 					<>
 						<dt>Next</dt>
-						<dd className="text-foreground">{selectedLabel}</dd>
+						<dd className="text-foreground">{compute.selectedLabel}</dd>
 					</>
 				)}
 				{showDuration && (
@@ -103,13 +88,14 @@ function SessionDetails({
 					</>
 				)}
 			</dl>
-			{pending && (
+			{compute.pendingMessage && (
 				<span className="w-fit rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-400">
-					{session.compute_from_snapshot
-						? 'applies after snapshot is dropped'
-						: session.compute_profile === selectedProfile?.name
-							? 'profile updated — restart to apply'
-							: `${selectedProfile?.name} on next restart`}
+					{compute.pendingMessage}
+				</span>
+			)}
+			{compute.snapshotMessage && (
+				<span className="w-fit rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-400">
+					{compute.snapshotMessage}
 				</span>
 			)}
 		</div>

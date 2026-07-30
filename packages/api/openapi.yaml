@@ -197,16 +197,14 @@ components:
         compute_profiles:
           type: array
           items:
-            type: object
-            properties:
-              name:
-                type: string
-              cpu:
-                type: number
-              memory_bytes:
-                type: number
-            required:
-              - name
+            allOf:
+              - $ref: '#/components/schemas/ComputeResources'
+              - type: object
+                properties:
+                  name:
+                    type: string
+                required:
+                  - name
         compute_profile_override:
           type: string
           enum:
@@ -221,6 +219,13 @@ components:
         - sandbox_images
         - compute_profiles
         - compute_profile_override
+    ComputeResources:
+      type: object
+      properties:
+        cpu:
+          type: number
+        memory_bytes:
+          type: number
     ProjectPage:
       type: object
       properties:
@@ -757,12 +762,7 @@ components:
         compute_profile:
           type: string
         compute_resources:
-          type: object
-          properties:
-            cpu:
-              type: number
-            memory_bytes:
-              type: number
+          $ref: '#/components/schemas/ComputeResources'
         compute_from_snapshot:
           type: boolean
         error:
