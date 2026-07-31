@@ -2,6 +2,7 @@ import { getSandbox, proxyToSandbox } from '@cloudflare/sandbox';
 import type { Sandbox } from '@cloudflare/sandbox';
 import {
 	base64Encode,
+	buildGitCloneCommand,
 	mapWithConcurrency,
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
@@ -111,7 +112,10 @@ class CloudflareSandboxInstance implements SandboxInstance {
 	}
 
 	async gitCheckout(repo: string, options?: GitCheckoutOptions): Promise<void> {
-		await this.sandbox.gitCheckout(repo, options);
+		// Via exec rather than the SDK's gitCheckout so the env-defaults prefix
+		// applies to the clone, like every other adapter.
+		const res = await this.exec(buildGitCloneCommand(repo, options));
+		if (!res.success) throw new Error(`git checkout failed: ${res.stderr}`);
 	}
 
 	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
