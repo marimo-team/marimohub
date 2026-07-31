@@ -1110,7 +1110,6 @@ describe('schema dialect', () => {
 				for (const [key, child] of Object.entries(props)) walk(child, `${path}.${key}`, kind);
 				const additional = node.additionalProperties as Node | undefined;
 				if (additional && typeof additional === 'object') {
-					// kv-pairs record: string values only, never secrets.
 					expect(additional.type, `${kind}:${path} record values must be strings`).toBe('string');
 					expect(additional[SECRET_MARK], `${kind}:${path} record values must not be secret`).toBe(
 						undefined,

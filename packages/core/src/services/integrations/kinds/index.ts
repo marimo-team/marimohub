@@ -25,7 +25,6 @@ export { postgres } from './postgres';
 export { pyspark } from './pyspark';
 export { trino } from './trino';
 
-/** Registry of integration kinds built into this deployment. */
 export function defaultRegistry(): IntegrationRegistry {
 	const registry = new IntegrationRegistry();
 	registry.register(postgres);

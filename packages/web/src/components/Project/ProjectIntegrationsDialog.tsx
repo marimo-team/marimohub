@@ -128,7 +128,6 @@ export interface ProjectIntegrationsDialogProps {
 	project: ProjectDetail;
 }
 
-/** Project integration manager whose forms are driven by kind schemas. */
 export function ProjectIntegrationsDialog({
 	isOpen,
 	onClose,

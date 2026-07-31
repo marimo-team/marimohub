@@ -222,7 +222,6 @@ function TextAreaField({
 	);
 }
 
-/** Renders a discriminated union as a branch selector and its active fields. */
 function UnionField(props: SchemaFieldProps & { label: string }) {
 	const { path, node, hints, value, onChange, errors, editing, label } = props;
 	const branches = unionBranches(node) ?? [];

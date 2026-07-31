@@ -100,7 +100,7 @@ function versionFromKey(key: string): number {
 	return Number(match[1]);
 }
 
-/** Opaque keyset cursor: the last version number returned. */
+/** Opaque keyset cursor: the last version number selected for the page. */
 function encodeVersionCursor(version: number): string {
 	return btoa(String(version));
 }

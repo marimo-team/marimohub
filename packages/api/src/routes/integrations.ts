@@ -271,7 +271,6 @@ const testIntegration = createRoute({
 	},
 });
 
-/** Returns 404 when integrations are disabled for the deployment. */
 function requireIntegrations(deps: ApiDeps): IntegrationsProvider {
 	if (!deps.integrations) {
 		throw new NotFoundError('Integrations are not enabled on this deployment');
@@ -437,7 +436,6 @@ function assertTestBudget(userId: string): void {
 	recentTestsByUser.set(userId, recent);
 }
 
-/** How many users the probe limiter currently holds state for. */
 export function trackedTestBudgets(): number {
 	return recentTestsByUser.size;
 }

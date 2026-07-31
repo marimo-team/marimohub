@@ -40,7 +40,6 @@ export function makeIntegrations(
 	};
 }
 
-/** Maps the deployment's probe policy to the guarded transport. */
 function makeProbe(env: Env): IntegrationProbe | undefined {
 	const setting = env.MARIMOHUB_INTEGRATIONS_PROBE?.trim().toLowerCase();
 	switch (setting) {

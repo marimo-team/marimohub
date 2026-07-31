@@ -59,7 +59,6 @@ export function branchDiscriminator(
 	return undefined;
 }
 
-/** Selects the union branch matching the current form value. */
 export function branchForValue(node: JsonSchemaNode, value: unknown): JsonSchemaNode | undefined {
 	const branches = unionBranches(node);
 	if (!branches) return undefined;
@@ -227,7 +226,6 @@ export interface FieldGroup {
 	fields: { key: string; node: JsonSchemaNode }[];
 }
 
-/** Orders top-level fields and groups them by layout hints. */
 export function groupFields(schema: JsonSchemaNode, hints: UiHints): FieldGroup[] {
 	const entries = Object.entries(schema.properties ?? {}).map(([key, node], index) => ({
 		key,

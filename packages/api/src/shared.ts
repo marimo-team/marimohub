@@ -784,7 +784,6 @@ export const DeploymentInfoResponseSchema = z
 export const CapabilitiesResponseSchema = z
 	.object({
 		federation: z.object({ available: z.boolean() }),
-		/** Whether project integrations are enabled on this deployment. */
 		integrations: z.object({ available: z.boolean() }),
 		/**
 		 * What an effective `viewer` sees when opening a notebook

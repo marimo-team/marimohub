@@ -33,7 +33,6 @@ export class IntegrationRegistry {
 		return [...this.defs.values()];
 	}
 
-	/** Returns the serializable schema and UI descriptor, memoized per kind. */
 	describe(kind: string): KindDescriptor {
 		const cached = this.descriptors.get(kind);
 		if (cached) return cached;
@@ -64,7 +63,6 @@ export class IntegrationRegistry {
 		return z.toJSONSchema(this.get(kind).configSchema, { io: 'input' }) as Record<string, unknown>;
 	}
 
-	/** Returns the kind's secret paths, memoized per kind. */
 	secretPathsOf(kind: string): SecretPath[] {
 		const cached = this.paths.get(kind);
 		if (cached) return cached;
