@@ -193,6 +193,18 @@ describe('authz', () => {
 			expect(canSeeProjectEntry(entry, { ...INVITEE, email: 'INVITEE@example.com' })).toBe(true);
 		});
 
+		it('normalizes stored member_emails, so a whitespace-padded entry still lists', () => {
+			// ProjectMemberSchema lowercases but does not trim; direct access
+			// (memberRefMatchesSubject) trims both sides, so listing must too or an
+			// invitee could reach the project yet be missing from their list.
+			const padded = {
+				owner: OWNER.id,
+				member_ids: [OWNER.id],
+				member_emails: [' invitee@example.com '],
+			};
+			expect(canSeeProjectEntry(padded, INVITEE)).toBe(true);
+		});
+
 		it('fails closed for an email member when member_emails is absent', () => {
 			const stripped = { owner: OWNER.id, member_ids: [OWNER.id] };
 			expect(canSeeProjectEntry(stripped, INVITEE)).toBe(false);

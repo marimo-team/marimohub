@@ -43,15 +43,15 @@ describe('Cloudflare Worker configuration', () => {
 		SANDBOX: {},
 	};
 
-	it('parses SUPER_ADMINS into a trimmed list, dropping empties', () => {
+	it('parses MARIMOHUB_SUPER_ADMINS into a trimmed list, dropping empties', () => {
 		const deps = buildDeps(new Request('https://hub.example.com'), {
 			...baseEnv,
-			SUPER_ADMINS: 'admin@example.com, user-1 ,',
+			MARIMOHUB_SUPER_ADMINS: 'admin@example.com, user-1 ,',
 		} as unknown as Env);
 		expect(deps.policy.superAdmins).toEqual(['admin@example.com', 'user-1']);
 	});
 
-	it('leaves superAdmins undefined when SUPER_ADMINS is unset', () => {
+	it('leaves superAdmins undefined when MARIMOHUB_SUPER_ADMINS is unset', () => {
 		const deps = buildDeps(new Request('https://hub.example.com'), baseEnv as unknown as Env);
 		expect(deps.policy.superAdmins).toBeUndefined();
 	});

@@ -21,7 +21,7 @@
 import type { Role } from './constants';
 import { ForbiddenError } from './errors';
 import type { UserId } from './ids';
-import { anyRefMatchesSubject, memberRefMatchesSubject, normalizeEmail } from './identityMatch';
+import { anyRefMatchesSubject, emailsEqual, memberRefMatchesSubject } from './identityMatch';
 import type { IdentitySubject } from './identityMatch';
 import type { Project } from './schema';
 
@@ -139,5 +139,9 @@ export function canSeeProjectEntry(
 	if (entry.owner === subject.id) return true;
 	if (entry.member_ids === undefined) return null;
 	if (entry.member_ids.includes(subject.id)) return true;
-	return (entry.member_emails ?? []).includes(normalizeEmail(subject.email));
+	// Normalize both sides (stored entries are lowercased but not trimmed by
+	// ProjectMemberSchema), matching memberRefMatchesSubject — otherwise a pending
+	// invitee with whitespace in their stored email could reach the project
+	// directly yet be omitted from its listing.
+	return (entry.member_emails ?? []).some((e) => emailsEqual(e, subject.email));
 }

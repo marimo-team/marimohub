@@ -133,7 +133,9 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 			// members-only. Project edit/delete always requires admin.
 			defaultRole: env.DEFAULT_ROLE === 'none' ? undefined : (env.DEFAULT_ROLE ?? 'editor'),
 			// Comma-separated user ids/emails granted implicit admin on every project.
-			superAdmins: env.SUPER_ADMINS?.split(',')
+			// Read under the documented, config-package name so the reference deployment
+			// honors what docs/configuration.md advertises.
+			superAdmins: env.MARIMOHUB_SUPER_ADMINS?.split(',')
 				.map((s) => s.trim())
 				.filter(Boolean),
 		},

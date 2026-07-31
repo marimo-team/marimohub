@@ -45,6 +45,11 @@ export type { ApiDeps, HonoEnv } from './context';
  * (403) on insufficient role. Used to gate write routes. Returns the loaded
  * project so callers can reuse it without a second fetch. The subject is the
  * request's `AuthUser` — membership matches by user id or (invite) email.
+ *
+ * A soft-deleted project is treated as **404**, before the role check — the
+ * same lifecycle guard `loadVisibleProject` applies to reads. Its bytes linger
+ * until the GC sweep, but nothing about it stays mutable, so no caller (a super
+ * admin or a lingering member included) can reach its secrets/notebooks/events.
  */
 export async function assertProjectRole(
 	projects: ProjectService,
@@ -54,6 +59,9 @@ export async function assertProjectRole(
 	policy?: AuthzPolicy,
 ): Promise<Project> {
 	const project = await projects.getProject(pid);
+	if (project.status === 'deleted') {
+		throw new NotFoundError(`Project ${pid} not found`);
+	}
 	requireRole(project, subject, min, policy);
 	return project;
 }
