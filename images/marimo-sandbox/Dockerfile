@@ -41,6 +41,14 @@ RUN cd /tmp \
       plotly \
       anywidget \
       moutils \
+      connectorx \
+      pyiceberg \
+      sqlalchemy \
+      fsspec \
+      s3fs \
+      gcsfs \
+      python-dotenv \
+      pydantic \
       scikit-learn \
       scipy \
       requests \
