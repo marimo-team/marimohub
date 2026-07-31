@@ -62,6 +62,11 @@ function timingSafeEqual(a: string, b: string): boolean {
 	return diff === 0;
 }
 
+// Plain `owner/repo` coordinates — not a clone URL or `git@` remote (a bare
+// "anything/anything" check would admit both). The UI builds host links
+// (github.com/{repo}/…) from this, so a looser shape would produce broken URLs.
+const OWNER_REPO_PATTERN = /^[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+$/;
+
 export function normalizeGitSourceConfig(input: {
 	repo: string;
 	branch: string;
@@ -71,6 +76,9 @@ export function normalizeGitSourceConfig(input: {
 	const repo = input.repo.trim();
 	if (!repo) {
 		throw new BadRequestError('repo is required');
+	}
+	if (!OWNER_REPO_PATTERN.test(repo)) {
+		throw new BadRequestError('repo must use the owner/repo format, e.g. acme/analytics');
 	}
 	const branch = input.branch.trim();
 	if (!branch) {

@@ -68,6 +68,19 @@ describe('SyncedNotebookService', () => {
 			const p = (await catalog.getCurrentSnapshot()).projects.find((pr) => pr.id === projectId);
 			expect(p?.notebook_count).toBe(1);
 		});
+
+		it('rejects a repo that is not plain owner/repo', async () => {
+			for (const repo of [
+				'https://gitlab.com/group/project',
+				'git@github.com:owner/repo.git',
+				'just-a-name',
+				'a/b/c',
+			]) {
+				await expect(
+					notebooks.synced.create(projectId, { ...CREATE_INPUT, repo }, ACTOR),
+				).rejects.toThrow('repo must use the owner/repo format');
+			}
+		});
 	});
 
 	describe('verifyToken / rotateToken', () => {
@@ -90,6 +103,23 @@ describe('SyncedNotebookService', () => {
 	});
 
 	describe('updateSource', () => {
+		it('rejects a repo that is not plain owner/repo', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			await expect(
+				notebooks.synced.updateSource(
+					projectId,
+					meta.id,
+					{
+						repo: 'git@github.com:owner/repo.git',
+						branch: 'main',
+						root_path: '',
+						entry_notebook: 'app.py',
+					},
+					ACTOR,
+				),
+			).rejects.toThrow('repo must use the owner/repo format');
+		});
+
 		it('updates an unsynced draft immediately', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 
@@ -192,6 +222,11 @@ describe('SyncedNotebookService', () => {
 				expect(nb.source.commit).toBe('commit-aaaa');
 				expect(nb.source.current_version_id).not.toBeNull();
 			}
+
+			// The cut version records the commit it mirrors (the UI links it).
+			const [version] = await notebooks.listVersions(projectId, meta.id);
+			expect(version?.commit).toBe('commit-aaaa');
+			expect(version?.message).toBe('Sync commit-aaaa');
 
 			const e = await entry(meta.id);
 			expect(e?.status).toBe('active');

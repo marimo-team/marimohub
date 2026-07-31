@@ -582,6 +582,27 @@ describe('Project — Notebook Actions', () => {
 		);
 	});
 
+	it("a git row's source tile opens a popover with GitHub links", async () => {
+		const user = userEvent.setup();
+		makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });
+		await renderProject();
+
+		const trigger = screen.getByRole('button', { name: 'Synced from GitHub — details' });
+		// Outside the row anchor — RowLink's no-buttons-in-<a> invariant.
+		expect(trigger.closest('a')).toBeNull();
+		await user.click(trigger);
+		const popover = await screen.findByRole('dialog');
+		expect(within(popover).getByRole('link', { name: 'acme/analytics' })).toHaveAttribute(
+			'href',
+			'https://github.com/acme/analytics',
+		);
+		expect(within(popover).getByText('apps/dashboard.py')).toBeInTheDocument();
+		expect(within(popover).getByRole('link', { name: /View source on GitHub/ })).toHaveAttribute(
+			'href',
+			'https://github.com/acme/analytics/blob/abc123/apps/dashboard.py',
+		);
+	});
+
 	it('rotates a sync token and shows the write-once token', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });

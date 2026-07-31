@@ -4,7 +4,7 @@ import { useApiMutation } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
 import { sanitizeFilename, triggerDownload } from '../lib/download';
 import { userKeys, projectKeys, notebookKeys, sessionKeys, systemKeys } from './queryKeys';
-import type { ResolvedUser, ProjectFederation, ProjectRole } from '../types';
+import type { NotebookDetail, ResolvedUser, ProjectFederation, ProjectRole } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
 const SESSIONS_POLL_INTERVAL_MS = 5_000;
@@ -350,13 +350,19 @@ export function useNotebooksQuery(projectId: string) {
 export function useNotebookQuery(
 	projectId: string,
 	notebookId: string,
-	// Freshness options for consumers that compare against the notebook HEAD (the
-	// app page's staleness banner): versions are committed server-side
-	// (snapshotter, teardown), which no client-side invalidation ever observes.
-	// `refetchIntervalMs` polls for a long-lived view; `staleTime: 0` re-reads on
-	// mount instead, for a short-lived one that must not trust the shared cache.
-	options: { refetchIntervalMs?: number; staleTime?: number } = {},
+	// Freshness options for consumers that compare against the notebook HEAD
+	// (the staleness banners): versions are committed server-side (snapshotter,
+	// teardown, git push), which no client-side invalidation ever observes.
+	// `refetchIntervalMs` polls for a long-lived view — pass a function when the
+	// interval depends on the fetched detail (e.g. poll only git-synced sources);
+	// `staleTime: 0` re-reads on mount instead, for a short-lived one that must
+	// not trust the shared cache.
+	options: {
+		refetchIntervalMs?: number | ((notebook: NotebookDetail | undefined) => number | undefined);
+		staleTime?: number;
+	} = {},
 ) {
+	const { refetchIntervalMs } = options;
 	return useQuery({
 		queryKey: notebookKeys.detail(projectId, notebookId),
 		queryFn: () =>
@@ -366,7 +372,10 @@ export function useNotebookQuery(
 				}),
 			),
 		staleTime: options.staleTime ?? 5 * 60 * 1000,
-		refetchInterval: options.refetchIntervalMs,
+		refetchInterval:
+			typeof refetchIntervalMs === 'function'
+				? (query) => refetchIntervalMs(query.state.data)
+				: refetchIntervalMs,
 	});
 }
 

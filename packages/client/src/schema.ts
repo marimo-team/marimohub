@@ -3865,6 +3865,7 @@ export interface components {
 			parent_id: string | null;
 			html_snapshot?: components['schemas']['SnapshotDescriptor'];
 			session_snapshot?: components['schemas']['SnapshotDescriptor'];
+			commit?: string;
 		};
 		SnapshotDescriptor: {
 			/**

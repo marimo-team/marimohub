@@ -63,6 +63,20 @@ describe('Git sync routes', () => {
 		'X-Marimohub-Commit': 'abc123',
 	});
 
+	it('rejects creating a synced notebook whose repo is not owner/repo (400)', async () => {
+		await expectError(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Bad repo',
+				description: 'd',
+				repo: 'git@github.com:org/repo.git',
+				branch: 'main',
+				entry_notebook: 'app.py',
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+	});
+
 	it('rejects a request with no Authorization header (401)', async () => {
 		const { notebookId } = await createSyncedNotebook();
 		await expectError(await syncRequest({ notebookId }), 401, 'UNAUTHORIZED');
@@ -120,6 +134,12 @@ describe('Git sync routes', () => {
 			await request('GET', `/projects/${projectId}/notebooks/${notebookId}/content`),
 		);
 		expect(content.code).toBe('print("synced")');
+
+		// The cut version exposes the commit it mirrors (for the UI's GitHub links).
+		const versions = await expectOk<{ items: { commit?: string; message: string }[] }>(
+			await request('GET', `/projects/${projectId}/notebooks/${notebookId}/versions`),
+		);
+		expect(versions.items[0]?.commit).toBe('abc123');
 	});
 
 	it("rejects a valid sync token used against a DIFFERENT notebook's path (401 IDOR)", async () => {

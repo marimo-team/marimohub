@@ -34,7 +34,7 @@ interface SyncSettingsDialogProps {
 
 const settingsSchema = z.object({
 	repo: requiredText('Repository').regex(
-		/^[^/\s]+\/[^/\s]+$/,
+		/^[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+$/,
 		'Use the owner/repo format, e.g. acme/analytics',
 	),
 	branch: requiredText('Branch'),

@@ -21,6 +21,26 @@ export interface NotebookSessions {
 }
 
 /**
+ * Whether a frozen-snapshot session (the shared app, or any session on a
+ * git-synced notebook) is serving an older version than the notebook's current
+ * head. NOTE: for app sessions on local notebooks the periodic snapshotter
+ * commits a fresh version every ~2 minutes while someone is editing, so callers
+ * must also suppress the hint while an edit session is live on the notebook
+ * (`editActive`) — otherwise it flaps for the whole editing session. Git-synced
+ * heads move only when a push lands, so no such suppression applies there.
+ */
+export function isSessionStale(
+	session: Pick<Session, 'source_version_id'>,
+	currentVersionId: string | null | undefined,
+): boolean {
+	return (
+		!!session.source_version_id &&
+		!!currentVersionId &&
+		currentVersionId !== session.source_version_id
+	);
+}
+
+/**
  * "~N people are connected" for the stop/restart-app confirms — the number is
  * the lifecycle sweep's last probe, so it's approximate; omitted when unknown
  * or zero.

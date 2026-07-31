@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Session } from '@/types';
-import { rankSession, sessionsByNotebook } from './sessions';
+import { isSessionStale, rankSession, sessionsByNotebook } from './sessions';
 
 function session(
 	notebookId: string,
@@ -30,6 +30,16 @@ describe('rankSession', () => {
 		expect(rankSession(undefined)).toBe(0);
 		expect(rankSession('expired')).toBe(0);
 		expect(rankSession('garbage')).toBe(0);
+	});
+});
+
+describe('isSessionStale', () => {
+	it('is stale only when both versions are known and differ', () => {
+		expect(isSessionStale({ source_version_id: 'a' }, 'b')).toBe(true);
+		expect(isSessionStale({ source_version_id: 'a' }, 'a')).toBe(false);
+		expect(isSessionStale({ source_version_id: undefined }, 'b')).toBe(false);
+		expect(isSessionStale({ source_version_id: 'a' }, null)).toBe(false);
+		expect(isSessionStale({ source_version_id: 'a' }, undefined)).toBe(false);
 	});
 });
 

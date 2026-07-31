@@ -43,6 +43,8 @@ interface FetchOptions {
 	projectSessions?: Session[];
 	/** The notebook's current head version (staleness comparisons). */
 	headVersion?: string;
+	/** The notebook's source type; `git` models a GitHub-synced notebook. */
+	sourceType?: 'local' | 'git';
 	/** When set, POST .../sessions fails with this error code at this status. */
 	createError?: { code: string; message: string; status: number };
 	computeProfiles?: { name: string; cpu?: number; memory_bytes?: number }[];
@@ -94,7 +96,20 @@ function makeFetch(opts: FetchOptions) {
 					author: 'me',
 					...(opts.computeProfile ? { compute_profile: opts.computeProfile } : {}),
 				},
-				source: { type: 'local', current_version_id: opts.headVersion ?? 'ver-head' },
+				source:
+					opts.sourceType === 'git'
+						? {
+								type: 'git',
+								provider: 'github',
+								repo: 'org/repo',
+								branch: 'main',
+								root_path: '',
+								entry_notebook: 'app.py',
+								commit: 'deadbeefcafe0123',
+								last_synced_at: '2026-07-01T10:00:00Z',
+								current_version_id: opts.headVersion ?? 'ver-head',
+							}
+						: { type: 'local', current_version_id: opts.headVersion ?? 'ver-head' },
 			});
 		}
 		if (url.includes('/capabilities')) {
@@ -266,6 +281,122 @@ describe('NotebookPage viewer modes', () => {
 	});
 });
 
+describe('NotebookPage git-synced editor', () => {
+	const gitEditSession = (overrides: Partial<Session> = {}) =>
+		runningSession({ source_version_id: 'ver-head', ...overrides });
+
+	it('shows the updated-on-GitHub banner when the session trails the head', async () => {
+		makeFetch({
+			role: 'editor',
+			sourceType: 'git',
+			session: gitEditSession({ source_version_id: 'ver-old' }),
+			headVersion: 'ver-head',
+		});
+		renderPage();
+
+		await waitFor(() => expect(screen.getByText(/updated on GitHub/)).toBeInTheDocument());
+		expect(screen.getByText('Restart to update')).toBeInTheDocument();
+	});
+
+	it('shows no banner when the session serves the synced head', async () => {
+		makeFetch({ role: 'editor', sourceType: 'git', session: gitEditSession() });
+		const { container } = renderPage();
+
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(screen.queryByText(/updated on GitHub/)).toBeNull();
+	});
+
+	it('header shows the repo chip whose popover links to the source on GitHub', async () => {
+		const user = userEvent.setup();
+		makeFetch({ role: 'editor', sourceType: 'git', session: gitEditSession() });
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Synced from GitHub — details' }));
+		const popover = await screen.findByRole('dialog');
+		expect(within(popover).getByRole('link', { name: 'org/repo' })).toHaveAttribute(
+			'href',
+			'https://github.com/org/repo',
+		);
+		expect(within(popover).getByRole('link', { name: 'deadbee' })).toHaveAttribute(
+			'href',
+			'https://github.com/org/repo/commit/deadbeefcafe0123',
+		);
+		expect(within(popover).getByRole('link', { name: /View source on GitHub/ })).toHaveAttribute(
+			'href',
+			'https://github.com/org/repo/blob/deadbeefcafe0123/app.py',
+		);
+	});
+
+	it('the app view shows no repo chip', async () => {
+		makeFetch({
+			role: 'editor',
+			sourceType: 'git',
+			session: gitEditSession({ mode: 'app' }),
+		});
+		const { container } = renderPage('app');
+
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(screen.queryByRole('button', { name: 'Synced from GitHub — details' })).toBeNull();
+	});
+
+	it('shows the banner without a restart CTA when the caller cannot stop the session', async () => {
+		makeFetch({
+			role: 'editor',
+			sourceType: 'git',
+			session: gitEditSession({
+				source_version_id: 'ver-old',
+				can: { attach: true, stop: false },
+			}),
+			headVersion: 'ver-head',
+		});
+		renderPage();
+
+		await waitFor(() => expect(screen.getByText(/updated on GitHub/)).toBeInTheDocument());
+		expect(screen.queryByText('Restart to update')).toBeNull();
+	});
+
+	it('shows no banner on a local notebook even when versions differ', async () => {
+		makeFetch({
+			role: 'editor',
+			session: gitEditSession({ source_version_id: 'ver-old' }),
+			headVersion: 'ver-head',
+		});
+		const { container } = renderPage();
+
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(screen.queryByText(/updated on GitHub/)).toBeNull();
+	});
+
+	it('Restart to update confirms (cancel is a no-op), then tears down and starts fresh', async () => {
+		const user = userEvent.setup();
+		const impl = makeFetch({
+			role: 'editor',
+			sourceType: 'git',
+			session: gitEditSession({ source_version_id: 'ver-old' }),
+			headVersion: 'ver-head',
+		});
+		const { container } = renderPage();
+		await waitFor(() => expect(screen.getByText('Restart to update')).toBeInTheDocument());
+
+		await user.click(screen.getByText('Restart to update'));
+		// The dialog, not a teardown, is what a click produces.
+		expect(sessionPosts(impl)).toHaveLength(1);
+		let dialog = await screen.findByRole('dialog');
+		expect(within(dialog).getByText(/latest version from GitHub/)).toBeInTheDocument();
+
+		await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+		expect(impl.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+		expect(container.querySelector('iframe')).not.toBeNull();
+
+		await user.click(screen.getByText('Restart to update'));
+		dialog = await screen.findByRole('dialog');
+		await user.click(within(dialog).getByRole('button', { name: 'Restart' }));
+		await waitFor(() => expect(sessionPosts(impl)).toHaveLength(2));
+		const deletes = impl.mock.calls.filter(([, init]) => init?.method === 'DELETE');
+		expect(deletes).toHaveLength(1);
+	});
+});
+
 describe('NotebookPage app variant', () => {
 	const appSession = (overrides: Partial<Session> = {}) =>
 		runningSession({ mode: 'app', source_version_id: 'ver-head', ...overrides });
@@ -310,6 +441,19 @@ describe('NotebookPage app variant', () => {
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 		await waitFor(() => expect(screen.queryByText(/serving an older version/)).toBeNull());
+	});
+
+	it('does not suppress the banner during editing on a git-synced notebook', async () => {
+		makeFetch({
+			role: 'editor',
+			sourceType: 'git',
+			session: appSession({ source_version_id: 'ver-old' }),
+			headVersion: 'ver-head',
+			projectSessions: [runningSession({ session_id: 'sess-edit', mode: 'edit' })],
+		});
+		renderPage('app');
+
+		await waitFor(() => expect(screen.getByText(/serving an older version/)).toBeInTheDocument());
 	});
 
 	it('shows no staleness banner when the app serves the head version', async () => {

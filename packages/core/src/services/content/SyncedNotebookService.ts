@@ -220,6 +220,7 @@ export class SyncedNotebookService {
 			author: actor,
 			message: `Sync ${prepared.commit.slice(0, 12)}`,
 			parentId: syncedSource.current_version_id,
+			commit: prepared.commit,
 		});
 		let versionToKeep = versionId;
 

@@ -4,6 +4,7 @@ import { useNotebookQuery, useUsersQuery } from '@/api/hooks';
 import { Button, Popover, UserLabel } from '@/components/ui';
 import { useNow } from '@/hooks/useNow';
 import { cn } from '@/lib/utils';
+import { isSessionStale } from '@/lib/sessions';
 import { formatDuration, formatRelative } from '@/lib/time';
 import {
 	computeSessionPresentation,
@@ -20,24 +21,6 @@ const APP_STATUS: Partial<
 	starting: { className: 'text-amber-500', label: 'App starting', pulse: true },
 	terminating: { className: 'text-orange-500', label: 'App stopping', pulse: true },
 };
-
-/**
- * Whether the app session is serving an older version than the notebook's
- * current head. NOTE: the periodic snapshotter commits a fresh version every
- * ~2 minutes while someone is editing, so callers must also suppress the hint
- * while an edit session is live on the notebook (`editActive`) — otherwise it
- * flaps for the whole editing session.
- */
-export function isAppStale(
-	session: Pick<Session, 'source_version_id'>,
-	currentVersionId: string | null | undefined,
-): boolean {
-	return (
-		!!session.source_version_id &&
-		!!currentVersionId &&
-		currentVersionId !== session.source_version_id
-	);
-}
 
 function AppSessionDetails({
 	session,
@@ -71,8 +54,12 @@ function AppSessionDetails({
 	const { data: notebook } = useNotebookQuery(session.project_id, session.notebook_id, {
 		staleTime: 0,
 	});
-	// Suppressed while the notebook is being edited — the head is still moving.
-	const stale = !editActive && isAppStale(session, notebook?.source.current_version_id);
+	// Suppressed while a LOCAL notebook is being edited — the snapshotter keeps
+	// moving its head. A synced head moves only when a push lands, so an open
+	// editor is no reason to hide the hint there.
+	const suppressForLocalEdit = editActive && notebook?.source.type !== 'git';
+	const stale =
+		!suppressForLocalEdit && isSessionStale(session, notebook?.source.current_version_id);
 	const connections = session.active_connections;
 	const storedProfileName = notebook ? notebook.meta.compute_profile : selectedProfileName;
 	const selectedProfile = effectiveComputeProfile(
@@ -183,7 +170,7 @@ export function AppSessionIndicator({
 	canControl: boolean;
 	/** The caller may open the app (viewers, when the viewer mode grants apps). */
 	canOpen?: boolean;
-	/** An edit session is live on the notebook — suppresses the stale hint. */
+	/** An edit session is live on the notebook — suppresses the stale hint (local sources only). */
 	editActive?: boolean;
 	onStop: () => void;
 	onRestart: () => void;

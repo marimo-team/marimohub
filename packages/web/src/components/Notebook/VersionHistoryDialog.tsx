@@ -11,6 +11,7 @@ import {
 	UserLabel,
 } from '@/components/ui';
 import {
+	useNotebookQuery,
 	useNotebookVersionQuery,
 	useNotebookVersionsQuery,
 	useRestoreVersion,
@@ -19,6 +20,7 @@ import {
 import type { UserDirectory } from '@/api/hooks';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { toastError } from '@/lib/errors';
+import { githubCommitUrl, githubCoords, shortCommit, versionCommit } from '@/lib/github';
 import { formatRelative } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { NotebookEntry, NotebookVersion } from '@/types';
@@ -76,6 +78,8 @@ interface VersionListItemProps {
 	users: UserDirectory | undefined;
 	usersLoading: boolean;
 	showRestore: boolean;
+	/** GitHub link for the synced commit this version mirrors, when known. */
+	commitLink?: { href: string; label: string };
 	onSelect: () => void;
 	onRestore: () => void;
 }
@@ -88,6 +92,7 @@ function VersionListItem({
 	users,
 	usersLoading,
 	showRestore,
+	commitLink,
 	onSelect,
 	onRestore,
 }: VersionListItemProps) {
@@ -120,6 +125,17 @@ function VersionListItem({
 					className="max-w-full text-xs text-muted-foreground"
 				/>
 			</button>
+			{commitLink && (
+				<a
+					href={commitLink.href}
+					target="_blank"
+					rel="noreferrer"
+					title="View commit on GitHub"
+					className="shrink-0 rounded font-mono text-[11px] text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
+				>
+					{commitLink.label}
+				</a>
+			)}
 			{showRestore && (
 				<Button variant="ghost" size="sm" onPress={onRestore} className="shrink-0">
 					Restore
@@ -151,6 +167,19 @@ export function VersionHistoryDialog({
 	const versionsQuery = useNotebookVersionsQuery(projectId, notebook.id);
 	const versions = versionsQuery.data ?? [];
 	const ids = new Set(versions.map((v) => v.version_id));
+
+	// The repo behind each sync version's commit link. The dialog mounts only
+	// while open, so this fetch is on-demand; local notebooks (and git sources
+	// without a trustworthy GitHub repo) just get no chips.
+	const { data: detail } = useNotebookQuery(projectId, notebook.id);
+	const coords = githubCoords(detail?.source);
+	const commitLinkFor = (v: NotebookVersion): { href: string; label: string } | undefined => {
+		if (!coords) return undefined;
+		const commit = versionCommit(v);
+		return commit
+			? { href: githubCommitUrl(coords.repo, commit), label: shortCommit(commit) }
+			: undefined;
+	};
 
 	const effectiveCompare =
 		compareId && ids.has(compareId) ? compareId : (versions[0]?.version_id ?? null);
@@ -257,6 +286,7 @@ export function VersionHistoryDialog({
 										users={users}
 										usersLoading={usersLoading}
 										showRestore={restorable && i !== 0}
+										commitLink={commitLinkFor(v)}
 										onSelect={() => {
 											setBaseId(v.version_id);
 											setCompareId(null);
