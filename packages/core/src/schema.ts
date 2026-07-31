@@ -419,6 +419,9 @@ export const VersionSchema = z.object({
 	// so no migration of existing version.json objects is required.
 	html_snapshot: SnapshotDescriptorSchema.optional(),
 	session_snapshot: SnapshotDescriptorSchema.optional(),
+	// The git commit a sync-cut version mirrors (git-synced sources only; the
+	// UI links it to the host). Forward-tolerant like the snapshots above.
+	commit: z.string().optional(),
 });
 
 export type Version = z.infer<typeof VersionSchema>;

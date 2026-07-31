@@ -66,6 +66,11 @@ describe('Session routes (app mode)', () => {
 		expect(same.source_version_id).toBe(source.current_version_id);
 	});
 
+	it('does not stamp source_version_id on an edit session for a local notebook', async () => {
+		const edit = await expectOk<any>(await owner('POST', sessionsPath()));
+		expect(edit.source_version_id).toBeUndefined();
+	});
+
 	it('writes the app claim at create and releases it on delete', async () => {
 		const app = await expectOk<any>(await owner('POST', sessionsPath(), { mode: 'app' }));
 		expect(await appClaimHolder(bucket, pid, nid)).toBe(app.session_id);
@@ -618,5 +623,55 @@ describe('Session routes (app mode)', () => {
 		expect(app.status).toBe('running');
 		const { source } = await services.notebooks.getNotebook(pid, meta.id as NotebookId);
 		expect(app.source_version_id).toBe(source.current_version_id);
+	});
+
+	it('stamps source_version_id on an EDIT session for a git-synced notebook', async () => {
+		const services = createServices(bucket);
+		const { meta } = await services.notebooks.synced.create(
+			pid,
+			{
+				title: 'Git NB',
+				description: 'd',
+				repo: 'owner/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+			},
+			ACTOR,
+		);
+		const gitNid = meta.id as NotebookId;
+		await services.notebooks.synced.sync(pid, gitNid, {
+			repo: 'owner/repo',
+			branch: 'main',
+			root_path: '',
+			commit: 'commit-aaaa',
+			files: [{ path: 'app.py', bytes: enc('import marimo') }],
+		});
+
+		const edit = await expectOk<any>(await owner('POST', sessionsPath('', gitNid)));
+		expect(edit.mode).toBe('edit');
+		const { source } = await services.notebooks.getNotebook(pid, gitNid);
+		expect(edit.source_version_id).toBe(source.current_version_id);
+
+		// A background push advances the head; the session's provenance stays put.
+		await services.notebooks.synced.sync(pid, gitNid, {
+			repo: 'owner/repo',
+			branch: 'main',
+			root_path: '',
+			commit: 'commit-bbbb',
+			files: [{ path: 'app.py', bytes: enc('import marimo  # updated') }],
+		});
+		const after = await services.notebooks.getNotebook(pid, gitNid);
+		expect(after.source.current_version_id).not.toBe(edit.source_version_id);
+		const same = await expectOk<any>(
+			await owner('GET', sessionsPath(`/${edit.session_id}`, gitNid)),
+		);
+		expect(same.source_version_id).toBe(edit.source_version_id);
+
+		// Reopening the notebook attaches to the live session, provenance intact —
+		// the reconnect the client's staleness banner fires on.
+		const reattached = await expectOk<any>(await owner('POST', sessionsPath('', gitNid)));
+		expect(reattached.reused).toBe(true);
+		expect(reattached.session_id).toBe(edit.session_id);
+		expect(reattached.source_version_id).toBe(edit.source_version_id);
 	});
 });

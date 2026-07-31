@@ -6,6 +6,7 @@ import {
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
 	useNotebookHtmlQuery,
+	useNotebookQuery,
 	useProjectSecretsQuery,
 	useRestartApp,
 	useRestartSession,
@@ -148,6 +149,44 @@ describe('useUserSearchQuery', () => {
 		releaseSecond();
 		await waitFor(() => expect(result.current.data?.[0]?.id).toBe('u2'));
 		expect(result.current.isPlaceholderData).toBe(false);
+	});
+});
+
+describe('useNotebookQuery', () => {
+	const notebookDetail = (sourceType: 'local' | 'git') => ({
+		meta: { id: NID, title: 'NB', author: 'me' },
+		source: { type: sourceType, current_version_id: 'ver-head' },
+	});
+
+	it('function-form refetchIntervalMs polls when the fetched detail asks for it', async () => {
+		const fetchMock = stubFetch(async () => jsonOk(notebookDetail('git')));
+
+		renderHookWithClient(
+			() =>
+				useNotebookQuery(PID, NID, {
+					refetchIntervalMs: (n) => (n?.source.type === 'git' ? 20 : undefined),
+				}),
+			{ toaster: false },
+		);
+
+		await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3));
+	});
+
+	it('function-form refetchIntervalMs returning undefined never polls', async () => {
+		const fetchMock = stubFetch(async () => jsonOk(notebookDetail('local')));
+
+		const { result } = renderHookWithClient(
+			() =>
+				useNotebookQuery(PID, NID, {
+					refetchIntervalMs: (n) => (n?.source.type === 'git' ? 20 : undefined),
+				}),
+			{ toaster: false },
+		);
+
+		await waitFor(() => expect(result.current.data).toBeDefined());
+		// Long enough for several 20ms ticks to have fired if polling were armed.
+		await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 });
 

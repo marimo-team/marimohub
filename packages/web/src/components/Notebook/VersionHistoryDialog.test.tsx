@@ -68,10 +68,13 @@ function makeFetch({
 	versions = VERSIONS,
 	listResponse,
 	restoreResponse,
+	source = { type: 'local', current_version_id: 'v3' },
 }: {
 	versions?: NotebookVersion[];
 	listResponse?: Response;
 	restoreResponse?: Response;
+	/** The notebook detail's source (git enables the per-version commit links). */
+	source?: Record<string, unknown>;
 } = {}) {
 	const calls: { url: string; method: string }[] = [];
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -88,12 +91,25 @@ function makeFetch({
 		}
 		if (url.includes(`/notebooks/${NID}/versions`))
 			return listResponse ?? ok({ items: versions, next_cursor: null });
+		if (url.endsWith(`/notebooks/${NID}`))
+			return ok({ meta: { id: NID, title: 'my_analysis', author: 'u-1' }, source });
 		if (url.includes('/users')) return ok(DIRECTORY);
 		throw new Error(`unexpected fetch: ${method} ${url}`);
 	});
 	vi.stubGlobal('fetch', impl);
 	return calls;
 }
+
+const GIT_SOURCE = {
+	type: 'git',
+	repo: 'org/repo',
+	branch: 'main',
+	root_path: '',
+	entry_notebook: 'app.py',
+	commit: 'deadbeefcafe0123',
+	current_version_id: 'v3',
+	last_synced_at: '2026-07-01T10:00:00Z',
+};
 
 function renderDialog({
 	sourceType = 'local' as const,
@@ -156,6 +172,34 @@ describe('VersionHistoryDialog', () => {
 		expect(within(rows[2]).getByText('first save')).toBeInTheDocument();
 		expect(within(rows[1]).queryByText('Current')).not.toBeInTheDocument();
 		await waitFor(() => expect(within(rows[0]).getByText('Ana Author')).toBeInTheDocument());
+	});
+
+	it('links sync versions to their GitHub commits for a git-synced notebook', async () => {
+		makeFetch({
+			versions: [
+				{
+					...version('v2', '2026-07-01T10:00:00Z', 'Sync deadbeefcafe'),
+					commit: 'deadbeefcafe0123',
+				},
+				// A version written before the commit field existed: parsed from the message.
+				version('v1', '2026-06-30T10:00:00Z', 'Sync abc123def456'),
+			],
+			source: GIT_SOURCE,
+		});
+		renderDialog({ sourceType: 'git' });
+
+		const stamped = await screen.findByRole('link', { name: 'deadbee' });
+		expect(stamped).toHaveAttribute('href', 'https://github.com/org/repo/commit/deadbeefcafe0123');
+		const legacy = screen.getByRole('link', { name: 'abc123d' });
+		expect(legacy).toHaveAttribute('href', 'https://github.com/org/repo/commit/abc123def456');
+	});
+
+	it('shows no commit links for a local notebook', async () => {
+		makeFetch();
+		renderDialog();
+
+		await screen.findAllByTestId('version-row');
+		expect(screen.queryByTitle('View commit on GitHub')).toBeNull();
 	});
 
 	it('defaults the diff to previous → current', async () => {

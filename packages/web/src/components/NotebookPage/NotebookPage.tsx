@@ -1,6 +1,14 @@
 import { useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { AlertTriangle, AppWindow, ArrowLeft, Eye, Pencil, RefreshCw } from 'lucide-react';
+import {
+	AlertTriangle,
+	AppWindow,
+	ArrowLeft,
+	Eye,
+	GitBranch,
+	Pencil,
+	RefreshCw,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
 	Button,
@@ -23,12 +31,12 @@ import { useNotebookSession } from '@/hooks/useNotebookSession';
 import type { SessionEnded } from '@/hooks/useNotebookSession';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
+import { GitSourcePopover } from '@/components/Notebook/GitSourcePopover';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
 import { ComputeProfileIndicator } from '@/components/Notebook/ComputeProfileIndicator';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
-import { isAppStale } from '@/components/Project/AppSessionIndicator';
-import { appConnectionHint, sessionsByNotebook } from '@/lib/sessions';
+import { appConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
 import type { Theme } from '@/context/ThemeContext';
 
@@ -77,6 +85,8 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const renameModal = useDisclosure();
 	// Stop/Restart disconnect everyone using the shared app, so both confirm first.
 	const confirmAppAction = useDialogTarget<'stop' | 'restart'>();
+	// Restarting a git-synced editor discards its sandbox scratch state, so confirm.
+	const confirmEditRestart = useDisclosure();
 
 	// The viewer branch (server-enforced regardless): editors get a session as
 	// always; a viewer gets an edit kernel only when the deployment's evaluated
@@ -129,14 +139,13 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 
 	// Metadata for the "created by" line — loaded lazily so it never blocks the
 	// kernel from starting. The author id is resolved to a name via the directory.
-	// On the app page it also carries the head version for the staleness banner,
-	// which must track versions committed server-side (snapshotter, teardown) —
-	// hence the poll; a cached-once head would never fire (or mis-fire) the banner.
-	const { data: notebook } = useNotebookQuery(
-		pid!,
-		nid!,
-		isApp ? { refetchIntervalMs: 30_000 } : {},
-	);
+	// It also carries the head version for the staleness banners, which must track
+	// versions committed server-side (snapshotter, teardown, git push) — hence the
+	// poll; a cached-once head would never fire (or mis-fire) a banner. Edit pages
+	// poll only git-synced sources — the one head that can move mid-edit.
+	const { data: notebook } = useNotebookQuery(pid!, nid!, {
+		refetchIntervalMs: isApp ? 30_000 : (n) => (n?.source.type === 'git' ? 30_000 : undefined),
+	});
 	const author = notebook?.meta.author;
 	// Prefer the canonical title once detail loads, so a rename reflects immediately.
 	const title = notebook?.meta.title ?? notebookTitle;
@@ -151,8 +160,22 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const { data: projectSessions } = useProjectSessionsQuery(pid!, isApp && !ended);
 	const sessionByNotebook = useMemo(() => sessionsByNotebook(projectSessions), [projectSessions]);
 	const editActive = isApp && !!sessionByNotebook.get(nid!)?.edit;
+	// Suppressed while a LOCAL notebook is being edited — the snapshotter keeps
+	// moving its head. A synced head moves only when a push lands, so an open
+	// editor is no reason to hide the banner there.
+	const suppressForLocalEdit = editActive && notebook?.source.type !== 'git';
 	const appStale =
-		isApp && !!session && !editActive && isAppStale(session, notebook?.source.current_version_id);
+		isApp &&
+		!!session &&
+		!suppressForLocalEdit &&
+		isSessionStale(session, notebook?.source.current_version_id);
+	// No `editActive` suppression here: a synced head moves only when a push
+	// lands, never from typing in the editor.
+	const editStale =
+		!isApp &&
+		!!session &&
+		notebook?.source.type === 'git' &&
+		isSessionStale(session, notebook.source.current_version_id);
 	// A viewer deep-linking to /app gets a plain 403 panel; retrying can only
 	// fail again, so the button is dropped (no retry loop, manual or otherwise).
 	const showRetry = error?.code !== 'FORBIDDEN';
@@ -222,6 +245,19 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					>
 						<Pencil className="size-3.5" />
 					</IconButton>
+				)}
+				{!isApp && notebook?.source.type === 'git' && (
+					<GitSourcePopover
+						projectId={pid!}
+						notebookId={nid!}
+						triggerClassName="shrink-0 cursor-pointer rounded-full"
+						trigger={
+							<span className="flex max-w-[16rem] items-center gap-1 rounded-full border border-input px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary">
+								<GitBranch className="size-3 shrink-0" />
+								<span className="truncate">{notebook.source.repo}</span>
+							</span>
+						}
+					/>
 				)}
 				{author && (
 					<span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
@@ -331,6 +367,27 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 							)}
 						</div>
 					)}
+					{editStale && (
+						<div
+							aria-live="polite"
+							className="flex items-center gap-1.5 border-b bg-amber-500/10 px-3 py-1.5 text-xs text-muted-foreground"
+						>
+							<AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-500" />
+							<span>
+								This notebook was updated on GitHub since this session started — you're viewing an
+								older version.
+							</span>
+							{session?.can?.stop && (
+								<Button
+									variant="unstyled"
+									className="ml-1 shrink-0 rounded text-xs font-medium text-primary underline-offset-2 hover:underline"
+									onPress={confirmEditRestart.open}
+								>
+									Restart to update
+								</Button>
+							)}
+						</div>
+					)}
 					<div className="flex-1 overflow-hidden">
 						<iframe
 							className="size-full border-0"
@@ -404,6 +461,20 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					onClose={renameModal.close}
 					projectId={pid!}
 					notebook={{ id: nid!, title }}
+				/>
+			)}
+
+			{!isApp && (
+				<ConfirmDialog
+					isOpen={confirmEditRestart.isOpen}
+					onClose={confirmEditRestart.close}
+					title="Restart Session"
+					description={`Restart the session for "${title}" to load the latest version from GitHub? Changes made in this sandbox aren't synced back and will be lost.`}
+					confirmLabel="Restart"
+					onConfirm={() => {
+						confirmEditRestart.close();
+						restart();
+					}}
 				/>
 			)}
 

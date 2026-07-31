@@ -80,6 +80,7 @@ import {
 	computeProfileOptions,
 	DEFAULT_COMPUTE_PROFILE,
 } from '@/components/Notebook/computeProfiles';
+import { GitSourcePopover } from '@/components/Notebook/GitSourcePopover';
 import { SyncedNotebookDialog } from '@/components/Notebook/SyncedNotebookDialog';
 import type { SyncedNotebookCreated } from '@/components/Notebook/SyncedNotebookDialog';
 import { SyncSettingsDialog } from '@/components/Notebook/SyncSettingsDialog';
@@ -578,6 +579,20 @@ export function Project() {
 								state={{ title: nb.title }}
 								label={nb.title}
 								contentClassName="items-center justify-between gap-3 py-3.5"
+								leading={
+									nb.source_type === 'git' ? (
+										<GitSourcePopover
+											projectId={pid!}
+											notebookId={nb.id}
+											triggerClassName="shrink-0 cursor-pointer rounded-lg"
+											trigger={
+												<span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
+													<GitBranch className="size-4" />
+												</span>
+											}
+										/>
+									) : undefined
+								}
 								actions={
 									<>
 										{/* Primary shutdown stays edit-only: the inline Power button
@@ -621,13 +636,11 @@ export function Project() {
 								}
 							>
 								<div className="flex min-w-0 items-center gap-3">
-									<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
-										{nb.source_type === 'git' ? (
-											<GitBranch className="size-4" />
-										) : (
+									{nb.source_type !== 'git' && (
+										<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
 											<FileText className="size-4" />
-										)}
-									</span>
+										</span>
+									)}
 									<span className="truncate text-sm font-medium">{nb.title}</span>
 									{badges.map((badge) => (
 										<span

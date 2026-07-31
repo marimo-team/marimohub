@@ -193,6 +193,11 @@ describe('SyncedNotebookService', () => {
 				expect(nb.source.current_version_id).not.toBeNull();
 			}
 
+			// The cut version records the commit it mirrors (the UI links it).
+			const [version] = await notebooks.listVersions(projectId, meta.id);
+			expect(version?.commit).toBe('commit-aaaa');
+			expect(version?.message).toBe('Sync commit-aaaa');
+
 			const e = await entry(meta.id);
 			expect(e?.status).toBe('active');
 		});

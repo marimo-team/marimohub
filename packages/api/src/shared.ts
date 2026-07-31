@@ -631,6 +631,7 @@ export const NotebookVersionResponseSchema = z
 		parent_id: z.string().nullable(),
 		html_snapshot: SnapshotDescriptorResponseSchema.optional(),
 		session_snapshot: SnapshotDescriptorResponseSchema.optional(),
+		commit: z.string().optional(),
 	})
 	.openapi('NotebookVersion');
 

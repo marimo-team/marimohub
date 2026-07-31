@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session } from '@/types';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
-import { AppSessionIndicator, isAppStale } from './AppSessionIndicator';
+import { AppSessionIndicator } from './AppSessionIndicator';
 
 function makeAppSession(overrides: Partial<Session> = {}): Session {
 	return {
@@ -29,6 +29,7 @@ function renderIndicator(
 		canOpen = false,
 		editActive = false,
 		headVersion = 'ver-head',
+		sourceType = 'local',
 		profiles = [],
 		computeProfile,
 		allowComputeOverride = false,
@@ -40,6 +41,7 @@ function renderIndicator(
 		editActive?: boolean;
 		/** A function to model a head that moves between popover opens. */
 		headVersion?: string | (() => string);
+		sourceType?: 'local' | 'git';
 		profiles?: ComputeProfile[];
 		computeProfile?: string;
 		allowComputeOverride?: boolean;
@@ -69,7 +71,7 @@ function renderIndicator(
 							...(computeProfile ? { compute_profile: computeProfile } : {}),
 						},
 						source: {
-							type: 'local',
+							type: sourceType,
 							current_version_id: typeof headVersion === 'function' ? headVersion() : headVersion,
 						},
 					}
@@ -115,16 +117,6 @@ beforeEach(() => {
 afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
-});
-
-describe('isAppStale', () => {
-	it('is stale only when both versions are known and differ', () => {
-		expect(isAppStale({ source_version_id: 'a' }, 'b')).toBe(true);
-		expect(isAppStale({ source_version_id: 'a' }, 'a')).toBe(false);
-		expect(isAppStale({ source_version_id: undefined }, 'b')).toBe(false);
-		expect(isAppStale({ source_version_id: 'a' }, null)).toBe(false);
-		expect(isAppStale({ source_version_id: 'a' }, undefined)).toBe(false);
-	});
 });
 
 describe('AppSessionIndicator', () => {
@@ -178,6 +170,17 @@ describe('AppSessionIndicator', () => {
 	it('shows the stale hint when the app trails the notebook head', async () => {
 		renderIndicator(makeAppSession({ source_version_id: 'ver-old' }), {
 			headVersion: 'ver-head',
+		});
+		await userEvent.click(screen.getByRole('button'));
+
+		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();
+	});
+
+	it('does not suppress the stale hint during editing on a git-synced notebook', async () => {
+		renderIndicator(makeAppSession({ source_version_id: 'ver-old' }), {
+			headVersion: 'ver-head',
+			sourceType: 'git',
+			editActive: true,
 		});
 		await userEvent.click(screen.getByRole('button'));
 

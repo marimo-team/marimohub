@@ -476,12 +476,16 @@ app.openapi(createSession, async (c) => {
 	const workspacePrefix = syncedVersionId
 		? paths.project(pid).notebook(nid).version(syncedVersionId).workspacePrefix
 		: undefined;
-	// Staleness provenance: a non-persisting mode serves a frozen snapshot, so
-	// stamp the head committed version it was provisioned from — what the client
-	// compares for the "app is stale" banner.
-	const sourceVersionId = MODE_POLICY[mode].persistsEdits
-		? undefined
-		: (notebook.source.current_version_id ?? undefined);
+	// Staleness provenance: a session that serves a frozen snapshot — a
+	// non-persisting mode (`app`), or any mode on a synced source (a read-only
+	// mirror, even under `edit`) — is stamped with the head committed version it
+	// was provisioned from. The client compares it against the live head for the
+	// "session is stale" banners.
+	const sourceVersionId =
+		syncedVersionId ??
+		(MODE_POLICY[mode].persistsEdits
+			? undefined
+			: (notebook.source.current_version_id ?? undefined));
 
 	const { compute, bucket: bucketHandle, sandbox } = deps;
 	// The notebook's stored choice, resolved leniently: "default"/absent → first

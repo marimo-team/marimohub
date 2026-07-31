@@ -120,6 +120,12 @@ describe('Git sync routes', () => {
 			await request('GET', `/projects/${projectId}/notebooks/${notebookId}/content`),
 		);
 		expect(content.code).toBe('print("synced")');
+
+		// The cut version exposes the commit it mirrors (for the UI's GitHub links).
+		const versions = await expectOk<{ items: { commit?: string; message: string }[] }>(
+			await request('GET', `/projects/${projectId}/notebooks/${notebookId}/versions`),
+		);
+		expect(versions.items[0]?.commit).toBe('abc123');
 	});
 
 	it("rejects a valid sync token used against a DIFFERENT notebook's path (401 IDOR)", async () => {

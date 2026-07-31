@@ -45,6 +45,8 @@ interface BuildVersionArgs {
 	author: UserId;
 	message: string;
 	parentId: VersionId | null;
+	/** The synced git commit, on versions cut by a push. */
+	commit?: string;
 }
 
 /**
@@ -61,6 +63,7 @@ export function buildVersion(args: BuildVersionArgs): Version {
 		author: args.author,
 		message: args.message,
 		parent_id: args.parentId,
+		...(args.commit ? { commit: args.commit } : {}),
 	};
 }
 

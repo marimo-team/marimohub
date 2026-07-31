@@ -671,6 +671,8 @@ components:
           $ref: '#/components/schemas/SnapshotDescriptor'
         session_snapshot:
           $ref: '#/components/schemas/SnapshotDescriptor'
+        commit:
+          type: string
       required:
         - version_id
         - notebook_id
