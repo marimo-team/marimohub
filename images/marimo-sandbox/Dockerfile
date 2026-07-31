@@ -29,7 +29,7 @@ RUN cd /tmp \
  && uv init --bare --no-readme base \
  && cd base \
  && uv add --compile-bytecode \
-      "marimo[recommended]==${MARIMO_VERSION}" \
+      "marimo[recommended,ai]==${MARIMO_VERSION}" \
       polars \
       narwhals \
       numpy \
@@ -41,6 +41,14 @@ RUN cd /tmp \
       plotly \
       anywidget \
       moutils \
+      connectorx \
+      pyiceberg \
+      sqlalchemy \
+      fsspec \
+      s3fs \
+      gcsfs \
+      python-dotenv \
+      pydantic \
       scikit-learn \
       scipy \
       requests \
