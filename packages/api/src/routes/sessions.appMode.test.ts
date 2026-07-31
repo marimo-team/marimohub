@@ -209,6 +209,7 @@ describe('Session routes (app mode)', () => {
 			runFake.calls.writeFiles.flat().some((file) => file.path.endsWith('/marimo/marimo.toml')),
 		).toBe(false);
 		expect(runFake.calls.setEnvVars.flatMap(Object.keys)).not.toContain('XDG_CONFIG_HOME');
+		expect(runFake.calls.setEnvDefaults).toHaveLength(0);
 	});
 
 	describe('viewer admission per MARIMOHUB_VIEWER_MODE', () => {

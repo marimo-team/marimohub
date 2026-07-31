@@ -30,13 +30,24 @@ export function shellQuote(value: string): string {
  * Build the `export K='v'; …` shell prefix that carries accumulated env vars into
  * a command, for backends whose `exec` has no per-command env (CoreWeave,
  * Docker, Podman, Kubernetes pod-exec). Values are {@link shellQuote}d. Returns
- * `cmd` unchanged when `env` is empty.
+ * `cmd` unchanged when `env` and `defaults` are empty.
+ *
+ * `defaults` are fallbacks (`setEnvVars` with `onlyIfUnset`): each is exported
+ * behind a `[ -n "${K:-}" ]` guard, so a value the sandbox already defines —
+ * image ENV, profile script, or a forced export from `env` — wins. The guards
+ * come after the forced exports, which is what lets a key present in both
+ * resolve to the forced value.
  */
-export function withEnvPrefix(cmd: string, env: Record<string, string>): string {
-	const keys = Object.keys(env);
-	if (keys.length === 0) return cmd;
-	const prefix = keys.map((k) => `export ${k}=${shellQuote(env[k])}; `).join('');
-	return prefix + cmd;
+export function withEnvPrefix(
+	cmd: string,
+	env: Record<string, string>,
+	defaults: Record<string, string> = {},
+): string {
+	const forced = Object.keys(env).map((k) => `export ${k}=${shellQuote(env[k])}; `);
+	const guarded = Object.keys(defaults).map(
+		(k) => `[ -n "\${${k}:-}" ] || export ${k}=${shellQuote(defaults[k])}; `,
+	);
+	return forced.join('') + guarded.join('') + cmd;
 }
 
 /**

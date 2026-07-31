@@ -96,6 +96,11 @@ export interface SandboxFileWrite {
 	content: string | Uint8Array;
 }
 
+export interface SetEnvVarsOptions {
+	/** Apply each var only when the sandbox does not already define it. */
+	onlyIfUnset?: boolean;
+}
+
 export interface SandboxInstance {
 	exec(cmd: string): Promise<ExecResult>;
 	execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream>;
@@ -112,7 +117,13 @@ export interface SandboxInstance {
 	 */
 	writeFiles(files: readonly SandboxFileWrite[]): Promise<void>;
 	gitCheckout(repo: string, options?: GitCheckoutOptions): Promise<void>;
-	setEnvVars(vars: Record<string, string>): Promise<void>;
+	/**
+	 * Set env vars for every subsequent command and process in the sandbox.
+	 * `onlyIfUnset` makes each var a fallback: the sandbox keeps its own value
+	 * (image ENV, profile) when one is already defined. A key set both ways gets
+	 * the forced value.
+	 */
+	setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void>;
 	mountBucket(options: MountBucketOptions): Promise<void>;
 	unmountBucket(mountPath: string): Promise<void>;
 	startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess>;

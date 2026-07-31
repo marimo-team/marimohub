@@ -163,6 +163,20 @@ describe('DockerCompute', () => {
 		);
 	});
 
+	it('applies onlyIfUnset vars as guarded defaults after the forced exports', async () => {
+		const { runner, calls } = fakeRunner(defaultHandler);
+		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
+
+		await sb.setEnvVars({ MODE: 'prod' });
+		await sb.setEnvVars({ CACHE: '/tmp/c' }, { onlyIfUnset: true });
+		await sb.exec('echo defaults');
+
+		const exec = calls.find((c) => c.args.at(-1)?.includes('echo defaults'));
+		expect(exec?.args.at(-1)).toBe(
+			"export MODE='prod'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; echo defaults",
+		);
+	});
+
 	it('exposePort: resolves the OS-assigned host port into an http URL', async () => {
 		const { runner } = fakeRunner(defaultHandler);
 		const sb = new DockerCompute({ host: 'example.test' }, runner).create(SANDBOX_ID);

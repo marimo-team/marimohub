@@ -2,9 +2,20 @@ import { stringify } from 'smol-toml';
 import type { TomlTable, TomlValue } from 'smol-toml';
 import type { SessionEnv } from './runtime/SandboxProvisioner';
 
+export type { TomlTable };
+
 export type MarimoConfigContributor = () => TomlTable;
 
 const XDG_CONFIG_HOME = '/tmp/marimohub-config';
+// marimo also writes logs to XDG_CACHE_HOME and recent-files/server state to
+// XDG_STATE_HOME (`~/.cache`, `~/.local/state` by default). Redirect both to
+// /tmp so ephemeral runtime state never lands under $HOME, where a deployment
+// whose workdir overlaps the home directory would sweep it into the workspace
+// capture and filesystem snapshots. Unlike XDG_CONFIG_HOME (forced — it
+// carries policy config), these are fallbacks: an image that sets its own
+// cache/state locations keeps them.
+const XDG_CACHE_HOME = '/tmp/marimohub-cache';
+const XDG_STATE_HOME = '/tmp/marimohub-state';
 
 function isTomlTable(value: TomlValue | undefined): value is TomlTable {
 	return (
@@ -60,5 +71,6 @@ export function marimoConfigToSessionEnv(
 			},
 		],
 		vars: { XDG_CONFIG_HOME },
+		defaults: { XDG_CACHE_HOME, XDG_STATE_HOME },
 	};
 }

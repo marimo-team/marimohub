@@ -12,6 +12,7 @@ import type {
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
+	SetEnvVarsOptions,
 	StartProcessOptions,
 } from '../ports/sandbox';
 
@@ -29,6 +30,8 @@ export interface SandboxCalls {
 	/** One entry per `writeFiles` call (the set sent in that call) — for batching assertions. */
 	writeFiles: SandboxFileWrite[][];
 	setEnvVars: Record<string, string>[];
+	/** Vars set with `onlyIfUnset` (`SessionEnv.defaults`), recorded separately. */
+	setEnvDefaults: Record<string, string>[];
 	readFile: string[];
 	waitForPort: number[];
 	destroy: number;
@@ -63,6 +66,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 		writeFile: [],
 		writeFiles: [],
 		setEnvVars: [],
+		setEnvDefaults: [],
 		readFile: [],
 		waitForPort: [],
 		destroy: 0,
@@ -103,9 +107,14 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 			calls.sequence.push('writeFiles');
 		},
 		gitCheckout: async () => {},
-		setEnvVars: async (vars: Record<string, string>) => {
-			calls.setEnvVars.push(vars);
-			calls.sequence.push('setEnvVars');
+		setEnvVars: async (vars: Record<string, string>, options?: SetEnvVarsOptions) => {
+			if (options?.onlyIfUnset) {
+				calls.setEnvDefaults.push(vars);
+				calls.sequence.push('setEnvDefaults');
+			} else {
+				calls.setEnvVars.push(vars);
+				calls.sequence.push('setEnvVars');
+			}
 		},
 		mountBucket: async (options: MountBucketOptions) => {
 			calls.mountBucket.push(options);
@@ -189,6 +198,7 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 		writeFile: [],
 		writeFiles: [],
 		setEnvVars: [],
+		setEnvDefaults: [],
 		readFile: [],
 		waitForPort: [],
 		destroy: 0,

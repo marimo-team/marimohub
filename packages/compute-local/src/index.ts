@@ -28,6 +28,7 @@ import {
 	buildGitCloneCommand,
 	mapWithConcurrency,
 	pollUntilReady,
+	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core';
@@ -47,6 +48,7 @@ import type {
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
+	SetEnvVarsOptions,
 	StartProcessOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
@@ -161,6 +163,7 @@ class LocalSandboxInstance implements SandboxInstance {
 	/** Logical port (as named in core, e.g. 2718) → real allocated host port. */
 	private readonly portMap = new Map<number, number>();
 	private env: Record<string, string> = {};
+	private envDefaults: Record<string, string> = {};
 	/** ISO timestamp the instance was constructed — surfaced via listActive(). */
 	readonly createdAt = new Date().toISOString();
 
@@ -297,8 +300,12 @@ class LocalSandboxInstance implements SandboxInstance {
 		if (!res.success) throw new Error(`git checkout failed: ${res.stderr}`);
 	}
 
-	async setEnvVars(vars: Record<string, string>): Promise<void> {
-		this.env = { ...this.env, ...vars };
+	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
+		if (options?.onlyIfUnset) {
+			this.envDefaults = { ...this.envDefaults, ...vars };
+		} else {
+			this.env = { ...this.env, ...vars };
+		}
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {
@@ -328,7 +335,9 @@ class LocalSandboxInstance implements SandboxInstance {
 		const cwd = options?.cwd ? this.mapPath(options.cwd) : this.root;
 		await mkdir(cwd, { recursive: true });
 
-		const child = spawn('sh', ['-c', command], {
+		// Forced vars ride spawn's env; defaults can't (a spawn env entry always
+		// wins), so they go in as a guarded prefix that defers to the host env.
+		const child = spawn('sh', ['-c', withEnvPrefix(command, {}, this.envDefaults)], {
 			cwd,
 			env: { ...process.env, ...this.env, ...options?.env },
 			detached: true,

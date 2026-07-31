@@ -343,10 +343,9 @@ describe('CloudflareSandboxProvider', () => {
 	});
 
 	describe('simple delegations', () => {
-		it('writeFile / gitCheckout / setEnvVars / unmountBucket / destroy forward to the sandbox', async () => {
+		it('writeFile / setEnvVars / unmountBucket / destroy forward; gitCheckout clones via exec', async () => {
 			for (const fn of [
 				fakeSandbox.writeFile,
-				fakeSandbox.gitCheckout,
 				fakeSandbox.setEnvVars,
 				fakeSandbox.unmountBucket,
 				fakeSandbox.destroy,
@@ -357,14 +356,48 @@ describe('CloudflareSandboxProvider', () => {
 
 			await instance.writeFiles([{ path: '/f', content: 'data' }]);
 			expect(fakeSandbox.writeFile).toHaveBeenCalledWith('/f', 'data');
+			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
 			await instance.gitCheckout('https://x/y', { branch: 'main' });
-			expect(fakeSandbox.gitCheckout).toHaveBeenCalledWith('https://x/y', { branch: 'main' });
+			expect(fakeSandbox.exec).toHaveBeenCalledWith("git clone --branch 'main' 'https://x/y' '.'");
 			await instance.setEnvVars({ A: '1' });
 			expect(fakeSandbox.setEnvVars).toHaveBeenCalledWith({ A: '1' });
 			await instance.unmountBucket('/m');
 			expect(fakeSandbox.unmountBucket).toHaveBeenCalledWith('/m');
 			await instance.destroy();
 			expect(fakeSandbox.destroy).toHaveBeenCalled();
+		});
+
+		it('setEnvVars with onlyIfUnset skips the SDK and prefixes commands instead', async () => {
+			fakeSandbox.setEnvVars.mockClear();
+			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+			const instance = makeProvider().create(SANDBOX_ID);
+
+			await instance.setEnvVars({ CACHE: '/tmp/c' }, { onlyIfUnset: true });
+			expect(fakeSandbox.setEnvVars).not.toHaveBeenCalled();
+
+			await instance.exec('run');
+			expect(fakeSandbox.exec).toHaveBeenCalledWith(
+				'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; run',
+			);
+
+			fakeSandbox.startProcess.mockResolvedValueOnce({
+				id: 'p1',
+				command: 'serve',
+				kill: async () => {},
+				waitForPort: async () => {},
+				getLogs: async () => ({ stdout: '', stderr: '' }),
+			});
+			await instance.startProcess('serve');
+			expect(fakeSandbox.startProcess).toHaveBeenCalledWith(
+				'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; serve',
+				expect.anything(),
+			);
+
+			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+			await instance.gitCheckout('https://x/y');
+			expect(fakeSandbox.exec).toHaveBeenCalledWith(
+				"[ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; git clone 'https://x/y' '.'",
+			);
 		});
 	});
 

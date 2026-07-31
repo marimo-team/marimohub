@@ -1,6 +1,12 @@
 import { getSandbox, proxyToSandbox } from '@cloudflare/sandbox';
 import type { Sandbox } from '@cloudflare/sandbox';
-import { base64Encode, mapWithConcurrency, WRITE_CONCURRENCY } from '@marimo-hub/compute-commons';
+import {
+	base64Encode,
+	buildGitCloneCommand,
+	mapWithConcurrency,
+	withEnvPrefix,
+	WRITE_CONCURRENCY,
+} from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core';
 import type {
 	ExecResult,
@@ -16,6 +22,7 @@ import type {
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
+	SetEnvVarsOptions,
 	StartProcessOptions,
 } from '@marimo-hub/core/ports';
 
@@ -54,6 +61,7 @@ async function waitForTunnelReady(url: string): Promise<void> {
 class CloudflareSandboxInstance implements SandboxInstance {
 	private sandbox: SandboxType;
 	private useTunnel: boolean;
+	private envDefaults: Record<string, string> = {};
 
 	constructor(sandbox: SandboxType, useTunnel = false) {
 		this.sandbox = sandbox;
@@ -61,12 +69,12 @@ class CloudflareSandboxInstance implements SandboxInstance {
 	}
 
 	async exec(cmd: string): Promise<ExecResult> {
-		const res = await this.sandbox.exec(cmd);
+		const res = await this.sandbox.exec(this.withDefaults(cmd));
 		return { success: res.success, stdout: res.stdout, stderr: res.stderr };
 	}
 
 	async execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream> {
-		return this.sandbox.execStream(cmd, {
+		return this.sandbox.execStream(this.withDefaults(cmd), {
 			timeout: options?.timeout,
 		});
 	}
@@ -104,11 +112,24 @@ class CloudflareSandboxInstance implements SandboxInstance {
 	}
 
 	async gitCheckout(repo: string, options?: GitCheckoutOptions): Promise<void> {
-		await this.sandbox.gitCheckout(repo, options);
+		// Via exec rather than the SDK's gitCheckout so the env-defaults prefix
+		// applies to the clone, like every other adapter.
+		const res = await this.exec(buildGitCloneCommand(repo, options));
+		if (!res.success) throw new Error(`git checkout failed: ${res.stderr}`);
 	}
 
-	async setEnvVars(vars: Record<string, string>): Promise<void> {
+	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
+		if (options?.onlyIfUnset) {
+			// The SDK's session-level setEnvVars always overwrites, so defaults are
+			// applied as a guarded shell prefix on each command instead.
+			this.envDefaults = { ...this.envDefaults, ...vars };
+			return;
+		}
 		await this.sandbox.setEnvVars(vars);
+	}
+
+	private withDefaults(cmd: string): string {
+		return withEnvPrefix(cmd, {}, this.envDefaults);
 	}
 
 	async mountBucket(options: MountBucketOptions): Promise<void> {
@@ -133,7 +154,7 @@ class CloudflareSandboxInstance implements SandboxInstance {
 	}
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
-		const proc = await this.sandbox.startProcess(cmd, {
+		const proc = await this.sandbox.startProcess(this.withDefaults(cmd), {
 			processId: options?.processId,
 			cwd: options?.cwd,
 			env: options?.env,

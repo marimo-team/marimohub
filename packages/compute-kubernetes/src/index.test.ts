@@ -504,6 +504,20 @@ describe('KubernetesCompute', () => {
 			);
 		});
 
+		it('applies onlyIfUnset vars as guarded defaults after the forced exports', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world).create(SANDBOX_ID);
+
+			await inst.setEnvVars({ MODE: 'prod' });
+			await inst.setEnvVars({ CACHE: '/tmp/c' }, { onlyIfUnset: true });
+			await inst.exec('echo defaults');
+
+			const exec = world.execCalls.find((c) => shCmd(c).includes('echo defaults'));
+			expect(shCmd(exec!)).toBe(
+				"export MODE='prod'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; echo defaults",
+			);
+		});
+
 		it('proxy() is a no-op (kernel reached via its Ingress host)', async () => {
 			const world = makeWorld();
 			expect(await makeCompute(world).proxy(new Request('http://x/'))).toBeNull();

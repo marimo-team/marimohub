@@ -459,6 +459,16 @@ describe('CoreWeaveCompute', () => {
 			expect(cmd).toContain("export A='1'; ");
 			expect(cmd).toContain("export B='2'; ");
 		});
+
+		it('applies onlyIfUnset vars as guarded defaults after the forced exports', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world).create(SANDBOX_ID);
+			await inst.setEnvVars({ A: '1' });
+			await inst.setEnvVars({ CACHE: '/tmp/c' }, { onlyIfUnset: true });
+			await inst.exec('run');
+			const cmd = [...world.registry.values()][0].fake.runCalls.at(-1)![2];
+			expect(cmd).toBe("export A='1'; [ -n \"${CACHE:-}\" ] || export CACHE='/tmp/c'; run");
+		});
 	});
 
 	describe('listFiles()', () => {

@@ -72,6 +72,7 @@ import type {
 	SandboxProcess,
 	SandboxProvider,
 	StartProcessOptions,
+	SetEnvVarsOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
 
@@ -118,6 +119,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private readonly kernelPort: number;
 	private ready = false;
 	private env: Record<string, string> = {};
+	private envDefaults: Record<string, string> = {};
 
 	constructor(
 		private readonly id: SandboxId,
@@ -199,7 +201,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 
 	/** Prefix accumulated env vars onto a shell command (exec carries no env). */
 	private withEnv(cmd: string): string {
-		return withEnvPrefix(cmd, this.env);
+		return withEnvPrefix(cmd, this.env, this.envDefaults);
 	}
 
 	async exec(cmd: string): Promise<ExecResult> {
@@ -267,10 +269,14 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		if (!res.success) throw new Error(`git checkout failed: ${res.stderr}`);
 	}
 
-	async setEnvVars(vars: Record<string, string>): Promise<void> {
+	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
 		// Stored and applied as a shell prefix by withEnv(); the Pod env is fixed at
 		// create time and the provisioner never calls this on the hot path.
-		this.env = { ...this.env, ...vars };
+		if (options?.onlyIfUnset) {
+			this.envDefaults = { ...this.envDefaults, ...vars };
+		} else {
+			this.env = { ...this.env, ...vars };
+		}
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {

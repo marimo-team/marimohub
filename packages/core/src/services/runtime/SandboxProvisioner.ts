@@ -49,6 +49,12 @@ export interface BucketConfig {
 /** Env vars + files injected into a sandbox before the kernel starts. */
 export interface SessionEnv {
 	vars?: Record<string, string>;
+	/**
+	 * Fallback vars, applied with `onlyIfUnset`: the sandbox image's own value
+	 * wins when it defines one. Use `vars` for anything policy- or
+	 * credential-bearing — a default the image can shadow is not a control.
+	 */
+	defaults?: Record<string, string>;
 	files?: { path: string; content: string }[];
 }
 
@@ -368,12 +374,16 @@ export class SandboxProvisioner {
 		using _inject = sw.span('inject');
 		try {
 			// The credential files go in one write; env vars are a separate channel, so
-			// the two round-trips overlap.
+			// the round-trips overlap.
 			const files = sessionEnv.files ?? [];
 			const vars = sessionEnv.vars;
+			const defaults = sessionEnv.defaults;
 			await Promise.all([
 				files.length > 0 ? sandbox.writeFiles(files) : undefined,
 				vars && Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,
+				defaults && Object.keys(defaults).length > 0
+					? sandbox.setEnvVars(defaults, { onlyIfUnset: true })
+					: undefined,
 			]);
 		} catch (err) {
 			throw provisionFailure('injecting session credentials', err);

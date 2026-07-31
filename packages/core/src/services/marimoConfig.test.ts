@@ -106,10 +106,15 @@ describe('marimoSharingDisabled', () => {
 describe('marimoConfigToSessionEnv', () => {
 	it('writes marimo.toml under the injected XDG_CONFIG_HOME', () => {
 		const env = marimoConfigToSessionEnv([marimoNotebookDefaults]);
-		expect(env.vars.XDG_CONFIG_HOME).toBe('/tmp/marimohub-config');
+		expect(env.vars).toEqual({ XDG_CONFIG_HOME: '/tmp/marimohub-config' });
+		expect(env.defaults).toEqual({
+			XDG_CACHE_HOME: '/tmp/marimohub-cache',
+			XDG_STATE_HOME: '/tmp/marimohub-state',
+		});
 		expect(env.files).toHaveLength(1);
-		expect(env.files[0].path).toBe('/tmp/marimohub-config/marimo/marimo.toml');
-		expect(parse(env.files[0].content)).toEqual({
+		const [file] = env.files ?? [];
+		expect(file?.path).toBe('/tmp/marimohub-config/marimo/marimo.toml');
+		expect(parse(file?.content ?? '')).toEqual({
 			display: { default_width: 'medium' },
 			runtime: { default_sql_output: 'native' },
 		});

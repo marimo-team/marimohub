@@ -139,6 +139,11 @@ describe('Session routes', () => {
 		expect(calls.setEnvVars).toContainEqual({
 			XDG_CONFIG_HOME: '/tmp/marimohub-config',
 		});
+		// Cache/state redirects are fallbacks — an image defining its own wins.
+		expect(calls.setEnvDefaults).toContainEqual({
+			XDG_CACHE_HOME: '/tmp/marimohub-cache',
+			XDG_STATE_HOME: '/tmp/marimohub-state',
+		});
 	});
 
 	describe('base image resolution', () => {
