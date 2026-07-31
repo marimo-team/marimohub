@@ -178,12 +178,10 @@ export interface CoreWeaveConfig {
 	/** Access level for `objectStorageBuckets`. Default `read-write`. */
 	objectStoragePermission?: 'read' | 'read-write';
 	/**
-	 * When `objectStorageBuckets` is set: S3 endpoint/region injected as real
-	 * container env at create (`AWS_ENDPOINT_URL_S3`/`AWS_REGION`) so plain SDK
-	 * clients target CAIOS. Omit if the vending sidecar already provides them.
-	 * TODO: the CoreWeave runner injects `AWS_ENDPOINT_URL_S3=http://cwlota.com`
-	 * itself and clobbers this value (observed 2026-07; `AWS_REGION` survives) —
-	 * decide whether to drop this option or fight for precedence.
+	 * S3 endpoint and region injected as `AWS_ENDPOINT_URL_S3` and `AWS_REGION`.
+	 * These values do not require `objectStorageBuckets`. Pod Identity supplies
+	 * credentials but not an endpoint. When buckets are set, the CoreWeave runner
+	 * overrides `AWS_ENDPOINT_URL_S3` with `http://cwlota.com` (observed 2026-07).
 	 */
 	objectStorageEndpoint?: string;
 	objectStorageRegion?: string;
@@ -264,7 +262,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		this.sandbox = existing
 			? await this.client.fromId(existing.sandboxId)
 			: await this.client.create(this.createOptions());
-		if (!existing && this.config.objectStorageBuckets?.length) {
+		if (!existing && this.needsAwsConfigBootstrap()) {
 			await this.bootstrapAwsConfig(this.sandbox);
 		}
 		const t2 = Date.now();
@@ -317,24 +315,30 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		};
 	}
 
-	/** Sandbox-native CAIOS access + the endpoint env plain SDK clients need. */
 	private objectStorageOptions(): Pick<
 		SandboxRunOptions,
 		'objectStorageAccess' | 'environmentVariables'
 	> {
 		const buckets = this.config.objectStorageBuckets;
-		if (!buckets?.length) return {};
 		const env = removeUndefined({
 			AWS_ENDPOINT_URL_S3: this.config.objectStorageEndpoint,
 			AWS_REGION: this.config.objectStorageRegion,
 		});
 		return {
-			objectStorageAccess: {
-				buckets,
-				permission: this.config.objectStoragePermission ?? 'read-write',
-			},
+			...(buckets?.length
+				? {
+						objectStorageAccess: {
+							buckets,
+							permission: this.config.objectStoragePermission ?? 'read-write',
+						},
+					}
+				: {}),
 			...(Object.keys(env).length > 0 ? { environmentVariables: env } : {}),
 		};
+	}
+
+	private needsAwsConfigBootstrap(): boolean {
+		return Boolean(this.config.objectStorageBuckets?.length || this.config.objectStorageEndpoint);
 	}
 
 	/**
