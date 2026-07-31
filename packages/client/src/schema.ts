@@ -3596,6 +3596,7 @@ export interface components {
 			id: string;
 			email: string;
 			logout_url: string | null;
+			is_super_admin: boolean;
 		};
 		ErrorResponse: {
 			/** @enum {boolean} */

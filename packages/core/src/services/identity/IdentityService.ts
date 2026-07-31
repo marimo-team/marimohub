@@ -1,6 +1,7 @@
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { foldCase, normalizeEmail } from '../../identityMatch';
 import type { UserId } from '../../ids';
 import type { AuthUser } from '../../ports/auth';
 import { paths } from '../../paths';
@@ -141,15 +142,15 @@ export class IdentityService {
 	 * add-member picker. Results are name-sorted for a stable UI.
 	 */
 	async search(query: string, limit = 10): Promise<Identity[]> {
-		const q = query.trim().toLowerCase();
+		const q = foldCase(query);
 		if (!q) return [];
 		const all = await this.listAll();
 		return all
 			.filter(
 				(u) =>
-					u.email.toLowerCase().includes(q) ||
-					u.name.toLowerCase().includes(q) ||
-					u.id.toLowerCase().includes(q),
+					foldCase(u.email).includes(q) ||
+					foldCase(u.name).includes(q) ||
+					foldCase(u.id).includes(q),
 			)
 			.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
 			.slice(0, limit);
@@ -162,10 +163,10 @@ export class IdentityService {
 	 * record wins.
 	 */
 	async getByEmail(email: string): Promise<Identity | null> {
-		const target = email.trim().toLowerCase();
+		const target = normalizeEmail(email);
 		if (!target) return null;
 		const all = await this.listAll();
-		const matches = all.filter((u) => u.email.toLowerCase() === target);
+		const matches = all.filter((u) => normalizeEmail(u.email) === target);
 		if (matches.length === 0) return null;
 		return matches.reduce((a, b) => (a.updated_at >= b.updated_at ? a : b));
 	}

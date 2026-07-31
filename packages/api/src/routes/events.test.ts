@@ -62,6 +62,18 @@ describe('Event routes', () => {
 		await expectError(await viewerRequest('GET', `/projects/${pid}/events`), 403);
 	});
 
+	it('a non-member super admin may read the audit trail', async () => {
+		const pid = await createProject();
+		const god = uid('user_god');
+		const godRequest = createTestApi({
+			bucket,
+			userId: god,
+			deps: { policy: { superAdmins: [god] } },
+		}).request;
+		const events = await expectOk<any[]>(await godRequest('GET', `/projects/${pid}/events`));
+		expect(events.map((e) => e.event)).toEqual(['project.create']);
+	});
+
 	it('rejects unauthenticated callers (401)', async () => {
 		const pid = await createProject();
 		// A fresh app with the default deny-all authenticator.

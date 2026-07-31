@@ -724,11 +724,13 @@ A request that fails authentication receives `401 UNAUTHORIZED`. The verified us
 
 **Writes** are always enforced against the target project: the Worker loads `project.json`, resolves the caller's effective role, and rejects insufficient roles with `403 FORBIDDEN`. A `viewer` or non-member cannot mutate a project's notebooks.
 
+**Super admins.** `MARIMOHUB_SUPER_ADMINS` lists operators who resolve to `admin` on **every** project, overriding both membership and `MARIMOHUB_DEFAULT_ROLE`. It is the single deployment-wide exception to the per-project model: a super admin sees and lists all projects (even under `none`), reads/writes every notebook and secret, controls any session, and reads the audit trail. An entry containing `@` matches the login email (case-insensitive); any other entry matches the user id (`sub`) exactly — the id and email namespaces do not overlap (`isSuperAdmin`, `packages/core/src/authz.ts`). The elevation flows through the same `effectiveRole` the role matrix uses, so no enforcement path is special-cased; the two invariants that still bind everyone hold for super admins too — a project `owner` cannot be demoted/removed, and a soft-deleted project stays `404`. A PAT minted by a super admin inherits the power.
+
 Read-side isolation under `none` keeps the read model intact (§7.1). Filtering `GET /projects` would otherwise cost a membership check per project, so each catalog snapshot project entry carries a denormalized **`member_ids`** array (owner + members), refreshed in the same CAS as every membership edit. The list filters in-memory over data already fetched — still 2 GETs. Single-project reads (`GET /projects/{id}`, notebook & session reads) load `project.json` and check `viewer` only when `defaultRole` is `none`; with a default role set they short-circuit with no extra load.
 
 ### Role → permission matrix
 
-The read row is open to any authenticated user when a default role is set; under `MARIMOHUB_DEFAULT_ROLE=none` it is restricted to the owner and explicit members (non-members get `404`).
+The read row is open to any authenticated user when a default role is set; under `MARIMOHUB_DEFAULT_ROLE=none` it is restricted to the owner and explicit members (non-members get `404`) — plus any super admin, who is `admin` on every project regardless.
 
 | Capability                                                                                 | `viewer` | `editor` | `admin` |
 | ------------------------------------------------------------------------------------------ | :------: | :------: | :-----: |

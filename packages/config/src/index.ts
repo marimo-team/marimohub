@@ -17,6 +17,7 @@ import {
 	createServices,
 	Millis,
 	ProxyExposure,
+	ROLES,
 	runPreflight,
 	SubdomainExposure,
 	VIEWER_MODES,
@@ -36,7 +37,7 @@ import {
 import { makeSecrets } from './secrets';
 import { makeStorage, makeSandboxBucketConfig } from './storage';
 import { makeWif } from './wif';
-import { parseIntEnv, parseList } from './env';
+import { parseEnum, parseEnumOr, parseIntEnv, parseList } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import { checkSandboxHostIsolation } from './hostIsolation';
@@ -152,14 +153,12 @@ function parseSessionLifetime(env: Env): SessionLifetimeConfig {
  * here cannot reach it.
  */
 function parseDefaultRole(env: Env): Role | undefined {
-	const raw = env.MARIMOHUB_DEFAULT_ROLE?.trim().toLowerCase();
-	if (raw === undefined || raw === '') return 'editor';
-	if (raw === 'none') return undefined;
-	if (raw === 'viewer' || raw === 'editor' || raw === 'admin') return raw;
-	throw new ConfigError(
-		`Invalid MARIMOHUB_DEFAULT_ROLE: ${env.MARIMOHUB_DEFAULT_ROLE} (expected viewer, editor, admin, or none)`,
-		{ variable: 'MARIMOHUB_DEFAULT_ROLE' },
-	);
+	// `none` deserializes to undefined (members-only); unset falls back to `editor`.
+	return parseEnum(env, 'MARIMOHUB_DEFAULT_ROLE', {
+		allowed: ROLES,
+		fallback: 'editor',
+		offValues: ['none'],
+	});
 }
 
 /**
@@ -170,13 +169,7 @@ function parseDefaultRole(env: Env): Role | undefined {
  * is never written back. Throws on any other value.
  */
 function parseViewerMode(env: Env): ViewerMode {
-	const raw = env.MARIMOHUB_VIEWER_MODE?.trim().toLowerCase();
-	if (raw === undefined || raw === '') return 'static';
-	if ((VIEWER_MODES as readonly string[]).includes(raw)) return raw as ViewerMode;
-	throw new ConfigError(
-		`Invalid MARIMOHUB_VIEWER_MODE: ${env.MARIMOHUB_VIEWER_MODE} (expected ${VIEWER_MODES.join(', ')})`,
-		{ variable: 'MARIMOHUB_VIEWER_MODE' },
-	);
+	return parseEnumOr(env, 'MARIMOHUB_VIEWER_MODE', VIEWER_MODES, 'static');
 }
 
 /**
@@ -186,12 +179,11 @@ function parseViewerMode(env: Env): ViewerMode {
  * teardown and restores it on the next session. Throws on any other value.
  */
 function parsePersistWorkspace(env: Env): 'source' | 'workspace' {
-	const raw = env.MARIMOHUB_PERSIST_WORKSPACE?.trim().toLowerCase();
-	if (raw === undefined || raw === '') return 'source';
-	if (raw === 'source' || raw === 'workspace') return raw;
-	throw new ConfigError(
-		`Invalid MARIMOHUB_PERSIST_WORKSPACE: ${env.MARIMOHUB_PERSIST_WORKSPACE} (expected source or workspace)`,
-		{ variable: 'MARIMOHUB_PERSIST_WORKSPACE' },
+	return parseEnumOr(
+		env,
+		'MARIMOHUB_PERSIST_WORKSPACE',
+		['source', 'workspace'] as const,
+		'source',
 	);
 }
 
@@ -332,6 +324,7 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 			defaultRole: parseDefaultRole(env),
 			viewerMode: parseViewerMode(env),
 			allowedOrigins: parseList(env.MARIMOHUB_ALLOWED_ORIGINS),
+			superAdmins: parseList(env.MARIMOHUB_SUPER_ADMINS),
 			maxConcurrentSessionsPerUser: parseCap(
 				env,
 				'MARIMOHUB_MAX_SESSIONS_PER_USER',

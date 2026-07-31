@@ -7,7 +7,7 @@ import type { User } from '@/types';
 import { jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { AuthProvider, useAuth } from './AuthContext';
 
-const ME: User = { id: 'usr-1', email: 'ada@example.com', logout_url: null };
+const ME: User = { id: 'usr-1', email: 'ada@example.com', logout_url: null, is_super_admin: false };
 
 type AuthValue = ReturnType<typeof useAuth>;
 

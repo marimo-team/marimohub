@@ -148,6 +148,20 @@ describe('Secrets routes', () => {
 
 		// A non-member cannot list (no default role → 403).
 		await expectError(await strangerReq('GET', `/projects/${pid}/secrets`), 403);
+		// Unless they are a super admin — then they hold admin (list + write).
+		const godReq = createTestApi({
+			bucket,
+			userId: nonmember,
+			deps: { ...secretsDeps(bucket), policy: { superAdmins: [nonmember] } },
+		}).request;
+		await expectOk(await godReq('GET', `/projects/${pid}/secrets`));
+		await expectOk(
+			await godReq('PUT', `/projects/${pid}/secrets/G`, {
+				kind: 'reference',
+				backend: 'stub',
+				locator: 'x',
+			}),
+		);
 		// An editor can list but not write.
 		await expectOk(await editorReq('GET', `/projects/${pid}/secrets`));
 		await expectError(

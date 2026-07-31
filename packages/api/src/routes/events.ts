@@ -47,13 +47,7 @@ app.openapi(listEvents, async (c) => {
 	const { date } = c.req.valid('query');
 
 	// Unlike other reads (open by v1 policy), the audit trail is admin-only.
-	const project = await assertProjectRole(
-		deps.services.projects,
-		pid,
-		user,
-		'admin',
-		deps.policy.defaultRole,
-	);
+	const project = await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}

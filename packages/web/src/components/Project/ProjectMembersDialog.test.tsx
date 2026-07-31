@@ -35,7 +35,12 @@ const DIRECTORY: Record<string, ResolvedUser> = {
 };
 
 const NINA: ResolvedUser = { id: 'u-nina', email: 'nina@x.io', name: 'Nina New' };
-const OWNER_USER: User = { id: OWNER, email: DIRECTORY[OWNER].email, logout_url: null };
+const OWNER_USER: User = {
+	id: OWNER,
+	email: DIRECTORY[OWNER].email,
+	logout_url: null,
+	is_super_admin: false,
+};
 let currentTestUser = OWNER_USER;
 
 const CAPABILITIES = {
@@ -342,7 +347,7 @@ describe('ProjectMembersDialog — admin', () => {
 describe('ProjectMembersDialog — non-admin', () => {
 	it('renders a read-only list: no role selects, no remove, no add picker', async () => {
 		makeFetch({
-			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null },
+			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null, is_super_admin: false },
 			directory: {
 				...DIRECTORY,
 				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
@@ -360,7 +365,7 @@ describe('ProjectMembersDialog — non-admin', () => {
 describe('ProjectMembersDialog — current access', () => {
 	it('recognizes the current user through a matching email invite', async () => {
 		makeFetch({
-			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null },
+			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null, is_super_admin: false },
 			directory: {
 				...DIRECTORY,
 				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
@@ -375,7 +380,7 @@ describe('ProjectMembersDialog — current access', () => {
 
 	it('shows default access without inserting a synthetic member row', async () => {
 		makeFetch({
-			currentUser: { id: NINA.id, email: NINA.email, logout_url: null },
+			currentUser: { id: NINA.id, email: NINA.email, logout_url: null, is_super_admin: false },
 			capabilities: { ...CAPABILITIES, default_role: 'editor' } as Capabilities,
 			directory: { ...DIRECTORY, [NINA.id]: NINA },
 		});
@@ -385,6 +390,19 @@ describe('ProjectMembersDialog — current access', () => {
 		expect(screen.getByLabelText('Your role: Editor')).toBeInTheDocument();
 		expect(screen.queryByText('You')).not.toBeInTheDocument();
 		expect(screen.getAllByTestId('member-row')).toHaveLength(MEMBERS.length);
+	});
+
+	it('labels a non-member super admin as a deployment super admin', async () => {
+		makeFetch({
+			currentUser: { id: NINA.id, email: NINA.email, logout_url: null, is_super_admin: true },
+			directory: { ...DIRECTORY, [NINA.id]: NINA },
+		});
+		// A super admin sees `your_role: admin` even without a member row.
+		await renderDialog('admin');
+
+		expect(screen.getByText('Deployment super admin')).toBeInTheDocument();
+		expect(screen.queryByText('Default access')).not.toBeInTheDocument();
+		expect(screen.queryByText('You')).not.toBeInTheDocument();
 	});
 
 	it('shows owner access when a legacy roster omits the owner row', async () => {
@@ -401,7 +419,7 @@ describe('ProjectMembersDialog — current access', () => {
 	it('shows deployment-aware role details on focus', async () => {
 		const user = userEvent.setup();
 		makeFetch({
-			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null },
+			currentUser: { id: 'u-invitee', email: INVITED, logout_url: null, is_super_admin: false },
 			capabilities: {
 				...CAPABILITIES,
 				viewer_mode: 'ephemeral-sandbox',

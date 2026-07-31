@@ -34,4 +34,25 @@ describe('Cloudflare Worker configuration', () => {
 		expect(deps.sandbox.computeProfileOverride).toBe('none');
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('profiles are ignored'));
 	});
+
+	const baseEnv = {
+		AUTH_MODE: 'dev',
+		USER_ID: 'user-test',
+		USER_EMAIL: 'test@example.com',
+		NOTEBOOKS_BUCKET: {},
+		SANDBOX: {},
+	};
+
+	it('parses SUPER_ADMINS into a trimmed list, dropping empties', () => {
+		const deps = buildDeps(new Request('https://hub.example.com'), {
+			...baseEnv,
+			SUPER_ADMINS: 'admin@example.com, user-1 ,',
+		} as unknown as Env);
+		expect(deps.policy.superAdmins).toEqual(['admin@example.com', 'user-1']);
+	});
+
+	it('leaves superAdmins undefined when SUPER_ADMINS is unset', () => {
+		const deps = buildDeps(new Request('https://hub.example.com'), baseEnv as unknown as Env);
+		expect(deps.policy.superAdmins).toBeUndefined();
+	});
 });

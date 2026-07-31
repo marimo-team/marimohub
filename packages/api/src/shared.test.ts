@@ -113,6 +113,18 @@ describe('assertProjectRole', () => {
 			),
 		).rejects.toBeInstanceOf(NotFoundError);
 	});
+
+	it('admits a non-member super admin at admin level', async () => {
+		const bucket = new MemoryBucket();
+		const { id } = await seedProject(bucket, { owner: uid('someone-else'), members: [] });
+		const { projects } = createServices(bucket);
+
+		await expect(
+			assertProjectRole(projects, id, { id: uid('god'), email: 'god@example.com' }, 'admin', {
+				superAdmins: ['god@example.com'],
+			}),
+		).resolves.toMatchObject({ id });
+	});
 });
 
 describe('path param schemas', () => {

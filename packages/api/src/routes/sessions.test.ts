@@ -506,6 +506,60 @@ describe('Session routes', () => {
 		await expectError(await stranger('POST', sessionsPath()), 403, 'FORBIDDEN');
 	});
 
+	it("a non-member super admin can start, heartbeat, and stop another user's session", async () => {
+		const god = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: { policy: { superAdmins: [STRANGER] } },
+		}).request;
+
+		const sid = await startSession(); // started by ACTOR
+		const session = await expectOk<ApiSession>(await god('GET', sessionsPath(`/${sid}`)));
+		expect(session.can).toEqual({ attach: true, stop: true });
+		await expectOk(await god('POST', sessionsPath(`/${sid}/heartbeat`)));
+		await expectOk(await god('DELETE', sessionsPath(`/${sid}`)));
+	});
+
+	it('super admins do not bypass the per-user session cap', async () => {
+		const god = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: { policy: { superAdmins: [STRANGER], maxConcurrentSessionsPerUser: 1 } },
+		}).request;
+		await expectOk(await god('POST', sessionsPath()));
+		const second = await createServices(bucket).notebooks.createNotebook(
+			pid,
+			{ title: 'NB2', description: 'd', code: 'import marimo as mo' },
+			ACTOR,
+		);
+		await expectError(await god('POST', `/projects/${pid}/notebooks/${second.id}/sessions`), 429);
+	});
+
+	it('a super admin starts a real persisted session, never an ephemeral one', async () => {
+		// Even under a viewer default with ephemeral-sandbox mode — which would
+		// stamp a plain viewer's session `ephemeral` — the super admin resolves to
+		// `admin`, so their session persists (edits are written back on teardown).
+		const god = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: {
+				policy: {
+					superAdmins: [STRANGER],
+					defaultRole: 'viewer',
+					viewerMode: 'ephemeral-sandbox',
+				},
+			},
+		}).request;
+		const data = await expectOk<ApiSession>(await god('POST', sessionsPath()));
+		expect(data.status).toBe('running');
+		expect(data.ephemeral).toBeUndefined();
+		const stored = await createServices(bucket).sessions.getSession(pid, data.session_id);
+		expect(stored.ephemeral).toBeFalsy();
+	});
+
 	it('DELETE /sessions/{sid} as a non-member returns 404 (no IDOR, no existence oracle)', async () => {
 		// 404, not 403: a hidden project's session ids must be indistinguishable
 		// from nonexistent ones (matches getSession).

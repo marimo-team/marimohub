@@ -1,5 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { MAX_REQUEST_BYTES, MAX_VERSIONS, viewerSessionModes } from '@marimo-hub/core';
+import {
+	isSuperAdmin,
+	MAX_REQUEST_BYTES,
+	MAX_VERSIONS,
+	viewerSessionModes,
+} from '@marimo-hub/core';
 import {
 	CapabilitiesResponseSchema,
 	createApp,
@@ -37,7 +42,12 @@ app.openapi(meRoute, (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const logoutUrl = deps.authenticator.logoutUrl?.() ?? null;
-	return ok(c, { id: user.id, email: user.email, logout_url: logoutUrl });
+	return ok(c, {
+		id: user.id,
+		email: user.email,
+		logout_url: logoutUrl,
+		is_super_admin: isSuperAdmin(user, deps.policy.superAdmins),
+	});
 });
 
 const versionRoute = createRoute({

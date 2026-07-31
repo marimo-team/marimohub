@@ -265,5 +265,27 @@ describe('Token routes', () => {
 			await session('DELETE', `/me/tokens/${id}`);
 			await expectError(await patRequest('GET', '/me'), 401, 'UNAUTHORIZED');
 		});
+
+		// The PAT resolves to its issuing user, so a token minted by a super admin
+		// carries super-admin power. Documented behavior — scope such tokens tightly.
+		it('a PAT minted by a super admin inherits admin on a foreign project', async () => {
+			// A project owned by a different user; the PAT holder (ACTOR) is not a member.
+			const foreign = await createTestApi({ bucket }).deps.services.projects.createProject(
+				{ name: 'Foreign', description: 'd' },
+				uid('user_other'),
+			);
+			// Compose the PAT-aware app with ACTOR configured as a super admin.
+			const composedGod = createApi({
+				...createTestApi({ bucket, userId: ACTOR, deps: { policy: { superAdmins: [ACTOR] } } })
+					.deps,
+				authenticator: composeAuthenticators(createTestApi({ bucket }).deps.services.tokens, {
+					authenticate: async () => null,
+				}),
+			});
+			const res = await composedGod.request(`/api/v1/projects/${foreign.id}`, {
+				headers: { authorization: `Bearer ${token}` },
+			});
+			expect((await expectOk<{ your_role: string }>(res)).your_role).toBe('admin');
+		});
 	});
 });
