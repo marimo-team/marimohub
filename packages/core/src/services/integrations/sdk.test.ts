@@ -29,6 +29,36 @@ describe('defineIntegration secret guard', () => {
 		expect(result?.details).toBe('request failed');
 	});
 
+	it('redacts a JSON-escaped header secret quoted back by the transport', async () => {
+		const secret = 'he"llo\\wor\nld\tx';
+		const config = trino.configSchema.parse({
+			host: 'trino.internal',
+			auth: { method: 'none' },
+			http_headers: [{ name: 'X-Tenant', value: secret }],
+		});
+
+		const result = await trino.testConnection?.(config, echoingProbe());
+
+		expect(result?.ok).toBe(false);
+		expect(result?.details).not.toContain('llo');
+		expect(result?.details).toBe('request failed');
+	});
+
+	// A JSON config can carry a lone surrogate, which encodeURIComponent rejects;
+	// the guard must still redact rather than throw the URIError out as a 500.
+	it('redacts a secret that cannot be URL-encoded', async () => {
+		const secret = 'tok\ud800en';
+		const config = trino.configSchema.parse({
+			host: 'trino.internal',
+			auth: { method: 'none' },
+			http_headers: [{ name: 'X-Tenant', value: secret }],
+		});
+
+		const result = await trino.testConnection?.(config, echoingProbe());
+
+		expect(result?.details).toBe('request failed');
+	});
+
 	it('redacts a secret nested under an array path and a URL-encoded echo', async () => {
 		const secret = 'extra credential/value';
 		const def = defineIntegration({

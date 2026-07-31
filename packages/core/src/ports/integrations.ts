@@ -119,7 +119,11 @@ export interface IntegrationVersionPageRequest {
 export interface IntegrationVersionPage {
 	/** Newest first. */
 	items: IntegrationVersionMeta[];
-	/** Cursor for the next page, or null on the last one. */
+	/**
+	 * Cursor for the next page, or null on the last one. A page can hold fewer
+	 * than `limit` items and still carry a cursor (a record removed underneath the
+	 * reader), so callers follow the cursor rather than the item count.
+	 */
 	next_cursor: string | null;
 }
 

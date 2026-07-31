@@ -58,8 +58,6 @@ export interface IntegrationPaths {
 	head: string;
 	/** Immutable config-version record, keyed by zero-padded version number. */
 	version: (n: number) => string;
-	/** Prefix of the integration's version records. */
-	versionsPrefix: string;
 	/** Prefix of everything under this integration (head + versions), for delete. */
 	base: string;
 }
@@ -130,7 +128,6 @@ function integrationPaths(projectBase: string, iid: IntegrationId): IntegrationP
 		head: `${base}/integration.json`,
 		version: (n: number) =>
 			`${base}/versions/${String(n).padStart(INTEGRATION_VERSION_PAD, '0')}.json`,
-		versionsPrefix: `${base}/versions/`,
 	};
 }
 

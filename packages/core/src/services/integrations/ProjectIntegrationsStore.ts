@@ -20,6 +20,7 @@ import type {
 	IntegrationEntry,
 	IntegrationProbe,
 	IntegrationsProvider,
+	IntegrationVersionMeta,
 	IntegrationVersionPage,
 	IntegrationVersionPageRequest,
 	KindDescriptor,
@@ -62,6 +63,15 @@ import type { IntegrationDefinition } from './sdk';
 const DEFAULT_VERSION_PAGE_SIZE = 100;
 
 /**
+ * Version numbers a page may probe beyond its `limit` before it stops short and
+ * hands back a cursor. Gaps exist only where an update's appended version was
+ * compensated away, so they are isolated and this slack hides them; the cap is
+ * what keeps one page from degenerating into a full-history scan if that ever
+ * stops holding.
+ */
+const VERSION_PROBE_SLACK = 32;
+
+/**
  * A head that no longer matches the caller's `If-Match`, raised from inside a CAS
  * callback. `withCasRetry` reads a `PreconditionFailedError` as a lost race and
  * retries it, so the guard escapes the loop wrapped and `update` rethrows the 412.
@@ -94,13 +104,7 @@ function isTombstoned(raw: unknown): boolean {
 	return typeof (raw as { deleted_at?: unknown } | null)?.deleted_at === 'string';
 }
 
-function versionFromKey(key: string): number {
-	const match = /^(\d+)\.json$/.exec(key.slice(key.lastIndexOf('/') + 1));
-	if (!match) throw new ValidationError(`Invalid integration version key "${key}".`);
-	return Number(match[1]);
-}
-
-/** Opaque keyset cursor: the last version number selected for the page. */
+/** Opaque keyset cursor: the last version number examined for the page. */
 function encodeVersionCursor(version: number): string {
 	return btoa(String(version));
 }
@@ -355,6 +359,12 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	 * Undo a head rename — a no-op if a third writer renamed again in between, or
 	 * if a delete tombstoned the head: that CAS is the commit point, so writing a
 	 * name back onto it would edit an integration already gone.
+	 *
+	 * The revert advances `updated_at` rather than restoring the pre-rename one:
+	 * the rename was a committed, readable state, so a token minted from it must
+	 * stop matching once the name moves back. Rewinding the token instead would
+	 * both validate that stale read and discard the version of any writer that
+	 * committed between the two CASes.
 	 */
 	private async revertRename(
 		projectId: ProjectId,
@@ -367,7 +377,13 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 			paths.project(projectId).integration(id).head,
 			(raw) => parseStored(IntegrationRecordSchema, raw, `integration ${id}`),
 			(current) =>
-				current.name === fromName && !isTombstoned(current) ? { ...current, name: toName } : null,
+				current.name === fromName && !isTombstoned(current)
+					? {
+							...current,
+							name: toName,
+							updated_at: nextTimestamp(current.updated_at, this.now()),
+						}
+					: null,
 			{ notFound: () => new NotFoundError(`Integration ${id} not found`) },
 		);
 	}
@@ -436,42 +452,51 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		page: IntegrationVersionPageRequest = { limit: DEFAULT_VERSION_PAGE_SIZE },
 	): Promise<IntegrationVersionPage> {
 		const head = await this.getHead(projectId, id);
-		const objects = await listAllObjects(
-			this.bucket,
-			paths.project(projectId).integration(id).versionsPrefix,
-		);
-		// The key carries the version number, so the page is chosen from the listing
-		// alone and only its records are read — history is append-only and unbounded,
-		// and every record carries a full config blob.
+		const integrationPaths = paths.project(projectId).integration(id);
 		const after = decodeVersionCursor(page.cursor);
-		const remaining = objects
-			.map((o) => ({ key: o.key, version: versionFromKey(o.key) }))
-			.filter((o) => after === undefined || o.version < after)
-			.sort((a, b) => b.version - a.version);
-		const selected = remaining.slice(0, Math.max(page.limit, 1));
-		const records = await mapWithConcurrency(selected, BUCKET_SCAN_CONCURRENCY, async (o) => {
-			const body = await this.bucket.get(o.key);
-			if (!body) return null;
-			const record = parseStored(IntegrationVersionRecordSchema, await body.json(), o.key);
-			this.assertVersionIdentity(head, o.version, record, o.key);
-			return record;
-		});
-		const last = selected[selected.length - 1];
+		const limit = Math.max(page.limit, 1);
+		// Version numbers are dense and monotonic (1…current_version, see
+		// `appendVersion`), so the page's KEYS are computed from the head or the
+		// cursor and only those records are read. History is append-only and
+		// unbounded — listing it to find a page would make every page cost grow
+		// with the history it is paging over.
+		let next = after === undefined ? head.current_version : after - 1;
+		let probes = limit + VERSION_PROBE_SLACK;
+		const items: IntegrationVersionMeta[] = [];
+		while (items.length < limit && next >= 1 && probes > 0) {
+			const size = Math.min(limit - items.length, probes, next);
+			const versions = Array.from({ length: size }, (_, i) => next - i);
+			next -= size;
+			probes -= size;
+			const records = await mapWithConcurrency(
+				versions,
+				BUCKET_SCAN_CONCURRENCY,
+				async (version) => {
+					const key = integrationPaths.version(version);
+					const body = await this.bucket.get(key);
+					if (!body) return null;
+					const record = parseStored(IntegrationVersionRecordSchema, await body.json(), key);
+					this.assertVersionIdentity(head, version, record, key);
+					return record;
+				},
+			);
+			for (const record of records) {
+				if (record === null) continue;
+				items.push({
+					version: record.version,
+					kind_schema_version: record.kind_schema_version,
+					created_by: record.created_by,
+					created_at: record.created_at,
+					...(record.change_note ? { change_note: record.change_note } : {}),
+				});
+			}
+		}
 		return {
-			items: records
-				.filter((r) => r !== null)
-				.sort((a, b) => b.version - a.version)
-				.map((r) => ({
-					version: r.version,
-					kind_schema_version: r.kind_schema_version,
-					created_by: r.created_by,
-					created_at: r.created_at,
-					...(r.change_note ? { change_note: r.change_note } : {}),
-				})),
-			// Keyed off the last selected KEY, not the last returned record, so a
-			// version deleted underneath us cannot truncate the history early.
-			next_cursor:
-				last && remaining.length > selected.length ? encodeVersionCursor(last.version) : null,
+			items,
+			// Keyed off the last version NUMBER examined, not the last record
+			// returned, so a version deleted underneath us cannot truncate the
+			// history early.
+			next_cursor: next >= 1 ? encodeVersionCursor(next + 1) : null,
 		};
 	}
 

@@ -639,6 +639,63 @@ describe('ProjectIntegrationsStore', () => {
 			expect((await base.listVersions(pid, created.id)).items.map((v) => v.version)).toEqual([1]);
 			await base.create(pid, { kind: 'echo', name: 'after', config: { token: 't' } }, ACTOR);
 		});
+
+		it('a rolled-back rename invalidates a token minted from the renamed head', async () => {
+			const registry = new IntegrationRegistry();
+			registry.register(echoKind);
+			const base = new ProjectIntegrationsStore({
+				bucket,
+				registry,
+				codec,
+				probe: stubProbe,
+				now: ticking(),
+			});
+			const created = await base.create(
+				pid,
+				{ kind: 'echo', name: 'before', config: { token: 't' } },
+				ACTOR,
+			);
+			let headCasWrites = 0;
+			let exposed: { name: string; updated_at: string } | undefined;
+			const failing: Bucket = {
+				get: (key) => bucket.get(key),
+				head: (key) => bucket.head(key),
+				delete: (key) => bucket.delete(key),
+				list: (options) => bucket.list(options),
+				put: async (key, value, options) => {
+					if (key.endsWith('/integration.json') && options?.onlyIfEtagMatches) {
+						headCasWrites += 1;
+						if (headCasWrites === 2) {
+							// The rename is committed and readable here: whatever a concurrent
+							// reader sees now, it can echo back as an If-Match token.
+							exposed = await (await bucket.get(key))?.json<{ name: string; updated_at: string }>();
+							return Promise.reject(new Error('final head commit failed'));
+						}
+					}
+					return bucket.put(key, value, options);
+				},
+			};
+			const store = new ProjectIntegrationsStore({
+				bucket: failing,
+				registry,
+				codec,
+				probe: stubProbe,
+				now: ticking(),
+			});
+
+			await expect(store.update(pid, created.id, { name: 'after' }, ACTOR)).rejects.toThrow(
+				/final head commit failed/,
+			);
+			expect(exposed?.name).toBe('after');
+			const reverted = await base.get(pid, created.id);
+			expect(reverted.name).toBe('before');
+			// The rollback changed the name back, so the token that described the
+			// renamed head must no longer match.
+			await expect(
+				base.update(pid, created.id, { enabled: false }, ACTOR, exposed?.updated_at),
+			).rejects.toThrow(PreconditionFailedError);
+			await base.update(pid, created.id, { enabled: false }, ACTOR, reverted.updated_at);
+		});
 	});
 
 	it('update honors the If-Match precondition (412 when the head changed underneath)', async () => {
@@ -924,6 +981,93 @@ describe('ProjectIntegrationsStore', () => {
 		await expect(
 			store.listVersions(pid, created.id, { limit: 2, cursor: 'not a cursor' }),
 		).rejects.toThrow(BadRequestError);
+	});
+
+	describe('version history paging cost', () => {
+		/**
+		 * Writes `total` version records directly (cloning the real first one) and
+		 * points the head at them — a long history without paying for `total` updates.
+		 */
+		async function withHistory(total: number) {
+			const store = makeStore(bucket);
+			const created = await store.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { token: 't' } },
+				ACTOR,
+			);
+			const integrationPaths = paths.project(pid).integration(created.id);
+			const first = await (
+				await bucket.get(integrationPaths.version(1))
+			)?.json<Record<string, unknown>>();
+			for (let version = 2; version <= total; version++) {
+				await bucket.put(integrationPaths.version(version), JSON.stringify({ ...first, version }));
+			}
+			const head = await (await bucket.get(integrationPaths.head))?.json<Record<string, unknown>>();
+			await bucket.put(integrationPaths.head, JSON.stringify({ ...head, current_version: total }));
+			return { id: created.id, integrationPaths };
+		}
+
+		function countingStore() {
+			const gets: string[] = [];
+			const lists: unknown[] = [];
+			const counting: Bucket = {
+				get: (key) => {
+					gets.push(key);
+					return bucket.get(key);
+				},
+				head: (key) => bucket.head(key),
+				delete: (key) => bucket.delete(key),
+				list: (options) => {
+					lists.push(options);
+					return bucket.list(options);
+				},
+				put: (key, value, options) => bucket.put(key, value, options),
+			};
+			const registry = new IntegrationRegistry();
+			registry.register(echoKind);
+			return {
+				gets,
+				lists,
+				store: new ProjectIntegrationsStore({ bucket: counting, registry, codec }),
+			};
+		}
+
+		it('reads one head + one record per item and never lists the history', async () => {
+			const { id } = await withHistory(400);
+			const { store, gets, lists } = countingStore();
+
+			const first = await store.listVersions(pid, id, { limit: 2 });
+			expect(first.items.map((v) => v.version)).toEqual([400, 399]);
+			// The page is COMPUTED from the head pointer: one head read, one read per
+			// returned record, and no listing of the 400-record history.
+			expect(lists).toEqual([]);
+			expect(gets).toHaveLength(3);
+
+			gets.length = 0;
+			const rest = await store.listVersions(pid, id, {
+				limit: 2,
+				cursor: first.next_cursor ?? undefined,
+			});
+			expect(rest.items.map((v) => v.version)).toEqual([398, 397]);
+			expect(rest.next_cursor).not.toBeNull();
+			expect(lists).toEqual([]);
+			expect(gets).toHaveLength(3);
+		});
+
+		it('skips a missing record rather than returning a short page', async () => {
+			const { id, integrationPaths } = await withHistory(5);
+			await bucket.delete(integrationPaths.version(4));
+			const { store } = countingStore();
+
+			const first = await store.listVersions(pid, id, { limit: 2 });
+			expect(first.items.map((v) => v.version)).toEqual([5, 3]);
+			const rest = await store.listVersions(pid, id, {
+				limit: 2,
+				cursor: first.next_cursor ?? undefined,
+			});
+			expect(rest.items.map((v) => v.version)).toEqual([2, 1]);
+			expect(rest.next_cursor).toBeNull();
+		});
 	});
 
 	it('rejects a stale If-Match token when consecutive writes share a timestamp', async () => {

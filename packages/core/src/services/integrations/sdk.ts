@@ -127,8 +127,8 @@ export function defineIntegration<S extends z.ZodType>(
 function withoutSecretEcho(result: TestResult, config: unknown, paths: SecretPath[]): TestResult {
 	const { details } = result;
 	if (details === undefined || details === '') return result;
-	const echoes = collectSecretValues(config, paths).some(
-		(value) => details.includes(value) || details.includes(encodeURIComponent(value)),
+	const echoes = collectSecretValues(config, paths).some((value) =>
+		secretForms(value).some((form) => details.includes(form)),
 	);
 	if (!echoes) return result;
 	// The substring match stays deliberately blunt (a short secret matches an
@@ -136,6 +136,27 @@ function withoutSecretEcho(result: TestResult, config: unknown, paths: SecretPat
 	// `ok` instead of asserting failure: a false positive then costs detail, not
 	// correctness.
 	return { ...result, details: result.ok ? 'connected' : 'request failed' };
+}
+
+/**
+ * Shapes a secret can take on the way into a transport error message. The
+ * JSON-escaped body matters because a message built from `JSON.stringify` of the
+ * request turns a quote, backslash, newline, tab, or control character into an
+ * escape sequence that the raw substring no longer matches. A value without
+ * those characters encodes to itself, so this never widens the match.
+ *
+ * `encodeURIComponent` throws on a lone surrogate, which a JSON config can carry
+ * (`"\ud800"`). Dropping just that form keeps the guard working instead of
+ * letting a URIError escape `testConnection` as a 500.
+ */
+function secretForms(value: string): string[] {
+	const forms = [value, JSON.stringify(value).slice(1, -1)];
+	try {
+		forms.push(encodeURIComponent(value));
+	} catch {
+		// Not URL-encodable, so no transport can echo it in that form either.
+	}
+	return forms;
 }
 
 /** Plaintext values sitting at the kind's schema-marked secret paths. */
