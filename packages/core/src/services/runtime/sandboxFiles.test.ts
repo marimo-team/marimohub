@@ -24,7 +24,7 @@ function nbCtx() {
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 
 describe('restoreWorkspace', () => {
-	it('creates every parent in ONE mkdir, then restores every workspace key', async () => {
+	it('restores every workspace key without spending a mkdir exec', async () => {
 		const { nb } = nbCtx();
 		const bucket = new MemoryBucket();
 		await bucket.put(nb.code, 'import marimo');
@@ -32,17 +32,27 @@ describe('restoreWorkspace', () => {
 		await bucket.put(nb.workspaceFile('data/cars.csv'), 'a,b\n1,2\n');
 		const { instance, fs, calls } = makeFsSandbox();
 
-		await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT);
+		const stats = await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT);
 
-		// One exec covers the working dir AND every nested parent (SDK writeFile won't
-		// make parents), rather than one mkdir per file.
-		const mkdirs = calls.exec.filter((c) => c.startsWith('mkdir -p '));
-		expect(mkdirs).toHaveLength(1);
-		expect(mkdirs[0]).toContain(`'${MOUNT}'`);
-		expect(mkdirs[0]).toContain(`'${MOUNT}/data'`);
+		// `writeFiles` creates parents (port contract), so restore spends no exec of
+		// its own — a command round-trip is the expensive unit on a remote backend.
+		expect(calls.exec.filter((c) => c.startsWith('mkdir -p '))).toHaveLength(0);
 		expect(decode(fs.get('notebook.py')!)).toBe('import marimo');
 		expect(decode(fs.get('pyproject.toml')!)).toBe('[project]\nname = "nb"');
 		expect(decode(fs.get('data/cars.csv')!)).toBe('a,b\n1,2\n');
+		expect(stats.objectCount).toBe(3);
+		expect(stats.bytes).toBe(('import marimo' + '[project]\nname = "nb"' + 'a,b\n1,2\n').length);
+	});
+
+	it('empty workspace: still creates the working dir marimo runs in', async () => {
+		const { nb } = nbCtx();
+		const { instance, calls } = makeFsSandbox();
+
+		const stats = await restoreWorkspace(instance, new MemoryBucket(), nb.workspacePrefix, MOUNT);
+
+		// Nothing is written, so nothing else would create the cwd.
+		expect(calls.exec.filter((c) => c.startsWith('mkdir -p '))).toEqual([`mkdir -p '${MOUNT}'`]);
+		expect(stats).toEqual({ objectCount: 0, bytes: 0 });
 	});
 
 	it('writes the whole workspace in one batched call', async () => {

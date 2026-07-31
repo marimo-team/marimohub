@@ -52,7 +52,6 @@ import {
 	buildGitCloneCommand,
 	iterableToStream,
 	parseFindFilesOutput,
-	pollUntilReady,
 	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
@@ -84,6 +83,47 @@ const DEFAULT_KERNEL_PORT = 2718;
 const DEFAULT_OWNER_TAG = 'marimohub';
 /** Prefix for the per-sandbox tag that encodes our `SandboxId`. */
 const ID_TAG_PREFIX = 'mh-sbx-';
+
+/** Longest a single in-sandbox port wait may block before we re-issue it. */
+const PORT_WAIT_CHUNK_MS = 30_000;
+/** First such chunk, kept short so a kernel that dies on launch is caught quickly. */
+const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
+/**
+ * How often to poll a fresh sandbox for `running`. The SDK's own default is 1s,
+ * which rounds every boot up to the next second; each poll is one control-plane
+ * round-trip, so this trades a few extra polls for that rounding.
+ */
+const BOOT_POLL_INTERVAL_MS = 100;
+
+/**
+ * Shell that blocks until `port` accepts a connection, for at most `seconds`.
+ * Exits 0 as soon as it does, 1 on its own deadline. `sleep 0.05 || sleep 1`
+ * degrades to whole seconds on an image whose sleep is POSIX-integer-only,
+ * rather than spinning hot. Assumes `python3` and `date` (see INTEGRATION
+ * SURFACE above).
+ */
+export function portWaitCommand(port: number, seconds: number): string {
+	const probe =
+		`python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); ` +
+		`sys.exit(0 if s.connect_ex(('127.0.0.1',${port}))==0 else 1)"`;
+	return (
+		`end=$(( $(date +%s) + ${seconds} )); ` +
+		`while [ "$(date +%s)" -lt "$end" ]; do ${probe} && exit 0; sleep 0.05 || sleep 1; done; exit 1`
+	);
+}
+
+/**
+ * CAIOS rejects path-style requests, and boto3 defaults to path style for a
+ * custom endpoint with no env var to change it — only the AWS config file works.
+ * Runs once per fresh create and leaves an image-supplied config alone. Trailing
+ * `;`, never `&&`: best-effort, so a failure must not short-circuit the command
+ * this gets spliced ahead of.
+ */
+const AWS_CONFIG_BOOTSTRAP =
+	'if [ -n "${AWS_ENDPOINT_URL_S3:-}" ] && [ ! -e "$HOME/.aws/config" ]; then' +
+	' mkdir -p "$HOME/.aws" &&' +
+	' printf \'[default]\\ns3 =\\n    addressing_style = virtual\\n\' > "$HOME/.aws/config";' +
+	' fi;';
 
 export function coreWeaveProfileResources(
 	resources: ComputeResources | undefined,
@@ -207,6 +247,8 @@ export interface CoreWeaveClient {
 /** The slice of the SDK's `Sandbox` handle this adapter uses. */
 export interface CoreWeaveSandbox {
 	readonly sandboxId: string;
+	/** Block until the sandbox reaches `running`; see `BOOT_POLL_INTERVAL_MS`. */
+	wait(options?: { intervalMs?: number }): Promise<unknown>;
 	readonly commands: {
 		run(command: readonly string[], options?: { cwd?: string }): Promise<ProcessResult>;
 		start(command: readonly string[], options?: { cwd?: string }): Promise<CommandProcess>;
@@ -233,6 +275,12 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
 	private lastEnsureTimings?: Timings;
+	/** Shell snippet to splice onto the next command; see `takeBootstrap`. */
+	private pendingBootstrap?: string;
+	/** Directories already `mkdir -p`'d in this sandbox, so re-issuing is skipped. */
+	private readonly createdDirs = new Set<string>();
+	/** Blocking commands sent to this sandbox — one wide-event field per provision. */
+	private execCount = 0;
 
 	constructor(
 		private readonly id: SandboxId,
@@ -253,20 +301,28 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	 */
 	private async ensure(): Promise<CoreWeaveSandbox> {
 		if (this.sandbox) return this.sandbox;
-		// Split the lazy resolve (the provisioner's `reachable` = this + the first
-		// command): find_ms is the reconnect lookup, create_ms is create +
-		// waitUntilRunning — cold-start + image pull, the dominant startup cost.
+		// find = the reconnect lookup, create = the API accepting the start request,
+		// boot = reaching `running` (cold start + image pull). create and boot are
+		// split because only that says whether the dominant startup cost is a real
+		// container start or time spent waiting on a poll.
 		const t0 = Date.now();
 		const existing = this.reuse ? await this.findByOurId() : undefined;
 		const t1 = Date.now();
+		// Create-then-wait is what the SDK does internally for
+		// `waitUntilRunning: true`, except its wait takes the default 1s poll
+		// interval — which rounds every boot up to the next whole second.
 		this.sandbox = existing
 			? await this.client.fromId(existing.sandboxId)
 			: await this.client.create(this.createOptions());
-		if (!existing && this.needsAwsConfigBootstrap()) {
-			await this.bootstrapAwsConfig(this.sandbox);
-		}
 		const t2 = Date.now();
-		this.lastEnsureTimings = { create: t2 - t1, find: t1 - t0 };
+		if (!existing) await this.sandbox.wait({ intervalMs: BOOT_POLL_INTERVAL_MS });
+		const t3 = Date.now();
+		// Armed, not run: the snippet is spliced onto the first command we were going
+		// to send anyway, so it costs no round-trip of its own.
+		if (!existing && this.needsAwsConfigBootstrap()) {
+			this.pendingBootstrap = AWS_CONFIG_BOOTSTRAP;
+		}
+		this.lastEnsureTimings = { find: t1 - t0, create: t2 - t1, boot: t3 - t2 };
 		console.warn(
 			JSON.stringify({
 				ts: new Date().toISOString(),
@@ -275,15 +331,27 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				reconnected: Boolean(existing),
 				find_ms: t1 - t0,
 				create_ms: t2 - t1,
+				boot_ms: t3 - t2,
 			}),
 		);
 		return this.sandbox;
+	}
+
+	/** Resolve the sandbox without spending a command round-trip to prove it is up. */
+	async ready(): Promise<void> {
+		await this.ensure();
 	}
 
 	drainTimings(): Timings {
 		const t = this.lastEnsureTimings ?? {};
 		this.lastEnsureTimings = undefined;
 		return t;
+	}
+
+	drainCounters(): Record<string, number> {
+		const counters = { execs: this.execCount };
+		this.execCount = 0;
+		return counters;
 	}
 
 	/** Find a live sandbox tagged with our id (tags are a request-side filter only). */
@@ -311,7 +379,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				? { maxLifetimeSeconds: this.config.maxLifetimeSeconds }
 				: {}),
 			...this.objectStorageOptions(),
-			waitUntilRunning: true,
+			// `ensure` runs the readiness wait itself, on a tighter poll interval than
+			// the SDK's built-in one.
+			waitUntilRunning: false,
 		};
 	}
 
@@ -342,39 +412,25 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	/**
-	 * CAIOS rejects path-style requests, and boto3 defaults to path style for a
-	 * custom endpoint with no env var to change it — only the AWS config file
-	 * works. Written once per fresh create (any POSIX-shell image, per the
-	 * sandbox contract); skipped when the image already ships an AWS config.
-	 * Best-effort: a failure only costs plain-client ergonomics, not the kernel.
+	 * Claim the armed bootstrap (at most once) and splice it ahead of `cmd`. It
+	 * needs a shell — it resolves `$HOME` and tests for an existing config — so it
+	 * rides a command instead of being written as a file, costing no round-trip.
 	 */
-	private async bootstrapAwsConfig(sandbox: CoreWeaveSandbox): Promise<void> {
-		const cmd =
-			'if [ -n "${AWS_ENDPOINT_URL_S3:-}" ] && [ ! -e "$HOME/.aws/config" ]; then' +
-			' mkdir -p "$HOME/.aws" &&' +
-			' printf \'[default]\\ns3 =\\n    addressing_style = virtual\\n\' > "$HOME/.aws/config";' +
-			' fi';
-		try {
-			await sandbox.commands.run(['sh', '-lc', cmd]);
-		} catch (err) {
-			console.warn(
-				JSON.stringify({
-					ts: new Date().toISOString(),
-					event: 'aws_config_bootstrap_failed',
-					sandbox_id: this.id,
-					error: String(err),
-				}),
-			);
-		}
+	private takeBootstrap(cmd: string): string {
+		const bootstrap = this.pendingBootstrap;
+		if (!bootstrap) return cmd;
+		this.pendingBootstrap = undefined;
+		return `${bootstrap} ${cmd}`;
 	}
 
 	/** Prefix accumulated env vars onto a shell command (the SDK has no per-command env). */
 	private withEnv(cmd: string): string {
-		return withEnvPrefix(cmd, this.env, this.envDefaults);
+		return withEnvPrefix(this.takeBootstrap(cmd), this.env, this.envDefaults);
 	}
 
 	async exec(cmd: string): Promise<ExecResult> {
 		const sandbox = await this.ensure();
+		this.execCount++;
 		const res = await sandbox.commands.run(['sh', '-lc', this.withEnv(cmd)]);
 		return { success: res.exitCode === 0, stdout: res.stdout, stderr: res.stderr };
 	}
@@ -401,13 +457,16 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// The SDK's files.write does not create parent dirs, so mkdir first — once for
 		// every parent, not per file. Its multi-file write is Promise.all over per-file
 		// RPCs, so collapsing these execs (not the writes) is what removes round-trips.
+		// Dirs already created in this sandbox are skipped, so a workspace restored in
+		// N byte-bounded batches pays one mkdir rather than N.
 		const dirs = new Set<string>();
 		for (const f of files) {
 			const dir = f.path.slice(0, f.path.lastIndexOf('/'));
-			if (dir) dirs.add(dir);
+			if (dir && !this.createdDirs.has(dir)) dirs.add(dir);
 		}
 		if (dirs.size > 0) {
 			await this.exec(`mkdir -p ${[...dirs].map(shellQuote).join(' ')}`);
+			for (const dir of dirs) this.createdDirs.add(dir);
 		}
 		// The SDK's FileContent is `string | Uint8Array`, so bytes pass straight through.
 		await sandbox.files.write(files.map((f) => ({ path: f.path, content: f.content })));
@@ -490,17 +549,31 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			},
 			async waitForPort(port: number, opts?: WaitForPortOptions): Promise<void> {
 				const timeout = opts?.timeout ?? 30_000;
-				// In-sandbox TCP probe (the SDK exposes no waitForPort). Mirrors the
-				// local adapter's tcpReady poll, run via exec.
-				const probe =
-					`python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); ` +
-					`sys.exit(0 if s.connect_ex(('127.0.0.1',${port}))==0 else 1)"`;
-				await pollUntilReady(async () => (await exec(probe)).success, {
-					timeoutMs: timeout,
-					intervalMs: 500,
-					timeoutMessage: () =>
-						`timed out waiting for port ${port} after ${timeout}ms.\n${stderr || stdout}`,
-				});
+				// The SDK exposes no waitForPort, so probe in-sandbox — and loop there
+				// too: probing from here cost a command round-trip per attempt on top of
+				// the poll interval, quantizing the wait to that grid.
+				//
+				// Chunked rather than one command spanning the whole timeout, because
+				// the gateway's per-command cap is unverified (see INTEGRATION SURFACE
+				// above) and each boundary is where a dead kernel gets noticed — the
+				// first chunk is short so a launch that fails outright reports fast.
+				// `attempts` bounds the loop if the waiter itself returns instantly.
+				const deadline = Date.now() + timeout;
+				const attempts = Math.ceil(timeout / PORT_WAIT_CHUNK_MS) + 1;
+				let chunkMs = PORT_WAIT_FIRST_CHUNK_MS;
+				for (let i = 0; i < attempts && Date.now() < deadline; i++) {
+					if (proc.poll() !== undefined) {
+						throw new Error(
+							`process exited before port ${port} opened.\n${stderr || stdout}`.trim(),
+						);
+					}
+					const seconds = Math.max(1, Math.ceil(Math.min(chunkMs, deadline - Date.now()) / 1000));
+					chunkMs = PORT_WAIT_CHUNK_MS;
+					if ((await exec(portWaitCommand(port, seconds))).success) return;
+				}
+				throw new Error(
+					`timed out waiting for port ${port} after ${timeout}ms.\n${stderr || stdout}`,
+				);
 			},
 			async getLogs(): Promise<{ stdout: string; stderr: string }> {
 				return { stdout, stderr };

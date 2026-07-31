@@ -26,19 +26,20 @@ export function procResult(over: Partial<ProcessResult> = {}): ProcessResult {
 	};
 }
 
-export function fakeProcess(): CommandProcess {
+/** `exitCode` set = a process that has already exited, for the died-on-launch paths. */
+export function fakeProcess(exitCode?: number): CommandProcess {
 	async function* empty(): AsyncGenerator<string> {
 		// no output
 	}
 	return {
 		command: ['sh'] as unknown as CommandProcess['command'],
-		exitCode: undefined,
-		status: 'running',
+		exitCode,
+		status: exitCode === undefined ? 'running' : 'exited',
 		stdout: empty(),
 		stderr: empty(),
 		cancel: async () => {},
-		poll: () => {},
-		wait: async () => procResult(),
+		poll: () => exitCode,
+		wait: async () => procResult({ exitCode }),
 	};
 }
 
@@ -50,6 +51,8 @@ export interface FakeSandbox {
 	batchWrites: { path: string; content: unknown }[][];
 	reads: Record<string, string>;
 	deleted: number;
+	/** One entry per `wait()` call, carrying the options the adapter passed. */
+	waitCalls: { intervalMs?: number }[];
 }
 
 // `FileWrites` also admits a path→content record, but the adapter only ever
@@ -63,7 +66,11 @@ function recordWrite(fake: FakeSandbox) {
 	};
 }
 
-export function makeWorld(opts?: { runImpl?: (cmd: readonly string[]) => Promise<ProcessResult> }) {
+export function makeWorld(opts?: {
+	runImpl?: (cmd: readonly string[]) => Promise<ProcessResult>;
+	/** Exit code for started processes; omit to leave them running. */
+	procExitCode?: number;
+}) {
 	const created: NonNullable<Parameters<CoreWeaveClient['create']>[0]>[] = [];
 	const deleted: string[] = [];
 	const listCalls: (readonly string[])[] = [];
@@ -79,9 +86,13 @@ export function makeWorld(opts?: { runImpl?: (cmd: readonly string[]) => Promise
 			batchWrites: [],
 			reads: {},
 			deleted: 0,
+			waitCalls: [],
 		};
 		const sandbox = {
 			sandboxId,
+			wait: async (options?: { intervalMs?: number }) => {
+				fake.waitCalls.push(options ?? {});
+			},
 			commands: {
 				run: async (command: readonly string[]) => {
 					fake.runCalls.push([...command]);
@@ -89,7 +100,7 @@ export function makeWorld(opts?: { runImpl?: (cmd: readonly string[]) => Promise
 				},
 				start: async (command: readonly string[]) => {
 					fake.startCalls.push([...command]);
-					return fakeProcess();
+					return fakeProcess(opts?.procExitCode);
 				},
 			},
 			files: {

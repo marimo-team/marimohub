@@ -4,7 +4,7 @@ import type { SandboxInfo } from '@coreweave/cwsandbox';
 import type { SandboxId, SandboxProvider } from '@marimo-hub/core';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
-import { coreWeaveProfileResources, CoreWeaveCompute } from './index';
+import { coreWeaveProfileResources, CoreWeaveCompute, portWaitCommand } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
 import { fakeProcess, makeWorld, procResult } from './testWorld';
 
@@ -56,7 +56,9 @@ describe('CoreWeaveCompute', () => {
 			});
 			expect(opts.tags).toEqual(['marimohub', ID_TAG]);
 			expect(opts.containerImage).toBe('my-image');
-			expect(opts.waitUntilRunning).toBe(true);
+			// The readiness wait is issued separately (see "boot wait"), so create
+			// itself returns as soon as the backend accepts the start request.
+			expect(opts.waitUntilRunning).toBe(false);
 		});
 
 		it('reuses the cached sandbox across calls (one create)', async () => {
@@ -193,15 +195,16 @@ describe('CoreWeaveCompute', () => {
 			expect(calls[0][2]).toContain('addressing_style = virtual');
 		});
 
-		it('bootstraps the AWS config for virtual-hosted addressing on fresh create', async () => {
+		it('bootstraps the AWS config on the first command, not a round-trip of its own', async () => {
 			const world = makeWorld();
 			await makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] })
 				.create(SANDBOX_ID)
 				.exec('true');
 			const calls = world.registry.get('cw-1')!.fake.runCalls;
+			expect(calls).toHaveLength(1);
 			expect(calls[0][2]).toContain('addressing_style = virtual');
 			expect(calls[0][2]).toContain('AWS_ENDPOINT_URL_S3');
-			expect(calls).toHaveLength(2); // bootstrap, then the exec
+			expect(calls[0][2]).toContain('fi; true');
 		});
 
 		it('skips the AWS config bootstrap without CAIOS configuration and on reconnect', async () => {
@@ -219,17 +222,15 @@ describe('CoreWeaveCompute', () => {
 			expect(bare.registry.get('cw-1')!.fake.runCalls).toHaveLength(1);
 		});
 
-		it('survives a failing AWS config bootstrap', async () => {
-			const world = makeWorld({
-				runImpl: async (command) => {
-					if (command[2].includes('addressing_style')) throw new Error('exec transport lost');
-					return procResult();
-				},
-			});
+		it('a failing AWS config bootstrap does not sink the command it rides on', async () => {
+			const world = makeWorld();
 			const result = await makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] })
 				.create(SANDBOX_ID)
 				.exec('true');
 			expect(result.success).toBe(true);
+			// Separated by `;`, never `&&`: the bootstrap is best-effort, so a non-zero
+			// exit inside it must not short-circuit the command it was spliced onto.
+			expect(world.registry.get('cw-1')!.fake.runCalls[0][2]).not.toContain('fi && ');
 		});
 	});
 
@@ -301,16 +302,67 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('drainTimings()', () => {
-		it('returns the last ensure create/find ms, then clears', async () => {
+		it('returns the last ensure find/create/boot ms, then clears', async () => {
 			const world = makeWorld();
 			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 			await inst.exec('true'); // triggers ensure()
 			const timings = inst.drainTimings!();
-			expect(timings).toHaveProperty('create');
+			// `boot` is split from `create` so the wide event can tell a real container
+			// start apart from time spent waiting on a status poll.
 			expect(timings).toHaveProperty('find');
+			expect(timings).toHaveProperty('create');
+			expect(timings).toHaveProperty('boot');
 			expect(typeof timings.create).toBe('number');
 			// Drained once — a second drain is empty.
 			expect(inst.drainTimings!()).toEqual({});
+		});
+	});
+
+	describe('drainCounters()', () => {
+		it('counts blocking commands, then clears', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			await inst.exec('true');
+			await inst.exec('true');
+			expect(inst.drainCounters!()).toEqual({ execs: 2 });
+			expect(inst.drainCounters!()).toEqual({ execs: 0 });
+		});
+	});
+
+	describe('portWaitCommand()', () => {
+		it('loops in-sandbox on its own deadline instead of returning per probe', () => {
+			const cmd = portWaitCommand(2718, 30);
+			expect(cmd).toContain("connect_ex(('127.0.0.1',2718))");
+			// Bounded in-sandbox, exits 0 the moment the port answers.
+			expect(cmd).toContain('+ 30 ');
+			expect(cmd).toContain('&& exit 0');
+			expect(cmd).toMatch(/exit 1$/);
+			// Sub-second granularity is the point: a 1s sleep would reintroduce the
+			// quantization this replaced. The `|| sleep 1` is the fallback for an image
+			// whose sleep takes only whole seconds.
+			expect(cmd).toContain('sleep 0.05 || sleep 1');
+		});
+	});
+
+	describe('boot wait', () => {
+		it('waits explicitly with a tighter interval than the SDK default', async () => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID, { reuse: false }).exec('true');
+
+			// The SDK's built-in waitUntilRunning polls every 1s, rounding every boot
+			// up to the next second; we run the same wait on a tighter interval.
+			expect(world.created[0]).toMatchObject({ waitUntilRunning: false });
+			const waits = world.registry.get('cw-1')!.fake.waitCalls;
+			expect(waits).toHaveLength(1);
+			expect(waits[0].intervalMs).toBeLessThan(1000);
+		});
+
+		it('does not re-wait when reconnecting to a live sandbox', async () => {
+			const world = makeWorld();
+			const compute = makeCompute(world);
+			await compute.create(SANDBOX_ID).exec('true');
+			await compute.create(SANDBOX_ID).exec('true'); // reconnects to cw-1
+			expect(world.registry.get('cw-1')!.fake.waitCalls).toHaveLength(1);
 		});
 	});
 
@@ -378,23 +430,51 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('startProcess().waitForPort()', () => {
-		it('polls an in-sandbox probe until the port is ready', async () => {
-			let probes = 0;
-			const world = makeWorld({
-				runImpl: async (cmd) => {
-					if (cmd.join(' ').includes('connect_ex')) {
-						probes++;
-						return procResult({ exitCode: probes >= 2 ? 0 : 1 });
-					}
-					return procResult();
-				},
-			});
+		it('waits in ONE in-sandbox command rather than one round-trip per probe', async () => {
+			const world = makeWorld();
 			const inst = makeCompute(world).create(SANDBOX_ID);
 			const proc = await inst.startProcess('uv run marimo edit --port 2718');
 			await proc.waitForPort(2718, { timeout: 5_000 });
-			expect(probes).toBeGreaterThanOrEqual(2);
+
+			// Probing from here cost a command round-trip per attempt on top of the
+			// poll interval, which quantized the wait to that interval; the loop now
+			// runs inside the sandbox and returns the moment the port binds.
+			const waits = world.registry
+				.get('cw-1')!
+				.fake.runCalls.filter((c) => c[2].includes('connect_ex'));
+			expect(waits).toHaveLength(1);
+			expect(waits[0][2]).toContain('while');
 			const entry = [...world.registry.values()][0];
 			expect(entry.fake.startCalls.at(-1)).toEqual(['sh', '-lc', 'uv run marimo edit --port 2718']);
+		});
+
+		it('a kernel that dies on launch is reported without burning the timeout', async () => {
+			// Launch setup rides the kernel command, so a broken env exits the process
+			// immediately; the port would otherwise never open and the wait would run
+			// the full (2 minute) timeout.
+			const world = makeWorld({ procExitCode: 1 });
+			const proc = await makeCompute(world).create(SANDBOX_ID).startProcess('marimo edit');
+			await expect(proc.waitForPort(2718, { timeout: 120_000 })).rejects.toThrow(
+				/exited before port 2718/,
+			);
+		});
+
+		it('a waiter that fails instantly is reported, not re-issued until the deadline', async () => {
+			// A broken waiter (no python3/date on the image) exits non-zero without
+			// burning its chunk; retrying would hammer the command channel for the
+			// whole timeout.
+			const world = makeWorld({
+				runImpl: async (cmd) =>
+					cmd.join(' ').includes('connect_ex') ? procResult({ exitCode: 1 }) : procResult(),
+			});
+			const proc = await makeCompute(world).create(SANDBOX_ID).startProcess('marimo edit');
+			await expect(proc.waitForPort(2718, { timeout: 5_000 })).rejects.toThrow(/timed out/);
+			const waits = world.registry
+				.get('cw-1')!
+				.fake.runCalls.filter((c) => c[2].includes('connect_ex'));
+			// Bounded by the chunk count, not by re-issuing until the deadline (which
+			// at ~220ms per round-trip would be hundreds of commands).
+			expect(waits.length).toBeLessThanOrEqual(3);
 		});
 	});
 
@@ -673,6 +753,7 @@ describe('CoreWeaveCompute', () => {
 			const client: CoreWeaveClient = {
 				create: async () => ({
 					sandboxId: 'cw-x',
+					wait: async () => {},
 					commands: { run: async () => procResult(), start: async () => fakeProcess() },
 					files: { readText: async () => '', write: async () => {} },
 					delete: async () => {
@@ -681,6 +762,7 @@ describe('CoreWeaveCompute', () => {
 				}),
 				fromId: async (id) => ({
 					sandboxId: id,
+					wait: async () => {},
 					commands: { run: async () => procResult(), start: async () => fakeProcess() },
 					files: { readText: async () => '', write: async () => {} },
 					delete: async () => {},
@@ -697,6 +779,7 @@ describe('CoreWeaveCompute', () => {
 	describe('reconnect / dead-status handling', () => {
 		const bareSandbox = (sandboxId: string) => ({
 			sandboxId,
+			wait: async () => {},
 			commands: { run: async () => procResult(), start: async () => fakeProcess() },
 			files: { readText: async () => '', write: async () => {} },
 			delete: async () => {},

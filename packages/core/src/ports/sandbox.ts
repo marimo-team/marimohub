@@ -102,6 +102,13 @@ export interface SetEnvVarsOptions {
 }
 
 export interface SandboxInstance {
+	/**
+	 * Resolve the backing sandbox without running anything in it, so an adapter
+	 * that creates lazily pays its create here rather than inside whichever call
+	 * touches it first. Optional: callers fall back to a no-op `exec`, which forces
+	 * the same resolution at the cost of a command round-trip.
+	 */
+	ready?(): Promise<void>;
 	exec(cmd: string): Promise<ExecResult>;
 	execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream>;
 	readFile(path: string): Promise<ReadFileResult>;
@@ -135,6 +142,11 @@ export interface SandboxInstance {
 	 * actually spent. Optional; the provisioner folds them into its own timings.
 	 */
 	drainTimings?(): Timings;
+	/**
+	 * Return and CLEAR non-duration counters the adapter accumulated — e.g. how
+	 * many blocking commands a provision sent. Optional.
+	 */
+	drainCounters?(): Record<string, number>;
 }
 
 export interface ActiveSandbox {
