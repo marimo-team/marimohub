@@ -158,6 +158,8 @@ spec:
       nodeSelector:
         compute.coreweave.com/node-pool: marimohub-sandboxes
       enableServiceLinks: false
+      # Notebook code does not need access to the Kubernetes API.
+      automountServiceAccountToken: false
       # Kubernetes defaults /dev/shm to 64Mi; data tools (DuckDB, PyTorch
       # dataloaders, Arrow) want much more. Optional but recommended.
       volumes:
@@ -259,6 +261,8 @@ and [Create access keys](https://docs.coreweave.com/products/storage/object-stor
 This key pair is used by the hub server only. Notebooks that need bucket access
 should use short-lived credentials instead — see
 [Optional: automatic bucket credentials in sandboxes](#automatic-caios-credentials-in-sandboxes).
+The hub can also use short-lived credentials from an annotated ServiceAccount.
+See [Pod Identity](#caios-credentials-from-a-serviceaccount).
 :::
 
 ## 8. Install marimohub with Helm
@@ -454,6 +458,25 @@ MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_PERMISSION=read   # or read-write
 
 Full setup and the alternative hub-minted federation flow:
 [Workload Identity Federation](../workload-identity-federation.md).
+
+### CAIOS credentials from a ServiceAccount
+
+CoreWeave's **Pod Identity Webhook** can supply short-lived CAIOS credentials.
+It uses your cluster's OIDC issuer and an annotated ServiceAccount.
+
+Add the ServiceAccount to `spec.pod.spec.serviceAccountName` in the sandbox
+profile. The webhook can also supply credentials to the hub pods.
+
+Do not set the CoreWeave bucket list for this method. Set the endpoint and
+region:
+
+```bash
+MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_ENDPOINT=https://cwobject.com
+MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION=us-east-04a
+```
+
+For setup steps, access policies, and trade-offs, see
+[Pod Identity](../workload-identity-federation.md#example-coreweave-object-storage-pod-identity).
 
 ### GPU sandboxes
 

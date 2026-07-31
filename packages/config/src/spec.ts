@@ -356,14 +356,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_ENDPOINT',
 						name: 'CoreWeave object-storage endpoint',
 						description:
-							'S3 endpoint injected into sandboxes as `AWS_ENDPOINT_URL_S3` (only when buckets are set) so plain SDK clients target CAIOS without per-call configuration.',
+							'Injects the S3 endpoint into sandboxes as `AWS_ENDPOINT_URL_S3`. If Pod Identity supplies the credentials, set this variable without a bucket list.',
 						example: 'https://cwobject.com',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION',
 						name: 'CoreWeave object-storage region',
 						description:
-							'Region injected into sandboxes as `AWS_REGION` (only when buckets are set).',
+							'Injects the region into sandboxes as `AWS_REGION`. This value does not require a bucket list.',
 						example: 'us-east-04a',
 					},
 					{

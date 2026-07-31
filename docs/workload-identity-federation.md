@@ -95,27 +95,30 @@ They are minted once per session and **not refreshed** — after ~1 hour they
 expire. Restart the session to renew.
 :::
 
+## Choosing a CoreWeave option
+
+Choose one method to provide CAIOS credentials to a notebook:
+
+|              | Automatic (sandbox-native)         | [Pod Identity](#example-coreweave-object-storage-pod-identity) | Manual (hub-minted)                 |
+| ------------ | ---------------------------------- | -------------------------------------------------------------- | ----------------------------------- |
+| Requires     | `coreweave` backend                | your own CKS cluster + runner                                  | any backend                         |
+| Provided by  | a Sandbox Gateway sidecar          | the CKS Pod Identity Webhook                                   | the hub, per session                |
+| Credentials  | refresh for the sandbox lifetime   | refresh for the pod lifetime                                   | expire after approximately one hour |
+| Scope        | one bucket list per deployment     | one ServiceAccount per profile                                 | one identity per project            |
+| Trust anchor | `oidc.cwsandbox.com` (CoreWeave's) | your cluster's OIDC issuer                                     | the hub itself                      |
+| Hub setup    | bucket list variable               | endpoint and region variables                                  | signing key and `MARIMOHUB_WIF_*`   |
+
 ## Example: CoreWeave Object Storage (Automatic)
 
-On the `coreweave` compute backend, the Sandbox platform vends CAIOS
-credentials itself: created with `object_storage_access`, a sandbox gets a
-per-sandbox OIDC token from the Sandbox Gateway and a credential-vending
-sidecar that exchanges it for temporary S3 credentials. The hub never signs or
-exchanges anything.
-
-|                 | Automatic                           | Manual (hub-minted)                  |
-| --------------- | ----------------------------------- | ------------------------------------ |
-| Compute backend | `coreweave` only                    | any                                  |
-| Credentials     | auto-refresh for the sandbox's life | minted once per session, expire ~1h  |
-| Scope           | one bucket list for the deployment  | per project, via access policy       |
-| Hub setup       | none — no signing key or JWKS       | signing key + `MARIMOHUB_WIF_*` vars |
+On the `coreweave` backend, the Sandbox platform can provide CAIOS credentials.
+A sandbox with `object_storage_access` receives an OIDC token from the Sandbox
+Gateway. A sidecar exchanges this token for temporary S3 credentials.
 
 This is the Sandbox analogue of CoreWeave's
 [Pod Identity Webhook](https://docs.coreweave.com/security/tutorials/cks-object-storage-authentication/automatic)
-for CKS pods. The webhook itself keys off a ServiceAccount annotation, so it
-applies only where you control the ServiceAccount — the `kubernetes` compute
-backend (`MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT`) or the hub's own
-Deployment — never to Sandbox-runner pods.
+for CKS pods. Use this option with CoreWeave's shared runner infrastructure.
+If you control the runner cluster, you can use
+[Pod Identity](#example-coreweave-object-storage-pod-identity) instead.
 
 ### One-time setup (operator)
 
@@ -211,18 +214,185 @@ MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION=us-east-04a
 CoreWeave documents `http://cwlota.com` (LOTA) as the accelerated in-cluster
 endpoint — since sandboxes run on CoreWeave infrastructure, try it as the
 endpoint once the org setup is live. CAIOS requires virtual-hosted addressing
-with either endpoint. boto3 does **not** infer this for a custom endpoint (it
-defaults to path style, and botocore has no env var to change it), so the hub
-writes `~/.aws/config` with `addressing_style = virtual` into each fresh
-sandbox when the bucket list is set — plain `boto3.client("s3")` and the AWS
-CLI then work as-is. Images that ship their own `~/.aws/config` are left
-untouched; clients that bypass the config file (e.g. obstore) must request
-virtual-hosted addressing explicitly.
+with either endpoint. boto3 defaults to path-style addressing for a custom
+endpoint. The hub writes `addressing_style = virtual` to `~/.aws/config` for
+each new CAIOS sandbox. It does not replace an existing configuration file.
+Clients that do not read this file, such as obstore, must request virtual-hosted
+addressing.
 
 Setting the bucket list on the `coreweave` backend disables Manual WIF
 (logged as `wif_disabled_sandbox_native_storage`): the hub's static
 `AWS_ACCESS_KEY_ID` env would take precedence over the sidecar in the AWS
 credential chain and stop refresh.
+
+## Example: CoreWeave Object Storage (Pod Identity)
+
+CoreWeave's
+[Pod Identity Webhook](https://docs.coreweave.com/security/tutorials/cks-object-storage-authentication/automatic)
+provides temporary CAIOS credentials to pods that use an annotated
+ServiceAccount. The credentials refresh for the lifetime of the pod.
+
+On a [CKS deployment](./deploying/cks.md), this method can serve kernel and hub
+pods. It uses the cluster's OIDC issuer as the trust anchor. Each workload has a
+Kubernetes principal: `system:serviceaccount:<namespace>:<name>`.
+
+::: warning Requires your own cluster and runner
+The webhook only changes pods in your cluster. It cannot reach CoreWeave's
+shared sandbox infrastructure. Use the Automatic method for shared runners.
+:::
+
+### One-time setup (operator)
+
+1. **Install the webhook** into the cluster:
+
+   ```sh
+   helm repo add coreweave https://charts.core-services.ingress.coreweave.com
+   helm install pod-identity-webhook coreweave/pod-identity-webhook \
+     -n pod-identity-webhook --create-namespace \
+     --set config.orgID=<ORG-ID> --set config.region=<ZONE>
+   ```
+
+2. **Register the cluster's OIDC issuer.** Open
+   [Administration → API Access → OIDC](https://console.coreweave.com/organization/iam/workload-federation/oidc).
+   Put the issuer URL in both the **Issuer URL** and **Client ID (Audience)**
+   fields. Read the URL from the cluster:
+
+   ```sh
+   kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
+   # https://oidc.cks.coreweave.com/id/<CLUSTER-UUID>
+   ```
+
+3. **Create a ServiceAccount for each identity.** The CKS guide uses the
+   `per-org` namespace strategy. Its validation steps create a namespace named
+   `org-ns-<ORG-ID>`. Run `kubectl get ns` to make sure that it exists.
+
+   Create the ServiceAccount for kernel pods:
+
+   ```yaml
+   apiVersion: v1
+   kind: ServiceAccount
+   metadata:
+     name: marimohub-sandbox
+     namespace: org-ns-<ORG-ID> # where kernel pods land
+     annotations:
+       caios.coreweave.com/inject: 'true'
+   ```
+
+   The chart does not select a named ServiceAccount for hub pods. Annotate the
+   `default` ServiceAccount in the `marimohub` namespace:
+
+   ```sh
+   kubectl annotate serviceaccount -n marimohub default \
+     caios.coreweave.com/inject='true'
+   ```
+
+   Kubernetes rejects a pod if its named ServiceAccount does not exist. Create
+   these identities before you update the sandbox profile or restart the hub.
+
+4. **Create an object-storage access policy.** Open
+   [Object Storage → Access Policies](https://console.coreweave.com/object-storage/access-policies).
+   Use this principal format:
+
+   ```text
+   role/<issuer>:system:serviceaccount:<namespace>:<name>
+   ```
+
+<details>
+<summary>Example policy for kernel and hub pods</summary>
+
+```json
+{
+	"name": "marimohub-pod-identity",
+	"version": "v1alpha1",
+	"statements": [
+		{
+			"name": "authn",
+			"effect": "Allow",
+			"actions": ["cwobject:CreateAccessKeyOIDC"],
+			"resources": ["*"],
+			"principals": [
+				"role/https://oidc.cks.coreweave.com/id/<CLUSTER-UUID>:system:serviceaccount:org-ns-<ORG-ID>:marimohub-sandbox",
+				"role/https://oidc.cks.coreweave.com/id/<CLUSTER-UUID>:system:serviceaccount:marimohub:default"
+			]
+		},
+		{
+			"name": "kernel-bucket-access",
+			"effect": "Allow",
+			"actions": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+			"resources": ["my-org-data", "my-org-data/*"],
+			"principals": [
+				"role/https://oidc.cks.coreweave.com/id/<CLUSTER-UUID>:system:serviceaccount:org-ns-<ORG-ID>:marimohub-sandbox"
+			]
+		},
+		{
+			"name": "hub-bucket-access",
+			"effect": "Allow",
+			"actions": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+			"resources": ["marimohub-prod", "marimohub-prod/*"],
+			"principals": [
+				"role/https://oidc.cks.coreweave.com/id/<CLUSTER-UUID>:system:serviceaccount:marimohub:default"
+			]
+		}
+	]
+}
+```
+
+</details>
+
+Each identity needs `cwobject:CreateAccessKeyOIDC` and access to its buckets.
+Without the first permission, the credential exchange fails. Without bucket
+access, S3 requests fail with `403 permission denied`.
+
+5. **Add the ServiceAccount to the sandbox profile.** The `spec.pod` field
+   accepts a partial Kubernetes `PodSpec`:
+
+   ```yaml
+   spec:
+     pod:
+       spec:
+         serviceAccountName: marimohub-sandbox
+         # Notebook code does not need access to the Kubernetes API.
+         # The webhook uses a separate projected token.
+         automountServiceAccountToken: false
+   ```
+
+   Run `cwic sandbox profile edit <PROFILE>` and add these fields to the current
+   profile. The change applies to new sandboxes.
+
+### Hub configuration (Pod Identity)
+
+The webhook supplies credentials but not the S3 endpoint. Configure the endpoint
+and region for new sandboxes:
+
+```sh
+MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_ENDPOINT=https://cwobject.com
+MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_REGION=us-east-04a
+```
+
+Do not set the CoreWeave bucket list. That setting enables the sandbox-native
+sidecar.
+
+Leave `MARIMOHUB_WIF_*` unset. These variables inject static AWS credentials,
+which take precedence over the webhook credentials.
+
+For hub storage, leave `MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID` and
+`MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY` unset. The S3 adapter then uses the
+credentials from the annotated `default` ServiceAccount.
+
+On the `kubernetes` compute backend the equivalent knob is
+`MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT`, and the rest of this section
+applies unchanged.
+
+### Scope and limits
+
+- **The identity belongs to the ServiceAccount.** Kernels from one profile share
+  one CAIOS identity. Use hub-minted federation for per-project identities.
+- **Different tiers need different profiles.** To give one class of notebooks
+  more access, create a second profile with its own ServiceAccount and select it
+  with `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`.
+- **Use the `per-org` or `static` namespace strategy.** The `per-user` and
+  `per-profile` strategies create namespaces dynamically. Each namespace would
+  need the ServiceAccount before pod admission.
 
 ## Example: CoreWeave Object Storage (Manual)
 

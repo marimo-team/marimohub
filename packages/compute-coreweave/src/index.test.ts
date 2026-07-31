@@ -174,6 +174,25 @@ describe('CoreWeaveCompute', () => {
 			expect(world.created[0].objectStorageAccess).toBeUndefined();
 		});
 
+		it('injects CAIOS environment variables without bucket access', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				objectStorageEndpoint: 'https://cwobject.com',
+				objectStorageRegion: 'us-east-04a',
+			})
+				.create(SANDBOX_ID)
+				.exec('true');
+			const opts = world.created[0];
+			expect(opts.objectStorageAccess).toBeUndefined();
+			expect(opts.environmentVariables).toEqual({
+				AWS_ENDPOINT_URL_S3: 'https://cwobject.com',
+				AWS_REGION: 'us-east-04a',
+			});
+			const calls = world.registry.get('cw-1')!.fake.runCalls;
+			expect(calls[0][2]).toContain('addressing_style = virtual');
+		});
+
 		it('bootstraps the AWS config for virtual-hosted addressing on fresh create', async () => {
 			const world = makeWorld();
 			await makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] })
@@ -185,7 +204,7 @@ describe('CoreWeaveCompute', () => {
 			expect(calls).toHaveLength(2); // bootstrap, then the exec
 		});
 
-		it('skips the AWS config bootstrap without buckets and on reconnect', async () => {
+		it('skips the AWS config bootstrap without CAIOS configuration and on reconnect', async () => {
 			const world = makeWorld();
 			const compute = makeCompute(world, { ...baseConfig, objectStorageBuckets: ['org-data'] });
 			await compute.create(SANDBOX_ID).exec('true');
