@@ -152,6 +152,45 @@ describe('LocalCompute env propagation', () => {
 		}
 		expect(content).toBe('hello-env');
 	});
+
+	it('onlyIfUnset vars apply when the environment does not define them', async () => {
+		const sb = newSandbox();
+		await sb.setEnvVars({ MH_TEST_DEFAULT: 'fallback' }, { onlyIfUnset: true });
+
+		const cmd = `node -e "require('fs').writeFileSync('/workspace/env-default.txt', process.env.MH_TEST_DEFAULT || 'MISSING')"`;
+		await sb.startProcess(cmd, { cwd: '/workspace' });
+
+		let content = '';
+		for (let i = 0; i < 50; i++) {
+			const read = await sb.readFile('/workspace/env-default.txt');
+			if (read.success && read.content) {
+				content = read.content;
+				break;
+			}
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		expect(content).toBe('fallback');
+	});
+
+	it('onlyIfUnset vars defer to a value the process environment already has', async () => {
+		const sb = newSandbox();
+		await sb.setEnvVars({ MH_TEST_DEFAULT: 'from-env' });
+		await sb.setEnvVars({ MH_TEST_DEFAULT: 'fallback' }, { onlyIfUnset: true });
+
+		const cmd = `node -e "require('fs').writeFileSync('/workspace/env-forced.txt', process.env.MH_TEST_DEFAULT || 'MISSING')"`;
+		await sb.startProcess(cmd, { cwd: '/workspace' });
+
+		let content = '';
+		for (let i = 0; i < 50; i++) {
+			const read = await sb.readFile('/workspace/env-forced.txt');
+			if (read.success && read.content) {
+				content = read.content;
+				break;
+			}
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		expect(content).toBe('from-env');
+	});
 });
 
 describe('LocalCompute process lifecycle', () => {

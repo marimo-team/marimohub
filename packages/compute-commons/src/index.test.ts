@@ -62,6 +62,22 @@ describe('withEnvPrefix', () => {
 	it('shell-quotes env values (injection-safe)', () => {
 		expect(withEnvPrefix('run', { TOKEN: "a'b" })).toBe("export TOKEN='a'\\''b'; run");
 	});
+
+	it('emits defaults as guarded exports the existing environment wins over', () => {
+		expect(withEnvPrefix('run', {}, { A: '1' })).toBe('[ -n "${A:-}" ] || export A=\'1\'; run');
+	});
+
+	it('puts forced exports before default guards, so a forced value wins the key', () => {
+		expect(withEnvPrefix('run', { A: '1' }, { A: '2', B: '3' })).toBe(
+			"export A='1'; [ -n \"${A:-}\" ] || export A='2'; [ -n \"${B:-}\" ] || export B='3'; run",
+		);
+	});
+
+	it('shell-quotes default values (injection-safe)', () => {
+		expect(withEnvPrefix('run', {}, { TOKEN: "a'b" })).toBe(
+			"[ -n \"${TOKEN:-}\" ] || export TOKEN='a'\\''b'; run",
+		);
+	});
 });
 
 describe('removeUndefined', () => {

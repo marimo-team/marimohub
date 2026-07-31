@@ -66,6 +66,7 @@ function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): Session
 	return {
 		files: [...(base?.files ?? []), ...(add.files ?? [])],
 		vars: { ...base?.vars, ...add.vars },
+		defaults: { ...base?.defaults, ...add.defaults },
 	};
 }
 

@@ -5,6 +5,7 @@ import {
 	buildGitCloneCommand,
 	mapWithConcurrency,
 	shellQuote,
+	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { SandboxId } from '@marimo-hub/core';
@@ -25,6 +26,7 @@ import type {
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
+	SetEnvVarsOptions,
 	StartProcessOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
@@ -189,6 +191,7 @@ let processSequence = 0;
 class ModalSandboxInstance implements SandboxInstance {
 	private sandboxPromise?: Promise<ModalSandboxLike>;
 	private env: Record<string, string> = {};
+	private envDefaults: Record<string, string> = {};
 
 	constructor(
 		private readonly id: SandboxId,
@@ -254,11 +257,11 @@ class ModalSandboxInstance implements SandboxInstance {
 	}
 
 	async exec(cmd: string): Promise<ExecResult> {
-		return runProcess(await this.spawn(['sh', '-lc', cmd]));
+		return runProcess(await this.spawn(['sh', '-lc', this.withDefaults(cmd)]));
 	}
 
 	async execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream> {
-		const process = await this.spawn(['sh', '-lc', cmd], {
+		const process = await this.spawn(['sh', '-lc', this.withDefaults(cmd)], {
 			timeout: options?.timeout,
 		});
 		void readStream(process.stderr).catch(() => {});
@@ -316,8 +319,18 @@ class ModalSandboxInstance implements SandboxInstance {
 		if (!result.success) throw new Error(`git checkout failed: ${result.stderr}`);
 	}
 
-	async setEnvVars(vars: Record<string, string>): Promise<void> {
-		this.env = { ...this.env, ...vars };
+	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
+		if (options?.onlyIfUnset) {
+			this.envDefaults = { ...this.envDefaults, ...vars };
+		} else {
+			this.env = { ...this.env, ...vars };
+		}
+	}
+
+	// Forced vars ride the exec `env` option; defaults can't (that channel always
+	// overwrites), so they go in as a guarded shell prefix instead.
+	private withDefaults(cmd: string): string {
+		return withEnvPrefix(cmd, {}, this.envDefaults);
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {
@@ -335,7 +348,7 @@ class ModalSandboxInstance implements SandboxInstance {
 			`printf '%s %s\\n' "$$" "\${20}" > ${shellQuote(pidPath)}`,
 			`exec sh -lc ${shellQuote(cmd)}`,
 		].join('; ');
-		const process = await this.spawn(['sh', '-lc', trackedCommand], {
+		const process = await this.spawn(['sh', '-lc', this.withDefaults(trackedCommand)], {
 			cwd: options?.cwd,
 			env: options?.env,
 			timeout: options?.timeout,

@@ -35,6 +35,7 @@ import type {
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
+	SetEnvVarsOptions,
 	StartProcessOptions,
 } from '@marimo-hub/core/ports';
 import type { SandboxId } from '@marimo-hub/core';
@@ -109,8 +110,8 @@ class TieredSandboxInstance implements SandboxInstance {
 		return (await this.resolve()).gitCheckout(repo, options);
 	}
 
-	async setEnvVars(vars: Record<string, string>): Promise<void> {
-		return (await this.resolve()).setEnvVars(vars);
+	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
+		return (await this.resolve()).setEnvVars(vars, options);
 	}
 
 	async mountBucket(options: MountBucketOptions): Promise<void> {

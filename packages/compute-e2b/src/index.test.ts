@@ -385,6 +385,26 @@ describe('E2bCompute', () => {
 		});
 	});
 
+	it('applies onlyIfUnset vars as a guarded prefix, not run envs', async () => {
+		const fake = new FakeE2b({});
+		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+
+		await sb.setEnvVars({ TOKEN: 'abc' });
+		await sb.setEnvVars({ CACHE: '/tmp/c' }, { onlyIfUnset: true });
+		await sb.exec('echo env');
+
+		const run = fake.runOptions.find((r) => r.cmd.endsWith('echo env'));
+		expect(run?.cmd).toBe('[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; echo env');
+		expect(run?.options?.envs).toEqual({ TOKEN: 'abc' });
+
+		const proc = await sb.startProcess('run kernel', { cwd: '/workspace' });
+		await proc.kill();
+		expect(fake.backgroundCalls[0]).toMatchObject({
+			cmd: '[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; run kernel > /tmp/marimohub-kernel.log 2>&1',
+			options: { cwd: '/workspace', envs: { TOKEN: 'abc' } },
+		});
+	});
+
 	describe('gitCheckout', () => {
 		it('runs a shell-quoted git clone (injection-safe via compute-commons)', async () => {
 			const fake = new FakeE2b();

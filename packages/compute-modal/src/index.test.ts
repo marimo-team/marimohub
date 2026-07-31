@@ -230,6 +230,32 @@ describe('ModalCompute', () => {
 		expect(sandbox.execCalls[0].options?.env).toEqual({ A: '1', B: '2' });
 	});
 
+	it('applies onlyIfUnset vars as a guarded prefix, not exec env', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		sandbox.execImpl = () => processResult(0, '', '');
+		world.existing.set(SANDBOX_ID, sandbox);
+		const instance = makeCompute(world).create(SANDBOX_ID);
+		await instance.setEnvVars({ A: '1' });
+		await instance.setEnvVars({ CACHE: '/tmp/c' }, { onlyIfUnset: true });
+
+		await instance.exec('run');
+
+		expect(sandbox.execCalls[0].command).toEqual([
+			'sh',
+			'-lc',
+			'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; run',
+		]);
+		expect(sandbox.execCalls[0].options?.env).toEqual({ A: '1' });
+
+		await instance.startProcess('serve');
+		const started = sandbox.execCalls.at(-1)!;
+		expect(started.command[2].startsWith('[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; ')).toBe(
+			true,
+		);
+		expect(started.options?.env).toEqual({ A: '1' });
+	});
+
 	it('streams raw stdout without enabling PTY mode', async () => {
 		const world = makeWorld();
 		const sandbox = new FakeSandbox();

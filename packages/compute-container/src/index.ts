@@ -33,6 +33,7 @@ import type {
 	SandboxProcess,
 	SandboxProvider,
 	StartProcessOptions,
+	SetEnvVarsOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
 
@@ -107,6 +108,7 @@ let procSeq = 0;
 class ContainerSandboxInstance implements SandboxInstance {
 	private readonly name: string;
 	private env: Record<string, string> = {};
+	private envDefaults: Record<string, string> = {};
 	/** Cached host port for the published kernel port, once known. */
 	private hostPort?: number;
 
@@ -154,7 +156,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 
 	/** Prefix accumulated env vars onto a shell command. */
 	private withEnv(cmd: string): string {
-		return withEnvPrefix(cmd, this.env);
+		return withEnvPrefix(cmd, this.env, this.envDefaults);
 	}
 
 	private async dexec(cmd: string, flags: string[] = []): Promise<ContainerRunResult> {
@@ -217,8 +219,12 @@ class ContainerSandboxInstance implements SandboxInstance {
 		if (!res.success) throw new Error(`git checkout failed: ${res.stderr}`);
 	}
 
-	async setEnvVars(vars: Record<string, string>): Promise<void> {
-		this.env = { ...this.env, ...vars };
+	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
+		if (options?.onlyIfUnset) {
+			this.envDefaults = { ...this.envDefaults, ...vars };
+		} else {
+			this.env = { ...this.env, ...vars };
+		}
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {

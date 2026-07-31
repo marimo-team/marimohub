@@ -366,6 +366,33 @@ describe('CloudflareSandboxProvider', () => {
 			await instance.destroy();
 			expect(fakeSandbox.destroy).toHaveBeenCalled();
 		});
+
+		it('setEnvVars with onlyIfUnset skips the SDK and prefixes commands instead', async () => {
+			fakeSandbox.setEnvVars.mockClear();
+			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
+			const instance = makeProvider().create(SANDBOX_ID);
+
+			await instance.setEnvVars({ CACHE: '/tmp/c' }, { onlyIfUnset: true });
+			expect(fakeSandbox.setEnvVars).not.toHaveBeenCalled();
+
+			await instance.exec('run');
+			expect(fakeSandbox.exec).toHaveBeenCalledWith(
+				'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; run',
+			);
+
+			fakeSandbox.startProcess.mockResolvedValueOnce({
+				id: 'p1',
+				command: 'serve',
+				kill: async () => {},
+				waitForPort: async () => {},
+				getLogs: async () => ({ stdout: '', stderr: '' }),
+			});
+			await instance.startProcess('serve');
+			expect(fakeSandbox.startProcess).toHaveBeenCalledWith(
+				'[ -n "${CACHE:-}" ] || export CACHE=\'/tmp/c\'; serve',
+				expect.anything(),
+			);
+		});
 	});
 
 	describe('provider surface', () => {

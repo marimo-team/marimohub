@@ -216,6 +216,42 @@ describe('SandboxProvisioner', () => {
 			expect(calls.sequence).toEqual(['writeFiles', 'setEnvVars', 'startProcess']);
 		});
 
+		it('injects sessionEnv defaults with onlyIfUnset, before the kernel starts', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: { defaults: { XDG_CACHE_HOME: '/tmp/marimohub-cache' } },
+			});
+
+			expect(calls.setEnvDefaults).toEqual([{ XDG_CACHE_HOME: '/tmp/marimohub-cache' }]);
+			expect(calls.setEnvVars).toHaveLength(0);
+			expect(calls.sequence).toEqual(['setEnvDefaults', 'startProcess']);
+		});
+
+		it('skips the env calls when sessionEnv holds only empty objects', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: { vars: {}, defaults: {}, files: [] },
+			});
+
+			expect(calls.setEnvVars).toHaveLength(0);
+			expect(calls.setEnvDefaults).toHaveLength(0);
+			expect(calls.sequence).toEqual(['startProcess']);
+		});
+
 		it('does not call setEnvVars/writeFile when sessionEnv is omitted', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));

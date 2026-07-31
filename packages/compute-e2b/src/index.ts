@@ -22,6 +22,7 @@ import {
 	buildGitCloneCommand,
 	parseFindFilesOutput,
 	pollUntilReady,
+	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
 import { SandboxId, Seconds } from '@marimo-hub/core';
 import type {
@@ -40,6 +41,7 @@ import type {
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
+	SetEnvVarsOptions,
 	StartProcessOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
@@ -134,6 +136,7 @@ export interface E2bConfig {
 class E2bSandboxInstance implements SandboxInstance {
 	private handle?: E2bSandboxHandle;
 	private env: Record<string, string> = {};
+	private envDefaults: Record<string, string> = {};
 
 	constructor(
 		private readonly id: SandboxId,
@@ -163,7 +166,9 @@ class E2bSandboxInstance implements SandboxInstance {
 
 	async exec(cmd: string): Promise<ExecResult> {
 		const sb = await this.ensure();
-		const res = await sb.commands.run(cmd, { envs: this.env });
+		// Forced vars ride the SDK's per-command `envs`; defaults can't (that channel
+		// always overwrites), so they go in as a guarded shell prefix instead.
+		const res = await sb.commands.run(this.withDefaults(cmd), { envs: this.env });
 		return { success: res.exitCode === 0, stdout: res.stdout, stderr: res.stderr };
 	}
 
@@ -208,8 +213,16 @@ class E2bSandboxInstance implements SandboxInstance {
 		if (!res.success) throw new Error(`git checkout failed: ${res.stderr}`);
 	}
 
-	async setEnvVars(vars: Record<string, string>): Promise<void> {
-		this.env = { ...this.env, ...vars };
+	async setEnvVars(vars: Record<string, string>, options?: SetEnvVarsOptions): Promise<void> {
+		if (options?.onlyIfUnset) {
+			this.envDefaults = { ...this.envDefaults, ...vars };
+		} else {
+			this.env = { ...this.env, ...vars };
+		}
+	}
+
+	private withDefaults(cmd: string): string {
+		return withEnvPrefix(cmd, {}, this.envDefaults);
 	}
 
 	async mountBucket(_options: MountBucketOptions): Promise<void> {
@@ -225,7 +238,7 @@ class E2bSandboxInstance implements SandboxInstance {
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess> {
 		const sb = await this.ensure();
 		const logPath = '/tmp/marimohub-kernel.log';
-		const handle = await sb.commands.runBackground(`${cmd} > ${logPath} 2>&1`, {
+		const handle = await sb.commands.runBackground(this.withDefaults(`${cmd} > ${logPath} 2>&1`), {
 			envs: this.env,
 			cwd: options?.cwd,
 		});
