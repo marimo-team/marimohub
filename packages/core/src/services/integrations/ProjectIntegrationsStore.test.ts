@@ -772,6 +772,112 @@ describe('ProjectIntegrationsStore', () => {
 		await store.delete(pid, created.id, created.updated_at);
 	});
 
+	describe('delete under a concurrent commit', () => {
+		function storeOn(on: Bucket) {
+			const registry = new IntegrationRegistry();
+			registry.register(echoKind);
+			return new ProjectIntegrationsStore({
+				bucket: on,
+				registry,
+				codec,
+				probe: stubProbe,
+				now: ticking(),
+			});
+		}
+
+		/** A store whose first head read is stale by the time it writes: `interloper` commits in between. */
+		function racingDeleteStore(interloper: () => Promise<unknown>) {
+			let raced = false;
+			return storeOn({
+				head: (key) => bucket.head(key),
+				delete: (key) => bucket.delete(key),
+				list: (options) => bucket.list(options),
+				put: (key, value, options) => bucket.put(key, value, options),
+				get: async (key) => {
+					const body = await bucket.get(key);
+					if (key.endsWith('/integration.json') && !raced) {
+						raced = true;
+						await interloper();
+					}
+					return body;
+				},
+			});
+		}
+
+		it('an update committing after the head read forces 412 and deletes nothing', async () => {
+			const inner = storeOn(bucket);
+			const created = await inner.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { token: 't' } },
+				ACTOR,
+			);
+			const store = racingDeleteStore(() =>
+				inner.update(pid, created.id, { config: { token: 't2' } }, ACTOR, created.updated_at),
+			);
+
+			await expect(store.delete(pid, created.id, created.updated_at)).rejects.toThrow(
+				PreconditionFailedError,
+			);
+			expect(await inner.get(pid, created.id)).toMatchObject({ name: 'prod', current_version: 2 });
+			expect((await inner.listVersions(pid, created.id)).items.map((v) => v.version)).toEqual([
+				2, 1,
+			]);
+			// The losing delete must not free the name it never deleted.
+			await expect(
+				inner.create(pid, { kind: 'echo', name: 'prod', config: { token: 't' } }, ACTOR),
+			).rejects.toThrow(/already exists/);
+		});
+
+		it('without a precondition the delete retries past the update and removes everything', async () => {
+			const inner = storeOn(bucket);
+			const created = await inner.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { token: 't' } },
+				ACTOR,
+			);
+			const store = racingDeleteStore(() =>
+				inner.update(pid, created.id, { enabled: false }, ACTOR),
+			);
+
+			await store.delete(pid, created.id);
+			await expect(inner.get(pid, created.id)).rejects.toThrow(NotFoundError);
+			expect(
+				(await bucket.list({ prefix: `projects/${pid}/integrations/${created.id}/` })).objects,
+			).toEqual([]);
+			await inner.create(pid, { kind: 'echo', name: 'prod', config: { token: 't' } }, ACTOR);
+		});
+
+		it('a delete interrupted after the tombstone reads as gone and resumes', async () => {
+			const store = storeOn(bucket);
+			const created = await store.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { token: 't' } },
+				ACTOR,
+			);
+			const crashing = storeOn({
+				get: (key) => bucket.get(key),
+				head: (key) => bucket.head(key),
+				list: (options) => bucket.list(options),
+				put: (key, value, options) => bucket.put(key, value, options),
+				delete: () => Promise.reject(new Error('bucket unavailable')),
+			});
+			await expect(crashing.delete(pid, created.id)).rejects.toThrow('bucket unavailable');
+
+			await expect(store.get(pid, created.id)).rejects.toThrow(NotFoundError);
+			expect(await store.list(pid)).toEqual([]);
+			expect(await store.resolveForSession(pid, renderContext(createSessionId()))).toBeUndefined();
+			await expect(store.update(pid, created.id, { enabled: false }, ACTOR)).rejects.toThrow(
+				NotFoundError,
+			);
+
+			await store.delete(pid, created.id);
+			expect(
+				(await bucket.list({ prefix: `projects/${pid}/integrations/${created.id}/` })).objects,
+			).toEqual([]);
+			await store.create(pid, { kind: 'echo', name: 'prod', config: { token: 't' } }, ACTOR);
+		});
+	});
+
 	it('listVersions pages newest-first and reads only the requested page', async () => {
 		const versionReads: string[] = [];
 		const counting: Bucket = {

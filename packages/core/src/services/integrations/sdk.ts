@@ -130,7 +130,12 @@ function withoutSecretEcho(result: TestResult, config: unknown, paths: SecretPat
 	const echoes = collectSecretValues(config, paths).some(
 		(value) => details.includes(value) || details.includes(encodeURIComponent(value)),
 	);
-	return echoes ? { ...result, details: 'request failed' } : result;
+	if (!echoes) return result;
+	// The substring match stays deliberately blunt (a short secret matches an
+	// innocuous detail by chance), so the replacement tracks the result's own
+	// `ok` instead of asserting failure: a false positive then costs detail, not
+	// correctness.
+	return { ...result, details: result.ok ? 'connected' : 'request failed' };
 }
 
 /** Plaintext values sitting at the kind's schema-marked secret paths. */

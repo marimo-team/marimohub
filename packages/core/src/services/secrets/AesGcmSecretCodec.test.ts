@@ -66,14 +66,34 @@ describe('AesGcmSecretCodec', () => {
 		['a low-entropy value of the right byte length', 'k'.repeat(44)],
 		['a repeated-byte hex key', 'ab'.repeat(32)],
 		['a 31-byte key', 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHg'],
+		// Every phrase below decoded to 32+ non-degenerate "bytes" — the base64
+		// alphabet is letters and digits — so a byte-count check accepted them all.
+		['a 43-character word phrase', 'the-quick-brown-fox-jumps-over-the-lazy-dog'],
+		['a hyphenated passphrase', 'correct-horse-battery-staple-and-more-words'],
+		['a mixed-case passphrase', 'ThisIsMyVeryLongPassphraseForTheMarimoHubKEK'],
+		['a snake_case passphrase', 'marimohub_production_kek_do_not_share_with_anyone'],
+		['a passphrase with digits', 'MarimoHubProductionKeyEncryptionKey2026Rocks'],
+		// Trailing bits a base64 encoder never sets, and a mix of the two alphabets.
+		['a non-canonical final character', '4HMqFRKdJGH9AJeVOu3hINa5G/SfWDuHEzhSszvY9/l'],
+		['a mixed base64/base64url alphabet', '4HMqFRKdJGH9AJeVOu3hINa5G_SfWDuHEzhSszvY9/k'],
+		[
+			'a 64-byte key (the KEK is exactly one AES-256 key)',
+			'4Hs2UbcZt4xSShxbqWowYwHUVY+I1UbRSnOidTyjO9loqqBDNd9Nyn38bEOJOCTTifx7Iuc5vDe2FGMqzcSmIQ==',
+		],
 	])('rejects %s as key material', (_label, kek) => {
-		expect(() => new AesGcmSecretCodec({ kek })).toThrow(/random bytes encoded as base64 or hex/);
+		expect(() => new AesGcmSecretCodec({ kek })).toThrow(/openssl rand -base64 32/);
 	});
 
 	it.each([
 		['base64 with padding', KEK],
 		['base64url without padding', KEK.replaceAll('+', '-').replaceAll('/', '_').replace('=', '')],
 		['hex', '8a6a4c1c15ea9c0ea4c49045d40feb16766b370a6b24f22cb335dbd4de5813ba'],
+		['upper-case hex', '8A6A4C1C15EA9C0EA4C49045D40FEB16766B370A6B24F22CB335DBD4DE5813BA'],
+		// Fixtures other packages' tests construct this codec with; they must not
+		// need updating when the key-material rule tightens.
+		['a config-package fixture', 'sBN3HR4/RHc81JkWZ794UoUuUnPEHvt7zvkBjjbTWk0='],
+		['an api-package fixture', '/ECMzY/eM7nlHPPNu+OM2wv0lWiFuHUScSJxNmh64N8='],
+		['a store-test fixture', 'sFjp5R6eWYvc9SGtfeYEsQQlMKB8MfP4FdFAD7JAjsw='],
 	])('accepts %s key material', (_label, kek) => {
 		expect(() => new AesGcmSecretCodec({ kek })).not.toThrow();
 	});

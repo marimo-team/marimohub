@@ -82,6 +82,18 @@ function assertHeadUnchanged(current: IntegrationRecord, expected: string | unde
 	}
 }
 
+/**
+ * A head carrying `deleted_at` is a tombstone: the terminal state a delete CAS's
+ * it into before sweeping the objects. The bucket port has no conditional
+ * delete, so that CAS is the atomic commit point a delete and a concurrent
+ * update race on. A tombstoned head reads as absent everywhere, so a delete
+ * interrupted before its sweep leaves the integration gone rather than
+ * half-visible, and the next delete resumes it.
+ */
+function isTombstoned(raw: unknown): boolean {
+	return typeof (raw as { deleted_at?: unknown } | null)?.deleted_at === 'string';
+}
+
 function versionFromKey(key: string): number {
 	const match = /^(\d+)\.json$/.exec(key.slice(key.lastIndexOf('/') + 1));
 	if (!match) throw new ValidationError(`Invalid integration version key "${key}".`);
@@ -223,11 +235,10 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		const head = await this.getHead(projectId, id);
 		assertVersionMatch(head.updated_at, expectedVersion);
 		const headPath = paths.project(projectId).integration(id).head;
-		const parseHead = (raw: unknown) => {
-			const parsed = parseStored(IntegrationRecordSchema, raw, `integration ${id}`);
-			this.assertHeadIdentity(projectId, id, parsed);
-			return parsed;
-		};
+		// Re-checked at every CAS, not just the read above: a delete that commits its
+		// tombstone underneath this PATCH must fail it (and compensate) rather than
+		// write to a head that is already gone.
+		const parseHead = (raw: unknown) => this.parseHead(projectId, id, raw);
 		const headNotFound = { notFound: () => new NotFoundError(`Integration ${id} not found`) };
 		const newName = input.name !== undefined && input.name !== head.name ? input.name : undefined;
 		if (newName !== undefined) {
@@ -340,7 +351,11 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		return this.toDetail(updated!, version, config);
 	}
 
-	/** Undo a head rename (no-op if a third writer renamed again in between). */
+	/**
+	 * Undo a head rename — a no-op if a third writer renamed again in between, or
+	 * if a delete tombstoned the head: that CAS is the commit point, so writing a
+	 * name back onto it would edit an integration already gone.
+	 */
 	private async revertRename(
 		projectId: ProjectId,
 		id: IntegrationId,
@@ -351,35 +366,68 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 			this.bucket,
 			paths.project(projectId).integration(id).head,
 			(raw) => parseStored(IntegrationRecordSchema, raw, `integration ${id}`),
-			(current) => (current.name === fromName ? { ...current, name: toName } : null),
+			(current) =>
+				current.name === fromName && !isTombstoned(current) ? { ...current, name: toName } : null,
 			{ notFound: () => new NotFoundError(`Integration ${id} not found`) },
 		);
 	}
 
+	/**
+	 * Commits by CAS'ing the head to a tombstone, then sweeps the objects. The CAS,
+	 * not the read that precedes it, is what enforces `expectedVersion`: an update
+	 * committing in that window takes the head's ETag with it, and the retry
+	 * re-checks the token against the winner, so a stale `If-Match` answers 412
+	 * instead of erasing an edit the caller never saw.
+	 */
 	async delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<void> {
+		const integrationPaths = paths.project(projectId).integration(id);
 		let name: string | undefined;
 		try {
-			const head = await this.getHead(projectId, id);
-			// Guarded here rather than at the delete itself: the bucket port has no
-			// conditional delete, so this is the same read-then-act guard the other
-			// delete paths use (`NotebookService.deleteNotebook`).
-			assertVersionMatch(head.updated_at, expectedVersion);
-			name = head.name;
+			name = await this.tombstoneHead(projectId, id, expectedVersion);
 		} catch (err) {
-			// A missing or unreadable head still sweeps the leftovers below (delete is
-			// idempotent) — but a failed precondition is the caller's answer.
-			if (err instanceof PreconditionFailedError) throw err;
+			if (err instanceof StaleHeadError) throw err.precondition;
+			// A head that cannot be parsed has no version to check and nothing to
+			// tombstone, but must still be removable — sweep its objects unguarded.
+			if (!(err instanceof ValidationError)) throw err;
 		}
-		// The head goes FIRST: a concurrent update's head CAS then fails fast and
-		// compensates its own just-appended version, so the sweep below plus that
-		// compensation covers every interleaving.
-		await this.bucket.delete(paths.project(projectId).integration(id).head);
-		const objects = await listAllObjects(
-			this.bucket,
-			paths.project(projectId).integration(id).base,
-		);
-		if (objects.length > 0) await this.bucket.delete(objects.map((o) => o.key));
+		const strays = (await listAllObjects(this.bucket, integrationPaths.base))
+			.map((o) => o.key)
+			.filter((key) => key !== integrationPaths.head);
+		if (strays.length > 0) await this.bucket.delete(strays);
+		// The tombstone goes LAST: while it stands, the integration reads as gone and
+		// a delete interrupted mid-sweep still resumes. Dropping it first would leave
+		// the surviving objects in a directory no listing reports, so nothing would
+		// ever reclaim them.
+		await this.bucket.delete(integrationPaths.head);
 		if (name !== undefined) await this.releaseName(projectId, name, id);
+	}
+
+	/**
+	 * Returns the name whose claim the delete must release, or undefined when there
+	 * is no head left to tombstone.
+	 */
+	private async tombstoneHead(
+		projectId: ProjectId,
+		id: IntegrationId,
+		expectedVersion: string | undefined,
+	): Promise<string | undefined> {
+		const headPath = paths.project(projectId).integration(id).head;
+		return withCasRetry(async () => {
+			const existing = await this.bucket.get(headPath);
+			if (!existing) return;
+			const raw = await existing.json();
+			// Already committed by an interrupted delete: resume its sweep (and its
+			// name release) rather than answer 412 on a token no live head can match.
+			if (isTombstoned(raw)) {
+				return parseStored(IntegrationRecordSchema, raw, `integration ${id}`).name;
+			}
+			const head = this.parseHead(projectId, id, raw);
+			assertHeadUnchanged(head, expectedVersion);
+			await this.bucket.put(headPath, JSON.stringify({ ...head, deleted_at: this.now() }), {
+				onlyIfEtagMatches: existing.etag,
+			});
+			return head.name;
+		});
 	}
 
 	async listVersions(
@@ -519,11 +567,9 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		const heads = await mapWithConcurrency(instanceDirs, BUCKET_SCAN_CONCURRENCY, async (dir) => {
 			const body = await this.bucket.get(`${dir}integration.json`);
 			if (!body) return null; // deleted between list and get — skip
-			const head = parseStored(
-				IntegrationRecordSchema,
-				await body.json(),
-				`${dir}integration.json`,
-			);
+			const raw = await body.json();
+			if (isTombstoned(raw)) return null; // a committed delete, sweep pending
+			const head = parseStored(IntegrationRecordSchema, raw, `${dir}integration.json`);
 			const rawId = dir.slice(prefix.length, -1);
 			if (!rawId) throw new ValidationError(`Invalid integration path "${dir}".`);
 			this.assertHeadIdentity(projectId, rawId as IntegrationId, head);
@@ -535,7 +581,13 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	private async getHead(projectId: ProjectId, id: IntegrationId): Promise<IntegrationRecord> {
 		const body = await this.bucket.get(paths.project(projectId).integration(id).head);
 		if (!body) throw new NotFoundError(`Integration ${id} not found`);
-		const head = parseStored(IntegrationRecordSchema, await body.json(), `integration ${id}`);
+		return this.parseHead(projectId, id, await body.json());
+	}
+
+	/** A tombstoned head is gone as far as every reader and writer is concerned. */
+	private parseHead(projectId: ProjectId, id: IntegrationId, raw: unknown): IntegrationRecord {
+		if (isTombstoned(raw)) throw new NotFoundError(`Integration ${id} not found`);
+		const head = parseStored(IntegrationRecordSchema, raw, `integration ${id}`);
 		this.assertHeadIdentity(projectId, id, head);
 		return head;
 	}

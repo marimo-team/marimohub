@@ -98,6 +98,84 @@ describe('process-wide YAML settings', () => {
 		);
 	});
 
+	// An integration that merely wrote a different key into the same file is not
+	// party to the dispute, and naming it sends the admin after the wrong config.
+	it('names only the two integrations that set the conflicting key', () => {
+		let message = '';
+		try {
+			bundle([
+				rendered('warehouse', yaml('.pyiceberg.yaml', { 'max-workers': '4' })),
+				rendered('bystander', yaml('.pyiceberg.yaml', { catalog: { b: { uri: 'https://b' } } })),
+				rendered('lakehouse', yaml('.pyiceberg.yaml', { 'max-workers': '8' })),
+			]);
+		} catch (error) {
+			message = (error as Error).message;
+		}
+		expect(message).toMatch(
+			/Integrations "warehouse" and "lakehouse" disagree on "max-workers".*"4" vs "8"/s,
+		);
+		expect(message).not.toContain('bystander');
+	});
+
+	it('names every integration that set the value now being contradicted', () => {
+		expect(() =>
+			bundle([
+				rendered('warehouse', yaml('.pyiceberg.yaml', { 'max-workers': '4' })),
+				rendered('lakeshore', yaml('.pyiceberg.yaml', { 'max-workers': '4' })),
+				rendered('lakehouse', yaml('.pyiceberg.yaml', { 'max-workers': '8' })),
+			]),
+		).toThrow(/Integrations "warehouse", "lakeshore" and "lakehouse" disagree on "max-workers"/);
+	});
+
+	it('names the owners of a nested subtree replaced by a scalar', () => {
+		let message = '';
+		try {
+			bundle([
+				rendered('warehouse', yaml('.pyiceberg.yaml', { catalog: { a: { uri: 'https://a' } } })),
+				rendered('bystander', yaml('.pyiceberg.yaml', { 'max-workers': '4' })),
+				rendered('lakehouse', yaml('.pyiceberg.yaml', { catalog: 'off' })),
+			]);
+		} catch (error) {
+			message = (error as Error).message;
+		}
+		expect(message).toMatch(/Integrations "warehouse" and "lakehouse" disagree on "catalog"/);
+		expect(message).not.toContain('bystander');
+	});
+
+	it('reports the nested key path and keeps unrelated nested keys out of the blame', () => {
+		let message = '';
+		try {
+			bundle([
+				rendered(
+					'warehouse',
+					yaml('.pyiceberg.yaml', { catalog: { shared: { uri: 'https://a' } } }),
+				),
+				rendered(
+					'bystander',
+					yaml('.pyiceberg.yaml', { catalog: { other: { uri: 'https://b' } } }),
+				),
+				rendered(
+					'lakehouse',
+					yaml('.pyiceberg.yaml', { catalog: { shared: { uri: 'https://c' } } }),
+				),
+			]);
+		} catch (error) {
+			message = (error as Error).message;
+		}
+		expect(message).toMatch(/Integrations "warehouse" and "lakehouse" disagree on "uri"/);
+		expect(message).toContain('.pyiceberg.yaml:catalog:shared');
+		expect(message).not.toContain('bystander');
+	});
+
+	it('still names an owner when the contradicted value was an empty object', () => {
+		expect(() =>
+			bundle([
+				rendered('warehouse', yaml('.pyiceberg.yaml', { catalog: {} })),
+				rendered('lakehouse', yaml('.pyiceberg.yaml', { catalog: 'off' })),
+			]),
+		).toThrow(/Integrations "warehouse" and "lakehouse" disagree on "catalog"/);
+	});
+
 	it('still merges disjoint catalogs into one file', () => {
 		const result = bundle([
 			rendered('a', yaml('.pyiceberg.yaml', { catalog: { a: { uri: 'https://a' } } })),

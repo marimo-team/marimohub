@@ -79,6 +79,19 @@ a `manifest.json` naming the instances, kinds, and config versions in play. The
 directory sits outside the workspace, so rendered config is never captured back
 into the notebook's files.
 
+### PostgreSQL and TLS
+
+New PostgreSQL integrations default to libpq's `verify-full`, which checks both
+the certificate chain and the hostname. libpq does not consult the system trust
+store on its own — with no `sslrootcert` it looks for `~/.postgresql/root.crt`
+and fails when that file is absent — so the rendered URL points `sslrootcert` at
+the sandbox image's CA bundle (`/etc/ssl/certs/ca-certificates.crt`). A publicly
+trusted server therefore verifies with no extra setup. For a private CA, paste
+its PEM into **CA bundle**; it is written beside the integration's other files
+and `sslrootcert` points there instead. `require` encrypts but authenticates
+nothing — choose it deliberately. A custom sandbox image must ship
+`ca-certificates`, or every integration needs its own CA bundle.
+
 ## Managing integrations
 
 Open a project → the **integrations** icon in the header. Members (`viewer`+)
@@ -109,12 +122,13 @@ with (restart the session to apply).
 
 Secret config fields (passwords, tokens) are encrypted at rest with the
 deployment's managed-secret KEK and never returned by any API — responses show
-`{ "$secret": { "set": true } }`. Set `MARIMOHUB_SECRETS_KEK` to enable them —
-32+ random bytes encoded as base64 or hex, e.g. `openssl rand -base64 32`. A
-passphrase is rejected at startup, because the hub applies no password
-stretching to it. Without a KEK, only secret-free configs can be saved and the
-error names the missing variable. The KEK is shared with
-[managed project secrets](./secrets.md).
+`{ "$secret": { "set": true } }`. Set `MARIMOHUB_SECRETS_KEK` to enable them — a
+generated 32-byte key, i.e. the exact output of `openssl rand -base64 32` (43
+base64 characters) or `openssl rand -hex 32` (64 hex characters). A passphrase,
+or any value not shaped like a generated key, is rejected at startup, because
+the hub applies no password stretching to it. Without a KEK, only secret-free
+configs can be saved and the error names the missing variable. The KEK is shared
+with [managed project secrets](./secrets.md).
 
 ## Failure model
 

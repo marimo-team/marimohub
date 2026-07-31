@@ -106,7 +106,8 @@ describe('kind renders (golden)', () => {
 		const out = postgres.render(input(FIXTURES.postgres, postgres));
 		expect(out.env).toEqual({
 			MARIMOHUB_PG_PROD_URL:
-				'postgresql://svc%20user:p%40ss%3Aword@db.internal:5432/analytics?sslmode=verify-full',
+				'postgresql://svc%20user:p%40ss%3Aword@db.internal:5432/analytics' +
+				'?sslmode=verify-full&sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt',
 			MARIMOHUB_PG_PROD_HOST: 'db.internal',
 			MARIMOHUB_PG_PROD_PORT: '5432',
 			MARIMOHUB_PG_PROD_DATABASE: 'analytics',
@@ -131,21 +132,52 @@ describe('kind renders (golden)', () => {
 		expect(new URL(out.env?.MARIMOHUB_PG_PROD_URL ?? '').hostname).toBe('[2001:db8::1]');
 	});
 
-	it('postgres: TLS verification is the default and a custom CA lands outside the workspace', () => {
+	// Without an explicit `sslrootcert` a verifying sslmode resolves against
+	// `~/.postgresql/root.crt`, which the sandbox image does not ship, so such a
+	// default cannot reach ANY server — publicly trusted or not.
+	it('postgres: the default names a trust source, so it can verify a publicly trusted server', () => {
 		const parse = (ssl: unknown) =>
 			postgres.configSchema.parse({ ...(FIXTURES.postgres as object), ssl });
-		const sslmode = (config: unknown) =>
+		const params = (config: unknown) =>
 			new URL(postgres.render(input(config, postgres)).env?.MARIMOHUB_PG_PROD_URL ?? '')
 				.searchParams;
 
-		expect(sslmode(parse(undefined)).get('sslmode')).toBe('verify-full');
-		// `require` encrypts without authenticating the server: opt-in, never implied.
-		expect(sslmode(parse({ mode: 'require' })).get('sslmode')).toBe('require');
-		expect(sslmode(parse({ mode: 'disable' })).get('sslmode')).toBe('disable');
-
-		const withCa = postgres.render(
-			input(parse({ mode: 'verify-full', ca_bundle: 'CA' }), postgres),
+		const byDefault = params(parse(undefined));
+		expect(byDefault.get('sslmode')).toBe('verify-full');
+		expect(byDefault.get('sslrootcert')).toBe('/etc/ssl/certs/ca-certificates.crt');
+		expect(params(parse({ mode: 'verify-ca' })).get('sslrootcert')).toBe(
+			'/etc/ssl/certs/ca-certificates.crt',
 		);
+
+		// Non-verifying modes ignore sslrootcert; leaving it off keeps their DSN
+		// byte-identical to what a v1 boolean config rendered.
+		for (const mode of ['disable', 'prefer', 'require'] as const) {
+			expect(params(parse({ mode })).get('sslmode'), mode).toBe(mode);
+			expect(params(parse({ mode })).get('sslrootcert'), mode).toBe(null);
+		}
+
+		const defaultDescriptor = JSON.parse(
+			postgres
+				.render(input(parse(undefined), postgres))
+				.files?.find(({ path }) => path === 'postgres/prod.json')?.content ?? '',
+		) as { ssl: Record<string, unknown> };
+		// The DSN and the JSON descriptor are read by the same notebook code.
+		expect(defaultDescriptor.ssl).toEqual({
+			mode: 'verify-full',
+			ca_path: '/etc/ssl/certs/ca-certificates.crt',
+		});
+		// The image's bundle is referenced, never copied into the sandbox.
+		expect(
+			postgres.render(input(parse(undefined), postgres)).files?.map(({ path }) => path),
+		).toEqual(['postgres/prod.json']);
+	});
+
+	it('postgres: a custom CA overrides the system trust store and lands outside the workspace', () => {
+		const config = postgres.configSchema.parse({
+			...(FIXTURES.postgres as object),
+			ssl: { mode: 'verify-full', ca_bundle: 'CA' },
+		});
+		const withCa = postgres.render(input(config, postgres));
 		const caPath = `${INTEGRATIONS_DIR}/postgres/prod-ca.pem`;
 		expect(new URL(withCa.env?.MARIMOHUB_PG_PROD_URL ?? '').searchParams.get('sslrootcert')).toBe(
 			caPath,
@@ -165,6 +197,20 @@ describe('kind renders (golden)', () => {
 		expect(migrate(false).ssl).toEqual({ mode: 'prefer' });
 		expect(migrate(undefined).ssl).toEqual({ mode: 'require' });
 		expect(() => postgres.configSchema.parse(migrate(true))).not.toThrow();
+
+		// The verify-full default is for NEW integrations only: a migrated config
+		// picks up neither the stricter mode nor the system trust store, so an
+		// existing connection keeps working exactly as it did.
+		for (const stored of [true, false, undefined]) {
+			const config = postgres.configSchema.parse(migrate(stored));
+			const url = new URL(
+				postgres.render(input(config, postgres)).env?.MARIMOHUB_PG_PROD_URL ?? '',
+			);
+			expect(url.searchParams.get('sslmode'), String(stored)).toBe(
+				stored === false ? 'prefer' : 'require',
+			);
+			expect(url.searchParams.get('sslrootcert'), String(stored)).toBe(null);
+		}
 	});
 
 	it('trino: basic auth rides the URL; auth "none" passes the principal email through', () => {

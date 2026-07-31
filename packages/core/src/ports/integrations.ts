@@ -184,7 +184,9 @@ export interface IntegrationsProvider {
 	 * Idempotent; removes the head and all version history. `expectedVersion` is
 	 * the same optimistic-concurrency guard as `update` — 412 when the head
 	 * changed since the caller read it, so a stale delete cannot erase an edit the
-	 * caller never saw. Ignored once the integration is already gone.
+	 * caller never saw. The check is atomic with the commit: an update landing
+	 * while the delete is in flight also produces 412, and nothing is removed.
+	 * Ignored once the integration is already gone.
 	 */
 	delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<void>;
 	listVersions(

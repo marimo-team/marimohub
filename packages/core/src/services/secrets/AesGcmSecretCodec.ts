@@ -15,21 +15,22 @@ import { fromBase64Url, toBase64Url } from '../../internal/base64url';
 /** AES-GCM's standard nonce size; a fresh IV is generated for every encryption. */
 const IV_BYTES = 12;
 
-/**
- * The KEK must be at least AES-256's own key length of random bytes. Length
- * alone proves nothing about entropy, hence the encoding requirement below.
- */
-const MIN_KEK_BYTES = 32;
+/** A KEK is exactly one AES-256 key. Not a minimum: see {@link assertKeyMaterial}. */
+const KEK_BYTES = 32;
+
+/** `openssl rand -hex 32`. */
+const HEX_KEK_REGEX = /^[0-9a-fA-F]{64}$/;
+
+/** `openssl rand -base64 32`: 43 significant characters plus optional padding. */
+const BASE64_KEK_REGEX = /^[A-Za-z0-9+/\-_]{43}=?$/;
 
 /**
  * A degenerate-pattern floor. 32 uniformly random bytes hold ~30 distinct byte
- * values, so falling under this means a repeated or padded pattern (`'k'*44`),
- * not key material; a real key clears it with overwhelming probability.
+ * values, so falling under this means a repeated or padded pattern
+ * (`'ab'.repeat(32)`), not key material; a real key clears it with overwhelming
+ * probability.
  */
 const MIN_DISTINCT_BYTES = 16;
-
-const HEX_REGEX = /^(?:[0-9a-f]{2})+$/i;
-const BASE64_REGEX = /^[A-Za-z0-9+/\-_]+={0,2}$/;
 
 const encoder = new TextEncoder();
 
@@ -117,42 +118,69 @@ export class AesGcmSecretCodec implements ManagedSecretCodec {
 }
 
 /**
- * Rejects anything that is not plainly key material: the KEK must decode from
- * base64(url) or hex to at least {@link MIN_KEK_BYTES} non-degenerate bytes.
- * HKDF is a key-derivation function, not a password KDF — nothing here stretches
- * the input — so a memorable passphrase that merely reaches 32 characters would
- * leave every managed secret guessable. The message never echoes the value.
+ * Rejects anything that is not shaped like a generated key: the KEK must be the
+ * *canonical* encoding of exactly {@link KEK_BYTES} non-degenerate bytes — 64 hex
+ * digits, or 43 base64 characters (one optional `=`) that re-encode to the input
+ * unchanged and carry both cases, which is what rules out a lower-case phrase
+ * that happens to fit the base64 shape (see {@link isGeneratedKey}).
+ *
+ * Requiring the exact shape rather than a byte floor is the point. HKDF is a
+ * key-derivation function, not a password KDF — nothing here stretches the input
+ * — so a memorable passphrase would leave every managed secret guessable, and a
+ * long one *does* decode as base64: the alphabet is letters and digits, so
+ * `'the-quick-brown-fox-jumps-over-the-lazy-dog'` yielded 32 "bytes" under a
+ * byte-count check. This is not an entropy measurement; no check on a string can
+ * be. It only makes a non-generated value hard to supply by accident, and tells
+ * the operator the command that produces a valid one. The message never echoes
+ * the value.
  *
  * The KEK *string* (not the decoded bytes) remains the HKDF input keying
  * material: the encoded form carries the same entropy, and re-deriving from the
  * decoded bytes would invalidate every envelope already in the bucket.
  */
 function assertKeyMaterial(kek: string): void {
-	const bytes = decodeKey(kek);
-	if (!bytes || bytes.length < MIN_KEK_BYTES || new Set(bytes).size < MIN_DISTINCT_BYTES) {
+	if (!isGeneratedKey(kek)) {
 		throw new Error(
-			`Managed-secret KEK must be ${MIN_KEK_BYTES}+ random bytes encoded as base64 or hex ` +
-				'(generate one with `openssl rand -base64 32`); a passphrase is rejected because no ' +
-				'password stretching is applied to it. Secrets written under a previously accepted ' +
-				'weak key cannot be decrypted with the new one and must be re-entered.',
+			`Managed-secret KEK must be a generated ${KEK_BYTES}-byte key in its canonical ` +
+				'encoding: 64 hex characters, or 43 base64 characters (plus an optional `=`) ' +
+				'carrying the mixed case a random key has. Generate one with ' +
+				'`openssl rand -base64 32`. A passphrase is rejected because no password ' +
+				'stretching is applied to it. Secrets written under a previously accepted weak ' +
+				'key cannot be decrypted with the new one and must be re-entered.',
 		);
 	}
 }
 
-function decodeKey(kek: string): Uint8Array | undefined {
-	try {
-		if (HEX_REGEX.test(kek)) {
-			const bytes = new Uint8Array(kek.length / 2);
-			for (let i = 0; i < bytes.length; i++) {
-				bytes[i] = Number.parseInt(kek.slice(i * 2, i * 2 + 2), 16);
-			}
-			return bytes;
+function isGeneratedKey(kek: string): boolean {
+	const bytes = decodeKek(kek);
+	if (!bytes || new Set(bytes).size < MIN_DISTINCT_BYTES) return false;
+	// Hex is single-case by construction. Base64 of a random 32-byte key misses a
+	// case with probability ~4e-10, so demanding both costs a real key nothing and
+	// turns away the lower-case word phrases that otherwise fit the 43-char shape.
+	return HEX_KEK_REGEX.test(kek) || (/[a-z]/.test(kek) && /[A-Z]/.test(kek));
+}
+
+function decodeKek(kek: string): Uint8Array | undefined {
+	if (HEX_KEK_REGEX.test(kek)) {
+		const bytes = new Uint8Array(KEK_BYTES);
+		for (let i = 0; i < KEK_BYTES; i++) {
+			bytes[i] = Number.parseInt(kek.slice(i * 2, i * 2 + 2), 16);
 		}
-		if (BASE64_REGEX.test(kek)) return fromBase64Url(kek.replace(/=+$/, ''));
+		return bytes;
+	}
+	if (!BASE64_KEK_REGEX.test(kek)) return undefined;
+	let bytes: Uint8Array;
+	try {
+		bytes = fromBase64Url(kek.replace(/=$/, ''));
 	} catch {
 		return undefined;
 	}
-	return undefined;
+	// Re-encoding must reproduce the input. This rejects a 43rd character whose
+	// unused low bits are set and an input mixing the two alphabets — neither is
+	// something a base64 encoder emits.
+	const url = toBase64Url(bytes);
+	const std = url.replaceAll('-', '+').replaceAll('_', '/');
+	return [url, `${url}=`, std, `${std}=`].includes(kek) ? bytes : undefined;
 }
 
 /**

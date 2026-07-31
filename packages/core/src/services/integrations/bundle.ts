@@ -54,7 +54,7 @@ export function bundleIntegrations(
 	sessionId: SessionId,
 ): SessionRender {
 	const files: SessionRender['files'] = [];
-	const yamlFiles = new Map<string, { value: Record<string, unknown>; owners: string[] }>();
+	const yamlFiles = new Map<string, MergedYaml>();
 	const claimPath = pathClaimer();
 	// Claimed up front so a kind emitting the bundler's own key gets the normal
 	// collision error instead of having its value silently overwritten.
@@ -73,9 +73,10 @@ export function bundleIntegrations(
 			const existing = yamlFiles.get(path);
 			if (existing) {
 				existing.value = mergeYaml(existing.value, file.value, path, existing.owners, item.name);
-				existing.owners.push(item.name);
 			} else {
-				yamlFiles.set(path, { value: structuredClone(file.value), owners: [item.name] });
+				const owners = new Map<string, string[]>();
+				recordOwners(owners, '', file.value, item.name);
+				yamlFiles.set(path, { value: structuredClone(file.value), owners });
 			}
 		}
 		for (const [key, value] of Object.entries(item.output.env ?? {})) {
@@ -168,30 +169,81 @@ function nestedPathError(
 }
 
 /**
+ * A merged YAML file plus, per leaf key path, the integrations that put the
+ * current value there. Blame is tracked per key rather than per file so a
+ * conflict names only the integrations that set the disputed key — an
+ * integration that contributed unrelated keys to the same file has nothing to
+ * reconcile.
+ */
+interface MergedYaml {
+	value: Record<string, unknown>;
+	owners: Map<string, string[]>;
+}
+
+/** Key-path separator; cannot appear in a YAML key. */
+const KEY_SEP = '\u0000';
+
+function recordOwners(
+	owners: Map<string, string[]>,
+	keyPath: string,
+	value: unknown,
+	owner: string,
+): void {
+	// An empty object has no leaves to attribute, so it is claimed as a leaf
+	// itself — otherwise a later value replacing it would blame nobody.
+	if (isPlainObject(value) && Object.keys(value).length > 0) {
+		for (const [key, child] of Object.entries(value)) {
+			recordOwners(owners, `${keyPath}${KEY_SEP}${key}`, child, owner);
+		}
+		return;
+	}
+	const existing = owners.get(keyPath);
+	if (!existing) owners.set(keyPath, [owner]);
+	else if (!existing.includes(owner)) existing.push(owner);
+}
+
+/** Everyone whose contribution is part of the value now being contradicted. */
+function ownersOf(owners: Map<string, string[]>, keyPath: string): string[] {
+	const found: string[] = [];
+	const prefix = `${keyPath}${KEY_SEP}`;
+	for (const [key, names] of owners) {
+		if (key !== keyPath && !key.startsWith(prefix)) continue;
+		for (const name of names) if (!found.includes(name)) found.push(name);
+	}
+	return found;
+}
+
+/**
  * Fail closed on disagreement rather than picking a winner: some PyIceberg root
  * properties (`legacy-current-snapshot-id`, `max-workers`) are process-wide, so
  * silently choosing one integration's value would change how the OTHER one
- * reads data. The message names both integrations and both values because this
- * surfaces at session launch, where the admin has no other clue which pair to
- * reconcile.
+ * reads data. The message names the disagreeing integrations and both values
+ * because this surfaces at session launch, where the admin has no other clue
+ * which pair to reconcile.
  */
 function mergeYaml(
 	left: Record<string, unknown>,
 	right: Record<string, unknown>,
 	path: string,
-	leftOwners: string[],
+	owners: Map<string, string[]>,
 	rightOwner: string,
+	keyPath = '',
 ): Record<string, unknown> {
 	const merged = { ...left };
 	for (const [key, value] of Object.entries(right)) {
 		const previous = merged[key];
+		const childPath = `${keyPath}${KEY_SEP}${key}`;
 		if (previous === undefined) {
 			merged[key] = structuredClone(value);
+			recordOwners(owners, childPath, value, rightOwner);
 		} else if (isPlainObject(previous) && isPlainObject(value)) {
-			merged[key] = mergeYaml(previous, value, `${path}:${key}`, leftOwners, rightOwner);
-		} else if (JSON.stringify(previous) !== JSON.stringify(value)) {
+			merged[key] = mergeYaml(previous, value, `${path}:${key}`, owners, rightOwner, childPath);
+		} else if (JSON.stringify(previous) === JSON.stringify(value)) {
+			recordOwners(owners, childPath, value, rightOwner);
+		} else {
+			const disputed = ownersOf(owners, childPath);
 			throw new ValidationError(
-				`Integrations "${leftOwners.join('", "')}" and "${rightOwner}" disagree on ` +
+				`Integrations "${disputed.join('", "')}" and "${rightOwner}" disagree on ` +
 					`"${key}" in ${path}: ${JSON.stringify(previous)} vs ${JSON.stringify(value)}. ` +
 					'This setting applies to the whole session, so the two cannot run together — ' +
 					'align the value or disable one of them.',

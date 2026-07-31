@@ -55,6 +55,28 @@ describe('defineIntegration secret guard', () => {
 		expect(result?.details).toBe('request failed');
 	});
 
+	it('keeps a redacted success from contradicting its own ok result', async () => {
+		const probe: IntegrationProbe = {
+			fetch: () =>
+				Promise.resolve({
+					ok: true,
+					status: 200,
+					json: () => Promise.resolve({ nodeVersion: { version: '444' } }),
+				}),
+		};
+		// A two-character password is a substring of the success detail "Trino 444".
+		const config = trino.configSchema.parse({
+			host: 'trino.internal',
+			auth: { method: 'basic', username: 'svc', password: '44' },
+		});
+
+		const result = await trino.testConnection?.(config, probe);
+
+		expect(result?.ok).toBe(true);
+		expect(result?.details).toBe('connected');
+		expect(result?.details).not.toContain('44');
+	});
+
 	it('leaves secret-free details (status codes, versions) untouched', async () => {
 		const probe: IntegrationProbe = {
 			fetch: () =>

@@ -20,6 +20,21 @@ const IPV6_ALTERNATIVES = [
 ].join('|');
 const PG_HOST_REGEX = new RegExp(`${HOSTNAME_REGEX.source}|^(?:${IPV6_ALTERNATIVES})$`);
 
+// A verifying sslmode with no `sslrootcert` makes libpq read
+// `~/.postgresql/root.crt`, which no sandbox image ships, so the connection fails
+// before reaching the server. libpq 16+ accepts `sslrootcert=system`, but that
+// resolves through OpenSSL's compiled-in default paths, and psycopg2-binary
+// bundles an OpenSSL whose defaults point at the wheel builder's scratch
+// directory (`/host/tmp/libpq.build/certs`) — so `system` fails to verify too.
+// Naming the image's bundle is what makes `verify-full` usable as the default.
+const SYSTEM_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
+
+const caBundleField = z
+	.string()
+	.min(1)
+	.optional()
+	.describe(`PEM CA bundle; defaults to the sandbox image trust store (${SYSTEM_CA_BUNDLE})`);
+
 // `require` encrypts but authenticates nothing: any server that completes the
 // handshake is accepted, so it stays available as an explicit choice while new
 // connections default to full verification.
@@ -30,11 +45,11 @@ const sslSchema = z
 		z.object({ mode: z.literal('require') }),
 		z.object({
 			mode: z.literal('verify-ca'),
-			ca_bundle: z.string().min(1).optional(),
+			ca_bundle: caBundleField,
 		}),
 		z.object({
 			mode: z.literal('verify-full'),
-			ca_bundle: z.string().min(1).optional(),
+			ca_bundle: caBundleField,
 		}),
 	])
 	.default({ mode: 'verify-full' })
@@ -88,10 +103,13 @@ export const postgres = defineIntegration({
 		const auth = `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}`;
 		const files: { path: string; content: string }[] = [];
 		const caBundle = 'ca_bundle' in config.ssl ? config.ssl.ca_bundle : undefined;
+		const verifies = config.ssl.mode === 'verify-ca' || config.ssl.mode === 'verify-full';
 		let caPath: string | undefined;
 		if (caBundle) {
 			caPath = `${INTEGRATIONS_DIR}/postgres/${instanceName}-ca.pem`;
 			files.push({ path: `postgres/${instanceName}-ca.pem`, content: caBundle });
+		} else if (verifies) {
+			caPath = SYSTEM_CA_BUNDLE;
 		}
 		const query = new URLSearchParams({ sslmode: config.ssl.mode });
 		if (caPath) query.set('sslrootcert', caPath);
