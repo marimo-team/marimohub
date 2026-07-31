@@ -3534,7 +3534,9 @@ export interface paths {
 		delete: {
 			parameters: {
 				query?: never;
-				header?: never;
+				header?: {
+					'if-match'?: string;
+				};
 				path: {
 					pid: string;
 					iid: string;
@@ -3572,6 +3574,15 @@ export interface paths {
 				};
 				/** @description Not found */
 				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Precondition failed (If-Match did not match the current version) */
+				412: {
 					headers: {
 						[name: string]: unknown;
 					};

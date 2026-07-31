@@ -3,6 +3,7 @@ import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import {
 	assertVersionMatch,
+	BadRequestError,
 	NotFoundError,
 	PreconditionFailedError,
 	ValidationError,
@@ -19,7 +20,8 @@ import type {
 	IntegrationEntry,
 	IntegrationProbe,
 	IntegrationsProvider,
-	IntegrationVersionMeta,
+	IntegrationVersionPage,
+	IntegrationVersionPageRequest,
 	KindDescriptor,
 	SessionRender,
 	SessionRenderContext,
@@ -55,6 +57,55 @@ import {
 } from './secretFields';
 import type { StoredSecretValue } from './secretFields';
 import type { IntegrationDefinition } from './sdk';
+
+/** Page size when a caller states none; the API passes its own page policy. */
+const DEFAULT_VERSION_PAGE_SIZE = 100;
+
+/**
+ * A head that no longer matches the caller's `If-Match`, raised from inside a CAS
+ * callback. `withCasRetry` reads a `PreconditionFailedError` as a lost race and
+ * retries it, so the guard escapes the loop wrapped and `update` rethrows the 412.
+ */
+class StaleHeadError extends Error {
+	constructor(readonly precondition: PreconditionFailedError) {
+		super(precondition.message);
+		this.name = 'StaleHeadError';
+	}
+}
+
+function assertHeadUnchanged(current: IntegrationRecord, expected: string | undefined): void {
+	try {
+		assertVersionMatch(current.updated_at, expected);
+	} catch (err) {
+		if (err instanceof PreconditionFailedError) throw new StaleHeadError(err);
+		throw err;
+	}
+}
+
+function versionFromKey(key: string): number {
+	const match = /^(\d+)\.json$/.exec(key.slice(key.lastIndexOf('/') + 1));
+	if (!match) throw new ValidationError(`Invalid integration version key "${key}".`);
+	return Number(match[1]);
+}
+
+/** Opaque keyset cursor: the last version number returned. */
+function encodeVersionCursor(version: number): string {
+	return btoa(String(version));
+}
+
+function decodeVersionCursor(cursor: string | undefined): number | undefined {
+	if (cursor === undefined || cursor === '') return undefined;
+	let version: number | undefined;
+	try {
+		version = Number(atob(cursor));
+	} catch {
+		version = undefined;
+	}
+	if (version === undefined || !Number.isInteger(version) || version < 1) {
+		throw new BadRequestError('Invalid pagination cursor');
+	}
+	return version;
+}
 
 export interface ProjectIntegrationsStoreOptions {
 	bucket: Bucket;
@@ -202,22 +253,34 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 
 		let appended: number | undefined;
 		let updated: IntegrationRecord | undefined;
+		// The version each head CAS must still observe. The early check above only
+		// covers the read; a CAS attempt (including a retry after a lost race) can
+		// see a newer head, and applying its mutation there would silently overwrite
+		// an edit the caller never read. It advances past this PATCH's own rename.
+		let expected = expectedVersion;
 		const transaction = saga(metricsObserver(this.metrics, 'saga.integration_update'));
 		if (newName !== undefined) {
 			transaction
 				.step('rename_head', {
-					do: () =>
-						mutateObject(
+					do: async () => {
+						const renamed = await mutateObject(
 							this.bucket,
 							headPath,
 							parseHead,
-							(current) => ({
-								...current,
-								name: newName,
-								updated_at: nextTimestamp(current.updated_at, this.now()),
-							}),
+							(current) => {
+								assertHeadUnchanged(current, expected);
+								return {
+									...current,
+									name: newName,
+									updated_at: nextTimestamp(current.updated_at, this.now()),
+								};
+							},
 							headNotFound,
-						),
+						);
+						// Only under a precondition: adopting it unguarded would turn an
+						// ordinary PATCH's later CAS into a 412 on any concurrent write.
+						if (expected !== undefined) expected = renamed.updated_at;
+					},
 					compensate: () => this.revertRename(projectId, id, newName, head.name),
 				})
 				.step('claim_name', {
@@ -250,20 +313,28 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 				this.bucket,
 				headPath,
 				parseHead,
-				(current) => ({
-					...current,
-					...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-					// Two concurrent config edits both land in history; the higher version
-					// number wins the pointer regardless of head-commit order.
-					...(appended !== undefined
-						? { current_version: Math.max(current.current_version, appended) }
-						: {}),
-					updated_at: nextTimestamp(current.updated_at, this.now()),
-				}),
+				(current) => {
+					assertHeadUnchanged(current, expected);
+					return {
+						...current,
+						...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+						// Two concurrent config edits both land in history; the higher version
+						// number wins the pointer regardless of head-commit order.
+						...(appended !== undefined
+							? { current_version: Math.max(current.current_version, appended) }
+							: {}),
+						updated_at: nextTimestamp(current.updated_at, this.now()),
+					};
+				},
 				headNotFound,
 			);
 		});
-		await transaction.run();
+		try {
+			await transaction.run();
+		} catch (err) {
+			if (err instanceof StaleHeadError) throw err.precondition;
+			throw err;
+		}
 		if (newName !== undefined) await this.releaseName(projectId, head.name, id);
 		const { version, config } = await this.loadCurrent(projectId, updated!);
 		return this.toDetail(updated!, version, config);
@@ -285,11 +356,20 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		);
 	}
 
-	async delete(projectId: ProjectId, id: IntegrationId): Promise<void> {
+	async delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<void> {
 		let name: string | undefined;
 		try {
-			name = (await this.getHead(projectId, id)).name;
-		} catch {}
+			const head = await this.getHead(projectId, id);
+			// Guarded here rather than at the delete itself: the bucket port has no
+			// conditional delete, so this is the same read-then-act guard the other
+			// delete paths use (`NotebookService.deleteNotebook`).
+			assertVersionMatch(head.updated_at, expectedVersion);
+			name = head.name;
+		} catch (err) {
+			// A missing or unreadable head still sweeps the leftovers below (delete is
+			// idempotent) — but a failed precondition is the caller's answer.
+			if (err instanceof PreconditionFailedError) throw err;
+		}
 		// The head goes FIRST: a concurrent update's head CAS then fails fast and
 		// compensates its own just-appended version, so the sweep below plus that
 		// compensation covers every interleaving.
@@ -302,32 +382,49 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		if (name !== undefined) await this.releaseName(projectId, name, id);
 	}
 
-	async listVersions(projectId: ProjectId, id: IntegrationId): Promise<IntegrationVersionMeta[]> {
+	async listVersions(
+		projectId: ProjectId,
+		id: IntegrationId,
+		page: IntegrationVersionPageRequest = { limit: DEFAULT_VERSION_PAGE_SIZE },
+	): Promise<IntegrationVersionPage> {
 		const head = await this.getHead(projectId, id);
 		const objects = await listAllObjects(
 			this.bucket,
 			paths.project(projectId).integration(id).versionsPrefix,
 		);
-		const records = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (o) => {
+		// The key carries the version number, so the page is chosen from the listing
+		// alone and only its records are read — history is append-only and unbounded,
+		// and every record carries a full config blob.
+		const after = decodeVersionCursor(page.cursor);
+		const remaining = objects
+			.map((o) => ({ key: o.key, version: versionFromKey(o.key) }))
+			.filter((o) => after === undefined || o.version < after)
+			.sort((a, b) => b.version - a.version);
+		const selected = remaining.slice(0, Math.max(page.limit, 1));
+		const records = await mapWithConcurrency(selected, BUCKET_SCAN_CONCURRENCY, async (o) => {
 			const body = await this.bucket.get(o.key);
 			if (!body) return null;
 			const record = parseStored(IntegrationVersionRecordSchema, await body.json(), o.key);
-			const filename = o.key.slice(o.key.lastIndexOf('/') + 1);
-			const match = /^(\d+)\.json$/.exec(filename);
-			if (!match) throw new ValidationError(`Invalid integration version key "${o.key}".`);
-			this.assertVersionIdentity(head, Number(match[1]), record, o.key);
+			this.assertVersionIdentity(head, o.version, record, o.key);
 			return record;
 		});
-		return records
-			.filter((r) => r !== null)
-			.sort((a, b) => b.version - a.version)
-			.map((r) => ({
-				version: r.version,
-				kind_schema_version: r.kind_schema_version,
-				created_by: r.created_by,
-				created_at: r.created_at,
-				...(r.change_note ? { change_note: r.change_note } : {}),
-			}));
+		const last = selected[selected.length - 1];
+		return {
+			items: records
+				.filter((r) => r !== null)
+				.sort((a, b) => b.version - a.version)
+				.map((r) => ({
+					version: r.version,
+					kind_schema_version: r.kind_schema_version,
+					created_by: r.created_by,
+					created_at: r.created_at,
+					...(r.change_note ? { change_note: r.change_note } : {}),
+				})),
+			// Keyed off the last selected KEY, not the last returned record, so a
+			// version deleted underneath us cannot truncate the history early.
+			next_cursor:
+				last && remaining.length > selected.length ? encodeVersionCursor(last.version) : null,
+		};
 	}
 
 	async test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult> {

@@ -1,8 +1,28 @@
+import type * as dnsPromises from 'node:dns/promises';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGuardedProbe } from './integrationProbe';
 import type { ProbeTransportRequest } from './integrationProbe';
+
+type PinnedAddress = { address: string; family: number };
+type Lookup = (
+	hostname: string,
+	options: { all: true; verbatim: true },
+) => Promise<PinnedAddress[]>;
+
+/** Real resolution, optionally slowed down, so DNS cost is observable in tests. */
+const dns = vi.hoisted(() => ({ delayMs: 0 }));
+vi.mock('node:dns/promises', async (importOriginal) => {
+	const actual = await importOriginal<typeof dnsPromises>();
+	return {
+		...actual,
+		lookup: async (hostname: string, options: { all: true; verbatim: true }) => {
+			if (dns.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, dns.delayMs));
+			return (actual.lookup as unknown as Lookup)(hostname, options);
+		},
+	};
+});
 
 /** Captures the request after target validation and address pinning. */
 function stubTransport(status = 200, body = '{}') {
@@ -17,6 +37,7 @@ function stubTransport(status = 200, body = '{}') {
 afterEach(() => {
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
+	dns.delayMs = 0;
 });
 
 describe('createGuardedProbe policy', () => {
@@ -109,12 +130,34 @@ describe('createGuardedProbe policy', () => {
 		});
 	});
 
-	it('rate-limits probes per process', async () => {
+	it('rate-limits probes per probe instance', async () => {
 		const { transport } = stubTransport();
 		const probe = createGuardedProbe({ transport, allowPrivate: true, maxProbesPerMinute: 2 });
 		await probe.fetch('http://10.0.0.5/');
 		await probe.fetch('http://10.0.0.5/');
 		await expect(probe.fetch('http://10.0.0.5/')).rejects.toThrow(/Too many/);
+
+		// The budget belongs to the instance, not the module: `createFromEnv` builds
+		// exactly one probe per process, which is what makes it the process cap.
+		const second = createGuardedProbe({ transport, allowPrivate: true, maxProbesPerMinute: 2 });
+		await expect(second.fetch('http://10.0.0.5/')).resolves.toMatchObject({ ok: true });
+	});
+
+	it('spends ONE deadline across resolution and transport', async () => {
+		dns.delayMs = 60;
+		const { transport, calls } = stubTransport();
+		const probe = createGuardedProbe({ transport, allowPrivate: true, timeoutMs: 200 });
+		await probe.fetch('http://localhost:9/');
+		expect(calls[0].timeoutMs).toBeLessThanOrEqual(140);
+		expect(calls[0].timeoutMs).toBeGreaterThan(0);
+	});
+
+	it('fails without connecting when resolution alone exhausts the deadline', async () => {
+		dns.delayMs = 200;
+		const { transport } = stubTransport();
+		const probe = createGuardedProbe({ transport, allowPrivate: true, timeoutMs: 30 });
+		await expect(probe.fetch('http://localhost:9/')).rejects.toThrow(/timed out/);
+		expect(transport).not.toHaveBeenCalled();
 	});
 
 	it('restores probe budget after the sliding window expires', async () => {

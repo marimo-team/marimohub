@@ -153,6 +153,53 @@ describe('pruneForSubmit', () => {
 		});
 	});
 
+	it('drops an empty optional array with no default, keeping defaulted and required ones', () => {
+		const item: JsonSchemaNode = {
+			type: 'object',
+			required: ['value'],
+			properties: { value: { type: 'string' } },
+		};
+		const arraySchema: JsonSchemaNode = {
+			type: 'object',
+			required: ['tags'],
+			properties: {
+				// `z.array(...).min(1).optional()`: the server rejects `[]`.
+				encoding: { type: 'array', items: item },
+				// `z.array(...).default([])`: an empty list is a legal, deliberate value.
+				client_tags: { type: 'array', items: item, default: [] },
+				tags: { type: 'array', items: item },
+			},
+		};
+		expect(pruneForSubmit(arraySchema, { encoding: [], client_tags: [], tags: [] })).toEqual({
+			client_tags: [],
+			tags: [],
+		});
+		expect(
+			pruneForSubmit(arraySchema, { encoding: [{ value: 'json' }], client_tags: [], tags: [] }),
+		).toEqual({ encoding: [{ value: 'json' }], client_tags: [], tags: [] });
+	});
+
+	it('drops an empty optional array nested in the selected union branch', () => {
+		const unionSchema: JsonSchemaNode = {
+			oneOf: [
+				{
+					type: 'object',
+					required: ['method'],
+					properties: {
+						method: { type: 'string', const: 'spool' },
+						encoding: {
+							type: 'array',
+							items: { type: 'object', properties: { value: { type: 'string' } } },
+						},
+					},
+				},
+			],
+		};
+		expect(pruneForSubmit(unionSchema, { method: 'spool', encoding: [] })).toEqual({
+			method: 'spool',
+		});
+	});
+
 	it('drops an empty optional string but keeps a non-empty one', () => {
 		const optionalStringSchema: JsonSchemaNode = {
 			type: 'object',

@@ -109,9 +109,11 @@ with (restart the session to apply).
 
 Secret config fields (passwords, tokens) are encrypted at rest with the
 deployment's managed-secret KEK and never returned by any API — responses show
-`{ "$secret": { "set": true } }`. Set `MARIMOHUB_SECRETS_KEK` (≥ 32 chars,
-high-entropy) to enable them; without it, only secret-free configs can be saved
-and the error names the missing variable. The KEK is shared with
+`{ "$secret": { "set": true } }`. Set `MARIMOHUB_SECRETS_KEK` to enable them —
+32+ random bytes encoded as base64 or hex, e.g. `openssl rand -base64 32`. A
+passphrase is rejected at startup, because the hub applies no password
+stretching to it. Without a KEK, only secret-free configs can be saved and the
+error names the missing variable. The KEK is shared with
 [managed project secrets](./secrets.md).
 
 ## Failure model
@@ -126,6 +128,15 @@ while you fix it.
 Env-name precedence when sources collide: project secrets < integrations <
 hub-injected vars (WIF, AI, system) — user-supplied values can never shadow the
 hub's own.
+
+A few PyIceberg settings (`legacy-current-snapshot-id`, `max-workers`) apply to
+the whole process, not to one catalog, so two Iceberg integrations in the same
+project must agree on them. They cannot be reconciled automatically — choosing
+one value would change how the other integration reads data — so a disagreement
+fails the session with an error naming both integrations and both values. Note
+that the BigQuery catalog requires `legacy-current-snapshot-id`, so it cannot
+share a project with a catalog that disables it. Align the values or disable one
+of the two.
 
 ## Configuration
 

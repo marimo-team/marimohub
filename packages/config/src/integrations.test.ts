@@ -55,7 +55,10 @@ describe('makeIntegrations', () => {
 		await expect(noKek?.create(pid, input, ACTOR)).rejects.toThrow(/MARIMOHUB_SECRETS_KEK/);
 
 		const withKek = makeIntegrations(
-			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_SECRETS_KEK: 'k'.repeat(32) },
+			{
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_SECRETS_KEK: 'sBN3HR4/RHc81JkWZ794UoUuUnPEHvt7zvkBjjbTWk0=',
+			},
 			new MemoryBucket(),
 		).integrations;
 		const detail = await withKek?.create(pid, input, ACTOR);

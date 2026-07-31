@@ -1,10 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AesGcmSecretCodec, defaultRegistry, ProjectIntegrationsStore } from '@marimo-hub/core';
+import type { UserId } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import { trackedTestBudgets } from './integrations';
 
-const codec = new AesGcmSecretCodec({ kek: 'route-test-kek-'.padEnd(32, 'x') });
+const codec = new AesGcmSecretCodec({ kek: '/ECMzY/eM7nlHPPNu+OM2wv0lWiFuHUScSJxNmh64N8=' });
 
 function integrationsDeps(bucket: MemoryBucket) {
 	return {
@@ -66,7 +68,7 @@ describe('Integrations routes', () => {
 		const pg = kinds.find((k) => k.kind === 'postgres');
 		expect(pg).toMatchObject({
 			category: 'database',
-			schema_version: 1,
+			schema_version: 2,
 			json_schema: { type: 'object' },
 		});
 	});
@@ -200,6 +202,26 @@ describe('Integrations routes', () => {
 				{ 'if-match': `"${fresh.updated_at}"` },
 			),
 		);
+	});
+
+	it('DELETE honors If-Match: stale token → 412, fresh ETag → 200', async () => {
+		const pid = await createProject();
+		const created = await createPg(pid);
+		await expectError(
+			await request('DELETE', `/projects/${pid}/integrations/${created.id}`, undefined, {
+				'if-match': '"1999-01-01T00:00:00.000Z"',
+			}),
+			412,
+		);
+		const fresh = await expectOk<{ updated_at: string }>(
+			await request('GET', `/projects/${pid}/integrations/${created.id}`),
+		);
+		await expectOk(
+			await request('DELETE', `/projects/${pid}/integrations/${created.id}`, undefined, {
+				'if-match': `"${fresh.updated_at}"`,
+			}),
+		);
+		await expectError(await request('GET', `/projects/${pid}/integrations/${created.id}`), 404);
 	});
 
 	it('enabled toggle and rename append no version', async () => {
@@ -493,5 +515,37 @@ describe('Integrations routes', () => {
 		}
 		await expectError(await firstReq('POST', `/projects/${pid}/integrations/test`, body), 429);
 		await expectError(await secondReq('POST', `/projects/${pid}/integrations/test`, body), 422);
+	});
+
+	it('forgets probe budgets once their window expires', async () => {
+		const pid = await createProject();
+		const stale = uid('user_rate_stale');
+		const active = uid('user_rate_active');
+		for (const user_id of [stale, active]) {
+			await expectOk(
+				await request('POST', `/projects/${pid}/members`, { user_id, role: 'admin' }),
+				201,
+			);
+		}
+		const probe = (userId: UserId) =>
+			createTestApi({ bucket, userId, deps: integrationsDeps(bucket) }).request(
+				'POST',
+				`/projects/${pid}/integrations/test`,
+				{ kind: 'postgres', config: PG_CONFIG },
+			);
+
+		// Only `Date` is faked: the request path still needs real timers.
+		const base = Date.now();
+		vi.useFakeTimers({ toFake: ['Date'] });
+		try {
+			vi.setSystemTime(base + 1_000);
+			await expectError(await probe(stale), 422);
+			vi.setSystemTime(base + 62_000);
+			await expectError(await probe(active), 422);
+			// Everyone from before the window is gone; only the live prober is held.
+			expect(trackedTestBudgets()).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronRight, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { TextField as AriaTextField, FieldError, Label, TextArea } from 'react-aria-components';
 import { Button, IconButton, TextField } from '@/components/ui';
 import { cn } from '@/lib/utils';
 import {
@@ -155,6 +156,19 @@ function SchemaField(props: SchemaFieldProps) {
 					/>
 				);
 			}
+			if (hint?.widget === 'textarea') {
+				return (
+					<FieldShell description={node.description}>
+						<TextAreaField
+							label={label}
+							placeholder={placeholderFor(node, hint)}
+							value={typeof value === 'string' ? value : ''}
+							onChange={onChange}
+							error={error}
+						/>
+					</FieldShell>
+				);
+			}
 			return (
 				<FieldShell description={node.description}>
 					<TextField
@@ -167,6 +181,45 @@ function SchemaField(props: SchemaFieldProps) {
 				</FieldShell>
 			);
 	}
+}
+
+/**
+ * Multi-line counterpart of `TextField` for `widget: 'textarea'` hints: PEM
+ * bundles and `krb5.conf` contents lose their newlines in a single-line input.
+ */
+function TextAreaField({
+	label,
+	placeholder,
+	value,
+	onChange,
+	error,
+}: {
+	label: string;
+	placeholder?: string;
+	value: string;
+	onChange: (next: string) => void;
+	error?: string;
+}) {
+	return (
+		<AriaTextField
+			className="flex flex-col gap-1.5"
+			isInvalid={!!error}
+			value={value}
+			onChange={onChange}
+		>
+			<Label className="text-xs font-medium text-muted-foreground">{label}</Label>
+			<TextArea
+				placeholder={placeholder}
+				rows={4}
+				className={cn(
+					'w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground shadow-sm transition-colors',
+					'placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+					'data-[invalid]:border-destructive data-[invalid]:focus-visible:ring-destructive',
+				)}
+			/>
+			{error && <FieldError className="text-xs text-destructive">{error}</FieldError>}
+		</AriaTextField>
+	);
 }
 
 /** Renders a discriminated union as a branch selector and its active fields. */

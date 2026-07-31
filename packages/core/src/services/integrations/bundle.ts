@@ -4,6 +4,7 @@ import { ValidationError } from '../../errors';
 import type { IntegrationId, SessionId } from '../../ids';
 import type { SessionRender } from '../../ports/integrations';
 import type { RenderOutput } from './sdk';
+import { CODE_EXECUTION_ENV, SHELL_BASICS_ENV } from '../secrets/secretName';
 import { stringify } from 'yaml';
 
 /** Sandbox directory containing rendered integration files. */
@@ -16,23 +17,12 @@ export const INTEGRATIONS_DIR_ENV = 'MARIMOHUB_INTEGRATIONS_DIR';
  * basics. Narrower than the project-secret blocklist on purpose — kinds are hub
  * code and legitimately set tool vars (`PYICEBERG_HOME`) and `MARIMOHUB_*`.
  */
-const FORBIDDEN_ENV = new Set([
-	'PATH',
-	'HOME',
-	'PWD',
-	'LANG',
-	'IFS',
-	'LD_PRELOAD',
-	'LD_LIBRARY_PATH',
-	'DYLD_INSERT_LIBRARIES',
-	'PYTHONSTARTUP',
-	'PYTHONPATH',
-	'NODE_OPTIONS',
-	'BASH_ENV',
-	'ENV',
-]);
+const FORBIDDEN_ENV = new Set<string>([...SHELL_BASICS_ENV, ...CODE_EXECUTION_ENV]);
 
 const ENV_NAME_REGEX = /^[A-Z_][A-Z0-9_]*$/;
+
+/** Owner label for the env vars and files the bundler itself contributes. */
+const BUNDLER = 'marimohub';
 
 /**
  * Instance names parameterize rendered file paths and env fragments, so they
@@ -64,34 +54,25 @@ export function bundleIntegrations(
 	sessionId: SessionId,
 ): SessionRender {
 	const files: SessionRender['files'] = [];
-	const fileOwner = new Map<string, string>();
 	const yamlFiles = new Map<string, { value: Record<string, unknown>; owners: string[] }>();
-	const vars: Record<string, string> = {};
-	const varOwner = new Map<string, string>();
+	const claimPath = pathClaimer();
+	// Claimed up front so a kind emitting the bundler's own key gets the normal
+	// collision error instead of having its value silently overwritten.
+	const vars: Record<string, string> = { [INTEGRATIONS_DIR_ENV]: INTEGRATIONS_DIR };
+	const varOwner = new Map<string, string>([[INTEGRATIONS_DIR_ENV, BUNDLER]]);
 
 	for (const item of rendered) {
 		for (const file of item.output.files ?? []) {
 			const path = normalizeRelativePath(file.path, item.name);
-			const owner = fileOwner.get(path) ?? yamlFiles.get(path)?.owners[0];
-			if (owner) {
-				throw new ValidationError(
-					`Integrations "${owner}" and "${item.name}" both render "${path}".`,
-				);
-			}
-			fileOwner.set(path, item.name);
+			claimPath(path, item.name, false);
 			files.push({ path: `${INTEGRATIONS_DIR}/${path}`, content: file.content });
 		}
 		for (const file of item.output.yamlFiles ?? []) {
 			const path = normalizeRelativePath(file.path, item.name);
-			const owner = fileOwner.get(path);
-			if (owner) {
-				throw new ValidationError(
-					`Integrations "${owner}" and "${item.name}" both render "${path}".`,
-				);
-			}
+			claimPath(path, item.name, true);
 			const existing = yamlFiles.get(path);
 			if (existing) {
-				existing.value = mergeYaml(existing.value, file.value, path);
+				existing.value = mergeYaml(existing.value, file.value, path, existing.owners, item.name);
 				existing.owners.push(item.name);
 			} else {
 				yamlFiles.set(path, { value: structuredClone(file.value), owners: [item.name] });
@@ -134,7 +115,6 @@ export function bundleIntegrations(
 		path: `${INTEGRATIONS_DIR}/manifest.json`,
 		content: `${JSON.stringify(manifest, null, '\t')}\n`,
 	});
-	vars[INTEGRATIONS_DIR_ENV] = INTEGRATIONS_DIR;
 
 	return {
 		files,
@@ -143,10 +123,64 @@ export function bundleIntegrations(
 	};
 }
 
+/**
+ * Tracks rendered paths and the directories they imply. A path may be claimed
+ * twice only when both claims are `shared` (YAML fragments, which the bundler
+ * merges); anything else — including a file that sits on another file's path
+ * prefix, which the sandbox could not materialize — is a collision.
+ */
+function pathClaimer(): (path: string, instance: string, shared: boolean) => void {
+	const fileOwner = new Map<string, { owner: string; shared: boolean }>();
+	const dirOwner = new Map<string, { owner: string; path: string }>();
+
+	return (path, instance, shared) => {
+		const asDirectory = dirOwner.get(path);
+		if (asDirectory) {
+			throw nestedPathError(instance, path, asDirectory.owner, asDirectory.path);
+		}
+		const claim = fileOwner.get(path);
+		if (claim && !(claim.shared && shared)) {
+			throw new ValidationError(
+				`Integrations "${claim.owner}" and "${instance}" both render "${path}".`,
+			);
+		}
+		const segments = path.split('/');
+		for (let i = 1; i < segments.length; i++) {
+			const dir = segments.slice(0, i).join('/');
+			const dirClaim = fileOwner.get(dir);
+			if (dirClaim) throw nestedPathError(dirClaim.owner, dir, instance, path);
+			if (!dirOwner.has(dir)) dirOwner.set(dir, { owner: instance, path });
+		}
+		if (!claim) fileOwner.set(path, { owner: instance, shared });
+	};
+}
+
+function nestedPathError(
+	fileInstance: string,
+	filePath: string,
+	nestedInstance: string,
+	nestedPath: string,
+): ValidationError {
+	return new ValidationError(
+		`Integrations "${fileInstance}" and "${nestedInstance}" render conflicting paths: ` +
+			`"${filePath}" is a file, but "${nestedPath}" needs it to be a directory.`,
+	);
+}
+
+/**
+ * Fail closed on disagreement rather than picking a winner: some PyIceberg root
+ * properties (`legacy-current-snapshot-id`, `max-workers`) are process-wide, so
+ * silently choosing one integration's value would change how the OTHER one
+ * reads data. The message names both integrations and both values because this
+ * surfaces at session launch, where the admin has no other clue which pair to
+ * reconcile.
+ */
 function mergeYaml(
 	left: Record<string, unknown>,
 	right: Record<string, unknown>,
 	path: string,
+	leftOwners: string[],
+	rightOwner: string,
 ): Record<string, unknown> {
 	const merged = { ...left };
 	for (const [key, value] of Object.entries(right)) {
@@ -154,9 +188,14 @@ function mergeYaml(
 		if (previous === undefined) {
 			merged[key] = structuredClone(value);
 		} else if (isPlainObject(previous) && isPlainObject(value)) {
-			merged[key] = mergeYaml(previous, value, `${path}:${key}`);
+			merged[key] = mergeYaml(previous, value, `${path}:${key}`, leftOwners, rightOwner);
 		} else if (JSON.stringify(previous) !== JSON.stringify(value)) {
-			throw new ValidationError(`Rendered YAML fragments conflict at "${path}:${key}".`);
+			throw new ValidationError(
+				`Integrations "${leftOwners.join('", "')}" and "${rightOwner}" disagree on ` +
+					`"${key}" in ${path}: ${JSON.stringify(previous)} vs ${JSON.stringify(value)}. ` +
+					'This setting applies to the whole session, so the two cannot run together — ' +
+					'align the value or disable one of them.',
+			);
 		}
 	}
 	return merged;

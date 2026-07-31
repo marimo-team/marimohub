@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { NotFoundError, PreconditionFailedError, ValidationError } from '../../errors';
+import {
+	BadRequestError,
+	NotFoundError,
+	PreconditionFailedError,
+	ValidationError,
+} from '../../errors';
 import { createProjectId, createSessionId } from '../../ids';
 import type { ProjectId, SessionId } from '../../ids';
 import { paths } from '../../paths';
@@ -14,7 +19,7 @@ import { IntegrationRegistry } from './registry';
 import { defineIntegration, envSegment } from './sdk';
 import { zSecret } from './secretFields';
 
-const codec = new AesGcmSecretCodec({ kek: 'test-kek-'.padEnd(32, 'x') });
+const codec = new AesGcmSecretCodec({ kek: 'sFjp5R6eWYvc9SGtfeYEsQQlMKB8MfP4FdFAD7JAjsw=' });
 
 /** Test kind with a secret field and deterministic env/file output. */
 const echoKind = defineIntegration({
@@ -51,6 +56,12 @@ function makeStore(bucket: MemoryBucket, withCodec = true) {
 		codec: withCodec ? codec : undefined,
 		probe: stubProbe,
 	});
+}
+
+/** A strictly ticking clock, so consecutive writes never share an `updated_at`. */
+function ticking(): () => string {
+	let tick = 0;
+	return () => new Date(1_700_000_000_000 + ++tick * 1000).toISOString();
 }
 
 const renderContext = (sessionId: SessionId) => ({
@@ -120,7 +131,7 @@ describe('ProjectIntegrationsStore', () => {
 		expect(updated.change_note).toBe('rotate');
 
 		const versions = await store.listVersions(pid, created.id);
-		expect(versions.map((v) => v.version)).toEqual([2, 1]);
+		expect(versions.items.map((v) => v.version)).toEqual([2, 1]);
 
 		// Appending version 2 must not rewrite version 1.
 		const v1 = await bucket.get(paths.project(pid).integration(created.id).version(1));
@@ -159,7 +170,7 @@ describe('ProjectIntegrationsStore', () => {
 		const detail = await store.get(pid, created.id);
 		expect(detail.current_version).toBe(3);
 		const versions = await store.listVersions(pid, created.id);
-		expect(versions.map((v) => v.version)).toEqual([3, 2, 1]);
+		expect(versions.items.map((v) => v.version)).toEqual([3, 2, 1]);
 	});
 
 	it('create removes its version when writing the head fails', async () => {
@@ -512,7 +523,7 @@ describe('ProjectIntegrationsStore', () => {
 
 			const detail = await store.get(pid, a.id);
 			expect(detail).toMatchObject({ name: 'aaa', current_version: 1 });
-			expect((await store.listVersions(pid, a.id)).map((v) => v.version)).toEqual([1]);
+			expect((await store.listVersions(pid, a.id)).items.map((v) => v.version)).toEqual([1]);
 			// The old name is still claimed; the target name never was.
 			await expect(
 				store.create(pid, { kind: 'echo', name: 'aaa', config: { token: 't' } }, ACTOR),
@@ -540,7 +551,7 @@ describe('ProjectIntegrationsStore', () => {
 			const detail = await store.get(pid, a.id);
 			expect(detail).toMatchObject({ name: 'aaa', current_version: 1 });
 			expect(detail.config.greeting).toBe('hi');
-			expect((await store.listVersions(pid, a.id)).map((v) => v.version)).toEqual([1]);
+			expect((await store.listVersions(pid, a.id)).items.map((v) => v.version)).toEqual([1]);
 		});
 
 		it('an update racing a delete compensates its own appended version', async () => {
@@ -625,7 +636,7 @@ describe('ProjectIntegrationsStore', () => {
 				name: 'before',
 				current_version: 1,
 			});
-			expect((await base.listVersions(pid, created.id)).map((v) => v.version)).toEqual([1]);
+			expect((await base.listVersions(pid, created.id)).items.map((v) => v.version)).toEqual([1]);
 			await base.create(pid, { kind: 'echo', name: 'after', config: { token: 't' } }, ACTOR);
 		});
 	});
@@ -654,6 +665,159 @@ describe('ProjectIntegrationsStore', () => {
 			store.update(pid, created.id, { enabled: true }, ACTOR, created.updated_at),
 		).rejects.toThrow(PreconditionFailedError);
 		await store.update(pid, created.id, { enabled: true }, ACTOR, fresh.updated_at);
+	});
+
+	describe('If-Match under a losing head CAS', () => {
+		/** A store whose head CAS lets `interloper` commit before its first attempt lands. */
+		function racingStore(inner: ProjectIntegrationsStore, interloper: () => Promise<unknown>) {
+			let raced = false;
+			const wrapped: Bucket = {
+				get: (key) => bucket.get(key),
+				head: (key) => bucket.head(key),
+				delete: (key) => bucket.delete(key),
+				list: (options) => bucket.list(options),
+				put: async (key, value, options) => {
+					if (key.endsWith('/integration.json') && options?.onlyIfEtagMatches && !raced) {
+						raced = true;
+						await interloper();
+					}
+					return bucket.put(key, value, options);
+				},
+			};
+			const registry = new IntegrationRegistry();
+			registry.register(echoKind);
+			return new ProjectIntegrationsStore({
+				bucket: wrapped,
+				registry,
+				codec,
+				probe: stubProbe,
+				now: ticking(),
+			});
+		}
+
+		function makeInner() {
+			const registry = new IntegrationRegistry();
+			registry.register(echoKind);
+			return new ProjectIntegrationsStore({
+				bucket,
+				registry,
+				codec,
+				probe: stubProbe,
+				now: ticking(),
+			});
+		}
+
+		it('the CAS retry re-checks the token instead of clobbering the newer head', async () => {
+			const inner = makeInner();
+			const created = await inner.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { token: 't' } },
+				ACTOR,
+			);
+			// Both PATCHes carry the token from `created`; the interloper commits first.
+			const store = racingStore(inner, () =>
+				inner.update(pid, created.id, { name: 'winner' }, ACTOR, created.updated_at),
+			);
+
+			await expect(
+				store.update(pid, created.id, { enabled: false }, ACTOR, created.updated_at),
+			).rejects.toThrow(PreconditionFailedError);
+			expect(await inner.get(pid, created.id)).toMatchObject({ name: 'winner', enabled: true });
+		});
+
+		it('a stale rename commits neither the name nor its claim', async () => {
+			const inner = makeInner();
+			const created = await inner.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { token: 't' } },
+				ACTOR,
+			);
+			const store = racingStore(inner, () =>
+				inner.update(pid, created.id, { enabled: false }, ACTOR, created.updated_at),
+			);
+
+			await expect(
+				store.update(pid, created.id, { name: 'renamed' }, ACTOR, created.updated_at),
+			).rejects.toThrow(PreconditionFailedError);
+			expect(await inner.get(pid, created.id)).toMatchObject({ name: 'prod', enabled: false });
+			await inner.create(pid, { kind: 'echo', name: 'renamed', config: { token: 't' } }, ACTOR);
+		});
+	});
+
+	it('delete honors the If-Match precondition and stays idempotent', async () => {
+		const registry = new IntegrationRegistry();
+		registry.register(echoKind);
+		const store = new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			probe: stubProbe,
+			now: ticking(),
+		});
+		const created = await store.create(
+			pid,
+			{ kind: 'echo', name: 'prod', config: { token: 't' } },
+			ACTOR,
+		);
+		const updated = await store.update(pid, created.id, { enabled: false }, ACTOR);
+
+		await expect(store.delete(pid, created.id, created.updated_at)).rejects.toThrow(
+			PreconditionFailedError,
+		);
+		expect(await store.get(pid, created.id)).toMatchObject({ name: 'prod' });
+
+		await store.delete(pid, created.id, updated.updated_at);
+		await expect(store.get(pid, created.id)).rejects.toThrow(NotFoundError);
+		// Already gone: a stale token must not turn the idempotent replay into a 412.
+		await store.delete(pid, created.id, created.updated_at);
+	});
+
+	it('listVersions pages newest-first and reads only the requested page', async () => {
+		const versionReads: string[] = [];
+		const counting: Bucket = {
+			get: (key) => {
+				if (key.includes('/versions/')) versionReads.push(key);
+				return bucket.get(key);
+			},
+			head: (key) => bucket.head(key),
+			delete: (key) => bucket.delete(key),
+			list: (options) => bucket.list(options),
+			put: (key, value, options) => bucket.put(key, value, options),
+		};
+		const registry = new IntegrationRegistry();
+		registry.register(echoKind);
+		const store = new ProjectIntegrationsStore({ bucket: counting, registry, codec });
+		const created = await store.create(
+			pid,
+			{ kind: 'echo', name: 'prod', config: { token: 't' } },
+			ACTOR,
+		);
+		for (const greeting of ['a', 'b', 'c']) {
+			await store.update(
+				pid,
+				created.id,
+				{ config: { greeting, token: { $secret: { set: true } } } },
+				ACTOR,
+			);
+		}
+
+		versionReads.length = 0;
+		const first = await store.listVersions(pid, created.id, { limit: 2 });
+		expect(first.items.map((v) => v.version)).toEqual([4, 3]);
+		expect(first.next_cursor).not.toBeNull();
+		// The whole history is 4 records; a 2-record page must cost 2 reads.
+		expect(versionReads).toHaveLength(2);
+
+		const rest = await store.listVersions(pid, created.id, {
+			limit: 2,
+			cursor: first.next_cursor ?? undefined,
+		});
+		expect(rest.items.map((v) => v.version)).toEqual([2, 1]);
+		expect(rest.next_cursor).toBeNull();
+
+		await expect(
+			store.listVersions(pid, created.id, { limit: 2, cursor: 'not a cursor' }),
+		).rejects.toThrow(BadRequestError);
 	});
 
 	it('rejects a stale If-Match token when consecutive writes share a timestamp', async () => {

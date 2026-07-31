@@ -131,6 +131,52 @@ describe('SchemaForm', () => {
 	});
 });
 
+describe('textarea widget', () => {
+	// Mirrors Trino/Iceberg REST: the textarea hints sit on union-branch paths
+	// (`tls.ca_bundle`), and their material is multi-line PEM or krb5.conf.
+	const tlsSchema: JsonSchemaNode = {
+		type: 'object',
+		required: ['host'],
+		properties: {
+			host: { type: 'string' },
+			tls: {
+				oneOf: [
+					{
+						type: 'object',
+						required: ['verification', 'ca_bundle'],
+						properties: {
+							verification: { type: 'string', const: 'custom_ca' },
+							ca_bundle: { type: 'string' },
+						},
+					},
+				],
+			},
+		},
+	};
+	const tlsHints: UiHints = { 'tls.ca_bundle': { widget: 'textarea' } };
+
+	function TlsHarness() {
+		const [value, setValue] = useState<Record<string, unknown>>(
+			() => buildDefaults(tlsSchema) as Record<string, unknown>,
+		);
+		return <SchemaForm schema={tlsSchema} hints={tlsHints} value={value} onChange={setValue} />;
+	}
+
+	it('renders a hinted string as a textarea that keeps newlines, leaving others single-line', async () => {
+		const user = userEvent.setup();
+		render(<TlsHarness />);
+		const bundle = screen.getByLabelText('Ca bundle');
+		expect(bundle.tagName).toBe('TEXTAREA');
+		expect(screen.getByLabelText('Host').tagName).toBe('INPUT');
+
+		await user.type(
+			bundle,
+			'-----BEGIN CERTIFICATE-----{enter}abc{enter}-----END CERTIFICATE-----',
+		);
+		expect(bundle).toHaveValue('-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----');
+	});
+});
+
 describe('kv-pairs editor', () => {
 	// A record widget: rows convert via Object.fromEntries, which silently keeps
 	// only the LAST value per key — duplicates/blank names must be called out.

@@ -5,8 +5,10 @@ import { defineIntegration, envSegment, HOSTNAME_REGEX } from '../sdk';
 import { zSecret } from '../secretFields';
 
 const METADATA_KEY_REGEX = /^[0-9a-z_.-]+$/;
+// Spark property names separate words with `.`, `-`, or `_` interchangeably
+// (`spark.foo.api_key`), so all three have to count as a separator here.
 const SENSITIVE_CONFIG_REGEX =
-	/token|credential|password|secret|access[.-]?key|api[.-]?key|authorization|private[.-]?key|account[.-]?key|sas/i;
+	/token|credential|password|secret|access[._-]?key|api[._-]?key|authorization|private[._-]?key|account[._-]?key|sas/i;
 const RESERVED_PARAMETERS = new Set([
 	'token',
 	'use_ssl',

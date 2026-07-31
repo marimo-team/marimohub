@@ -343,7 +343,8 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 		...makeAi(env),
 		// Project secrets (no-op unless MARIMOHUB_SECRETS_BACKEND is configured).
 		...makeSecrets(env, bucket),
-		// Integrations are enabled by default; MARIMOHUB_INTEGRATIONS=off removes the capability.
+		// Project integrations (no-op unless MARIMOHUB_INTEGRATIONS=on — opt-in per the
+		// two-phase rollout note on makeIntegrations).
 		...makeIntegrations(env, bucket, metrics),
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time

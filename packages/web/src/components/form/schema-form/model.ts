@@ -125,8 +125,14 @@ export function pruneForSubmit(node: JsonSchemaNode, value: unknown): unknown {
 		const out: Record<string, unknown> = {};
 		for (const [key, child] of Object.entries(node.properties ?? {})) {
 			const pruned = pruneForSubmit(child, record[key]);
-			if (pruned === '' && !isRequired(node, key) && !isSecretNode(child)) continue;
 			if (pruned === undefined) continue;
+			if (!isRequired(node, key)) {
+				if (pruned === '' && !isSecretNode(child)) continue;
+				// An untouched optional list is empty, and an optional array without a
+				// schema default may forbid `[]` outright (e.g. Trino's `encoding` is
+				// `min(1).optional()`); a declared default means `[]` is a legal choice.
+				if (Array.isArray(pruned) && pruned.length === 0 && child.default === undefined) continue;
+			}
 			out[key] = pruned;
 		}
 		return out;

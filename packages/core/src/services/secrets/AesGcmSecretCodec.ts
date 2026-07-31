@@ -16,15 +16,25 @@ import { fromBase64Url, toBase64Url } from '../../internal/base64url';
 const IV_BYTES = 12;
 
 /**
- * High-entropy KEKs only — this is key material, not a password (no stretching
- * is applied), so a short value would make the whole store brute-forceable.
+ * The KEK must be at least AES-256's own key length of random bytes. Length
+ * alone proves nothing about entropy, hence the encoding requirement below.
  */
-const MIN_KEK_CHARS = 32;
+const MIN_KEK_BYTES = 32;
+
+/**
+ * A degenerate-pattern floor. 32 uniformly random bytes hold ~30 distinct byte
+ * values, so falling under this means a repeated or padded pattern (`'k'*44`),
+ * not key material; a real key clears it with overwhelming probability.
+ */
+const MIN_DISTINCT_BYTES = 16;
+
+const HEX_REGEX = /^(?:[0-9a-f]{2})+$/i;
+const BASE64_REGEX = /^[A-Za-z0-9+/\-_]+={0,2}$/;
 
 const encoder = new TextEncoder();
 
 export interface AesGcmSecretCodecOptions {
-	/** Operator-held key material, not a user password. */
+	/** Operator-held key material, not a user password. See {@link assertKeyMaterial}. */
 	kek: string;
 	/**
 	 * Label stamped on envelopes and checked on decrypt, so a KEK swap fails with
@@ -39,9 +49,7 @@ export class AesGcmSecretCodec implements ManagedSecretCodec {
 	private readonly kekId: Promise<string>;
 
 	constructor(options: AesGcmSecretCodecOptions) {
-		if (options.kek.length < MIN_KEK_CHARS) {
-			throw new Error(`Managed-secret KEK must be at least ${MIN_KEK_CHARS} characters`);
-		}
+		assertKeyMaterial(options.kek);
 		this.kek = options.kek;
 		this.kekId = options.kekId ? Promise.resolve(options.kekId) : fingerprint(options.kek);
 	}
@@ -106,6 +114,45 @@ export class AesGcmSecretCodec implements ManagedSecretCodec {
 			[usage],
 		);
 	}
+}
+
+/**
+ * Rejects anything that is not plainly key material: the KEK must decode from
+ * base64(url) or hex to at least {@link MIN_KEK_BYTES} non-degenerate bytes.
+ * HKDF is a key-derivation function, not a password KDF — nothing here stretches
+ * the input — so a memorable passphrase that merely reaches 32 characters would
+ * leave every managed secret guessable. The message never echoes the value.
+ *
+ * The KEK *string* (not the decoded bytes) remains the HKDF input keying
+ * material: the encoded form carries the same entropy, and re-deriving from the
+ * decoded bytes would invalidate every envelope already in the bucket.
+ */
+function assertKeyMaterial(kek: string): void {
+	const bytes = decodeKey(kek);
+	if (!bytes || bytes.length < MIN_KEK_BYTES || new Set(bytes).size < MIN_DISTINCT_BYTES) {
+		throw new Error(
+			`Managed-secret KEK must be ${MIN_KEK_BYTES}+ random bytes encoded as base64 or hex ` +
+				'(generate one with `openssl rand -base64 32`); a passphrase is rejected because no ' +
+				'password stretching is applied to it. Secrets written under a previously accepted ' +
+				'weak key cannot be decrypted with the new one and must be re-entered.',
+		);
+	}
+}
+
+function decodeKey(kek: string): Uint8Array | undefined {
+	try {
+		if (HEX_REGEX.test(kek)) {
+			const bytes = new Uint8Array(kek.length / 2);
+			for (let i = 0; i < bytes.length; i++) {
+				bytes[i] = Number.parseInt(kek.slice(i * 2, i * 2 + 2), 16);
+			}
+			return bytes;
+		}
+		if (BASE64_REGEX.test(kek)) return fromBase64Url(kek.replace(/=+$/, ''));
+	} catch {
+		return undefined;
+	}
+	return undefined;
 }
 
 /**

@@ -106,7 +106,7 @@ describe('kind renders (golden)', () => {
 		const out = postgres.render(input(FIXTURES.postgres, postgres));
 		expect(out.env).toEqual({
 			MARIMOHUB_PG_PROD_URL:
-				'postgresql://svc%20user:p%40ss%3Aword@db.internal:5432/analytics?sslmode=require',
+				'postgresql://svc%20user:p%40ss%3Aword@db.internal:5432/analytics?sslmode=verify-full',
 			MARIMOHUB_PG_PROD_HOST: 'db.internal',
 			MARIMOHUB_PG_PROD_PORT: '5432',
 			MARIMOHUB_PG_PROD_DATABASE: 'analytics',
@@ -117,6 +117,54 @@ describe('kind renders (golden)', () => {
 		expect(out.files?.[0]?.path).toBe('postgres/prod.json');
 		expect(descriptor.password_env).toBe('MARIMOHUB_PG_PROD_PASSWORD');
 		expect(JSON.stringify(descriptor)).not.toContain('p@ss');
+	});
+
+	it('postgres: brackets an IPv6 literal in the rendered URL but not in the env/descriptor', () => {
+		const config = postgres.configSchema.parse({
+			...(FIXTURES.postgres as object),
+			host: '2001:db8::1',
+		});
+		const out = postgres.render(input(config, postgres));
+		expect(out.env?.MARIMOHUB_PG_PROD_URL).toContain('@[2001:db8::1]:5432/');
+		// libpq's PGHOST-style fields take the bare address.
+		expect(out.env?.MARIMOHUB_PG_PROD_HOST).toBe('2001:db8::1');
+		expect(new URL(out.env?.MARIMOHUB_PG_PROD_URL ?? '').hostname).toBe('[2001:db8::1]');
+	});
+
+	it('postgres: TLS verification is the default and a custom CA lands outside the workspace', () => {
+		const parse = (ssl: unknown) =>
+			postgres.configSchema.parse({ ...(FIXTURES.postgres as object), ssl });
+		const sslmode = (config: unknown) =>
+			new URL(postgres.render(input(config, postgres)).env?.MARIMOHUB_PG_PROD_URL ?? '')
+				.searchParams;
+
+		expect(sslmode(parse(undefined)).get('sslmode')).toBe('verify-full');
+		// `require` encrypts without authenticating the server: opt-in, never implied.
+		expect(sslmode(parse({ mode: 'require' })).get('sslmode')).toBe('require');
+		expect(sslmode(parse({ mode: 'disable' })).get('sslmode')).toBe('disable');
+
+		const withCa = postgres.render(
+			input(parse({ mode: 'verify-full', ca_bundle: 'CA' }), postgres),
+		);
+		const caPath = `${INTEGRATIONS_DIR}/postgres/prod-ca.pem`;
+		expect(new URL(withCa.env?.MARIMOHUB_PG_PROD_URL ?? '').searchParams.get('sslrootcert')).toBe(
+			caPath,
+		);
+		expect(withCa.files?.find(({ path }) => path === 'postgres/prod-ca.pem')?.content).toBe('CA');
+		const descriptor = JSON.parse(
+			withCa.files?.find(({ path }) => path === 'postgres/prod.json')?.content ?? '',
+		) as { ssl: Record<string, unknown> };
+		expect(descriptor.ssl).toEqual({ mode: 'verify-full', ca_path: caPath });
+	});
+
+	it('postgres: the v1 boolean ssl flag migrates to its exact libpq mode', () => {
+		const migrate = (ssl: unknown) =>
+			postgres.migrate?.({ ...(FIXTURES.postgres as object), ssl }, 1) as { ssl: unknown };
+		expect(migrate(true).ssl).toEqual({ mode: 'require' });
+		// v1 `false` emitted no sslmode at all, i.e. libpq's `prefer`.
+		expect(migrate(false).ssl).toEqual({ mode: 'prefer' });
+		expect(migrate(undefined).ssl).toEqual({ mode: 'require' });
+		expect(() => postgres.configSchema.parse(migrate(true))).not.toThrow();
 	});
 
 	it('trino: basic auth rides the URL; auth "none" passes the principal email through', () => {
@@ -335,6 +383,21 @@ describe('kind renders (golden)', () => {
 				parse({ spark_config: { 'spark.hadoop.fs.s3a.secret.key': 'plain-secret' } }),
 			),
 		).toThrow(/secret Spark config/);
+		// Spark property names use `_` as a word separator as freely as `.`/`-`.
+		for (const key of [
+			'api_key',
+			'spark.myservice.access_key',
+			'spark.myservice.private_key',
+			'spark.myservice.account_key',
+		]) {
+			expect(
+				() => pyspark.validate?.(parse({ spark_config: { [key]: 'plain-secret' } })),
+				key,
+			).toThrow(/secret Spark config/);
+		}
+		expect(() =>
+			pyspark.validate?.(parse({ spark_config: { 'spark.sql.shuffle.partitions': '8' } })),
+		).not.toThrow();
 	});
 
 	it('iceberg_rest: emits a PyIceberg catalog block for load_catalog(name)', () => {
@@ -414,6 +477,52 @@ describe('kind renders (golden)', () => {
 			});
 			expect(() => icebergRest.validate?.(config)).toThrow(ValidationError);
 		}
+	});
+
+	it('iceberg_rest rejects credentials and TLS material over cleartext http', () => {
+		const parse = (patch: Record<string, unknown>) =>
+			icebergRest.configSchema.parse({
+				uri: 'http://catalog.internal',
+				auth: { method: 'none' },
+				...patch,
+			});
+		expect(() =>
+			icebergRest.validate?.(parse({ auth: { method: 'bearer_token', token: 'tok' } })),
+		).toThrow(/requires an https:\/\/ URI/);
+		expect(() =>
+			icebergRest.validate?.(parse({ auth: { method: 'basic', username: 'u', password: 'p' } })),
+		).toThrow(/requires an https:\/\/ URI/);
+		expect(() => icebergRest.validate?.(parse({ tls: { ca_bundle: 'CA' } }))).toThrow(
+			/no effect on an http:\/\/ catalog URI/,
+		);
+		expect(() =>
+			icebergRest.validate?.(
+				icebergRest.configSchema.parse({
+					uri: 'https://catalog.internal',
+					auth: {
+						method: 'oauth2_client_credentials',
+						token_endpoint: 'http://idp.internal/token',
+						client_id: 'cid',
+						client_secret: 'csec',
+					},
+				}),
+			),
+		).toThrow(/token endpoint must be https/);
+
+		// Unauthenticated http stays legal, and the opt-in escape hatch unblocks
+		// the rest for local development.
+		expect(() => icebergRest.validate?.(parse({}))).not.toThrow();
+		expect(() =>
+			icebergRest.validate?.(
+				parse({
+					allow_insecure_transport: true,
+					auth: { method: 'bearer_token', token: 'tok' },
+				}),
+			),
+		).not.toThrow();
+		expect(() =>
+			icebergRest.validate?.(icebergRest.configSchema.parse(FIXTURES.iceberg_rest)),
+		).not.toThrow();
 	});
 
 	it('iceberg_rest migrates the v1 delegation and obsolete S3 path-style fields', () => {
@@ -734,6 +843,11 @@ describe('kind renders (golden)', () => {
 			postgres.configSchema.safeParse({ ...(FIXTURES.postgres as object), host }).success;
 		expect(pgHost('db.internal')).toBe(true);
 		expect(pgHost('10.0.0.5')).toBe(true);
+		expect(pgHost('2001:db8::1')).toBe(true);
+		expect(pgHost('::1')).toBe(true);
+		expect(pgHost('[::1]')).toBe(false);
+		expect(pgHost('nothex::1')).toBe(false);
+		expect(pgHost('::1/path')).toBe(false);
 		expect(pgHost('db.internal/path')).toBe(false);
 		expect(pgHost('db.internal:5432')).toBe(false);
 		expect(pgHost('user@db.internal')).toBe(false);
@@ -886,7 +1000,7 @@ describe('cross-kind bundle', () => {
 		});
 		expect(() =>
 			bundleIntegrations([withYaml('first', 'a'), withYaml('second', 'b')], createSessionId()),
-		).toThrow(/conflict/);
+		).toThrow(/Integrations "first" and "second" disagree on "same"/);
 	});
 
 	it.each(['PATH', 'LD_PRELOAD', 'NODE_OPTIONS', 'lowercase', 'HAS-DASH'])(
@@ -1097,6 +1211,33 @@ describe('testConnection goes through the injected probe only', () => {
 		expect(calls[0].init?.headers?.Authorization).toBe('Basic Y2lkOmNzZWM=');
 		expect(calls[0].init?.body).toBe('grant_type=client_credentials&scope=catalog');
 		expect(calls[1].init?.headers?.Authorization).toBe('Bearer tok');
+	});
+
+	it('iceberg_rest: the /v1/config probe survives a URI with a query and fragment', async () => {
+		const { probe, calls } = recordingProbe(() => ({}));
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.internal/api/catalog?tenant=acme#frag',
+			warehouse: 'wh',
+			auth: { method: 'none' },
+		});
+		const result = await icebergRest.testConnection?.(config, probe);
+		expect(result?.ok).toBe(true);
+		expect(calls[0].url).toBe(
+			'https://catalog.internal/api/catalog/v1/config?tenant=acme&warehouse=wh',
+		);
+	});
+
+	it('iceberg_rest: custom TLS material is reported as sandbox-only, never probed', async () => {
+		const { probe, calls } = recordingProbe(() => ({}));
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.internal',
+			auth: { method: 'none' },
+			tls: { ca_bundle: 'CA' },
+		});
+		const result = await icebergRest.testConnection?.(config, probe);
+		expect(result?.ok).toBe(false);
+		expect(result?.details).toMatch(/inside the sandbox/);
+		expect(calls).toHaveLength(0);
 	});
 
 	it('probe failures never echo configured secret values in result details', async () => {

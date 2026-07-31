@@ -52,6 +52,33 @@ describe('secretPaths', () => {
 	it('finds marks inside union branches and array items, deduped', () => {
 		expect(paths.map((p) => p.join('.')).sort()).toEqual(['auth.password', 'secrets.*.value']);
 	});
+
+	it('finds marks inside intersection (allOf) branches', () => {
+		const intersected = z.intersection(
+			z.object({ host: z.string() }),
+			z.object({ token: zSecret() }),
+		);
+		const json = z.toJSONSchema(intersected, { io: 'input' }) as Record<string, unknown>;
+		// Premise: an intersection really does compile to `allOf`.
+		expect(json.allOf).toBeDefined();
+		expect(secretPaths(json).map((p) => p.join('.'))).toEqual(['token']);
+	});
+
+	it('seals a secret that only appears under an intersection', async () => {
+		const intersected = z.intersection(
+			z.object({ host: z.string() }),
+			z.object({ token: zSecret() }),
+		);
+		const json = z.toJSONSchema(intersected, { io: 'input' }) as Record<string, unknown>;
+		const stored = await sealConfig({
+			schema: intersected,
+			paths: secretPaths(json),
+			authoring: { host: 'h', token: 't0ken' },
+			seal: fakeSeal(),
+		});
+		expect(JSON.stringify(stored)).not.toContain('t0ken');
+		expect(redactConfig(stored, secretPaths(json)).token).toEqual(REDACTED_SECRET);
+	});
 });
 
 describe('sealConfig / openConfig / redactConfig', () => {
@@ -160,6 +187,89 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		await expect(openConfig({ stored, paths, open: fakeOpen })).rejects.toThrow(
 			/unsupported stored shape/,
 		);
+	});
+});
+
+describe('keep-markers in nested arrays', () => {
+	const nestedSchema = z.object({
+		groups: z.array(
+			z.object({
+				name: z.string(),
+				members: z.array(z.object({ name: z.string(), token: zSecret() })),
+			}),
+		),
+	});
+	const nestedPaths = secretPaths(
+		z.toJSONSchema(nestedSchema, { io: 'input' }) as Record<string, unknown>,
+	);
+	const keep = { $secret: { set: true } };
+
+	it('matches every wildcard level by name across an inner reorder', async () => {
+		const previous = await sealConfig({
+			schema: nestedSchema,
+			paths: nestedPaths,
+			authoring: {
+				groups: [
+					{
+						name: 'g1',
+						members: [
+							{ name: 'm1', token: 't1' },
+							{ name: 'm2', token: 't2' },
+						],
+					},
+					{ name: 'g2', members: [{ name: 'm3', token: 't3' }] },
+				],
+			},
+			seal: fakeSeal(),
+		});
+		const stored = await sealConfig({
+			schema: nestedSchema,
+			paths: nestedPaths,
+			authoring: {
+				groups: [
+					{ name: 'g2', members: [{ name: 'm3', token: keep }] },
+					{
+						name: 'g1',
+						members: [
+							{ name: 'm2', token: keep },
+							{ name: 'm1', token: keep },
+						],
+					},
+				],
+			},
+			previous,
+			seal: fakeSeal(),
+		});
+		expect(await openConfig({ stored, paths: nestedPaths, open: fakeOpen })).toEqual({
+			groups: [
+				{ name: 'g2', members: [{ name: 'm3', token: 't3' }] },
+				{
+					name: 'g1',
+					members: [
+						{ name: 'm2', token: 't2' },
+						{ name: 'm1', token: 't1' },
+					],
+				},
+			],
+		});
+	});
+
+	it('rejects a keep-marker for an inner entry that did not exist', async () => {
+		const previous = await sealConfig({
+			schema: nestedSchema,
+			paths: nestedPaths,
+			authoring: { groups: [{ name: 'g1', members: [{ name: 'm1', token: 't1' }] }] },
+			seal: fakeSeal(),
+		});
+		await expect(
+			sealConfig({
+				schema: nestedSchema,
+				paths: nestedPaths,
+				authoring: { groups: [{ name: 'g1', members: [{ name: 'new', token: keep }] }] },
+				previous,
+				seal: fakeSeal(),
+			}),
+		).rejects.toThrow(/no stored value to keep/);
 	});
 });
 

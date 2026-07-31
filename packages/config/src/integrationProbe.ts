@@ -14,9 +14,14 @@ import type { IntegrationProbe, ProbeRequestInit, ProbeResponse } from '@marimo-
 export interface GuardedProbeOptions {
 	/** Allow private and loopback targets for deployments with on-prem services. */
 	allowPrivate?: boolean;
+	/** One budget for the whole request: DNS resolution AND the transport. */
 	timeoutMs?: number;
 	maxResponseBytes?: number;
-	/** Per-process sliding-window cap shared by all callers. */
+	/**
+	 * Sliding-window cap held by this probe instance. `createFromEnv` builds a
+	 * single probe per process, so that is also the process-wide cap; a second
+	 * instance (tests, a second config) gets its own independent budget.
+	 */
 	maxProbesPerMinute?: number;
 	/** Injectable request layer; defaults to Node's HTTP(S) transport. */
 	transport?: ProbeTransport;
@@ -64,15 +69,23 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 			}
 			recentProbes.push(now);
 
+			// One deadline for the whole test: a slow resolver eats into the transport's
+			// share instead of granting it a fresh timeout (worst case ~2x the limit).
+			const deadline = now + timeoutMs;
 			const target = parseTarget(url);
-			const pinned = await resolveAndValidate(target.hostname, allowPrivate);
+			const pinned = await withDeadline(
+				resolveAndValidate(target.hostname, allowPrivate),
+				deadline,
+			);
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) throw timedOut();
 			const response = await transport({
 				url: target,
 				method: init.method ?? 'GET',
 				headers: init.headers ?? {},
 				body: init.body,
 				pinned,
-				timeoutMs,
+				timeoutMs: remainingMs,
 				maxResponseBytes,
 			});
 			return {
@@ -194,6 +207,21 @@ async function resolveAndValidate(
 		throw forbidden(hostname);
 	}
 	return addresses;
+}
+
+/** `dns.lookup` honours no timeout of its own, so bound it from the outside. */
+function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([
+		work,
+		new Promise<never>((_resolve, reject) => {
+			timer = setTimeout(() => reject(timedOut()), Math.max(0, deadline - Date.now()));
+		}),
+	]).finally(() => clearTimeout(timer));
+}
+
+function timedOut(): Error {
+	return new Error('Connection test timed out.');
 }
 
 function forbidden(hostname: string): Error {

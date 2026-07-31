@@ -4533,6 +4533,12 @@ paths:
           required: true
           name: iid
           in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: false
+          name: if-match
+          in: header
       responses:
         '200':
           description: Integration deleted
@@ -4554,6 +4560,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
           content:
             application/json:
               schema:

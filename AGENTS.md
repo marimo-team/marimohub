@@ -26,8 +26,12 @@ any change.
   — sits behind a TypeScript interface (a _port_). The domain depends on the
   interface, never on a vendor SDK.
 - **`packages/core`** holds the domain model, services, and the port interfaces.
-  It imports **no vendor SDK** (its only deps are the generic utilities `ulidx`,
-  `zod`, and `better-all`).
+  It imports **no vendor SDK** — nothing that speaks to a specific provider or
+  performs I/O. Its deps are generic, side-effect-free utilities only: `ulidx`,
+  `zod`, `better-all`, and the format serializers `smol-toml` and `yaml` (core
+  renders `marimo.toml` and integration config files). A serializer is a pure
+  function, not a vendor, so a port around it would buy no substitutability.
+  Anything that _reaches_ something — a store, a cluster, an IdP — is a port.
 - **Adapters** (`packages/storage-*`, `packages/compute-*`, `packages/auth-*`)
   implement the ports. `packages/api` wires the services to Hono/OpenAPI routes
   via `@hono/zod-openapi`.

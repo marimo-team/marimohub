@@ -26,7 +26,7 @@ import {
 	SuccessResponseSchema,
 } from '../shared';
 import type { ApiDeps } from '../shared';
-import { pageSchema, paginate, PaginationQuery } from '../pagination';
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, pageSchema, PaginationQuery } from '../pagination';
 
 const IntegrationIdParam = ProjectIdParam.extend({
 	iid: z
@@ -228,11 +228,11 @@ const deleteIntegration = createRoute({
 	path: '/projects/{pid}/integrations/{iid}',
 	tags: ['Integrations'],
 	summary: 'Delete an integration and its version history (admin only)',
-	request: { params: IntegrationIdParam },
+	request: { params: IntegrationIdParam, headers: IfMatchHeader },
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'Integration deleted'),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(403, 404, 412),
 	},
 });
 
@@ -380,7 +380,7 @@ app.openapi(deleteIntegration, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
 	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
-	await integrations.delete(pid, iid);
+	await integrations.delete(pid, iid, ifMatchToken(c));
 	await deps.services.events
 		.append({ event: 'integration.delete', actor: user.id, project_id: pid, integration_id: iid })
 		.catch(() => {});
@@ -394,11 +394,11 @@ app.openapi(listIntegrationVersions, async (c) => {
 	const query = c.req.valid('query');
 	const integrations = requireIntegrations(deps);
 	await assertProjectRole(deps.services.projects, pid, user, 'viewer', deps.policy);
-	const versions = await integrations.listVersions(pid, iid);
-	// `paginate` orders descending, so zero-padded version numbers = newest first.
-	const page = paginate(versions, query, {
-		key: (v) => String(v.version).padStart(7, '0'),
-		tiebreak: (v) => String(v.version),
+	// Paged in the store rather than by `paginate`: it reads only this page's
+	// records, never the whole (unbounded) history.
+	const page = await integrations.listVersions(pid, iid, {
+		limit: Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE),
+		cursor: query.cursor,
 	});
 	return c.json({ success: true, data: page }, 200);
 });
@@ -407,16 +407,39 @@ app.openapi(listIntegrationVersions, async (c) => {
 // probe's own global cap, each USER gets a sliding-window budget — one admin
 // cannot starve every other tenant on the replica.
 const TESTS_PER_USER_PER_MINUTE = 10;
+const TEST_WINDOW_MS = 60_000;
 const recentTestsByUser = new Map<string, number[]>();
+let lastSweptAt = 0;
+
+/**
+ * Forget users whose window has fully expired, so the map tracks concurrent
+ * probers rather than every user the replica has ever served. Driven by request
+ * traffic and amortized to once per window — an interval would keep a timer (and
+ * this module's state) alive with no request behind it, in tests and on Workers
+ * alike.
+ */
+function sweepTestBudgets(now: number): void {
+	if (now - lastSweptAt < TEST_WINDOW_MS) return;
+	lastSweptAt = now;
+	for (const [userId, timestamps] of recentTestsByUser) {
+		if (timestamps.every((t) => now - t >= TEST_WINDOW_MS)) recentTestsByUser.delete(userId);
+	}
+}
 
 function assertTestBudget(userId: string): void {
 	const now = Date.now();
-	const recent = (recentTestsByUser.get(userId) ?? []).filter((t) => now - t < 60_000);
+	sweepTestBudgets(now);
+	const recent = (recentTestsByUser.get(userId) ?? []).filter((t) => now - t < TEST_WINDOW_MS);
 	if (recent.length >= TESTS_PER_USER_PER_MINUTE) {
 		throw new ResourceExhaustedError('Too many connection tests — try again in a minute.');
 	}
 	recent.push(now);
 	recentTestsByUser.set(userId, recent);
+}
+
+/** How many users the probe limiter currently holds state for. */
+export function trackedTestBudgets(): number {
+	return recentTestsByUser.size;
 }
 
 app.openapi(testIntegration, async (c) => {

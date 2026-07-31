@@ -406,7 +406,7 @@ Persist secret entries in the deployment bucket (`projects/{pid}/secrets/`). Ref
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_SECRETS_KEK` 🔒 | Operator-held key material (≥ 32 chars, high-entropy) for `managed` values and integration secret fields: the hub derives a per-object AES-256-GCM key from it, so the bucket only ever sees ciphertext. Unset disables managed values (references still work). Losing it makes existing managed values unrecoverable. | — | — | — |
+| `MARIMOHUB_SECRETS_KEK` 🔒 | Operator-held key material — 32+ random bytes encoded as base64 or hex (`openssl rand -base64 32`) — for `managed` values and integration secret fields: the hub derives a per-object AES-256-GCM key from it, so the bucket only ever sees ciphertext. A passphrase is rejected at startup: no password stretching is applied to it, so only real key material is safe here. Unset disables managed values (references still work). Losing it makes existing managed values unrecoverable. | — | — | — |
 | `MARIMOHUB_SECRETS_KEK_ID` | Optional label stamped on envelopes so a KEK swap fails with "unknown KEK" instead of a bare cipher error. Defaults to a fingerprint of the KEK. | — | — | — |
 
 ### AWS Secrets Manager (reference)

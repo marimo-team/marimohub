@@ -75,8 +75,10 @@ export function secretPaths(jsonSchema: Record<string, unknown>): SecretPath[] {
 				walk(child, [...path, key]);
 			}
 		}
-		for (const unionKey of ['oneOf', 'anyOf'] as const) {
-			const branches = record[unionKey];
+		// `allOf` (intersections) contributes every branch, not one of them; the
+		// dedupe above keeps a field marked in two branches from listing twice.
+		for (const combinator of ['oneOf', 'anyOf', 'allOf'] as const) {
+			const branches = record[combinator];
 			if (Array.isArray(branches)) for (const branch of branches) walk(branch, path);
 		}
 		if (record.items !== undefined) walk(record.items, [...path, '*']);
@@ -196,7 +198,8 @@ export async function sealConfig(options: {
 /**
  * Locate the previously-stored value a keep-marker refers to. Object paths map
  * 1:1; array entries are matched by their `name` sibling (identity survives
- * reorder/removal), falling back to the same index for name-less items.
+ * reorder/removal), falling back to the same index for name-less items — at
+ * every wildcard level, not just the outermost one.
  */
 function findPrevious(
 	previous: Record<string, unknown> | undefined,
@@ -205,26 +208,30 @@ function findPrevious(
 	current: Record<string, unknown>,
 ): StoredSecretValue | undefined {
 	if (!previous) return undefined;
-	const star = path.indexOf('*');
-	if (star !== -1) {
-		const itemPath = concrete.slice(0, star + 1);
-		const rest = concrete.slice(star + 1);
-		const item = getAt(current, itemPath);
-		const name =
-			typeof item === 'object' && item !== null
-				? (item as Record<string, unknown>).name
-				: undefined;
-		const prevList = getAt(previous, concrete.slice(0, star));
-		if (!Array.isArray(prevList)) return undefined;
-		const match =
-			typeof name === 'string'
-				? prevList.find((p) => typeof p === 'object' && (p as { name?: unknown })?.name === name)
-				: prevList[concrete[star] as number];
-		const value = getAt(match, rest);
-		return isStoredSecret(value) ? value : undefined;
+	let prev: unknown = previous;
+	let cur: unknown = current;
+	for (const [i, segment] of path.entries()) {
+		const key = concrete[i];
+		if (segment === '*') {
+			if (!Array.isArray(prev)) return undefined;
+			const item = getAt(cur, [key]);
+			const name = isRecord(item) ? item.name : undefined;
+			prev =
+				typeof name === 'string'
+					? prev.find((p) => isRecord(p) && p.name === name)
+					: prev[key as number];
+			cur = item;
+		} else {
+			prev = getAt(prev, [segment]);
+			cur = getAt(cur, [segment]);
+		}
+		if (prev === undefined) return undefined;
 	}
-	const value = getAt(previous, concrete);
-	return isStoredSecret(value) ? value : undefined;
+	return isStoredSecret(prev) ? prev : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
 }
 
 /** Replaces stored secret envelopes with API-safe keep markers. */

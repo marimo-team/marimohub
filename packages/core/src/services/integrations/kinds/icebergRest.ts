@@ -54,9 +54,15 @@ const authSchema = z.discriminatedUnion('method', [
 	}),
 ]);
 
+const isInsecureUrl = (url: string) => url.startsWith('http://');
+
 const icebergRestConfig = z.object({
 	uri: httpUrl().describe('REST catalog base URI, e.g. https://catalog.internal/api/catalog'),
 	warehouse: z.string().optional().describe('Warehouse name/path if the server hosts several'),
+	allow_insecure_transport: z
+		.boolean()
+		.default(false)
+		.describe('Allow http:// endpoints to carry credentials — local development only'),
 	auth: authSchema,
 	storage: icebergStorageSchema,
 	runtime: icebergRuntimeSchema,
@@ -127,6 +133,7 @@ export const icebergRest = defineIntegration({
 	uiHints: {
 		uri: { group: 'Connection', order: 1 },
 		warehouse: { group: 'Connection', order: 2 },
+		allow_insecure_transport: { group: 'Connection', order: 3, advanced: true, widget: 'toggle' },
 		auth: { group: 'Authentication', order: 10 },
 		'auth.token': { widget: 'password' },
 		'auth.password': { widget: 'password' },
@@ -146,6 +153,30 @@ export const icebergRest = defineIntegration({
 	validate(config) {
 		if ((config.tls.client_certificate === undefined) !== (config.tls.client_key === undefined)) {
 			throw new ValidationError('TLS client certificate and client key must be provided together.');
+		}
+		if (!config.allow_insecure_transport) {
+			if (isInsecureUrl(config.uri) && config.auth.method !== 'none') {
+				throw new ValidationError(
+					'An authenticated REST catalog requires an https:// URI — bearer tokens, Basic ' +
+						'passwords, and OAuth2 tokens would cross the network in cleartext. Enable ' +
+						'allow_insecure_transport to override for local development.',
+				);
+			}
+			if (
+				isInsecureUrl(config.uri) &&
+				(config.tls.ca_bundle !== undefined || config.tls.client_certificate !== undefined)
+			) {
+				throw new ValidationError('TLS material has no effect on an http:// catalog URI.');
+			}
+			if (
+				config.auth.method === 'oauth2_client_credentials' &&
+				isInsecureUrl(config.auth.token_endpoint)
+			) {
+				throw new ValidationError(
+					'The OAuth2 token endpoint must be https:// — the client secret is sent to it as ' +
+						'Basic auth. Enable allow_insecure_transport to override for local development.',
+				);
+			}
 		}
 		for (const [key, value] of Object.entries(config.headers)) {
 			if (!/^[A-Za-z0-9-]+$/.test(key)) {
@@ -257,6 +288,15 @@ export const icebergRest = defineIntegration({
 				details: `${config.auth.method} authentication can only be exercised inside the sandbox`,
 			};
 		}
+		// The probe has no seam for per-connection TLS material, so it would test a
+		// different (hub-trusted) connection than the sandbox will make.
+		if (config.tls.ca_bundle !== undefined || config.tls.client_certificate !== undefined) {
+			return {
+				ok: false,
+				latency_ms: 0,
+				details: 'a custom CA or client certificate can only be exercised inside the sandbox',
+			};
+		}
 		try {
 			const headers: Record<string, string> = { ...config.headers };
 			if (config.auth.method === 'bearer_token') {
@@ -274,10 +314,7 @@ export const icebergRest = defineIntegration({
 				}
 				headers.Authorization = `Bearer ${token.value}`;
 			}
-			const url = `${config.uri.replace(/\/$/, '')}/v1/config${
-				config.warehouse ? `?warehouse=${encodeURIComponent(config.warehouse)}` : ''
-			}`;
-			const res = await probe.fetch(url, { headers });
+			const res = await probe.fetch(configEndpoint(config.uri, config.warehouse), { headers });
 			const latency_ms = Math.round(performance.now() - start);
 			return res.ok
 				? { ok: true, latency_ms, details: 'catalog reachable' }
@@ -291,6 +328,18 @@ export const icebergRest = defineIntegration({
 		}
 	},
 });
+
+/**
+ * `/v1/config` under the catalog URI's path. String concatenation would append
+ * the suffix to a query or fragment instead ("…/api?tenant=1/v1/config").
+ */
+function configEndpoint(uri: string, warehouse?: string): string {
+	const url = new URL(uri);
+	url.hash = '';
+	url.pathname = `${url.pathname.replace(/\/+$/, '')}/v1/config`;
+	if (warehouse) url.searchParams.set('warehouse', warehouse);
+	return url.toString();
+}
 
 function authProperties(
 	auth: z.infer<typeof authSchema>,

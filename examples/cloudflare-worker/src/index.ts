@@ -34,6 +34,22 @@ export { Sandbox, ContainerProxy };
 const R2_BINDING = 'NOTEBOOKS_BUCKET';
 let warnedAboutComputeProfiles = false;
 
+/**
+ * Deps are built per request here, so a rejected KEK would otherwise surface as
+ * an opaque 500 on whichever request happened to arrive first. Name the binding
+ * the operator has to fix, the way the Node entrypoint's ConfigError does.
+ */
+function secretCodec(kek: string | undefined): AesGcmSecretCodec | undefined {
+	if (!kek) return undefined;
+	try {
+		return new AesGcmSecretCodec({ kek });
+	} catch (err) {
+		throw new Error(
+			`Invalid SECRETS_KEK secret: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+}
+
 export function buildDeps(request: Request, env: Env): ApiDeps {
 	const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
@@ -111,7 +127,7 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 		integrations: new ProjectIntegrationsStore({
 			bucket,
 			registry: defaultRegistry(),
-			codec: env.SECRETS_KEK ? new AesGcmSecretCodec({ kek: env.SECRETS_KEK }) : undefined,
+			codec: secretCodec(env.SECRETS_KEK),
 		}),
 		sandbox: {
 			// Default: credential-less R2 binding mount (no endpoint/secrets) — the

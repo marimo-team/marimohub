@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import type {
 	IntegrationCategory,
 	IntegrationProbe,
@@ -6,6 +6,8 @@ import type {
 	UiHints,
 } from '../../ports/integrations';
 import type { ProjectId, SessionId, UserId } from '../../ids';
+import { secretPaths } from './secretFields';
+import type { SecretPath } from './secretFields';
 
 export interface RenderInput<C> {
 	/** Validated config with secret fields resolved to plaintext. */
@@ -74,7 +76,8 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	validate?(config: z.infer<S>): void;
 	/**
 	 * Optional connectivity probe behind the UI's "Test" button. Runs server-side
-	 * with the (resolved) config; the result must never echo secret material.
+	 * with the (resolved) config; the result must never echo secret material —
+	 * `defineIntegration` redacts details that quote a schema-marked value.
 	 * ALL network access goes through `probe` (never ambient `fetch`) — it is the
 	 * deployment's egress-policy boundary, and testing is disabled when none is
 	 * wired.
@@ -92,11 +95,59 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	migrate?(stored: unknown, fromVersion: number): unknown;
 }
 
-/** Preserves schema inference across a complete integration definition. */
+/**
+ * Preserves schema inference across a complete integration definition, and wraps
+ * `testConnection` in the secret guard below.
+ */
 export function defineIntegration<S extends z.ZodType>(
 	def: IntegrationDefinition<S>,
 ): IntegrationDefinition<S> {
-	return def;
+	const testConnection = def.testConnection?.bind(def);
+	if (!testConnection) return def;
+	let paths: SecretPath[] | undefined;
+	return {
+		...def,
+		async testConnection(config, probe) {
+			const result = await testConnection(config, probe);
+			paths ??= secretPaths(
+				z.toJSONSchema(def.configSchema, { io: 'input' }) as Record<string, unknown>,
+			);
+			return withoutSecretEcho(result, config, paths);
+		},
+	};
+}
+
+/**
+ * A kind's own view of where its secrets live is not the boundary: configs carry
+ * secret material outside the auth block (Trino custom headers and extra
+ * credentials, storage credentials), so an `auth: none` test whose transport
+ * quotes the offending header would echo it through `err.message`. Enforce the
+ * contract centrally against the schema-marked paths instead.
+ */
+function withoutSecretEcho(result: TestResult, config: unknown, paths: SecretPath[]): TestResult {
+	const { details } = result;
+	if (details === undefined || details === '') return result;
+	const echoes = collectSecretValues(config, paths).some(
+		(value) => details.includes(value) || details.includes(encodeURIComponent(value)),
+	);
+	return echoes ? { ...result, details: 'request failed' } : result;
+}
+
+/** Plaintext values sitting at the kind's schema-marked secret paths. */
+function collectSecretValues(config: unknown, paths: SecretPath[]): string[] {
+	const marked = new Set(paths.map((path) => path.join('.')));
+	const values: string[] = [];
+	const walk = (value: unknown, path: string[]): void => {
+		if (typeof value === 'string') {
+			if (marked.has(path.join('.'))) values.push(value);
+		} else if (Array.isArray(value)) {
+			for (const item of value) walk(item, [...path, '*']);
+		} else if (typeof value === 'object' && value !== null) {
+			for (const [key, child] of Object.entries(value)) walk(child, [...path, key]);
+		}
+	};
+	walk(config, []);
+	return values;
 }
 
 export function envSegment(instanceName: string): string {
@@ -120,6 +171,11 @@ export function basicAuthHeader(username: string, password: string): string {
 	return `Basic ${btoa(binary)}`;
 }
 
+/**
+ * `containsSecrets` is the kind's own fast path for a request it knows carried
+ * credentials; secrets living elsewhere in the config are caught by
+ * `defineIntegration`'s guard, so never treat this flag as the whole boundary.
+ */
 export function probeErrorDetails(err: unknown, containsSecrets: boolean): string {
 	if (containsSecrets) return 'request failed';
 	return err instanceof Error ? err.message : 'request failed';

@@ -104,6 +104,25 @@ export interface IntegrationVersionMeta {
 	change_note?: string;
 }
 
+/**
+ * Keyset page over the version history. The page bounds the work: an
+ * implementation must read only the records it returns, never the whole
+ * (unbounded, append-only) history.
+ */
+export interface IntegrationVersionPageRequest {
+	/** Max records to return; callers apply their own default and ceiling. */
+	limit: number;
+	/** Opaque `next_cursor` from the previous page. */
+	cursor?: string;
+}
+
+export interface IntegrationVersionPage {
+	/** Newest first. */
+	items: IntegrationVersionMeta[];
+	/** Cursor for the next page, or null on the last one. */
+	next_cursor: string | null;
+}
+
 export interface CreateIntegrationInput {
 	kind: string;
 	name: string;
@@ -161,9 +180,18 @@ export interface IntegrationsProvider {
 		actor: UserId,
 		expectedVersion?: string,
 	): Promise<IntegrationDetail>;
-	/** Idempotent; removes the head and all version history. */
-	delete(projectId: ProjectId, id: IntegrationId): Promise<void>;
-	listVersions(projectId: ProjectId, id: IntegrationId): Promise<IntegrationVersionMeta[]>;
+	/**
+	 * Idempotent; removes the head and all version history. `expectedVersion` is
+	 * the same optimistic-concurrency guard as `update` — 412 when the head
+	 * changed since the caller read it, so a stale delete cannot erase an edit the
+	 * caller never saw. Ignored once the integration is already gone.
+	 */
+	delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<void>;
+	listVersions(
+		projectId: ProjectId,
+		id: IntegrationId,
+		page?: IntegrationVersionPageRequest,
+	): Promise<IntegrationVersionPage>;
 	test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult>;
 	/**
 	 * Server-only render path. Failures name the instance but no values and abort

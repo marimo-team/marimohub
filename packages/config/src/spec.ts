@@ -1143,7 +1143,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SECRETS_KEK',
 						name: 'Managed-secret KEK',
 						description:
-							'Operator-held key material (≥ 32 chars, high-entropy) for `managed` values and integration secret fields: the hub derives a per-object AES-256-GCM key from it, so the bucket only ever sees ciphertext. Unset disables managed values (references still work). Losing it makes existing managed values unrecoverable.',
+							'Operator-held key material — 32+ random bytes encoded as base64 or hex (`openssl rand -base64 32`) — for `managed` values and integration secret fields: the hub derives a per-object AES-256-GCM key from it, so the bucket only ever sees ciphertext. A passphrase is rejected at startup: no password stretching is applied to it, so only real key material is safe here. Unset disables managed values (references still work). Losing it makes existing managed values unrecoverable.',
 						secret: true,
 					},
 					{

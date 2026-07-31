@@ -12,7 +12,7 @@ import { ACTOR, fakeComputeFrom, makeFakeSandbox, uid } from '@marimo-hub/core/t
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 
-const codec = new AesGcmSecretCodec({ kek: 'session-test-kek-'.padEnd(32, 'x') });
+const codec = new AesGcmSecretCodec({ kek: 'sBN3HR4/RHc81JkWZ794UoUuUnPEHvt7zvkBjjbTWk0=' });
 
 describe('Session provisioning with integrations', () => {
 	let bucket: MemoryBucket;
