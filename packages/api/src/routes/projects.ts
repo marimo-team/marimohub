@@ -1,6 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { effectiveRole, ROLES, toPublicProject, UserId } from '@marimo-hub/core';
-import type { AuthSubject, Project, ProjectMember, Role } from '@marimo-hub/core';
+import type { AuthSubject, AuthzPolicy, Project, ProjectMember, Role } from '@marimo-hub/core';
 import {
 	assertProjectRole,
 	commonErrors,
@@ -103,8 +103,8 @@ function visibleMembers(
 }
 
 /** Project detail + the requesting user's effective role, with internal fields stripped. */
-function projectResponse(project: Project, subject: AuthSubject, defaultRole?: Role) {
-	const role = effectiveRole(project, subject, defaultRole);
+function projectResponse(project: Project, subject: AuthSubject, policy?: AuthzPolicy) {
+	const role = effectiveRole(project, subject, policy);
 	const pub = toPublicProject(project);
 	return { ...pub, members: visibleMembers(pub.members, role, subject), your_role: role };
 }
@@ -268,7 +268,7 @@ app.openapi(listProjects, async (c) => {
 	const user = c.get('user');
 	const all = await deps.services.projects.listProjects({
 		subject: user,
-		defaultRole: deps.policy.defaultRole,
+		policy: deps.policy,
 	});
 	const data = paginate(all, c.req.valid('query'), {
 		key: (p) => p.created_at,
@@ -283,7 +283,7 @@ app.openapi(createProject, async (c) => {
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(c, 'POST /projects', async () => {
 		const project = await deps.services.projects.createProject(body, user.id);
-		return projectResponse(project, user, deps.policy.defaultRole);
+		return projectResponse(project, user, deps.policy);
 	});
 	return c.json({ success: true, data }, 201);
 });
@@ -294,17 +294,9 @@ app.openapi(getProject, async (c) => {
 	const { pid } = c.req.valid('param');
 	// 404s a project the caller can't see (MARIMOHUB_DEFAULT_ROLE=none, non-member)
 	// or one that is soft-deleted.
-	const project = await loadVisibleProject(
-		deps.services.projects,
-		pid,
-		user,
-		deps.policy.defaultRole,
-	);
+	const project = await loadVisibleProject(deps.services.projects, pid, user, deps.policy);
 	c.header('ETag', etagFor(project.updated_at));
-	return c.json(
-		{ success: true, data: projectResponse(project, user, deps.policy.defaultRole) },
-		200,
-	);
+	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
 });
 
 app.openapi(updateProject, async (c) => {
@@ -312,14 +304,11 @@ app.openapi(updateProject, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy.defaultRole);
+	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
 	const body = c.req.valid('json');
 	const project = await projects.updateProject(pid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(project.updated_at));
-	return c.json(
-		{ success: true, data: projectResponse(project, user, deps.policy.defaultRole) },
-		200,
-	);
+	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
 });
 
 app.openapi(deleteProject, async (c) => {
@@ -327,7 +316,7 @@ app.openapi(deleteProject, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy.defaultRole);
+	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
 	await projects.deleteProject(pid, user.id, ifMatchToken(c));
 	await retireLiveApps(deps, pid);
 	return c.json({ success: true }, 200);
@@ -337,13 +326,8 @@ app.openapi(listMembers, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	const project = await loadVisibleProject(
-		deps.services.projects,
-		pid,
-		user,
-		deps.policy.defaultRole,
-	);
-	const role = effectiveRole(project, user, deps.policy.defaultRole);
+	const project = await loadVisibleProject(deps.services.projects, pid, user, deps.policy);
+	const role = effectiveRole(project, user, deps.policy);
 	return c.json({ success: true, data: visibleMembers(project.members, role, user) }, 200);
 });
 
@@ -352,7 +336,7 @@ app.openapi(addMember, async (c) => {
 	const { projects, identities } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy.defaultRole);
+	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
 	const body = c.req.valid('json');
 	// Both identifiers are passed to the service whenever both are known, so the
 	// duplicate check spans a person's id row AND any pending invite row — one
@@ -370,10 +354,7 @@ app.openapi(addMember, async (c) => {
 		member = { user_id: userId, email: (await identities.get(userId))?.email };
 	}
 	const project = await projects.addMember(pid, member, body.role, user.id);
-	return c.json(
-		{ success: true, data: projectResponse(project, user, deps.policy.defaultRole) },
-		201,
-	);
+	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 201);
 });
 
 app.openapi(updateMember, async (c) => {
@@ -381,13 +362,10 @@ app.openapi(updateMember, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy.defaultRole);
+	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
 	const body = c.req.valid('json');
 	const project = await projects.updateMemberRole(pid, uid, body.role, user.id);
-	return c.json(
-		{ success: true, data: projectResponse(project, user, deps.policy.defaultRole) },
-		200,
-	);
+	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
 });
 
 app.openapi(removeMember, async (c) => {
@@ -395,7 +373,7 @@ app.openapi(removeMember, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy.defaultRole);
+	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
 	await projects.removeMember(pid, uid, user.id);
 	return c.json({ success: true }, 200);
 });

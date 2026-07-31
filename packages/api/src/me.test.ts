@@ -11,7 +11,13 @@ describe('GET /api/v1/me', () => {
 			id: ACTOR,
 			email: `${ACTOR}@example.com`,
 			logout_url: null,
+			is_super_admin: false,
 		});
+	});
+
+	it('flags a configured super admin', async () => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		expect((await expectOk(await request('GET', '/me'))).is_super_admin).toBe(true);
 	});
 
 	it('surfaces the authenticator logout URL when one is provided', async () => {

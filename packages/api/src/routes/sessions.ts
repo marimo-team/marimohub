@@ -267,10 +267,10 @@ function authorizeSessionStart(
 	mode: SessionMode,
 	policy: PolicyConfig,
 ): { ephemeral: boolean; profileOverrideEligible: boolean } {
-	const role = effectiveRole(project, user, policy.defaultRole);
+	const role = effectiveRole(project, user, policy);
 	if (!canStartSessionMode({ role, viewerMode: policy.viewerMode }, mode)) {
 		// Throws the canonical editor-gate 403 (canStart admits every editor+).
-		requireRole(project, user, 'editor', policy.defaultRole);
+		requireRole(project, user, 'editor', policy);
 	}
 	const ephemeral = role === 'viewer' && MODE_POLICY[mode].viewerSession === 'ephemeral';
 	return {
@@ -395,7 +395,7 @@ app.openapi(listSessions, async (c) => {
 	// open when a default role is set, members-only under MARIMOHUB_DEFAULT_ROLE=none.
 	// The project is loaded (not just visibility-checked) to gate each item's
 	// kernel URL and `can` grants by the caller's role (see sessionGrantsFor).
-	const project = await loadVisibleProject(projects, pid, user, deps.policy.defaultRole);
+	const project = await loadVisibleProject(projects, pid, user, deps.policy);
 	const active = await sessions.listActiveByProject(pid);
 	const data = paginate(
 		active.map((s) => toSessionResponse(s, sessionGrantsFor(project, user, s, deps.policy))),
@@ -416,7 +416,7 @@ app.openapi(getSession, async (c) => {
 	// Read-only, project-scoped (matches listSessions). The project-scoped key 404s
 	// a cross-project id; the notebook check keeps a same-project/other-notebook id
 	// out of scope.
-	const project = await loadVisibleProject(projects, pid, user, deps.policy.defaultRole);
+	const project = await loadVisibleProject(projects, pid, user, deps.policy);
 	const session = await sessions.getSession(pid, sid);
 	if (session.notebook_id !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
@@ -899,7 +899,7 @@ app.openapi(deleteSession, async (c) => {
 	// Project visibility FIRST (404 when hidden, matching getSession) — resolving
 	// the session before it would let 403-vs-404 leak whether a session id exists
 	// in a project the caller cannot see.
-	const project = await loadVisibleProject(projects, pid, user, deps.policy.defaultRole);
+	const project = await loadVisibleProject(projects, pid, user, deps.policy);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
@@ -931,7 +931,7 @@ app.openapi(heartbeatSession, async (c) => {
 	const { pid, nid, sid } = c.req.valid('param');
 
 	// Project visibility FIRST (404 when hidden) — see the delete route.
-	const project = await loadVisibleProject(projects, pid, user, deps.policy.defaultRole);
+	const project = await loadVisibleProject(projects, pid, user, deps.policy);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.

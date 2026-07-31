@@ -1,5 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { ForbiddenError, UserId } from '@marimo-hub/core';
+import { ForbiddenError, isSuperAdmin, UserId } from '@marimo-hub/core';
 import { createApp, errorResponses, jsonContent, UserResponseSchema } from '../shared';
 
 // --- Route definitions ---
@@ -79,7 +79,7 @@ app.openapi(searchUsers, async (c) => {
 	// every project; under members-only, require at least one project involvement
 	// (decided from the catalog snapshot — no per-project loads) so a drive-by
 	// account cannot harvest the directory by substring.
-	if (deps.policy.defaultRole == null) {
+	if (deps.policy.defaultRole == null && !isSuperAdmin(user, deps.policy.superAdmins)) {
 		const snapshot = await catalog.getCurrentSnapshot();
 		const email = user.email.toLowerCase();
 		const involved = snapshot.projects.some(

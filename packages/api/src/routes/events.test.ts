@@ -62,11 +62,29 @@ describe('Event routes', () => {
 		await expectError(await viewerRequest('GET', `/projects/${pid}/events`), 403);
 	});
 
+	it('a non-member super admin may read the audit trail', async () => {
+		const pid = await createProject();
+		const god = uid('user_god');
+		const godRequest = createTestApi({
+			bucket,
+			userId: god,
+			deps: { policy: { superAdmins: [god] } },
+		}).request;
+		const events = await expectOk<any[]>(await godRequest('GET', `/projects/${pid}/events`));
+		expect(events.map((e) => e.event)).toEqual(['project.create']);
+	});
+
 	it('rejects unauthenticated callers (401)', async () => {
 		const pid = await createProject();
 		// A fresh app with the default deny-all authenticator.
 		const app = createApi(makeTestDeps(bucket));
 		await expectError(await app.request(`/api/v1/projects/${pid}/events`), 401, 'UNAUTHORIZED');
+	});
+
+	it('404s a soft-deleted project (lifecycle guard in assertProjectRole)', async () => {
+		const pid = await createProject();
+		await expectOk(await request('DELETE', `/projects/${pid}`));
+		await expectError(await request('GET', `/projects/${pid}/events`), 404);
 	});
 
 	it('validates the date query and returns empty for an event-free day', async () => {

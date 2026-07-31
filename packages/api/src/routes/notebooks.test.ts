@@ -813,6 +813,20 @@ describe('Notebook routes', () => {
 		);
 	});
 
+	it('a non-member super admin can read and edit notebooks', async () => {
+		const created = await expectOk<any>(
+			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),
+			201,
+		);
+		const god = createTestApi({
+			bucket,
+			userId: uid('user_god'),
+			deps: { policy: { superAdmins: [uid('user_god')] } },
+		}).request;
+		expect((await expectOk<any>(await god('GET', nb(`/${created.id}`)))).meta.title).toBe('NB');
+		await expectOk(await god('PATCH', nb(`/${created.id}`), { title: 'Edited' }));
+	});
+
 	it('POST restore requires editor (403 for a non-member)', async () => {
 		const created = await expectOk<any>(
 			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),

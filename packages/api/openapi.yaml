@@ -45,10 +45,13 @@ components:
           type:
             - string
             - 'null'
+        is_super_admin:
+          type: boolean
       required:
         - id
         - email
         - logout_url
+        - is_super_admin
     ErrorResponse:
       type: object
       properties:

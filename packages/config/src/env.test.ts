@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { required, requiredVar, parseList, parseBool, parseIntEnv } from './env';
+import {
+	parseBool,
+	parseEnum,
+	parseEnumOr,
+	parseIntEnv,
+	parseList,
+	readFolded,
+	required,
+	requiredVar,
+} from './env';
 import { ConfigError } from './errors';
 
 describe('required', () => {
@@ -61,5 +70,66 @@ describe('parseIntEnv', () => {
 
 	it.each(['1.5', 'abc', '10px'])('throws ConfigError on the non-integer %o', (value) => {
 		expect(() => parseIntEnv({ N: value }, 'N')).toThrow(ConfigError);
+	});
+});
+
+describe('readFolded', () => {
+	it('trims and lowercases a set value', () => {
+		expect(readFolded({ M: '  EdiTor ' }, 'M')).toBe('editor');
+	});
+
+	it.each([undefined, '', '   '])('returns undefined for %o', (value) => {
+		expect(readFolded({ M: value }, 'M')).toBeUndefined();
+	});
+});
+
+describe('parseEnum', () => {
+	const allowed = ['viewer', 'editor', 'admin'] as const;
+
+	it('accepts an allowed value, case- and whitespace-insensitively', () => {
+		expect(parseEnum({ M: ' Editor ' }, 'M', { allowed })).toBe('editor');
+	});
+
+	it('returns the fallback when unset or blank', () => {
+		expect(parseEnum({}, 'M', { allowed, fallback: 'editor' })).toBe('editor');
+		expect(parseEnum({ M: '  ' }, 'M', { allowed, fallback: 'editor' })).toBe('editor');
+	});
+
+	it('returns undefined when unset and no fallback is given', () => {
+		expect(parseEnum({}, 'M', { allowed })).toBeUndefined();
+	});
+
+	it('maps an offValue to undefined (feature off)', () => {
+		expect(
+			parseEnum({ M: 'NONE' }, 'M', { allowed, fallback: 'editor', offValues: ['none'] }),
+		).toBeUndefined();
+	});
+
+	it('throws a ConfigError listing the accepted tokens, echoing the raw value', () => {
+		try {
+			parseEnum({ M: 'Superadmin' }, 'M', { allowed, offValues: ['none'], docs: 'docs/x.md' });
+			expect.unreachable('should have thrown');
+		} catch (err) {
+			expect(err).toBeInstanceOf(ConfigError);
+			const e = err as ConfigError;
+			expect(e.message).toBe('Invalid M: Superadmin (expected viewer, editor, admin, none)');
+			expect(e.opts.variable).toBe('M');
+			expect(e.opts.docs).toBe('docs/x.md');
+		}
+	});
+});
+
+describe('parseEnumOr', () => {
+	const modes = ['source', 'workspace'] as const;
+
+	it('always resolves to a value: the fallback when unset, the parsed value otherwise', () => {
+		expect(parseEnumOr({}, 'M', modes, 'source')).toBe('source');
+		expect(parseEnumOr({ M: 'WORKSPACE' }, 'M', modes, 'source')).toBe('workspace');
+	});
+
+	it('throws on an invalid value', () => {
+		expect(() => parseEnumOr({ M: 'always' }, 'M', modes, 'source')).toThrow(
+			/Invalid M.*source, workspace/,
+		);
 	});
 });

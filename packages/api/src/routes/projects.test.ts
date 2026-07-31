@@ -414,6 +414,92 @@ describe('Read visibility (MARIMOHUB_DEFAULT_ROLE)', () => {
 	});
 });
 
+describe('Super admin (MARIMOHUB_SUPER_ADMINS)', () => {
+	let bucket: MemoryBucket;
+	let owner: ReturnType<typeof createTestApi>['request'];
+	let pid: string;
+	const godId = uid('user_god');
+
+	beforeEach(async () => {
+		bucket = await createInitializedBucket();
+		owner = createTestApi({ bucket }).request; // ACTOR owns the project
+		const created = await expectOk<any>(
+			await owner('POST', '/projects', { name: 'Private', description: 'd' }),
+			201,
+		);
+		pid = created.id;
+	});
+
+	function god(superAdmins: string[]) {
+		return createTestApi({ bucket, userId: godId, deps: { policy: { superAdmins } } }).request;
+	}
+
+	it('a non-member super admin sees, lists, and administers the project', async () => {
+		const req = god([godId]);
+		expect(await expectPage(await req('GET', '/projects'))).toHaveLength(1);
+		expect((await expectOk<any>(await req('GET', `/projects/${pid}`))).your_role).toBe('admin');
+		expect(
+			(await expectOk<any>(await req('PATCH', `/projects/${pid}`, { name: 'Renamed' }))).name,
+		).toBe('Renamed');
+		await expectOk(
+			await req('POST', `/projects/${pid}/members`, { user_id: uid('user_new'), role: 'editor' }),
+			201,
+		);
+	});
+
+	it('matches by email case-insensitively', async () => {
+		// The stub authenticator's email is `${userId}@example.com`.
+		const req = god(['USER_GOD@example.com']);
+		expect((await expectOk<any>(await req('GET', `/projects/${pid}`))).your_role).toBe('admin');
+	});
+
+	it('still cannot demote or remove the project owner (409)', async () => {
+		const req = god([godId]);
+		await expectError(
+			await req('PUT', `/projects/${pid}/members/${ACTOR}`, { role: 'viewer' }),
+			409,
+		);
+		await expectError(await req('DELETE', `/projects/${pid}/members/${ACTOR}`), 409);
+	});
+
+	it('a soft-deleted project stays 404 even for a super admin', async () => {
+		const etag = (await owner('GET', `/projects/${pid}`)).headers.get('ETag') ?? '';
+		await expectOk(await owner('DELETE', `/projects/${pid}`, undefined, { 'If-Match': etag }));
+		await expectError(await god([godId])('GET', `/projects/${pid}`), 404);
+	});
+
+	it('an unlisted user gets no elevation', async () => {
+		const req = god(['someone-else@example.com']);
+		await expectError(await req('GET', `/projects/${pid}`), 404);
+	});
+
+	// A caller whose id and login email diverge — the shape a namespace-collision
+	// attack needs (the stub authenticator couples them, so build one by hand).
+	function reqAs(id: string, email: string, superAdmins: string[]) {
+		return createTestApi({
+			bucket,
+			deps: {
+				authenticator: { authenticate: async () => ({ id: uid(id), email }) },
+				policy: { superAdmins },
+			},
+		}).request;
+	}
+
+	it('an email entry never elevates a caller whose ID merely equals it', async () => {
+		// superAdmins holds an email; the attacker sets their opaque IdP `sub` to
+		// that exact string while their real (verified) email is their own.
+		const attacker = reqAs('admin@example.com', 'attacker@evil.example', ['admin@example.com']);
+		await expectError(await attacker('GET', `/projects/${pid}`), 404);
+	});
+
+	it('an id entry never elevates a caller whose email merely echoes it', async () => {
+		// superAdmins holds an @-free id; a caller whose email local-part matches it
+		// (but whose id does not) gains nothing.
+		const attacker = reqAs('stranger_sub', 'user_admin@example.com', ['user_admin']);
+		await expectError(await attacker('GET', `/projects/${pid}`), 404);
+	});
+});
+
 describe('Project ETag / If-Match concurrency', () => {
 	let bucket: MemoryBucket;
 	let request: ReturnType<typeof createTestApi>['request'];

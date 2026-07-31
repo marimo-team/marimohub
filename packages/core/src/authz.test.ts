@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canAct, canSeeProjectEntry, effectiveRole, requireRole } from './authz';
+import { canAct, canSeeProjectEntry, effectiveRole, isSuperAdmin, requireRole } from './authz';
 import type { AuthSubject } from './authz';
 import { ForbiddenError } from './errors';
 import { UserId } from './ids';
@@ -66,13 +66,60 @@ describe('authz', () => {
 		});
 
 		it('falls back to the default role for a non-member', () => {
-			expect(effectiveRole(project, STRANGER, 'editor')).toBe('editor');
-			expect(effectiveRole(project, STRANGER, 'viewer')).toBe('viewer');
+			expect(effectiveRole(project, STRANGER, { defaultRole: 'editor' })).toBe('editor');
+			expect(effectiveRole(project, STRANGER, { defaultRole: 'viewer' })).toBe('viewer');
 		});
 
 		it('does not let the default role override an explicit membership', () => {
-			expect(effectiveRole(project, VIEWER, 'admin')).toBe('viewer');
-			expect(effectiveRole(project, OWNER, 'viewer')).toBe('admin');
+			expect(effectiveRole(project, VIEWER, { defaultRole: 'admin' })).toBe('viewer');
+			expect(effectiveRole(project, OWNER, { defaultRole: 'viewer' })).toBe('admin');
+		});
+
+		it('grants a super admin admin on a project they have no relation to', () => {
+			expect(effectiveRole(project, STRANGER, { superAdmins: [STRANGER.id] })).toBe('admin');
+			expect(effectiveRole(project, STRANGER, { superAdmins: [STRANGER.email] })).toBe('admin');
+		});
+
+		it('super admin outranks an explicit lower membership', () => {
+			expect(effectiveRole(project, VIEWER, { superAdmins: [VIEWER.id] })).toBe('admin');
+		});
+	});
+
+	describe('isSuperAdmin', () => {
+		it('is off with no list', () => {
+			expect(isSuperAdmin(STRANGER)).toBe(false);
+			expect(isSuperAdmin(STRANGER, [])).toBe(false);
+		});
+
+		it('matches ids exactly, never case-variant', () => {
+			expect(isSuperAdmin(STRANGER, [STRANGER.id])).toBe(true);
+			expect(isSuperAdmin(STRANGER, [STRANGER.id.toUpperCase()])).toBe(false);
+			expect(isSuperAdmin(STRANGER, ['user_strange'])).toBe(false);
+		});
+
+		it('matches emails case-insensitively in both directions', () => {
+			expect(isSuperAdmin(STRANGER, ['USER_STRANGER@example.com'])).toBe(true);
+			const shouty = { ...STRANGER, email: 'User_Stranger@Example.COM' };
+			expect(isSuperAdmin(shouty, ['user_stranger@example.com'])).toBe(true);
+		});
+
+		it('any matching entry in the list suffices', () => {
+			expect(isSuperAdmin(STRANGER, ['someone@else.com', STRANGER.id])).toBe(true);
+			expect(isSuperAdmin(STRANGER, ['someone@else.com', 'other_id'])).toBe(false);
+		});
+
+		it('an email entry never matches an id (namespace collision)', () => {
+			// UserId is an opaque IdP sub — it can be any string, including one that
+			// looks like the configured email while the real email is someone else's.
+			const impostor = subject('admin@example.com', 'attacker@example.net');
+			expect(isSuperAdmin(impostor, ['admin@example.com'])).toBe(false);
+		});
+
+		it('an id entry never matches an email', () => {
+			// An @-free entry is an id; a subject whose EMAIL local-part echoes it
+			// gains nothing.
+			const bystander = subject('other_id', 'user_god@example.com');
+			expect(isSuperAdmin(bystander, ['user_god'])).toBe(false);
 		});
 	});
 
@@ -94,8 +141,12 @@ describe('authz', () => {
 		});
 
 		it('lets a default editor role act on notebooks but not the project', () => {
-			expect(canAct(project, STRANGER, 'editor', 'editor')).toBe(true);
-			expect(canAct(project, STRANGER, 'admin', 'editor')).toBe(false);
+			expect(canAct(project, STRANGER, 'editor', { defaultRole: 'editor' })).toBe(true);
+			expect(canAct(project, STRANGER, 'admin', { defaultRole: 'editor' })).toBe(false);
+		});
+
+		it('lets a super admin act at every level', () => {
+			expect(canAct(project, STRANGER, 'admin', { superAdmins: [STRANGER.id] })).toBe(true);
 		});
 	});
 
@@ -110,8 +161,12 @@ describe('authz', () => {
 		});
 
 		it('honors a default role for non-members', () => {
-			expect(() => requireRole(project, STRANGER, 'editor', 'editor')).not.toThrow();
-			expect(() => requireRole(project, STRANGER, 'admin', 'editor')).toThrow(ForbiddenError);
+			expect(() =>
+				requireRole(project, STRANGER, 'editor', { defaultRole: 'editor' }),
+			).not.toThrow();
+			expect(() => requireRole(project, STRANGER, 'admin', { defaultRole: 'editor' })).toThrow(
+				ForbiddenError,
+			);
 		});
 	});
 
@@ -123,34 +178,62 @@ describe('authz', () => {
 		};
 
 		it('makes every project visible when a default role is set', () => {
-			expect(canSeeProjectEntry(entry, STRANGER, 'viewer')).toBe(true);
-			expect(canSeeProjectEntry(entry, STRANGER, 'editor')).toBe(true);
+			expect(canSeeProjectEntry(entry, STRANGER, { defaultRole: 'viewer' })).toBe(true);
+			expect(canSeeProjectEntry(entry, STRANGER, { defaultRole: 'editor' })).toBe(true);
 		});
 
 		it('restricts visibility to owner and members under none (null default)', () => {
-			expect(canSeeProjectEntry(entry, OWNER, null)).toBe(true);
-			expect(canSeeProjectEntry(entry, EDITOR, null)).toBe(true);
-			expect(canSeeProjectEntry(entry, STRANGER, null)).toBe(false);
+			expect(canSeeProjectEntry(entry, OWNER)).toBe(true);
+			expect(canSeeProjectEntry(entry, EDITOR)).toBe(true);
+			expect(canSeeProjectEntry(entry, STRANGER)).toBe(false);
 		});
 
 		it('sees an email member via member_emails, case-insensitively', () => {
-			expect(canSeeProjectEntry(entry, INVITEE, null)).toBe(true);
-			expect(canSeeProjectEntry(entry, { ...INVITEE, email: 'INVITEE@example.com' }, null)).toBe(
-				true,
-			);
+			expect(canSeeProjectEntry(entry, INVITEE)).toBe(true);
+			expect(canSeeProjectEntry(entry, { ...INVITEE, email: 'INVITEE@example.com' })).toBe(true);
+		});
+
+		it('normalizes stored member_emails, so a whitespace-padded entry still lists', () => {
+			// ProjectMemberSchema lowercases but does not trim; direct access
+			// (memberRefMatchesSubject) trims both sides, so listing must too or an
+			// invitee could reach the project yet be missing from their list.
+			const padded = {
+				owner: OWNER.id,
+				member_ids: [OWNER.id],
+				member_emails: [' invitee@example.com '],
+			};
+			expect(canSeeProjectEntry(padded, INVITEE)).toBe(true);
 		});
 
 		it('fails closed for an email member when member_emails is absent', () => {
 			const stripped = { owner: OWNER.id, member_ids: [OWNER.id] };
-			expect(canSeeProjectEntry(stripped, INVITEE, null)).toBe(false);
+			expect(canSeeProjectEntry(stripped, INVITEE)).toBe(false);
 		});
 
 		it('sees the owner even when member_ids is absent', () => {
-			expect(canSeeProjectEntry({ owner: OWNER.id }, OWNER, null)).toBe(true);
+			expect(canSeeProjectEntry({ owner: OWNER.id }, OWNER)).toBe(true);
 		});
 
 		it('is indeterminate for a non-owner when member_ids is absent (fallback)', () => {
-			expect(canSeeProjectEntry({ owner: OWNER.id }, STRANGER, null)).toBeNull();
+			expect(canSeeProjectEntry({ owner: OWNER.id }, STRANGER)).toBeNull();
+		});
+
+		it('a super admin sees everything, even indeterminate legacy entries', () => {
+			const policy = { superAdmins: [STRANGER.id] };
+			expect(canSeeProjectEntry(entry, STRANGER, policy)).toBe(true);
+			expect(canSeeProjectEntry({ owner: OWNER.id }, STRANGER, policy)).toBe(true);
+		});
+
+		it('does not grant visibility on an id/email namespace collision', () => {
+			// Email entry, caller whose ID equals it but whose email is their own:
+			// visibility stays members-only (here: indeterminate → fallback needed).
+			const impostor = subject('admin@example.com', 'attacker@evil.example');
+			expect(
+				canSeeProjectEntry({ owner: OWNER.id }, impostor, { superAdmins: ['admin@example.com'] }),
+			).toBeNull();
+			expect(canSeeProjectEntry(entry, impostor, { superAdmins: ['admin@example.com'] })).toBe(
+				false,
+			);
 		});
 	});
 });

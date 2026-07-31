@@ -667,3 +667,30 @@ describe('createFromEnv allowed origins', () => {
 		expect(createFromEnv({ ...baseEnv }).policy.allowedOrigins).toBeUndefined();
 	});
 });
+
+describe('createFromEnv super admins', () => {
+	const baseEnv = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'dev',
+	};
+
+	it('parses MARIMOHUB_SUPER_ADMINS into a trimmed list of ids/emails', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_SUPER_ADMINS: 'admin@example.com, user_01HXY00000000000000000000 ,',
+		});
+		expect(deps.policy.superAdmins).toEqual([
+			'admin@example.com',
+			'user_01HXY00000000000000000000',
+		]);
+	});
+
+	it('leaves super admins undefined when unset or empty', () => {
+		expect(createFromEnv({ ...baseEnv }).policy.superAdmins).toBeUndefined();
+		expect(
+			createFromEnv({ ...baseEnv, MARIMOHUB_SUPER_ADMINS: ' , ' }).policy.superAdmins,
+		).toBeUndefined();
+	});
+});

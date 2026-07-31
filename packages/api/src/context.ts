@@ -192,6 +192,15 @@ export interface PolicyConfig {
 	 * attaching to a running app never trips it. Unset/undefined = unlimited.
 	 */
 	maxAppsPerProject?: number;
+	/**
+	 * Deployment super admins (config: MARIMOHUB_SUPER_ADMINS): entries granted
+	 * implicit `admin` on every project and visibility of all projects. An
+	 * entry containing `@` matches only the login email (case-insensitive);
+	 * any other entry matches only the user id (exact) — see
+	 * `isSuperAdmin` in core. A PAT minted by a super admin carries the same
+	 * power. Unset = no super admins.
+	 */
+	superAdmins?: string[];
 }
 
 /**

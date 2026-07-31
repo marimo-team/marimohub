@@ -59,7 +59,9 @@ After deploy:
 Authentication decides who you are. Authorization decides what you may do on a
 project. Each project has an owner, who is implicitly `admin`, and a member list.
 Roles are ordered `viewer` < `editor` < `admin`; each role includes the
-capabilities below it.
+capabilities below it. One deployment-wide exception sits above this per-project
+model: a [super admin](#super-admins-marimohub_super_admins) is treated as
+`admin` on every project.
 
 | Role     | Description                                                                                          |
 | -------- | ---------------------------------------------------------------------------------------------------- |
@@ -107,8 +109,8 @@ project detail show them only to project admins (and to the invitee themself).
 The add-member picker searches the user directory
 (`GET /api/v1/users/search` — email, name, or id substring; everyone who has
 signed in at least once). Under `MARIMOHUB_DEFAULT_ROLE=none` the caller must
-own or belong to at least one project to search; with a default role set, any
-authenticated user may.
+own or belong to at least one project to search; with a default role set — or as
+a super admin — any authenticated user may.
 
 **Rollout note:** code older than this feature cannot parse a `project.json`
 containing an email invite row. Finish rolling out a release with this feature
@@ -151,6 +153,27 @@ A logged-in user who is not the owner or a member falls back to
 - `none`: non-members cannot see projects they do not own or belong to.
 - `admin`: every logged-in user is a project admin. Use only in a fully trusted
   deployment.
+
+### Super admins: `MARIMOHUB_SUPER_ADMINS`
+
+`MARIMOHUB_SUPER_ADMINS` is a comma-separated list of operators who are treated
+as `admin` on **every** project, regardless of membership or
+`MARIMOHUB_DEFAULT_ROLE`. A super admin can see and list all projects (even under
+`MARIMOHUB_DEFAULT_ROLE=none`), read and write every notebook and secret, control
+any session, and read the audit trail. It is the one grant that overrides the
+per-project role model.
+
+An entry containing `@` matches the caller's login email, case-insensitively;
+any other entry matches the user id (the IdP `sub`) exactly. The two namespaces
+do not overlap — an email entry never elevates a caller whose _id_ happens to
+equal that string, and vice versa. Email matching trusts the IdP-asserted login
+email, the same trust model as email invites.
+
+Two bounds still hold for a super admin: a project owner cannot be demoted or
+removed, and a soft-deleted project stays unreachable (`404`) like it is for
+everyone else. Session and app rate caps are not bypassed. A personal access
+token minted by a super admin carries the same power, so scope those tokens
+accordingly. Unset (the default) means no super admins.
 
 ## Troubleshooting
 

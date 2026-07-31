@@ -167,7 +167,7 @@ app.openapi(listSecrets, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const secrets = requireSecrets(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'viewer', deps.policy.defaultRole);
+	await assertProjectRole(deps.services.projects, pid, user, 'viewer', deps.policy);
 	const data = (await secrets.list(pid)).map(entryResponse);
 	return c.json({ success: true, data }, 200);
 });
@@ -177,7 +177,7 @@ app.openapi(putSecret, async (c) => {
 	const user = c.get('user');
 	const { pid, name } = c.req.valid('param');
 	const secrets = requireSecrets(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy.defaultRole);
+	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
 	assertValidSecretName(name);
 	const input = toSecretInput(c.req.valid('json'));
 	const entry = await secrets.put(pid, name, input, user.id);
@@ -201,7 +201,7 @@ app.openapi(deleteSecret, async (c) => {
 	const user = c.get('user');
 	const { pid, name } = c.req.valid('param');
 	const secrets = requireSecrets(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy.defaultRole);
+	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
 	await secrets.delete(pid, name);
 	await deps.services.events
 		.append({ event: 'secret.delete', actor: user.id, project_id: pid, secret_name: name })
@@ -214,7 +214,7 @@ app.openapi(validateSecret, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const secrets = requireSecrets(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy.defaultRole);
+	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
 	try {
 		await secrets.validate(toSecretInput(c.req.valid('json')));
 		return c.json({ success: true as const, data: { ok: true } }, 200);

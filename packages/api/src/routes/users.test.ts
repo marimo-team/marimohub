@@ -115,5 +115,14 @@ describe('User routes', () => {
 			}).request;
 			expect(await expectOk(await anyone('GET', '/users/search?q=adam'))).toHaveLength(1);
 		});
+
+		it('a super admin with no project involvement may search under members-only', async () => {
+			const god = createTestApi({
+				bucket,
+				userId: uid('ada'),
+				deps: { policy: { superAdmins: [uid('ada')] } },
+			}).request;
+			expect(await expectOk(await god('GET', '/users/search?q=adam'))).toHaveLength(1);
+		});
 	});
 });

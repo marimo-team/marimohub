@@ -23,6 +23,7 @@ import {
 } from '@marimo-hub/core';
 import type {
 	AuthSubject,
+	AuthzPolicy,
 	ComputeResources,
 	Project,
 	ProjectService,
@@ -44,21 +45,29 @@ export type { ApiDeps, HonoEnv } from './context';
  * (403) on insufficient role. Used to gate write routes. Returns the loaded
  * project so callers can reuse it without a second fetch. The subject is the
  * request's `AuthUser` — membership matches by user id or (invite) email.
+ *
+ * A soft-deleted project is treated as **404**, before the role check — the
+ * same lifecycle guard `loadVisibleProject` applies to reads. Its bytes linger
+ * until the GC sweep, but nothing about it stays mutable, so no caller (a super
+ * admin or a lingering member included) can reach its secrets/notebooks/events.
  */
 export async function assertProjectRole(
 	projects: ProjectService,
 	pid: ProjectId,
 	subject: AuthSubject,
 	min: Role,
-	defaultRole?: Role,
+	policy?: AuthzPolicy,
 ): Promise<Project> {
 	const project = await projects.getProject(pid);
-	requireRole(project, subject, min, defaultRole);
+	if (project.status === 'deleted') {
+		throw new NotFoundError(`Project ${pid} not found`);
+	}
+	requireRole(project, subject, min, policy);
 	return project;
 }
 
 /** The slice of PolicyConfig the session gates need. */
-export type SessionPolicy = { defaultRole?: Role; viewerMode?: ViewerMode };
+export type SessionPolicy = AuthzPolicy & { viewerMode?: ViewerMode };
 
 /**
  * The caller as `sessionCan` sees them, with the role evaluated against the
@@ -72,7 +81,7 @@ export function sessionActorFor(
 ): SessionActor {
 	return {
 		userId: subject.id,
-		role: effectiveRole(project, subject, policy.defaultRole),
+		role: effectiveRole(project, subject, policy),
 		viewerMode: policy.viewerMode,
 	};
 }
@@ -96,7 +105,7 @@ function assertSession(
 ): void {
 	if (sessionCan(action, sessionActorFor(project, subject, policy), session)) return;
 	// The canonical editor-gate 403 (sessionCan admits every editor+, so this throws).
-	requireRole(project, subject, 'editor', policy.defaultRole);
+	requireRole(project, subject, 'editor', policy);
 }
 
 /**
@@ -201,10 +210,12 @@ export async function loadVisibleProject(
 	projects: ProjectService,
 	pid: ProjectId,
 	subject: AuthSubject,
-	defaultRole?: Role,
+	policy?: AuthzPolicy,
 ): Promise<Project> {
 	const project = await projects.getProject(pid);
-	if (project.status === 'deleted' || !canAct(project, subject, 'viewer', defaultRole)) {
+	// The deleted check precedes role logic on purpose: soft-deleted projects
+	// are unreachable for everyone, super admins included.
+	if (project.status === 'deleted' || !canAct(project, subject, 'viewer', policy)) {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
 	return project;
@@ -221,9 +232,9 @@ export async function assertProjectVisible(
 	projects: ProjectService,
 	pid: ProjectId,
 	subject: AuthSubject,
-	defaultRole?: Role,
+	policy?: AuthzPolicy,
 ): Promise<void> {
-	await loadVisibleProject(projects, pid, subject, defaultRole);
+	await loadVisibleProject(projects, pid, subject, policy);
 }
 
 export function createApp() {
@@ -732,6 +743,8 @@ export const MeResponseSchema = z
 		id: z.string(),
 		email: z.string(),
 		logout_url: z.string().nullable(),
+		/** Deployment super admin (MARIMOHUB_SUPER_ADMINS): implicit admin everywhere. */
+		is_super_admin: z.boolean(),
 	})
 	.openapi('Me');
 

@@ -132,6 +132,12 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 			// logged-in user can edit notebooks. Set DEFAULT_ROLE=none to keep writes
 			// members-only. Project edit/delete always requires admin.
 			defaultRole: env.DEFAULT_ROLE === 'none' ? undefined : (env.DEFAULT_ROLE ?? 'editor'),
+			// Comma-separated user ids/emails granted implicit admin on every project.
+			// Read under the documented, config-package name so the reference deployment
+			// honors what docs/configuration.md advertises.
+			superAdmins: env.MARIMOHUB_SUPER_ADMINS?.split(',')
+				.map((s) => s.trim())
+				.filter(Boolean),
 		},
 		// Deployment metadata for GET /api/v1/version (UI footer). On Workers there's no
 		// Docker image to report (image/sandboxImage stay null → hidden), but the

@@ -21,37 +21,50 @@
 import type { Role } from './constants';
 import { ForbiddenError } from './errors';
 import type { UserId } from './ids';
-import type { Project, ProjectMember } from './schema';
+import { anyRefMatchesSubject, emailsEqual, memberRefMatchesSubject } from './identityMatch';
+import type { IdentitySubject } from './identityMatch';
+import type { Project } from './schema';
 
 const RANK: Record<Role, number> = { viewer: 1, editor: 2, admin: 3 };
 
 /**
  * The authenticated caller as authorization sees them. Structurally a subset
- * of `AuthUser`, so route handlers pass the request user directly.
+ * of `AuthUser`, so route handlers pass the request user directly. Matched
+ * against ids and emails via {@link ./identityMatch}.
  */
-export interface AuthSubject {
-	id: UserId;
-	email: string;
+export type AuthSubject = IdentitySubject;
+
+/**
+ * The authorization-relevant slice of the deployment policy. `PolicyConfig`
+ * (api/context.ts) is structurally assignable, so callers pass `deps.policy`
+ * wholesale.
+ */
+export interface AuthzPolicy {
+	defaultRole?: Role | null;
+	/** MARIMOHUB_SUPER_ADMINS entries: emails (contain `@`) or user ids. */
+	superAdmins?: readonly string[];
 }
 
 /**
- * Whether a member row denotes this subject (id rows by id, invite rows by
- * email). `email` is the subject's login email, pre-lowercased by the caller;
- * stored rows are lowercased by ProjectMemberSchema on parse.
+ * Whether the caller is a deployment super admin (config:
+ * MARIMOHUB_SUPER_ADMINS). Super admins hold implicit `admin` on every project
+ * and see all projects in listings. Entries match by id or email per the
+ * namespace rule in {@link refMatchesSubject}.
  */
-function memberMatches(member: ProjectMember, id: UserId, email: string): boolean {
-	if (member.user_id !== undefined) return member.user_id === id;
-	return member.email === email;
+export function isSuperAdmin(subject: AuthSubject, superAdmins?: readonly string[]): boolean {
+	return anyRefMatchesSubject(superAdmins, subject);
 }
 
 /**
  * The caller's effective role on a project, or null if they have none.
  *
- * `defaultRole` is the deployment-wide fallback (config: MARIMOHUB_DEFAULT_ROLE)
- * applied to any authenticated caller who is neither the owner nor an explicit
- * member. Left undefined it preserves the members-only behavior; passed `editor`
- * it lets every logged-in user edit notebooks. The default never overrides an
- * explicit membership — it only fills the gap when there is none.
+ * `policy.defaultRole` is the deployment-wide fallback (config:
+ * MARIMOHUB_DEFAULT_ROLE) applied to any authenticated caller who is neither
+ * the owner nor an explicit member. Left undefined it preserves the
+ * members-only behavior; passed `editor` it lets every logged-in user edit
+ * notebooks. The default never overrides an explicit membership — it only
+ * fills the gap when there is none. A super admin (`policy.superAdmins`) is
+ * `admin` everywhere, regardless of membership.
  *
  * When both an id row and an email row match the same caller (added by id and
  * separately invited by email), the highest-ranked role wins, so the result is
@@ -60,17 +73,17 @@ function memberMatches(member: ProjectMember, id: UserId, email: string): boolea
 export function effectiveRole(
 	project: Project,
 	subject: AuthSubject,
-	defaultRole?: Role | null,
+	policy?: AuthzPolicy,
 ): Role | null {
+	if (isSuperAdmin(subject, policy?.superAdmins)) return 'admin';
 	if (project.owner === subject.id) return 'admin';
-	const email = subject.email.toLowerCase();
 	let best: Role | null = null;
 	for (const member of project.members) {
-		if (!memberMatches(member, subject.id, email)) continue;
+		if (!memberRefMatchesSubject(member, subject)) continue;
 		if (best === null || RANK[member.role] > RANK[best]) best = member.role;
 		if (best === 'admin') break;
 	}
-	return best ?? defaultRole ?? null;
+	return best ?? policy?.defaultRole ?? null;
 }
 
 /** True if the caller's role on the project is at least `min`. */
@@ -78,9 +91,9 @@ export function canAct(
 	project: Project,
 	subject: AuthSubject,
 	min: Role,
-	defaultRole?: Role | null,
+	policy?: AuthzPolicy,
 ): boolean {
-	const role = effectiveRole(project, subject, defaultRole);
+	const role = effectiveRole(project, subject, policy);
 	return role != null && RANK[role] >= RANK[min];
 }
 
@@ -89,9 +102,9 @@ export function requireRole(
 	project: Project,
 	subject: AuthSubject,
 	min: Role,
-	defaultRole?: Role | null,
+	policy?: AuthzPolicy,
 ): void {
-	if (!canAct(project, subject, min, defaultRole)) {
+	if (!canAct(project, subject, min, policy)) {
 		throw new ForbiddenError(`Requires '${min}' role on project ${project.id}`);
 	}
 }
@@ -119,11 +132,16 @@ export function requireRole(
 export function canSeeProjectEntry(
 	entry: { owner: UserId; member_ids?: UserId[]; member_emails?: string[] },
 	subject: AuthSubject,
-	defaultRole?: Role | null,
+	policy?: AuthzPolicy,
 ): boolean | null {
-	if (defaultRole != null) return true;
+	if (isSuperAdmin(subject, policy?.superAdmins)) return true;
+	if (policy?.defaultRole != null) return true;
 	if (entry.owner === subject.id) return true;
 	if (entry.member_ids === undefined) return null;
 	if (entry.member_ids.includes(subject.id)) return true;
-	return (entry.member_emails ?? []).includes(subject.email.toLowerCase());
+	// Normalize both sides (stored entries are lowercased but not trimmed by
+	// ProjectMemberSchema), matching memberRefMatchesSubject — otherwise a pending
+	// invitee with whitespace in their stored email could reach the project
+	// directly yet be omitted from its listing.
+	return (entry.member_emails ?? []).some((e) => emailsEqual(e, subject.email));
 }

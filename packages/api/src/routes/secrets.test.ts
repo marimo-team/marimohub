@@ -148,6 +148,20 @@ describe('Secrets routes', () => {
 
 		// A non-member cannot list (no default role → 403).
 		await expectError(await strangerReq('GET', `/projects/${pid}/secrets`), 403);
+		// Unless they are a super admin — then they hold admin (list + write).
+		const godReq = createTestApi({
+			bucket,
+			userId: nonmember,
+			deps: { ...secretsDeps(bucket), policy: { superAdmins: [nonmember] } },
+		}).request;
+		await expectOk(await godReq('GET', `/projects/${pid}/secrets`));
+		await expectOk(
+			await godReq('PUT', `/projects/${pid}/secrets/G`, {
+				kind: 'reference',
+				backend: 'stub',
+				locator: 'x',
+			}),
+		);
 		// An editor can list but not write.
 		await expectOk(await editorReq('GET', `/projects/${pid}/secrets`));
 		await expectError(
@@ -244,5 +258,35 @@ describe('Secrets routes', () => {
 			}),
 			404,
 		);
+	});
+
+	it('404s every route once the project is soft-deleted — owner and super admin alike', async () => {
+		const pid = await createProject();
+		await expectOk(
+			await request('PUT', `/projects/${pid}/secrets/K`, {
+				kind: 'reference',
+				backend: 'stub',
+				locator: 'x',
+			}),
+		);
+		await expectOk(await request('DELETE', `/projects/${pid}`));
+
+		// A soft-deleted project keeps its bytes until GC, but nothing about it
+		// stays reachable — its retained secret metadata must not leak, and no
+		// post-delete mutation may land.
+		const ref = { kind: 'reference' as const, backend: 'stub', locator: 'x' };
+		for (const req of [
+			request,
+			createTestApi({
+				bucket,
+				userId: uid('user_god'),
+				deps: { ...secretsDeps(bucket), policy: { superAdmins: [uid('user_god')] } },
+			}).request,
+		]) {
+			await expectError(await req('GET', `/projects/${pid}/secrets`), 404);
+			await expectError(await req('PUT', `/projects/${pid}/secrets/K`, ref), 404);
+			await expectError(await req('DELETE', `/projects/${pid}/secrets/K`), 404);
+			await expectError(await req('POST', `/projects/${pid}/secrets/validate`, ref), 404);
+		}
 	});
 });

@@ -113,28 +113,31 @@ describe('ProjectService', () => {
 
 		it('returns all projects when a default role is set', async () => {
 			await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
-			const list = await projects.listProjects({ subject: STRANGER, defaultRole: 'viewer' });
+			const list = await projects.listProjects({
+				subject: STRANGER,
+				policy: { defaultRole: 'viewer' },
+			});
 			expect(list.map((p) => p.name)).toEqual(['A']);
 		});
 
 		it('hides projects a caller does not own or belong to when defaultRole is null', async () => {
 			await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
 			// Owner sees it; a stranger does not.
-			expect(await projects.listProjects({ subject: OWNER, defaultRole: null })).toHaveLength(1);
-			expect(await projects.listProjects({ subject: STRANGER, defaultRole: null })).toEqual([]);
+			expect(await projects.listProjects({ subject: OWNER })).toHaveLength(1);
+			expect(await projects.listProjects({ subject: STRANGER })).toEqual([]);
 		});
 
 		it('shows a project once the caller is added as a member', async () => {
 			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
 			await projects.addMember(p.id, { user_id: STRANGER.id }, 'viewer', ACTOR);
-			const list = await projects.listProjects({ subject: STRANGER, defaultRole: null });
+			const list = await projects.listProjects({ subject: STRANGER });
 			expect(list.map((e) => e.id)).toEqual([p.id]);
 		});
 
 		it('shows a project to an email member via the denormalized roster', async () => {
 			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
 			await projects.addMember(p.id, { email: STRANGER.email }, 'viewer', ACTOR);
-			const list = await projects.listProjects({ subject: STRANGER, defaultRole: null });
+			const list = await projects.listProjects({ subject: STRANGER });
 			expect(list.map((e) => e.id)).toEqual([p.id]);
 		});
 
@@ -148,7 +151,7 @@ describe('ProjectService', () => {
 			expect((await catalog.getCurrentSnapshot()).projects[0].member_ids).toBeUndefined();
 
 			// The member is still visible via the project.json fallback.
-			const list = await projects.listProjects({ subject: STRANGER, defaultRole: null });
+			const list = await projects.listProjects({ subject: STRANGER });
 			expect(list.map((e) => e.id)).toEqual([p.id]);
 		});
 
@@ -163,7 +166,33 @@ describe('ProjectService', () => {
 
 			// The stranger is neither owner nor a member, so the deny branch of
 			// canSeeProject hides the project entirely.
-			const list = await projects.listProjects({ subject: STRANGER, defaultRole: null });
+			const list = await projects.listProjects({ subject: STRANGER });
+			expect(list).toEqual([]);
+		});
+
+		it('shows every project to a super admin, including legacy entries', async () => {
+			const a = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			await projects.createProject({ name: 'B', description: 'b' }, ACTOR);
+			// A legacy entry (no denormalized roster) must not trip the
+			// project.json fallback for a super admin — the fast path covers it.
+			await catalog.updateProjectEntry('test.strip', ACTOR, a.id, () => ({
+				member_ids: undefined,
+			}));
+
+			const policy = { superAdmins: [STRANGER.email] };
+			const list = await projects.listProjects({ subject: STRANGER, policy });
+			expect(list.map((p) => p.name).sort()).toEqual(['A', 'B']);
+		});
+
+		it('does not open god-mode listing on an id/email namespace collision', async () => {
+			await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			// An email entry whose value equals the caller's ID must not elevate:
+			// the caller's real email is their own, so the fast path stays closed.
+			const impostor = { id: UserId.parse('admin@example.com'), email: 'attacker@evil.example' };
+			const list = await projects.listProjects({
+				subject: impostor,
+				policy: { superAdmins: ['admin@example.com'] },
+			});
 			expect(list).toEqual([]);
 		});
 	});

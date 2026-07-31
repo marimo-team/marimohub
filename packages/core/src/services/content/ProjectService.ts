@@ -1,6 +1,7 @@
 import type { Bucket } from '../../ports/bucket';
-import { canAct, canSeeProjectEntry } from '../../authz';
-import type { AuthSubject } from '../../authz';
+import { canAct, canSeeProjectEntry, isSuperAdmin } from '../../authz';
+import type { AuthSubject, AuthzPolicy } from '../../authz';
+import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import type { Role } from '../../constants';
@@ -49,14 +50,6 @@ export interface UpdateProjectInput {
  */
 export type NewMember = { user_id: UserId; email?: string } | { email: string };
 
-// A selector (path/API-supplied user id or email) denotes a member row when it
-// equals the row's single identifier. Emails compare lowercased; ids exactly.
-// A row has exactly one of the two, so this is unambiguous.
-function memberSelectorMatches(member: ProjectMember, selector: string): boolean {
-	if (member.user_id !== undefined) return member.user_id === selector;
-	return member.email === selector.toLowerCase();
-}
-
 export class ProjectService {
 	constructor(
 		private bucket: Bucket,
@@ -67,21 +60,26 @@ export class ProjectService {
 	/**
 	 * List projects, newest-first paging applied by the caller. Soft-deleted
 	 * projects are always hidden. When `filter` is passed with a null/undefined
-	 * `defaultRole` (deployment `MARIMOHUB_DEFAULT_ROLE=none`), the list is
-	 * restricted to projects the caller can see (owner or member); with a
-	 * `defaultRole` set every authenticated user is a viewer, so nothing is hidden.
+	 * `policy.defaultRole` (deployment `MARIMOHUB_DEFAULT_ROLE=none`), the list
+	 * is restricted to projects the caller can see (owner or member); with a
+	 * `defaultRole` set — or when the caller is a super admin — every project
+	 * is visible, so nothing is hidden.
 	 */
 	async listProjects(filter?: {
 		subject: AuthSubject;
-		defaultRole?: Role | null;
+		policy?: AuthzPolicy;
 	}): Promise<PublicProjectEntry[]> {
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		const live = snapshot.projects.filter((p) => p.status !== 'deleted');
-		if (!filter || filter.defaultRole != null) {
+		if (
+			!filter ||
+			filter.policy?.defaultRole != null ||
+			isSuperAdmin(filter.subject, filter.policy?.superAdmins)
+		) {
 			return live.map(toPublicProjectEntry);
 		}
 		const visibility = await mapWithConcurrency(live, BUCKET_SCAN_CONCURRENCY, async (entry) => {
-			const seen = canSeeProjectEntry(entry, filter.subject, filter.defaultRole);
+			const seen = canSeeProjectEntry(entry, filter.subject, filter.policy);
 			// `null` = the entry predates `member_ids`, so visibility can't be decided
 			// from the snapshot alone; fall back to the authoritative project.json.
 			return seen ?? (await this.canSeeProject(entry.id, filter.subject));
@@ -89,8 +87,10 @@ export class ProjectService {
 		return live.filter((_, i) => visibility[i]).map(toPublicProjectEntry);
 	}
 
+	// Only reached when the fast path above didn't return, i.e. the caller is
+	// neither a super admin nor covered by a defaultRole — so no policy here.
 	private async canSeeProject(id: ProjectId, subject: AuthSubject): Promise<boolean> {
-		return canAct(await this.getProject(id), subject, 'viewer', null);
+		return canAct(await this.getProject(id), subject, 'viewer', undefined);
 	}
 
 	async getProject(id: ProjectId): Promise<Project> {
@@ -198,7 +198,7 @@ export class ProjectService {
 	async addMember(id: ProjectId, member: NewMember, role: Role, actor: UserId): Promise<Project> {
 		const existing = await this.getProject(id);
 		const userId = 'user_id' in member ? member.user_id : undefined;
-		const email = member.email?.toLowerCase();
+		const email = member.email !== undefined ? normalizeEmail(member.email) : undefined;
 		const duplicate = existing.members.some(
 			(m) =>
 				(userId !== undefined && m.user_id === userId) ||
@@ -227,11 +227,11 @@ export class ProjectService {
 		if (selector === existing.owner) {
 			throw new ConflictError(`Cannot change the role of the project owner`);
 		}
-		if (!existing.members.some((m) => memberSelectorMatches(m, selector))) {
+		if (!existing.members.some((m) => memberRefMatchesSelector(m, selector))) {
 			throw new NotFoundError(`${selector} is not a member of project ${id}`);
 		}
 		const members = existing.members.map((m) =>
-			memberSelectorMatches(m, selector) ? { ...m, role } : m,
+			memberRefMatchesSelector(m, selector) ? { ...m, role } : m,
 		);
 		return this.writeMembers(existing, members, actor);
 	}
@@ -245,10 +245,10 @@ export class ProjectService {
 		if (selector === existing.owner) {
 			throw new ConflictError(`Cannot remove the project owner`);
 		}
-		if (!existing.members.some((m) => memberSelectorMatches(m, selector))) {
+		if (!existing.members.some((m) => memberRefMatchesSelector(m, selector))) {
 			throw new NotFoundError(`${selector} is not a member of project ${id}`);
 		}
-		const members = existing.members.filter((m) => !memberSelectorMatches(m, selector));
+		const members = existing.members.filter((m) => !memberRefMatchesSelector(m, selector));
 		return this.writeMembers(existing, members, actor);
 	}
 

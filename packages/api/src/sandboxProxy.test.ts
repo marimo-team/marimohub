@@ -105,6 +105,14 @@ describe('authorizeProxyRequest', () => {
 		expect(d).toMatchObject({ kind: 'reject', status: 403 });
 	});
 
+	it('forwards a non-member super admin to the kernel', async () => {
+		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+			...deps(STRANGER),
+			policy: { superAdmins: [STRANGER] },
+		});
+		expect(d.kind).toBe('forward');
+	});
+
 	describe('viewer access to the shared app kernel', () => {
 		let appToken: string;
 

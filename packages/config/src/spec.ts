@@ -897,6 +897,18 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'editor',
 					},
 					{
+						id: 'MARIMOHUB_SUPER_ADMINS',
+						name: 'Super admins',
+						description:
+							'Comma-separated user ids and/or emails granted implicit `admin` on every ' +
+							'project, plus visibility of all projects in listings. An entry containing ' +
+							'`@` matches only the login email, case-insensitively (trusting the email ' +
+							'the auth provider asserts); any other entry matches only the user id, ' +
+							'exactly. A personal access token minted by a super admin carries the same ' +
+							'power. Unset: no super admins.',
+						example: 'admin@example.com,user_01HXY00000000000000000000',
+					},
+					{
 						id: 'MARIMOHUB_VIEWER_MODE',
 						name: 'Viewer mode',
 						description:

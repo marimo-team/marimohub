@@ -297,7 +297,9 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			? 'Project owner'
 			: currentUserIsMember
 				? 'Project member'
-				: 'Default access';
+				: user?.is_super_admin
+					? 'Deployment super admin'
+					: 'Default access';
 	const currentIdentity = user ? users?.[user.id] : undefined;
 	const currentDisplayName = currentIdentity?.name || user?.email || 'You';
 

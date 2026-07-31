@@ -22,6 +22,7 @@ declare global {
 		E2B_API_KEY?: string;
 		E2B_TEMPLATE?: string;
 		DEFAULT_ROLE?: 'viewer' | 'editor' | 'admin' | 'none';
+		MARIMOHUB_SUPER_ADMINS?: string;
 		PERSIST_WORKSPACE?: 'source' | 'workspace';
 		AI_UPSTREAM_BASE_URL?: string;
 		AI_UPSTREAM_API_KEY?: string;
