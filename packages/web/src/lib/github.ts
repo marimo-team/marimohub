@@ -52,6 +52,10 @@ export function githubCommitUrl(repo: string, commit: string): string {
 	return `${githubRepoUrl(repo)}/commit/${encodeURIComponent(commit)}`;
 }
 
+export function githubBranchUrl(repo: string, branch: string): string {
+	return `${githubRepoUrl(repo)}/tree/${encodePath(branch)}`;
+}
+
 /** The repo-relative path of the synced entry notebook. */
 export function gitEntryPath(
 	source: Pick<GitSourceCoords, 'root_path' | 'entry_notebook'>,

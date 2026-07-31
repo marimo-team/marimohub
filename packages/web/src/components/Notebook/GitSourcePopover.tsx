@@ -5,6 +5,7 @@ import { Popover } from '@/components/ui';
 import { formatRelative } from '@/lib/time';
 import {
 	gitEntryPath,
+	githubBranchUrl,
 	githubCommitUrl,
 	githubCoords,
 	githubRepoUrl,
@@ -49,9 +50,35 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 					)}
 				</dd>
 				<dt>Branch</dt>
-				<dd className="min-w-0 truncate text-foreground">{source.branch}</dd>
+				<dd className="min-w-0 truncate">
+					{coords ? (
+						<a
+							href={githubBranchUrl(coords.repo, coords.branch)}
+							target="_blank"
+							rel="noreferrer"
+							className={LINK_CLASSES}
+						>
+							{source.branch}
+						</a>
+					) : (
+						<span className="text-foreground">{source.branch}</span>
+					)}
+				</dd>
 				<dt>File</dt>
-				<dd className="min-w-0 truncate text-foreground">{gitEntryPath(source)}</dd>
+				<dd className="min-w-0 truncate">
+					{coords ? (
+						<a
+							href={githubSourceUrl(coords)}
+							target="_blank"
+							rel="noreferrer"
+							className={LINK_CLASSES}
+						>
+							{gitEntryPath(source)}
+						</a>
+					) : (
+						<span className="text-foreground">{gitEntryPath(source)}</span>
+					)}
+				</dd>
 				{source.commit && (
 					<>
 						<dt>Commit</dt>

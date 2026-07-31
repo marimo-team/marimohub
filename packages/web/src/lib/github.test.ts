@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { NotebookDetail } from '@/types';
 import {
 	gitEntryPath,
+	githubBranchUrl,
 	githubCommitUrl,
 	githubCoords,
 	githubRepoUrl,
@@ -19,10 +20,13 @@ const SOURCE = {
 };
 
 describe('github link builders', () => {
-	it('builds repo and commit urls', () => {
+	it('builds repo, commit, and branch urls', () => {
 		expect(githubRepoUrl('acme/analytics')).toBe('https://github.com/acme/analytics');
 		expect(githubCommitUrl('acme/analytics', 'abc123')).toBe(
 			'https://github.com/acme/analytics/commit/abc123',
+		);
+		expect(githubBranchUrl('acme/analytics', 'feature/x y')).toBe(
+			'https://github.com/acme/analytics/tree/feature/x%20y',
 		);
 	});
 

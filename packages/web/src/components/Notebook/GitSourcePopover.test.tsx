@@ -70,6 +70,14 @@ describe('GitSourcePopover', () => {
 			'href',
 			'https://github.com/acme/analytics',
 		);
+		expect(screen.getByRole('link', { name: 'main' })).toHaveAttribute(
+			'href',
+			'https://github.com/acme/analytics/tree/main',
+		);
+		expect(screen.getByRole('link', { name: 'apps/dashboard.py' })).toHaveAttribute(
+			'href',
+			'https://github.com/acme/analytics/blob/abc123def456/apps/dashboard.py',
+		);
 		expect(screen.getByRole('link', { name: 'abc123d' })).toHaveAttribute(
 			'href',
 			'https://github.com/acme/analytics/commit/abc123def456',
