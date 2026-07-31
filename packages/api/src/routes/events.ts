@@ -1,5 +1,4 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { NotFoundError } from '@marimo-hub/core';
 import {
 	assertProjectRole,
 	AuditEventResponseSchema,
@@ -47,10 +46,8 @@ app.openapi(listEvents, async (c) => {
 	const { date } = c.req.valid('query');
 
 	// Unlike other reads (open by v1 policy), the audit trail is admin-only.
-	const project = await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
-	if (project.status === 'deleted') {
-		throw new NotFoundError(`Project ${pid} not found`);
-	}
+	// assertProjectRole also 404s a soft-deleted project (its own lifecycle guard).
+	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
 
 	const day = date ?? new Date().toISOString().slice(0, 10);
 	const events = await deps.services.events.getEvents(day);

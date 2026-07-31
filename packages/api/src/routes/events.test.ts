@@ -81,6 +81,12 @@ describe('Event routes', () => {
 		await expectError(await app.request(`/api/v1/projects/${pid}/events`), 401, 'UNAUTHORIZED');
 	});
 
+	it('404s a soft-deleted project (lifecycle guard in assertProjectRole)', async () => {
+		const pid = await createProject();
+		await expectOk(await request('DELETE', `/projects/${pid}`));
+		await expectError(await request('GET', `/projects/${pid}/events`), 404);
+	});
+
 	it('validates the date query and returns empty for an event-free day', async () => {
 		const pid = await createProject();
 
