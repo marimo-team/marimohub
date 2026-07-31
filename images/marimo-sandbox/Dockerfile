@@ -29,7 +29,7 @@ RUN cd /tmp \
  && uv init --bare --no-readme base \
  && cd base \
  && uv add --compile-bytecode \
-      "marimo[recommended,ai]==${MARIMO_VERSION}" \
+      "marimo[recommended]==${MARIMO_VERSION}" \
       polars \
       narwhals \
       numpy \
