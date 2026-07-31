@@ -2,7 +2,7 @@
 // (content arrives by push), but the sole `provider` today is GitHub, so links
 // are built for it directly.
 
-import type { NotebookVersion } from '@/types';
+import type { NotebookDetail, NotebookVersion } from '@/types';
 
 /** The git-source coordinates the link builders need (a subset of GitSource). */
 export interface GitSourceCoords {
@@ -11,6 +11,28 @@ export interface GitSourceCoords {
 	root_path: string;
 	entry_notebook: string;
 	commit: string | null;
+}
+
+// Server-validated on new sources; older or API-written records may carry a
+// clone URL or `git@` remote, which must degrade to "no link", never a wrong one.
+// Mirrors the server's OWNER_REPO_PATTERN (syncedSource.ts).
+const OWNER_REPO_PATTERN = /^[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+$/;
+
+/**
+ * The coordinates to build GitHub links from, or null when no trustworthy link
+ * exists: a non-git source, a future non-GitHub provider (the stored `provider`
+ * is a claim, not verified), or a repo that isn't plain `owner/repo`.
+ */
+export function githubCoords(source: NotebookDetail['source'] | undefined): GitSourceCoords | null {
+	if (source?.type !== 'git' || source.provider !== 'github') return null;
+	if (!OWNER_REPO_PATTERN.test(source.repo)) return null;
+	return {
+		repo: source.repo,
+		branch: source.branch,
+		root_path: source.root_path,
+		entry_notebook: source.entry_notebook,
+		commit: source.commit,
+	};
 }
 
 /**

@@ -100,6 +100,7 @@ function makeFetch(opts: FetchOptions) {
 					opts.sourceType === 'git'
 						? {
 								type: 'git',
+								provider: 'github',
 								repo: 'org/repo',
 								branch: 'main',
 								root_path: '',

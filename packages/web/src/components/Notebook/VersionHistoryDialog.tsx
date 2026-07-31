@@ -20,7 +20,7 @@ import {
 import type { UserDirectory } from '@/api/hooks';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { toastError } from '@/lib/errors';
-import { githubCommitUrl, shortCommit, versionCommit } from '@/lib/github';
+import { githubCommitUrl, githubCoords, shortCommit, versionCommit } from '@/lib/github';
 import { formatRelative } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { NotebookEntry, NotebookVersion } from '@/types';
@@ -169,14 +169,15 @@ export function VersionHistoryDialog({
 	const ids = new Set(versions.map((v) => v.version_id));
 
 	// The repo behind each sync version's commit link. The dialog mounts only
-	// while open, so this fetch is on-demand; local notebooks just get no chips.
+	// while open, so this fetch is on-demand; local notebooks (and git sources
+	// without a trustworthy GitHub repo) just get no chips.
 	const { data: detail } = useNotebookQuery(projectId, notebook.id);
-	const gitRepo = detail?.source.type === 'git' ? detail.source.repo : undefined;
+	const coords = githubCoords(detail?.source);
 	const commitLinkFor = (v: NotebookVersion): { href: string; label: string } | undefined => {
-		if (!gitRepo) return undefined;
+		if (!coords) return undefined;
 		const commit = versionCommit(v);
 		return commit
-			? { href: githubCommitUrl(gitRepo, commit), label: shortCommit(commit) }
+			? { href: githubCommitUrl(coords.repo, commit), label: shortCommit(commit) }
 			: undefined;
 	};
 

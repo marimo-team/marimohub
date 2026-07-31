@@ -102,6 +102,7 @@ function makeFetch({
 
 const GIT_SOURCE = {
 	type: 'git',
+	provider: 'github',
 	repo: 'org/repo',
 	branch: 'main',
 	root_path: '',

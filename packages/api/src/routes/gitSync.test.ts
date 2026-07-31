@@ -63,6 +63,20 @@ describe('Git sync routes', () => {
 		'X-Marimohub-Commit': 'abc123',
 	});
 
+	it('rejects creating a synced notebook whose repo is not owner/repo (400)', async () => {
+		await expectError(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Bad repo',
+				description: 'd',
+				repo: 'git@github.com:org/repo.git',
+				branch: 'main',
+				entry_notebook: 'app.py',
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+	});
+
 	it('rejects a request with no Authorization header (401)', async () => {
 		const { notebookId } = await createSyncedNotebook();
 		await expectError(await syncRequest({ notebookId }), 401, 'UNAUTHORIZED');

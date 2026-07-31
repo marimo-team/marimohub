@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import type { NotebookDetail } from '@/types';
 import {
 	gitEntryPath,
 	githubCommitUrl,
+	githubCoords,
 	githubRepoUrl,
 	githubSourceUrl,
 	shortCommit,
@@ -65,6 +67,40 @@ describe('github link builders', () => {
 		expect(githubSourceUrl({ ...SOURCE, commit: null, branch: 'feature/x y' })).toBe(
 			'https://github.com/acme/analytics/blob/feature/x%20y/app.py',
 		);
+	});
+});
+
+describe('githubCoords', () => {
+	const gitSource = (overrides: Record<string, unknown> = {}) =>
+		({
+			type: 'git',
+			provider: 'github',
+			repo: 'acme/analytics',
+			branch: 'main',
+			root_path: '',
+			entry_notebook: 'app.py',
+			sync_mode: 'push',
+			current_version_id: 'v1',
+			commit: 'abc123',
+			last_synced_at: null,
+			...overrides,
+		}) as NotebookDetail['source'];
+
+	it('returns coordinates for a GitHub source with an owner/repo shape', () => {
+		expect(githubCoords(gitSource())).toMatchObject({ repo: 'acme/analytics', commit: 'abc123' });
+	});
+
+	it('returns null for non-git, undefined, or non-github-provider sources', () => {
+		expect(githubCoords(undefined)).toBeNull();
+		expect(githubCoords({ type: 'local', current_version_id: 'v1' })).toBeNull();
+		expect(githubCoords(gitSource({ provider: 'gitlab' }))).toBeNull();
+	});
+
+	it('returns null when repo is not plain owner/repo (never a wrong link)', () => {
+		expect(githubCoords(gitSource({ repo: 'https://gitlab.com/group/project' }))).toBeNull();
+		expect(githubCoords(gitSource({ repo: 'git@github.com:acme/analytics.git' }))).toBeNull();
+		expect(githubCoords(gitSource({ repo: 'just-a-name' }))).toBeNull();
+		expect(githubCoords(gitSource({ repo: 'a/b/c' }))).toBeNull();
 	});
 });
 

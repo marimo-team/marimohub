@@ -6,6 +6,7 @@ import { formatRelative } from '@/lib/time';
 import {
 	gitEntryPath,
 	githubCommitUrl,
+	githubCoords,
 	githubRepoUrl,
 	githubSourceUrl,
 	shortCommit,
@@ -18,6 +19,9 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 	// can advance the source underneath a cached read and nothing invalidates it.
 	const { data: notebook, isError } = useNotebookQuery(projectId, notebookId, { staleTime: 0 });
 	const source = notebook?.source.type === 'git' ? notebook.source : undefined;
+	// Null when no trustworthy GitHub link exists (non-github provider, or a repo
+	// that isn't plain owner/repo) — metadata then renders without links.
+	const coords = githubCoords(notebook?.source);
 
 	if (isError) {
 		return <p className="text-xs text-destructive">Failed to load sync details.</p>;
@@ -31,14 +35,18 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 			<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-muted-foreground">
 				<dt>Repository</dt>
 				<dd className="min-w-0 truncate">
-					<a
-						href={githubRepoUrl(source.repo)}
-						target="_blank"
-						rel="noreferrer"
-						className={LINK_CLASSES}
-					>
-						{source.repo}
-					</a>
+					{coords ? (
+						<a
+							href={githubRepoUrl(coords.repo)}
+							target="_blank"
+							rel="noreferrer"
+							className={LINK_CLASSES}
+						>
+							{source.repo}
+						</a>
+					) : (
+						<span className="text-foreground">{source.repo}</span>
+					)}
 				</dd>
 				<dt>Branch</dt>
 				<dd className="min-w-0 truncate text-foreground">{source.branch}</dd>
@@ -48,14 +56,18 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 					<>
 						<dt>Commit</dt>
 						<dd>
-							<a
-								href={githubCommitUrl(source.repo, source.commit)}
-								target="_blank"
-								rel="noreferrer"
-								className={`font-mono ${LINK_CLASSES}`}
-							>
-								{shortCommit(source.commit)}
-							</a>
+							{coords ? (
+								<a
+									href={githubCommitUrl(coords.repo, source.commit)}
+									target="_blank"
+									rel="noreferrer"
+									className={`font-mono ${LINK_CLASSES}`}
+								>
+									{shortCommit(source.commit)}
+								</a>
+							) : (
+								<span className="font-mono text-foreground">{shortCommit(source.commit)}</span>
+							)}
 						</dd>
 					</>
 				)}
@@ -64,15 +76,17 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 					{source.last_synced_at ? formatRelative(source.last_synced_at) : 'Not synced yet'}
 				</dd>
 			</dl>
-			<a
-				href={githubSourceUrl(source)}
-				target="_blank"
-				rel="noreferrer"
-				className={`flex items-center gap-1 pt-0.5 font-medium ${LINK_CLASSES}`}
-			>
-				View source on GitHub
-				<ExternalLink className="size-3" />
-			</a>
+			{coords && (
+				<a
+					href={githubSourceUrl(coords)}
+					target="_blank"
+					rel="noreferrer"
+					className={`flex items-center gap-1 pt-0.5 font-medium ${LINK_CLASSES}`}
+				>
+					View source on GitHub
+					<ExternalLink className="size-3" />
+				</a>
+			)}
 		</div>
 	);
 }
