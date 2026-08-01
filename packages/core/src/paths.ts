@@ -189,5 +189,15 @@ export const paths = {
 	/** Advisory lease for the session-lifecycle sweep — its own key, so the two loops
 	 * (which share a replica and holder id) can never release each other's lease. */
 	sessionLifecycleLock: '_system/_session_lifecycle.lock',
+	/**
+	 * Org-scoped integration instance, inherited by every project:
+	 * `_system/integrations/{iid}/…`. Same layout and mutability classes as the
+	 * project-scoped tree (CAS-managed head, immutable versions, per-name claim),
+	 * written only by `OrgIntegrationsStore`.
+	 */
+	orgIntegration: (iid: IntegrationId) => integrationPaths('_system', iid),
+	orgIntegrationsPrefix: '_system/integrations/',
+	orgIntegrationNameClaim: (name: string) =>
+		`_system/integrations/_names/${encodeURIComponent(name)}.json`,
 	project: projectPaths,
 } as const;

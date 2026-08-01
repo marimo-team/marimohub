@@ -18,6 +18,10 @@ Integrations follow the repository's ports-and-adapters boundary:
   definitions into JSON Schema descriptors for the API and web form.
 - `packages/core/src/services/integrations/ProjectIntegrationsStore.ts` owns
   storage, versioning, name claims, secret handling, migrations, and rendering.
+  The machinery is scope-generic: `ProjectIntegrationsStore` binds it to
+  `projects/{pid}/integrations/…`, and `OrgIntegrationsStore` (same file) binds
+  it to the org tier at `_system/integrations/…`, whose instances every project
+  inherits.
 - `packages/core/src/services/integrations/bundle.ts` merges rendered files and
   environment variables into the session payload. Structured YAML fragments
   sharing a path are recursively merged, with conflicting leaves rejected.
@@ -35,6 +39,15 @@ to the current kind schema, decrypts secret fields, and calls the kind's
 renderer. The session then records that version as its audit pin. Rendered files
 and environment variables are bundled outside the notebook workspace so
 credentials cannot be captured in a notebook version.
+
+Session resolution merges the two tiers before a single bundle pass: enabled org
+instances render into the project's session unless the project has an
+integration with the same name — enabled or not — which shadows the org one
+(override and opt-out in one rule, and what keeps the bundle free of cross-tier
+name collisions). Org instances render with the _session's_ project id; only
+their storage (and secret-envelope binding) lives under `_system/`. Management
+of the org tier is exposed at `/api/v1/org/integrations…`, gated by
+`assertSuperAdmin` (`MARIMOHUB_SUPER_ADMINS`).
 
 ## Adding a kind
 

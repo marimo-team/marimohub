@@ -11,9 +11,23 @@ describe('makeIntegrations', () => {
 		expect(makeIntegrations({}, new MemoryBucket())).toEqual({});
 		expect(makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'off' }, new MemoryBucket())).toEqual({});
 		expect(makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'none' }, new MemoryBucket())).toEqual({});
-		expect(
-			makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'on' }, new MemoryBucket()).integrations,
-		).toBeDefined();
+		const wired = makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'on' }, new MemoryBucket());
+		expect(wired.integrations).toBeDefined();
+		expect(wired.orgIntegrations).toBeDefined();
+	});
+
+	it('org and project tiers share one bucket: org instances inherit into projects', async () => {
+		const bucket = new MemoryBucket();
+		const { integrations, orgIntegrations } = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on' },
+			bucket,
+		);
+		await orgIntegrations?.create(
+			{ kind: 'custom_env', name: 'org-flags', config: { vars: { ORG_FLAG: 'on' } } },
+			ACTOR,
+		);
+		const entries = await integrations?.list(createProjectId());
+		expect(entries).toEqual([expect.objectContaining({ name: 'org-flags', scope: 'org' })]);
 	});
 
 	it('rejects unknown values for the switch and the probe policy', () => {

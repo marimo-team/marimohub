@@ -5,6 +5,7 @@ import {
 	defaultRegistry,
 	INTEGRATIONS_DIR,
 	INTEGRATIONS_DIR_ENV,
+	OrgIntegrationsStore,
 	ProjectIntegrationsStore,
 } from '@marimo-hub/core';
 import type { NotebookId, ProjectId } from '@marimo-hub/core';
@@ -152,5 +153,54 @@ describe('Session provisioning with integrations', () => {
 		expect(calls.setEnvVars).toHaveLength(0);
 		expect(calls.writeFile).toHaveLength(0);
 		expect(calls.startProcess).toHaveLength(0);
+	});
+
+	it('renders inherited org integrations into the session and pins them', async () => {
+		const options = { bucket, registry: defaultRegistry(), codec };
+		const org = new OrgIntegrationsStore(options);
+		await org.create(
+			{ kind: 'custom_env', name: 'org-flags', config: { vars: { ORG_FLAG: 'on' } } },
+			ACTOR,
+		);
+		const store = makeStore();
+		await store.create(
+			pid,
+			{ kind: 'custom_env', name: 'flags', config: { vars: { MY_FLAG: 'on' } } },
+			ACTOR,
+		);
+
+		const { request, calls } = api(store);
+		const session = await expectOk<Record<string, unknown>>(
+			await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`),
+		);
+		expect(session.integrations).toEqual([
+			{ id: expect.stringMatching(/^intg-/), name: 'flags', kind: 'custom_env', version: 1 },
+			{ id: expect.stringMatching(/^intg-/), name: 'org-flags', kind: 'custom_env', version: 1 },
+		]);
+		const env = Object.assign({}, ...calls.setEnvVars);
+		expect(env.ORG_FLAG).toBe('on');
+		expect(env.MY_FLAG).toBe('on');
+	});
+
+	it('a same-name project integration overrides the inherited org config', async () => {
+		const options = { bucket, registry: defaultRegistry(), codec };
+		const org = new OrgIntegrationsStore(options);
+		await org.create(
+			{ kind: 'custom_env', name: 'flags', config: { vars: { SOURCE: 'org' } } },
+			ACTOR,
+		);
+		const store = makeStore();
+		await store.create(
+			pid,
+			{ kind: 'custom_env', name: 'flags', config: { vars: { SOURCE: 'project' } } },
+			ACTOR,
+		);
+
+		const { request, calls } = api(store);
+		const session = await expectOk<Record<string, unknown>>(
+			await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`),
+		);
+		expect(session.integrations).toHaveLength(1);
+		expect(Object.assign({}, ...calls.setEnvVars).SOURCE).toBe('project');
 	});
 });

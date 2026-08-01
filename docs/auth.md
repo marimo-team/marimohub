@@ -161,7 +161,10 @@ as `admin` on **every** project, regardless of membership or
 `MARIMOHUB_DEFAULT_ROLE`. A super admin can see and list all projects (even under
 `MARIMOHUB_DEFAULT_ROLE=none`), read and write every notebook, secret, and
 [integration](./integrations.md), control any session, and read the audit trail.
-It is the one grant that overrides the per-project role model.
+It is the one grant that overrides the per-project role model. Super admins are
+also the only principals who can manage
+[org-wide integrations](./integrations.md#org-wide-integrations) — no project
+role reaches those.
 
 An entry containing `@` matches the caller's login email, case-insensitively;
 any other entry matches the user id (the IdP `sub`) exactly. The two namespaces

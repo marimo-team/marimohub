@@ -78,6 +78,11 @@ export interface ProbeResponse {
 	json(): Promise<unknown>;
 }
 
+/** Where an integration instance lives. Org instances are deployment-wide and
+ *  inherited by every project; a same-name project instance (enabled or not)
+ *  shadows the org one, which makes it both the override and the opt-out. */
+export type IntegrationScopeKind = 'project' | 'org';
+
 /** List projection that intentionally omits config. */
 export interface IntegrationEntry {
 	id: IntegrationId;
@@ -88,6 +93,10 @@ export interface IntegrationEntry {
 	created_by: UserId;
 	created_at: string;
 	updated_at: string;
+	/** Absent means project-owned; project listings mark inherited org instances `'org'`. */
+	scope?: IntegrationScopeKind;
+	/** Org entries in a project listing only: a same-name project integration shadows this one. */
+	shadowed?: boolean;
 }
 
 /** Detail projection whose secret fields are always redacted. */
@@ -202,9 +211,37 @@ export interface IntegrationsProvider {
 	/**
 	 * Server-only render path. Failures name the instance but no values and abort
 	 * provisioning rather than starting a sandbox with partial configuration.
+	 * Includes enabled, unshadowed org-scoped instances rendered into this
+	 * project's session.
 	 */
 	resolveForSession(
 		projectId: ProjectId,
 		context: SessionRenderContext,
 	): Promise<SessionRender | undefined>;
+}
+
+/**
+ * CRUD over org-scoped (deployment-wide) integrations, stored under
+ * `_system/integrations/`. Managed by super admins only — the API layer gates
+ * every call; the provider itself carries no authorization. Rendering into
+ * sessions goes through `IntegrationsProvider.resolveForSession`, which merges
+ * the org scope in.
+ */
+export interface OrgIntegrationsProvider {
+	listKinds(): KindDescriptor[];
+	list(): Promise<IntegrationEntry[]>;
+	get(id: IntegrationId): Promise<IntegrationDetail>;
+	create(input: CreateIntegrationInput, actor: UserId): Promise<IntegrationDetail>;
+	update(
+		id: IntegrationId,
+		input: UpdateIntegrationInput,
+		actor: UserId,
+		expectedVersion?: string,
+	): Promise<IntegrationDetail>;
+	delete(id: IntegrationId, expectedVersion?: string): Promise<void>;
+	listVersions(
+		id: IntegrationId,
+		page?: IntegrationVersionPageRequest,
+	): Promise<IntegrationVersionPage>;
+	test(request: TestIntegrationRequest): Promise<TestResult>;
 }

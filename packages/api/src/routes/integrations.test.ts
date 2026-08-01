@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AesGcmSecretCodec, defaultRegistry, ProjectIntegrationsStore } from '@marimo-hub/core';
+import {
+	AesGcmSecretCodec,
+	defaultRegistry,
+	OrgIntegrationsStore,
+	ProjectIntegrationsStore,
+} from '@marimo-hub/core';
 import type { UserId } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
@@ -9,8 +14,10 @@ import { trackedTestBudgets } from './integrations';
 const codec = new AesGcmSecretCodec({ kek: '/ECMzY/eM7nlHPPNu+OM2wv0lWiFuHUScSJxNmh64N8=' });
 
 function integrationsDeps(bucket: MemoryBucket) {
+	const options = { bucket, registry: defaultRegistry(), codec };
 	return {
-		integrations: new ProjectIntegrationsStore({ bucket, registry: defaultRegistry(), codec }),
+		integrations: new ProjectIntegrationsStore(options),
+		orgIntegrations: new OrgIntegrationsStore(options),
 	};
 }
 
@@ -547,5 +554,159 @@ describe('Integrations routes', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe('Org integrations routes', () => {
+	const ROOT = uid('user_root');
+	let bucket: MemoryBucket;
+	let deps: ReturnType<typeof integrationsDeps> & { policy: { superAdmins: string[] } };
+	let asRoot: ReturnType<typeof createTestApi>['request'];
+	let asUser: ReturnType<typeof createTestApi>['request'];
+	let services: ReturnType<typeof createTestApi>['deps']['services'];
+
+	beforeEach(async () => {
+		bucket = await createInitializedBucket();
+		deps = { ...integrationsDeps(bucket), policy: { superAdmins: [ROOT] } };
+		const rootApi = createTestApi({ bucket, userId: ROOT, deps });
+		services = rootApi.deps.services;
+		asRoot = rootApi.request;
+		asUser = createTestApi({ bucket, userId: ACTOR, deps }).request;
+	});
+
+	async function createOrgPg(name = 'warehouse') {
+		return expectOk<{ id: string }>(
+			await asRoot('POST', '/org/integrations', { kind: 'postgres', name, config: PG_CONFIG }),
+			201,
+		);
+	}
+
+	it('every org route requires super admin (403 for everyone else)', async () => {
+		const iid = 'intg-0000000000000000';
+		await expectError(await asUser('GET', '/org/integrations'), 403);
+		await expectError(
+			await asUser('POST', '/org/integrations', {
+				kind: 'postgres',
+				name: 'warehouse',
+				config: PG_CONFIG,
+			}),
+			403,
+		);
+		await expectError(await asUser('GET', `/org/integrations/${iid}`), 403);
+		await expectError(await asUser('PATCH', `/org/integrations/${iid}`, { enabled: false }), 403);
+		await expectError(await asUser('DELETE', `/org/integrations/${iid}`), 403);
+		await expectError(await asUser('GET', `/org/integrations/${iid}/versions`), 403);
+		await expectError(
+			await asUser('POST', '/org/integrations/test', { kind: 'postgres', config: PG_CONFIG }),
+			403,
+		);
+	});
+
+	it('super admin CRUD round-trip: redaction, versions, ETag/If-Match, audit events', async () => {
+		const created = await createOrgPg();
+
+		const entries = await expectOk<Record<string, unknown>[]>(
+			await asRoot('GET', '/org/integrations'),
+		);
+		expect(entries).toEqual([
+			expect.objectContaining({ id: created.id, name: 'warehouse', scope: 'org' }),
+		]);
+
+		const res = await asRoot('GET', `/org/integrations/${created.id}`);
+		const etag = res.headers.get('ETag');
+		expect(etag).toBeTruthy();
+		const detail = await expectOk<Record<string, unknown>>(res);
+		expect(detail).toMatchObject({
+			kind: 'postgres',
+			scope: 'org',
+			config: { host: 'db.internal', password: { $secret: { set: true } } },
+		});
+		expect(JSON.stringify(detail)).not.toContain('sup3r-secret');
+
+		const updated = await expectOk<Record<string, unknown>>(
+			await asRoot(
+				'PATCH',
+				`/org/integrations/${created.id}`,
+				{ config: { ...PG_CONFIG, host: 'db2.internal', password: { $secret: { set: true } } } },
+				{ 'If-Match': etag! },
+			),
+		);
+		expect(updated.current_version).toBe(2);
+		await expectError(
+			await asRoot(
+				'PATCH',
+				`/org/integrations/${created.id}`,
+				{ enabled: false },
+				{ 'If-Match': etag! },
+			),
+			412,
+		);
+
+		const versions = await expectOk<{ items: { version: number }[] }>(
+			await asRoot('GET', `/org/integrations/${created.id}/versions`),
+		);
+		expect(versions.items.map((v) => v.version)).toEqual([2, 1]);
+
+		await expectOk(await asRoot('DELETE', `/org/integrations/${created.id}`));
+		await expectError(await asRoot('GET', `/org/integrations/${created.id}`), 404);
+
+		const events = await services.events.getEvents(new Date().toISOString().slice(0, 10));
+		const names = events.map((e) => e.event);
+		expect(names).toContain('org_integration.create');
+		expect(names).toContain('org_integration.update');
+		expect(names).toContain('org_integration.delete');
+		expect(JSON.stringify(events)).not.toContain('sup3r-secret');
+	});
+
+	it('project listings inherit org instances; a same-name project one marks them shadowed', async () => {
+		await createOrgPg();
+		const pid = (
+			await expectOk<{ id: string }>(
+				await asUser('POST', '/projects', { name: 'P', description: 'd' }),
+				201,
+			)
+		).id;
+
+		let entries = await expectOk<Record<string, unknown>[]>(
+			await asUser('GET', `/projects/${pid}/integrations`),
+		);
+		expect(entries).toEqual([expect.objectContaining({ name: 'warehouse', scope: 'org' })]);
+		expect(entries[0]?.shadowed).toBeUndefined();
+
+		await expectOk(
+			await asUser('POST', `/projects/${pid}/integrations`, {
+				kind: 'postgres',
+				name: 'warehouse',
+				config: PG_CONFIG,
+			}),
+			201,
+		);
+		entries = await expectOk<Record<string, unknown>[]>(
+			await asUser('GET', `/projects/${pid}/integrations`),
+		);
+		expect(entries.map((e) => ({ scope: e.scope, shadowed: e.shadowed }))).toEqual([
+			{ scope: undefined, shadowed: undefined },
+			{ scope: 'org', shadowed: true },
+		]);
+		// The inherited entry is read-only through project routes.
+		const orgId = String(entries[1]?.id);
+		await expectError(await asUser('GET', `/projects/${pid}/integrations/${orgId}`), 404);
+		await expectError(
+			await asUser('PATCH', `/projects/${pid}/integrations/${orgId}`, { enabled: false }),
+			404,
+		);
+	});
+
+	it('404s (before the admin gate) when the deployment has integrations disabled', async () => {
+		const bare = createTestApi({ bucket, userId: ROOT, deps: { policy: deps.policy } }).request;
+		await expectError(await bare('GET', '/org/integrations'), 404);
+		await expectError(
+			await bare('POST', '/org/integrations', {
+				kind: 'postgres',
+				name: 'warehouse',
+				config: PG_CONFIG,
+			}),
+			404,
+		);
 	});
 });

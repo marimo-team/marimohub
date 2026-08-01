@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
-import { ChevronDown, Copy, KeyRound, Moon, Sun } from 'lucide-react';
+import { ChevronDown, Copy, KeyRound, Moon, Puzzle, Sun } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
@@ -8,11 +8,13 @@ import { Brand } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
+import { OrgIntegrationsDialog } from '@/components/Project/ProjectIntegrationsDialog';
 
 export function Header() {
 	const { user, signOut } = useAuth();
 	const { theme, toggleTheme } = useTheme();
 	const tokensDialog = useDisclosure();
+	const orgIntegrationsDialog = useDisclosure();
 	const { copy } = useCopyToClipboard();
 
 	return (
@@ -56,6 +58,7 @@ export function Header() {
 									else if (key === 'copy-id') {
 										void copy(user.id).then((ok) => ok && toast.success('User id copied'));
 									} else if (key === 'api-tokens') tokensDialog.open();
+									else if (key === 'org-integrations') orgIntegrationsDialog.open();
 								}}
 							>
 								<MenuItem
@@ -83,6 +86,15 @@ export function Header() {
 									<KeyRound className="size-3.5" />
 									API tokens
 								</MenuItem>
+								{user.is_super_admin && (
+									<MenuItem
+										id="org-integrations"
+										className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors focus:bg-muted max-md:min-h-11"
+									>
+										<Puzzle className="size-3.5" />
+										Org integrations
+									</MenuItem>
+								)}
 								<Separator className="h-px bg-border" />
 								<MenuItem
 									id="signout"
@@ -97,6 +109,10 @@ export function Header() {
 			</div>
 
 			<ApiTokensDialog isOpen={tokensDialog.isOpen} onClose={tokensDialog.close} />
+			<OrgIntegrationsDialog
+				isOpen={orgIntegrationsDialog.isOpen}
+				onClose={orgIntegrationsDialog.close}
+			/>
 		</header>
 	);
 }

@@ -33,8 +33,11 @@ export type { ProjectSecretsStoreOptions } from './secrets/ProjectSecretsStore';
 export { AesGcmSecretCodec } from './secrets/AesGcmSecretCodec';
 export type { AesGcmSecretCodecOptions } from './secrets/AesGcmSecretCodec';
 export { assertValidSecretName } from './secrets/secretName';
-export { ProjectIntegrationsStore } from './integrations/ProjectIntegrationsStore';
-export type { ProjectIntegrationsStoreOptions } from './integrations/ProjectIntegrationsStore';
+export {
+	OrgIntegrationsStore,
+	ProjectIntegrationsStore,
+} from './integrations/ProjectIntegrationsStore';
+export type { IntegrationsStoreOptions } from './integrations/ProjectIntegrationsStore';
 export { IntegrationRegistry } from './integrations/registry';
 export { defineIntegration, envSegment } from './integrations/sdk';
 export type { IntegrationDefinition, RenderInput, RenderOutput } from './integrations/sdk';

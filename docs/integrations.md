@@ -127,6 +127,30 @@ can see the list and redacted configs; **`admin`** manages them — as does a
 New sessions pick up config changes; running sessions keep what they launched
 with (restart the session to apply).
 
+## Org-wide integrations
+
+A [super admin](./auth.md#super-admins-marimohub_super_admins) can define
+integrations once for the whole deployment — user menu → **Org integrations**,
+or the `/api/v1/org/integrations` routes. Org instances are **inherited by
+every project**: they render into every non-ephemeral session exactly like a
+project integration and appear in each project's list with an **org** badge
+(read-only there; members see name and kind, never config).
+
+A project **overrides** an org integration by creating its own integration with
+the same name — the project's config wins for that project's sessions. The same
+mechanism is the **opt-out**: create the same-name project integration and
+disable it, and sessions in that project get neither. The org list is unchanged
+either way; the project's entry just shows the org one as _overridden_.
+
+Two things follow from inheritance being deployment-wide:
+
+- An org integration that cannot render fails sessions closed in **every**
+  project that inherits it (see the failure model below). The per-project
+  escape hatch is the same-name opt-out; the global one is disabling the org
+  instance.
+- Org config changes reach each project's next session start — no per-project
+  action needed.
+
 ## Secret fields
 
 Secret config fields (passwords, tokens) are encrypted at rest with the

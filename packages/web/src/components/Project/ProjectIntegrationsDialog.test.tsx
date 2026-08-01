@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
-import { ProjectIntegrationsDialog } from './ProjectIntegrationsDialog';
+import { OrgIntegrationsDialog, ProjectIntegrationsDialog } from './ProjectIntegrationsDialog';
 import type { IntegrationDetail, IntegrationEntry, IntegrationKind, ProjectDetail } from '@/types';
 
 const PID = 'p_1';
@@ -94,10 +94,17 @@ interface FetchOpts {
 	entries: IntegrationEntry[] | null | 'error';
 	details?: Record<string, IntegrationDetail>;
 	patchError?: boolean;
+	orgEntries?: IntegrationEntry[];
 }
 
 /** Routes the dialog's list, detail, and probe requests through one mock. */
-function makeFetch({ kinds, entries, details = {}, patchError = false }: FetchOpts) {
+function makeFetch({
+	kinds,
+	entries,
+	details = {},
+	patchError = false,
+	orgEntries = [],
+}: FetchOpts) {
 	const calls: {
 		url: string;
 		method: string;
@@ -116,6 +123,26 @@ function makeFetch({ kinds, entries, details = {}, patchError = false }: FetchOp
 		if (url.includes('/api/v1/integrations/kinds')) {
 			if (kinds === 'error') return serverError();
 			return kinds === null ? notFound() : ok(kinds);
+		}
+		if (url.includes('/api/v1/org/integrations')) {
+			if (method === 'GET') return ok(orgEntries);
+			if (method === 'POST' && !url.includes('/test')) {
+				return ok(
+					{
+						id: 'org_new',
+						kind: body?.kind,
+						name: body?.name,
+						config: body?.config,
+						enabled: true,
+						current_version: 1,
+						created_by: 'u',
+						created_at: '',
+						updated_at: '',
+						scope: 'org',
+					},
+					201,
+				);
+			}
 		}
 		if (url.includes(`/projects/${PID}/integrations/test`) && method === 'POST') {
 			return ok({ ok: true, latency_ms: 5 });
@@ -476,6 +503,78 @@ describe('ProjectIntegrationsDialog — enable/disable', () => {
 			expect(patch).toBeTruthy();
 			expect(patch!.url).toContain(`/projects/${PID}/integrations/i_1`);
 			expect(patch!.body).toEqual({ enabled: false });
+		});
+	});
+});
+
+describe('ProjectIntegrationsDialog — inherited org integrations', () => {
+	it('marks inherited entries and hides their controls, even for a project admin', async () => {
+		setup(
+			{},
+			{
+				kinds: [postgresKind],
+				entries: [
+					entry(),
+					entry({ id: 'org_1', name: 'warehouse', scope: 'org' }),
+					entry({ id: 'org_2', name: 'prod-db', scope: 'org', shadowed: true }),
+				],
+			},
+		);
+		const rows = await screen.findAllByTestId('integration-row');
+		expect(rows).toHaveLength(3);
+		expect(screen.getAllByText('org')).toHaveLength(2);
+		expect(screen.getByText('overridden')).toBeInTheDocument();
+
+		// The project-owned row keeps its controls; inherited rows have none.
+		expect(screen.getAllByRole('button', { name: 'Disable' })).toHaveLength(1);
+		expect(screen.queryByRole('button', { name: 'Edit warehouse' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Delete warehouse' })).not.toBeInTheDocument();
+	});
+});
+
+describe('OrgIntegrationsDialog', () => {
+	function setupOrg(fetchOpts: FetchOpts) {
+		const calls = makeFetch(fetchOpts);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={client}>
+				{children}
+				<Toaster />
+			</QueryClientProvider>
+		);
+		render(<OrgIntegrationsDialog isOpen onClose={vi.fn()} />, { wrapper });
+		return { calls };
+	}
+
+	it('lists org instances with management controls', async () => {
+		setupOrg({
+			kinds: [postgresKind],
+			entries: [],
+			orgEntries: [entry({ id: 'org_1', name: 'warehouse', scope: 'org' })],
+		});
+		expect(await screen.findByRole('heading', { name: 'Org integrations' })).toBeInTheDocument();
+		expect(await screen.findByText('warehouse')).toBeInTheDocument();
+		// Org-owned rows are managed here, so they keep their controls.
+		expect(screen.getByRole('button', { name: 'Disable' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Edit warehouse' })).toBeInTheDocument();
+	});
+
+	it('creates through /org/integrations', async () => {
+		const user = userEvent.setup();
+		const { calls } = setupOrg({ kinds: [postgresKind], entries: [], orgEntries: [] });
+
+		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
+		await user.click(await screen.findByTestId('kind-card'));
+		await user.type(screen.getByLabelText('Name'), 'warehouse');
+		await user.type(screen.getByLabelText(/host/i), 'db.internal');
+		await user.click(screen.getByRole('button', { name: 'Add integration' }));
+
+		await waitFor(() => {
+			const post = calls.find((c) => c.method === 'POST');
+			expect(post).toBeTruthy();
+			expect(post!.url).toContain('/api/v1/org/integrations');
+			expect(post!.url).not.toContain('/projects/');
+			expect(post!.body).toMatchObject({ kind: 'postgres', name: 'warehouse' });
 		});
 	});
 });

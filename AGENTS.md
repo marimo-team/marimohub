@@ -93,9 +93,11 @@ compare-and-swap on the object's ETag (conditional PUT) with retry. Two other
 CAS-managed pointers exist, each with a single writer: the per-notebook app
 claim (`_system/apps/{pid}/{nid}.json`), written ONLY via
 `SessionService.claimApp`/`releaseApp`, and the per-integration head
-(`projects/{pid}/integrations/{iid}/integration.json`), written ONLY by
-`ProjectIntegrationsStore` — which also solely owns its immutable
-`versions/{n}.json` history (create-if-absent) and the per-name uniqueness
+(`projects/{pid}/integrations/{iid}/integration.json`, and its org-tier twin
+`_system/integrations/{iid}/integration.json` written ONLY by
+`OrgIntegrationsStore`), written ONLY by
+`ProjectIntegrationsStore` — each tier's store also solely owns its immutable
+`versions/{n}.json` history (create-if-absent) and its per-name uniqueness
 claim `integrations/_names/{name}.json` (the app-claim pattern) — sole
 exception: deleting the owning notebook or project also deletes its
 claim/integration object(s) as cleanup. Everything else in
