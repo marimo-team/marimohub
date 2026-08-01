@@ -1054,6 +1054,57 @@ describe('ProjectIntegrationsStore', () => {
 			expect(gets).toHaveLength(3);
 		});
 
+		/**
+		 * A cursor above the head used to yield an empty page WITH a cursor: no
+		 * progress toward version 1, `VERSION_PROBE_SLACK` reads burned per
+		 * round-trip, and — for a value past 2^53, where `- 1` is a no-op — a cursor
+		 * that re-encoded to itself, i.e. a genuinely non-terminating follow loop.
+		 */
+		it('rejects a forged out-of-range cursor instead of paging empty forever', async () => {
+			const { id } = await withHistory(5);
+			const { store, gets } = countingStore();
+			for (const forged of [
+				'1000000000',
+				String(Number.MAX_SAFE_INTEGER),
+				'9007199254740994', // past 2^53: decrementing it does nothing
+				'1e300',
+				'1e+300', // the shape `encodeVersionCursor` would round-trip
+			]) {
+				gets.length = 0;
+				await expect(
+					store.listVersions(pid, id, { limit: 2, cursor: btoa(forged) }),
+					forged,
+				).rejects.toThrow(BadRequestError);
+				// Rejected before any version record is probed: one head read, no more.
+				expect(gets, forged).toHaveLength(1);
+			}
+		});
+
+		// The highest cursor the store can mint: resumes just under the head.
+		it('accepts a cursor at the head and terminates', async () => {
+			const { id } = await withHistory(3);
+			const { store } = countingStore();
+
+			const page = await store.listVersions(pid, id, { limit: 5, cursor: btoa('3') });
+			expect(page.items.map((v) => v.version)).toEqual([2, 1]);
+			expect(page.next_cursor).toBeNull();
+		});
+
+		it('every cursor it hands out walks the whole history down to version 1', async () => {
+			const { id } = await withHistory(7);
+			const { store } = countingStore();
+
+			const seen: number[] = [];
+			let cursor: string | undefined;
+			for (let page = 0; page < 10; page++) {
+				const result = await store.listVersions(pid, id, { limit: 2, cursor });
+				seen.push(...result.items.map((v) => v.version));
+				if (result.next_cursor === null) break;
+				cursor = result.next_cursor;
+			}
+			expect(seen).toEqual([7, 6, 5, 4, 3, 2, 1]);
+		});
+
 		it('skips a missing record rather than returning a short page', async () => {
 			const { id, integrationPaths } = await withHistory(5);
 			await bucket.delete(integrationPaths.version(4));

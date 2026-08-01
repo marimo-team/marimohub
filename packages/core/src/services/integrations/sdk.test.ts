@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { ValidationError } from '../../errors';
 import type { IntegrationProbe } from '../../ports/integrations';
 import { trino } from './kinds/trino';
 import { basicAuthHeader, defineIntegration, envSegment, probeErrorDetails } from './sdk';
@@ -11,6 +12,11 @@ function echoingProbe(): IntegrationProbe {
 		fetch: (_url, init) =>
 			Promise.reject(new Error(`invalid header value ${JSON.stringify(init?.headers ?? {})}`)),
 	};
+}
+
+/** For kinds that fail before (or without) touching the network. */
+function unusedProbe(): IntegrationProbe {
+	return { fetch: () => Promise.reject(new Error('unused')) };
 }
 
 describe('defineIntegration secret guard', () => {
@@ -78,11 +84,66 @@ describe('defineIntegration secret guard', () => {
 				}),
 		});
 
-		const result = await def.testConnection?.({ items: [{ name: 'a', value: secret }] }, {
-			fetch: () => Promise.reject(new Error('unused')),
-		} as IntegrationProbe);
+		const result = await def.testConnection?.(
+			{ items: [{ name: 'a', value: secret }] },
+			unusedProbe(),
+		);
 
 		expect(result?.details).toBe('request failed');
+	});
+
+	it('converts a throw that quotes a secret into a redacted failure', async () => {
+		const secret = 'thrown-token-value';
+		const def = defineIntegration({
+			kind: 'throwing_fixture',
+			title: 'Throwing fixture',
+			description: 'Test double',
+			category: 'engine',
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			testConnection: (config) => {
+				throw new Error(`connect failed: authorization=Bearer ${config.token}`);
+			},
+		});
+
+		const result = await def.testConnection?.({ token: secret }, unusedProbe());
+
+		expect(result).toEqual({ ok: false, details: 'request failed' });
+	});
+
+	it('drops the message of an escaped throw even when no secret is quoted', async () => {
+		const def = defineIntegration({
+			kind: 'throwing_fixture',
+			title: 'Throwing fixture',
+			description: 'Test double',
+			category: 'engine',
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			testConnection: () => Promise.reject(new Error('connect ECONNREFUSED 10.0.0.1:8080')),
+		});
+
+		const result = await def.testConnection?.({ token: 'unused' }, unusedProbe());
+
+		expect(result?.details).toBe('request failed');
+	});
+
+	it('propagates a ValidationError so the route still answers 422', async () => {
+		const def = defineIntegration({
+			kind: 'rejecting_fixture',
+			title: 'Rejecting fixture',
+			description: 'Test double',
+			category: 'engine',
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			testConnection: () => Promise.reject(new ValidationError('unsupported auth combination')),
+		});
+
+		await expect(def.testConnection?.({ token: 'unused' }, unusedProbe())).rejects.toThrow(
+			ValidationError,
+		);
 	});
 
 	it('keeps a redacted success from contradicting its own ok result', async () => {

@@ -142,9 +142,10 @@ function assertKeyMaterial(kek: string): void {
 	if (!isGeneratedKey(kek)) {
 		throw new Error(
 			`Managed-secret KEK must be a generated ${KEK_BYTES}-byte key in its canonical ` +
-				'encoding: 64 hex characters, or 43 base64 characters (plus an optional `=`) ' +
-				'carrying the mixed case a random key has. Generate one with ' +
-				'`openssl rand -base64 32`. A passphrase is rejected because no password ' +
+				'encoding: 64 hex characters, or the 44-character output of ' +
+				'`openssl rand -base64 32` (43 characters plus its `=` padding, which is ' +
+				'optional), carrying the mixed case a random key has. A passphrase is ' +
+				'rejected because no password ' +
 				'stretching is applied to it. Secrets written under a previously accepted weak ' +
 				'key cannot be decrypted with the new one and must be re-entered.',
 		);

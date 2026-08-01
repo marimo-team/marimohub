@@ -86,11 +86,20 @@ the certificate chain and the hostname. libpq does not consult the system trust
 store on its own — with no `sslrootcert` it looks for `~/.postgresql/root.crt`
 and fails when that file is absent — so the rendered URL points `sslrootcert` at
 the sandbox image's CA bundle (`/etc/ssl/certs/ca-certificates.crt`). A publicly
-trusted server therefore verifies with no extra setup. For a private CA, paste
-its PEM into **CA bundle**; it is written beside the integration's other files
-and `sslrootcert` points there instead. `require` encrypts but authenticates
-nothing — choose it deliberately. A custom sandbox image must ship
-`ca-certificates`, or every integration needs its own CA bundle.
+trusted server therefore verifies with no extra setup. `require` encrypts but
+authenticates nothing — choose it deliberately.
+
+That default path is correct for the Debian-based images built here. Two ways to
+point it elsewhere:
+
+- **CA path** — an absolute path to a bundle the runtime already ships. Use it
+  when a custom image keeps its bundle somewhere else (RHEL/UBI:
+  `/etc/pki/tls/certs/ca-bundle.crt`), or under the host-based `local` compute
+  backend, where the image's path does not exist.
+- **CA bundle** — paste a private CA's PEM. It is written beside the
+  integration's other files and `sslrootcert` points there.
+
+Set one or the other, not both.
 
 ## Managing integrations
 
@@ -123,8 +132,9 @@ with (restart the session to apply).
 Secret config fields (passwords, tokens) are encrypted at rest with the
 deployment's managed-secret KEK and never returned by any API — responses show
 `{ "$secret": { "set": true } }`. Set `MARIMOHUB_SECRETS_KEK` to enable them — a
-generated 32-byte key, i.e. the exact output of `openssl rand -base64 32` (43
-base64 characters) or `openssl rand -hex 32` (64 hex characters). A passphrase,
+generated 32-byte key, i.e. the exact output of `openssl rand -base64 32` (44
+characters, ending in `=`) or `openssl rand -hex 32` (64 hex characters). A
+passphrase,
 or any value not shaped like a generated key, is rejected at startup, because
 the hub applies no password stretching to it. Without a KEK, only secret-free
 configs can be saved and the error names the missing variable. The KEK is shared

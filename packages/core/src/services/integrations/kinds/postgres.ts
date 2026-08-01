@@ -1,24 +1,58 @@
 import { z } from 'zod';
+import { ValidationError } from '../../../errors';
 import { INTEGRATIONS_DIR } from '../bundle';
 import { defineIntegration, envSegment, HOSTNAME_REGEX } from '../sdk';
 import { zSecret } from '../secretFields';
 
 // The shared host shape covers names and IPv4 literals only; a Postgres server
-// may sit on a bare IPv6 address. Hex groups and colons only, so an address
-// still cannot smuggle extra URL structure into the rendered DSN.
-const HEX_GROUP = '[0-9A-Fa-f]{1,4}';
-const IPV6_ALTERNATIVES = [
-	`(?:${HEX_GROUP}:){7}${HEX_GROUP}`,
-	`(?:${HEX_GROUP}:){1,7}:`,
-	`(?:${HEX_GROUP}:){1,6}:${HEX_GROUP}`,
-	`(?:${HEX_GROUP}:){1,5}(?::${HEX_GROUP}){1,2}`,
-	`(?:${HEX_GROUP}:){1,4}(?::${HEX_GROUP}){1,3}`,
-	`(?:${HEX_GROUP}:){1,3}(?::${HEX_GROUP}){1,4}`,
-	`(?:${HEX_GROUP}:){1,2}(?::${HEX_GROUP}){1,5}`,
-	`${HEX_GROUP}:(?::${HEX_GROUP}){1,6}`,
-	`:(?:(?::${HEX_GROUP}){1,7}|:)`,
-].join('|');
-const PG_HOST_REGEX = new RegExp(`${HOSTNAME_REGEX.source}|^(?:${IPV6_ALTERNATIVES})$`);
+// may sit on a bare IPv6 address. The regex is the security boundary and nothing
+// more: hex digits, colons and dotted-quad dots are the entire alphabet, so no
+// host — well formed or not — can smuggle URL structure (scheme, port, path,
+// userinfo, brackets, whitespace) into the rendered DSN. `isPgHost` then decides
+// whether those characters actually spell an address. Splitting it this way is
+// deliberate: counting groups around the single `::` and allowing the IPv4 tail
+// in exactly the trailing position is where hand-rolled IPv6 alternations go
+// wrong, and a wrong parser here costs a usability bug, never an injection.
+const PG_HOST_REGEX = new RegExp(`${HOSTNAME_REGEX.source}|^[0-9A-Fa-f.:]+$`);
+
+const IPV6_WORDS = 8;
+const HEX_GROUP_REGEX = /^[0-9A-Fa-f]{1,4}$/;
+const OCTET = String.raw`(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)`;
+const IPV4_REGEX = new RegExp(String.raw`^${OCTET}(?:\.${OCTET}){3}$`);
+
+/** 16-bit words a piece stands for, or `null` if it is not a legal piece. */
+function pieceWords(piece: string, isTrailing: boolean): number | null {
+	// `::ffff:192.0.2.128` and friends spell the low 32 bits as IPv4, which is how
+	// a dual-stack address is normally written — but only as the final piece.
+	if (isTrailing && piece.includes('.')) return IPV4_REGEX.test(piece) ? 2 : null;
+	return HEX_GROUP_REGEX.test(piece) ? 1 : null;
+}
+
+function isIpv6Literal(host: string): boolean {
+	const halves = host.split('::');
+	// A zone id (`%eth0`) is excluded by the regex above: it has no unescaped
+	// spelling inside a URL authority.
+	if (halves.length > 2) return false;
+	const compressed = halves.length === 2;
+	let words = 0;
+	for (const [halfIndex, half] of halves.entries()) {
+		if (half === '') continue;
+		const pieces = half.split(':');
+		for (const [index, piece] of pieces.entries()) {
+			const isTrailing = halfIndex === halves.length - 1 && index === pieces.length - 1;
+			const count = pieceWords(piece, isTrailing);
+			if (count === null) return false;
+			words += count;
+		}
+	}
+	// `::` stands for at least one omitted zero word, so a compressed address that
+	// already spells all eight is not compressed at all.
+	return compressed ? words < IPV6_WORDS : words === IPV6_WORDS;
+}
+
+function isPgHost(host: string): boolean {
+	return host.includes(':') ? isIpv6Literal(host) : HOSTNAME_REGEX.test(host);
+}
 
 // A verifying sslmode with no `sslrootcert` makes libpq read
 // `~/.postgresql/root.crt`, which no sandbox image ships, so the connection fails
@@ -26,14 +60,29 @@ const PG_HOST_REGEX = new RegExp(`${HOSTNAME_REGEX.source}|^(?:${IPV6_ALTERNATIV
 // resolves through OpenSSL's compiled-in default paths, and psycopg2-binary
 // bundles an OpenSSL whose defaults point at the wheel builder's scratch
 // directory (`/host/tmp/libpq.build/certs`) — so `system` fails to verify too.
-// Naming the image's bundle is what makes `verify-full` usable as the default.
-const SYSTEM_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
+// Naming a bundle is what makes `verify-full` usable as the default.
+//
+// This particular path is Debian's, matching the images built in this repo. A
+// deployment may run any base image (RHEL keeps its bundle under
+// `/etc/pki/tls/certs`) and the `local` compute backend runs on the developer's
+// own machine, where the path is typically absent — hence `ca_path`, so the
+// trust source is a config field rather than one image's layout.
+const DEFAULT_CA_PATH = '/etc/ssl/certs/ca-certificates.crt';
 
-const caBundleField = z
-	.string()
-	.min(1)
-	.optional()
-	.describe(`PEM CA bundle; defaults to the sandbox image trust store (${SYSTEM_CA_BUNDLE})`);
+const trustFields = {
+	ca_bundle: z
+		.string()
+		.min(1)
+		.optional()
+		.describe('PEM CA bundle to trust, written into the session'),
+	ca_path: z
+		.string()
+		.min(1)
+		.optional()
+		.describe(
+			`Absolute path to a CA bundle the runtime already ships (default ${DEFAULT_CA_PATH})`,
+		),
+};
 
 // `require` encrypts but authenticates nothing: any server that completes the
 // handshake is accepted, so it stays available as an explicit choice while new
@@ -43,14 +92,8 @@ const sslSchema = z
 		z.object({ mode: z.literal('disable') }),
 		z.object({ mode: z.literal('prefer') }),
 		z.object({ mode: z.literal('require') }),
-		z.object({
-			mode: z.literal('verify-ca'),
-			ca_bundle: caBundleField,
-		}),
-		z.object({
-			mode: z.literal('verify-full'),
-			ca_bundle: caBundleField,
-		}),
+		z.object({ mode: z.literal('verify-ca'), ...trustFields }),
+		z.object({ mode: z.literal('verify-full'), ...trustFields }),
 	])
 	.default({ mode: 'verify-full' })
 	.describe('libpq sslmode; `verify-full` checks the CA chain and the hostname');
@@ -58,7 +101,11 @@ const sslSchema = z
 const pgConfig = z.object({
 	host: z
 		.string()
-		.regex(PG_HOST_REGEX, 'Hostname or IP literal only — no scheme, port, path, or credentials')
+		.regex(PG_HOST_REGEX, {
+			error: 'Hostname or IP literal only — no scheme, port, path, or credentials',
+			abort: true,
+		})
+		.refine(isPgHost, 'Not a valid hostname or IP literal')
 		.describe('Server hostname, e.g. db.internal'),
 	port: z.number().int().min(1).max(65535).default(5432),
 	database: z.string().min(1),
@@ -87,6 +134,20 @@ export const postgres = defineIntegration({
 		'ssl.ca_bundle': { widget: 'textarea' },
 	},
 
+	validate(config) {
+		if (!('ca_path' in config.ssl)) return;
+		const { ca_bundle, ca_path } = config.ssl;
+		if (ca_path === undefined) return;
+		if (ca_bundle !== undefined) {
+			throw new ValidationError('Set only one of ssl.ca_bundle or ssl.ca_path');
+		}
+		// libpq resolves `sslrootcert` from the kernel's working directory, which is
+		// not the one the operator had in mind when typing a relative path.
+		if (!ca_path.startsWith('/') || ca_path.split('/').includes('..')) {
+			throw new ValidationError('ssl.ca_path must be an absolute path with no ".." segment');
+		}
+	},
+
 	migrate(stored, fromVersion) {
 		if (fromVersion !== 1 || typeof stored !== 'object' || stored === null) return stored;
 		const next = structuredClone(stored) as Record<string, unknown>;
@@ -109,7 +170,7 @@ export const postgres = defineIntegration({
 			caPath = `${INTEGRATIONS_DIR}/postgres/${instanceName}-ca.pem`;
 			files.push({ path: `postgres/${instanceName}-ca.pem`, content: caBundle });
 		} else if (verifies) {
-			caPath = SYSTEM_CA_BUNDLE;
+			caPath = ('ca_path' in config.ssl ? config.ssl.ca_path : undefined) ?? DEFAULT_CA_PATH;
 		}
 		const query = new URLSearchParams({ sslmode: config.ssl.mode });
 		if (caPath) query.set('sslrootcert', caPath);

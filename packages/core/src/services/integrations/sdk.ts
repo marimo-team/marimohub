@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DomainError } from '../../errors';
 import type {
 	IntegrationCategory,
 	IntegrationProbe,
@@ -80,7 +81,8 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	 * `defineIntegration` redacts details that quote a schema-marked value.
 	 * ALL network access goes through `probe` (never ambient `fetch`) — it is the
 	 * deployment's egress-policy boundary, and testing is disabled when none is
-	 * wired.
+	 * wired. Any throw that is not a `DomainError` becomes a generic failure
+	 * result and its message is discarded, so report failures by returning one.
 	 */
 	testConnection?(config: z.infer<S>, probe: IntegrationProbe): Promise<TestResult>;
 	/**
@@ -108,7 +110,22 @@ export function defineIntegration<S extends z.ZodType>(
 	return {
 		...def,
 		async testConnection(config, probe) {
-			const result = await testConnection(config, probe);
+			let result: TestResult;
+			try {
+				result = await testConnection(config, probe);
+			} catch (err) {
+				// A throw means the kind never reached its own sanitizer, so its text is
+				// untrusted wholesale — it can quote material this schema never marked (a
+				// probe URL with userinfo, a closed-over token) that the echo guard below
+				// would not catch. Drop it and report the generic failure.
+				//
+				// `DomainError` stays the deliberate rejection path (`ValidationError` →
+				// 422, a budget → 429): converting one would answer 200 with a failure
+				// detail for a request the API meant to refuse. Their messages are ours,
+				// not a transport's.
+				if (err instanceof DomainError) throw err;
+				result = { ok: false, details: probeErrorDetails(err, true) };
+			}
 			paths ??= secretPaths(
 				z.toJSONSchema(def.configSchema, { io: 'input' }) as Record<string, unknown>,
 			);

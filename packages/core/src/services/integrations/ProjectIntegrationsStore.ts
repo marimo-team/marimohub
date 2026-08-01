@@ -117,7 +117,10 @@ function decodeVersionCursor(cursor: string | undefined): number | undefined {
 	} catch {
 		version = undefined;
 	}
-	if (version === undefined || !Number.isInteger(version) || version < 1) {
+	// SAFE integer, not merely integer: `1e300` is an integer that `- 1` leaves
+	// unchanged and `encodeVersionCursor` round-trips, so a page built from it can
+	// neither make progress nor terminate.
+	if (version === undefined || !Number.isSafeInteger(version) || version < 1) {
 		throw new BadRequestError('Invalid pagination cursor');
 	}
 	return version;
@@ -454,6 +457,14 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		const head = await this.getHead(projectId, id);
 		const integrationPaths = paths.project(projectId).integration(id);
 		const after = decodeVersionCursor(page.cursor);
+		// `current_version` only ever grows, so every cursor this store mints is at
+		// or below the head it is read against; one above it is forged (or belongs
+		// to another integration). Paging from there would return empty pages WITH a
+		// cursor — no progress toward version 1, and `VERSION_PROBE_SLACK` wasted
+		// reads per round-trip — so it is as malformed as an undecodable cursor.
+		if (after !== undefined && after > head.current_version) {
+			throw new BadRequestError('Invalid pagination cursor');
+		}
 		const limit = Math.max(page.limit, 1);
 		// Version numbers are dense and monotonic (1…current_version, see
 		// `appendVersion`), so the page's KEYS are computed from the head or the

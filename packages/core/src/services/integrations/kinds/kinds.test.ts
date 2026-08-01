@@ -120,16 +120,56 @@ describe('kind renders (golden)', () => {
 		expect(JSON.stringify(descriptor)).not.toContain('p@ss');
 	});
 
-	it('postgres: brackets an IPv6 literal in the rendered URL but not in the env/descriptor', () => {
-		const config = postgres.configSchema.parse({
-			...(FIXTURES.postgres as object),
-			host: '2001:db8::1',
-		});
-		const out = postgres.render(input(config, postgres));
-		expect(out.env?.MARIMOHUB_PG_PROD_URL).toContain('@[2001:db8::1]:5432/');
-		// libpq's PGHOST-style fields take the bare address.
-		expect(out.env?.MARIMOHUB_PG_PROD_HOST).toBe('2001:db8::1');
-		expect(new URL(out.env?.MARIMOHUB_PG_PROD_URL ?? '').hostname).toBe('[2001:db8::1]');
+	it.each(['2001:db8::1', '::ffff:192.0.2.128'])(
+		'postgres: brackets the IPv6 literal %s in the rendered URL but not in the env/descriptor',
+		(host) => {
+			const config = postgres.configSchema.parse({ ...(FIXTURES.postgres as object), host });
+			const out = postgres.render(input(config, postgres));
+			expect(out.env?.MARIMOHUB_PG_PROD_URL).toContain(`@[${host}]:5432/`);
+			// libpq's PGHOST-style fields take the bare address.
+			expect(out.env?.MARIMOHUB_PG_PROD_HOST).toBe(host);
+			// A bracketed authority is what makes the DSN a parseable URL at all.
+			expect(new URL(out.env?.MARIMOHUB_PG_PROD_URL ?? '').hostname).toMatch(/^\[.+]$/);
+			const descriptor = JSON.parse(
+				out.files?.find(({ path }) => path === 'postgres/prod.json')?.content ?? '',
+			) as { host: string };
+			expect(descriptor.host).toBe(host);
+		},
+	);
+
+	// A hand-rolled hex-group alternation rejects every IPv4-embedded form, which
+	// is how a dual-stack server's address is usually written.
+	it('postgres: accepts every IPv6 literal form, including an IPv4-embedded tail', () => {
+		const pgHost = (host: string) =>
+			postgres.configSchema.safeParse({ ...(FIXTURES.postgres as object), host }).success;
+		for (const host of [
+			'::ffff:192.0.2.128',
+			'::ffff:0:192.0.2.128',
+			'64:ff9b::192.0.2.33',
+			'2001:db8:0:0:0:0:192.0.2.128',
+			'1:2:3:4:5:6:7:8',
+			'2001:db8::',
+			'::',
+		]) {
+			expect(pgHost(host), host).toBe(true);
+		}
+		// Structurally impossible addresses: two `::`, too many groups, a stray
+		// colon, a misplaced or malformed dotted quad, a zone id.
+		for (const host of [
+			'1::2::3',
+			'1:2:3:4:5:6:7:8:9',
+			'1:2:3:4:5:6:7',
+			':1',
+			'1:::2',
+			'192.0.2.1::1',
+			'::ffff:192.0.2.128.5',
+			'::ffff:999.0.2.1',
+			'::ffff:192.0.2',
+			'::12345',
+			'fe80::1%eth0',
+		]) {
+			expect(pgHost(host), host).toBe(false);
+		}
 	});
 
 	// Without an explicit `sslrootcert` a verifying sslmode resolves against
@@ -187,6 +227,46 @@ describe('kind renders (golden)', () => {
 			withCa.files?.find(({ path }) => path === 'postgres/prod.json')?.content ?? '',
 		) as { ssl: Record<string, unknown> };
 		expect(descriptor.ssl).toEqual({ mode: 'verify-full', ca_path: caPath });
+	});
+
+	// The default names Debian's bundle because the images built here are Debian,
+	// but an operator may run any base image and the `local` backend runs on the
+	// developer's own machine — neither is guaranteed to keep a bundle there.
+	it('postgres: the trust store path is overridable without pasting a CA bundle', () => {
+		const config = postgres.configSchema.parse({
+			...(FIXTURES.postgres as object),
+			ssl: { mode: 'verify-full', ca_path: '/etc/pki/tls/certs/ca-bundle.crt' },
+		});
+		const out = postgres.render(input(config, postgres));
+		expect(new URL(out.env?.MARIMOHUB_PG_PROD_URL ?? '').searchParams.get('sslrootcert')).toBe(
+			'/etc/pki/tls/certs/ca-bundle.crt',
+		);
+		const descriptor = JSON.parse(
+			out.files?.find(({ path }) => path === 'postgres/prod.json')?.content ?? '',
+		) as { ssl: Record<string, unknown> };
+		expect(descriptor.ssl).toEqual({
+			mode: 'verify-full',
+			ca_path: '/etc/pki/tls/certs/ca-bundle.crt',
+		});
+		// Naming a path copies nothing into the session.
+		expect(out.files?.map(({ path }) => path)).toEqual(['postgres/prod.json']);
+	});
+
+	it('postgres: rejects an ambiguous or unusable trust source', () => {
+		const parse = (ssl: unknown) =>
+			postgres.configSchema.parse({ ...(FIXTURES.postgres as object), ssl });
+		expect(() =>
+			postgres.validate?.(parse({ mode: 'verify-full', ca_bundle: 'CA', ca_path: '/ca.pem' })),
+		).toThrow(/only one/i);
+		for (const ca_path of ['ca.pem', 'relative/ca.pem', '/etc/../ca.pem']) {
+			expect(() => postgres.validate?.(parse({ mode: 'verify-ca', ca_path })), ca_path).toThrow(
+				ValidationError,
+			);
+		}
+		expect(() =>
+			postgres.validate?.(parse({ mode: 'verify-full', ca_path: '/etc/ssl/cert.pem' })),
+		).not.toThrow();
+		expect(() => postgres.validate?.(parse(undefined))).not.toThrow();
 	});
 
 	it('postgres: the v1 boolean ssl flag migrates to its exact libpq mode', () => {
@@ -898,6 +978,20 @@ describe('kind renders (golden)', () => {
 		expect(pgHost('db.internal:5432')).toBe(false);
 		expect(pgHost('user@db.internal')).toBe(false);
 		expect(pgHost('db internal')).toBe(false);
+
+		// The exact IPv6 grammar is not expressible in JSON Schema, so the pattern
+		// the web form validates against is a deliberate superset. It still carries
+		// the whole security contract: no character of URL structure gets through.
+		const schemas = Object.fromEntries(
+			defaultRegistry()
+				.describeAll()
+				.map(({ kind, json_schema }) => [kind, json_schema]),
+		) as Record<string, { properties: { host: { pattern: string } } }>;
+		const pattern = new RegExp(schemas.postgres?.properties.host.pattern ?? '');
+		for (const bad of ['[::1]', 'db.internal/x', 'a@b', 'a b', 'a?b', 'a#b', 'a%2fb', 'a\\b']) {
+			expect(pattern.test(bad), bad).toBe(false);
+		}
+		expect(pattern.test('::ffff:192.0.2.128')).toBe(true);
 
 		const trinoField = (field: Record<string, unknown>) =>
 			trino.configSchema.safeParse({ ...(FIXTURES.trino as object), ...field }).success;
