@@ -29,9 +29,13 @@ config-driven vs. library-composition paths.
 There is no separate database. Notebooks, version history, sessions, and a small
 `_system/catalog.json` index all live in the object store. That's why the only
 hard requirement on storage is **atomic conditional writes**: the catalog
-pointer is updated with a compare-and-swap so concurrent edits never corrupt it,
-and everything else is immutable or append-only. One consequence: **backing up =
+pointer and operational session claims are updated with compare-and-swap so
+concurrent requests converge on one owner. Notebook versions and audit events
+are immutable or append-only. One consequence: **backing up =
 backing up the bucket** (see [Operations](/operations#backups-restore)).
+
+Persistent edit sandboxes use a per-notebook editor claim. See
+[Editor sessions](/editor-sessions) for the shared and exclusive policies.
 
 ## Request and kernel flow
 

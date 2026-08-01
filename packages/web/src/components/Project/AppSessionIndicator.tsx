@@ -12,8 +12,7 @@ import {
 } from '@/components/Notebook/computeProfiles';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 
-// App-indicator treatment per status: an AppWindow glyph colored like the
-// kernel dot, so the row reads "per-user edit dot + shared app glyph".
+// Use a distinct glyph so a shared app is not confused with the editor sandbox.
 const APP_STATUS: Partial<
 	Record<Session['status'], { className: string; label: string; pulse?: boolean }>
 > = {

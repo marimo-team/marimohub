@@ -79,6 +79,7 @@ export function createApi(rawDeps: ApiDeps) {
 		policy: {
 			...rawDeps.policy,
 			viewerMode: rawDeps.policy.viewerMode ?? 'static',
+			editorSandboxSharing: rawDeps.policy.editorSandboxSharing ?? 'shared',
 		},
 	};
 

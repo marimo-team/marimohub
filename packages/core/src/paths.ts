@@ -164,6 +164,9 @@ export const paths = {
 	appClaim: (projectId: ProjectId, notebookId: NotebookId) =>
 		`_system/apps/${projectId}/${notebookId}.json`,
 	appClaimsForProject: (projectId: ProjectId) => `_system/apps/${projectId}/`,
+	editorClaim: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/editors/${projectId}/${notebookId}.json`,
+	editorClaimsForProject: (projectId: ProjectId) => `_system/editors/${projectId}/`,
 	identity: (userId: UserId) => `_system/identities/${encodeURIComponent(userId)}.json`,
 	identitiesPrefix: '_system/identities/',
 	// One mutable record per personal access token, keyed by the id embedded in

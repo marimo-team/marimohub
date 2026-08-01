@@ -52,6 +52,36 @@ export class SessionRetirer {
 				.catch(() => {});
 		}
 		await this.deps.sessions.releaseAppFor(session);
+		await this.deps.sessions.releaseEditorFor(session);
+	}
+
+	/** Save and stop an exclusive editor without releasing its protected claim. */
+	async retireForTakeover(session: Session, requestedBy: Session['user_id']): Promise<void> {
+		if (session.sandbox_id) {
+			const sandbox = this.deps.compute.create(session.sandbox_id);
+			await this.provisioner.captureSession(
+				sandbox,
+				this.deps.notebooks,
+				this.deps.bucket,
+				session.project_id,
+				session.notebook_id,
+				session.user_id,
+				this.deps.persistWorkspace,
+				this.deps.workdir,
+				{ persistEdits: true },
+			);
+		}
+		await this.deps.sessions.beginTerminating(session.project_id, session.session_id, {
+			reason: 'takeover',
+			by: requestedBy,
+		});
+		if (session.sandbox_id) await this.deps.compute.create(session.sandbox_id).destroy();
+		await this.deps.sessions.markTerminated(session.project_id, session.session_id);
+	}
+
+	async completeTakeoverDrain(session: Session): Promise<void> {
+		if (session.sandbox_id) await this.deps.compute.create(session.sandbox_id).destroy();
+		await this.deps.sessions.markTerminated(session.project_id, session.session_id);
 	}
 
 	/**
@@ -75,6 +105,7 @@ export class SessionRetirer {
 			.markSandboxReclaimed(session.project_id, session.session_id, new Date().toISOString())
 			.catch(() => {});
 		await this.deps.sessions.releaseAppFor(session);
+		await this.deps.sessions.releaseEditorFor(session);
 		return true;
 	}
 
@@ -88,6 +119,8 @@ export class SessionRetirer {
 		if (!session.sandbox_id) return;
 		const sandbox = this.deps.compute.create(session.sandbox_id);
 		try {
+			const persistEdits =
+				sessionPersistsEdits(session) && (await this.deps.sessions.ownsEditorClaim(session));
 			await this.provisioner.teardown(
 				sandbox,
 				this.deps.notebooks,
@@ -98,7 +131,7 @@ export class SessionRetirer {
 				this.deps.persistWorkspace,
 				this.deps.workdir,
 				{
-					persistEdits: sessionPersistsEdits(session),
+					persistEdits,
 					computeProfile: session.compute_profile,
 					computeResources: session.compute_resources,
 				},

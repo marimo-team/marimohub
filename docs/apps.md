@@ -4,6 +4,7 @@ Serve a notebook as a read-only **application**. An app runs the notebook with
 `marimo run` — people using it see the notebook's outputs and interactive
 elements (sliders, forms, buttons), never the code or the editor. The editing
 workflow is untouched: an app runs alongside edit sessions, in its own sandbox.
+App sharing is independent of [editor sandbox sharing](./editor-sessions.md).
 
 ## How it works
 

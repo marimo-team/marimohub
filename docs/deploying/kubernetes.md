@@ -55,6 +55,7 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net     # kernels at https:
 MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
 MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=traefik
 MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared                     # shared | exclusive
 # Optional per-kernel resources / scheduling:
 # MARIMOHUB_COMPUTE_KUBERNETES_CPU=2
 # MARIMOHUB_COMPUTE_KUBERNETES_MEMORY=4Gi
@@ -64,7 +65,9 @@ MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
 ```
 
 See [Configuration → Compute → Kubernetes](../configuration.md#compute) for every
-variable.
+variable. Read [Editor sessions](../editor-sessions.md) before changing the
+sharing mode. Upgrades require draining edit sessions before replacing API
+replicas.
 
 ## Topology
 

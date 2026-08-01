@@ -21,12 +21,14 @@ import {
 	sessionPersistsEdits,
 	SessionRetirer,
 	SOURCE_TYPES,
+	EDITOR_SANDBOX_SHARING_VALUES,
 	VIEWER_MODES,
 } from '@marimo-hub/core';
 import type {
 	AuthSubject,
 	AuthzPolicy,
 	ComputeResources,
+	EditorSandboxSharing,
 	Project,
 	ProjectService,
 	Role,
@@ -79,7 +81,10 @@ export function assertSuperAdmin(subject: AuthSubject, policy?: AuthzPolicy): vo
 }
 
 /** The slice of PolicyConfig the session gates need. */
-export type SessionPolicy = AuthzPolicy & { viewerMode?: ViewerMode };
+export type SessionPolicy = AuthzPolicy & {
+	viewerMode?: ViewerMode;
+	editorSandboxSharing?: EditorSandboxSharing;
+};
 
 /**
  * The caller as `sessionCan` sees them, with the role evaluated against the
@@ -95,6 +100,7 @@ export function sessionActorFor(
 		userId: subject.id,
 		role: effectiveRole(project, subject, policy),
 		viewerMode: policy.viewerMode,
+		editorSandboxSharing: policy.editorSandboxSharing,
 	};
 }
 
@@ -102,7 +108,7 @@ export function sessionActorFor(
 export function sessionGrantsFor(
 	project: Project,
 	subject: AuthSubject,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 	policy: SessionPolicy,
 ): { attach: boolean; stop: boolean } {
 	return sessionGrants(sessionActorFor(project, subject, policy), session);
@@ -111,7 +117,7 @@ export function sessionGrantsFor(
 function assertSession(
 	action: SessionAction,
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): void {
@@ -122,11 +128,12 @@ function assertSession(
 
 /**
  * Gate control of a live session (stop / terminate) — `sessionCan('stop')` as
- * a thrower. Editor+, or the owner of their own ephemeral (viewer) session.
+ * a thrower. Applies the shared, exclusive, temporary, administrator, and
+ * viewer rules from `sessionCan`.
  */
 export function assertSessionControl(
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): void {
@@ -141,7 +148,7 @@ export function assertSessionControl(
  */
 export function assertSessionAccess(
 	project: Project,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 	subject: AuthSubject,
 	policy: SessionPolicy,
 ): void {
@@ -694,13 +701,15 @@ export const SessionResponseSchema = z
 		started_at: dt(),
 		last_heartbeat: dt(),
 		/**
-		 * A viewer's throwaway session (MARIMOHUB_VIEWER_MODE=ephemeral-sandbox):
-		 * edits run live but are discarded at teardown. Drives the client's
-		 * "edits won't be saved" banner; absent = persisting.
+		 * A discard-only viewer or temporary-editor session. Edits run live but
+		 * are discarded at teardown. Drives the client's warning banner.
 		 */
 		ephemeral: z.boolean().optional(),
+		editor_sandbox_sharing: z.enum(EDITOR_SANDBOX_SHARING_VALUES).optional(),
+		ended_reason: z.enum(['takeover']).optional(),
+		ended_by_user_id: z.string().optional(),
 		/**
-		 * `edit` (the editor; per-user) or `app` (the notebook served read-only —
+		 * `edit` (an editor sandbox) or `app` (the notebook served read-only —
 		 * a per-notebook singleton shared by everyone admitted to it). Always
 		 * present in responses; stored records may omit it (= `edit`).
 		 */
@@ -719,7 +728,7 @@ export const SessionResponseSchema = z
 		 */
 		can: z.object({ attach: z.boolean(), stop: z.boolean() }),
 		/**
-		 * `app` only: kernel connection count as of the lifecycle sweep's last
+		 * Shared app/editor kernel connection count as of the lifecycle sweep's last
 		 * probe (approximate). Drives the "~N connected" stop-confirm hint.
 		 */
 		active_connections: z.number().optional(),
@@ -809,6 +818,7 @@ export const CapabilitiesResponseSchema = z
 		 * clients render from it instead of re-deriving policy from `viewer_mode`.
 		 */
 		viewer_session_modes: z.array(z.enum(SESSION_MODES)),
+		editor_sandbox_sharing: z.enum(EDITOR_SANDBOX_SHARING_VALUES),
 		/**
 		 * Role granted to an authenticated non-member (MARIMOHUB_DEFAULT_ROLE);
 		 * null = members-only. The UI derives its role/access copy from this.

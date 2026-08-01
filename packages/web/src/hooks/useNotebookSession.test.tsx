@@ -116,30 +116,38 @@ describe('useNotebookSession', () => {
 		expect(result.current.isRunning).toBe(false);
 	});
 
-	it('keeps provisioning visible during the one-shot Default retry', async () => {
+	it('keeps temporary intent and provisioning visible during the one-shot Default retry', async () => {
 		let postCount = 0;
 		let resolveDefault!: (response: Response) => void;
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method !== 'POST') throw new Error('unexpected request');
-				postCount += 1;
-				if (postCount === 1) return jsonError('RESOURCE_EXHAUSTED', 'profile too large', 429);
-				return new Promise<Response>((resolve) => {
-					resolveDefault = resolve;
-				});
-			}),
-		);
-
-		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
-			toaster: false,
+		const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.method !== 'POST') throw new Error('unexpected request');
+			postCount += 1;
+			if (postCount === 1) return jsonError('RESOURCE_EXHAUSTED', 'profile too large', 429);
+			return new Promise<Response>((resolve) => {
+				resolveDefault = resolve;
+			});
 		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		const { result } = renderHookWithClient(
+			() => useNotebookSession(PID, NID, { editIntent: 'temporary' }),
+			{
+				toaster: false,
+			},
+		);
 		await waitFor(() => expect(result.current.error?.message).toBe('profile too large'));
+		expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+			edit_intent: 'temporary',
+		});
 
 		act(() => result.current.startWithDefault());
 		expect(result.current.defaultRetryAttempted).toBe(true);
 		expect(result.current.isProvisioning).toBe(true);
 		await waitFor(() => expect(postCount).toBe(2));
+		expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+			compute_profile: 'default',
+			edit_intent: 'temporary',
+		});
 
 		await act(async () => {
 			resolveDefault(jsonError('RESOURCE_EXHAUSTED', 'default unavailable', 429));
@@ -147,6 +155,35 @@ describe('useNotebookSession', () => {
 		await waitFor(() => expect(result.current.error?.message).toBe('default unavailable'));
 		expect(result.current.isProvisioning).toBe(false);
 		expect(result.current.defaultRetryAttempted).toBe(true);
+	});
+
+	it('starts a persistent editor explicitly after a temporary session', async () => {
+		let postCount = 0;
+		const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.method !== 'POST') throw new Error('unexpected request');
+			postCount += 1;
+			return jsonOk(
+				makeSession({
+					session_id: postCount === 1 ? 'sess-temporary' : 'sess-persistent',
+					ephemeral: postCount === 1 ? true : undefined,
+				}),
+			);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		const { result } = renderHookWithClient(
+			() => useNotebookSession(PID, NID, { editIntent: 'temporary' }),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.session?.session_id).toBe('sess-temporary'));
+
+		act(() => result.current.startPersistent());
+		await waitFor(() => expect(result.current.session?.session_id).toBe('sess-persistent'));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+			edit_intent: 'temporary',
+		});
+		expect(fetchMock.mock.calls[1]?.[1]?.body).toBeUndefined();
 	});
 
 	it('stop() clears local state and issues a DELETE', async () => {

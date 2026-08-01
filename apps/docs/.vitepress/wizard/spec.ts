@@ -136,6 +136,14 @@ export const ALL_VARS_BY_ID: Map<string, ConfigVar> = new Map(
 /** Extra toggles. Append entries here to surface more options — no UI changes needed. */
 export const EXTRA_OPTIONS: ExtraOption[] = [
 	{
+		id: serverVar('MARIMOHUB_EDITOR_SANDBOX_SHARING').id,
+		label: 'Editor sandbox sharing',
+		description: serverVar('MARIMOHUB_EDITOR_SANDBOX_SHARING').description,
+		kind: 'enum',
+		choices: ['shared', 'exclusive'],
+		default: 'shared',
+	},
+	{
 		id: serverVar('MARIMOHUB_PERSIST_WORKSPACE').id,
 		label: 'Persist workspace',
 		description: serverVar('MARIMOHUB_PERSIST_WORKSPACE').description,

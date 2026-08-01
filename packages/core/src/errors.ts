@@ -46,6 +46,33 @@ export class ConflictError extends DomainError {
 	}
 }
 
+export class EditSessionOwnedError extends DomainError {
+	readonly code = 'EDIT_SESSION_OWNED';
+	readonly status = 409;
+	constructor(message = 'Another editor owns the persistent editing session') {
+		super(message);
+		this.name = 'EditSessionOwnedError';
+	}
+}
+
+export class EditSessionChangedError extends DomainError {
+	readonly code = 'EDIT_SESSION_CHANGED';
+	readonly status = 409;
+	constructor(message = 'The editing session changed; refresh before taking over') {
+		super(message);
+		this.name = 'EditSessionChangedError';
+	}
+}
+
+export class TakeoverInProgressError extends DomainError {
+	readonly code = 'TAKEOVER_IN_PROGRESS';
+	readonly status = 409;
+	constructor(message = 'An editing-session takeover is already in progress') {
+		super(message);
+		this.name = 'TakeoverInProgressError';
+	}
+}
+
 export class ForbiddenError extends DomainError {
 	readonly code = 'FORBIDDEN';
 	readonly status = 403;

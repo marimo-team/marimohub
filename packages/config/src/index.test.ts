@@ -385,6 +385,20 @@ describe('createFromEnv default role', () => {
 		);
 	});
 
+	it('defaults editor sandbox sharing to shared and accepts exclusive', () => {
+		expect(createFromEnv({ ...baseEnv }).policy.editorSandboxSharing).toBe('shared');
+		expect(
+			createFromEnv({ ...baseEnv, MARIMOHUB_EDITOR_SANDBOX_SHARING: 'EXCLUSIVE' }).policy
+				.editorSandboxSharing,
+		).toBe('exclusive');
+	});
+
+	it('rejects an invalid editor sandbox sharing', () => {
+		expect(() =>
+			createFromEnv({ ...baseEnv, MARIMOHUB_EDITOR_SANDBOX_SHARING: 'per-user' }),
+		).toThrow(/Invalid MARIMOHUB_EDITOR_SANDBOX_SHARING.*shared, exclusive/);
+	});
+
 	it('defaults persistWorkspace to "source" when MARIMOHUB_PERSIST_WORKSPACE is unset', () => {
 		expect(createFromEnv({ ...baseEnv }).sandbox.persistWorkspace).toBe('source');
 	});

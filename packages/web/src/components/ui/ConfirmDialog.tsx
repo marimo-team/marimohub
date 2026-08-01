@@ -44,6 +44,7 @@ export function ConfirmDialog({
 	return (
 		<DialogModal isOpen={isOpen} onClose={onClose} title={title} width="sm">
 			<form
+				aria-busy={isPending}
 				onSubmit={(e) => {
 					e.preventDefault();
 					// Guard so Enter can't bypass a type-to-confirm guard or double-fire
@@ -56,7 +57,7 @@ export function ConfirmDialog({
 					<p className="text-sm leading-relaxed text-muted-foreground">{description}</p>
 					{children}
 					<div className="flex justify-end gap-2 pt-2 max-md:flex-col">
-						<Button type="button" variant="ghost" onPress={onClose}>
+						<Button type="button" variant="ghost" onPress={onClose} isDisabled={isPending}>
 							Cancel
 						</Button>
 						<Button
@@ -68,7 +69,9 @@ export function ConfirmDialog({
 							// it instead and the form's implicit submit handles Enter.
 							autoFocus={!children}
 						>
-							{isPending ? (pendingLabel ?? confirmLabel) : confirmLabel}
+							<span aria-live="polite">
+								{isPending ? (pendingLabel ?? confirmLabel) : confirmLabel}
+							</span>
 						</Button>
 					</div>
 				</div>

@@ -94,7 +94,7 @@ import { errorMessage, toastError } from '@/lib/errors';
 import { filterBySearch } from '@/lib/search';
 import { formatRelative } from '@/lib/time';
 import { syncUrl } from '@/lib/links';
-import { appConnectionHint, sessionsByNotebook } from '@/lib/sessions';
+import { sessionConnectionHint, sessionsByNotebook } from '@/lib/sessions';
 import type { DropdownMenuOption } from '@/components/ui';
 import type { NotebookEntry, Session } from '@/types';
 
@@ -867,8 +867,8 @@ export function Project() {
 				title={appModal.target?.action === 'restart' ? 'Restart App' : 'Stop App'}
 				description={
 					appModal.target?.action === 'restart'
-						? `Restart the app for "${appModal.target.notebook.title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${appConnectionHint(appModal.target.session)}`
-						: `Stop the app for "${appModal.target?.notebook.title}"? Anyone using it will be disconnected.${appConnectionHint(appModal.target?.session)}`
+						? `Restart the app for "${appModal.target.notebook.title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${sessionConnectionHint(appModal.target.session)}`
+						: `Stop the app for "${appModal.target?.notebook.title}"? Anyone using it will be disconnected.${sessionConnectionHint(appModal.target?.session)}`
 				}
 				confirmLabel={appModal.target?.action === 'restart' ? 'Restart' : 'Stop App'}
 				pendingLabel={appModal.target?.action === 'restart' ? 'Restarting...' : 'Stopping...'}

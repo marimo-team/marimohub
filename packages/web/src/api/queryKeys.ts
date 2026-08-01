@@ -52,4 +52,6 @@ export const sessionKeys = {
 	all: ['sessions'] as const,
 	detail: (sid: string) => [...sessionKeys.all, 'detail', sid] as const,
 	listByProject: (projectId: string) => [...sessionKeys.all, 'list', { projectId }] as const,
+	editor: (projectId: string, notebookId: string) =>
+		[...sessionKeys.all, 'editor', { projectId, notebookId }] as const,
 };

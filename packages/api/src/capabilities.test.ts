@@ -69,6 +69,20 @@ describe('GET /api/v1/capabilities', () => {
 		});
 	});
 
+	it('reports the editor sandbox sharing, defaulting to shared', async () => {
+		const defaulted = makeTestDeps(new MemoryBucket(), { authenticator: authed });
+		expect(
+			await expectOk(await createApi(defaulted).request('/api/v1/capabilities')),
+		).toMatchObject({ editor_sandbox_sharing: 'shared' });
+		const exclusive = makeTestDeps(new MemoryBucket(), {
+			authenticator: authed,
+			policy: { editorSandboxSharing: 'exclusive' },
+		});
+		expect(
+			await expectOk(await createApi(exclusive).request('/api/v1/capabilities')),
+		).toMatchObject({ editor_sandbox_sharing: 'exclusive' });
+	});
+
 	it('reports deployment limits', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), {
 			authenticator: authed,

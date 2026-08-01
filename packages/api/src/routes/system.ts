@@ -100,6 +100,7 @@ app.openapi(capabilitiesRoute, (c) => {
 		// direct callers (mirrors the sandbox.exposure pattern).
 		viewer_mode: deps.policy.viewerMode ?? 'static',
 		viewer_session_modes: [...viewerSessionModes(deps.policy.viewerMode)],
+		editor_sandbox_sharing: deps.policy.editorSandboxSharing ?? 'shared',
 		default_role: deps.policy.defaultRole ?? null,
 		limits: {
 			max_concurrent_sessions_per_user: deps.policy.maxConcurrentSessionsPerUser ?? null,

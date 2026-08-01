@@ -47,16 +47,27 @@ interface FetchOptions {
 	sourceType?: 'local' | 'git';
 	/** When set, POST .../sessions fails with this error code at this status. */
 	createError?: { code: string; message: string; status: number };
+	sessionResponses?: Session[];
 	computeProfiles?: { name: string; cpu?: number; memory_bytes?: number }[];
 	computeProfile?: string;
 	computeProfileOverride?: 'none' | 'editors';
+	editorSharing?: 'shared' | 'exclusive';
+	editorOwner?: { id: string; activity: 'active' | 'idle' | 'unknown' | 'starting' };
+	editorStateFailures?: number;
 }
 
 /** Route every request the page makes to a canned response; return the fetch spy. */
 function makeFetch(opts: FetchOptions) {
+	let takeoverComplete = false;
+	let sessionPostCount = 0;
+	let editorStateRequestCount = 0;
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? 'GET';
+		if (method === 'POST' && url.endsWith(`/notebooks/${NID}/editor-session/takeover`)) {
+			takeoverComplete = true;
+			return ok(undefined);
+		}
 
 		if (method === 'POST' && url.endsWith(`/notebooks/${NID}/sessions`)) {
 			if (opts.createError) {
@@ -66,7 +77,10 @@ function makeFetch(opts: FetchOptions) {
 					headers: { 'content-type': 'application/json' },
 				});
 			}
-			return ok({ ...(opts.session ?? runningSession()), reused: false });
+			const response =
+				opts.sessionResponses?.[sessionPostCount] ?? opts.session ?? runningSession();
+			sessionPostCount += 1;
+			return ok({ ...response, reused: false });
 		}
 		if (url.endsWith(`/sessions/${(opts.session ?? runningSession()).session_id}`)) {
 			return ok(opts.session ?? runningSession());
@@ -126,6 +140,37 @@ function makeFetch(opts: FetchOptions) {
 				limits: {},
 				compute_profiles: opts.computeProfiles ?? [],
 				compute_profile_override: opts.computeProfileOverride ?? 'none',
+				editor_sandbox_sharing: opts.editorSharing ?? 'shared',
+			});
+		}
+		if (url.endsWith('/me')) {
+			return ok({ id: 'me', email: 'me@example.com', logout_url: null, is_super_admin: false });
+		}
+		if (url.endsWith(`/notebooks/${NID}/editor-session`)) {
+			editorStateRequestCount += 1;
+			if (editorStateRequestCount <= (opts.editorStateFailures ?? 0)) {
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'SERVICE_UNAVAILABLE', message: 'ownership unavailable' },
+					}),
+					{ status: 503, headers: { 'content-type': 'application/json' } },
+				);
+			}
+			const owner = takeoverComplete ? undefined : opts.editorOwner;
+			return ok({
+				sharing: opts.editorSharing ?? 'shared',
+				holder: owner
+					? {
+							session_id: 'sess-owner',
+							user_id: owner.id,
+							status: 'running',
+							started_at: '2025-03-05T14:00:00Z',
+							activity: { state: owner.activity },
+						}
+					: null,
+				can_take_over: !!owner,
+				...(takeoverComplete ? { transfer: { status: 'ready' } } : {}),
 			});
 		}
 		if (url.includes('/users')) return ok({});
@@ -190,6 +235,90 @@ afterEach(() => {
 });
 
 describe('NotebookPage viewer modes', () => {
+	it('asks before starting compute when another editor owns an exclusive session', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'editor',
+			editorSharing: 'exclusive',
+			editorOwner: { id: 'other', activity: 'active' },
+		});
+		renderPage();
+		expect(await screen.findByText(/owns the saved editing session/)).toBeInTheDocument();
+		expect(sessionPosts(fetch)).toHaveLength(0);
+		await user.click(screen.getByRole('button', { name: 'Open temporary sandbox' }));
+		await waitFor(() => expect(sessionPosts(fetch)).toHaveLength(1));
+		expect(JSON.parse(String(sessionPosts(fetch)[0]?.[1]?.body))).toMatchObject({
+			edit_intent: 'temporary',
+		});
+	});
+
+	it('warns and completes an exclusive takeover before starting the replacement', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'editor',
+			editorSharing: 'exclusive',
+			editorOwner: { id: 'other', activity: 'idle' },
+		});
+		renderPage();
+		await user.click(await screen.findByRole('button', { name: 'Take over editing' }));
+		expect(screen.getByText(/Their work will be saved/)).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Take Over' }));
+		await waitFor(() =>
+			expect(
+				fetch.mock.calls.some(
+					([url, init]) =>
+						String(url).endsWith('/editor-session/takeover') && init?.method === 'POST',
+				),
+			).toBe(true),
+		);
+		await waitFor(() => expect(sessionPosts(fetch)).toHaveLength(1));
+	});
+
+	it('starts a persistent replacement after takeover from a temporary sandbox', async () => {
+		const user = userEvent.setup();
+		const temporary = runningSession({
+			session_id: 'sess-temporary',
+			ephemeral: true,
+			editor_sandbox_sharing: 'exclusive',
+		});
+		const persistent = runningSession({
+			session_id: 'sess-persistent',
+			editor_sandbox_sharing: 'exclusive',
+		});
+		const fetch = makeFetch({
+			role: 'editor',
+			editorSharing: 'exclusive',
+			editorOwner: { id: 'other', activity: 'idle' },
+			sessionResponses: [temporary, persistent],
+		});
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open temporary sandbox' }));
+		await screen.findByText(/Temporary sandbox/);
+		await user.click(screen.getByRole('button', { name: 'Take over editing' }));
+		await user.click(screen.getByRole('button', { name: 'Take Over' }));
+
+		await waitFor(() => expect(sessionPosts(fetch)).toHaveLength(2));
+		const [temporaryPost, replacementPost] = sessionPosts(fetch);
+		expect(JSON.parse(String(temporaryPost?.[1]?.body))).toMatchObject({
+			edit_intent: 'temporary',
+		});
+		expect(replacementPost?.[1]?.body).toBeUndefined();
+	});
+
+	it('shows an ownership-state error and retries before starting compute', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({ role: 'editor', editorStateFailures: 1 });
+		renderPage();
+
+		expect(
+			await screen.findByText('Unable to check who owns the editor sandbox.'),
+		).toBeInTheDocument();
+		expect(sessionPosts(fetch)).toHaveLength(0);
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		await waitFor(() => expect(sessionPosts(fetch)).toHaveLength(1));
+	});
+
 	it('editor: starts a session and embeds the kernel iframe, no banner', async () => {
 		const impl = makeFetch({ role: 'editor' });
 		const { container } = renderPage();

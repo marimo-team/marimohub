@@ -133,7 +133,7 @@ describe('SessionService (app mode)', () => {
 			expect(await sessions.findReusable(projectId, notebookId, USER_B, 'app')).toBeUndefined();
 		});
 
-		it('stays per-user for edit', async () => {
+		it('keeps generic edit lookup user-scoped', async () => {
 			await running(USER_A, 'edit');
 			expect(await sessions.findReusable(projectId, notebookId, USER_B, 'edit')).toBeUndefined();
 		});

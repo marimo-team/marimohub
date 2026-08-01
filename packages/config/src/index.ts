@@ -17,12 +17,19 @@ import {
 	createServices,
 	Millis,
 	ProxyExposure,
+	EDITOR_SANDBOX_SHARING_VALUES,
 	ROLES,
 	runPreflight,
 	SubdomainExposure,
 	VIEWER_MODES,
 } from '@marimo-hub/core';
-import type { Metrics, Role, SandboxExposure, ViewerMode } from '@marimo-hub/core';
+import type {
+	EditorSandboxSharing,
+	Metrics,
+	Role,
+	SandboxExposure,
+	ViewerMode,
+} from '@marimo-hub/core';
 import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
 import { makeAi } from './ai';
 import { makeAuth } from './auth';
@@ -171,6 +178,15 @@ function parseDefaultRole(env: Env): Role | undefined {
  */
 function parseViewerMode(env: Env): ViewerMode {
 	return parseEnumOr(env, 'MARIMOHUB_VIEWER_MODE', VIEWER_MODES, 'static');
+}
+
+function parseEditorSandboxSharing(env: Env): EditorSandboxSharing {
+	return parseEnumOr(
+		env,
+		'MARIMOHUB_EDITOR_SANDBOX_SHARING',
+		EDITOR_SANDBOX_SHARING_VALUES,
+		'shared',
+	);
 }
 
 /**
@@ -324,6 +340,7 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 		policy: {
 			defaultRole: parseDefaultRole(env),
 			viewerMode: parseViewerMode(env),
+			editorSandboxSharing: parseEditorSandboxSharing(env),
 			allowedOrigins: parseList(env.MARIMOHUB_ALLOWED_ORIGINS),
 			superAdmins: parseList(env.MARIMOHUB_SUPER_ADMINS),
 			maxConcurrentSessionsPerUser: parseCap(

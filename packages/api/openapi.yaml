@@ -165,6 +165,11 @@ components:
             enum:
               - edit
               - app
+        editor_sandbox_sharing:
+          type: string
+          enum:
+            - shared
+            - exclusive
         default_role:
           type:
             - string
@@ -225,6 +230,7 @@ components:
         - integrations
         - viewer_mode
         - viewer_session_modes
+        - editor_sandbox_sharing
         - default_role
         - limits
         - sandbox_images
@@ -749,6 +755,17 @@ components:
           example: 2025-03-05T14:00:00Z
         ephemeral:
           type: boolean
+        editor_sandbox_sharing:
+          type: string
+          enum:
+            - shared
+            - exclusive
+        ended_reason:
+          type: string
+          enum:
+            - takeover
+        ended_by_user_id:
+          type: string
         mode:
           type: string
           enum:
@@ -816,6 +833,95 @@ components:
         - last_heartbeat
         - mode
         - can
+    EditorSessionState:
+      type: object
+      properties:
+        sharing:
+          type: string
+          enum:
+            - shared
+            - exclusive
+        holder:
+          type:
+            - object
+            - 'null'
+          properties:
+            session_id:
+              type: string
+            user_id:
+              type: string
+            status:
+              type: string
+              enum:
+                - starting
+                - running
+                - terminating
+            started_at:
+              type: string
+            activity:
+              type: object
+              properties:
+                state:
+                  type: string
+                  enum:
+                    - active
+                    - idle
+                    - unknown
+                    - starting
+                active_connections:
+                  type: number
+                checked_at:
+                  type: string
+              required:
+                - state
+          required:
+            - session_id
+            - user_id
+            - status
+            - started_at
+            - activity
+        can_take_over:
+          type: boolean
+        transfer:
+          type: object
+          properties:
+            status:
+              type: string
+              enum:
+                - requested
+                - draining
+                - ready
+          required:
+            - status
+      required:
+        - sharing
+        - holder
+        - can_take_over
+    EditorTakeoverBody:
+      type: object
+      properties:
+        takeover_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        expected_holder_session_id:
+          type: string
+        expected_activity:
+          type: string
+          enum:
+            - active
+            - idle
+            - unknown
+            - starting
+        acknowledge_disruption:
+          type: boolean
+          enum:
+            - true
+      required:
+        - takeover_id
+        - expected_holder_session_id
+        - expected_activity
+        - acknowledge_disruption
     SessionCreateResult:
       allOf:
         - $ref: '#/components/schemas/Session'
@@ -823,6 +929,23 @@ components:
           properties:
             reused:
               type: boolean
+            editor_session:
+              type: object
+              properties:
+                sharing:
+                  type: string
+                  enum:
+                    - shared
+                    - exclusive
+                access:
+                  type: string
+                  enum:
+                    - shared
+                    - owner
+                    - temporary
+              required:
+                - sharing
+                - access
           required:
             - reused
     SessionCreateBody:
@@ -837,6 +960,10 @@ components:
           type: string
           enum:
             - default
+        edit_intent:
+          type: string
+          enum:
+            - temporary
     SecretEntry:
       type: object
       properties:
@@ -3637,14 +3764,172 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/editor-session:
+    get:
+      tags:
+        - Sessions
+      summary: Inspect persistent editor ownership
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      responses:
+        '200':
+          description: Persistent editor ownership and current activity
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/EditorSessionState'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/editor-session/takeover:
+    post:
+      tags:
+        - Sessions
+      summary: Gracefully take over an exclusive editor session
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EditorTakeoverBody'
+      responses:
+        '200':
+          description: The prior editor was saved and stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/sessions:
     post:
       tags:
         - Sessions
       summary: Create a session and provision a sandbox
-      description: 'Create-or-reuse: returns the caller’s existing starting/running
-        session for this notebook when one exists (for `mode: "app"`, ANY user’s
-        running app session), otherwise provisions a new sandbox.'
+      description: Create or reuse a notebook sandbox. Edit-session reuse follows the
+        configured editor sandbox-sharing policy. App-session reuse is shared
+        per notebook.
       parameters:
         - schema:
             type: string

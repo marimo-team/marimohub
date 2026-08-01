@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
 	AlertTriangle,
@@ -25,6 +25,9 @@ import {
 	useNotebookQuery,
 	useProjectQuery,
 	useProjectSessionsQuery,
+	useEditorSessionQuery,
+	useTakeoverEditorSession,
+	useUserQuery,
 	useUsersQuery,
 } from '@/api/hooks';
 import { useNotebookSession } from '@/hooks/useNotebookSession';
@@ -36,7 +39,7 @@ import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog
 import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
 import { ComputeProfileIndicator } from '@/components/Notebook/ComputeProfileIndicator';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
-import { appConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
+import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
 import type { Theme } from '@/context/ThemeContext';
 
@@ -58,6 +61,28 @@ function endedPanel(ended: SessionEnded): { title: string; message: string; canR
 	}
 	if (ended === 'failed') return stopped('The app crashed.');
 	return stopped('The app is no longer running.');
+}
+
+function editorEndedPanel(ended: SessionEnded, endedBy?: string) {
+	if (ended === 'takeover') {
+		return {
+			title: 'Editing was taken over',
+			message: `${endedBy ?? 'Another editor'} took over editing; your work was saved and this sandbox was closed.`,
+			canRestart: false,
+		};
+	}
+	return {
+		title: 'Editing session ended',
+		message: 'This sandbox is no longer running.',
+		canRestart: true,
+	};
+}
+
+function activityWarning(name: string, state: 'active' | 'idle' | 'unknown' | 'starting'): string {
+	if (state === 'active') return `${name} has an active connection.`;
+	if (state === 'idle') return `${name} had no connections at the latest check.`;
+	if (state === 'starting') return `${name}'s sandbox is still starting.`;
+	return `${name}'s connection could not be checked. They may still be active.`;
 }
 
 /**
@@ -87,6 +112,9 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const confirmAppAction = useDialogTarget<'stop' | 'restart'>();
 	// Restarting a git-synced editor discards its sandbox scratch state, so confirm.
 	const confirmEditRestart = useDisclosure();
+	const confirmEditStop = useDisclosure();
+	const confirmTakeover = useDisclosure();
+	const [editIntent, setEditIntent] = useState<'temporary' | undefined>();
 
 	// The viewer branch (server-enforced regardless): editors get a session as
 	// always; a viewer gets an edit kernel only when the deployment's evaluated
@@ -109,6 +137,23 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const viewerHasEditKernel = !!viewerGrants?.includes('edit');
 	const staticView = !isApp && isViewer && viewerGrants !== undefined && !viewerHasEditKernel;
 	const resolvingMode = !isApp && isViewer && viewerGrants === undefined;
+	const { data: me } = useUserQuery();
+	const configuredEditorSharing = capabilities?.editor_sandbox_sharing;
+	const editorStateQuery = useEditorSessionQuery(
+		pid!,
+		nid!,
+		!isApp && !isViewer && configuredEditorSharing !== undefined,
+	);
+	const editorState = editorStateQuery.data;
+	const otherOwner =
+		!isApp &&
+		editorState?.sharing === 'exclusive' &&
+		editorState.holder?.user_id !== undefined &&
+		editorState.holder.user_id !== me?.id;
+	const showEditorChoice = !!otherOwner && editIntent !== 'temporary';
+	const editorStateReady = isApp || isViewer || editorStateQuery.isSuccess;
+	const editorStateFailed = !isApp && !isViewer && editorStateQuery.isError;
+	const takeover = useTakeoverEditorSession(pid!, nid!);
 
 	const {
 		session,
@@ -117,14 +162,20 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 		isRunning,
 		sandboxUrl,
 		ended,
+		endedByUserId,
 		start,
+		startPersistent,
 		startWithDefault,
 		defaultRetryAttempted,
 		stop,
 		restart,
 	} = useNotebookSession(pid!, nid!, {
-		enabled: isApp || !isViewer || viewerHasEditKernel,
+		enabled:
+			(isApp || !isViewer || viewerHasEditKernel) &&
+			editorStateReady &&
+			(!showEditorChoice || editIntent === 'temporary'),
 		mode: isApp ? 'app' : 'edit',
+		editIntent,
 	});
 
 	// Freeze the theme when the URL is first established, not on every toggle:
@@ -149,7 +200,26 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const author = notebook?.meta.author;
 	// Prefer the canonical title once detail loads, so a rename reflects immediately.
 	const title = notebook?.meta.title ?? notebookTitle;
-	const { data: users } = useUsersQuery(author ? [author] : []);
+	const holderId = editorState?.holder?.user_id;
+	const sharedStarterId =
+		session?.editor_sandbox_sharing === 'shared' && !session.ephemeral
+			? session.user_id
+			: undefined;
+	const { data: users } = useUsersQuery([
+		author,
+		holderId,
+		sharedStarterId,
+		endedByUserId ?? undefined,
+	]);
+	const holderName = holderId
+		? (users?.[holderId]?.name ?? users?.[holderId]?.email ?? holderId)
+		: '';
+	const sharedStarterName = sharedStarterId
+		? (users?.[sharedStarterId]?.name ?? users?.[sharedStarterId]?.email ?? sharedStarterId)
+		: '';
+	const endedByName = endedByUserId
+		? (users?.[endedByUserId]?.name ?? users?.[endedByUserId]?.email ?? endedByUserId)
+		: undefined;
 
 	// App pages watch the project's sessions (5s poll) to know whether the
 	// notebook is being edited: the periodic snapshotter commits a version every
@@ -179,7 +249,12 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	// A viewer deep-linking to /app gets a plain 403 panel; retrying can only
 	// fail again, so the button is dropped (no retry loop, manual or otherwise).
 	const showRetry = error?.code !== 'FORBIDDEN';
-	const terminal = isApp && ended && !isProvisioning ? endedPanel(ended) : null;
+	const terminal =
+		ended && !isProvisioning
+			? isApp
+				? endedPanel(ended)
+				: editorEndedPanel(ended, endedByName)
+			: null;
 	const computeProfiles = capabilities?.compute_profiles ?? [];
 	const computeOverrideApplies =
 		capabilities?.compute_profile_override === 'editors' && (!isViewer || isApp);
@@ -214,6 +289,29 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const handleStop = () => {
 		stop();
 		backToProject();
+	};
+	const takeOver = () => {
+		const holder = editorState?.holder;
+		if (!holder) return;
+		takeover.mutate(
+			{
+				takeover_id: crypto.randomUUID(),
+				expected_holder_session_id: holder.session_id,
+				expected_activity: holder.activity.state,
+				acknowledge_disruption: true,
+			},
+			{
+				onSuccess: () => {
+					confirmTakeover.close();
+					setEditIntent(undefined);
+					startPersistent();
+				},
+				onError: () => {
+					confirmTakeover.close();
+					void editorStateQuery.refetch();
+				},
+			},
+		);
 	};
 
 	return (
@@ -313,7 +411,13 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 						<Button
 							variant="unstyled"
 							className="flex h-[26px] items-center rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-destructive hover:bg-destructive/10 hover:text-destructive max-md:min-h-11"
-							onPress={isApp ? () => confirmAppAction.open('stop') : handleStop}
+							onPress={
+								isApp
+									? () => confirmAppAction.open('stop')
+									: session.editor_sandbox_sharing === 'shared'
+										? confirmEditStop.open
+										: handleStop
+							}
 						>
 							Stop
 						</Button>
@@ -323,27 +427,92 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 
 			{staticView && <StaticNotebookView projectId={pid!} notebookId={nid!} title={title} />}
 
-			{(isProvisioning || resolvingMode) && (
-				<div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-					<div
-						className={cn(
-							'size-8 rounded-full border-[3px] border-border border-t-primary',
-							'animate-spin',
-						)}
-					/>
-					<p>{resolvingMode ? 'Loading...' : isApp ? 'Starting app...' : 'Starting sandbox...'}</p>
+			{showEditorChoice && editorState?.holder && (
+				<div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+					<AlertTriangle className="size-8 text-amber-600" />
+					<div className="flex max-w-lg flex-col gap-1">
+						<p className="text-sm font-medium">{holderName} owns the saved editing session</p>
+						<p className="text-sm text-muted-foreground">
+							{activityWarning(holderName, editorState.holder.activity.state)} Open an isolated
+							temporary sandbox, or take over after saving and closing theirs.
+						</p>
+					</div>
+					<div className="flex gap-2">
+						<Button variant="default" onPress={() => setEditIntent('temporary')}>
+							Open temporary sandbox
+						</Button>
+						<Button variant="primary" onPress={confirmTakeover.open}>
+							Take over editing
+						</Button>
+					</div>
 				</div>
 			)}
 
+			{editorStateFailed && (
+				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+					<AlertTriangle className="size-8 text-destructive" />
+					<p className="max-w-md text-sm text-destructive">
+						Unable to check who owns the editor sandbox.
+					</p>
+					<div className="flex gap-2">
+						<Button
+							variant="primary"
+							isDisabled={editorStateQuery.isFetching}
+							onPress={() => void editorStateQuery.refetch()}
+						>
+							{editorStateQuery.isFetching ? 'Checking...' : 'Retry'}
+						</Button>
+						<Button variant="ghost" onPress={backToProject}>
+							Back
+						</Button>
+					</div>
+				</div>
+			)}
+
+			{(isProvisioning || resolvingMode || (!isApp && !isViewer && !editorStateReady)) &&
+				!editorStateFailed &&
+				!showEditorChoice && (
+					<div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+						<div
+							className={cn(
+								'size-8 rounded-full border-[3px] border-border border-t-primary',
+								'animate-spin',
+							)}
+						/>
+						<p>
+							{resolvingMode ? 'Loading...' : isApp ? 'Starting app...' : 'Starting sandbox...'}
+						</p>
+					</div>
+				)}
+
 			{isRunning && (
 				<>
+					{session?.editor_sandbox_sharing === 'shared' && !session.ephemeral && (
+						<div className="flex items-center gap-1.5 border-b bg-primary/5 px-3 py-1.5 text-xs text-muted-foreground">
+							<Eye className="size-3.5 shrink-0" />
+							<span>
+								Trusted shared sandbox started by {sharedStarterName || 'another editor'} — other
+								project editors may view and edit this session.
+							</span>
+						</div>
+					)}
 					{session?.ephemeral && (
 						<div className="flex items-center gap-1.5 border-b bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
 							<Eye className="size-3.5 shrink-0" />
 							<span>
-								You're a viewer on this project — this session is temporary and your changes won't
-								be saved.
+								{isViewer
+									? "You're a viewer on this project — this session is temporary and your changes won't be saved."
+									: `Temporary sandbox — ${holderName || 'another editor'} owns saved editing. This sandbox is isolated and its changes won't be saved. Taking over will discard this temporary work.`}
 							</span>
+							{!isViewer && editorState?.holder && (
+								<Button
+									variant="unstyled"
+									className="ml-auto text-xs underline"
+									onPress={confirmTakeover.open}
+								>
+									Take over editing
+								</Button>
+							)}
 						</div>
 					)}
 					{appStale && (
@@ -388,7 +557,10 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 							)}
 						</div>
 					)}
-					<div className="flex-1 overflow-hidden">
+					<div
+						className={cn('flex-1 overflow-hidden', takeover.isPending && 'pointer-events-none')}
+						aria-hidden={takeover.isPending || undefined}
+					>
 						<iframe
 							className="size-full border-0"
 							src={iframeSrc}
@@ -418,7 +590,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					<div className="flex gap-2">
 						{terminal.canRestart && (
 							<Button variant="primary" onPress={start}>
-								Restart app
+								{isApp ? 'Restart app' : 'Start editing'}
 							</Button>
 						)}
 						<Button variant="ghost" onPress={backToProject}>
@@ -468,13 +640,48 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 				<ConfirmDialog
 					isOpen={confirmEditRestart.isOpen}
 					onClose={confirmEditRestart.close}
-					title="Restart Session"
-					description={`Restart the session for "${title}" to load the latest version from GitHub? Changes made in this sandbox aren't synced back and will be lost.`}
+					title={
+						session?.editor_sandbox_sharing === 'shared'
+							? 'Restart Shared Sandbox'
+							: 'Restart Session'
+					}
+					description={`Restart the session for "${title}" to load the latest version from GitHub? Changes made in this sandbox aren't synced back and will be lost.${
+						session?.editor_sandbox_sharing === 'shared'
+							? ` All connected editors will be disconnected.${sessionConnectionHint(session)}`
+							: ''
+					}`}
 					confirmLabel="Restart"
 					onConfirm={() => {
 						confirmEditRestart.close();
 						restart();
 					}}
+				/>
+			)}
+
+			{!isApp && (
+				<ConfirmDialog
+					isOpen={confirmEditStop.isOpen}
+					onClose={confirmEditStop.close}
+					title="Stop Shared Sandbox"
+					description={`Stop the shared sandbox for "${title}"? All connected editors will be disconnected.${sessionConnectionHint(session ?? undefined)}`}
+					confirmLabel="Stop Sandbox"
+					onConfirm={() => {
+						confirmEditStop.close();
+						handleStop();
+					}}
+				/>
+			)}
+
+			{!isApp && editorState?.holder && (
+				<ConfirmDialog
+					isOpen={confirmTakeover.isOpen}
+					onClose={takeover.isPending ? () => {} : confirmTakeover.close}
+					title="Take Over Editing"
+					description={`${activityWarning(holderName, editorState.holder.activity.state)} Their work will be saved, their sandbox will close, and connected users will be disconnected. Any work in your temporary sandbox will be discarded.`}
+					confirmLabel="Take Over"
+					pendingLabel="Saving and taking over..."
+					isPending={takeover.isPending}
+					onConfirm={takeOver}
 				/>
 			)}
 
@@ -485,8 +692,8 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					title={confirmAppAction.target === 'restart' ? 'Restart App' : 'Stop App'}
 					description={
 						confirmAppAction.target === 'restart'
-							? `Restart the app for "${title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${appConnectionHint(session ?? undefined)}`
-							: `Stop the app for "${title}"? Anyone using it will be disconnected.${appConnectionHint(session ?? undefined)}`
+							? `Restart the app for "${title}"? It will come back serving the latest saved version — anyone using it now will be disconnected and must reopen it.${sessionConnectionHint(session ?? undefined)}`
+							: `Stop the app for "${title}"? Anyone using it will be disconnected.${sessionConnectionHint(session ?? undefined)}`
 					}
 					confirmLabel={confirmAppAction.target === 'restart' ? 'Restart' : 'Stop App'}
 					onConfirm={() => {

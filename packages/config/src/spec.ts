@@ -927,6 +927,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'static',
 					},
 					{
+						id: 'MARIMOHUB_EDITOR_SANDBOX_SHARING',
+						name: 'Editor sandbox sharing',
+						description:
+							'Whether project editors share one persistent notebook sandbox (`shared`) or use exclusive ownership (`exclusive`). In exclusive mode, other editors can use a temporary sandbox or request a warned takeover. This setting does not affect apps or viewer sessions. See [Editor sessions](./editor-sessions.md).',
+						example: 'exclusive',
+						default: 'shared',
+					},
+					{
 						id: 'MARIMOHUB_PERSIST_WORKSPACE',
 						name: 'Persist workspace',
 						description:

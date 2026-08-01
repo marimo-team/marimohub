@@ -57,9 +57,11 @@ notebooks, version history, and the catalog all live there.
   `azcopy sync` to a second bucket. Everything except the in-flight kernel
   filesystem is durable and restorable.
 - **Restore** by pointing a fresh marimohub at a bucket with your objects — no
-  migration step. The catalog pointer (`_system/catalog.json`) is the only
-  mutated-in-place object; everything else is immutable/append-only, so a
-  point-in-time bucket snapshot is internally consistent.
+  migration step. Immutable snapshots and versions hold content history. The
+  catalog pointer, sessions, identities, tokens, and singleton editor/app claims
+  are mutable operational records, so restore them from the same point-in-time
+  bucket snapshot. Their write rules are described in
+  [How it works](./architecture.md).
 
 ::: tip Notebook history is already in the store
 Per-notebook version history is kept in object storage, so bucket backups
@@ -82,8 +84,9 @@ helm history marimohub -n marimohub      # what's running
 Replace `<VERSION>` with a tag from
 [GitHub Releases](https://github.com/marimo-team/marimohub/releases), without
 the leading `v`. See [Deploying with Helm](/deploying/helm). The API tier is
-stateless, so rolling upgrades need no draining beyond your normal readiness
-gating.
+stateless. Changes involving the editor-claim protocol require the drain
+procedure in
+[Editor sessions → Changing the sharing mode](/editor-sessions#changing-the-sharing-mode).
 
 ## Configuration changes
 

@@ -161,6 +161,7 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 			persistWorkspace: env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
 		},
 		policy: {
+			editorSandboxSharing: env.MARIMOHUB_EDITOR_SANDBOX_SHARING ?? 'shared',
 			// Fallback role for logged-in non-members; defaults to `editor` so any
 			// logged-in user can edit notebooks. Set DEFAULT_ROLE=none to keep writes
 			// members-only. Project edit/delete always requires admin.
