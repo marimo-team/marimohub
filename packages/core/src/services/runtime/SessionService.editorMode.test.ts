@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createNotebookId, createProjectId } from '../../ids';
+import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import type { UserId } from '../../ids';
 import { MemoryBucket, uid } from '../../testing';
 import { SessionService } from './SessionService';
@@ -75,6 +75,71 @@ describe('SessionService editor claims', () => {
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
 			owner.session_id,
 		);
+	});
+
+	it.each(['terminated', 'failed'] as const)(
+		'adopts a pre-claim editor when another sandbox is already %s',
+		async (terminalStatus) => {
+			const owner = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: USER_A,
+				sandbox_id: createSandboxId(),
+				mode: 'edit',
+			});
+			const stale = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: USER_B,
+				sandbox_id: createSandboxId(),
+				mode: 'edit',
+			});
+			const runningOwner = await sessions.setRunning(
+				projectId,
+				owner.session_id,
+				'https://owner.example',
+			);
+			await sessions.setRunning(projectId, stale.session_id, 'https://stale.example');
+			if (terminalStatus === 'terminated') {
+				await sessions.terminate(projectId, stale.session_id);
+			} else {
+				await sessions.markFailed(projectId, stale.session_id);
+			}
+
+			await expect(sessions.ownsEditorClaim(runningOwner)).resolves.toBe(true);
+			expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+				runningOwner.session_id,
+			);
+		},
+	);
+
+	it('keeps an unreclaimed expired sandbox in the pre-claim conflict set', async () => {
+		vi.useFakeTimers();
+		const stale = await sessions.createSession({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: USER_B,
+			sandbox_id: createSandboxId(),
+			mode: 'edit',
+		});
+		await sessions.setRunning(projectId, stale.session_id, 'https://stale.example');
+		vi.advanceTimersByTime(6 * 60 * 1000);
+		const owner = await sessions.createSession({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: USER_A,
+			sandbox_id: createSandboxId(),
+			mode: 'edit',
+		});
+		const runningOwner = await sessions.setRunning(
+			projectId,
+			owner.session_id,
+			'https://owner.example',
+		);
+		await sessions.expireStale();
+
+		await expect(sessions.ownsEditorClaim(runningOwner)).resolves.toBe(false);
+		expect(await sessions.getEditorClaim(projectId, notebookId)).toBeUndefined();
 	});
 
 	it('reserves takeover idempotently and only releases ready state to the requester', async () => {

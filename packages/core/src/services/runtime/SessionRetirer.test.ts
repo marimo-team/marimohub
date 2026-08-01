@@ -1,0 +1,198 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
+import { paths } from '../../paths';
+import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type { Session } from '../../schema';
+import {
+	ACTOR,
+	makeFakeSandbox,
+	makeLocalSource,
+	makeSession,
+	MemoryBucket,
+	uid,
+} from '../../testing';
+import { CatalogService } from '../catalog/CatalogService';
+import { resolveRestoreSnapshot } from '../content/filesystemSnapshots';
+import { NotebookService } from '../content/NotebookService';
+import { SandboxProvisioner } from './SandboxProvisioner';
+import { SessionRetirer } from './SessionRetirer';
+import { SessionService } from './SessionService';
+
+function snapshotProvider(
+	instance: SandboxInstance,
+	opts: { failCapture?: boolean } = {},
+): SandboxProvider & FilesystemSnapshots {
+	return {
+		filesystemSnapshotsEnabled: true,
+		create: () => instance,
+		proxy: async () => null,
+		createFromSnapshot: () => instance,
+		captureSnapshot: async () => {
+			if (opts.failCapture) throw new Error('snapshot unavailable');
+			return { snapshotId: 'snapshot-after-takeover' };
+		},
+		deleteSnapshot: async () => {},
+	};
+}
+
+describe('SessionRetirer', () => {
+	let bucket: MemoryBucket;
+	let sessions: SessionService;
+	let notebooks: NotebookService;
+	const projectId = createProjectId();
+	const notebookId = createNotebookId();
+
+	beforeEach(() => {
+		bucket = new MemoryBucket();
+		sessions = new SessionService(bucket);
+		notebooks = new NotebookService(bucket, new CatalogService(bucket));
+		vi.spyOn(notebooks, 'getNotebook').mockResolvedValue({ source: makeLocalSource() } as never);
+		vi.spyOn(notebooks, 'commitSession').mockResolvedValue(null);
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	async function persistentSession(overrides: Partial<Session> = {}): Promise<Session> {
+		const session = makeSession({
+			project_id: projectId,
+			notebook_id: notebookId,
+			sandbox_id: createSandboxId(),
+			editor_sandbox_sharing: 'exclusive',
+			...overrides,
+		});
+		await bucket.put(paths.session(projectId, session.session_id), JSON.stringify(session));
+		await sessions.claimEditor(projectId, notebookId, session.session_id, 'exclusive');
+		return session;
+	}
+
+	function retirer(compute: SandboxProvider): SessionRetirer {
+		return new SessionRetirer({
+			sessions,
+			notebooks,
+			compute,
+			bucket,
+			persistWorkspace: 'source',
+		});
+	}
+
+	it('retains the editor claim until a failed destroy is later confirmed', async () => {
+		const { instance } = makeFakeSandbox();
+		let destroyFails = true;
+		instance.destroy = async () => {
+			if (destroyFails) throw new Error('compute unavailable');
+		};
+		const session = await persistentSession();
+		await sessions.beginTerminating(projectId, session.session_id);
+		const service = retirer({ create: () => instance, proxy: async () => null });
+
+		await service.retire(session);
+
+		const terminated = await sessions.getSession(projectId, session.session_id);
+		expect(terminated.status).toBe('terminated');
+		expect(await sessions.getEditorClaim(projectId, notebookId)).toMatchObject({
+			session_id: session.session_id,
+		});
+
+		destroyFails = false;
+		expect(await service.reclaim(terminated, false)).toBe(true);
+		expect(await sessions.getEditorClaim(projectId, notebookId)).toMatchObject({
+			session_id: null,
+		});
+	});
+
+	it('captures an owner-scoped filesystem snapshot during takeover', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const compute = snapshotProvider(instance);
+		const session = await persistentSession();
+		const nextOwner = uid('user_01HXY00000000000000000001');
+
+		await retirer(compute).retireForTakeover(session, nextOwner);
+
+		const snapshot = await notebooks.getFsSnapshot(projectId, notebookId);
+		expect(snapshot).toMatchObject({
+			snapshot_id: 'snapshot-after-takeover',
+			owner_user_id: ACTOR,
+		});
+		expect(
+			await resolveRestoreSnapshot(compute, notebooks, projectId, notebookId, {
+				sharing: 'exclusive',
+				userId: nextOwner,
+			}),
+		).toBeUndefined();
+		expect(
+			await resolveRestoreSnapshot(compute, notebooks, projectId, notebookId, {
+				sharing: 'exclusive',
+				userId: ACTOR,
+			}),
+		).toEqual(snapshot ?? undefined);
+		expect(calls.destroy).toBe(1);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+	});
+
+	it('skips the filesystem snapshot when takeover persistence is ineligible', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const compute = snapshotProvider(instance);
+		const captureSnapshot = vi.spyOn(compute, 'captureSnapshot');
+		const session = await persistentSession();
+		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(false);
+
+		await retirer(compute).retireForTakeover(session, uid('user_01HXY00000000000000000001'));
+
+		expect(captureSnapshot).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(1);
+	});
+
+	it('does not continue takeover teardown after losing the terminating transition', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		vi.spyOn(sessions, 'beginTerminating').mockResolvedValue({
+			session: { ...session, status: 'terminating' },
+			transitioned: false,
+		});
+
+		await expect(
+			retirer({ create: () => instance, proxy: async () => null }).retireForTakeover(
+				session,
+				uid('user_01HXY00000000000000000001'),
+			),
+		).rejects.toThrow('already started terminating');
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(0);
+	});
+
+	it('still destroys the takeover sandbox when filesystem snapshot capture fails', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await retirer(snapshotProvider(instance, { failCapture: true })).retireForTakeover(
+			session,
+			uid('user_01HXY00000000000000000001'),
+		);
+
+		expect(calls.destroy).toBe(1);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+	});
+
+	it('keeps a takeover draining when its final strict capture fails', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		const capture = vi
+			.spyOn(SandboxProvisioner.prototype, 'captureSession')
+			.mockRejectedValueOnce(new Error('final save failed'));
+		const service = retirer({ create: () => instance, proxy: async () => null });
+
+		await expect(
+			service.retireForTakeover(session, uid('user_01HXY00000000000000000001')),
+		).rejects.toThrow('final save failed');
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminating');
+		expect(calls.destroy).toBe(0);
+
+		capture.mockResolvedValueOnce(true);
+		await service.completeTakeoverDrain(session);
+		expect(calls.destroy).toBe(1);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+	});
+});

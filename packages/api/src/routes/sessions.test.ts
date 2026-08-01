@@ -193,6 +193,48 @@ describe('Session routes', () => {
 		expect(temporary.editor_sandbox_sharing).toBe('exclusive');
 	});
 
+	it('does not restore a filesystem snapshot into a temporary editor sandbox', async () => {
+		const exclusiveOwner = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
+		}).request;
+		await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		await createServices(bucket).notebooks.setFsSnapshot(pid, nid, {
+			snapshot_id: 'snap-other-editor',
+			captured_at: '2026-07-01T00:00:00.000Z',
+			owner_user_id: STRANGER,
+		});
+		const { instance } = makeFakeSandbox();
+		const restored: string[] = [];
+		const compute = {
+			...fakeComputeFrom(instance),
+			filesystemSnapshotsEnabled: true,
+			createFromSnapshot(_id: string, snapshotId: string) {
+				restored.push(snapshotId);
+				return instance;
+			},
+			async captureSnapshot() {
+				return { snapshotId: 'unused' };
+			},
+			async deleteSnapshot() {},
+		};
+		const exclusiveOther = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute,
+			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
+		}).request;
+
+		const data = await expectOk<ApiSession>(
+			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
+		);
+		expect(data.ephemeral).toBe(true);
+		expect(restored).toEqual([]);
+		expect(data.compute_from_snapshot).toBeUndefined();
+	});
+
 	it('reports exclusive ownership and completes a warned takeover before replacement', async () => {
 		const ownerCompute = makeFakeCompute();
 		const otherCompute = makeFakeCompute();
@@ -246,7 +288,7 @@ describe('Session routes', () => {
 		expect(discarded.status).toBe('terminated');
 	});
 
-	it('aborts takeover without stopping the owner when the strict save fails', async () => {
+	it('keeps the claim protected when the strict takeover save fails', async () => {
 		const exclusiveOwner = createTestApi({
 			bucket,
 			userId: ACTOR,
@@ -282,11 +324,11 @@ describe('Session routes', () => {
 			'SERVICE_UNAVAILABLE',
 		);
 		const old = await createServices(bucket).sessions.getSession(pid, persistent.session_id);
-		expect(old.status).toBe('running');
+		expect(old.status).toBe('terminating');
 		expect(failing.calls.destroy).toBe(0);
-		expect(
-			(await createServices(bucket).sessions.getEditorClaim(pid, nid))?.transfer,
-		).toBeUndefined();
+		expect((await createServices(bucket).sessions.getEditorClaim(pid, nid))?.transfer?.phase).toBe(
+			'draining',
+		);
 	});
 
 	it('keeps a failed shutdown claim protected in draining state', async () => {

@@ -665,7 +665,10 @@ export class SessionService {
 				sessionMode(item) === 'edit' &&
 				!item.ephemeral &&
 				!!item.sandbox_id &&
-				!item.sandbox_reclaimed_at,
+				!item.sandbox_reclaimed_at &&
+				(item.session_id === session.session_id ||
+					!isTerminal(item.status) ||
+					item.status === 'expired'),
 		);
 		if (candidates.length !== 1 || candidates[0]?.session_id !== session.session_id) {
 			if (candidates.length > 1) this.metrics.increment('sessions.editor_claim.legacy_conflict');

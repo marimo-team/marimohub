@@ -192,7 +192,8 @@ export class SessionLifecycleService {
 				s.status === 'expired' || (s.status === 'running' && (pastDeadline || heartbeatStale));
 			const connectionCountCheck =
 				s.status === 'running' &&
-				(sessionModePolicy(s).singleton || s.editor_sandbox_sharing === 'shared');
+				(sessionModePolicy(s).singleton ||
+					(sessionPersistsEdits(s) && (s.editor_sandbox_sharing ?? 'shared') === 'shared'));
 			if (this.cfg.connectionAware && (reapCandidate || connectionCountCheck)) {
 				active = await this.probe(sandbox, kernelBasePath(s));
 				// A null probe is "unknown" — leave the last stamp rather than write a
@@ -269,11 +270,12 @@ export class SessionLifecycleService {
 			// backstop, node loss, OOM) loses at most one interval of notebook edits.
 			// Source-only (`includeWorkspace: false`): a full workspace mirror every
 			// interval is too expensive; the mirror still refreshes at teardown.
-			const snapshotDue =
+			const snapshotDueByCadence =
 				sessionPersistsEdits(s) &&
-				(await this.sessions.ownsEditorClaim(s)) &&
 				this.cfg.snapshotIntervalMs > 0 &&
 				now - Date.parse(s.last_snapshot_at ?? s.started_at) >= this.cfg.snapshotIntervalMs;
+			const snapshotDue =
+				snapshotDueByCadence && (await this.sessions.ownsEditorClaim(s).catch(() => false));
 			if (snapshotDue) {
 				const saved = await this.provisioner
 					.captureSession(

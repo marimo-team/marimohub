@@ -878,12 +878,13 @@ app.openapi(createSession, async (c) => {
 
 	// createApi defaults this; the fallback satisfies the type for direct callers.
 	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
-	const restoreFilesystemSnapshot = workspacePolicy.restoreFilesystemSnapshot
-		? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
-				sharing: mode === 'edit' ? sharing : 'shared',
-				userId: user.id,
-			})
-		: undefined;
+	const restoreFilesystemSnapshot =
+		!ephemeral && workspacePolicy.restoreFilesystemSnapshot
+			? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
+					sharing: mode === 'edit' ? sharing : 'shared',
+					userId: user.id,
+				})
+			: undefined;
 	const appliedComputeProfile = restoreFilesystemSnapshot
 		? {
 				name: restoreFilesystemSnapshot.compute_profile,

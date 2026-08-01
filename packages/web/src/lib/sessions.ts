@@ -17,6 +17,7 @@ export function rankSession(status: string | undefined): number {
  * the shared app singleton. Either side may be absent. */
 export interface NotebookSessions {
 	edit?: Session;
+	persistentEdit?: Session;
 	app?: Session;
 }
 
@@ -72,8 +73,15 @@ export function sessionsByNotebook(
 			!s.ephemeral;
 		if (!current || rankSession(s.status) > rankSession(current.status) || sameRankPersistent) {
 			entry[key] = s;
-			map.set(s.notebook_id, entry);
 		}
+		if (
+			key === 'edit' &&
+			!s.ephemeral &&
+			(!entry.persistentEdit || rankSession(s.status) > rankSession(entry.persistentEdit.status))
+		) {
+			entry.persistentEdit = s;
+		}
+		map.set(s.notebook_id, entry);
 	}
 	return map;
 }

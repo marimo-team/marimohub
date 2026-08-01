@@ -122,8 +122,7 @@ function assertSession(
 	policy: SessionPolicy,
 ): void {
 	if (sessionCan(action, sessionActorFor(project, subject, policy), session)) return;
-	// The canonical editor-gate 403 (sessionCan admits every editor+, so this throws).
-	requireRole(project, subject, 'editor', policy);
+	throw new ForbiddenError(`Not authorized to ${action} this session`);
 }
 
 /**

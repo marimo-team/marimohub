@@ -670,7 +670,7 @@ export function Project() {
 											session={live.app}
 											canControl={!!live.app.can?.stop}
 											canOpen={!!live.app.can?.attach}
-											editActive={!!live.edit}
+											editActive={!!live.persistentEdit}
 											profiles={computeProfiles}
 											allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
 											selectedProfileName={nb.compute_profile}

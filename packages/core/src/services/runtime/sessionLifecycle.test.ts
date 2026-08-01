@@ -172,19 +172,18 @@ describe('SessionLifecycleService', () => {
 			expect(sandboxCalls.destroy).toBe(1);
 		});
 
-		it('force-destroys and still marks terminated when live teardown throws', async () => {
-			// A save that throws must never leave the sandbox running and billing: the
-			// catch force-destroys, and the record is still stamped terminated.
-			const teardownSpy = vi
-				.spyOn(SandboxProvisioner.prototype, 'teardown')
+		it('destroys and still marks terminated when the live save throws', async () => {
+			// A failed save must not prevent the destruction attempt.
+			const captureSpy = vi
+				.spyOn(SandboxProvisioner.prototype, 'captureSession')
 				.mockRejectedValue(new Error('save failed'));
 			const s = await putSession({ expires_at: iso(-1000), last_snapshot_at: iso(0) });
 
 			const result = await makeService().sweep(now);
 
-			expect(teardownSpy).toHaveBeenCalled();
+			expect(captureSpy).toHaveBeenCalled();
 			expect(result.reapedExpired).toBe(1);
-			expect(sandboxCalls.destroy).toBe(1); // force-destroy in the catch
+			expect(sandboxCalls.destroy).toBe(1);
 			expect((await getStored(s)).status).toBe('terminated');
 		});
 	});
@@ -252,6 +251,7 @@ describe('SessionLifecycleService', () => {
 			const s = await putSession({
 				started_at: iso(-1000),
 				expires_at: iso(60 * 60 * 1000),
+				editor_sandbox_sharing: 'exclusive',
 			});
 
 			await makeService().sweep(now);
@@ -259,6 +259,34 @@ describe('SessionLifecycleService', () => {
 			expect(probe).not.toHaveBeenCalled();
 			expect(sandboxCalls.destroy).toBe(0);
 			expect((await getStored(s)).status).toBe('running');
+		});
+
+		it('stamps connections for a legacy persistent editor using the shared default', async () => {
+			probe.mockResolvedValue(3);
+			const s = await putSession({
+				expires_at: iso(60 * 60 * 1000),
+				editor_sandbox_sharing: undefined,
+			});
+
+			await makeService().sweep(now);
+
+			expect(probe).toHaveBeenCalledOnce();
+			expect(await getStored(s)).toMatchObject({
+				active_connections: 3,
+				connections_checked_at: iso(0),
+			});
+		});
+
+		it('does not probe a healthy ephemeral editor for shared connection status', async () => {
+			await putSession({
+				ephemeral: true,
+				expires_at: iso(60 * 60 * 1000),
+				editor_sandbox_sharing: undefined,
+			});
+
+			await makeService().sweep(now);
+
+			expect(probe).not.toHaveBeenCalled();
 		});
 	});
 
@@ -418,21 +446,49 @@ describe('SessionLifecycleService', () => {
 		});
 
 		it('skips a session snapshotted within the interval', async () => {
+			const ownsClaim = vi.spyOn(sessions, 'ownsEditorClaim');
 			await putSession({ last_snapshot_at: iso(-1000) });
 
 			const result = await makeService().sweep(now);
 
 			expect(result.snapshotted).toBe(0);
 			expect(notebooks.commitSession).not.toHaveBeenCalled();
+			expect(ownsClaim).not.toHaveBeenCalled();
 		});
 
 		it('is disabled by snapshotIntervalMs = 0', async () => {
+			const ownsClaim = vi.spyOn(sessions, 'ownsEditorClaim');
 			await putSession({ started_at: iso(-60 * 60 * 1000) });
 
 			const result = await makeService({ snapshotIntervalMs: 0 }).sweep(now);
 
 			expect(result.snapshotted).toBe(0);
 			expect(notebooks.commitSession).not.toHaveBeenCalled();
+			expect(ownsClaim).not.toHaveBeenCalled();
+		});
+
+		it('skips a transient claim read failure without aborting other snapshots', async () => {
+			const unavailable = await putSession({
+				last_snapshot_at: iso(-SNAPSHOT_INTERVAL_MS - 1000),
+			});
+			const eligible = await putSession({
+				notebook_id: createNotebookId(),
+				sandbox_id: createSandboxId(),
+				last_snapshot_at: iso(-SNAPSHOT_INTERVAL_MS - 1000),
+			});
+			vi.spyOn(sessions, 'ownsEditorClaim').mockImplementation(async (session) => {
+				if (session.session_id === unavailable.session_id) throw new Error('bucket unavailable');
+				return session.session_id === eligible.session_id;
+			});
+
+			const result = await makeService().sweep(now);
+
+			expect(result.snapshotted).toBe(1);
+			expect(notebooks.commitSession).toHaveBeenCalledTimes(1);
+			expect((await getStored(unavailable)).last_snapshot_at).toBe(
+				iso(-SNAPSHOT_INTERVAL_MS - 1000),
+			);
+			expect((await getStored(eligible)).last_snapshot_at).toBe(iso(0));
 		});
 
 		it('does not advance last_snapshot_at when the save fails (retried next sweep)', async () => {

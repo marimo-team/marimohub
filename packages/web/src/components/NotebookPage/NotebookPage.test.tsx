@@ -53,7 +53,15 @@ interface FetchOptions {
 	computeProfileOverride?: 'none' | 'editors';
 	editorSharing?: 'shared' | 'exclusive';
 	editorOwner?: { id: string; activity: 'active' | 'idle' | 'unknown' | 'starting' };
+	editorCanTakeOver?: boolean;
+	editorTransfer?: 'requested' | 'draining' | 'ready';
 	editorStateFailures?: number;
+	mePromise?: Promise<{
+		id: string;
+		email: string;
+		logout_url: null;
+		is_super_admin: boolean;
+	}>;
 }
 
 /** Route every request the page makes to a canned response; return the fetch spy. */
@@ -144,7 +152,11 @@ function makeFetch(opts: FetchOptions) {
 			});
 		}
 		if (url.endsWith('/me')) {
-			return ok({ id: 'me', email: 'me@example.com', logout_url: null, is_super_admin: false });
+			return ok(
+				opts.mePromise
+					? await opts.mePromise
+					: { id: 'me', email: 'me@example.com', logout_url: null, is_super_admin: false },
+			);
 		}
 		if (url.endsWith(`/notebooks/${NID}/editor-session`)) {
 			editorStateRequestCount += 1;
@@ -169,8 +181,12 @@ function makeFetch(opts: FetchOptions) {
 							activity: { state: owner.activity },
 						}
 					: null,
-				can_take_over: !!owner,
-				...(takeoverComplete ? { transfer: { status: 'ready' } } : {}),
+				can_take_over: opts.editorCanTakeOver ?? !!owner,
+				...(opts.editorTransfer
+					? { transfer: { status: opts.editorTransfer } }
+					: takeoverComplete
+						? { transfer: { status: 'ready' } }
+						: {}),
 			});
 		}
 		if (url.includes('/users')) return ok({});
@@ -235,6 +251,16 @@ afterEach(() => {
 });
 
 describe('NotebookPage viewer modes', () => {
+	it('starts shared editing without requesting exclusive ownership state', async () => {
+		const fetch = makeFetch({ role: 'editor', editorSharing: 'shared', editorStateFailures: 1 });
+		renderPage();
+
+		await waitFor(() => expect(sessionPosts(fetch)).toHaveLength(1));
+		expect(
+			fetch.mock.calls.some(([url]) => String(url).endsWith(`/notebooks/${NID}/editor-session`)),
+		).toBe(false);
+	});
+
 	it('asks before starting compute when another editor owns an exclusive session', async () => {
 		const user = userEvent.setup();
 		const fetch = makeFetch({
@@ -250,6 +276,61 @@ describe('NotebookPage viewer modes', () => {
 		expect(JSON.parse(String(sessionPosts(fetch)[0]?.[1]?.body))).toMatchObject({
 			edit_intent: 'temporary',
 		});
+	});
+
+	it('waits for the current user before deciding that an exclusive holder is someone else', async () => {
+		let resolveMe!: (value: {
+			id: string;
+			email: string;
+			logout_url: null;
+			is_super_admin: boolean;
+		}) => void;
+		const mePromise = new Promise<{
+			id: string;
+			email: string;
+			logout_url: null;
+			is_super_admin: boolean;
+		}>((resolve) => {
+			resolveMe = resolve;
+		});
+		const fetch = makeFetch({
+			role: 'editor',
+			editorSharing: 'exclusive',
+			editorOwner: { id: 'other', activity: 'idle' },
+			mePromise,
+		});
+		renderPage();
+
+		await waitFor(() =>
+			expect(
+				fetch.mock.calls.some(([url]) => String(url).endsWith(`/notebooks/${NID}/editor-session`)),
+			).toBe(true),
+		);
+		expect(screen.queryByText(/owns the saved editing session/)).toBeNull();
+		expect(sessionPosts(fetch)).toHaveLength(0);
+
+		resolveMe({
+			id: 'me',
+			email: 'me@example.com',
+			logout_url: null,
+			is_super_admin: false,
+		});
+		expect(await screen.findByText(/owns the saved editing session/)).toBeInTheDocument();
+	});
+
+	it('shows a transfer in progress without offering another takeover', async () => {
+		makeFetch({
+			role: 'editor',
+			editorSharing: 'exclusive',
+			editorOwner: { id: 'other', activity: 'idle' },
+			editorCanTakeOver: false,
+			editorTransfer: 'draining',
+		});
+		renderPage();
+
+		expect(await screen.findByText(/editing transfer is already in progress/)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Takeover in progress' })).toBeDisabled();
+		expect(screen.getByRole('button', { name: 'Open temporary sandbox' })).toBeEnabled();
 	});
 
 	it('warns and completes an exclusive takeover before starting the replacement', async () => {
@@ -308,7 +389,11 @@ describe('NotebookPage viewer modes', () => {
 
 	it('shows an ownership-state error and retries before starting compute', async () => {
 		const user = userEvent.setup();
-		const fetch = makeFetch({ role: 'editor', editorStateFailures: 1 });
+		const fetch = makeFetch({
+			role: 'editor',
+			editorSharing: 'exclusive',
+			editorStateFailures: 1,
+		});
 		renderPage();
 
 		expect(
@@ -331,6 +416,47 @@ describe('NotebookPage viewer modes', () => {
 		expect(document.title).toBe('Forecast · marimohub');
 		expect(sessionPosts(impl)).toHaveLength(1);
 		expect(screen.queryByText(/won't be saved/)).toBeNull();
+	});
+
+	it('stops a viewer ephemeral session without a shared-sandbox warning', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'viewer',
+			viewerMode: 'ephemeral-sandbox',
+			session: runningSession({
+				ephemeral: true,
+				editor_sandbox_sharing: 'shared',
+			}),
+		});
+		renderPage();
+
+		await screen.findByText(/session is temporary/);
+		await user.click(screen.getByRole('button', { name: 'Stop' }));
+		await waitFor(() =>
+			expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true),
+		);
+		expect(screen.queryByText('Stop Shared Sandbox')).toBeNull();
+	});
+
+	it('uses a private restart warning for a viewer ephemeral session', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'viewer',
+			viewerMode: 'ephemeral-sandbox',
+			sourceType: 'git',
+			headVersion: 'ver-head',
+			session: runningSession({
+				ephemeral: true,
+				editor_sandbox_sharing: 'shared',
+				source_version_id: 'ver-old',
+			}),
+		});
+		renderPage();
+
+		await user.click(await screen.findByText('Restart to update'));
+		const dialog = await screen.findByRole('dialog');
+		expect(within(dialog).getByText('Restart Session')).toBeInTheDocument();
+		expect(within(dialog).queryByText(/All connected editors/)).toBeNull();
 	});
 
 	it('dark theme: forces the embedded app onto ?theme=dark', async () => {
@@ -570,6 +696,18 @@ describe('NotebookPage app variant', () => {
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 		await waitFor(() => expect(screen.queryByText(/serving an older version/)).toBeNull());
+	});
+
+	it('does not suppress the staleness banner for a temporary editor', async () => {
+		makeFetch({
+			role: 'editor',
+			session: appSession({ source_version_id: 'ver-old' }),
+			headVersion: 'ver-head',
+			projectSessions: [runningSession({ session_id: 'sess-edit', mode: 'edit', ephemeral: true })],
+		});
+		renderPage('app');
+
+		await waitFor(() => expect(screen.getByText(/serving an older version/)).toBeInTheDocument());
 	});
 
 	it('does not suppress the banner during editing on a git-synced notebook', async () => {
