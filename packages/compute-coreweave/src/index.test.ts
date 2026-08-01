@@ -448,16 +448,23 @@ describe('CoreWeaveCompute', () => {
 			expect(entry.fake.startCalls.at(-1)).toEqual(['sh', '-lc', 'uv run marimo edit --port 2718']);
 		});
 
-		it('a kernel that dies on launch is reported without burning the timeout', async () => {
-			// Launch setup rides the kernel command, so a broken env exits the process
-			// immediately; the port would otherwise never open and the wait would run
-			// the full (2 minute) timeout.
-			const world = makeWorld({ procExitCode: 1 });
-			const proc = await makeCompute(world).create(SANDBOX_ID).startProcess('marimo edit');
-			await expect(proc.waitForPort(2718, { timeout: 120_000 })).rejects.toThrow(
-				/exited before port 2718/,
-			);
-		});
+		// Launch setup rides the kernel command, so a broken env kills the process
+		// outright; the port then never opens and the wait would otherwise run the
+		// full (2 minute) timeout. The SDK records an exit code ONLY on a clean exit,
+		// so `failed` (a gRPC stream reset — see RUNBOOK H1) and `cancelled` have to
+		// be recognised by status or they sail past a poll()-based check.
+		it.each(['exited', 'failed', 'cancelled'] as const)(
+			'a %s kernel is reported without burning the timeout',
+			async (status) => {
+				const world = makeWorld({
+					proc: { status, ...(status === 'exited' ? { exitCode: 1 } : {}) },
+				});
+				const proc = await makeCompute(world).create(SANDBOX_ID).startProcess('marimo edit');
+				await expect(proc.waitForPort(2718, { timeout: 120_000 })).rejects.toThrow(
+					new RegExp(`${status} before port 2718`),
+				);
+			},
+		);
 
 		it('a waiter that fails instantly is reported, not re-issued until the deadline', async () => {
 			// A broken waiter (no python3/date on the image) exits non-zero without

@@ -39,6 +39,7 @@
 import { CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type {
 	CommandProcess,
+	CommandProcessStatus,
 	FileWrites,
 	ListSandboxesResult,
 	ProcessResult,
@@ -94,6 +95,13 @@ const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
  * round-trip, so this trades a few extra polls for that rounding.
  */
 const BOOT_POLL_INTERVAL_MS = 100;
+
+/**
+ * Process states a kernel never comes back from. `failed` is a stream fault (a
+ * transient gRPC reset shows up here), `cancelled` a teardown mid-wait; neither
+ * carries an exit code, so only the status distinguishes them from `running`.
+ */
+const TERMINAL_PROCESS_STATUSES = new Set<CommandProcessStatus>(['exited', 'failed', 'cancelled']);
 
 /**
  * Shell that blocks until `port` accepts a connection, for at most `seconds`.
@@ -562,9 +570,12 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				const attempts = Math.ceil(timeout / PORT_WAIT_CHUNK_MS) + 1;
 				let chunkMs = PORT_WAIT_FIRST_CHUNK_MS;
 				for (let i = 0; i < attempts && Date.now() < deadline; i++) {
-					if (proc.poll() !== undefined) {
+					// Status, not poll(): the SDK sets an exit code only on a clean exit,
+					// so a stream fault (`failed`) or a cancel leaves poll() undefined and
+					// would otherwise burn the whole timeout before reporting.
+					if (TERMINAL_PROCESS_STATUSES.has(proc.status)) {
 						throw new Error(
-							`process exited before port ${port} opened.\n${stderr || stdout}`.trim(),
+							`process ${proc.status} before port ${port} opened.\n${stderr || stdout}`.trim(),
 						);
 					}
 					const seconds = Math.max(1, Math.ceil(Math.min(chunkMs, deadline - Date.now()) / 1000));
