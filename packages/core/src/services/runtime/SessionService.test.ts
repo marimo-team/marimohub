@@ -173,7 +173,66 @@ describe('SessionService', () => {
 		});
 	});
 
+	describe('rolling-deploy forward preservation', () => {
+		it('a CAS rewrite keeps fields this replica does not know (e.g. the integrations pin)', async () => {
+			const session = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			const key = paths.session(projectId, session.session_id);
+			const raw = await (await bucket.get(key))?.json<Record<string, unknown>>();
+			const pin = [{ id: 'intg-0000000000000000', name: 'prod', kind: 'postgres', version: 3 }];
+			await bucket.put(
+				key,
+				JSON.stringify({ ...raw, integrations: pin, future_field: 'from-a-newer-replica' }),
+			);
+
+			await sessions.heartbeat(projectId, session.session_id);
+
+			const rewritten = await (await bucket.get(key))?.json<Record<string, unknown>>();
+			expect(rewritten?.status).toBe('running');
+			expect(rewritten?.integrations).toEqual(pin);
+			expect(rewritten?.future_field).toBe('from-a-newer-replica');
+		});
+	});
+
 	describe('setRunning', () => {
+		it('does not replace an existing integration audit pin on a retry', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			const original = [
+				{ id: 'intg-0000000000000001' as never, name: 'prod', kind: 'postgres', version: 1 },
+			];
+			const replacement = [
+				{ id: 'intg-0000000000000002' as never, name: 'prod', kind: 'postgres', version: 2 },
+			];
+
+			await sessions.setRunning(
+				projectId,
+				created.session_id,
+				'https://sandbox.example',
+				undefined,
+				undefined,
+				undefined,
+				original,
+			);
+			const retried = await sessions.setRunning(
+				projectId,
+				created.session_id,
+				'https://sandbox.example',
+				undefined,
+				undefined,
+				undefined,
+				replacement,
+			);
+
+			expect(retried.integrations).toEqual(original);
+		});
+
 		it('does not revive a terminated session (stays terminated, no write)', async () => {
 			const created = await sessions.createSession({
 				notebook_id: notebookId,

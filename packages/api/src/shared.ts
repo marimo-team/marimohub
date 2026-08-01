@@ -718,6 +718,17 @@ export const SessionResponseSchema = z
 		compute_resources: ComputeResourcesResponseSchema.optional(),
 		/** The session booted from a provider snapshot whose resources are immutable. */
 		compute_from_snapshot: z.boolean().optional(),
+		/** Integration config versions used to provision this session. */
+		integrations: z
+			.array(
+				z.object({
+					id: z.string(),
+					name: z.string(),
+					kind: z.string(),
+					version: z.number().int(),
+				}),
+			)
+			.optional(),
 		/** Why the session went `failed` (sanitized); absent unless it failed. */
 		error: z.object({ code: z.string(), message: z.string() }).optional(),
 	})
@@ -773,6 +784,7 @@ export const DeploymentInfoResponseSchema = z
 export const CapabilitiesResponseSchema = z
 	.object({
 		federation: z.object({ available: z.boolean() }),
+		integrations: z.object({ available: z.boolean() }),
 		/**
 		 * What an effective `viewer` sees when opening a notebook
 		 * (MARIMOHUB_VIEWER_MODE): the client branches on this before starting a

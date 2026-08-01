@@ -16,6 +16,7 @@ export default defineConfig({
 	},
 	server: {
 		port: 5175,
+		open: true,
 		// Proxy API calls to the local Node server (apps/server) so the SPA dev
 		// server can reach the /api/* surface during development.
 		proxy: {

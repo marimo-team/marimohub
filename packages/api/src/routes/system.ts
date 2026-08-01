@@ -95,6 +95,7 @@ app.openapi(capabilitiesRoute, (c) => {
 	const deps = c.get('deps');
 	return ok(c, {
 		federation: { available: Boolean(deps.wif) },
+		integrations: { available: Boolean(deps.integrations) },
 		// createApi defaults this; the fallback satisfies the optional type for
 		// direct callers (mirrors the sandbox.exposure pattern).
 		viewer_mode: deps.policy.viewerMode ?? 'static',

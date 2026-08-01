@@ -26,6 +26,7 @@
 		"better-all": "catalog:",
 		"smol-toml": "catalog:",
 		"ulidx": "catalog:",
+		"yaml": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {

@@ -98,7 +98,7 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|storage|compute|sandbox-image|apps|ai|secrets|syncing|workload-identity-federation)',
+					'^/(auth|storage|compute|sandbox-image|apps|ai|secrets|integrations|syncing|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
@@ -107,6 +107,7 @@ export default defineConfig({
 					{ text: 'Notebook apps', link: '/apps' },
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Project secrets', link: '/secrets' },
+					{ text: 'Project integrations', link: '/integrations' },
 					{ text: 'Syncing from external sources', link: '/syncing' },
 					{ text: 'Workload Identity Federation', link: '/workload-identity-federation' },
 				],
@@ -155,6 +156,7 @@ export default defineConfig({
 					{ text: 'Notebook apps', link: '/apps' },
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Project secrets', link: '/secrets' },
+					{ text: 'Project integrations', link: '/integrations' },
 					{ text: 'Syncing from external sources', link: '/syncing' },
 					{ text: 'Workload Identity Federation', link: '/workload-identity-federation' },
 				],

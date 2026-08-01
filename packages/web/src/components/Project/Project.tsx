@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
 	AppWindow,
 	ArrowLeft,
+	Blocks,
 	ChevronDown,
 	Container,
 	Copy,
@@ -72,6 +73,7 @@ import {
 import { AppSessionIndicator } from './AppSessionIndicator';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
 import { ProjectSecretsDialog } from './ProjectSecretsDialog';
+import { ProjectIntegrationsDialog } from './ProjectIntegrationsDialog';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { ChangeBaseImageDialog } from '@/components/Notebook/ChangeBaseImageDialog';
 import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/baseImage';
@@ -152,6 +154,7 @@ export function Project() {
 	const editProjectModal = useDisclosure();
 	const deleteProjectModal = useDisclosure();
 	const secretsModal = useDisclosure();
+	const integrationsModal = useDisclosure();
 	const membersModal = useDisclosure();
 
 	const { data: notebooks } = useNotebooksQuery(pid!);
@@ -516,6 +519,16 @@ export function Project() {
 						>
 							<KeyRound className="size-4" />
 						</IconButton>
+						{/* Older servers omit the integrations capability entirely. */}
+						{capabilities?.integrations?.available && (
+							<IconButton
+								label="Project integrations"
+								tooltip="Project integrations"
+								onPress={integrationsModal.open}
+							>
+								<Blocks className="size-4" />
+							</IconButton>
+						)}
 						<IconButton label="Edit project" tooltip="Edit project" onPress={editProjectModal.open}>
 							<Pencil className="size-4" />
 						</IconButton>
@@ -893,6 +906,11 @@ export function Project() {
 				isPending={updateProject.isPending}
 				onSave={handleSaveSecrets}
 			/>
+
+			{/* Mount on open so integration schemas and entries are fetched on demand. */}
+			{integrationsModal.isOpen && (
+				<ProjectIntegrationsDialog isOpen onClose={integrationsModal.close} project={project} />
+			)}
 
 			<FormConfirmDialog
 				form={deleteProjectForm}

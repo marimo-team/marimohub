@@ -81,6 +81,15 @@ s3-bucket/
 └── projects/
     └── {project-id}/
         ├── project.json                    ← project metadata
+        ├── secrets/
+        │   └── {NAME}.json                 ← project secret entry (mutable, last-writer-wins)
+        ├── integrations/
+        │   ├── _names/
+        │   │   └── {name}.json             ← per-name singleton claim (CAS, app-claim pattern)
+        │   └── {integration-id}/
+        │       ├── integration.json        ← head: name/kind/enabled/current_version (CAS-managed)
+        │       └── versions/
+        │           └── {000001}.json       ← immutable config version (create-if-absent)
         └── notebooks/
             └── {notebook-id}/
                 ├── meta.json               ← notebook metadata (title, author, tags…)
@@ -121,6 +130,10 @@ s3-bucket/
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                  | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                           |
 | `_system/idempotency/{digest}.json`                            | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                           |
 | `projects/{pid}/project.json`                                  | JSON     | Project metadata: name, description, owner, members, tags.                                                                                                                                                                                                                                                                                                                                                                             |
+| `projects/{pid}/secrets/{NAME}.json`                           | JSON     | Project secret entry, keyed by env-var name: a `reference` pointer into an external manager, or a `managed` ciphertext envelope. Mutable, last-writer-wins (no CAS). Never contains plaintext.                                                                                                                                                                                                                                         |
+| `projects/{pid}/integrations/{iid}/integration.json`           | JSON     | Integration head: kind, instance name, `enabled`, and the `current_version` pointer. CAS-managed via ETag `mutateObject` — written only by `ProjectIntegrationsStore` (a version bump must be atomic against a concurrent edit). See §4.12.                                                                                                                                                                                            |
+| `projects/{pid}/integrations/{iid}/versions/{n}.json`          | JSON     | Immutable integration config version, keyed by zero-padded number so key order == version order. Written create-if-absent; a losing writer takes n+1. Secret fields are `{ "$secret": … }` ciphertext envelopes, never plaintext. Sessions pin these version numbers (the audit trail), so history is never rewritten.                                                                                                                 |
+| `projects/{pid}/integrations/_names/{name}.json`               | JSON     | Per-name singleton claim (`{ integration_id, claimed_at }`) anchoring integration-name uniqueness — the same claim class as the app claim, written only by `ProjectIntegrationsStore` via `acquireSingletonClaim`/`releaseSingletonClaim`. See §4.12.                                                                                                                                                                                  |
 | `projects/{pid}/notebooks/{nid}/meta.json`                     | JSON     | Notebook metadata: title, description, status, author, tags, last_run_at. Never contains code or paths.                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/README.md`                     | Markdown | Human-readable description and usage notes.                                                                                                                                                                                                                                                                                                                                                                                            |
 | `projects/{pid}/notebooks/{nid}/source.json`                   | JSON     | Typed source pointer. Declares where code lives + `current_version_id`. v1 supports `local`.                                                                                                                                                                                                                                                                                                                                           |
@@ -405,6 +418,41 @@ A personal access token record — the machine-credential counterpart of a sessi
 **Why keyed by token id.** The presented bearer is `mhub_pat_<tokenId>_<secret>`, so verification is a **single GET** by the embedded ULID — no scan and, critically, no mutable index object that would need its own CAS discipline. `hash` is the SHA-256 of the secret; the plaintext is returned once at creation and never stored. Per-user listing is a prefix scan of `_system/tokens/` (fine at the 20-per-user cap).
 
 **Mutability & write semantics.** Creation is a plain PUT to a fresh, unique token-id key. The only rewrite is the `last_used_at` refresh, and it is **conditional** — an `If-Match` on the ETag read at load time — so a token revoked (deleted) between load and the touch is not resurrected by a stale write; the touch is also coalesced to once per UTC day, keeping the request hot path read-only. Revocation is a plain DELETE. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag.
+
+### 4.12 `projects/{pid}/integrations/{iid}/…`
+
+A project integration instance — a named, versioned configuration of a code-registered _kind_ (`postgres`, `iceberg_rest`, …) rendered into every session's sandbox as env vars + files. Two records:
+
+```json
+// projects/proj-x/integrations/intg-y/integration.json   (head — CAS-managed)
+{
+	"id": "intg-7h2k9qm4xz7rp3w8",
+	"project_id": "proj-7h2k9qm4xz7rp3w8",
+	"kind": "postgres",
+	"name": "prod",
+	"enabled": true,
+	"current_version": 3,
+	"created_by": "user_abc123",
+	"created_at": "2026-07-30T14:30:00Z",
+	"updated_at": "2026-07-30T15:00:00Z"
+}
+
+// projects/proj-x/integrations/intg-y/versions/000003.json   (immutable)
+{
+	"schema_version": 1,
+	"version": 3,
+	"kind": "postgres",
+	"kind_schema_version": 1,
+	"config": { "host": "db.internal", "password": { "$secret": { "kind": "managed", "envelope": { "kek_id": "…", "alg": "A256GCM", "iv": "…", "ciphertext": "…" } } } },
+	"created_by": "user_abc123",
+	"created_at": "2026-07-30T15:00:00Z",
+	"change_note": "rotate password"
+}
+```
+
+**Mutability & write semantics.** Version records are **immutable** — written create-if-absent under a zero-padded number key (key order == version order); a losing concurrent writer retries with n+1. The **head** is the third CAS-managed mutable object class in the store (after `catalog.json`/sessions and the app claim): every rewrite goes through an ETag `mutateObject` so a `current_version` bump is atomic against a concurrent edit, and it is written **only** by `ProjectIntegrationsStore`. Two concurrent config edits both land in history; the higher version number wins the pointer regardless of head-commit order. Session records pin `{ id, name, kind, version }` per rendered integration, so a session's exact config is reproducible from the immutable versions **while the integration exists**. Deleting an integration (or hard-deleting its project) removes the head **first** — so a concurrent update's head CAS fails fast and removes its own just-appended version — then the remaining objects; like a project secret, it is gone immediately. The pins on session records (themselves reaped ~24h after termination) and the `integration.*` entries in `_system/events/` remain the durable audit trail of what was configured and when. Secret config fields hold ciphertext envelopes bound (via HKDF context) to the head path + field path — an envelope copied elsewhere fails to decrypt, and a box found outside the kind's registered secret paths (e.g. a bad migration) fails the whole config closed rather than leaking through redaction.
+
+**The name claim** (`_names/{name}.json`, name URI-encoded) anchors "one instance per name" the same way the app claim anchors "one app per notebook": `{ integration_id, claimed_at }`, acquired via `acquireSingletonClaim` (create-if-absent, ETag-CAS replace when stale) and released by CAS-ing `integration_id` to the free marker `null`, never a bare delete. Writers put the **head first, then claim** — a holder is _live_ iff its head still exists under that name, so the claim self-heals after a crash between the two writes, and two concurrent creates are arbitrated by the claim key: the loser deletes its own just-written objects. A rename claims the new name (reverting the head on conflict, so a combined rename+config PATCH that loses commits nothing) and then frees the old; delete frees the name last. Sole writer: `ProjectIntegrationsStore`. `_names/` cannot collide with an instance directory (ids are always `intg-…`), and listings skip it.
 
 ---
 

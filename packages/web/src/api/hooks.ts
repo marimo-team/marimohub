@@ -1,9 +1,16 @@
 import { useQuery, useSuspenseQuery, useMutation, keepPreviousData } from '@tanstack/react-query';
-import { apiClient, apiData } from './client';
+import { apiClient, apiData, apiDataWithResponse } from './client';
 import { useApiMutation } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
 import { sanitizeFilename, triggerDownload } from '../lib/download';
-import { userKeys, projectKeys, notebookKeys, sessionKeys, systemKeys } from './queryKeys';
+import {
+	userKeys,
+	projectKeys,
+	notebookKeys,
+	sessionKeys,
+	systemKeys,
+	integrationKeys,
+} from './queryKeys';
 import type { NotebookDetail, ResolvedUser, ProjectFederation, ProjectRole } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
@@ -324,6 +331,139 @@ export function useDeleteSecret(projectId: string) {
 			),
 		() => [projectKeys.secrets(projectId)],
 	);
+}
+
+// Integrations
+
+/** A 404 from the integrations routes means the deployment has them disabled. */
+export function isIntegrationsDisabledError(err: unknown): boolean {
+	return isApiErrorCode(err, 'NOT_FOUND');
+}
+
+/** Static kind catalog, or `null` when integrations are disabled. */
+export function useIntegrationKindsQuery(enabled = true) {
+	return useQuery({
+		queryKey: integrationKeys.kinds(),
+		enabled,
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+		queryFn: async () => {
+			try {
+				return await apiData(apiClient.GET('/api/v1/integrations/kinds'));
+			} catch (err) {
+				if (isIntegrationsDisabledError(err)) return null;
+				throw err;
+			}
+		},
+	});
+}
+
+/** Returns `null` when integrations are disabled for this deployment. */
+export function useProjectIntegrationsQuery(projectId: string, enabled = true) {
+	return useQuery({
+		queryKey: projectKeys.integrations(projectId),
+		enabled,
+		retry: (count, err) => !isIntegrationsDisabledError(err) && count < 2,
+		queryFn: async () => {
+			try {
+				return await apiData(
+					apiClient.GET('/api/v1/projects/{pid}/integrations', {
+						params: { path: { pid: projectId } },
+					}),
+				);
+			} catch (err) {
+				if (isIntegrationsDisabledError(err)) return null;
+				throw err;
+			}
+		},
+	});
+}
+
+/** Fetches the current config with secret fields redacted. */
+export function useIntegrationDetailQuery(projectId: string, integrationId: string | undefined) {
+	return useQuery({
+		queryKey: projectKeys.integration(projectId, integrationId ?? ''),
+		enabled: Boolean(integrationId),
+		queryFn: async () => {
+			const result = await apiDataWithResponse(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}', {
+					params: { path: { pid: projectId, iid: integrationId ?? '' } },
+				}),
+			);
+			return {
+				detail: result.data,
+				etag: result.response.headers.get('etag') ?? undefined,
+			};
+		},
+	});
+}
+
+export function useCreateIntegration(projectId: string) {
+	return useApiMutation(
+		(body: { kind: string; name: string; config: Record<string, unknown> }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/integrations', {
+					params: { path: { pid: projectId } },
+					body,
+				}),
+			),
+		() => [projectKeys.integrations(projectId)],
+	);
+}
+
+export function useUpdateIntegration(projectId: string) {
+	return useApiMutation(
+		({
+			id,
+			etag,
+			...body
+		}: {
+			id: string;
+			etag?: string;
+			name?: string;
+			enabled?: boolean;
+			config?: Record<string, unknown>;
+			change_note?: string;
+		}) =>
+			apiData(
+				apiClient.PATCH('/api/v1/projects/{pid}/integrations/{iid}', {
+					params: {
+						path: { pid: projectId, iid: id },
+						header: etag ? { 'if-match': etag } : {},
+					},
+					body,
+				}),
+			),
+		(variables) => [
+			projectKeys.integrations(projectId),
+			projectKeys.integration(projectId, variables.id),
+		],
+	);
+}
+
+export function useDeleteIntegration(projectId: string) {
+	return useApiMutation(
+		(id: string) =>
+			apiData(
+				apiClient.DELETE('/api/v1/projects/{pid}/integrations/{iid}', {
+					params: { path: { pid: projectId, iid: id } },
+				}),
+			),
+		() => [projectKeys.integrations(projectId)],
+	);
+}
+
+/** Tests either an unsaved config or a stored integration by id. */
+export function useTestIntegration(projectId: string) {
+	return useMutation({
+		mutationFn: (body: { kind: string; config: Record<string, unknown> } | { id: string }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/integrations/test', {
+					params: { path: { pid: projectId } },
+					body,
+				}),
+			),
+	});
 }
 
 // Notebooks

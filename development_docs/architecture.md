@@ -565,6 +565,8 @@ for Cloudflare Containers, Okta for Access — and the sequence is identical.
   retention, and observability.
 - [`migrations.md`](./migrations.md) — schema migration & rolling-deploy
   compatibility strategy.
+- [`integrations.md`](./integrations.md) — integration kind contracts, schema
+  evolution, rendering, probes, and tests.
 - [`auth.md`](./auth.md) — authentication backends, setup, redirect URIs, and a
   Google OIDC example.
 - [`technologies.md`](./technologies.md) — concrete library and runtime choices.

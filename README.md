@@ -82,7 +82,9 @@ pnpm build
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. For
 architecture and internal design, start with
 [development_docs/architecture.md](./development_docs/architecture.md) and
-[development_docs/bucket_spec.md](./development_docs/bucket_spec.md).
+[development_docs/bucket_spec.md](./development_docs/bucket_spec.md). Integration
+kind contributors should also read
+[development_docs/integrations.md](./development_docs/integrations.md).
 
 marimohub is licensed under the Apache License, Version 2.0. See
 [LICENSE](./LICENSE).

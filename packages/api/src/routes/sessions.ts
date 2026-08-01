@@ -8,6 +8,7 @@ import type {
 	Session,
 	SessionId,
 	SessionMode,
+	SessionRender,
 	UserId,
 } from '@marimo-hub/core';
 import {
@@ -37,6 +38,7 @@ import {
 	SubdomainExposure,
 	canStartSessionMode,
 	UnavailableError,
+	ValidationError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
@@ -224,6 +226,7 @@ function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean }) 
 		compute_profile: s.compute_profile,
 		compute_resources: s.compute_resources,
 		compute_from_snapshot: s.compute_from_snapshot,
+		integrations: s.integrations,
 		// A provision failure's message can name the sandbox host — the very thing
 		// withholding `sandbox_url` protects — so it rides the same grant.
 		error: can.attach ? s.error : undefined,
@@ -581,6 +584,8 @@ app.openapi(createSession, async (c) => {
 	let updated: Session | undefined;
 	let url = '';
 	let usedFallback = false;
+	// Audit pin for the integration versions rendered into this sandbox.
+	let integrationAttachments: SessionRender['attachments'] | undefined;
 	// In subdomain mode clientUrl === url and originUrl is unset.
 	let clientUrl = '';
 	let originUrl: string | undefined;
@@ -723,20 +728,51 @@ app.openapi(createSession, async (c) => {
 						}
 					};
 
-					// The three sources are independent, so resolve them together. Secrets are
-					// the base; the system/WIF/config vars win a name collision, so a user
-					// secret can never shadow them.
+					// Integrations: like secrets, FAILS CLOSED — a configured data source is
+					// load-bearing, so a render failure aborts provisioning rather than
+					// starting a sandbox with partial config. Never for an ephemeral sandbox.
+					const resolveIntegrationEnv = async () => {
+						if (!(deps.integrations && !ephemeral)) return;
+						try {
+							const render = await deps.integrations.resolveForSession(pid, {
+								sessionId: session!.session_id,
+								principal: { userId: user.id, email: user.email },
+							});
+							if (render) {
+								observer.tag('integrations_rendered_count', render.attachments.length);
+								integrationAttachments = render.attachments;
+							}
+							return render;
+						} catch (err) {
+							observer.tag('integration_render_failed', true);
+							for (const [key, value] of Object.entries(errorMetadata(err))) {
+								observer.tag(`integrations_${key}`, value);
+							}
+							// Only curated validation errors are safe to return to the caller.
+							if (err instanceof ValidationError) throw err;
+							throw new UnavailableError(
+								'integration_render_failed: could not render this project’s integrations',
+							);
+						}
+					};
+
+					// The four sources are independent, so resolve them together. Precedence
+					// on an env-name collision, lowest to highest: project secrets <
+					// integrations < system/WIF/marimo-config — user-supplied values can
+					// never shadow the hub's own injected vars.
 					const resolveSessionEnv = async (): Promise<SessionEnv | undefined> => {
-						const [wifVars, marimoEnv, secretVars] = await Promise.all([
+						const [wifVars, marimoEnv, secretVars, integrationEnv] = await Promise.all([
 							resolveWifVars(),
 							resolveMarimoConfigEnv(),
 							resolveSecretVars(),
+							resolveIntegrationEnv(),
 						]);
 						let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
 						if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
-						if (secretVars) {
-							env = { files: env?.files ?? [], vars: { ...secretVars, ...env?.vars } };
-						}
+						// The lower-precedence layers merge as the BASE, with everything
+						// resolved so far as the winning overlay.
+						if (integrationEnv) env = mergeSessionEnv(integrationEnv, env ?? {});
+						if (secretVars) env = mergeSessionEnv({ vars: secretVars }, env ?? {});
 						return env;
 					};
 
@@ -799,6 +835,7 @@ app.openapi(createSession, async (c) => {
 					usedFallback,
 					originUrl,
 					ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
+					integrationAttachments,
 				);
 			})
 			// A slow provision looks like a wedged holder once the `starting` record

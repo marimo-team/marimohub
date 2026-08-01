@@ -8,9 +8,12 @@
 import { createApi } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
 import {
+	AesGcmSecretCodec,
 	composeAuthenticators,
 	createServices,
+	defaultRegistry,
 	MaintenanceLock,
+	ProjectIntegrationsStore,
 	ReconciliationService,
 } from '@marimo-hub/core';
 import { CloudflareAccessAuthenticator } from '@marimo-hub/auth-cloudflare-access';
@@ -30,6 +33,22 @@ export { Sandbox, ContainerProxy };
 // Worker R2 binding (wrangler.jsonc `r2_buckets`) the sandbox mounts credential-less.
 const R2_BINDING = 'NOTEBOOKS_BUCKET';
 let warnedAboutComputeProfiles = false;
+
+/**
+ * Deps are built per request here, so a rejected KEK would otherwise surface as
+ * an opaque 500 on whichever request happened to arrive first. Name the binding
+ * the operator has to fix, the way the Node entrypoint's ConfigError does.
+ */
+function secretCodec(kek: string | undefined): AesGcmSecretCodec | undefined {
+	if (!kek) return undefined;
+	try {
+		return new AesGcmSecretCodec({ kek });
+	} catch (err) {
+		throw new Error(
+			`Invalid SECRETS_KEK secret: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+}
 
 export function buildDeps(request: Request, env: Env): ApiDeps {
 	const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
@@ -102,6 +121,14 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 		// deployment; other requests resolve through the adapter selected above.
 		authenticator: composeAuthenticators(services.tokens, authenticator),
 		ai,
+		// Secret-free integrations work without a KEK; secret fields require SECRETS_KEK.
+		// No `probe` — Workers lack the DNS hooks the guarded egress policy needs,
+		// so connection testing stays disabled here.
+		integrations: new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec: secretCodec(env.SECRETS_KEK),
+		}),
 		sandbox: {
 			// Default: credential-less R2 binding mount (no endpoint/secrets) — the
 			// sandbox mounts the bucket by Worker binding name. Set R2_S3_ENDPOINT to

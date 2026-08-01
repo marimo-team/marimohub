@@ -29,6 +29,8 @@ declare global {
 		AI_MODEL?: string;
 		AI_SESSION_SECRET?: string;
 		AI_UPSTREAM_PROJECT?: string;
+		// Wrangler secret used to encrypt integration fields; must be at least 32 characters.
+		SECRETS_KEK?: string;
 	}
 }
 

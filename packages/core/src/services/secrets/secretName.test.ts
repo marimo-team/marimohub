@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ValidationError } from '../../errors';
-import { assertValidSecretName } from './secretName';
+import { assertValidSecretName, CODE_EXECUTION_ENV } from './secretName';
 
 describe('assertValidSecretName', () => {
 	it('accepts upper-snake identifiers', () => {
@@ -20,12 +20,12 @@ describe('assertValidSecretName', () => {
 		},
 	);
 
-	it.each(['LD_PRELOAD', 'LD_LIBRARY_PATH', 'PYTHONSTARTUP', 'NODE_OPTIONS', 'BASH_ENV'])(
-		'rejects the code-execution vector %o',
-		(name) => {
-			expect(() => assertValidSecretName(name)).toThrow(ValidationError);
-		},
-	);
+	// Every entry, not a sample: the list is the security boundary, and a
+	// half-covered one is how `LD_AUDIT` (the sibling of the blocked `LD_PRELOAD`)
+	// stayed missing.
+	it.each(CODE_EXECUTION_ENV)('rejects the code-execution vector %o', (name) => {
+		expect(() => assertValidSecretName(name)).toThrow(ValidationError);
+	});
 
 	it.each(['MARIMO_FOO', 'MARIMOHUB_ANYTHING'])('rejects reserved prefix %o', (name) => {
 		expect(() => assertValidSecretName(name)).toThrow(ValidationError);

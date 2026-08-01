@@ -28,20 +28,20 @@ export function DialogModal({ isOpen, onClose, title, children, width = 'md' }: 
 			}}
 			isDismissable
 			className={cn(
-				'fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]',
+				'fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-4 backdrop-blur-[2px]',
 				'entering:animate-in entering:fade-in-0 exiting:animate-out exiting:fade-out-0',
 			)}
 		>
 			<Modal
 				className={cn(
-					'w-full rounded-xl border bg-card text-card-foreground shadow-xl',
+					'max-h-[calc(100dvh-2rem)] w-full overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xl',
 					'entering:animate-in entering:zoom-in-95 exiting:animate-out exiting:zoom-out-95',
 					widthClasses[width],
 				)}
 			>
-				<Dialog className="outline-none">
+				<Dialog className="flex max-h-[calc(100dvh-2rem)] flex-col outline-none">
 					{title && (
-						<div className="flex items-center justify-between border-b px-5 py-3.5">
+						<div className="flex shrink-0 items-center justify-between border-b px-5 py-3.5">
 							<Heading slot="title" className="text-sm font-semibold">
 								{title}
 							</Heading>
@@ -50,7 +50,7 @@ export function DialogModal({ isOpen, onClose, title, children, width = 'md' }: 
 							</IconButton>
 						</div>
 					)}
-					<div className="p-5">{children}</div>
+					<div className="min-h-0 overflow-y-auto overscroll-contain p-5">{children}</div>
 				</Dialog>
 			</Modal>
 		</ModalOverlay>

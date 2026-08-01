@@ -145,6 +145,13 @@ components:
               type: boolean
           required:
             - available
+        integrations:
+          type: object
+          properties:
+            available:
+              type: boolean
+          required:
+            - available
         viewer_mode:
           type: string
           enum:
@@ -215,6 +222,7 @@ components:
             - editors
       required:
         - federation
+        - integrations
         - viewer_mode
         - viewer_session_modes
         - default_role
@@ -770,6 +778,24 @@ components:
           $ref: '#/components/schemas/ComputeResources'
         compute_from_snapshot:
           type: boolean
+        integrations:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              kind:
+                type: string
+              version:
+                type: integer
+            required:
+              - id
+              - name
+              - kind
+              - version
         error:
           type: object
           properties:
@@ -898,6 +924,173 @@ components:
           type: string
       required:
         - ok
+    IntegrationKind:
+      type: object
+      properties:
+        kind:
+          type: string
+          example: postgres
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum:
+            - database
+            - catalog
+            - engine
+            - storage
+            - other
+        schema_version:
+          type: integer
+        json_schema:
+          type: object
+          additionalProperties: {}
+        ui_hints:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              widget:
+                type: string
+                enum:
+                  - text
+                  - password
+                  - textarea
+                  - select
+                  - toggle
+                  - number
+                  - kv-pairs
+              placeholder:
+                type: string
+              group:
+                type: string
+              order:
+                type: number
+              advanced:
+                type: boolean
+              docs_url:
+                type: string
+        supports_test:
+          type: boolean
+        requirements:
+          type: array
+          items:
+            type: string
+      required:
+        - kind
+        - title
+        - description
+        - category
+        - schema_version
+        - json_schema
+        - ui_hints
+        - supports_test
+        - requirements
+    IntegrationEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        current_version:
+          type: integer
+        created_by:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+      required:
+        - id
+        - kind
+        - name
+        - enabled
+        - current_version
+        - created_by
+        - created_at
+        - updated_at
+    IntegrationDetail:
+      allOf:
+        - $ref: '#/components/schemas/IntegrationEntry'
+        - type: object
+          properties:
+            config:
+              type: object
+              additionalProperties: {}
+            change_note:
+              type: string
+          required:
+            - config
+    IntegrationVersionPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationVersion'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
+    IntegrationVersion:
+      type: object
+      properties:
+        version:
+          type: integer
+        kind_schema_version:
+          type: integer
+        created_by:
+          type: string
+        created_at:
+          type: string
+        change_note:
+          type: string
+      required:
+        - version
+        - kind_schema_version
+        - created_by
+        - created_at
+    IntegrationTestResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        latency_ms:
+          type: number
+        details:
+          type: string
+      required:
+        - ok
+    IntegrationTestRequest:
+      anyOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              minLength: 1
+            config:
+              type: object
+              additionalProperties: {}
+          required:
+            - kind
+            - config
+        - type: object
+          properties:
+            id:
+              type: string
+              pattern: ^intg-[0-9a-z]{16}$
+          required:
+            - id
     User:
       type: object
       properties:
@@ -3893,6 +4086,675 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/integrations/kinds:
+    get:
+      tags:
+        - Integrations
+      summary: List available integration kinds (schemas drive the config forms)
+      responses:
+        '200':
+          description: Registered integration kinds
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IntegrationKind'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations:
+    get:
+      tags:
+        - Integrations
+      summary: List a project's integrations
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+      responses:
+        '200':
+          description: Integration instances (no config)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IntegrationEntry'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+        - Integrations
+      summary: Create an integration (admin only)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  minLength: 1
+                name:
+                  type: string
+                  minLength: 1
+                  example: prod
+                config:
+                  type: object
+                  additionalProperties: {}
+                change_note:
+                  type: string
+                  maxLength: 500
+              required:
+                - kind
+                - name
+                - config
+      responses:
+        '201':
+          description: Integration created (config redacted)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationDetail'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}:
+    get:
+      tags:
+        - Integrations
+      summary: Get an integration with its redacted config
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+      responses:
+        '200':
+          description: Integration detail (config redacted)
+          headers:
+            ETag:
+              schema:
+                type: string
+                description: Strong validator (the resource version). Echo as `If-Match` to
+                  guard a write.
+                example: '"2025-03-05T14:00:00Z"'
+              required: true
+              description: Strong validator (the resource version). Echo as `If-Match` to
+                guard a write.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationDetail'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      tags:
+        - Integrations
+      summary: Update an integration (admin only); a config change appends a version
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: false
+          name: if-match
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                enabled:
+                  type: boolean
+                config:
+                  type: object
+                  additionalProperties: {}
+                change_note:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: Integration updated (config redacted)
+          headers:
+            ETag:
+              schema:
+                type: string
+                description: Strong validator (the resource version). Echo as `If-Match` to
+                  guard a write.
+                example: '"2025-03-05T14:00:00Z"'
+              required: true
+              description: Strong validator (the resource version). Echo as `If-Match` to
+                guard a write.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationDetail'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Integrations
+      summary: Delete an integration and its version history (admin only)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: string
+            example: '"2025-03-05T14:00:00Z"'
+          required: false
+          name: if-match
+          in: header
+      responses:
+        '200':
+          description: Integration deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/versions:
+    get:
+      tags:
+        - Integrations
+      summary: List an integration's config versions (metadata only)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
+      responses:
+        '200':
+          description: Version history, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationVersionPage'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/test:
+    post:
+      tags:
+        - Integrations
+      summary: Probe connectivity for an unsaved config or a stored instance (admin
+        only)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationTestRequest'
+      responses:
+        '200':
+          description: Probe outcome (never secret material)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationTestResult'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
           content:
             application/json:
               schema:

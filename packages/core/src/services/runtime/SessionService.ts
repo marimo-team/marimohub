@@ -137,6 +137,7 @@ export class SessionService {
 		usedFallback?: boolean,
 		originUrl?: string,
 		expiresAt?: string,
+		integrations?: Session['integrations'],
 	): Promise<Session> {
 		return this.mutate(projectId, id, (session) => {
 			if (isTerminal(session.status) || session.status === 'terminating') return null;
@@ -149,6 +150,9 @@ export class SessionService {
 				sandbox_origin_url: originUrl,
 				used_fallback: usedFallback,
 				...(expiresAt ? { expires_at: expiresAt } : {}),
+				...(session.integrations === undefined && integrations && integrations.length > 0
+					? { integrations }
+					: {}),
 			};
 		});
 	}

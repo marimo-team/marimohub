@@ -1,0 +1,205 @@
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { ValidationError } from '../../errors';
+import type { IntegrationProbe } from '../../ports/integrations';
+import { trino } from './kinds/trino';
+import { basicAuthHeader, defineIntegration, envSegment, probeErrorDetails } from './sdk';
+import { zSecret } from './secretFields';
+
+/** Fails the request with a message that quotes whatever the kind sent. */
+function echoingProbe(): IntegrationProbe {
+	return {
+		fetch: (_url, init) =>
+			Promise.reject(new Error(`invalid header value ${JSON.stringify(init?.headers ?? {})}`)),
+	};
+}
+
+/** For kinds that fail before (or without) touching the network. */
+function unusedProbe(): IntegrationProbe {
+	return { fetch: () => Promise.reject(new Error('unused')) };
+}
+
+describe('defineIntegration secret guard', () => {
+	it('redacts a header secret an auth-none Trino test would echo', async () => {
+		const secret = 'header-secret-value';
+		const config = trino.configSchema.parse({
+			host: 'trino.internal',
+			auth: { method: 'none' },
+			http_headers: [{ name: 'X-Tenant', value: secret }],
+		});
+
+		const result = await trino.testConnection?.(config, echoingProbe());
+
+		expect(result?.ok).toBe(false);
+		expect(result?.details).not.toContain(secret);
+		expect(result?.details).toBe('request failed');
+	});
+
+	it('redacts a JSON-escaped header secret quoted back by the transport', async () => {
+		const secret = 'he"llo\\wor\nld\tx';
+		const config = trino.configSchema.parse({
+			host: 'trino.internal',
+			auth: { method: 'none' },
+			http_headers: [{ name: 'X-Tenant', value: secret }],
+		});
+
+		const result = await trino.testConnection?.(config, echoingProbe());
+
+		expect(result?.ok).toBe(false);
+		expect(result?.details).not.toContain('llo');
+		expect(result?.details).toBe('request failed');
+	});
+
+	// A JSON config can carry a lone surrogate, which encodeURIComponent rejects;
+	// the guard must still redact rather than throw the URIError out as a 500.
+	it('redacts a secret that cannot be URL-encoded', async () => {
+		const secret = 'tok\ud800en';
+		const config = trino.configSchema.parse({
+			host: 'trino.internal',
+			auth: { method: 'none' },
+			http_headers: [{ name: 'X-Tenant', value: secret }],
+		});
+
+		const result = await trino.testConnection?.(config, echoingProbe());
+
+		expect(result?.details).toBe('request failed');
+	});
+
+	it('redacts a secret nested under an array path and a URL-encoded echo', async () => {
+		const secret = 'extra credential/value';
+		const def = defineIntegration({
+			kind: 'guard_fixture',
+			title: 'Guard fixture',
+			description: 'Test double',
+			category: 'engine',
+			schemaVersion: 1,
+			configSchema: z.object({
+				items: z.array(z.object({ name: z.string(), value: zSecret() })),
+			}),
+			render: () => ({}),
+			testConnection: (config) =>
+				Promise.resolve({
+					ok: false,
+					details: `upstream said ${encodeURIComponent(config.items[0].value)}`,
+				}),
+		});
+
+		const result = await def.testConnection?.(
+			{ items: [{ name: 'a', value: secret }] },
+			unusedProbe(),
+		);
+
+		expect(result?.details).toBe('request failed');
+	});
+
+	it('converts a throw that quotes a secret into a redacted failure', async () => {
+		const secret = 'thrown-token-value';
+		const def = defineIntegration({
+			kind: 'throwing_fixture',
+			title: 'Throwing fixture',
+			description: 'Test double',
+			category: 'engine',
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			testConnection: (config) => {
+				throw new Error(`connect failed: authorization=Bearer ${config.token}`);
+			},
+		});
+
+		const result = await def.testConnection?.({ token: secret }, unusedProbe());
+
+		expect(result).toEqual({ ok: false, details: 'request failed' });
+	});
+
+	it('drops the message of an escaped throw even when no secret is quoted', async () => {
+		const def = defineIntegration({
+			kind: 'throwing_fixture',
+			title: 'Throwing fixture',
+			description: 'Test double',
+			category: 'engine',
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			testConnection: () => Promise.reject(new Error('connect ECONNREFUSED 10.0.0.1:8080')),
+		});
+
+		const result = await def.testConnection?.({ token: 'unused' }, unusedProbe());
+
+		expect(result?.details).toBe('request failed');
+	});
+
+	it('propagates a ValidationError so the route still answers 422', async () => {
+		const def = defineIntegration({
+			kind: 'rejecting_fixture',
+			title: 'Rejecting fixture',
+			description: 'Test double',
+			category: 'engine',
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			testConnection: () => Promise.reject(new ValidationError('unsupported auth combination')),
+		});
+
+		await expect(def.testConnection?.({ token: 'unused' }, unusedProbe())).rejects.toThrow(
+			ValidationError,
+		);
+	});
+
+	it('keeps a redacted success from contradicting its own ok result', async () => {
+		const probe: IntegrationProbe = {
+			fetch: () =>
+				Promise.resolve({
+					ok: true,
+					status: 200,
+					json: () => Promise.resolve({ nodeVersion: { version: '444' } }),
+				}),
+		};
+		// A two-character password is a substring of the success detail "Trino 444".
+		const config = trino.configSchema.parse({
+			host: 'trino.internal',
+			auth: { method: 'basic', username: 'svc', password: '44' },
+		});
+
+		const result = await trino.testConnection?.(config, probe);
+
+		expect(result?.ok).toBe(true);
+		expect(result?.details).toBe('connected');
+		expect(result?.details).not.toContain('44');
+	});
+
+	it('leaves secret-free details (status codes, versions) untouched', async () => {
+		const probe: IntegrationProbe = {
+			fetch: () =>
+				Promise.resolve({
+					ok: true,
+					status: 200,
+					json: () => Promise.resolve({ nodeVersion: { version: '444' } }),
+				}),
+		};
+		const config = trino.configSchema.parse({
+			host: 'trino.internal',
+			auth: { method: 'basic', username: 'svc', password: 'pw-not-echoed' },
+			http_headers: [{ name: 'X-Tenant', value: 'header-secret-value' }],
+		});
+
+		const result = await trino.testConnection?.(config, probe);
+
+		expect(result).toMatchObject({ ok: true, details: 'Trino 444' });
+	});
+});
+
+describe('sdk helpers', () => {
+	it('probeErrorDetails suppresses the message for credential-carrying requests', () => {
+		expect(probeErrorDetails(new Error('connect ECONNREFUSED'), false)).toBe(
+			'connect ECONNREFUSED',
+		);
+		expect(probeErrorDetails(new Error('connect ECONNREFUSED'), true)).toBe('request failed');
+		expect(probeErrorDetails('not an error', false)).toBe('request failed');
+	});
+
+	it('encodes non-Latin-1 basic credentials and normalizes env segments', () => {
+		expect(basicAuthHeader('césar', 'pässwörd')).toBe('Basic Y8Opc2FyOnDDpHNzd8O2cmQ=');
+		expect(envSegment('my-warehouse')).toBe('MY_WAREHOUSE');
+	});
+});

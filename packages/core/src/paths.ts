@@ -1,4 +1,5 @@
 import type {
+	IntegrationId,
 	NotebookId,
 	ProjectId,
 	SandboxId,
@@ -48,6 +49,19 @@ export interface NotebookPaths {
 	version: (vid: VersionId) => VersionPaths;
 }
 
+export interface IntegrationPaths {
+	/**
+	 * The integration's head record (`integration.json`): kind, name, enabled,
+	 * `current_version` pointer. CAS-managed via `mutateObject` — written only by
+	 * `ProjectIntegrationsStore`.
+	 */
+	head: string;
+	/** Immutable config-version record, keyed by zero-padded version number. */
+	version: (n: number) => string;
+	/** Prefix of everything under this integration (head + versions), for delete. */
+	base: string;
+}
+
 export interface ProjectPaths {
 	meta: string;
 	notebook: (nid: NotebookId) => NotebookPaths;
@@ -55,6 +69,16 @@ export interface ProjectPaths {
 	secret: (name: string) => string;
 	/** Prefix of the project's secrets: `projects/{pid}/secrets/`. */
 	secretsPrefix: string;
+	/** Project-scoped integration instance: `projects/{pid}/integrations/{iid}/…`. */
+	integration: (iid: IntegrationId) => IntegrationPaths;
+	/** Prefix of the project's integrations: `projects/{pid}/integrations/`. */
+	integrationsPrefix: string;
+	/**
+	 * Per-name singleton claim anchoring integration-name uniqueness (the same
+	 * claim class as the app claim; see `SingletonClaimConfig`). `_names` cannot
+	 * collide with an instance dir — ids are always `intg-…`.
+	 */
+	integrationNameClaim: (name: string) => string;
 }
 
 function versionPaths(base: string, vid: VersionId): VersionPaths {
@@ -92,6 +116,21 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 	};
 }
 
+// Version keys are zero-padded so lexicographic key order == version order
+// (mirroring the ULID convention for events/versions). 6 digits bounds a single
+// integration at 999,999 config revisions — far past any real edit history.
+const INTEGRATION_VERSION_PAD = 6;
+
+function integrationPaths(projectBase: string, iid: IntegrationId): IntegrationPaths {
+	const base = `${projectBase}/integrations/${iid}`;
+	return {
+		base: `${base}/`,
+		head: `${base}/integration.json`,
+		version: (n: number) =>
+			`${base}/versions/${String(n).padStart(INTEGRATION_VERSION_PAD, '0')}.json`,
+	};
+}
+
 function projectPaths(pid: ProjectId): ProjectPaths {
 	const base = `projects/${pid}`;
 	return {
@@ -99,6 +138,10 @@ function projectPaths(pid: ProjectId): ProjectPaths {
 		notebook: (nid: NotebookId) => notebookPaths(base, nid),
 		secret: (name: string) => `${base}/secrets/${encodeURIComponent(name)}.json`,
 		secretsPrefix: `${base}/secrets/`,
+		integration: (iid: IntegrationId) => integrationPaths(base, iid),
+		integrationsPrefix: `${base}/integrations/`,
+		integrationNameClaim: (name: string) =>
+			`${base}/integrations/_names/${encodeURIComponent(name)}.json`,
 	};
 }
 
