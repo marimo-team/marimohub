@@ -5,7 +5,13 @@
  * The fake keeps a registry of created sandboxes keyed by the CoreWeave id it
  * assigns, so reconnect/list/delete-by-tag behave realistically.
  */
-import type { CommandProcess, FileWrites, ProcessResult, SandboxInfo } from '@coreweave/cwsandbox';
+import type {
+	CommandProcess,
+	CommandProcessStatus,
+	FileWrites,
+	ProcessResult,
+	SandboxInfo,
+} from '@coreweave/cwsandbox';
 import type { CoreWeaveClient } from './index';
 
 export function procResult(over: Partial<ProcessResult> = {}): ProcessResult {
@@ -26,19 +32,32 @@ export function procResult(over: Partial<ProcessResult> = {}): ProcessResult {
 	};
 }
 
-export function fakeProcess(): CommandProcess {
+/** How a started process should present itself: still running unless told otherwise. */
+export interface FakeProcessState {
+	exitCode?: number;
+	status?: CommandProcessStatus;
+}
+
+/**
+ * Mirrors the SDK's own state machine: an exit code is recorded ONLY on a clean
+ * exit, so a `failed` (stream fault) or `cancelled` process reports its status
+ * with `exitCode`/`poll()` left undefined.
+ */
+export function fakeProcess(state?: FakeProcessState): CommandProcess {
 	async function* empty(): AsyncGenerator<string> {
 		// no output
 	}
+	const status = state?.status ?? (state?.exitCode === undefined ? 'running' : 'exited');
+	const exitCode = status === 'exited' ? state?.exitCode : undefined;
 	return {
 		command: ['sh'] as unknown as CommandProcess['command'],
-		exitCode: undefined,
-		status: 'running',
+		exitCode,
+		status,
 		stdout: empty(),
 		stderr: empty(),
 		cancel: async () => {},
-		poll: () => {},
-		wait: async () => procResult(),
+		poll: () => exitCode,
+		wait: async () => procResult({ exitCode }),
 	};
 }
 
@@ -50,6 +69,8 @@ export interface FakeSandbox {
 	batchWrites: { path: string; content: unknown }[][];
 	reads: Record<string, string>;
 	deleted: number;
+	/** One entry per `wait()` call, carrying the options the adapter passed. */
+	waitCalls: { intervalMs?: number }[];
 }
 
 // `FileWrites` also admits a path→content record, but the adapter only ever
@@ -63,7 +84,11 @@ function recordWrite(fake: FakeSandbox) {
 	};
 }
 
-export function makeWorld(opts?: { runImpl?: (cmd: readonly string[]) => Promise<ProcessResult> }) {
+export function makeWorld(opts?: {
+	runImpl?: (cmd: readonly string[]) => Promise<ProcessResult>;
+	/** State for started processes; omit to leave them running. */
+	proc?: FakeProcessState;
+}) {
 	const created: NonNullable<Parameters<CoreWeaveClient['create']>[0]>[] = [];
 	const deleted: string[] = [];
 	const listCalls: (readonly string[])[] = [];
@@ -79,9 +104,13 @@ export function makeWorld(opts?: { runImpl?: (cmd: readonly string[]) => Promise
 			batchWrites: [],
 			reads: {},
 			deleted: 0,
+			waitCalls: [],
 		};
 		const sandbox = {
 			sandboxId,
+			wait: async (options?: { intervalMs?: number }) => {
+				fake.waitCalls.push(options ?? {});
+			},
 			commands: {
 				run: async (command: readonly string[]) => {
 					fake.runCalls.push([...command]);
@@ -89,7 +118,7 @@ export function makeWorld(opts?: { runImpl?: (cmd: readonly string[]) => Promise
 				},
 				start: async (command: readonly string[]) => {
 					fake.startCalls.push([...command]);
-					return fakeProcess();
+					return fakeProcess(opts?.proc);
 				},
 			},
 			files: {

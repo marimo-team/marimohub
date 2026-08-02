@@ -19,7 +19,7 @@ import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/fi
 import { buildMarimoLaunch } from './marimoLaunch';
 import type { NotebookService } from '../content/NotebookService';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
-import { shellQuote } from './shell';
+import type { WorkspaceRestoreStats } from './sandboxFiles';
 
 /**
  * How long to wait for marimo to bind its port. Generous because a cold sandbox
@@ -132,8 +132,14 @@ export interface ProvisionResult {
 	url: string;
 	/** Whether files were loaded via manual copy (true) or bucket mount (false) */
 	usedFallback: boolean;
-	/** Per-phase ms: create, reachable, files, setup, start, waitport, expose. */
+	/** Per-phase ms: handle, reachable, files, inject, start, waitport, expose. */
 	timings: Timings;
+	/**
+	 * Non-duration measurements for the same wide event — workspace objects/bytes
+	 * copied, command round-trips. Kept apart from `timings` so nothing here gets
+	 * reported as milliseconds.
+	 */
+	counters: Record<string, number>;
 }
 
 /**
@@ -184,8 +190,15 @@ export interface WorkspaceLoadContext {
 	workspacePrefix: string;
 }
 
+export interface WorkspaceLoadResult {
+	/** Files were copied in (true) rather than bucket-mounted (false). */
+	usedFallback: boolean;
+	/** What the copy moved; absent when the workspace was mounted instead. */
+	stats?: WorkspaceRestoreStats;
+}
+
 export interface WorkspaceLoadStrategy {
-	load(ctx: WorkspaceLoadContext): Promise<boolean>;
+	load(ctx: WorkspaceLoadContext): Promise<WorkspaceLoadResult>;
 }
 
 export interface WorkspaceLoadStrategies {
@@ -199,7 +212,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		bucketHandle,
 		workspacePrefix,
 		mountPath,
-	}: WorkspaceLoadContext): Promise<boolean> {
+	}: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (!bucketHandle) {
 			throw provisionFailure(
 				'restoring the notebook workspace into the sandbox',
@@ -207,8 +220,8 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 			);
 		}
 		try {
-			await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath);
-			return true;
+			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath);
+			return { usedFallback: true, stats };
 		} catch (err) {
 			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
 		}
@@ -218,7 +231,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 class MountOrCopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 	constructor(private copyFallback: WorkspaceLoadStrategy) {}
 
-	async load(ctx: WorkspaceLoadContext): Promise<boolean> {
+	async load(ctx: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		try {
 			await ctx.sandbox.mountBucket({
 				bucketName: ctx.bucket.name,
@@ -227,7 +240,7 @@ class MountOrCopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 				prefix: ctx.workspacePrefix,
 				credentials: ctx.bucket.credentials,
 			});
-			return false;
+			return { usedFallback: false };
 		} catch (err) {
 			if (!ctx.bucketHandle) {
 				throw provisionFailure('mounting the notebook workspace into the sandbox', err);
@@ -262,7 +275,9 @@ export class SandboxProvisioner {
 		const createMs = Date.now() - createStart;
 		try {
 			const result = await this.provisionInto(sandbox, options);
-			result.timings.create = createMs;
+			// Constructing the (usually lazy) handle, NOT the backend's create — that
+			// lands in `reachable_create` once the adapter resolves it.
+			result.timings.handle = createMs;
 			return result;
 		} catch (err) {
 			// Provisioning failed partway — destroy any partial sandbox before
@@ -326,13 +341,25 @@ export class SandboxProvisioner {
 			},
 		});
 
-		return { sandbox, url: expose, usedFallback: load, timings: sw.timings };
+		const counters: Record<string, number> = {};
+		if (load.stats) {
+			counters.files_objects = load.stats.objectCount;
+			counters.files_bytes = load.stats.bytes;
+		}
+		// Last: the adapter's command count is only final once every phase has run.
+		Object.assign(counters, sandbox.drainCounters?.() ?? {});
+
+		return { sandbox, url: expose, usedFallback: load.usedFallback, timings: sw.timings, counters };
 	}
 
 	private async ensureReachable(sandbox: SandboxInstance, sw: Stopwatch): Promise<void> {
 		using _drained = drainTimingsInto(sandbox, sw, 'reachable');
 		try {
-			await sw.time('reachable', () => sandbox.exec('true'));
+			// Adapters without `ready()` fall back to a no-op command, which proves the
+			// same thing at the cost of a round-trip.
+			await sw.time('reachable', async () => {
+				await (sandbox.ready?.() ?? sandbox.exec('true'));
+			});
 		} catch (err) {
 			throw new UnavailableError(
 				`Sandbox container is not available. Is Docker running? ` +
@@ -347,7 +374,7 @@ export class SandboxProvisioner {
 		mountPath: string,
 		workspacePrefix: string,
 		sw: Stopwatch,
-	): Promise<boolean> {
+	): Promise<WorkspaceLoadResult> {
 		using _files = sw.span('files');
 		const strategy =
 			options.workspaceLoadMode === 'copy-only'
@@ -406,21 +433,14 @@ export class SandboxProvisioner {
 		});
 		let process: SandboxProcess | undefined;
 		try {
-			// cwd is the loaded workspace so marimo resolves relative imports and files
-			// beside the notebook. exec takes no cwd, so setup commands cd in first.
-			await sw.time('setup', async () => {
-				for (const cmd of launch.setup) {
-					const res = await sandbox.exec(`cd ${shellQuote(mountPath)} && ${cmd}`);
-					if (!res.success) {
-						throw new Error(`marimo launch setup failed (${cmd}): ${res.stderr || res.stdout}`);
-					}
-				}
-			});
-			const proc = await sw.time('start', () =>
-				sandbox.startProcess(launch.start, { cwd: mountPath }),
-			);
+			// Setup rides the kernel command instead of spending its own exec, and
+			// failures still surface through the process log read below. `&&` so a
+			// failed setup never leaves marimo running against a half-built env;
+			// marimoLaunch decides what is fatal.
+			const command = [...launch.setup, launch.start].join(' && ');
+			const proc = await sw.time('start', () => sandbox.startProcess(command, { cwd: mountPath }));
 			process = proc;
-			// `waitport` is where a slow kernel env (install/build) shows up.
+			// Covers setup as well, so a slow kernel env (install/build) shows up here.
 			await sw.time('waitport', () =>
 				proc.waitForPort(MARIMO_PORT, { timeout: MARIMO_PORT_TIMEOUT_MS }),
 			);

@@ -100,6 +100,12 @@ function isExcluded(rel: string): boolean {
 	);
 }
 
+/** What a workspace restore actually moved into the sandbox. */
+export interface WorkspaceRestoreStats {
+	objectCount: number;
+	bytes: number;
+}
+
 /**
  * Restore a workspace mirror (every key under `sourcePrefix`) from the bucket into
  * the sandbox working directory. Unconditional and binary-safe: every object is
@@ -107,13 +113,16 @@ function isExcluded(rel: string): boolean {
  * parent directories as needed. `sourcePrefix` is the local notebook's mutable
  * `workspace/` for editable sources, or an immutable `versions/{vid}/workspace/`
  * for synced read-only sources — the restore logic is identical either way.
+ *
+ * Returns what was copied, so the provisioning wide event can attribute a slow
+ * `files` phase to workspace size rather than leaving it to guesswork.
  */
 export async function restoreWorkspace(
 	sandbox: SandboxInstance,
 	bucket: Bucket,
 	sourcePrefix: string,
 	workingDir: string,
-): Promise<void> {
+): Promise<WorkspaceRestoreStats> {
 	// Select from the LISTING (sizes included) so an oversized object is skipped
 	// before `bucket.get()` buffers its body — the size check must never use the
 	// fetched object.
@@ -138,17 +147,19 @@ export async function restoreWorkspace(
 		wanted.push({ key: obj.key, dest: `${workingDir}/${rel}`, size: obj.size });
 	}
 
-	// One mkdir for every parent (deduped), derived from the listing rather than
-	// one exec per file. workingDir is always included so an empty workspace still
-	// yields the cwd marimo runs in. Paths are bounded by the file-count cap, so
-	// this can't approach ARG_MAX.
-	const dirs = new Set<string>([workingDir]);
-	for (const f of wanted) dirs.add(f.dest.slice(0, f.dest.lastIndexOf('/')) || workingDir);
-	await withRetry(() => sandbox.exec(`mkdir -p ${[...dirs].map(shellQuote).join(' ')}`));
+	// `writeFiles` creates parent directories (port contract), so the only case
+	// still needing an explicit mkdir is an empty workspace — nothing gets written,
+	// yet marimo still needs the cwd it runs in to exist.
+	if (wanted.length === 0) {
+		await withRetry(() => sandbox.exec(`mkdir -p ${shellQuote(workingDir)}`));
+		return { objectCount: 0, bytes: 0 };
+	}
 
 	// Fetch + write in byte-bounded batches, so only a slice of the workspace is
 	// ever resident. Raw bytes go straight to the port — nothing is base64-armored
 	// through a shell, and there is no temp file to decode.
+	let objectCount = 0;
+	let bytes = 0;
 	for (const batch of batchByBytes(wanted, RESTORE_BATCH_BYTES)) {
 		const fetched = await mapWithConcurrency(batch, SANDBOX_FILE_CONCURRENCY, async (f) => {
 			const body = await bucket.get(f.key);
@@ -157,7 +168,10 @@ export async function restoreWorkspace(
 		});
 		const files = fetched.filter((f) => f !== undefined);
 		if (files.length > 0) await withRetry(() => sandbox.writeFiles(files));
+		objectCount += files.length;
+		for (const f of files) bytes += f.content.byteLength;
 	}
+	return { objectCount, bytes };
 }
 
 /**

@@ -300,6 +300,84 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess).toHaveLength(1);
 		});
 
+		// A command round-trip is the dominant unit of startup cost on a remote
+		// backend (~220ms each on CoreWeave), so these lock in the count. Each was a
+		// measured regression: a duplicate mkdir, a reachability no-op, and a setup
+		// exec that the kernel command can carry itself.
+		describe('command round-trips', () => {
+			it('a copy-path provision spends no exec at all', async () => {
+				const { instance, calls } = makeFakeSandbox({ failMount: true });
+				const bucketHandle = new MemoryBucket();
+				const nb = paths.project(projectId).notebook(notebookId);
+				await bucketHandle.put(nb.code, 'import marimo as mo');
+				await bucketHandle.put(nb.workspaceFile('data/cars.csv'), 'a,b\n1,2\n');
+				// `ready()` stands in for an adapter that resolves lazily (CoreWeave).
+				instance.ready = async () => {};
+
+				await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+				});
+
+				// writeFiles creates parents, ready() replaces the exec('true') probe,
+				// and setup rides the kernel command.
+				expect(calls.exec).toEqual([]);
+				expect(calls.startProcess).toHaveLength(1);
+			});
+
+			it('prefers ready() over a no-op exec, and falls back when absent', async () => {
+				const withReady = makeFakeSandbox();
+				let readied = 0;
+				withReady.instance.ready = async () => {
+					readied++;
+				};
+				await new SandboxProvisioner(fakeComputeFrom(withReady.instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				});
+				expect(readied).toBe(1);
+				expect(withReady.calls.exec).not.toContain('true');
+
+				const withoutReady = makeFakeSandbox();
+				await new SandboxProvisioner(fakeComputeFrom(withoutReady.instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				});
+				expect(withoutReady.calls.exec).toContain('true');
+			});
+
+			it('carries launch setup on the kernel command instead of a separate exec', async () => {
+				const { instance, calls } = makeFakeSandbox();
+				instance.ready = async () => {};
+
+				await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				});
+
+				expect(calls.exec).toEqual([]);
+				// `uv sync` (setup) and `marimo edit` (start) travel together, joined by
+				// `&&` so a failed setup cannot leave marimo on a half-built env.
+				const cmd = calls.startProcess[0].cmd;
+				expect(cmd).toContain('uv sync');
+				expect(cmd).toContain('marimo edit');
+				expect(cmd).toMatch(/uv sync[\s\S]*&&[\s\S]*marimo edit/);
+			});
+		});
+
 		it('mount failure without a bucket handle rejects instead of starting an empty workspace', async () => {
 			const { instance, calls } = makeFakeSandbox({ failMount: true });
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
@@ -349,13 +427,13 @@ describe('SandboxProvisioner', () => {
 				copyOnly: {
 					async load(ctx) {
 						selected.push(`copy:${ctx.projectId}:${ctx.notebookId}`);
-						return true;
+						return { usedFallback: true, stats: { objectCount: 2, bytes: 40 } };
 					},
 				},
 				mountOrCopy: {
 					async load() {
 						selected.push('mount');
-						return false;
+						return { usedFallback: false };
 					},
 				},
 			};
@@ -374,6 +452,9 @@ describe('SandboxProvisioner', () => {
 			expect(selected).toEqual([`copy:${projectId}:${notebookId}`]);
 			expect(calls.mountBucket).toHaveLength(0);
 			expect(calls.startProcess).toHaveLength(1);
+			// What the copy moved rides the same wide event, so a slow `files` phase is
+			// attributable to workspace size rather than guesswork.
+			expect(result.counters).toMatchObject({ files_objects: 2, files_bytes: 40 });
 		});
 
 		it('unreachable sandbox: exec("true") throws -> provision rejects with "not available"', async () => {

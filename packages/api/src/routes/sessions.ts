@@ -817,6 +817,11 @@ app.openapi(createSession, async (c) => {
 					for (const [phase, ms] of Object.entries(provisionResult.timings)) {
 						observer.tag(`provision_${phase}_ms`, ms);
 					}
+					// Counts, not durations: workspace objects/bytes copied, and the
+					// command round-trips the provision spent.
+					for (const [name, value] of Object.entries(provisionResult.counters)) {
+						observer.tag(`provision_${name}`, value);
+					}
 					// Whether the files phase mounted the bucket (false) or copied it in
 					// (true) — files is the largest phase, so this says which path to optimize.
 					observer.tag('provision_used_fallback', usedFallback);
