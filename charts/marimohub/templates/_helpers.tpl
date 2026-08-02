@@ -61,9 +61,14 @@ metadata:
     {{- with $v.podLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- with $v.podAnnotations }}
+  {{- if or $v.podAnnotations $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") }}
   annotations:
+    {{- if or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") }}
+    checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+    {{- end }}
+    {{- with $v.podAnnotations }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
 spec:
   enableServiceLinks: false

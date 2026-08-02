@@ -98,10 +98,11 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|storage|compute|sandbox-image|apps|ai|secrets|integrations|syncing|workload-identity-federation)',
+					'^/(auth|storage|compute|editor-sessions|sandbox-image|apps|ai|secrets|integrations|syncing|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
+					{ text: 'Editor sessions', link: '/editor-sessions' },
 					{ text: 'Auth', link: '/auth' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },
@@ -151,6 +152,7 @@ export default defineConfig({
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
+					{ text: 'Editor sessions', link: '/editor-sessions' },
 					{ text: 'Auth', link: '/auth' },
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },

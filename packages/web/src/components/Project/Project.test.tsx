@@ -464,6 +464,33 @@ describe('Project — Notebook Actions', () => {
 		});
 	});
 
+	it('keeps the app stale hint visible when only a temporary editor is running', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'editor',
+			sessions: [
+				{
+					...runningSession(),
+					session_id: 'sess-temporary',
+					mode: 'edit',
+					ephemeral: true,
+					can: { attach: true, stop: true },
+				} as Session,
+				{
+					...runningSession(),
+					session_id: 'sess-app',
+					mode: 'app',
+					source_version_id: 'ver-old',
+					can: { attach: true, stop: true },
+				} as Session,
+			],
+		});
+		await renderProject();
+
+		await user.click(await screen.findByRole('button', { name: 'App running — details' }));
+		expect(await screen.findByText(/Restart to update/)).toBeInTheDocument();
+	});
+
 	it('surfaces an edit-session restart failure from the compute toast', async () => {
 		const user = userEvent.setup();
 		const toastError = vi.spyOn(toast, 'error');

@@ -73,6 +73,7 @@ Set the runtime `vars` (non-secret, committed):
   "AUTH_MODE": "access",        // "dev" is a LOCAL-ONLY bypass; prod MUST be "access"
   "ACCESS_TEAM": "your-team",   // <team>.cloudflareaccess.com
   "ACCESS_AUD": "<aud>",        // Access application Audience tag
+  "MARIMOHUB_EDITOR_SANDBOX_SHARING": "shared", // or "exclusive"
   "SANDBOX_HOSTNAME": "",       // empty => quick tunnels (see Kernel exposure)
   "R2_S3_ENDPOINT": ""          // empty => R2 binding mount (see Notebook storage)
 }
@@ -80,6 +81,8 @@ Set the runtime `vars` (non-secret, committed):
 
 The worker **refuses to start** if `AUTH_MODE` is unset or unknown — there is no
 insecure default.
+
+See [Editor sessions](../editor-sessions.md) for the sharing and takeover model.
 
 ## 5. Deploy
 

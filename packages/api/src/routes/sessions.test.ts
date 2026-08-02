@@ -30,6 +30,16 @@ type ApiSession = Session & {
 	reused?: boolean;
 };
 
+type EditorState = {
+	sharing: 'shared' | 'exclusive';
+	holder: null | {
+		session_id: string;
+		user_id: string;
+		activity: { state: 'active' | 'idle' | 'unknown' | 'starting' };
+	};
+	can_take_over: boolean;
+};
+
 describe('Session routes', () => {
 	let bucket: MemoryBucket;
 	let owner: ReturnType<typeof createTestApi>['request'];
@@ -60,6 +70,8 @@ describe('Session routes', () => {
 	});
 
 	const sessionsPath = (suffix = '') => `/projects/${pid}/notebooks/${nid}/sessions${suffix}`;
+	const editorSessionPath = (suffix = '') =>
+		`/projects/${pid}/notebooks/${nid}/editor-session${suffix}`;
 	const sandboxConfig = (overrides: Partial<ApiDeps['sandbox']> = {}): ApiDeps['sandbox'] => ({
 		bucket: { name: 'test', endpoint: '' },
 		hostname: 'localhost',
@@ -67,6 +79,24 @@ describe('Session routes', () => {
 		persistWorkspace: 'source',
 		...overrides,
 	});
+	const exclusiveApi = (
+		userId: ReturnType<typeof uid>,
+		compute: ApiDeps['compute'] = makeFakeCompute(),
+		extraDeps: Partial<ApiDeps> = {},
+	) =>
+		createTestApi({
+			bucket,
+			userId,
+			compute,
+			deps: {
+				...extraDeps,
+				policy: {
+					editorSandboxSharing: 'exclusive',
+					defaultRole: 'editor',
+					...extraDeps.policy,
+				},
+			},
+		}).request;
 
 	async function startSession(): Promise<string> {
 		const data = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
@@ -114,6 +144,254 @@ describe('Session routes', () => {
 		expect(data.reused).toBe(false);
 		// A healthy session carries no failure reason.
 		expect(data.error).toBeUndefined();
+	});
+
+	it('defaults to one shared edit sandbox across users', async () => {
+		const first = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
+		const sharedOther = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: { policy: { defaultRole: 'editor' } },
+		}).request;
+		const second = await expectOk<ApiSession>(await sharedOther('POST', sessionsPath()));
+		expect(second.session_id).toBe(first.session_id);
+		expect(second.reused).toBe(true);
+		expect(second.editor_sandbox_sharing).toBe('shared');
+		expect(second.can.attach).toBe(true);
+	});
+
+	it('uses the configured sharing mode after the previous claim is released', async () => {
+		const shared = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
+		await expectOk(await owner('DELETE', sessionsPath(`/${shared.session_id}`)));
+
+		const services = createServices(bucket);
+		expect(await services.sessions.getEditorClaim(pid, nid)).toMatchObject({
+			session_id: null,
+			sharing: 'shared',
+		});
+
+		const exclusive = exclusiveApi(STRANGER);
+		const state = await expectOk<EditorState>(await exclusive('GET', editorSessionPath()));
+		expect(state).toMatchObject({ sharing: 'exclusive', holder: null });
+
+		const replacement = await expectOk<ApiSession>(await exclusive('POST', sessionsPath()));
+		expect(replacement.editor_sandbox_sharing).toBe('exclusive');
+		expect(await services.sessions.getEditorClaim(pid, nid)).toMatchObject({
+			session_id: replacement.session_id,
+			sharing: 'exclusive',
+		});
+	});
+
+	it('requires an explicit temporary choice when an exclusive session has another owner', async () => {
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const exclusiveOther = exclusiveApi(STRANGER);
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		await expectError(await exclusiveOther('POST', sessionsPath()), 409, 'EDIT_SESSION_OWNED');
+		const temporary = await expectOk<ApiSession>(
+			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
+		);
+		expect(temporary.ephemeral).toBe(true);
+		expect(temporary.session_id).not.toBe(persistent.session_id);
+		expect(temporary.editor_sandbox_sharing).toBe('exclusive');
+	});
+
+	it('does not restore a filesystem snapshot into a temporary editor sandbox', async () => {
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		await createServices(bucket).notebooks.setFsSnapshot(pid, nid, {
+			snapshot_id: 'snap-other-editor',
+			captured_at: '2026-07-01T00:00:00.000Z',
+			owner_user_id: STRANGER,
+		});
+		const { instance } = makeFakeSandbox();
+		const restored: string[] = [];
+		const compute = {
+			...fakeComputeFrom(instance),
+			filesystemSnapshotsEnabled: true,
+			createFromSnapshot(_id: string, snapshotId: string) {
+				restored.push(snapshotId);
+				return instance;
+			},
+			async captureSnapshot() {
+				return { snapshotId: 'unused' };
+			},
+			async deleteSnapshot() {},
+		};
+		const exclusiveOther = exclusiveApi(STRANGER, compute);
+
+		const data = await expectOk<ApiSession>(
+			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
+		);
+		expect(data.ephemeral).toBe(true);
+		expect(restored).toEqual([]);
+		expect(data.compute_from_snapshot).toBeUndefined();
+	});
+
+	it('reports exclusive ownership and completes a warned takeover before replacement', async () => {
+		const ownerCompute = makeFakeCompute();
+		const otherCompute = makeFakeCompute();
+		const exclusiveOwner = exclusiveApi(ACTOR, ownerCompute);
+		const exclusiveOther = exclusiveApi(STRANGER, otherCompute, {
+			policy: { maxConcurrentSessionsPerUser: 1 },
+		});
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		const temporary = await expectOk<ApiSession>(
+			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
+		);
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+		expect(state.holder?.user_id).toBe(ACTOR);
+		expect(state.can_take_over).toBe(true);
+		await expectOk(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-test-1',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
+		);
+		const replacement = await expectOk<ApiSession>(await exclusiveOther('POST', sessionsPath()));
+		expect(replacement.user_id).toBe(STRANGER);
+		expect(replacement.session_id).not.toBe(persistent.session_id);
+		const old = await createServices(bucket).sessions.getSession(pid, persistent.session_id);
+		expect(old.status).toBe('terminated');
+		expect(old.ended_reason).toBe('takeover');
+		expect(old.ended_by_user_id).toBe(STRANGER);
+		const discarded = await createServices(bucket).sessions.getSession(pid, temporary.session_id);
+		expect(discarded.status).toBe('terminated');
+	});
+
+	it('keeps the claim protected when the strict takeover save fails', async () => {
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const failing = makeFakeSandbox();
+		failing.instance.readFile = async () => {
+			throw new Error('notebook unavailable');
+		};
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(failing.instance));
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+		await expectError(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-save-failure',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		const old = await createServices(bucket).sessions.getSession(pid, persistent.session_id);
+		expect(old.status).toBe('terminating');
+		expect(failing.calls.destroy).toBe(0);
+		expect((await createServices(bucket).sessions.getEditorClaim(pid, nid))?.transfer?.phase).toBe(
+			'draining',
+		);
+	});
+
+	it('keeps a failed shutdown claim protected in draining state', async () => {
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const failing = makeFakeSandbox();
+		failing.instance.destroy = async () => {
+			throw new Error('destroy unavailable');
+		};
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(failing.instance));
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+		await expectError(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-destroy-failure',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		const services = createServices(bucket);
+		expect((await services.sessions.getSession(pid, persistent.session_id)).status).toBe(
+			'terminating',
+		);
+		expect((await services.sessions.getEditorClaim(pid, nid))?.transfer?.phase).toBe('draining');
+		await expectError(await exclusiveOther('POST', sessionsPath()), 409, 'TAKEOVER_IN_PROGRESS');
+	});
+
+	it('does not adopt a concurrent normal stop as takeover draining', async () => {
+		const exclusiveOwner = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
+		});
+		const takeoverSandbox = makeFakeSandbox();
+		const exclusiveOther = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: fakeComputeFrom(takeoverSandbox.instance),
+			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
+		});
+		const persistent = await expectOk<ApiSession>(
+			await exclusiveOwner.request('POST', sessionsPath()),
+		);
+		const state = await expectOk<EditorState>(
+			await exclusiveOther.request('GET', editorSessionPath()),
+		);
+		const normalStopServices = createServices(bucket);
+		vi.spyOn(exclusiveOther.deps.services.sessions, 'beginTerminating').mockImplementation(
+			async () => {
+				const stopped = await normalStopServices.sessions.beginTerminating(
+					pid,
+					persistent.session_id,
+				);
+				return { session: stopped.session, transitioned: false };
+			},
+		);
+
+		await expectError(
+			await exclusiveOther.request('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-normal-stop-race',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+
+		expect(takeoverSandbox.calls.destroy).toBe(0);
+		expect((await normalStopServices.sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
+	});
+
+	it('requires reconfirmation whenever the displayed activity changes', async () => {
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const activitySandbox = makeFakeSandbox();
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(activitySandbox.instance));
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		await expectError(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-unknown-change',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: 'active',
+				acknowledge_disruption: true,
+			}),
+			409,
+			'EDIT_SESSION_CHANGED',
+		);
+		const services = createServices(bucket);
+		expect((await services.sessions.getSession(pid, persistent.session_id)).status).toBe('running');
+		expect((await services.sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
+
+		activitySandbox.instance.exec = async () => ({ success: true, stdout: '0', stderr: '' });
+		await expectError(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-idle-change',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: 'active',
+				acknowledge_disruption: true,
+			}),
+			409,
+			'EDIT_SESSION_CHANGED',
+		);
+		expect((await services.sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
 	});
 
 	it('injects notebook defaults into an edit session without managed AI', async () => {
@@ -730,15 +1008,12 @@ describe('Session routes', () => {
 		).toHaveLength(0);
 	});
 
-	it('POST /sessions resumes an existing running session instead of provisioning anew', async () => {
-		// First open provisions a sandbox.
+	it('POST /sessions reuses an existing running session instead of provisioning anew', async () => {
 		const first = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
-		// Re-opening the same notebook resumes the SAME session (no second sandbox).
 		const second = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
 
 		expect(second.session_id).toBe(first.session_id);
 		expect(second.sandbox_url).toBe(first.sandbox_url);
-		// First call provisioned; the resume reports `reused`.
 		expect(first.reused).toBe(false);
 		expect(second.reused).toBe(true);
 

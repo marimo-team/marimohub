@@ -6,6 +6,7 @@ import type {
 	BucketConfig,
 	ComputeResources,
 	createServices,
+	EditorSandboxSharing,
 	FederationTarget,
 	IntegrationsProvider,
 	KernelProbe,
@@ -156,6 +157,8 @@ export interface AiProxyConfig {
 
 /** Deployment-wide authorization / abuse-guard knobs. */
 export interface PolicyConfig {
+	/** How persistent edit sandboxes are shared between editors. */
+	editorSandboxSharing?: EditorSandboxSharing;
 	/**
 	 * Deployment-wide fallback role (config: MARIMOHUB_DEFAULT_ROLE) granted to any
 	 * authenticated user who is neither the project owner nor an explicit member.

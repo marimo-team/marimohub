@@ -30,13 +30,17 @@ export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
 /**
  * How a session's kernel serves the notebook. `edit` is the marimo editor
- * (per-user, edits persisted at teardown); `app` serves it read-only via
+ * (shared, exclusive, or discard-only according to its policy); `app` serves it read-only via
  * `marimo run` — a per-notebook singleton shared by all editors, provisioned
  * copy-only, never written back. Named for what the user gets (an app), not
  * the CLI subcommand that implements it.
  */
 export const SESSION_MODES = ['edit', 'app'] as const;
 export type SessionMode = (typeof SESSION_MODES)[number];
+
+/** Whether project editors share one persistent sandbox or use exclusive ownership. */
+export const EDITOR_SANDBOX_SHARING_VALUES = ['shared', 'exclusive'] as const;
+export type EditorSandboxSharing = (typeof EDITOR_SANDBOX_SHARING_VALUES)[number];
 
 /** Where a notebook's source lives. `git` = a git repo push-synced from an external host. */
 export const SOURCE_TYPES = ['local', 'git'] as const;

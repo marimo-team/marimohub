@@ -2,17 +2,28 @@ import type { Bucket, BucketObject } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import type { SessionMode } from '../../constants';
+import type { EditorSandboxSharing, SessionMode } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
-import { NotFoundError, PreconditionFailedError } from '../../errors';
-import { acquireSingletonClaim, mutateObject, releaseSingletonClaim } from '../catalog/cas';
+import {
+	ConflictError,
+	EditSessionChangedError,
+	NotFoundError,
+	PreconditionFailedError,
+	TakeoverInProgressError,
+} from '../../errors';
+import {
+	acquireSingletonClaim,
+	mutateObject,
+	releaseSingletonClaim,
+	withCasRetry,
+} from '../catalog/cas';
 import type { SingletonClaimConfig } from '../catalog/cas';
 import { createSessionId } from '../../ids';
 import type { NotebookId, ProjectId, SandboxId, SessionId, UserId, VersionId } from '../../ids';
 import { paths } from '../../paths';
-import { AppClaimSchema, parseStored, SessionSchema } from '../../schema';
-import type { Session } from '../../schema';
+import { AppClaimSchema, EditorClaimSchema, parseStored, SessionSchema } from '../../schema';
+import type { EditorClaim, Session } from '../../schema';
 import {
 	ACTIVE_STATUSES,
 	isTerminal,
@@ -34,16 +45,21 @@ export interface CreateSessionInput {
 	compute_profile?: string;
 	compute_resources?: Session['compute_resources'];
 	compute_from_snapshot?: boolean;
-	/** Viewer session whose edits are discarded at teardown (see SessionSchema). */
+	/** Discard-only session whose edits are never persisted (see SessionSchema). */
 	ephemeral?: boolean;
 	/** `edit` (default) or `app` (the shared singleton; see SessionSchema). */
 	mode?: SessionMode;
 	/** `app` only: the notebook's head version at provision, for staleness detection. */
 	source_version_id?: VersionId;
+	editor_sandbox_sharing?: EditorSandboxSharing;
+	session_id?: SessionId;
 }
 
 const HEARTBEAT_TTL_MS = Millis.minutes(5);
 const TERMINAL_RETENTION_MS = Millis.hours(24);
+const TAKEOVER_REQUEST_TTL_MS = Millis.minutes(5);
+const TAKEOVER_DRAIN_LEASE_MS = Millis.minutes(10);
+const TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS = Millis.minutes(30);
 // Coalesce heartbeat persistence: an already-running session is only re-written
 // once its stored heartbeat is older than this. Bounds heartbeat writes to
 // ~1/interval/session regardless of client cadence, while staying well within
@@ -52,6 +68,15 @@ const HEARTBEAT_PERSIST_INTERVAL_MS = Millis.seconds(60);
 
 /** Sentinel for a session object that vanished between list and read. */
 const SKIP = Symbol('missing-session');
+
+export type TakeoverDrainStage = 'capturing' | 'snapshotting' | 'destroying' | 'finalizing';
+
+const TAKEOVER_DRAIN_STAGE_ORDER: Record<TakeoverDrainStage, number> = {
+	capturing: 0,
+	snapshotting: 1,
+	destroying: 2,
+	finalizing: 3,
+};
 
 /**
  * Total order over session records — every replica derives the same queue
@@ -92,7 +117,7 @@ export class SessionService {
 	}
 
 	async createSession(input: CreateSessionInput): Promise<Session> {
-		const sessionId = createSessionId();
+		const sessionId = input.session_id ?? createSessionId();
 		const now = new Date().toISOString();
 
 		const session: Session = {
@@ -106,6 +131,9 @@ export class SessionService {
 			...(input.ephemeral ? { ephemeral: true } : {}),
 			...(input.mode && input.mode !== 'edit' ? { mode: input.mode } : {}),
 			...(input.source_version_id ? { source_version_id: input.source_version_id } : {}),
+			...(input.editor_sandbox_sharing
+				? { editor_sandbox_sharing: input.editor_sandbox_sharing }
+				: {}),
 			runtime: input.runtime,
 			sandbox_id: input.sandbox_id,
 			sandbox_url: input.sandbox_url,
@@ -174,10 +202,20 @@ export class SessionService {
 		return this.mutate(projectId, id, (session) => ({ ...session, last_snapshot_at: at }));
 	}
 
-	/** Record that the lifecycle sweep saved + destroyed the sandbox of an
-	 * already-terminal record, so reclaim is attempted exactly once. */
+	/** Record provider-confirmed sandbox destruction for claim fencing and reconciliation. */
 	async markSandboxReclaimed(projectId: ProjectId, id: SessionId, at: string): Promise<Session> {
 		return this.mutate(projectId, id, (session) => ({ ...session, sandbox_reclaimed_at: at }));
+	}
+
+	async markTakeoverCaptureCompleted(
+		projectId: ProjectId,
+		id: SessionId,
+		at: string,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => ({
+			...session,
+			takeover_capture_completed_at: at,
+		}));
 	}
 
 	/** Refresh a live session's heartbeat (keeps it off the TTL reaper). Coalesced
@@ -201,12 +239,21 @@ export class SessionService {
 	async beginTerminating(
 		projectId: ProjectId,
 		id: SessionId,
+		attribution?: { reason: 'takeover'; by: UserId },
 	): Promise<{ session: Session; transitioned: boolean }> {
 		let transitioned = false;
 		const session = await this.mutate(projectId, id, (current) => {
 			const next = nextStatus(current.status, 'terminate');
 			transitioned = next !== null;
-			return next ? { ...current, status: next } : null;
+			return next
+				? {
+						...current,
+						status: next,
+						...(attribution
+							? { ended_reason: attribution.reason, ended_by_user_id: attribution.by }
+							: {}),
+					}
+				: null;
 		});
 		return { session, transitioned };
 	}
@@ -317,11 +364,14 @@ export class SessionService {
 	 * wedged provision isn't reused forever. Returns the most recently
 	 * heartbeated match.
 	 *
-	 * Reuse is keyed per the mode's `reuseScope`: `per-user` (edit) matches only
-	 * the caller's own session; `per-notebook` (the shared app) is user-blind —
+	 * Reuse is keyed per the mode's `reuseScope`: `per-user` matches only
+	 * the caller's own session; `per-notebook` is user-blind —
 	 * ANY editor's request attaches. That user-blind reuse IS the singleton, so
 	 * for a singleton mode the CLAIM, not the heartbeat order, decides which
 	 * candidate is handed out.
+	 *
+	 * Persistent editor sessions use `findReusableEditor` instead. Their claim
+	 * applies the deployment's shared or exclusive policy.
 	 */
 	async findReusable(
 		projectId: ProjectId,
@@ -346,6 +396,81 @@ export class SessionService {
 		return candidates.sort(
 			(a, b) => new Date(b.last_heartbeat).getTime() - new Date(a.last_heartbeat).getTime(),
 		)[0];
+	}
+
+	async findReusableEditor(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		userId: UserId,
+		sharing: EditorSandboxSharing,
+		temporary: boolean,
+	): Promise<{
+		session?: Session;
+		ownedByOther?: Session;
+		takeoverInProgress?: boolean;
+		sharing: EditorSandboxSharing;
+	}> {
+		const now = Date.now();
+		const sessions = await this.scanProject(projectId, (session) => session);
+		const live = sessions.filter(
+			(s) =>
+				s.notebook_id === notebookId &&
+				sessionMode(s) === 'edit' &&
+				((s.status === 'running' && !!s.sandbox_url) ||
+					(s.status === 'starting' && now - new Date(s.started_at).getTime() < HEARTBEAT_TTL_MS)),
+		);
+		if (temporary) {
+			return {
+				sharing,
+				session: live
+					.filter((s) => s.ephemeral && s.user_id === userId)
+					.sort((a, b) => b.last_heartbeat.localeCompare(a.last_heartbeat))[0],
+			};
+		}
+		const claim = await this.getEditorClaim(projectId, notebookId);
+		if (!claim?.session_id) {
+			const persistent = live.filter((session) => !session.ephemeral);
+			if (persistent.length > 1) {
+				throw new ConflictError(
+					'Multiple legacy persistent editor sessions are active; drain them before continuing',
+				);
+			}
+			if (persistent.length === 1) {
+				const legacy = persistent[0];
+				const adopted = await this.claimEditor(
+					projectId,
+					notebookId,
+					legacy.session_id,
+					legacy.editor_sandbox_sharing ?? sharing,
+					legacy.user_id,
+				);
+				if (adopted.claim.session_id === legacy.session_id) {
+					if (adopted.claim.sharing === 'shared' || legacy.user_id === userId) {
+						return { sharing: adopted.claim.sharing, session: legacy };
+					}
+					return { sharing: adopted.claim.sharing, ownedByOther: legacy };
+				}
+			}
+			const mismatched = live.find((session) => session.user_id === userId);
+			if (mismatched) return { sharing, session: mismatched };
+			return { sharing: claim?.sharing ?? sharing };
+		}
+		if (claim.transfer) {
+			const replacement = claim.transfer.replacement_session_id
+				? live.find((session) => session.session_id === claim.transfer?.replacement_session_id)
+				: undefined;
+			if (claim.transfer.phase === 'ready' && claim.transfer.requested_by === userId) {
+				return { sharing: claim.sharing, session: replacement };
+			}
+			const holder = live.find((s) => s.session_id === claim.session_id);
+			return { sharing: claim.sharing, ownedByOther: holder, takeoverInProgress: true };
+		}
+		const holder = live.find((s) => s.session_id === claim.session_id);
+		if (!holder) return { sharing: claim.sharing };
+		if (claim.sharing === 'shared' || holder.user_id === userId) {
+			return { sharing: claim.sharing, session: holder };
+		}
+		return { sharing: claim.sharing, ownedByOther: holder };
 	}
 
 	/**
@@ -445,6 +570,502 @@ export class SessionService {
 			active_connections: activeConnections,
 			connections_checked_at: at,
 		}));
+	}
+
+	async getEditorClaim(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<EditorClaim | undefined> {
+		const key = paths.editorClaim(projectId, notebookId);
+		const obj = await this.bucket.get(key);
+		if (!obj) return undefined;
+		const claim = parseStored(EditorClaimSchema, await obj.json(), key);
+		if (
+			claim.transfer?.phase === 'requested' &&
+			Date.now() - Date.parse(claim.transfer.requested_at) >= TAKEOVER_REQUEST_TTL_MS
+		) {
+			await this.cancelRequestedTakeover(projectId, notebookId, claim.transfer.takeover_id);
+			const refreshed = await this.bucket.get(key);
+			return refreshed ? parseStored(EditorClaimSchema, await refreshed.json(), key) : undefined;
+		}
+		return claim;
+	}
+
+	private async holdsLiveEditor(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		holder: SessionId,
+	): Promise<boolean> {
+		try {
+			const session = await this.getSession(projectId, holder);
+			if (
+				session.notebook_id !== notebookId ||
+				sessionMode(session) !== 'edit' ||
+				session.ephemeral
+			) {
+				return false;
+			}
+			if (session.status === 'running') return true;
+			if (
+				session.status === 'starting' &&
+				Date.now() - new Date(session.started_at).getTime() < HEARTBEAT_TTL_MS
+			) {
+				return true;
+			}
+			return (
+				!!session.sandbox_id &&
+				!session.sandbox_reclaimed_at &&
+				(session.status === 'terminating' || isTerminal(session.status))
+			);
+		} catch (err) {
+			if (err instanceof NotFoundError) return false;
+			throw err;
+		}
+	}
+
+	/** Acquire the single persistent editor claim. A live holder always wins. */
+	async claimEditor(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		sessionId: SessionId,
+		sharing: EditorSandboxSharing,
+		requestedBy?: UserId,
+	): Promise<{ claimed: boolean; claim: EditorClaim }> {
+		const key = paths.editorClaim(projectId, notebookId);
+		return withCasRetry(
+			async () => {
+				const obj = await this.bucket.get(key);
+				const next: EditorClaim = {
+					session_id: sessionId,
+					sharing,
+					claimed_at: new Date().toISOString(),
+				};
+				if (!obj) {
+					await this.bucket.put(key, JSON.stringify(next), { onlyIfNotExists: true });
+					return { claimed: true, claim: next };
+				}
+				const current = parseStored(EditorClaimSchema, await obj.json(), key);
+				if (current.session_id === sessionId) return { claimed: true, claim: current };
+				if (current.transfer) {
+					if (current.transfer.phase !== 'ready' || current.transfer.requested_by !== requestedBy) {
+						throw new TakeoverInProgressError();
+					}
+					const reserved = current.transfer.replacement_session_id;
+					if (reserved === sessionId) return { claimed: true, claim: current };
+					if (reserved && (await this.holdsLiveEditor(projectId, notebookId, reserved))) {
+						return {
+							claimed: false,
+							claim: { ...current, session_id: reserved },
+						};
+					}
+					const reservedClaim: EditorClaim = {
+						...current,
+						transfer: { ...current.transfer, replacement_session_id: sessionId },
+					};
+					await this.bucket.put(key, JSON.stringify(reservedClaim), {
+						onlyIfEtagMatches: obj.etag,
+					});
+					return { claimed: true, claim: reservedClaim };
+				}
+				if (
+					current.session_id &&
+					(await this.holdsLiveEditor(projectId, notebookId, current.session_id))
+				) {
+					return { claimed: false, claim: current };
+				}
+				const replacement = { ...current, ...next, transfer: undefined };
+				await this.bucket.put(key, JSON.stringify(replacement), { onlyIfEtagMatches: obj.etag });
+				return { claimed: true, claim: replacement };
+			},
+			{
+				onConflict: () => this.metrics.increment('sessions.editor_claim.conflict'),
+				onExhausted: () => this.metrics.increment('sessions.editor_claim.exhausted'),
+			},
+		);
+	}
+
+	async ownsEditorClaim(session: Session): Promise<boolean> {
+		const claim = await this.getEditorClaim(session.project_id, session.notebook_id);
+		if (claim?.session_id) return claim.session_id === session.session_id;
+		if (claim?.transfer || sessionMode(session) !== 'edit' || session.ephemeral) return false;
+
+		// Upgrade compatibility: a lone pre-claim editor remains authoritative.
+		// Multiple unreclaimed sandboxes are ambiguous, so none may persist until
+		// an operator drains them instead of letting a lifecycle race pick a winner.
+		const candidates = (await this.scanProject(session.project_id, (item) => item)).filter(
+			(item) =>
+				item.notebook_id === session.notebook_id &&
+				sessionMode(item) === 'edit' &&
+				!item.ephemeral &&
+				!!item.sandbox_id &&
+				!item.sandbox_reclaimed_at &&
+				(item.session_id === session.session_id ||
+					!isTerminal(item.status) ||
+					item.status === 'expired'),
+		);
+		if (candidates.length !== 1 || candidates[0]?.session_id !== session.session_id) {
+			if (candidates.length > 1) this.metrics.increment('sessions.editor_claim.legacy_conflict');
+			return false;
+		}
+		const adopted = await this.claimEditor(
+			session.project_id,
+			session.notebook_id,
+			session.session_id,
+			session.editor_sandbox_sharing ?? 'shared',
+			session.user_id,
+		);
+		return adopted.claim.session_id === session.session_id;
+	}
+
+	async releaseEditorFor(
+		session: Pick<Session, 'project_id' | 'notebook_id' | 'session_id' | 'mode' | 'ephemeral'>,
+	): Promise<void> {
+		if (sessionMode(session) !== 'edit' || session.ephemeral) return;
+		const key = paths.editorClaim(session.project_id, session.notebook_id);
+		try {
+			const obj = await this.bucket.get(key);
+			if (!obj) return;
+			const claim = EditorClaimSchema.parse(await obj.json());
+			if (claim.session_id !== session.session_id || claim.transfer) return;
+			await this.bucket.put(
+				key,
+				JSON.stringify({ ...claim, session_id: null, claimed_at: new Date().toISOString() }),
+				{ onlyIfEtagMatches: obj.etag },
+			);
+		} catch (err) {
+			if (!(err instanceof PreconditionFailedError)) {
+				this.metrics.increment('sessions.editor_claim.release_error');
+			}
+		}
+	}
+
+	async reserveTakeover(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		input: {
+			takeoverId: string;
+			requestedBy: UserId;
+			expectedHolder: SessionId;
+			expectedActivity: 'active' | 'idle' | 'unknown' | 'starting';
+		},
+	): Promise<EditorClaim> {
+		return mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				if (claim.transfer?.takeover_id === input.takeoverId) {
+					if (
+						claim.transfer.requested_by !== input.requestedBy ||
+						claim.session_id !== input.expectedHolder ||
+						claim.transfer.expected_activity !== input.expectedActivity
+					) {
+						throw new EditSessionChangedError('The takeover ID was already used for another state');
+					}
+					return null;
+				}
+				const abandonedRequested =
+					claim.transfer?.phase === 'requested' &&
+					Date.now() - Date.parse(claim.transfer.requested_at) >= TAKEOVER_REQUEST_TTL_MS;
+				if (claim.transfer && !abandonedRequested) throw new TakeoverInProgressError();
+				if (claim.session_id !== input.expectedHolder) throw new EditSessionChangedError();
+				return {
+					...claim,
+					transfer: {
+						takeover_id: input.takeoverId,
+						requested_by: input.requestedBy,
+						expected_activity: input.expectedActivity,
+						phase: 'requested',
+						requested_at: new Date().toISOString(),
+					},
+				};
+			},
+		);
+	}
+
+	async setTakeoverPhase(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		phase: 'draining' | 'ready',
+		replacementSessionId?: SessionId,
+	): Promise<EditorClaim> {
+		return mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				if (claim.transfer?.takeover_id !== takeoverId) throw new EditSessionChangedError();
+				return {
+					...claim,
+					transfer: {
+						...claim.transfer,
+						phase,
+						...(phase === 'ready'
+							? {
+									drain_lease_id: undefined,
+									drain_lease_expires_at: undefined,
+									drain_lease_stage: undefined,
+									drain_lease_progress_deadline_at: undefined,
+								}
+							: {}),
+						...(replacementSessionId ? { replacement_session_id: replacementSessionId } : {}),
+					},
+				};
+			},
+		);
+	}
+
+	async acquireTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+	): Promise<boolean> {
+		let acquired = false;
+		await mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				acquired = false;
+				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
+					throw new EditSessionChangedError();
+				}
+				const activeLease =
+					claim.transfer.drain_lease_id &&
+					claim.transfer.drain_lease_expires_at &&
+					Date.parse(claim.transfer.drain_lease_expires_at) > Date.now();
+				if (activeLease && claim.transfer.drain_lease_id !== leaseId) return null;
+				acquired = true;
+				if (activeLease) return null;
+				const now = Date.now();
+				return {
+					...claim,
+					transfer: {
+						...claim.transfer,
+						drain_lease_id: leaseId,
+						drain_lease_expires_at: new Date(now + TAKEOVER_DRAIN_LEASE_MS).toISOString(),
+						drain_lease_stage: 'capturing',
+						drain_lease_progress_deadline_at: new Date(
+							now + TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS,
+						).toISOString(),
+					},
+				};
+			},
+		);
+		return acquired;
+	}
+
+	async renewTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+	): Promise<boolean> {
+		let renewed = false;
+		await mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				renewed = false;
+				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
+					throw new EditSessionChangedError();
+				}
+				const now = Date.now();
+				const expiresAt = Date.parse(claim.transfer.drain_lease_expires_at ?? '');
+				const progressDeadline = Date.parse(
+					claim.transfer.drain_lease_progress_deadline_at ??
+						claim.transfer.drain_lease_expires_at ??
+						'',
+				);
+				if (
+					claim.transfer.drain_lease_id !== leaseId ||
+					!Number.isFinite(expiresAt) ||
+					!Number.isFinite(progressDeadline) ||
+					expiresAt <= now ||
+					progressDeadline <= now
+				) {
+					return null;
+				}
+				renewed = true;
+				return {
+					...claim,
+					transfer: {
+						...claim.transfer,
+						drain_lease_expires_at: new Date(
+							Math.min(now + TAKEOVER_DRAIN_LEASE_MS, progressDeadline),
+						).toISOString(),
+					},
+				};
+			},
+		);
+		return renewed;
+	}
+
+	async advanceTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+		stage: TakeoverDrainStage,
+	): Promise<boolean> {
+		let advanced = false;
+		await mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				advanced = false;
+				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
+					throw new EditSessionChangedError();
+				}
+				const now = Date.now();
+				const expiresAt = Date.parse(claim.transfer.drain_lease_expires_at ?? '');
+				if (
+					claim.transfer.drain_lease_id !== leaseId ||
+					!Number.isFinite(expiresAt) ||
+					expiresAt <= now
+				) {
+					return null;
+				}
+				const currentStage = claim.transfer.drain_lease_stage;
+				if (
+					currentStage &&
+					TAKEOVER_DRAIN_STAGE_ORDER[stage] <= TAKEOVER_DRAIN_STAGE_ORDER[currentStage]
+				) {
+					advanced = currentStage === stage;
+					return null;
+				}
+				advanced = true;
+				return {
+					...claim,
+					transfer: {
+						...claim.transfer,
+						drain_lease_stage: stage,
+						drain_lease_expires_at: new Date(now + TAKEOVER_DRAIN_LEASE_MS).toISOString(),
+						drain_lease_progress_deadline_at: new Date(
+							now + TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS,
+						).toISOString(),
+					},
+				};
+			},
+		);
+		return advanced;
+	}
+
+	async finishTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+	): Promise<void> {
+		await mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				if (
+					claim.transfer?.takeover_id !== takeoverId ||
+					claim.transfer.phase !== 'draining' ||
+					claim.transfer.drain_lease_id !== leaseId
+				) {
+					throw new EditSessionChangedError();
+				}
+				return {
+					...claim,
+					transfer: {
+						...claim.transfer,
+						phase: 'ready',
+						drain_lease_id: undefined,
+						drain_lease_expires_at: undefined,
+						drain_lease_stage: undefined,
+						drain_lease_progress_deadline_at: undefined,
+					},
+				};
+			},
+		);
+	}
+
+	async releaseTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+	): Promise<void> {
+		try {
+			await mutateObject(
+				this.bucket,
+				paths.editorClaim(projectId, notebookId),
+				(raw) => EditorClaimSchema.parse(raw),
+				(claim) => {
+					if (
+						claim.transfer?.takeover_id !== takeoverId ||
+						claim.transfer.drain_lease_id !== leaseId
+					) {
+						return null;
+					}
+					return {
+						...claim,
+						transfer: {
+							...claim.transfer,
+							drain_lease_id: undefined,
+							drain_lease_expires_at: undefined,
+							drain_lease_stage: undefined,
+							drain_lease_progress_deadline_at: undefined,
+						},
+					};
+				},
+			);
+		} catch {
+			this.metrics.increment('sessions.editor_claim.drain_lease_release_error');
+		}
+	}
+
+	async completeTakeover(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		replacementSessionId: SessionId,
+	): Promise<EditorClaim> {
+		return mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				if (
+					claim.transfer?.takeover_id !== takeoverId ||
+					claim.transfer.phase !== 'ready' ||
+					claim.transfer.replacement_session_id !== replacementSessionId
+				) {
+					throw new EditSessionChangedError();
+				}
+				return {
+					...claim,
+					session_id: replacementSessionId,
+					sharing: 'exclusive',
+					claimed_at: new Date().toISOString(),
+					transfer: undefined,
+				};
+			},
+		);
+	}
+
+	async cancelRequestedTakeover(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+	): Promise<void> {
+		await mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) =>
+				claim.transfer?.takeover_id === takeoverId && claim.transfer.phase === 'requested'
+					? { ...claim, transfer: undefined }
+					: null,
+		).catch(() => {});
 	}
 
 	/** The app-singleton lease over `_system/apps/{pid}/{nid}.json` (see AppClaimSchema). */

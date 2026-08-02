@@ -68,11 +68,11 @@ export function sessionMode(session: Pick<Session, 'mode'>): SessionMode {
 }
 
 export interface SessionModePolicy {
-	/** Reuse key at create: the caller's own session, or ANY session on the notebook. */
+	/** Base reuse key. Persistent editors add claim-based sharing in SessionService. */
 	reuseScope: 'per-user' | 'per-notebook';
 	/** Which concurrency cap the create route enforces. */
 	capScope: 'user' | 'project';
-	/** May teardown/snapshot paths write edits back (for a non-ephemeral session)? */
+	/** May teardown/snapshot paths write edits back (for a non-discard-only session)? */
 	persistsEdits: boolean;
 	/**
 	 * `source-policy` honors the notebook source's load mode (may mount the
@@ -133,7 +133,7 @@ export function sessionModePolicy(session: Pick<Session, 'mode'>): SessionModePo
 
 /**
  * Whether teardown/snapshot paths may write this session's edits back — the one
- * predicate every persistence call site keys off. False for ephemeral (viewer)
+ * predicate every persistence call site keys off. False for discard-only
  * sessions and for modes that never persist (an app sandbox must never cut a
  * version, mirror the workspace, or advance the FS-snapshot pointer).
  */

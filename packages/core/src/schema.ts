@@ -455,6 +455,7 @@ export const FsSnapshotSchema = z.object({
 	size_bytes: z.number().int().nonnegative().optional(),
 	compute_profile: z.string().optional(),
 	compute_resources: ComputeResourceRecordSchema.optional(),
+	owner_user_id: UserIdSchema.optional(),
 });
 
 export type FsSnapshot = z.infer<typeof FsSnapshotSchema>;
@@ -528,20 +529,29 @@ export const SessionSchema = z.looseObject({
 	 */
 	last_snapshot_at: z.iso.datetime().optional(),
 	/**
-	 * Set once the lifecycle sweep has saved + destroyed the sandbox of an
-	 * already-terminal (`expired`) record, so reclaim runs exactly once instead of
-	 * re-probing a long-gone sandbox every sweep until the record is reaped.
+	 * Set after sandbox destruction is confirmed. Claim replacement and
+	 * reconciliation use it to distinguish terminal records still awaiting teardown
+	 * from sandboxes that are already gone.
 	 */
 	sandbox_reclaimed_at: z.iso.datetime().optional(),
 	/**
-	 * A viewer's throwaway session (MARIMOHUB_VIEWER_MODE=ephemeral-sandbox):
-	 * nothing is written back at teardown — no version, HTML/session snapshot,
-	 * workspace mirror, or FS snapshot. Every teardown/snapshot path must honor
-	 * this. Absent = persisting (all records predating the flag).
+	 * Durable takeover checkpoint written after the strict source/workspace capture
+	 * and before sandbox destruction. A draining retry can safely skip a second
+	 * capture when destruction succeeded but a later session-record write failed.
+	 */
+	takeover_capture_completed_at: z.iso.datetime().optional(),
+	/**
+	 * A discard-only session. This includes viewer throwaways and explicit
+	 * temporary editors: nothing is written back at teardown — no version,
+	 * HTML/session snapshot, workspace mirror, or FS snapshot. Absent means the
+	 * session can persist if its mode and editor claim permit it.
 	 */
 	ephemeral: z.boolean().optional(),
+	editor_sandbox_sharing: z.enum(['shared', 'exclusive']).optional(),
+	ended_reason: z.enum(['takeover']).optional(),
+	ended_by_user_id: UserIdSchema.optional(),
 	/**
-	 * `edit` (per-user editor) or `app` (read-only, shared per notebook, never
+	 * `edit` (editor sandbox) or `app` (read-only, shared per notebook, never
 	 * written back — see `sessionPersistsEdits`). Absent = `edit` (records
 	 * predating the field); read via `sessionMode()`, never directly. Immutable
 	 * for the session's life.
@@ -553,8 +563,8 @@ export const SessionSchema = z.looseObject({
 	 */
 	source_version_id: VersionIdSchema.optional(),
 	/**
-	 * `app` only: connection count from the lifecycle sweep's last kernel probe —
-	 * approximate by design (as fresh as the sweep cadence).
+	 * Connection count for shared app/editor sessions from the lifecycle sweep's
+	 * last kernel probe — approximate by design.
 	 */
 	active_connections: z.number().int().nonnegative().optional(),
 	connections_checked_at: z.iso.datetime().optional(),
@@ -617,6 +627,30 @@ export const AppClaimSchema = z.object({
 });
 
 export type AppClaim = z.infer<typeof AppClaimSchema>;
+
+export const EditorClaimSchema = z.looseObject({
+	session_id: SessionIdSchema.nullable(),
+	sharing: z.enum(['shared', 'exclusive']),
+	claimed_at: z.iso.datetime(),
+	transfer: z
+		.looseObject({
+			takeover_id: z.string().min(1).max(255),
+			requested_by: UserIdSchema,
+			expected_activity: z.enum(['active', 'idle', 'unknown', 'starting']),
+			phase: z.enum(['requested', 'draining', 'ready']),
+			requested_at: z.iso.datetime(),
+			drain_lease_id: z.string().min(1).max(255).optional(),
+			drain_lease_expires_at: z.iso.datetime().optional(),
+			drain_lease_stage: z
+				.enum(['capturing', 'snapshotting', 'destroying', 'finalizing'])
+				.optional(),
+			drain_lease_progress_deadline_at: z.iso.datetime().optional(),
+			replacement_session_id: SessionIdSchema.optional(),
+		})
+		.optional(),
+});
+
+export type EditorClaim = z.infer<typeof EditorClaimSchema>;
 
 // --- Identity ---
 //

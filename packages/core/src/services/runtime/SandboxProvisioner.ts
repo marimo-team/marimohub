@@ -611,6 +611,7 @@ export class SandboxProvisioner {
 				await captureFilesystemSnapshot(this.provider, notebooks, sandbox, projectId, notebookId, {
 					compute_profile: opts?.computeProfile,
 					compute_resources: opts?.computeResources,
+					owner_user_id: actor,
 				});
 			} catch (err) {
 				console.error(

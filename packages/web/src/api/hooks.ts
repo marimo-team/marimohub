@@ -901,20 +901,21 @@ export function useProjectSessionsQuery(projectId: string, enabled = true) {
 const SESSION_LIFECYCLE_TIMEOUT_MS = 150_000; // 2.5 minutes
 
 /**
- * The create-session request. Sent with no body for `edit` (byte-identical to
- * the pre-`mode` client) and `{ mode: "app" }` for the shared app singleton —
- * the server attaches ANY editor to the notebook's running app.
+ * Plain edit creates have no body for compatibility. App mode, profile fallback,
+ * and temporary intent add only their explicit fields.
  */
 function startSessionRequest(
 	projectId: string,
 	notebookId: string,
 	mode: 'edit' | 'app',
 	computeProfile?: 'default',
+	editIntent?: 'temporary',
 ) {
 	const params = { path: { pid: projectId, nid: notebookId } };
 	const body = {
 		...(mode === 'app' ? { mode } : {}),
 		...(computeProfile ? { compute_profile: computeProfile } : {}),
+		...(editIntent ? { edit_intent: editIntent } : {}),
 	};
 	return apiData(
 		Object.keys(body).length > 0
@@ -946,9 +947,10 @@ function useStartSessionRequest(
 	notebookId: string,
 	mode: 'edit' | 'app',
 	computeProfile?: 'default',
+	editIntent?: 'temporary',
 ) {
 	return useMutation({
-		mutationFn: () => startSessionRequest(projectId, notebookId, mode, computeProfile),
+		mutationFn: () => startSessionRequest(projectId, notebookId, mode, computeProfile, editIntent),
 	});
 }
 
@@ -956,16 +958,18 @@ export function useStartSession(
 	projectId: string,
 	notebookId: string,
 	mode: 'edit' | 'app' = 'edit',
+	editIntent?: 'temporary',
 ) {
-	return useStartSessionRequest(projectId, notebookId, mode);
+	return useStartSessionRequest(projectId, notebookId, mode, undefined, editIntent);
 }
 
 export function useStartSessionWithDefault(
 	projectId: string,
 	notebookId: string,
 	mode: 'edit' | 'app' = 'edit',
+	editIntent?: 'temporary',
 ) {
-	return useStartSessionRequest(projectId, notebookId, mode, 'default');
+	return useStartSessionRequest(projectId, notebookId, mode, 'default', editIntent);
 }
 
 async function restartSessionRequest(
@@ -1002,5 +1006,44 @@ export function useStopSession(projectId: string, notebookId: string) {
 	return useApiMutation(
 		(sessionId: string) => stopSessionRequest(projectId, notebookId, sessionId),
 		() => [sessionKeys.listByProject(projectId)],
+	);
+}
+
+export function useEditorSessionQuery(
+	projectId: string,
+	notebookId: string,
+	enabled = true,
+	currentUserId?: string,
+) {
+	return useQuery({
+		queryKey: sessionKeys.editor(projectId, notebookId),
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/editor-session', {
+					params: { path: { pid: projectId, nid: notebookId } },
+				}),
+			),
+		enabled,
+		refetchInterval: (query) =>
+			currentUserId && query.state.data?.holder?.user_id === currentUserId ? false : 10_000,
+	});
+}
+
+export function useTakeoverEditorSession(projectId: string, notebookId: string) {
+	return useApiMutation(
+		(body: {
+			takeover_id: string;
+			expected_holder_session_id: string;
+			expected_activity: 'active' | 'idle' | 'unknown' | 'starting';
+			acknowledge_disruption: true;
+		}) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/editor-session/takeover', {
+					params: { path: { pid: projectId, nid: notebookId } },
+					body,
+					timeout: 300_000,
+				}),
+			),
+		() => [sessionKeys.editor(projectId, notebookId), sessionKeys.listByProject(projectId)],
 	);
 }

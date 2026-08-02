@@ -25,6 +25,8 @@ Project reads require effective `viewer` access through ownership, membership,
 or `MARIMOHUB_DEFAULT_ROLE`; `none` hides non-member projects. Writes are
 role-gated, and the audit log requires project `admin` (see
 [Security → Authorization](/security#authorization-roles)).
+Editor ownership, temporary session creation, and takeover are documented in
+[Editor sessions](/editor-sessions).
 
 ## Endpoints
 

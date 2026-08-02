@@ -5,6 +5,7 @@ import { notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 import {
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
+	useEditorSessionQuery,
 	useNotebookHtmlQuery,
 	useNotebookQuery,
 	useProjectSecretsQuery,
@@ -498,5 +499,41 @@ describe('deployment-scoped queries', () => {
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('useEditorSessionQuery', () => {
+	it('stops polling after the current user owns the persistent editor session', async () => {
+		vi.useFakeTimers();
+		try {
+			const fetchMock = stubFetch(async () =>
+				jsonOk({
+					sharing: 'exclusive',
+					holder: {
+						session_id: 'sess-1',
+						user_id: 'me',
+						status: 'running',
+						started_at: '2026-08-02T12:00:00Z',
+						activity: { state: 'active' },
+					},
+					can_take_over: false,
+				}),
+			);
+
+			const { result, unmount } = renderHookWithClient(
+				() => useEditorSessionQuery(PID, NID, true, 'me'),
+				{ toaster: false },
+			);
+			await vi.waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			unmount();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

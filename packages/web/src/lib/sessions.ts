@@ -17,6 +17,7 @@ export function rankSession(status: string | undefined): number {
  * the shared app singleton. Either side may be absent. */
 export interface NotebookSessions {
 	edit?: Session;
+	persistentEdit?: Session;
 	app?: Session;
 }
 
@@ -41,11 +42,10 @@ export function isSessionStale(
 }
 
 /**
- * "~N people are connected" for the stop/restart-app confirms — the number is
- * the lifecycle sweep's last probe, so it's approximate; omitted when unknown
- * or zero.
+ * "~N people are connected" for shared-session stop and restart warnings. The
+ * number is approximate because it comes from the last lifecycle probe.
  */
-export function appConnectionHint(session: Session | undefined): string {
+export function sessionConnectionHint(session: Session | undefined): string {
 	const n = session?.active_connections;
 	if (typeof n !== 'number' || n <= 0) return '';
 	return ` About ${n} ${n === 1 ? 'person is' : 'people are'} connected right now.`;
@@ -53,10 +53,9 @@ export function appConnectionHint(session: Session | undefined): string {
 
 /**
  * Reduce a flat list of sessions to the "most alive" session per notebook and
- * per mode, keyed by `notebook_id`. Edit and app sessions coexist (one edit
- * sandbox per user + one shared app sandbox), so the row renders both
- * indicators independently. Pure — safe to call with `undefined` (treated as
- * empty) so callers can pass a query result straight through.
+ * per mode, keyed by `notebook_id`. A persistent edit sandbox, a caller-owned
+ * temporary sandbox, and the shared app can coexist. At the same liveness rank,
+ * the persistent editor takes precedence over a temporary editor.
  */
 export function sessionsByNotebook(
 	sessions: readonly Session[] | undefined,
@@ -66,10 +65,23 @@ export function sessionsByNotebook(
 		const entry = map.get(s.notebook_id) ?? {};
 		const key = s.mode === 'app' ? 'app' : 'edit';
 		const current = entry[key];
-		if (!current || rankSession(s.status) > rankSession(current.status)) {
+		const sameRankPersistent =
+			key === 'edit' &&
+			!!current &&
+			rankSession(s.status) === rankSession(current.status) &&
+			!!current.ephemeral &&
+			!s.ephemeral;
+		if (!current || rankSession(s.status) > rankSession(current.status) || sameRankPersistent) {
 			entry[key] = s;
-			map.set(s.notebook_id, entry);
 		}
+		if (
+			key === 'edit' &&
+			!s.ephemeral &&
+			(!entry.persistentEdit || rankSession(s.status) > rankSession(entry.persistentEdit.status))
+		) {
+			entry.persistentEdit = s;
+		}
+		map.set(s.notebook_id, entry);
 	}
 	return map;
 }

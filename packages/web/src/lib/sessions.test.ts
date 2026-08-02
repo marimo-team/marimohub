@@ -83,6 +83,29 @@ describe('sessionsByNotebook', () => {
 		expect(map.get('nb-a')?.app?.session_id).toBe('app-one');
 	});
 
+	it('prefers the persistent editor over an equally live temporary session', () => {
+		const temporary = { ...session('nb-a', 'running', 'temporary'), ephemeral: true };
+		const persistent = session('nb-a', 'running', 'persistent');
+		const map = sessionsByNotebook([temporary, persistent]);
+		expect(map.get('nb-a')?.edit?.session_id).toBe('persistent');
+		expect(map.get('nb-a')?.persistentEdit?.session_id).toBe('persistent');
+	});
+
+	it('keeps temporary editors visible without marking them as persistent edits', () => {
+		const temporary = { ...session('nb-a', 'running', 'temporary'), ephemeral: true };
+		const map = sessionsByNotebook([temporary]);
+		expect(map.get('nb-a')?.edit?.session_id).toBe('temporary');
+		expect(map.get('nb-a')?.persistentEdit).toBeUndefined();
+	});
+
+	it('tracks a less-live persistent editor separately from a temporary editor', () => {
+		const temporary = { ...session('nb-a', 'running', 'temporary'), ephemeral: true };
+		const persistent = session('nb-a', 'starting', 'persistent');
+		const map = sessionsByNotebook([temporary, persistent]);
+		expect(map.get('nb-a')?.edit?.session_id).toBe('temporary');
+		expect(map.get('nb-a')?.persistentEdit?.session_id).toBe('persistent');
+	});
+
 	it('ranks liveliness within a mode, not across modes', () => {
 		const map = sessionsByNotebook([
 			session('nb-a', 'starting', 'edit-one'),

@@ -13,11 +13,8 @@ const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 const START_POLL_INTERVAL_MS = 2_000;
 
 /**
- * How often a running APP page re-checks its session, in ms. The shared app can
- * be stopped by any editor (or expire) underneath an open page; this poll is
- * what flips the page to its terminal "App stopped" state instead of leaving a
- * dead iframe. Edit pages don't poll — an editor's own kernel dying surfaces in
- * the iframe itself.
+ * How often a running page re-checks its session. This surfaces app stops and
+ * exclusive-editor takeovers as terminal UI instead of leaving a dead iframe.
  */
 const RUN_WATCH_INTERVAL_MS = 10_000;
 
@@ -38,7 +35,7 @@ function toSessionError(err: Error): SessionError {
 }
 
 /** Why a watched session stopped being renderable — see `ended` below. */
-export type SessionEnded = Session['status'] | 'gone' | 'access_lost';
+export type SessionEnded = Session['status'] | 'gone' | 'access_lost' | 'takeover';
 
 export interface NotebookSession {
 	session: Session | null;
@@ -50,15 +47,17 @@ export interface NotebookSession {
 	/** The sandbox iframe URL once running, else undefined. */
 	sandboxUrl: string | undefined;
 	/**
-	 * App pages only: the session ended underneath the page (stopped by another
-	 * editor, expired, failed). Carries the last-seen terminal status —
+	 * The session ended underneath the page (stopped, taken over, expired, or
+	 * failed). Carries the last-seen terminal status —
 	 * `'gone'` when the record had already been reaped, `'access_lost'` when the
 	 * app runs on without this caller. Render the terminal panel, never an error
 	 * toast loop.
 	 */
 	ended: SessionEnded | null;
+	endedByUserId: string | null;
 	/** (Re)start the session — fired once on mount and again by the retry button. */
 	start: () => void;
+	startPersistent: () => void;
 	startWithDefault: () => void;
 	defaultRetryAttempted: boolean;
 	/** Stop the current session (saves files, tears down the sandbox). */
@@ -87,15 +86,21 @@ export interface NotebookSession {
 export function useNotebookSession(
 	projectId: string,
 	notebookId: string,
-	{ enabled = true, mode = 'edit' }: { enabled?: boolean; mode?: 'edit' | 'app' } = {},
+	{
+		enabled = true,
+		mode = 'edit',
+		editIntent,
+	}: { enabled?: boolean; mode?: 'edit' | 'app'; editIntent?: 'temporary' } = {},
 ): NotebookSession {
-	const startSession = useStartSession(projectId, notebookId, mode);
-	const startDefaultSession = useStartSessionWithDefault(projectId, notebookId, mode);
+	const startSession = useStartSession(projectId, notebookId, mode, editIntent);
+	const startPersistentSession = useStartSession(projectId, notebookId, mode);
+	const startDefaultSession = useStartSessionWithDefault(projectId, notebookId, mode, editIntent);
 	const stopSession = useStopSession(projectId, notebookId);
 
 	const [session, setSession] = useState<Session | null>(null);
 	const [error, setError] = useState<SessionError | null>(null);
 	const [ended, setEnded] = useState<SessionEnded | null>(null);
+	const [endedByUserId, setEndedByUserId] = useState<string | null>(null);
 	const [defaultRetryAttempted, setDefaultRetryAttempted] = useState(false);
 	// StrictMode can orphan the mutation observer during its mount/remount cycle,
 	// leaving `startSession.isPending` stuck. Track this request independently.
@@ -138,6 +143,7 @@ export function useNotebookSession(
 			const gen = generation.bump();
 			setError(null);
 			setEnded(null);
+			setEndedByUserId(null);
 			setStarting(true);
 			void mutation.mutateAsync().then(
 				(data) => {
@@ -161,6 +167,10 @@ export function useNotebookSession(
 	const start = useCallback(() => {
 		startWithMutation(startSession);
 	}, [startWithMutation, startSession]);
+	const startPersistent = useCallback(() => {
+		startedRef.current = true;
+		startWithMutation(startPersistentSession);
+	}, [startWithMutation, startPersistentSession]);
 	const startWithDefault = useCallback(() => {
 		setDefaultRetryAttempted(true);
 		startWithMutation(startDefaultSession);
@@ -181,6 +191,7 @@ export function useNotebookSession(
 		const gen = generation.bump();
 		setError(null);
 		setEnded(null);
+		setEndedByUserId(null);
 		if (s) {
 			commitSession(null);
 			setRestarting(true);
@@ -327,7 +338,7 @@ export function useNotebookSession(
 		[projectId, notebookId, commitSession, generation],
 	);
 
-	// App pages: watch the running session so a stop by another editor, a
+	// Watch the running session so a stop or takeover underneath an open page
 	// lifetime expiry, or a kernel failure lands on the terminal panel (via the
 	// replacement check above). A 404 (record already reaped, or the notebook
 	// deleted) is `gone`, not an error.
@@ -346,13 +357,24 @@ export function useNotebookSession(
 						// Keep connection-count/staleness fields fresh for the banner.
 						commitSession(next);
 					} else if (next.status !== 'starting') {
-						adoptReplacementOr(next.status);
+						if (mode === 'app') adoptReplacementOr(next.status);
+						else {
+							commitSession(null);
+							setEndedByUserId(next.ended_by_user_id ?? null);
+							setEnded(next.ended_reason === 'takeover' ? 'takeover' : next.status);
+						}
 					}
 				},
-				() => adoptReplacementOr('gone'),
+				() => {
+					if (mode === 'app') adoptReplacementOr('gone');
+					else {
+						commitSession(null);
+						setEnded('gone');
+					}
+				},
 			);
 		},
-		mode === 'app' && session?.status === 'running' ? RUN_WATCH_INTERVAL_MS : null,
+		session?.status === 'running' ? RUN_WATCH_INTERVAL_MS : null,
 	);
 
 	// Heartbeats are best-effort; the server's TTL handles missed requests.
@@ -384,7 +406,9 @@ export function useNotebookSession(
 		isRunning,
 		sandboxUrl: isRunning ? session?.sandbox_url : undefined,
 		ended,
+		endedByUserId,
 		start,
+		startPersistent,
 		startWithDefault,
 		defaultRetryAttempted,
 		stop,

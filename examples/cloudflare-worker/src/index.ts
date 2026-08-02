@@ -12,11 +12,14 @@ import {
 	composeAuthenticators,
 	createServices,
 	defaultRegistry,
+	EDITOR_SANDBOX_SHARING_VALUES,
+	foldCase,
 	MaintenanceLock,
 	OrgIntegrationsStore,
 	ProjectIntegrationsStore,
 	ReconciliationService,
 } from '@marimo-hub/core';
+import type { EditorSandboxSharing } from '@marimo-hub/core';
 import { CloudflareAccessAuthenticator } from '@marimo-hub/auth-cloudflare-access';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
 import { CloudflareSandboxProvider, ContainerProxy, Sandbox } from '@marimo-hub/compute-cloudflare';
@@ -49,6 +52,16 @@ function secretCodec(kek: string | undefined): AesGcmSecretCodec | undefined {
 			`Invalid SECRETS_KEK secret: ${err instanceof Error ? err.message : String(err)}`,
 		);
 	}
+}
+
+function parseEditorSandboxSharing(raw: string | undefined): EditorSandboxSharing {
+	const sharing = foldCase(raw ?? '') || 'shared';
+	const parsed = EDITOR_SANDBOX_SHARING_VALUES.find((candidate) => candidate === sharing);
+	if (parsed) return parsed;
+	throw new Error(
+		`Invalid MARIMOHUB_EDITOR_SANDBOX_SHARING: ${raw} ` +
+			`(expected ${EDITOR_SANDBOX_SHARING_VALUES.join(', ')})`,
+	);
 }
 
 export function buildDeps(request: Request, env: Env): ApiDeps {
@@ -161,6 +174,7 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 			persistWorkspace: env.PERSIST_WORKSPACE === 'workspace' ? 'workspace' : 'source',
 		},
 		policy: {
+			editorSandboxSharing: parseEditorSandboxSharing(env.MARIMOHUB_EDITOR_SANDBOX_SHARING),
 			// Fallback role for logged-in non-members; defaults to `editor` so any
 			// logged-in user can edit notebooks. Set DEFAULT_ROLE=none to keep writes
 			// members-only. Project edit/delete always requires admin.

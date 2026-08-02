@@ -1,4 +1,4 @@
-import type { Role, SessionMode, ViewerMode } from '../../constants';
+import type { EditorSandboxSharing, Role, SessionMode, ViewerMode } from '../../constants';
 import { viewerSessionModes } from '../../constants';
 import type { UserId } from '../../ids';
 import type { Session } from '../../schema';
@@ -13,6 +13,7 @@ export interface SessionActor {
 	userId: UserId;
 	role: Role | null;
 	viewerMode?: ViewerMode;
+	editorSandboxSharing?: EditorSandboxSharing;
 }
 
 /**
@@ -40,19 +41,24 @@ export function canStartSessionMode(
  * on session responses — is this function applied to (actor, session), so the
  * answers cannot drift between surfaces.
  *
- * Editor+ may do everything. A viewer fully controls their OWN ephemeral
- * session (strict id equality — an email-invite match never transfers someone
- * else's session), and may `attach` to a shared-mode session their viewer
- * tier grants; `stop` of a shared session stays editor+ (a viewer must not
- * kill the app under everyone else). No role at all grants nothing, including
- * to a stale owner — a revoked membership cuts kernel access.
+ * Shared editors are reachable by every editor and administrator. Exclusive
+ * editors are reachable only by their owner; an administrator may force-stop
+ * one but may not attach. A viewer fully controls their own throwaway and may
+ * attach to a shared app when their viewer tier grants it. Revoked membership
+ * cuts access to every session.
  */
 export function sessionCan(
 	action: SessionAction,
 	actor: SessionActor,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 ): boolean {
-	if (actor.role === 'editor' || actor.role === 'admin') return true;
+	if (actor.role === 'editor' || actor.role === 'admin') {
+		if (sessionMode(session) !== 'edit') return true;
+		const sharing = session.editor_sandbox_sharing ?? actor.editorSandboxSharing ?? 'shared';
+		if (sharing === 'shared') return true;
+		if (session.user_id === actor.userId) return true;
+		return action === 'stop' && actor.role === 'admin';
+	}
 	if (actor.role === null) return false;
 	if (session.ephemeral && session.user_id === actor.userId) {
 		// The owner may always stop their own throwaway; `attach` additionally
@@ -71,7 +77,7 @@ export function sessionCan(
 /** Both grants at once — the `can` object shipped on every session response. */
 export function sessionGrants(
 	actor: SessionActor,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id'>,
+	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 ): { attach: boolean; stop: boolean } {
 	return {
 		attach: sessionCan('attach', actor, session),

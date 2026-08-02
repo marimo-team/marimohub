@@ -688,6 +688,7 @@ export class NotebookService {
 		// Cleanup of an orphaned pointer, not a claim write — the claim's write
 		// discipline (claimApp/releaseApp) still holds for live notebooks.
 		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
+		await this.bucket.delete(paths.editorClaim(projectId, notebookId)).catch(() => {});
 	}
 
 	async listVersions(projectId: ProjectId, notebookId: NotebookId): Promise<Version[]> {
@@ -882,6 +883,7 @@ export class NotebookService {
 		// Belt-and-braces with deleteNotebook: the app claim lives under `_system/`,
 		// outside the notebook subtree.
 		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
+		await this.bucket.delete(paths.editorClaim(projectId, notebookId)).catch(() => {});
 	}
 
 	/**

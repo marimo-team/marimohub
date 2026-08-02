@@ -46,6 +46,7 @@ maintenance:
 #   MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED: "true"   # required to enable proxy mode
 #   MARIMOHUB_APP_BASE_URL: https://hub.example.com # optional; else derived per-request
 config: {}
+#  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared # shared | exclusive
 
 # Secret MARIMOHUB_* values, either:
 #   1. existingSecret: a Secret you create yourself (recommended — keeps secrets

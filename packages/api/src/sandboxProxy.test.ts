@@ -113,6 +113,26 @@ describe('authorizeProxyRequest', () => {
 		expect(d.kind).toBe('forward');
 	});
 
+	it('rejects a non-owner editor from an exclusive editor kernel', async () => {
+		const services = createServices(bucket);
+		const notebooks = await services.notebooks.listNotebooks(pid);
+		const exclusive = await services.sessions.createSession({
+			notebook_id: notebooks[0].id,
+			project_id: pid,
+			user_id: ACTOR,
+			mode: 'edit',
+			editor_sandbox_sharing: 'exclusive',
+		});
+		await services.sessions.setRunning(pid, exclusive.session_id, '/proxy/x/', false, ORIGIN);
+		const exclusiveToken = await signProxyToken(pid, exclusive.session_id, SECRET);
+
+		const d = await authorizeProxyRequest(req(`/proxy/${exclusiveToken}/`), {
+			...deps(STRANGER),
+			policy: { defaultRole: 'editor' },
+		});
+		expect(d).toMatchObject({ kind: 'reject', status: 403 });
+	});
+
 	describe('viewer access to the shared app kernel', () => {
 		let appToken: string;
 

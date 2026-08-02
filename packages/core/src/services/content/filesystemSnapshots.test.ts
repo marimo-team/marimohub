@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import type { FilesystemSnapshots, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
-import { ACTOR, makeFakeSandbox, setupTestEnv } from '../../testing';
+import { ACTOR, makeFakeSandbox, setupTestEnv, uid } from '../../testing';
 import {
 	captureFilesystemSnapshot,
 	createOrRestoreSandbox,
@@ -134,6 +134,34 @@ describe('filesystemSnapshots', () => {
 			const provider = snapshotProvider(makeFakeSandbox().instance);
 			expect(
 				await resolveRestoreSnapshot(provider, env.notebooks, project.id, nb.id),
+			).toBeUndefined();
+		});
+
+		it('restores exclusive snapshots only for the same owner', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const nb = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: 'd', code: 'c' },
+				ACTOR,
+			);
+			await env.notebooks.setFsSnapshot(project.id, nb.id, {
+				snapshot_id: 'snap_owner',
+				captured_at: '2020-01-01T00:00:00.000Z',
+				owner_user_id: ACTOR,
+			});
+			const provider = snapshotProvider(makeFakeSandbox().instance);
+			expect(
+				await resolveRestoreSnapshot(provider, env.notebooks, project.id, nb.id, {
+					sharing: 'exclusive',
+					userId: ACTOR,
+				}),
+			).toBeDefined();
+			expect(
+				await resolveRestoreSnapshot(provider, env.notebooks, project.id, nb.id, {
+					sharing: 'exclusive',
+					userId: uid('another_user'),
+				}),
 			).toBeUndefined();
 		});
 

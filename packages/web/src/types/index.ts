@@ -54,6 +54,7 @@ export type GitNotebookCreateResult = ClientGitNotebookCreateResult;
 /** A sync URL + write-once token, returned on synced-notebook creation and token rotation. */
 export type SyncToken = ClientSyncToken;
 export type Session = ClientSession;
+export type EditorSessionState = components['schemas']['EditorSessionState'];
 /** A project secret entry (metadata only — never a managed value). */
 export type SecretEntry = ClientSecretEntry;
 /** An integration kind's catalog card + JSON Schema for its config form. */

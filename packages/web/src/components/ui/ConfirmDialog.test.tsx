@@ -73,6 +73,16 @@ describe('ConfirmDialog', () => {
 		expect(onConfirm).not.toHaveBeenCalled();
 	});
 
+	it('does not close from the modal dismiss path while pending', async () => {
+		const user = userEvent.setup();
+		const { onClose } = setup({ isPending: true });
+
+		await user.keyboard('{Escape}');
+
+		expect(onClose).not.toHaveBeenCalled();
+		expect(screen.getByRole('dialog')).toBeInTheDocument();
+	});
+
 	it('disables confirm when confirmDisabled is set (e.g. type-to-confirm guard)', () => {
 		setup({ confirmDisabled: true });
 		expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled();

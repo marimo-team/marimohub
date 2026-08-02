@@ -2632,6 +2632,204 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/editor-session': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Inspect persistent editor ownership */
+		get: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+					nid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Persistent editor ownership and current activity */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['EditorSessionState'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/editor-session/takeover': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Gracefully take over an exclusive editor session */
+		post: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+					nid: string;
+				};
+				cookie?: never;
+			};
+			requestBody: {
+				content: {
+					'application/json': components['schemas']['EditorTakeoverBody'];
+				};
+			};
+			responses: {
+				/** @description The prior editor was saved and stopped */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['SuccessResponse'];
+					};
+				};
+				/** @description Bad request */
+				400: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/sessions': {
 		parameters: {
 			query?: never;
@@ -2643,7 +2841,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a session and provision a sandbox
-		 * @description Create-or-reuse: returns the caller’s existing starting/running session for this notebook when one exists (for `mode: "app"`, ANY user’s running app session), otherwise provisions a new sandbox.
+		 * @description Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App-session reuse is shared per notebook.
 		 */
 		post: {
 			parameters: {
@@ -5099,6 +5297,8 @@ export interface components {
 			/** @enum {string} */
 			viewer_mode: 'static' | 'applications' | 'ephemeral-sandbox';
 			viewer_session_modes: ('edit' | 'app')[];
+			/** @enum {string} */
+			editor_sandbox_sharing: 'shared' | 'exclusive';
 			/** @enum {string|null} */
 			default_role: 'admin' | 'editor' | 'viewer' | null;
 			limits: {
@@ -5357,6 +5557,11 @@ export interface components {
 			last_heartbeat: string;
 			ephemeral?: boolean;
 			/** @enum {string} */
+			editor_sandbox_sharing?: 'shared' | 'exclusive';
+			/** @enum {string} */
+			ended_reason?: 'takeover';
+			ended_by_user_id?: string;
+			/** @enum {string} */
 			mode: 'edit' | 'app';
 			source_version_id?: string;
 			can: {
@@ -5383,14 +5588,52 @@ export interface components {
 				message: string;
 			};
 		};
+		EditorSessionState: {
+			/** @enum {string} */
+			sharing: 'shared' | 'exclusive';
+			holder: {
+				session_id: string;
+				user_id: string;
+				/** @enum {string} */
+				status: 'starting' | 'running' | 'terminating';
+				started_at: string;
+				activity: {
+					/** @enum {string} */
+					state: 'active' | 'idle' | 'unknown' | 'starting';
+					active_connections?: number;
+					checked_at?: string;
+				};
+			} | null;
+			can_take_over: boolean;
+			transfer?: {
+				/** @enum {string} */
+				status: 'requested' | 'draining' | 'ready';
+			};
+		};
+		EditorTakeoverBody: {
+			takeover_id: string;
+			expected_holder_session_id: string;
+			/** @enum {string} */
+			expected_activity: 'active' | 'idle' | 'unknown' | 'starting';
+			/** @enum {boolean} */
+			acknowledge_disruption: true;
+		};
 		SessionCreateResult: components['schemas']['Session'] & {
 			reused: boolean;
+			editor_session?: {
+				/** @enum {string} */
+				sharing: 'shared' | 'exclusive';
+				/** @enum {string} */
+				access: 'shared' | 'owner' | 'temporary';
+			};
 		};
 		SessionCreateBody: {
 			/** @enum {string} */
 			mode?: 'edit' | 'app';
 			/** @enum {string} */
 			compute_profile?: 'default';
+			/** @enum {string} */
+			edit_intent?: 'temporary';
 		};
 		SecretEntry: {
 			name: string;

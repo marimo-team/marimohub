@@ -26,12 +26,16 @@ config-driven vs. library-composition paths.
 
 ## No database — the object store is the source of truth
 
-There is no separate database. Notebooks, version history, sessions, and a small
-`_system/catalog.json` index all live in the object store. That's why the only
-hard requirement on storage is **atomic conditional writes**: the catalog
-pointer is updated with a compare-and-swap so concurrent edits never corrupt it,
-and everything else is immutable or append-only. One consequence: **backing up =
-backing up the bucket** (see [Operations](/operations#backups-restore)).
+There is no separate database. Notebooks, version history, sessions, and the
+small `_system/catalog.json` index all live in the object store. The storage
+backend must support **atomic conditional writes**. The catalog pointer uses
+compare-and-swap to serialize content updates. Session claims use the same
+mechanism to select one owner. Notebook versions and audit events are immutable
+or append-only. As a result, **backing up the bucket backs up marimohub** (see
+[Operations](/operations#backups-restore)).
+
+Persistent edit sandboxes use a per-notebook editor claim. See
+[Editor sessions](/editor-sessions) for the shared and exclusive policies.
 
 ## Request and kernel flow
 

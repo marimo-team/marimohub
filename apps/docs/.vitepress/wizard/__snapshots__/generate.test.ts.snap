@@ -40,6 +40,7 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.or
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -80,6 +81,7 @@ exports[`config -> code generators > azure + kubernetes + oidc > compose 1`] = `
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -113,6 +115,7 @@ config:
   MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -214,6 +217,7 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.or
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -250,6 +254,7 @@ exports[`config -> code generators > default-prod (s3 + modal + oidc) > compose 
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -276,6 +281,7 @@ config:
   MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -369,6 +375,7 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.or
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -400,6 +407,7 @@ exports[`config -> code generators > fs + docker + oidc (single-box) > compose 1
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -425,6 +433,7 @@ config:
   MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -510,6 +519,7 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.or
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -541,6 +551,7 @@ exports[`config -> code generators > fs + podman + oidc > compose 1`] = `
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -566,6 +577,7 @@ config:
   MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -662,6 +674,7 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.or
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=workspace"
 `;
 
@@ -703,6 +716,7 @@ exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace 
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: workspace"
 `;
 
@@ -736,6 +750,7 @@ config:
   MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: workspace
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -822,6 +837,7 @@ MARIMOHUB_AUTH_DEV_NAME=
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -848,6 +864,7 @@ exports[`config -> code generators > memory + local + dev (all-local) > compose 
       MARIMOHUB_AUTH_DEV_EMAIL: "user@localhost"
       MARIMOHUB_AUTH_DEV_NAME: ""
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -870,6 +887,7 @@ config:
   MARIMOHUB_AUTH_DEV_EMAIL: "user@localhost"
   MARIMOHUB_AUTH_DEV_NAME: ""
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -963,6 +981,7 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.or
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -1009,6 +1028,7 @@ exports[`config -> code generators > s3 + coreweave + oidc, custom image > compo
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -1046,6 +1066,7 @@ config:
   MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -1136,6 +1157,7 @@ MARIMOHUB_AUTH_DEV_NAME=
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -1167,6 +1189,7 @@ exports[`config -> code generators > s3 + docker + dev > compose 1`] = `
       MARIMOHUB_AUTH_DEV_EMAIL: "user@localhost"
       MARIMOHUB_AUTH_DEV_NAME: ""
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -1192,6 +1215,7 @@ config:
   MARIMOHUB_AUTH_DEV_EMAIL: "user@localhost"
   MARIMOHUB_AUTH_DEV_NAME: ""
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -1284,6 +1308,7 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.or
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -1322,6 +1347,7 @@ exports[`config -> code generators > s3 + e2b + oidc > compose 1`] = `
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -1351,6 +1377,7 @@ config:
   MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -1454,6 +1481,7 @@ MARIMOHUB_AI_RULES=Prefer polars over pandas.
 MARIMOHUB_AI_TOKEN_TTL_SECONDS=3600
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -1498,6 +1526,7 @@ exports[`config -> code generators > s3 + modal + oidc, managed ai > compose 1`]
       MARIMOHUB_AI_MAX_TOKENS: 4096
       MARIMOHUB_AI_RULES: "Prefer polars over pandas."
       MARIMOHUB_AI_TOKEN_TTL_SECONDS: 3600
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -1531,6 +1560,7 @@ config:
   MARIMOHUB_AI_MAX_TOKENS: 4096
   MARIMOHUB_AI_RULES: "Prefer polars over pandas."
   MARIMOHUB_AI_TOKEN_TTL_SECONDS: 3600
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -1638,6 +1668,7 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=acme.com
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -1674,6 +1705,7 @@ exports[`config -> code generators > s3 + modal + oidc, value overrides > compos
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: acme.com
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -1700,6 +1732,7 @@ config:
   MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: acme.com
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -1790,6 +1823,7 @@ MARIMOHUB_AUTH_DEV_NAME=
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -1818,6 +1852,7 @@ exports[`config -> code generators > s3 + none + dev > compose 1`] = `
       MARIMOHUB_AUTH_DEV_EMAIL: "user@localhost"
       MARIMOHUB_AUTH_DEV_NAME: ""
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -1840,6 +1875,7 @@ config:
   MARIMOHUB_AUTH_DEV_EMAIL: "user@localhost"
   MARIMOHUB_AUTH_DEV_NAME: ""
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).
@@ -1935,6 +1971,7 @@ MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=_replace_me_  # e.g. example.com,example.or
 MARIMOHUB_AI_BACKEND=none
 
 # --- Options ---
+MARIMOHUB_EDITOR_SANDBOX_SHARING=shared
 MARIMOHUB_PERSIST_WORKSPACE=source"
 `;
 
@@ -1974,6 +2011,7 @@ exports[`config -> code generators > s3 + wandb + oidc > compose 1`] = `
       MARIMOHUB_AUTH_SESSION_SECRET: _replace_me_
       MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
       MARIMOHUB_AI_BACKEND: none
+      MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
       MARIMOHUB_PERSIST_WORKSPACE: source"
 `;
 
@@ -2004,6 +2042,7 @@ config:
   MARIMOHUB_AUTH_OIDC_PROMPT: consent
   MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: _replace_me_ # e.g. example.com,example.org
   MARIMOHUB_AI_BACKEND: none
+  MARIMOHUB_EDITOR_SANDBOX_SHARING: shared
   MARIMOHUB_PERSIST_WORKSPACE: source
 
 # Secret values -> Secret (prefer secrets.existingSecret in production).

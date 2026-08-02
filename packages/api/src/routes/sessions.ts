@@ -1,12 +1,13 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import type {
 	AuthUser,
+	EditorClaim,
+	EditorSandboxSharing,
 	Project,
 	ProjectId,
 	MarimoConfigContributor,
 	SessionEnv,
 	Session,
-	SessionId,
 	SessionMode,
 	SessionRender,
 	UserId,
@@ -33,11 +34,17 @@ import {
 	MODE_POLICY,
 	SandboxProvisioner,
 	SESSION_MODES,
+	SessionId,
 	sessionMode,
 	sessionModePolicy,
 	SubdomainExposure,
 	canStartSessionMode,
 	UnavailableError,
+	EditSessionOwnedError,
+	EditSessionChangedError,
+	TakeoverInProgressError,
+	TakeoverRetirementError,
+	kernelActiveConnections,
 	ValidationError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
@@ -72,12 +79,25 @@ function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): Session
 	};
 }
 
+function effectiveEditorSharing(
+	claim: EditorClaim | undefined,
+	configured: EditorSandboxSharing | undefined,
+): EditorSandboxSharing {
+	return claim?.session_id || claim?.transfer ? claim.sharing : (configured ?? 'shared');
+}
+
 // --- Route definitions ---
 
-// createSession is create-or-reuse; `reused` lets the client tell a reconnect
-// (the caller's existing session is returned) from a freshly provisioned one.
+// createSession is create-or-reuse; `reused` distinguishes an existing shared,
+// owned, or temporary session from a freshly provisioned one.
 const SessionCreateResponseSchema = SessionResponseSchema.extend({
 	reused: z.boolean(),
+	editor_session: z
+		.object({
+			sharing: z.enum(['shared', 'exclusive']),
+			access: z.enum(['shared', 'owner', 'temporary']),
+		})
+		.optional(),
 }).openapi('SessionCreateResult');
 
 const listSessions = createRoute({
@@ -104,15 +124,16 @@ const listSessions = createRoute({
 const SessionCreateBodySchema = z
 	.object({
 		/**
-		 * `edit` (default): the caller's personal editor session. `app`: the
-		 * notebook served as a read-only app — a per-notebook singleton shared by
-		 * everyone (any admitted request attaches to the running app). Viewers are
-		 * admitted per MARIMOHUB_VIEWER_MODE: `app` under `applications` or
-		 * `ephemeral-sandbox`, `edit` under `ephemeral-sandbox` only.
+		 * `edit` (default): a persistent or temporary editor sandbox according to
+		 * the editor sandbox-sharing policy. `app`: the notebook served as a
+		 * read-only, per-notebook app. Viewer access depends on
+		 * MARIMOHUB_VIEWER_MODE.
 		 */
 		mode: z.enum(SESSION_MODES).optional(),
 		/** One-shot fallback that does not change notebook metadata. */
 		compute_profile: z.literal('default').optional(),
+		/** Request a discard-only editor sandbox. Valid only with exclusive sharing. */
+		edit_intent: z.literal('temporary').optional(),
 	})
 	.openapi('SessionCreateBody');
 
@@ -122,13 +143,11 @@ const createSession = createRoute({
 	tags: ['Sessions'],
 	summary: 'Create a session and provision a sandbox',
 	// `Idempotency-Key` is accepted and documented, but this route is already
-	// idempotent via the reuse path in the handler — per (user, notebook) for
-	// `edit`, per notebook for `app` (the shared singleton) — so the key needs
-	// no separate store: a retry hits the same reused session.
+	// idempotent through session reuse. Edit reuse follows the configured sharing
+	// policy; app reuse is per notebook. A retry returns the same live session.
 	description:
-		'Create-or-reuse: returns the caller’s existing starting/running session for ' +
-		'this notebook when one exists (for `mode: "app"`, ANY user’s running app ' +
-		'session), otherwise provisions a new sandbox.',
+		'Create or reuse a notebook sandbox. Edit-session reuse follows the configured ' +
+		'editor sandbox-sharing policy. App-session reuse is shared per notebook.',
 	request: {
 		params: NotebookIdParam,
 		headers: IdempotencyKeyHeader,
@@ -193,6 +212,69 @@ const heartbeatSession = createRoute({
 	},
 });
 
+const EditorActivitySchema = z.enum(['active', 'idle', 'unknown', 'starting']);
+const EditorSessionStateSchema = z
+	.object({
+		sharing: z.enum(['shared', 'exclusive']),
+		holder: z
+			.object({
+				session_id: z.string(),
+				user_id: z.string(),
+				status: z.enum(['starting', 'running', 'terminating']),
+				started_at: z.string(),
+				activity: z.object({
+					state: EditorActivitySchema,
+					active_connections: z.number().optional(),
+					checked_at: z.string().optional(),
+				}),
+			})
+			.nullable(),
+		can_take_over: z.boolean(),
+		transfer: z.object({ status: z.enum(['requested', 'draining', 'ready']) }).optional(),
+	})
+	.openapi('EditorSessionState');
+
+const getEditorSession = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebooks/{nid}/editor-session',
+	tags: ['Sessions'],
+	summary: 'Inspect persistent editor ownership',
+	request: { params: NotebookIdParam },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: EditorSessionStateSchema }),
+			'Persistent editor ownership and current activity',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
+const TakeoverBodySchema = z
+	.object({
+		takeover_id: z.string().min(1).max(255),
+		expected_holder_session_id: z.string().refine(SessionId.is),
+		expected_activity: EditorActivitySchema,
+		acknowledge_disruption: z.literal(true),
+	})
+	.openapi('EditorTakeoverBody');
+
+const takeoverEditorSession = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/notebooks/{nid}/editor-session/takeover',
+	tags: ['Sessions'],
+	summary: 'Gracefully take over an exclusive editor session',
+	request: {
+		params: NotebookIdParam,
+		body: { content: { 'application/json': { schema: TakeoverBodySchema } }, required: true },
+	},
+	responses: {
+		200: jsonContent(SuccessResponseSchema, 'The prior editor was saved and stopped'),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 409, 503),
+	},
+});
+
 // --- App ---
 
 /**
@@ -217,6 +299,9 @@ function toSessionResponse(s: Session, can: { attach: boolean; stop: boolean }) 
 		started_at: s.started_at,
 		last_heartbeat: s.last_heartbeat,
 		ephemeral: s.ephemeral,
+		editor_sandbox_sharing: s.editor_sandbox_sharing,
+		ended_reason: s.ended_reason,
+		ended_by_user_id: s.ended_by_user_id,
 		// Defaulted in the projection so clients never see `undefined` (stored
 		// records predating the field omit it).
 		mode: sessionMode(s),
@@ -257,6 +342,12 @@ class AppClaimLostError extends Error {
 	}
 }
 
+class EditorClaimLostError extends Error {
+	constructor(readonly holder: SessionId) {
+		super('editor claim lost');
+	}
+}
+
 /**
  * The start gate — `canStartSessionMode` as a thrower, plus the session
  * classification: a viewer's admitted session is what
@@ -269,7 +360,12 @@ function authorizeSessionStart(
 	user: AuthUser,
 	mode: SessionMode,
 	policy: PolicyConfig,
-): { ephemeral: boolean; profileOverrideEligible: boolean } {
+): {
+	role: ReturnType<typeof effectiveRole>;
+	ephemeral: boolean;
+	profileOverrideEligible: boolean;
+	restrictedViewerCredentials: boolean;
+} {
 	const role = effectiveRole(project, user, policy);
 	if (!canStartSessionMode({ role, viewerMode: policy.viewerMode }, mode)) {
 		// Throws the canonical editor-gate 403 (canStart admits every editor+).
@@ -277,12 +373,14 @@ function authorizeSessionStart(
 	}
 	const ephemeral = role === 'viewer' && MODE_POLICY[mode].viewerSession === 'ephemeral';
 	return {
+		role,
 		ephemeral,
 		// The notebook's configured profile applies to every editor/admin session and
 		// to any shared (non-ephemeral) session: a shared app is the notebook's app and
 		// must provision identically no matter who starts it. Only a viewer's own
 		// ephemeral throwaway is forced onto the deployment default.
 		profileOverrideEligible: !ephemeral,
+		restrictedViewerCredentials: ephemeral,
 	};
 }
 
@@ -357,9 +455,14 @@ async function enforceSessionCap(
 	mode: SessionMode,
 	pid: ProjectId,
 	userId: UserId,
+	excludedSessionId?: SessionId,
 ): Promise<void> {
 	for (const cap of capsFor(deps, mode, pid, userId)) {
-		if (cap.max && cap.max > 0 && (await cap.queue()).length >= cap.max) {
+		if (!cap.max || cap.max <= 0) continue;
+		const queued = (await cap.queue()).filter(
+			(session) => session.session_id !== excludedSessionId,
+		);
+		if (queued.length >= cap.max) {
 			throw new ResourceExhaustedError(cap.message(cap.max));
 		}
 	}
@@ -378,10 +481,13 @@ async function assertCapAfterCreate(
 	pid: ProjectId,
 	userId: UserId,
 	sessionId: SessionId,
+	excludedSessionId?: SessionId,
 ): Promise<void> {
 	for (const cap of capsFor(deps, mode, pid, userId)) {
 		if (!cap.max || cap.max <= 0) continue;
-		const rank = (await cap.queue()).findIndex((s) => s.session_id === sessionId);
+		const rank = (await cap.queue())
+			.filter((session) => session.session_id !== excludedSessionId)
+			.findIndex((s) => s.session_id === sessionId);
 		// rank < 0: our record went terminal underneath us — nothing left to cap.
 		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message(cap.max));
 	}
@@ -433,6 +539,181 @@ app.openapi(getSession, async (c) => {
 	);
 });
 
+async function inspectEditorActivity(deps: ApiDeps, session: Session) {
+	if (session.status === 'starting') return { state: 'starting' as const };
+	if (session.status !== 'running' || !session.sandbox_id) {
+		return { state: 'unknown' as const };
+	}
+	let basePath = '';
+	try {
+		basePath = session.sandbox_url ? new URL(session.sandbox_url).pathname.replace(/\/$/, '') : '';
+	} catch {
+		basePath = '';
+	}
+	const active = await kernelActiveConnections(deps.compute.create(session.sandbox_id), basePath);
+	const checkedAt = new Date().toISOString();
+	if (active === null) return { state: 'unknown' as const, checked_at: checkedAt };
+	await deps.services.sessions
+		.markConnections(session.project_id, session.session_id, active, checkedAt)
+		.catch(() => {});
+	return {
+		state: active > 0 ? ('active' as const) : ('idle' as const),
+		active_connections: active,
+		checked_at: checkedAt,
+	};
+}
+
+app.openapi(getEditorSession, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, nid } = c.req.valid('param');
+	const project = await deps.services.projects.getProject(pid);
+	if (project.status === 'deleted') throw new NotFoundError(`Project ${pid} not found`);
+	requireRole(project, user, 'editor', deps.policy);
+	const notebook = await deps.services.notebooks.getNotebook(pid, nid);
+	if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
+	const claim = await deps.services.sessions.getEditorClaim(pid, nid);
+	const sharing = effectiveEditorSharing(claim, deps.policy.editorSandboxSharing);
+	const holder = claim?.session_id
+		? await deps.services.sessions.getSession(pid, claim.session_id).catch(() => null)
+		: undefined;
+	const activity = holder ? await inspectEditorActivity(deps, holder) : undefined;
+	return c.json(
+		{
+			success: true,
+			data: {
+				sharing,
+				holder:
+					holder &&
+					(holder.status === 'starting' ||
+						holder.status === 'running' ||
+						holder.status === 'terminating')
+						? {
+								session_id: holder.session_id,
+								user_id: holder.user_id,
+								status: holder.status,
+								started_at: holder.started_at,
+								activity: activity!,
+							}
+						: null,
+				can_take_over:
+					sharing === 'exclusive' && !!holder && holder.user_id !== user.id && !claim?.transfer,
+				...(claim?.transfer ? { transfer: { status: claim.transfer.phase } } : {}),
+			},
+		},
+		200,
+	);
+});
+
+app.openapi(takeoverEditorSession, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, nid } = c.req.valid('param');
+	const body = c.req.valid('json');
+	const startedAt = Date.now();
+	const observer = logObserver({
+		event: 'session_takeover',
+		takeover_id: body.takeover_id,
+		project_id: pid,
+		notebook_id: nid,
+		user_id: user.id,
+		expected_holder_session_id: body.expected_holder_session_id,
+		expected_activity: body.expected_activity,
+	});
+	let failed = false;
+	const audit = (event: string) =>
+		deps.services.events
+			.append({
+				event,
+				actor: user.id,
+				project_id: pid,
+				notebook_id: nid,
+				session_id: body.expected_holder_session_id,
+				takeover_id: body.takeover_id,
+			})
+			.catch(() => {});
+	try {
+		const project = await deps.services.projects.getProject(pid);
+		if (project.status === 'deleted') throw new NotFoundError(`Project ${pid} not found`);
+		requireRole(project, user, 'editor', deps.policy);
+		const currentClaim = await deps.services.sessions.getEditorClaim(pid, nid);
+		if (effectiveEditorSharing(currentClaim, deps.policy.editorSandboxSharing) !== 'exclusive') {
+			throw new BadRequestError('Takeover is only available in exclusive editor mode');
+		}
+		const claim = await deps.services.sessions.reserveTakeover(pid, nid, {
+			takeoverId: body.takeover_id,
+			requestedBy: user.id,
+			expectedHolder: body.expected_holder_session_id,
+			expectedActivity: body.expected_activity,
+		});
+		observer.tag('phase', claim.transfer?.phase ?? 'changed');
+		await audit('session.takeover.request');
+		if (claim.transfer?.phase === 'ready') {
+			await audit('session.takeover.success');
+			return c.json({ success: true }, 200);
+		}
+		const holder = await deps.services.sessions.getSession(pid, body.expected_holder_session_id);
+		if (claim.transfer?.phase === 'draining') {
+			try {
+				const completed = await sessionRetirer(deps).completeTakeoverDrain(
+					holder,
+					body.takeover_id,
+					globalThis.crypto.randomUUID(),
+				);
+				if (!completed) throw new Error('Another request owns the takeover drain lease');
+				await audit('session.takeover.success');
+				return c.json({ success: true }, 200);
+			} catch {
+				throw new UnavailableError(
+					'The prior editor is still shutting down; retry this takeover shortly',
+				);
+			}
+		}
+		if (holder.notebook_id !== nid || holder.user_id === user.id || holder.ephemeral) {
+			await deps.services.sessions.cancelRequestedTakeover(pid, nid, body.takeover_id);
+			throw new BadRequestError('The selected session cannot be taken over');
+		}
+		const activity = await inspectEditorActivity(deps, holder);
+		observer.tag('activity', activity.state);
+		observer.tag(
+			'active_connections',
+			'active_connections' in activity ? activity.active_connections : null,
+		);
+		if (activity.state !== body.expected_activity) {
+			await deps.services.sessions.cancelRequestedTakeover(pid, nid, body.takeover_id);
+			throw new EditSessionChangedError(
+				'The current editor activity changed; refresh and confirm the takeover again',
+			);
+		}
+		try {
+			await sessionRetirer(deps).retireForTakeover(holder, user.id);
+			await deps.services.sessions.setTakeoverPhase(pid, nid, body.takeover_id, 'ready');
+		} catch (err) {
+			if (err instanceof TakeoverRetirementError && err.drainStarted) {
+				await deps.services.sessions
+					.setTakeoverPhase(pid, nid, body.takeover_id, 'draining')
+					.catch(() => {});
+			} else {
+				await deps.services.sessions.cancelRequestedTakeover(pid, nid, body.takeover_id);
+			}
+			throw new UnavailableError(
+				'Could not safely save and stop the current editor; no replacement was started',
+			);
+		}
+		await audit('session.takeover.success');
+		return c.json({ success: true }, 200);
+	} catch (err) {
+		failed = true;
+		observer.tag('error', err instanceof Error ? err.name : 'unknown');
+		await audit('session.takeover.failure');
+		throw err;
+	} finally {
+		observer.tag('success', !failed);
+		observer.tag('duration_ms', Date.now() - startedAt);
+		observer.flush();
+	}
+});
+
 app.openapi(createSession, async (c) => {
 	const deps = c.get('deps');
 	const { sessions, projects, notebooks } = deps.services;
@@ -449,12 +730,25 @@ app.openapi(createSession, async (c) => {
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
-	const { ephemeral, profileOverrideEligible } = authorizeSessionStart(
-		project,
-		user,
-		mode,
-		deps.policy,
-	);
+	const authorization = authorizeSessionStart(project, user, mode, deps.policy);
+	const existingEditorClaim = mode === 'edit' ? await sessions.getEditorClaim(pid, nid) : undefined;
+	const sharing = effectiveEditorSharing(existingEditorClaim, deps.policy.editorSandboxSharing);
+	const replacingAfterTakeover =
+		existingEditorClaim?.transfer?.phase === 'ready' &&
+		existingEditorClaim.transfer.requested_by === user.id;
+	const editorTemporary =
+		mode === 'edit' &&
+		body?.edit_intent === 'temporary' &&
+		(authorization.role === 'editor' || authorization.role === 'admin');
+	if (body?.edit_intent && mode !== 'edit') {
+		throw new BadRequestError('edit_intent is only valid for edit sessions');
+	}
+	if (editorTemporary && sharing === 'shared') {
+		throw new BadRequestError('Temporary editor sessions are only available in exclusive mode');
+	}
+	const ephemeral = authorization.ephemeral || editorTemporary;
+	const profileOverrideEligible = authorization.profileOverrideEligible;
+	const restrictedViewerCredentials = authorization.restrictedViewerCredentials;
 	const grants = (s: Session) => sessionGrantsFor(project, user, s, deps.policy);
 
 	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
@@ -506,15 +800,22 @@ app.openapi(createSession, async (c) => {
 	);
 	const provisioner = new SandboxProvisioner(compute);
 
-	// Reuse: if the user already has a session for this notebook — a `running` one to
-	// reconnect to, OR an in-flight `starting` one (a concurrent refresh is already
-	// provisioning) — return it instead of provisioning a second sandbox. This is
-	// what stops a refresh loop from piling up `starting` records and tripping the
-	// cap. Checked before the cap (so a reuse is never rejected) and short-circuits
-	// before any compute call. A `starting` reuse has no URL yet; the client polls
-	// `GET …/sessions/{sid}` until it is `running`. For `app` the lookup is
-	// user-blind — any editor attaches to the notebook's shared app.
-	const reusable = await sessions.findReusable(pid, nid, user.id, mode);
+	// Reuse follows the session class: the claimed editor sandbox, the caller's
+	// temporary editor, or the notebook app. Check before the cap and before any
+	// compute call. A `starting` reuse has no URL yet; the client polls
+	// `GET …/sessions/{sid}` until it is `running`.
+	const editorReuse =
+		mode === 'edit'
+			? await sessions.findReusableEditor(pid, nid, user.id, sharing, ephemeral)
+			: undefined;
+	if (editorReuse?.takeoverInProgress) throw new TakeoverInProgressError();
+	if (editorReuse?.ownedByOther) {
+		throw new EditSessionOwnedError(
+			`Editing is currently owned by ${editorReuse.ownedByOther.user_id}`,
+		);
+	}
+	const reusable =
+		mode === 'edit' ? editorReuse?.session : await sessions.findReusable(pid, nid, user.id, mode);
 	if (reusable) {
 		// A role change flips the session class the caller is entitled to (a demoted
 		// editor must not keep a persisting, WIF-holding kernel; a promoted viewer's
@@ -536,7 +837,25 @@ app.openapi(createSession, async (c) => {
 			!!kernelUrl && !!deps.kernelProbe && (await deps.kernelProbe(kernelUrl)) === 'dead';
 		if (!mayRetire || (!dead && !classMismatch)) {
 			return c.json(
-				{ success: true, data: { ...toSessionResponse(reusable, grants(reusable)), reused: true } },
+				{
+					success: true,
+					data: {
+						...toSessionResponse(reusable, grants(reusable)),
+						reused: true,
+						...(mode === 'edit'
+							? {
+									editor_session: {
+										sharing,
+										access: ephemeral
+											? ('temporary' as const)
+											: sharing === 'shared'
+												? ('shared' as const)
+												: ('owner' as const),
+									},
+								}
+							: {}),
+					},
+				},
 				200,
 			);
 		}
@@ -552,15 +871,22 @@ app.openapi(createSession, async (c) => {
 		await sessionRetirer(deps).retire(reusable, { teardown: claimed.transitioned });
 	}
 
-	await enforceSessionCap(deps, mode, pid, user.id);
+	const temporaryToRetire = replacingAfterTakeover
+		? (await sessions.findReusableEditor(pid, nid, user.id, 'exclusive', true)).session
+		: undefined;
+	await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
 
 	const sandboxId = createSandboxId();
 
 	// createApi defaults this; the fallback satisfies the type for direct callers.
 	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
-	const restoreFilesystemSnapshot = workspacePolicy.restoreFilesystemSnapshot
-		? await resolveRestoreSnapshot(compute, notebooks, pid, nid)
-		: undefined;
+	const restoreFilesystemSnapshot =
+		!ephemeral && workspacePolicy.restoreFilesystemSnapshot
+			? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
+					sharing: mode === 'edit' ? sharing : 'shared',
+					userId: user.id,
+				})
+			: undefined;
 	const appliedComputeProfile = restoreFilesystemSnapshot
 		? {
 				name: restoreFilesystemSnapshot.compute_profile,
@@ -611,12 +937,20 @@ app.openapi(createSession, async (c) => {
 					ephemeral,
 					mode,
 					source_version_id: sourceVersionId,
+					editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
 				});
 			})
 			// The pre-flight cap check alone is raceable; re-rank now that this
 			// session is visible to every concurrent create.
 			.step('cap_recheck', () =>
-				assertCapAfterCreate(deps, mode, pid, user.id, session!.session_id),
+				assertCapAfterCreate(
+					deps,
+					mode,
+					pid,
+					user.id,
+					session!.session_id,
+					temporaryToRetire?.session_id,
+				),
 			)
 			// The app singleton: exactly one concurrent "Run as app" wins the
 			// per-notebook claim; a loser aborts before provisioning (no second
@@ -631,6 +965,24 @@ app.openapi(createSession, async (c) => {
 					if (session) await sessions.releaseAppFor(session);
 				},
 			})
+			.step('editor_claim', {
+				do: async () => {
+					if (mode !== 'edit' || ephemeral) return;
+					const result = await sessions.claimEditor(
+						pid,
+						nid,
+						session!.session_id,
+						sharing,
+						user.id,
+					);
+					if (!result.claimed && result.claim.session_id) {
+						throw new EditorClaimLostError(result.claim.session_id);
+					}
+				},
+				compensate: async () => {
+					if (session) await sessions.releaseEditorFor(session);
+				},
+			})
 			.step('sandbox_provision', {
 				do: async () => {
 					// `prepare` picks marimo's `--base-url`; `finalize` maps the adapter's
@@ -642,11 +994,13 @@ app.openapi(createSession, async (c) => {
 						sandboxId,
 						appBaseUrl,
 					};
-					// WIF: best-effort project-scoped federated S3 creds; never for an
-					// ephemeral (viewer) sandbox. A federation/policy gap yields no creds,
+					// WIF: best-effort project-scoped federated S3 creds; never for a
+					// viewer sandbox. A federation/policy gap yields no creds,
 					// never a failed kernel. jwt/creds are never logged.
 					const resolveWifVars = async () => {
-						if (!(deps.wif && project.federation?.enabled && !ephemeral)) return;
+						if (!(deps.wif && project.federation?.enabled && !restrictedViewerCredentials)) {
+							return;
+						}
 						try {
 							return await exchangeFederatedStorageEnv(
 								deps.wif.issuer,
@@ -706,10 +1060,10 @@ app.openapi(createSession, async (c) => {
 
 					// Project secrets: unlike WIF/AI, this FAILS CLOSED — a key the author
 					// configured is load-bearing, so a resolve failure aborts session create
-					// rather than starting a kernel that silently lacks it. Never for an
-					// ephemeral sandbox, and never logged.
+					// rather than starting a kernel that silently lacks it. Viewer sandboxes
+					// are restricted; temporary editor sandboxes retain editor credentials.
 					const resolveSecretVars = async () => {
-						if (!(deps.secrets && !ephemeral)) return;
+						if (!(deps.secrets && !restrictedViewerCredentials)) return;
 						try {
 							const vars = await deps.secrets.resolve(pid);
 							observer.tag('secrets_injected_count', Object.keys(vars).length);
@@ -730,9 +1084,10 @@ app.openapi(createSession, async (c) => {
 
 					// Integrations: like secrets, FAILS CLOSED — a configured data source is
 					// load-bearing, so a render failure aborts provisioning rather than
-					// starting a sandbox with partial config. Never for an ephemeral sandbox.
+					// starting a sandbox with partial config. Viewer sandboxes are restricted;
+					// temporary editor sandboxes retain editor credentials.
 					const resolveIntegrationEnv = async () => {
-						if (!(deps.integrations && !ephemeral)) return;
+						if (!(deps.integrations && !restrictedViewerCredentials)) return;
 						try {
 							const render = await deps.integrations.resolveForSession(pid, {
 								sessionId: session!.session_id,
@@ -856,6 +1211,22 @@ app.openapi(createSession, async (c) => {
 				const claim = await sessions.claimApp(pid, nid, session!.session_id);
 				if (!claim.claimed) throw new AppClaimLostError(claim.holder);
 			})
+			.step('editor_claim_recheck', async () => {
+				if (mode !== 'edit' || ephemeral) return;
+				if (replacingAfterTakeover && existingEditorClaim?.transfer) {
+					await sessions.completeTakeover(
+						pid,
+						nid,
+						existingEditorClaim.transfer.takeover_id,
+						session!.session_id,
+					);
+					return;
+				}
+				const result = await sessions.claimEditor(pid, nid, session!.session_id, sharing, user.id);
+				if (!result.claimed && result.claim.session_id) {
+					throw new EditorClaimLostError(result.claim.session_id);
+				}
+			})
 			// A delete only retires sessions that are already `running`, so one that
 			// lands mid-provision leaves this kernel serving deleted content — and,
 			// for an app, the recheck above just re-created the claim `deleteNotebook`
@@ -880,6 +1251,31 @@ app.openapi(createSession, async (c) => {
 			})
 			.run();
 	} catch (err) {
+		if (err instanceof EditorClaimLostError) {
+			observer.tag('editor_claim_lost', true);
+			if (session) await sessions.markTerminated(pid, session.session_id).catch(() => {});
+			const winner = await sessions.getSession(pid, err.holder).catch(() => null);
+			if (winner?.notebook_id === nid && sessionMode(winner) === 'edit') {
+				if (sharing === 'exclusive' && winner.user_id !== user.id) {
+					throw new EditSessionOwnedError(`Editing is currently owned by ${winner.user_id}`);
+				}
+				return c.json(
+					{
+						success: true,
+						data: {
+							...toSessionResponse(winner, grants(winner)),
+							reused: true,
+							editor_session: {
+								sharing,
+								access: sharing === 'shared' ? ('shared' as const) : ('owner' as const),
+							},
+						},
+					},
+					200,
+				);
+			}
+			throw new ConflictError('The editor session changed. Retry shortly.');
+		}
 		if (err instanceof AppClaimLostError) {
 			// Lost the app singleton — at the initial claim (nothing provisioned yet)
 			// or at the post-provision recheck (the saga compensation just destroyed
@@ -911,6 +1307,13 @@ app.openapi(createSession, async (c) => {
 		observer.flush();
 	}
 
+	if (replacingAfterTakeover && temporaryToRetire) {
+		const claimed = await sessions.beginTerminating(pid, temporaryToRetire.session_id);
+		await sessionRetirer(deps).retire(temporaryToRetire, {
+			teardown: claimed.transitioned,
+		});
+	}
+
 	// An app start puts a (possibly secrets/WIF-bearing) kernel in front of the
 	// whole admitted audience — who did it belongs in the project's event log.
 	// Best-effort like every audit append.
@@ -927,7 +1330,25 @@ app.openapi(createSession, async (c) => {
 	}
 
 	return c.json(
-		{ success: true, data: { ...toSessionResponse(updated!, grants(updated!)), reused: false } },
+		{
+			success: true,
+			data: {
+				...toSessionResponse(updated!, grants(updated!)),
+				reused: false,
+				...(mode === 'edit'
+					? {
+							editor_session: {
+								sharing,
+								access: ephemeral
+									? ('temporary' as const)
+									: sharing === 'shared'
+										? ('shared' as const)
+										: ('owner' as const),
+							},
+						}
+					: {}),
+			},
+		},
 		200,
 	);
 });

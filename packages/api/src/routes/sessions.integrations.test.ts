@@ -35,7 +35,11 @@ describe('Session provisioning with integrations', () => {
 
 	function api(
 		store: ProjectIntegrationsStore,
-		options: { userId?: ReturnType<typeof uid>; ephemeralViewer?: boolean } = {},
+		options: {
+			userId?: ReturnType<typeof uid>;
+			ephemeralViewer?: boolean;
+			exclusiveEditor?: boolean;
+		} = {},
 	) {
 		const sandbox = makeFakeSandbox();
 		const { request } = createTestApi({
@@ -46,7 +50,14 @@ describe('Session provisioning with integrations', () => {
 				integrations: store,
 				...(options.ephemeralViewer
 					? { policy: { defaultRole: 'viewer' as const, viewerMode: 'ephemeral-sandbox' as const } }
-					: {}),
+					: options.exclusiveEditor
+						? {
+								policy: {
+									defaultRole: 'editor' as const,
+									editorSandboxSharing: 'exclusive' as const,
+								},
+							}
+						: {}),
 			},
 		});
 		return { request, calls: sandbox.calls };
@@ -135,6 +146,35 @@ describe('Session provisioning with integrations', () => {
 		expect(calls.writeFile.map((file) => file.path)).not.toContain(
 			`${INTEGRATIONS_DIR}/manifest.json`,
 		);
+	});
+
+	it('injects integrations into a temporary editor sandbox', async () => {
+		const store = makeStore();
+		await store.create(
+			pid,
+			{ kind: 'custom_env', name: 'flags', config: { vars: { MY_FLAG: 'on' } } },
+			ACTOR,
+		);
+
+		const owner = api(store, { exclusiveEditor: true });
+		await expectOk(await owner.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`));
+
+		const { request, calls } = api(store, {
+			userId: uid('user_temporary_integration_editor'),
+			exclusiveEditor: true,
+		});
+		const session = await expectOk<Record<string, unknown>>(
+			await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`, {
+				edit_intent: 'temporary',
+			}),
+		);
+
+		expect(session.ephemeral).toBe(true);
+		expect(session.integrations).toEqual([
+			{ id: expect.stringMatching(/^intg-/), name: 'flags', kind: 'custom_env', version: 1 },
+		]);
+		expect(Object.assign({}, ...calls.setEnvVars).MY_FLAG).toBe('on');
+		expect(calls.writeFile.map((file) => file.path)).toContain(`${INTEGRATIONS_DIR}/manifest.json`);
 	});
 
 	it('fails the session CLOSED when a configured integration cannot render', async () => {

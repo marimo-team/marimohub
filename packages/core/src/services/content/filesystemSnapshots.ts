@@ -1,4 +1,4 @@
-import type { NotebookId, ProjectId, SandboxId } from '../../ids';
+import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { asFilesystemSnapshots } from '../../ports/sandbox';
 import type { ComputeResources, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { FsSnapshot } from '../../schema';
@@ -48,9 +48,13 @@ export async function resolveRestoreSnapshot(
 	notebooks: NotebookService,
 	projectId: ProjectId,
 	notebookId: NotebookId,
+	owner?: { sharing: 'shared' | 'exclusive'; userId: UserId },
 ): Promise<FsSnapshot | undefined> {
 	if (!asFilesystemSnapshots(provider)) return undefined;
-	return (await notebooks.getFsSnapshot(projectId, notebookId)) ?? undefined;
+	const snapshot = await notebooks.getFsSnapshot(projectId, notebookId);
+	if (!snapshot) return undefined;
+	if (owner?.sharing === 'exclusive' && snapshot.owner_user_id !== owner.userId) return undefined;
+	return snapshot;
 }
 
 /**
@@ -65,7 +69,7 @@ export async function captureFilesystemSnapshot(
 	sandbox: SandboxInstance,
 	projectId: ProjectId,
 	notebookId: NotebookId,
-	compute?: Pick<FsSnapshot, 'compute_profile' | 'compute_resources'>,
+	compute?: Pick<FsSnapshot, 'compute_profile' | 'compute_resources' | 'owner_user_id'>,
 ): Promise<void> {
 	const fs = asFilesystemSnapshots(provider);
 	if (!fs) return;

@@ -10,6 +10,8 @@ import {
 import { MemoryBucket, makeProject, uid } from '@marimo-hub/core/testing';
 import {
 	assertProjectRole,
+	assertSessionAccess,
+	assertSessionControl,
 	createApp,
 	ErrorResponseSchema,
 	jsonBody,
@@ -124,6 +126,37 @@ describe('assertProjectRole', () => {
 				superAdmins: ['god@example.com'],
 			}),
 		).resolves.toMatchObject({ id });
+	});
+});
+
+describe('session authorization assertions', () => {
+	const owner = uid('session-owner');
+	const editor = uid('other-editor');
+	const admin = uid('other-admin');
+	const project = makeProject({
+		owner,
+		members: [
+			{ user_id: editor, role: 'editor' },
+			{ user_id: admin, role: 'admin' },
+		],
+	});
+	const session = {
+		mode: 'edit' as const,
+		ephemeral: false,
+		user_id: owner,
+		editor_sandbox_sharing: 'exclusive' as const,
+	};
+
+	it('denies a non-owner editor instead of falling back to project role', () => {
+		const subject = { id: editor, email: 'editor@example.com' };
+		expect(() => assertSessionAccess(project, session, subject, {})).toThrow(ForbiddenError);
+		expect(() => assertSessionControl(project, session, subject, {})).toThrow(ForbiddenError);
+	});
+
+	it('denies admin attach while preserving force-stop authority', () => {
+		const subject = { id: admin, email: 'admin@example.com' };
+		expect(() => assertSessionAccess(project, session, subject, {})).toThrow(ForbiddenError);
+		expect(() => assertSessionControl(project, session, subject, {})).not.toThrow();
 	});
 });
 

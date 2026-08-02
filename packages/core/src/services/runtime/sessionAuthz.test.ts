@@ -47,6 +47,14 @@ describe('sessionCan', () => {
 		}
 	});
 
+	it('keeps exclusive editor kernels private while allowing admin shutdown', () => {
+		const exclusive = { ...otherEdit, editor_sandbox_sharing: 'exclusive' as const };
+		expect(sessionCan('attach', actor({ role: 'editor' }), exclusive)).toBe(false);
+		expect(sessionCan('stop', actor({ role: 'editor' }), exclusive)).toBe(false);
+		expect(sessionCan('attach', actor({ role: 'admin' }), exclusive)).toBe(false);
+		expect(sessionCan('stop', actor({ role: 'admin' }), exclusive)).toBe(true);
+	});
+
 	it('a viewer fully controls their own ephemeral session while the tier grants it', () => {
 		expect(sessionCan('attach', actor({ viewerMode: 'ephemeral-sandbox' }), ownEphemeral)).toBe(
 			true,
