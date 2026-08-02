@@ -837,6 +837,67 @@ export class SessionService {
 		return acquired;
 	}
 
+	async renewTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+	): Promise<boolean> {
+		let renewed = false;
+		await mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				renewed = false;
+				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
+					throw new EditSessionChangedError();
+				}
+				if (claim.transfer.drain_lease_id !== leaseId) return null;
+				renewed = true;
+				return {
+					...claim,
+					transfer: {
+						...claim.transfer,
+						drain_lease_expires_at: new Date(Date.now() + TAKEOVER_DRAIN_LEASE_MS).toISOString(),
+					},
+				};
+			},
+		);
+		return renewed;
+	}
+
+	async finishTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+	): Promise<void> {
+		await mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				if (
+					claim.transfer?.takeover_id !== takeoverId ||
+					claim.transfer.phase !== 'draining' ||
+					claim.transfer.drain_lease_id !== leaseId
+				) {
+					throw new EditSessionChangedError();
+				}
+				return {
+					...claim,
+					transfer: {
+						...claim.transfer,
+						phase: 'ready',
+						drain_lease_id: undefined,
+						drain_lease_expires_at: undefined,
+					},
+				};
+			},
+		);
+	}
+
 	async releaseTakeoverDrainLease(
 		projectId: ProjectId,
 		notebookId: NotebookId,

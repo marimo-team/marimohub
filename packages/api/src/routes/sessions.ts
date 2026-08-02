@@ -661,7 +661,6 @@ app.openapi(takeoverEditorSession, async (c) => {
 					globalThis.crypto.randomUUID(),
 				);
 				if (!completed) throw new Error('Another request owns the takeover drain lease');
-				await deps.services.sessions.setTakeoverPhase(pid, nid, body.takeover_id, 'ready');
 				await audit('session.takeover.success');
 				return c.json({ success: true }, 200);
 			} catch {

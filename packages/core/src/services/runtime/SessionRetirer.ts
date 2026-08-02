@@ -1,11 +1,14 @@
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxProvider } from '../../ports/sandbox';
 import type { Session } from '../../schema';
+import { Millis } from '../../duration';
 import { captureFilesystemSnapshot } from '../content/filesystemSnapshots';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import { sessionPersistsEdits } from './sessionState';
 import type { SessionService } from './SessionService';
+
+const TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS = Millis.minutes(1);
 
 export interface SessionRetirerDeps {
 	sessions: SessionService;
@@ -106,22 +109,67 @@ export class SessionRetirer {
 			leaseId,
 		);
 		if (!acquired) return false;
-		try {
-			const current = await this.deps.sessions.getSession(session.project_id, session.session_id);
-			await this.teardownForTakeover(current);
-			await this.deps.sessions.markTerminated(session.project_id, session.session_id);
-			return true;
-		} finally {
-			await this.deps.sessions.releaseTakeoverDrainLease(
+		let leaseFinished = false;
+		let leaseLost = false;
+		let renewalInFlight: Promise<boolean> | undefined;
+		const renewLease = (): Promise<boolean> => {
+			if (renewalInFlight) return renewalInFlight;
+			const pending = this.deps.sessions.renewTakeoverDrainLease(
 				session.project_id,
 				session.notebook_id,
 				takeoverId,
 				leaseId,
 			);
+			const tracked = pending.finally(() => {
+				if (renewalInFlight === tracked) renewalInFlight = undefined;
+			});
+			renewalInFlight = tracked;
+			return tracked;
+		};
+		const assertLease = async (): Promise<void> => {
+			if (leaseLost || !(await renewLease())) {
+				leaseLost = true;
+				throw new Error('The takeover drain lease is no longer owned by this request');
+			}
+		};
+		const renewalTimer = setInterval(() => {
+			void renewLease()
+				.then((renewed) => {
+					if (!renewed) leaseLost = true;
+				})
+				.catch(() => {});
+		}, TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS);
+		try {
+			const current = await this.deps.sessions.getSession(session.project_id, session.session_id);
+			await this.teardownForTakeover(current, assertLease);
+			await assertLease();
+			await this.deps.sessions.markTerminated(session.project_id, session.session_id);
+			await this.deps.sessions.finishTakeoverDrainLease(
+				session.project_id,
+				session.notebook_id,
+				takeoverId,
+				leaseId,
+			);
+			leaseFinished = true;
+			return true;
+		} finally {
+			clearInterval(renewalTimer);
+			await renewalInFlight?.catch(() => {});
+			if (!leaseFinished) {
+				await this.deps.sessions.releaseTakeoverDrainLease(
+					session.project_id,
+					session.notebook_id,
+					takeoverId,
+					leaseId,
+				);
+			}
 		}
 	}
 
-	private async teardownForTakeover(session: Session): Promise<void> {
+	private async teardownForTakeover(
+		session: Session,
+		assertLease: () => Promise<void> = async () => {},
+	): Promise<void> {
 		if (!session.sandbox_id || session.sandbox_reclaimed_at) return;
 		const sandbox = this.deps.compute.create(session.sandbox_id);
 		if (!session.takeover_capture_completed_at) {
@@ -136,6 +184,7 @@ export class SessionRetirer {
 				this.deps.workdir,
 				{ persistEdits: true },
 			);
+			await assertLease();
 			if (persisted) {
 				await captureFilesystemSnapshot(
 					this.deps.compute,
@@ -149,6 +198,7 @@ export class SessionRetirer {
 						owner_user_id: session.user_id,
 					},
 				);
+				await assertLease();
 			}
 			await this.deps.sessions.markTakeoverCaptureCompleted(
 				session.project_id,
@@ -156,7 +206,9 @@ export class SessionRetirer {
 				new Date().toISOString(),
 			);
 		}
+		await assertLease();
 		await sandbox.destroy();
+		await assertLease();
 		await this.deps.sessions.markSandboxReclaimed(
 			session.project_id,
 			session.session_id,

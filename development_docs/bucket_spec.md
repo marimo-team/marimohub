@@ -404,9 +404,11 @@ A takeover moves through three phases:
 
 1. `requested` reserves the expected holder and connection state.
 2. `draining` protects ownership while save or sandbox destruction retries. A
-   CAS-acquired, ten-minute lease serializes recovery so concurrent retries
-   cannot save or destroy the old sandbox twice. An abandoned lease expires so
-   another replica can continue the drain.
+   CAS-acquired lease serializes recovery so concurrent retries cannot save or
+   destroy the old sandbox twice. The holder renews its ten-minute deadline
+   every minute until it atomically moves the claim to `ready`. A lease expires
+   only after ten minutes without a successful renewal, so another replica can
+   continue a conclusively abandoned drain.
 3. `ready` permits only the requester to create the replacement session.
 
 The create route completes the transfer after the replacement reaches

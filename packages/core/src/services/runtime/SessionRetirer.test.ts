@@ -51,6 +51,7 @@ describe('SessionRetirer', () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
@@ -272,6 +273,90 @@ describe('SessionRetirer', () => {
 		await expect(first).resolves.toBe(true);
 
 		expect(capture).toHaveBeenCalledTimes(1);
+		expect(calls.destroy).toBe(1);
+	});
+
+	it('renews the drain lease throughout a capture lasting longer than its deadline', async () => {
+		vi.useFakeTimers();
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		await reserveTakeover(session, 'long-capture');
+		await sessions.setTakeoverPhase(projectId, notebookId, 'long-capture', 'draining');
+		await sessions.beginTerminating(projectId, session.session_id, {
+			reason: 'takeover',
+			by: uid('user_01HXY00000000000000000001'),
+		});
+		let releaseCapture!: () => void;
+		let captureStarted!: () => void;
+		const captureGate = new Promise<void>((resolve) => {
+			releaseCapture = resolve;
+		});
+		const started = new Promise<void>((resolve) => {
+			captureStarted = resolve;
+		});
+		const capture = vi
+			.spyOn(SandboxProvisioner.prototype, 'captureSession')
+			.mockImplementation(async () => {
+				captureStarted();
+				await captureGate;
+				return true;
+			});
+		const renew = vi.spyOn(sessions, 'renewTakeoverDrainLease');
+		const service = retirer({ create: () => instance, proxy: async () => null });
+
+		const first = service.completeTakeoverDrain(session, 'long-capture', 'lease-first');
+		await started;
+		await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+		await expect(
+			service.completeTakeoverDrain(session, 'long-capture', 'lease-second'),
+		).resolves.toBe(false);
+		releaseCapture();
+		await expect(first).resolves.toBe(true);
+
+		expect(renew).toHaveBeenCalled();
+		expect(capture).toHaveBeenCalledTimes(1);
+		expect(calls.destroy).toBe(1);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.transfer?.phase).toBe('ready');
+	});
+
+	it('renews the drain lease throughout sandbox destruction', async () => {
+		vi.useFakeTimers();
+		const { instance, calls } = makeFakeSandbox();
+		const originalDestroy = instance.destroy.bind(instance);
+		let releaseDestroy!: () => void;
+		let destroyStarted!: () => void;
+		const destroyGate = new Promise<void>((resolve) => {
+			releaseDestroy = resolve;
+		});
+		const started = new Promise<void>((resolve) => {
+			destroyStarted = resolve;
+		});
+		instance.destroy = async () => {
+			destroyStarted();
+			await destroyGate;
+			await originalDestroy();
+		};
+		const session = await persistentSession();
+		await reserveTakeover(session, 'long-destroy');
+		await sessions.setTakeoverPhase(projectId, notebookId, 'long-destroy', 'draining');
+		await sessions.beginTerminating(projectId, session.session_id, {
+			reason: 'takeover',
+			by: uid('user_01HXY00000000000000000001'),
+		});
+		const service = retirer({ create: () => instance, proxy: async () => null });
+
+		const first = service.completeTakeoverDrain(session, 'long-destroy', 'lease-first');
+		await started;
+		await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+		await expect(
+			service.completeTakeoverDrain(session, 'long-destroy', 'lease-second'),
+		).resolves.toBe(false);
+		releaseDestroy();
+		await expect(first).resolves.toBe(true);
+
+		expect(notebooks.commitSession).toHaveBeenCalledTimes(1);
 		expect(calls.destroy).toBe(1);
 	});
 });
