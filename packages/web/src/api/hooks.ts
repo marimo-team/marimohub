@@ -507,8 +507,10 @@ export function useImportIntegration(projectId: string) {
 
 /**
  * Non-suspense project list for pickers rendered inside dialogs. Walks every
- * page (unlike the first-page home list) so projects beyond the first page
- * stay selectable; the sweep is bounded rather than unbounded on a cursor bug.
+ * page (unlike the first-page home list) so the roster is COMPLETE — a
+ * truncated result would silently hide older projects from the picker. The
+ * loop is bounded by a cycle guard instead of a page cap: a repeated cursor
+ * (the realistic paging bug) fails the query loudly rather than truncating.
  */
 export function useProjectPickerQuery(enabled: boolean) {
 	return useQuery({
@@ -516,17 +518,23 @@ export function useProjectPickerQuery(enabled: boolean) {
 		enabled,
 		queryFn: async () => {
 			const items = [];
+			const followed = new Set<string>();
 			let cursor: string | undefined;
-			for (let page = 0; page < 40; page++) {
+			do {
 				const data = await apiData(
 					apiClient.GET('/api/v1/projects', {
 						params: { query: { limit: 500, ...(cursor ? { cursor } : {}) } },
 					}),
 				);
 				items.push(...data.items);
-				if (!data.next_cursor) break;
-				cursor = data.next_cursor;
-			}
+				cursor = data.next_cursor ?? undefined;
+				if (cursor !== undefined) {
+					if (followed.has(cursor)) {
+						throw new Error('Project listing did not advance; refusing a partial roster.');
+					}
+					followed.add(cursor);
+				}
+			} while (cursor !== undefined);
 			return items;
 		},
 	});

@@ -671,20 +671,27 @@ function ImportView({
 				Copy an integration's current config from a project you administer. Secrets are re-encrypted
 				for this project; the copy starts its own version history.
 			</p>
-			<ComboBox
-				label="Source project"
-				placeholder="Search projects…"
-				inputValue={projectInput}
-				onInputChange={(value) => {
-					setProjectInput(value);
-					setSourcePid(undefined);
-					setSourceEntry(undefined);
-				}}
-				options={projectOptions}
-				onSelect={pickProject}
-				renderOption={(option) => <span className="truncate text-sm">{option.textValue}</span>}
-				emptyState="No matching projects"
-			/>
+			{/* An errored roster must not masquerade as "no matching projects". */}
+			{projectsQuery.isError ? (
+				<p className="text-destructive">Could not load the project list. Go back and retry.</p>
+			) : (
+				<ComboBox
+					label="Source project"
+					placeholder="Search projects…"
+					inputValue={projectInput}
+					onInputChange={(value) => {
+						setProjectInput(value);
+						setSourcePid(undefined);
+						setSourceEntry(undefined);
+					}}
+					options={projectOptions}
+					onSelect={pickProject}
+					renderOption={(option) => <span className="truncate text-sm">{option.textValue}</span>}
+					emptyState={
+						projectsQuery.data === undefined ? 'Loading projects…' : 'No matching projects'
+					}
+				/>
+			)}
 
 			{sourcePid && sourceProject.data && !isSourceAdmin ? (
 				<p className="text-muted-foreground">

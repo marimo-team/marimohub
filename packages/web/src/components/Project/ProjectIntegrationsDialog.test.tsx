@@ -99,6 +99,8 @@ interface FetchOpts {
 	sourceProject?: { id: string; name: string; your_role: string; entries: IntegrationEntry[] };
 	/** Serve the source project on a SECOND /projects page. */
 	pagedProjects?: boolean;
+	/** Every /projects page repeats the same next_cursor (a paging bug). */
+	loopingProjects?: boolean;
 	/** Delay the source project's detail (role) response. */
 	slowRole?: boolean;
 }
@@ -112,6 +114,7 @@ function makeFetch({
 	orgEntries = [],
 	sourceProject,
 	pagedProjects = false,
+	loopingProjects = false,
 	slowRole = false,
 }: FetchOpts) {
 	const calls: {
@@ -160,6 +163,9 @@ function makeFetch({
 			(url.endsWith('/api/v1/projects') || url.includes('/api/v1/projects?')) &&
 			method === 'GET'
 		) {
+			if (loopingProjects) {
+				return ok({ items: [{ id: PID, name: 'Demo' }], next_cursor: 'stuck' });
+			}
 			if (pagedProjects && sourceProject) {
 				return url.includes('cursor=')
 					? ok({
@@ -676,6 +682,15 @@ describe('ProjectIntegrationsDialog — import from another project', () => {
 		setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE, pagedProjects: true });
 		await openImport(user);
 		expect(await screen.findByTestId('import-source-row')).toBeInTheDocument();
+	});
+
+	it('a cursor that never advances fails the picker loudly, not with a partial roster', async () => {
+		const user = userEvent.setup();
+		setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE, loopingProjects: true });
+		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
+		await user.click(await screen.findByRole('button', { name: /Import from another project/ }));
+		expect(await screen.findByText(/Could not load the project list/)).toBeInTheDocument();
+		expect(screen.queryByRole('combobox', { name: 'Source project' })).not.toBeInTheDocument();
 	});
 
 	it('never shows the pick/submit form before the source role resolves', async () => {
