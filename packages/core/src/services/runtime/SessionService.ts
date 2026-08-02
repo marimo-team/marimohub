@@ -58,6 +58,7 @@ export interface CreateSessionInput {
 const HEARTBEAT_TTL_MS = Millis.minutes(5);
 const TERMINAL_RETENTION_MS = Millis.hours(24);
 const TAKEOVER_REQUEST_TTL_MS = Millis.minutes(5);
+const TAKEOVER_DRAIN_LEASE_MS = Millis.minutes(10);
 // Coalesce heartbeat persistence: an already-running session is only re-written
 // once its stored heartbeat is older than this. Bounds heartbeat writes to
 // ~1/interval/session regardless of client cadence, while staying well within
@@ -790,11 +791,83 @@ export class SessionService {
 					transfer: {
 						...claim.transfer,
 						phase,
+						...(phase === 'ready'
+							? { drain_lease_id: undefined, drain_lease_expires_at: undefined }
+							: {}),
 						...(replacementSessionId ? { replacement_session_id: replacementSessionId } : {}),
 					},
 				};
 			},
 		);
+	}
+
+	async acquireTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+	): Promise<boolean> {
+		let acquired = false;
+		await mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				acquired = false;
+				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
+					throw new EditSessionChangedError();
+				}
+				const activeLease =
+					claim.transfer.drain_lease_id &&
+					claim.transfer.drain_lease_expires_at &&
+					Date.parse(claim.transfer.drain_lease_expires_at) > Date.now();
+				if (activeLease && claim.transfer.drain_lease_id !== leaseId) return null;
+				acquired = true;
+				if (activeLease) return null;
+				return {
+					...claim,
+					transfer: {
+						...claim.transfer,
+						drain_lease_id: leaseId,
+						drain_lease_expires_at: new Date(Date.now() + TAKEOVER_DRAIN_LEASE_MS).toISOString(),
+					},
+				};
+			},
+		);
+		return acquired;
+	}
+
+	async releaseTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+	): Promise<void> {
+		try {
+			await mutateObject(
+				this.bucket,
+				paths.editorClaim(projectId, notebookId),
+				(raw) => EditorClaimSchema.parse(raw),
+				(claim) => {
+					if (
+						claim.transfer?.takeover_id !== takeoverId ||
+						claim.transfer.drain_lease_id !== leaseId
+					) {
+						return null;
+					}
+					return {
+						...claim,
+						transfer: {
+							...claim.transfer,
+							drain_lease_id: undefined,
+							drain_lease_expires_at: undefined,
+						},
+					};
+				},
+			);
+		} catch {
+			this.metrics.increment('sessions.editor_claim.drain_lease_release_error');
+		}
 	}
 
 	async completeTakeover(

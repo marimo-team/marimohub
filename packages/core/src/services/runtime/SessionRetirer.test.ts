@@ -77,6 +77,15 @@ describe('SessionRetirer', () => {
 		});
 	}
 
+	async function reserveTakeover(session: Session, takeoverId: string): Promise<void> {
+		await sessions.reserveTakeover(projectId, notebookId, {
+			takeoverId,
+			requestedBy: uid('user_01HXY00000000000000000001'),
+			expectedHolder: session.session_id,
+			expectedActivity: 'idle',
+		});
+	}
+
 	it('retains the editor claim until a failed destroy is later confirmed', async () => {
 		const { instance } = makeFakeSandbox();
 		let destroyFails = true;
@@ -179,6 +188,7 @@ describe('SessionRetirer', () => {
 	it('keeps a takeover draining when its final strict capture fails', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession();
+		await reserveTakeover(session, 'capture-retry');
 		const capture = vi
 			.spyOn(SandboxProvisioner.prototype, 'captureSession')
 			.mockRejectedValueOnce(new Error('final save failed'));
@@ -190,8 +200,9 @@ describe('SessionRetirer', () => {
 		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminating');
 		expect(calls.destroy).toBe(0);
 
+		await sessions.setTakeoverPhase(projectId, notebookId, 'capture-retry', 'draining');
 		capture.mockResolvedValueOnce(true);
-		await service.completeTakeoverDrain(session);
+		expect(await service.completeTakeoverDrain(session, 'capture-retry', 'lease-retry')).toBe(true);
 		expect(calls.destroy).toBe(1);
 		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
 	});
@@ -199,6 +210,7 @@ describe('SessionRetirer', () => {
 	it('resumes after destruction when the terminal status write fails', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession();
+		await reserveTakeover(session, 'terminal-retry');
 		const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
 		vi.spyOn(sessions, 'markTerminated').mockRejectedValueOnce(
 			new Error('session record unavailable'),
@@ -215,10 +227,51 @@ describe('SessionRetirer', () => {
 			sandbox_reclaimed_at: expect.any(String),
 		});
 
-		await service.completeTakeoverDrain(draining);
+		await sessions.setTakeoverPhase(projectId, notebookId, 'terminal-retry', 'draining');
+		expect(await service.completeTakeoverDrain(draining, 'terminal-retry', 'lease-retry')).toBe(
+			true,
+		);
 
 		expect(capture).toHaveBeenCalledTimes(1);
 		expect(calls.destroy).toBe(1);
 		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+	});
+
+	it('serializes concurrent retries of a draining takeover', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		await reserveTakeover(session, 'concurrent-retry');
+		await sessions.setTakeoverPhase(projectId, notebookId, 'concurrent-retry', 'draining');
+		await sessions.beginTerminating(projectId, session.session_id, {
+			reason: 'takeover',
+			by: uid('user_01HXY00000000000000000001'),
+		});
+		let releaseCapture!: () => void;
+		let captureStarted!: () => void;
+		const captureGate = new Promise<void>((resolve) => {
+			releaseCapture = resolve;
+		});
+		const started = new Promise<void>((resolve) => {
+			captureStarted = resolve;
+		});
+		const capture = vi
+			.spyOn(SandboxProvisioner.prototype, 'captureSession')
+			.mockImplementation(async () => {
+				captureStarted();
+				await captureGate;
+				return true;
+			});
+		const service = retirer({ create: () => instance, proxy: async () => null });
+
+		const first = service.completeTakeoverDrain(session, 'concurrent-retry', 'lease-first');
+		await started;
+		await expect(
+			service.completeTakeoverDrain(session, 'concurrent-retry', 'lease-second'),
+		).resolves.toBe(false);
+		releaseCapture();
+		await expect(first).resolves.toBe(true);
+
+		expect(capture).toHaveBeenCalledTimes(1);
+		expect(calls.destroy).toBe(1);
 	});
 });

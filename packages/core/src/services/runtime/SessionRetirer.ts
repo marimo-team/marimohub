@@ -94,9 +94,31 @@ export class SessionRetirer {
 		}
 	}
 
-	async completeTakeoverDrain(session: Session): Promise<void> {
-		await this.teardownForTakeover(session);
-		await this.deps.sessions.markTerminated(session.project_id, session.session_id);
+	async completeTakeoverDrain(
+		session: Session,
+		takeoverId: string,
+		leaseId: string,
+	): Promise<boolean> {
+		const acquired = await this.deps.sessions.acquireTakeoverDrainLease(
+			session.project_id,
+			session.notebook_id,
+			takeoverId,
+			leaseId,
+		);
+		if (!acquired) return false;
+		try {
+			const current = await this.deps.sessions.getSession(session.project_id, session.session_id);
+			await this.teardownForTakeover(current);
+			await this.deps.sessions.markTerminated(session.project_id, session.session_id);
+			return true;
+		} finally {
+			await this.deps.sessions.releaseTakeoverDrainLease(
+				session.project_id,
+				session.notebook_id,
+				takeoverId,
+				leaseId,
+			);
+		}
 	}
 
 	private async teardownForTakeover(session: Session): Promise<void> {

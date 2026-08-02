@@ -78,6 +78,10 @@ replacement. If destruction fails, the editor claim remains protected and no
 replacement starts. Retry the same takeover request to continue the drain.
 Reconciliation can also destroy the old sandbox before the retry.
 
+Only one retry can drain the old sandbox at a time. A recovery attempt holds a
+ten-minute lease. Concurrent requests must retry later, and an abandoned lease
+expires so another API replica can continue recovery.
+
 If the requester has a temporary sandbox, it remains available until the
 replacement is running. marimohub then stops that temporary sandbox and
 discards its work.

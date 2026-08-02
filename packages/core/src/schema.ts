@@ -639,6 +639,8 @@ export const EditorClaimSchema = z.looseObject({
 			expected_activity: z.enum(['active', 'idle', 'unknown', 'starting']),
 			phase: z.enum(['requested', 'draining', 'ready']),
 			requested_at: z.iso.datetime(),
+			drain_lease_id: z.string().min(1).max(255).optional(),
+			drain_lease_expires_at: z.iso.datetime().optional(),
 			replacement_session_id: SessionIdSchema.optional(),
 		})
 		.optional(),

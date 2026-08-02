@@ -655,7 +655,12 @@ app.openapi(takeoverEditorSession, async (c) => {
 		const holder = await deps.services.sessions.getSession(pid, body.expected_holder_session_id);
 		if (claim.transfer?.phase === 'draining') {
 			try {
-				await sessionRetirer(deps).completeTakeoverDrain(holder);
+				const completed = await sessionRetirer(deps).completeTakeoverDrain(
+					holder,
+					body.takeover_id,
+					globalThis.crypto.randomUUID(),
+				);
+				if (!completed) throw new Error('Another request owns the takeover drain lease');
 				await deps.services.sessions.setTakeoverPhase(pid, nid, body.takeover_id, 'ready');
 				await audit('session.takeover.success');
 				return c.json({ success: true }, 200);

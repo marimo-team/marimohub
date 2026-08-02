@@ -389,7 +389,9 @@ chooses a discard-only temporary session or a takeover.
 		"takeover_id": "client-idempotency-key",
 		"requested_by": "user_b",
 		"phase": "draining",
-		"requested_at": "2026-07-31T12:10:00Z"
+		"requested_at": "2026-07-31T12:10:00Z",
+		"drain_lease_id": "server-attempt-id",
+		"drain_lease_expires_at": "2026-07-31T12:20:00Z"
 	}
 }
 ```
@@ -401,7 +403,10 @@ only when the session still holds the claim.
 A takeover moves through three phases:
 
 1. `requested` reserves the expected holder and connection state.
-2. `draining` protects ownership while save or sandbox destruction retries.
+2. `draining` protects ownership while save or sandbox destruction retries. A
+   CAS-acquired, ten-minute lease serializes recovery so concurrent retries
+   cannot save or destroy the old sandbox twice. An abandoned lease expires so
+   another replica can continue the drain.
 3. `ready` permits only the requester to create the replacement session.
 
 The create route completes the transfer after the replacement reaches

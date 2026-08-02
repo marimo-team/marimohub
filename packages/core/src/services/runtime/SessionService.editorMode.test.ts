@@ -327,6 +327,64 @@ describe('SessionService editor claims', () => {
 		expect(completed.session_id).toBe(replacement.session_id);
 	});
 
+	it('grants only one drain lease and releases it only for its owner', async () => {
+		const owner = await running(USER_A);
+		await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+		await sessions.reserveTakeover(projectId, notebookId, {
+			takeoverId: 'lease-race',
+			requestedBy: USER_B,
+			expectedHolder: owner.session_id,
+			expectedActivity: 'idle',
+		});
+		await sessions.setTakeoverPhase(projectId, notebookId, 'lease-race', 'draining');
+
+		const attempts = await Promise.all([
+			sessions.acquireTakeoverDrainLease(projectId, notebookId, 'lease-race', 'lease-a'),
+			sessions.acquireTakeoverDrainLease(projectId, notebookId, 'lease-race', 'lease-b'),
+		]);
+		expect(attempts.filter(Boolean)).toHaveLength(1);
+		const winner = attempts[0] ? 'lease-a' : 'lease-b';
+		const loser = attempts[0] ? 'lease-b' : 'lease-a';
+
+		await sessions.releaseTakeoverDrainLease(projectId, notebookId, 'lease-race', loser);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.transfer).toMatchObject({
+			drain_lease_id: winner,
+		});
+
+		await sessions.releaseTakeoverDrainLease(projectId, notebookId, 'lease-race', winner);
+		await expect(
+			sessions.acquireTakeoverDrainLease(projectId, notebookId, 'lease-race', loser),
+		).resolves.toBe(true);
+	});
+
+	it('recovers an abandoned drain lease after its bounded lifetime', async () => {
+		vi.useFakeTimers();
+		const owner = await running(USER_A);
+		await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+		await sessions.reserveTakeover(projectId, notebookId, {
+			takeoverId: 'expired-lease',
+			requestedBy: USER_B,
+			expectedHolder: owner.session_id,
+			expectedActivity: 'idle',
+		});
+		await sessions.setTakeoverPhase(projectId, notebookId, 'expired-lease', 'draining');
+		await sessions.acquireTakeoverDrainLease(
+			projectId,
+			notebookId,
+			'expired-lease',
+			'lease-abandoned',
+		);
+
+		vi.advanceTimersByTime(10 * 60 * 1000);
+
+		await expect(
+			sessions.acquireTakeoverDrainLease(projectId, notebookId, 'expired-lease', 'lease-recovery'),
+		).resolves.toBe(true);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.transfer).toMatchObject({
+			drain_lease_id: 'lease-recovery',
+		});
+	});
+
 	it('expires only an abandoned pre-drain takeover reservation', async () => {
 		vi.useFakeTimers();
 		const owner = await running(USER_A);
