@@ -16,6 +16,7 @@ import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import type {
+	CopyIntegrationOptions,
 	CreateIntegrationInput,
 	IntegrationDetail,
 	IntegrationEntry,
@@ -561,6 +562,31 @@ class ScopedIntegrationsStore {
 		};
 	}
 
+	async copy(
+		source: IntegrationScope,
+		id: IntegrationId,
+		target: IntegrationScope,
+		options: CopyIntegrationOptions,
+		actor: UserId,
+	): Promise<IntegrationDetail> {
+		const head = await this.getHead(source, id);
+		const { def, config } = await this.loadCurrent(source, head);
+		// Envelopes are bound to the SOURCE head path, so decrypt here and let
+		// `create` re-seal under the destination's context. The plaintext exists
+		// only in this frame — never in a response or a bucket object.
+		const resolved = await this.open(source, head.id, def, config);
+		return this.create(
+			target,
+			{
+				kind: head.kind,
+				name: options.name ?? head.name,
+				config: resolved,
+				change_note: `Imported "${head.name}" from project ${source.projectId ?? 'org'}`,
+			},
+			actor,
+		);
+	}
+
 	async test(scope: IntegrationScope, request: TestIntegrationRequest): Promise<TestResult> {
 		let def: IntegrationDefinition;
 		let resolved: Record<string, unknown>;
@@ -1019,6 +1045,22 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 
 	test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult> {
 		return this.store.test(projectScope(projectId), request);
+	}
+
+	copy(
+		sourceProjectId: ProjectId,
+		id: IntegrationId,
+		targetProjectId: ProjectId,
+		options: CopyIntegrationOptions,
+		actor: UserId,
+	): Promise<IntegrationDetail> {
+		return this.store.copy(
+			projectScope(sourceProjectId),
+			id,
+			projectScope(targetProjectId),
+			options,
+			actor,
+		);
 	}
 
 	async resolveForSession(

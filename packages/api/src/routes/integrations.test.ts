@@ -727,3 +727,144 @@ describe('Org integrations routes', () => {
 		);
 	});
 });
+
+describe('Integration import route', () => {
+	const ROOT = uid('user_import_root');
+	const OUTSIDER = uid('user_import_outsider');
+	let bucket: MemoryBucket;
+	let deps: ReturnType<typeof integrationsDeps> & { policy: { superAdmins: string[] } };
+	let asOwner: ReturnType<typeof createTestApi>['request'];
+	let sourcePid: string;
+	let targetPid: string;
+	let sourceIid: string;
+
+	beforeEach(async () => {
+		bucket = await createInitializedBucket();
+		deps = { ...integrationsDeps(bucket), policy: { superAdmins: [ROOT] } };
+		asOwner = createTestApi({ bucket, userId: ACTOR, deps }).request;
+		const createProject = async (name: string) =>
+			(
+				await expectOk<{ id: string }>(
+					await asOwner('POST', '/projects', { name, description: 'd' }),
+					201,
+				)
+			).id;
+		sourcePid = await createProject('source');
+		targetPid = await createProject('target');
+		sourceIid = (
+			await expectOk<{ id: string }>(
+				await asOwner('POST', `/projects/${sourcePid}/integrations`, {
+					kind: 'postgres',
+					name: 'prod',
+					config: PG_CONFIG,
+				}),
+				201,
+			)
+		).id;
+	});
+
+	const importBody = (over: Record<string, unknown> = {}) => ({
+		source_project_id: sourcePid,
+		source_integration_id: sourceIid,
+		...over,
+	});
+
+	it('admin of both projects copies the integration; secrets stay redacted', async () => {
+		const detail = await expectOk<Record<string, unknown>>(
+			await asOwner('POST', `/projects/${targetPid}/integrations/import`, importBody()),
+			201,
+		);
+		expect(detail).toMatchObject({
+			kind: 'postgres',
+			name: 'prod',
+			current_version: 1,
+			config: { host: 'db.internal', password: { $secret: { set: true } } },
+		});
+		expect(detail.id).not.toBe(sourceIid);
+		expect(JSON.stringify(detail)).not.toContain('sup3r-secret');
+
+		const events = await expectOk<Record<string, unknown>[]>(
+			await asOwner('GET', `/projects/${targetPid}/events`),
+		);
+		const imported = events.find((e) => e.event === 'integration.import');
+		expect(imported).toMatchObject({
+			source_project_id: sourcePid,
+			source_integration_id: sourceIid,
+		});
+		expect(JSON.stringify(events)).not.toContain('sup3r-secret');
+	});
+
+	it('requires admin on BOTH projects — dest-only admins are refused', async () => {
+		// An outsider who owns only the destination cannot even LEARN that the
+		// source exists: an invisible source answers the same 404 as a missing one,
+		// so the import route is not a project-id existence oracle.
+		const asOutsider = createTestApi({ bucket, userId: OUTSIDER, deps }).request;
+		const foreign = (
+			await expectOk<{ id: string }>(
+				await asOutsider('POST', '/projects', { name: 'mine', description: 'd' }),
+				201,
+			)
+		).id;
+		await expectError(
+			await asOutsider('POST', `/projects/${foreign}/integrations/import`, importBody()),
+			404,
+		);
+
+		// Editor on the source can see it but still cannot export it: 403.
+		await expectOk(
+			await asOwner('POST', `/projects/${sourcePid}/members`, {
+				user_id: OUTSIDER,
+				role: 'editor',
+			}),
+			201,
+		);
+		await expectError(
+			await asOutsider('POST', `/projects/${foreign}/integrations/import`, importBody()),
+			403,
+		);
+
+		// A super admin who is a member of neither project passes both gates.
+		const asRoot = createTestApi({ bucket, userId: ROOT, deps }).request;
+		await expectOk(
+			await asRoot('POST', `/projects/${targetPid}/integrations/import`, importBody()),
+			201,
+		);
+	});
+
+	it('404s on unknown sources and 422s on a destination name conflict', async () => {
+		await expectError(
+			await asOwner(
+				'POST',
+				`/projects/${targetPid}/integrations/import`,
+				importBody({ source_project_id: 'proj-0000000000000000' }),
+			),
+			404,
+		);
+		await expectError(
+			await asOwner(
+				'POST',
+				`/projects/${targetPid}/integrations/import`,
+				importBody({ source_integration_id: 'intg-0000000000000000' }),
+			),
+			404,
+		);
+
+		await expectOk(
+			await asOwner('POST', `/projects/${targetPid}/integrations/import`, importBody()),
+			201,
+		);
+		await expectError(
+			await asOwner('POST', `/projects/${targetPid}/integrations/import`, importBody()),
+			422,
+		);
+		const renamed = await expectOk<Record<string, unknown>>(
+			await asOwner(
+				'POST',
+				`/projects/${targetPid}/integrations/import`,
+				importBody({ name: 'prod-copy' }),
+			),
+			201,
+		);
+		expect(renamed.name).toBe('prod-copy');
+	});
+});

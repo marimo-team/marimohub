@@ -1067,6 +1067,23 @@ components:
         - kind_schema_version
         - created_by
         - created_at
+    IntegrationImportRequest:
+      type: object
+      properties:
+        source_project_id:
+          type: string
+          pattern: ^proj-[0-9a-z]{16}$
+          example: proj-7h2k9qm4xz7rp3w8
+        source_integration_id:
+          type: string
+          pattern: ^intg-[0-9a-z]{16}$
+          example: intg-7h2k9qm4xz7rp3w8
+        name:
+          type: string
+          minLength: 1
+      required:
+        - source_project_id
+        - source_integration_id
     IntegrationTestResult:
       type: object
       properties:
@@ -4653,6 +4670,81 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/import:
+    post:
+      tags:
+        - Integrations
+      summary: Copy an integration from another project (admin of both projects)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationImportRequest'
+      responses:
+        '201':
+          description: Integration copied (config redacted; secrets re-encrypted for this
+            project)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationDetail'
+                required:
+                  - success
+                  - data
         '401':
           description: Authentication required
           content:

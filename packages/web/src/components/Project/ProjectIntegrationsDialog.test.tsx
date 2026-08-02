@@ -95,6 +95,14 @@ interface FetchOpts {
 	details?: Record<string, IntegrationDetail>;
 	patchError?: boolean;
 	orgEntries?: IntegrationEntry[];
+	/** A second project offered by the import picker. */
+	sourceProject?: { id: string; name: string; your_role: string; entries: IntegrationEntry[] };
+	/** Serve the source project on a SECOND /projects page. */
+	pagedProjects?: boolean;
+	/** Every /projects page repeats the same next_cursor (a paging bug). */
+	loopingProjects?: boolean;
+	/** Delay the source project's detail (role) response. */
+	slowRole?: boolean;
 }
 
 /** Routes the dialog's list, detail, and probe requests through one mock. */
@@ -104,6 +112,10 @@ function makeFetch({
 	details = {},
 	patchError = false,
 	orgEntries = [],
+	sourceProject,
+	pagedProjects = false,
+	loopingProjects = false,
+	slowRole = false,
 }: FetchOpts) {
 	const calls: {
 		url: string;
@@ -146,6 +158,54 @@ function makeFetch({
 		}
 		if (url.includes(`/projects/${PID}/integrations/test`) && method === 'POST') {
 			return ok({ ok: true, latency_ms: 5 });
+		}
+		if (
+			(url.endsWith('/api/v1/projects') || url.includes('/api/v1/projects?')) &&
+			method === 'GET'
+		) {
+			if (loopingProjects) {
+				return ok({ items: [{ id: PID, name: 'Demo' }], next_cursor: 'stuck' });
+			}
+			if (pagedProjects && sourceProject) {
+				return url.includes('cursor=')
+					? ok({
+							items: [{ id: sourceProject.id, name: sourceProject.name }],
+							next_cursor: null,
+						})
+					: ok({ items: [{ id: PID, name: 'Demo' }], next_cursor: 'page-2' });
+			}
+			const items = [
+				{ id: PID, name: 'Demo' },
+				...(sourceProject ? [{ id: sourceProject.id, name: sourceProject.name }] : []),
+			];
+			return ok({ items, next_cursor: null });
+		}
+		if (sourceProject && url.endsWith(`/projects/${sourceProject.id}`) && method === 'GET') {
+			if (slowRole) await new Promise((resolve) => setTimeout(resolve, 50));
+			return ok({
+				id: sourceProject.id,
+				name: sourceProject.name,
+				your_role: sourceProject.your_role,
+			});
+		}
+		if (sourceProject && url.includes(`/projects/${sourceProject.id}/integrations`)) {
+			return ok(sourceProject.entries);
+		}
+		if (url.includes(`/projects/${PID}/integrations/import`) && method === 'POST') {
+			return ok(
+				{
+					id: 'imported_1',
+					kind: 'postgres',
+					name: body?.name,
+					enabled: true,
+					current_version: 1,
+					created_by: 'u',
+					created_at: '',
+					updated_at: '',
+					config: {},
+				},
+				201,
+			);
 		}
 		if (url.includes(`/projects/${PID}/integrations/`)) {
 			const iid = url.split(`/projects/${PID}/integrations/`)[1];
@@ -576,5 +636,110 @@ describe('OrgIntegrationsDialog', () => {
 			expect(post!.url).not.toContain('/projects/');
 			expect(post!.body).toMatchObject({ kind: 'postgres', name: 'warehouse' });
 		});
+	});
+});
+
+describe('ProjectIntegrationsDialog — import from another project', () => {
+	const SOURCE = {
+		id: 'p_2',
+		name: 'Analytics',
+		your_role: 'admin',
+		entries: [entry({ id: 'i_src', name: 'prod-db' })],
+	};
+
+	async function openImport(user: ReturnType<typeof userEvent.setup>) {
+		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
+		await user.click(await screen.findByRole('button', { name: /Import from another project/ }));
+		await user.type(screen.getByRole('combobox', { name: 'Source project' }), 'Analytics');
+		await user.click(await screen.findByRole('option', { name: 'Analytics' }));
+	}
+
+	it('POSTs to …/integrations/import with the picked source and name', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE });
+		await openImport(user);
+
+		await user.click(await screen.findByTestId('import-source-row'));
+		const nameField = screen.getByLabelText('Name in this project');
+		await user.clear(nameField);
+		await user.type(nameField, 'analytics-db');
+		await user.click(screen.getByRole('button', { name: 'Import integration' }));
+
+		await waitFor(() => {
+			const post = calls.find((c) => c.method === 'POST' && c.url.includes('/import'));
+			expect(post).toBeTruthy();
+			expect(post!.url).toContain(`/projects/${PID}/integrations/import`);
+			expect(post!.body).toEqual({
+				source_project_id: 'p_2',
+				source_integration_id: 'i_src',
+				name: 'analytics-db',
+			});
+		});
+	});
+
+	it('offers projects from every /projects page, not just the first', async () => {
+		const user = userEvent.setup();
+		setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE, pagedProjects: true });
+		await openImport(user);
+		expect(await screen.findByTestId('import-source-row')).toBeInTheDocument();
+	});
+
+	it('a cursor that never advances fails the picker loudly, not with a partial roster', async () => {
+		const user = userEvent.setup();
+		setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE, loopingProjects: true });
+		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
+		await user.click(await screen.findByRole('button', { name: /Import from another project/ }));
+		expect(await screen.findByText(/Could not load the project list/)).toBeInTheDocument();
+		expect(screen.queryByRole('combobox', { name: 'Source project' })).not.toBeInTheDocument();
+	});
+
+	it('never shows the pick/submit form before the source role resolves', async () => {
+		const user = userEvent.setup();
+		setup(
+			{},
+			{
+				kinds: [postgresKind],
+				entries: [],
+				sourceProject: { ...SOURCE, your_role: 'viewer' },
+				slowRole: true,
+			},
+		);
+		await openImport(user);
+		// While the role check is in flight, nothing selectable renders…
+		expect(screen.queryByTestId('import-source-row')).not.toBeInTheDocument();
+		// …and a viewer lands on the explanation, never a submittable form.
+		expect(await screen.findByText(/on both projects/)).toBeInTheDocument();
+		expect(screen.queryByTestId('import-source-row')).not.toBeInTheDocument();
+	});
+
+	it('explains that admin is required on the source project', async () => {
+		const user = userEvent.setup();
+		setup(
+			{},
+			{
+				kinds: [postgresKind],
+				entries: [],
+				sourceProject: { ...SOURCE, your_role: 'viewer' },
+			},
+		);
+		await openImport(user);
+		expect(await screen.findByText(/on both projects/)).toBeInTheDocument();
+		expect(screen.queryByTestId('import-source-row')).not.toBeInTheDocument();
+	});
+
+	it('does not offer the import entry point in the org dialog', async () => {
+		const user = userEvent.setup();
+		makeFetch({ kinds: [postgresKind], entries: [], orgEntries: [] });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<OrgIntegrationsDialog isOpen onClose={vi.fn()} />, {
+			wrapper: ({ children }: { children: ReactNode }) => (
+				<QueryClientProvider client={client}>{children}</QueryClientProvider>
+			),
+		});
+		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
+		expect(await screen.findAllByTestId('kind-card')).not.toHaveLength(0);
+		expect(
+			screen.queryByRole('button', { name: /Import from another project/ }),
+		).not.toBeInTheDocument();
 	});
 });

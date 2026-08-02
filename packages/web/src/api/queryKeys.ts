@@ -11,6 +11,8 @@ export const userKeys = {
 export const projectKeys = {
 	all: ['projects'] as const,
 	list: () => [...projectKeys.all, 'list'] as const,
+	/** Full multi-page roster for pickers; distinct from the first-page `list`. */
+	pickerList: () => [...projectKeys.all, 'list', 'all'] as const,
 	detail: (projectId: string) => [...projectKeys.all, 'detail', projectId] as const,
 	members: (projectId: string) => [...projectKeys.all, 'members', projectId] as const,
 	secrets: (projectId: string) => [...projectKeys.all, 'secrets', projectId] as const,

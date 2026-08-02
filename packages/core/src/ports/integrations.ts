@@ -159,6 +159,11 @@ export type TestIntegrationRequest =
 	| { kind: string; config: Record<string, unknown> }
 	| { id: IntegrationId };
 
+export interface CopyIntegrationOptions {
+	/** Name for the copy; defaults to the source instance's name. */
+	name?: string;
+}
+
 export interface SessionRenderContext {
 	sessionId: SessionId;
 	principal: { userId: UserId; email: string };
@@ -210,6 +215,21 @@ export interface IntegrationsProvider {
 		page?: IntegrationVersionPageRequest,
 	): Promise<IntegrationVersionPage>;
 	test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult>;
+	/**
+	 * Copies the source integration's CURRENT config into `targetProjectId` as a
+	 * new integration (history starts at version 1). Secret fields are decrypted
+	 * and re-sealed for the destination — envelopes are bound to their head path,
+	 * so a byte copy could never decrypt — which is why this is a server-side
+	 * operation and not a client GET+POST (reads always redact). The API layer
+	 * must gate BOTH projects; the provider carries no authorization.
+	 */
+	copy(
+		sourceProjectId: ProjectId,
+		id: IntegrationId,
+		targetProjectId: ProjectId,
+		options: CopyIntegrationOptions,
+		actor: UserId,
+	): Promise<IntegrationDetail>;
 	/**
 	 * Server-only render path. Failures name the instance but no values and abort
 	 * provisioning rather than starting a sandbox with partial configuration.

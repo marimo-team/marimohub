@@ -6,6 +6,7 @@ import {
 	Database,
 	FlaskConical,
 	Flame,
+	FolderInput,
 	HardDrive,
 	Library,
 	Network,
@@ -19,6 +20,7 @@ import {
 } from 'lucide-react';
 import {
 	Button,
+	ComboBox,
 	ConfirmDialog,
 	DialogModal,
 	IconButton,
@@ -36,9 +38,12 @@ import type { JsonSchemaNode, UiHints } from '@/components/form/schema-form';
 import {
 	useCreateIntegration,
 	useDeleteIntegration,
+	useImportIntegration,
 	useIntegrationDetailQuery,
 	useIntegrationKindsQuery,
 	useIntegrationsQuery,
+	useProjectPickerQuery,
+	useProjectRoleQuery,
 	useTestIntegration,
 	useUpdateIntegration,
 } from '@/api/hooks';
@@ -120,6 +125,7 @@ function getKindPresentation(kind: IntegrationKind | undefined) {
 type View =
 	| { mode: 'list' }
 	| { mode: 'catalog' }
+	| { mode: 'import' }
 	| { mode: 'create'; kind: IntegrationKind }
 	| { mode: 'edit'; entry: IntegrationEntry };
 
@@ -179,13 +185,15 @@ function IntegrationsDialog({
 	const title =
 		view.mode === 'catalog'
 			? 'Add integration'
-			: view.mode === 'create'
-				? `Add ${view.kind.title}`
-				: view.mode === 'edit'
-					? `Edit ${view.entry.name}`
-					: scope === 'org'
-						? 'Org integrations'
-						: 'Integrations';
+			: view.mode === 'import'
+				? 'Import integration'
+				: view.mode === 'create'
+					? `Add ${view.kind.title}`
+					: view.mode === 'edit'
+						? `Edit ${view.entry.name}`
+						: scope === 'org'
+							? 'Org integrations'
+							: 'Integrations';
 
 	return (
 		<DialogModal
@@ -199,7 +207,13 @@ function IntegrationsDialog({
 					<button
 						type="button"
 						className="flex w-fit items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-						onClick={() => setView(view.mode === 'create' ? { mode: 'catalog' } : { mode: 'list' })}
+						onClick={() =>
+							setView(
+								view.mode === 'create' || view.mode === 'import'
+									? { mode: 'catalog' }
+									: { mode: 'list' },
+							)
+						}
 					>
 						<ArrowLeft className="size-3.5" aria-hidden />
 						Back
@@ -225,7 +239,16 @@ function IntegrationsDialog({
 						onEdit={(entry) => setView({ mode: 'edit', entry })}
 					/>
 				) : view.mode === 'catalog' ? (
-					<CatalogView kinds={kinds} onPick={(kind) => setView({ mode: 'create', kind })} />
+					<CatalogView
+						kinds={kinds}
+						onPick={(kind) => setView({ mode: 'create', kind })}
+						onImport={scope === 'org' ? undefined : () => setView({ mode: 'import' })}
+					/>
+				) : view.mode === 'import' ? (
+					// Unreachable for the org scope: the catalog never offers Import there.
+					scope !== 'org' ? (
+						<ImportView pid={scope.pid} kinds={kinds} onDone={() => setView({ mode: 'list' })} />
+					) : null
 				) : view.mode === 'create' ? (
 					<EditorView scope={scope} kind={view.kind} onDone={() => setView({ mode: 'list' })} />
 				) : (
@@ -447,9 +470,11 @@ function ListView({
 function CatalogView({
 	kinds,
 	onPick,
+	onImport,
 }: {
 	kinds: IntegrationKind[];
 	onPick: (kind: IntegrationKind) => void;
+	onImport?: () => void;
 }) {
 	const [query, setQuery] = useState('');
 	const [category, setCategory] = useState<'all' | IntegrationCategory>('all');
@@ -470,7 +495,7 @@ function CatalogView({
 	return (
 		<>
 			<div className="flex flex-col gap-3 border-b pb-4">
-				<div>
+				<div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
 					<SearchField
 						aria-label="Search integration catalog"
 						placeholder="Search by name, category, or package…"
@@ -478,6 +503,12 @@ function CatalogView({
 						onChange={setQuery}
 						className="w-full sm:max-w-md"
 					/>
+					{onImport && (
+						<Button variant="ghost" onPress={onImport} className="shrink-0">
+							<FolderInput className="size-4" aria-hidden />
+							Import from another project
+						</Button>
+					)}
 				</div>
 				<fieldset className="flex flex-wrap gap-2">
 					<legend className="sr-only">Filter integration categories</legend>
@@ -571,6 +602,174 @@ function CatalogView({
 				</ul>
 			)}
 		</>
+	);
+}
+
+function ImportView({
+	pid,
+	kinds,
+	onDone,
+}: {
+	pid: string;
+	kinds: IntegrationKind[];
+	onDone: () => void;
+}) {
+	const [projectInput, setProjectInput] = useState('');
+	const [sourcePid, setSourcePid] = useState<string>();
+	const [sourceEntry, setSourceEntry] = useState<IntegrationEntry>();
+	const [name, setName] = useState('');
+	const [nameError, setNameError] = useState<string>();
+	const projectsQuery = useProjectPickerQuery(true);
+	const sourceProject = useProjectRoleQuery(sourcePid);
+	const isSourceAdmin = sourceProject.data?.your_role === 'admin';
+	// Entries (and with them the pick/submit form) wait for a RESOLVED admin
+	// role — otherwise a viewer could select and submit before the role check
+	// lands and get a failed POST instead of the explanation below.
+	const entriesQuery = useIntegrationsQuery({ pid: sourcePid ?? '' }, isSourceAdmin);
+	const importIntegration = useImportIntegration(pid);
+	const kindsByName = new Map(kinds.map((kind) => [kind.kind, kind]));
+
+	const projectOptions = (projectsQuery.data ?? [])
+		.filter((p) => p.id !== pid)
+		.filter((p) => p.name.toLowerCase().includes(projectInput.trim().toLowerCase()))
+		.map((p) => ({ id: p.id, textValue: p.name }));
+
+	// Only the source project's own instances: inherited org entries already
+	// reach the destination through inheritance.
+	const entries = (entriesQuery.data ?? []).filter((e) => e.scope !== 'org');
+
+	const pickProject = (id: string) => {
+		setSourcePid(id);
+		setSourceEntry(undefined);
+		setProjectInput(projectsQuery.data?.find((p) => p.id === id)?.name ?? id);
+	};
+
+	const submit = async () => {
+		if (!sourcePid || !sourceEntry) return;
+		const trimmed = name.trim();
+		if (!NAME_RE.test(trimmed)) {
+			setNameError('Lowercase letters, digits, and hyphens; starting with a letter.');
+			return;
+		}
+		setNameError(undefined);
+		try {
+			await importIntegration.mutateAsync({
+				source_project_id: sourcePid,
+				source_integration_id: sourceEntry.id,
+				name: trimmed,
+			});
+			toast.success(`Imported ${trimmed}`);
+			onDone();
+		} catch (err) {
+			toastError(err);
+		}
+	};
+
+	return (
+		<div className="flex flex-col gap-4">
+			<p className="max-w-3xl text-muted-foreground">
+				Copy an integration's current config from a project you administer. Secrets are re-encrypted
+				for this project; the copy starts its own version history.
+			</p>
+			{/* An errored roster must not masquerade as "no matching projects". */}
+			{projectsQuery.isError ? (
+				<p className="text-destructive">Could not load the project list. Go back and retry.</p>
+			) : (
+				<ComboBox
+					label="Source project"
+					placeholder="Search projects…"
+					inputValue={projectInput}
+					onInputChange={(value) => {
+						setProjectInput(value);
+						setSourcePid(undefined);
+						setSourceEntry(undefined);
+					}}
+					options={projectOptions}
+					onSelect={pickProject}
+					renderOption={(option) => <span className="truncate text-sm">{option.textValue}</span>}
+					emptyState={
+						projectsQuery.data === undefined ? 'Loading projects…' : 'No matching projects'
+					}
+				/>
+			)}
+
+			{sourcePid && sourceProject.data && !isSourceAdmin ? (
+				<p className="text-muted-foreground">
+					You need the <code>admin</code> role on both projects to import an integration.
+				</p>
+			) : sourcePid && (entriesQuery.isError || sourceProject.isError) ? (
+				<p className="text-destructive">Could not load that project's integrations.</p>
+			) : sourcePid && isSourceAdmin && entriesQuery.data !== undefined ? (
+				entries.length === 0 ? (
+					<p className="text-muted-foreground">That project has no integrations of its own.</p>
+				) : (
+					<fieldset className="flex flex-col gap-2">
+						<legend className="pb-1 text-xs font-medium text-muted-foreground">
+							Integration to copy
+						</legend>
+						<ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+							{entries.map((entry) => {
+								const kind = kindsByName.get(entry.kind);
+								const presentation = getKindPresentation(kind);
+								const { Icon } = presentation;
+								const selected = sourceEntry?.id === entry.id;
+								return (
+									<li key={entry.id}>
+										<button
+											type="button"
+											data-testid="import-source-row"
+											aria-pressed={selected}
+											onClick={() => {
+												setSourceEntry(entry);
+												setName(entry.name);
+												setNameError(undefined);
+											}}
+											className={`flex w-full items-center gap-3 rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-primary/40 ring-1 ring-primary/30' : 'border-input'}`}
+										>
+											<span
+												className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${presentation.iconClassName}`}
+											>
+												<Icon className="size-4.5" aria-hidden />
+											</span>
+											<span className="flex min-w-0 flex-col">
+												<code className="truncate text-xs font-medium">{entry.name}</code>
+												<span className="truncate text-xs text-muted-foreground">
+													{kind?.title ?? entry.kind}
+												</span>
+											</span>
+										</button>
+									</li>
+								);
+							})}
+						</ul>
+					</fieldset>
+				)
+			) : sourcePid ? (
+				<Skeleton className="h-16" />
+			) : null}
+
+			{sourceEntry && (
+				<form
+					className="flex flex-col gap-4 border-t pt-4"
+					onSubmit={(e) => {
+						e.preventDefault();
+						void submit();
+					}}
+				>
+					<TextField
+						label="Name in this project"
+						value={name}
+						onChange={setName}
+						error={nameError}
+					/>
+					<div className="flex justify-end">
+						<Button type="submit" variant="primary" isDisabled={importIntegration.isPending}>
+							{importIntegration.isPending ? 'Importing…' : 'Import integration'}
+						</Button>
+					</div>
+				</form>
+			)}
+		</div>
 	);
 }
 

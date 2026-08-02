@@ -491,6 +491,67 @@ export function useDeleteIntegration(scope: IntegrationsScope) {
 	);
 }
 
+/** Copies an integration from another project; the server re-encrypts secrets. */
+export function useImportIntegration(projectId: string) {
+	return useApiMutation(
+		(body: { source_project_id: string; source_integration_id: string; name?: string }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/integrations/import', {
+					params: { path: { pid: projectId } },
+					body,
+				}),
+			),
+		() => [projectKeys.integrations(projectId)],
+	);
+}
+
+/**
+ * Non-suspense project list for pickers rendered inside dialogs. Walks every
+ * page (unlike the first-page home list) so the roster is COMPLETE — a
+ * truncated result would silently hide older projects from the picker. The
+ * loop is bounded by a cycle guard instead of a page cap: a repeated cursor
+ * (the realistic paging bug) fails the query loudly rather than truncating.
+ */
+export function useProjectPickerQuery(enabled: boolean) {
+	return useQuery({
+		queryKey: projectKeys.pickerList(),
+		enabled,
+		queryFn: async () => {
+			const items = [];
+			const followed = new Set<string>();
+			let cursor: string | undefined;
+			do {
+				const data = await apiData(
+					apiClient.GET('/api/v1/projects', {
+						params: { query: { limit: 500, ...(cursor ? { cursor } : {}) } },
+					}),
+				);
+				items.push(...data.items);
+				cursor = data.next_cursor ?? undefined;
+				if (cursor !== undefined) {
+					if (followed.has(cursor)) {
+						throw new Error('Project listing did not advance; refusing a partial roster.');
+					}
+					followed.add(cursor);
+				}
+			} while (cursor !== undefined);
+			return items;
+		},
+	});
+}
+
+/** Non-suspense project detail, used to check the caller's role before importing. */
+export function useProjectRoleQuery(projectId: string | undefined) {
+	return useQuery({
+		queryKey: projectKeys.detail(projectId ?? ''),
+		enabled: Boolean(projectId),
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}', { params: { path: { pid: projectId ?? '' } } }),
+			),
+	});
+}
+
 /** Tests either an unsaved config or a stored integration by id. */
 export function useTestIntegration(scope: IntegrationsScope) {
 	return useMutation({
