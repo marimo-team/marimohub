@@ -22,6 +22,9 @@ export const projectKeys = {
 export const integrationKeys = {
 	/** Deployment-wide catalog; kind schemas are static for a deployment. */
 	kinds: () => ['integration-kinds'] as const,
+	/** Org-wide instances (super-admin managed, inherited by every project). */
+	org: () => ['org-integrations'] as const,
+	orgDetail: (integrationId: string) => ['org-integrations', integrationId] as const,
 };
 
 export const notebookKeys = {

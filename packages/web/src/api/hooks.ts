@@ -358,18 +358,44 @@ export function useIntegrationKindsQuery(enabled = true) {
 	});
 }
 
+export type IntegrationsScope = { pid: string } | 'org';
+
+function integrationsListKey(scope: IntegrationsScope) {
+	return scope === 'org' ? integrationKeys.org() : projectKeys.integrations(scope.pid);
+}
+
+/**
+ * Keys stale after any mutation in the scope. Org changes also invalidate every
+ * project's list — inherited entries are embedded there.
+ */
+function integrationsInvalidations(scope: IntegrationsScope, integrationId?: string) {
+	const detail =
+		integrationId === undefined
+			? []
+			: [
+					scope === 'org'
+						? integrationKeys.orgDetail(integrationId)
+						: projectKeys.integration(scope.pid, integrationId),
+				];
+	return scope === 'org'
+		? [integrationKeys.org(), [...projectKeys.all, 'integrations'], ...detail]
+		: [projectKeys.integrations(scope.pid), ...detail];
+}
+
 /** Returns `null` when integrations are disabled for this deployment. */
-export function useProjectIntegrationsQuery(projectId: string, enabled = true) {
+export function useIntegrationsQuery(scope: IntegrationsScope, enabled = true) {
 	return useQuery({
-		queryKey: projectKeys.integrations(projectId),
+		queryKey: integrationsListKey(scope),
 		enabled,
 		retry: (count, err) => !isIntegrationsDisabledError(err) && count < 2,
 		queryFn: async () => {
 			try {
 				return await apiData(
-					apiClient.GET('/api/v1/projects/{pid}/integrations', {
-						params: { path: { pid: projectId } },
-					}),
+					scope === 'org'
+						? apiClient.GET('/api/v1/org/integrations')
+						: apiClient.GET('/api/v1/projects/{pid}/integrations', {
+								params: { path: { pid: scope.pid } },
+							}),
 				);
 			} catch (err) {
 				if (isIntegrationsDisabledError(err)) return null;
@@ -380,15 +406,21 @@ export function useProjectIntegrationsQuery(projectId: string, enabled = true) {
 }
 
 /** Fetches the current config with secret fields redacted. */
-export function useIntegrationDetailQuery(projectId: string, integrationId: string | undefined) {
+export function useIntegrationDetailQuery(scope: IntegrationsScope, integrationId?: string) {
 	return useQuery({
-		queryKey: projectKeys.integration(projectId, integrationId ?? ''),
+		queryKey:
+			scope === 'org'
+				? integrationKeys.orgDetail(integrationId ?? '')
+				: projectKeys.integration(scope.pid, integrationId ?? ''),
 		enabled: Boolean(integrationId),
 		queryFn: async () => {
+			const iid = integrationId ?? '';
 			const result = await apiDataWithResponse(
-				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}', {
-					params: { path: { pid: projectId, iid: integrationId ?? '' } },
-				}),
+				scope === 'org'
+					? apiClient.GET('/api/v1/org/integrations/{iid}', { params: { path: { iid } } })
+					: apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}', {
+							params: { path: { pid: scope.pid, iid } },
+						}),
 			);
 			return {
 				detail: result.data,
@@ -398,20 +430,22 @@ export function useIntegrationDetailQuery(projectId: string, integrationId: stri
 	});
 }
 
-export function useCreateIntegration(projectId: string) {
+export function useCreateIntegration(scope: IntegrationsScope) {
 	return useApiMutation(
 		(body: { kind: string; name: string; config: Record<string, unknown> }) =>
 			apiData(
-				apiClient.POST('/api/v1/projects/{pid}/integrations', {
-					params: { path: { pid: projectId } },
-					body,
-				}),
+				scope === 'org'
+					? apiClient.POST('/api/v1/org/integrations', { body })
+					: apiClient.POST('/api/v1/projects/{pid}/integrations', {
+							params: { path: { pid: scope.pid } },
+							body,
+						}),
 			),
-		() => [projectKeys.integrations(projectId)],
+		() => integrationsInvalidations(scope),
 	);
 }
 
-export function useUpdateIntegration(projectId: string) {
+export function useUpdateIntegration(scope: IntegrationsScope) {
 	return useApiMutation(
 		({
 			id,
@@ -426,42 +460,48 @@ export function useUpdateIntegration(projectId: string) {
 			change_note?: string;
 		}) =>
 			apiData(
-				apiClient.PATCH('/api/v1/projects/{pid}/integrations/{iid}', {
-					params: {
-						path: { pid: projectId, iid: id },
-						header: etag ? { 'if-match': etag } : {},
-					},
-					body,
-				}),
+				scope === 'org'
+					? apiClient.PATCH('/api/v1/org/integrations/{iid}', {
+							params: { path: { iid: id }, header: etag ? { 'if-match': etag } : {} },
+							body,
+						})
+					: apiClient.PATCH('/api/v1/projects/{pid}/integrations/{iid}', {
+							params: {
+								path: { pid: scope.pid, iid: id },
+								header: etag ? { 'if-match': etag } : {},
+							},
+							body,
+						}),
 			),
-		(variables) => [
-			projectKeys.integrations(projectId),
-			projectKeys.integration(projectId, variables.id),
-		],
+		(variables) => integrationsInvalidations(scope, variables.id),
 	);
 }
 
-export function useDeleteIntegration(projectId: string) {
+export function useDeleteIntegration(scope: IntegrationsScope) {
 	return useApiMutation(
 		(id: string) =>
 			apiData(
-				apiClient.DELETE('/api/v1/projects/{pid}/integrations/{iid}', {
-					params: { path: { pid: projectId, iid: id } },
-				}),
+				scope === 'org'
+					? apiClient.DELETE('/api/v1/org/integrations/{iid}', { params: { path: { iid: id } } })
+					: apiClient.DELETE('/api/v1/projects/{pid}/integrations/{iid}', {
+							params: { path: { pid: scope.pid, iid: id } },
+						}),
 			),
-		() => [projectKeys.integrations(projectId)],
+		() => integrationsInvalidations(scope),
 	);
 }
 
 /** Tests either an unsaved config or a stored integration by id. */
-export function useTestIntegration(projectId: string) {
+export function useTestIntegration(scope: IntegrationsScope) {
 	return useMutation({
 		mutationFn: (body: { kind: string; config: Record<string, unknown> } | { id: string }) =>
 			apiData(
-				apiClient.POST('/api/v1/projects/{pid}/integrations/test', {
-					params: { path: { pid: projectId } },
-					body,
-				}),
+				scope === 'org'
+					? apiClient.POST('/api/v1/org/integrations/test', { body })
+					: apiClient.POST('/api/v1/projects/{pid}/integrations/test', {
+							params: { path: { pid: scope.pid } },
+							body,
+						}),
 			),
 	});
 }

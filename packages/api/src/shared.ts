@@ -4,6 +4,8 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
 	canAct,
 	effectiveRole,
+	ForbiddenError,
+	isSuperAdmin,
 	NotebookId,
 	NotFoundError,
 	NOTEBOOK_STATUSES,
@@ -64,6 +66,16 @@ export async function assertProjectRole(
 	}
 	requireRole(project, subject, min, policy);
 	return project;
+}
+
+/**
+ * Enforce that the caller is a deployment super admin (`MARIMOHUB_SUPER_ADMINS`).
+ * Gates org-scoped resources, which no project role can reach.
+ */
+export function assertSuperAdmin(subject: AuthSubject, policy?: AuthzPolicy): void {
+	if (!isSuperAdmin(subject, policy?.superAdmins)) {
+		throw new ForbiddenError('Requires super admin');
+	}
 }
 
 /** The slice of PolicyConfig the session gates need. */

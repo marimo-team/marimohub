@@ -1,24 +1,30 @@
 ---
-description: Connect data sources to a project — Postgres, PyIceberg catalogs, Trino, PySpark, custom env — rendered into every notebook sandbox.
+description: Configure project and organization data sources for notebook sessions, including PostgreSQL, PyIceberg, Trino, PySpark, and custom environment variables.
 ---
 
-# Project integrations
+# Integrations
 
-Let a **project admin** connect a data source once — a PostgreSQL database, a
-PyIceberg catalog, a Trino cluster, Spark Connect, or arbitrary environment variables — and
-every notebook session in that project receives its **connection config**,
-rendered into environment variables and files inside the sandbox at launch.
-Notebook code never sees the hub's API or storage. The hub injects config, not
-Python libraries: each kind lists the packages its contract assumes (below),
-which you add to the notebook's dependencies like any other package.
+A **project admin** can connect a data source once for one project. A
+[super admin](./auth.md#super-admins-marimohub_super_admins) can connect a data
+source for the whole organization. Supported sources include PostgreSQL,
+PyIceberg catalogs, Trino, Spark Connect, and custom environment variables.
 
-Opt-in: set `MARIMOHUB_INTEGRATIONS=on` (unset/`off` = the routes 404 and
-nothing is injected). Enable it only once **every** replica runs a release that
-preserves unknown session fields — during a mixed-version rolling deploy an
-older replica's heartbeat would strip the session's integration audit pin (the
-two-phase policy in `development_docs/migrations.md`). Configs are
-**versioned**: every save appends an immutable revision, and each session
-records exactly which revisions it launched with.
+Each new, non-ephemeral session receives the applicable connection
+configuration as environment variables and files. Notebook code never accesses
+the hub API or storage. The hub injects configuration, not Python libraries.
+Each kind lists the required packages below. Add those packages to the notebook
+dependencies.
+
+Set `MARIMOHUB_INTEGRATIONS=on` to enable integrations. If it is unset or
+`off`, the routes return `404` and sessions receive no integration
+configuration.
+
+Before you enable integrations, deploy a compatible release to every replica.
+Older replicas do not preserve the integration audit pins in session records.
+See the two-phase policy in `development_docs/migrations.md`.
+
+Integration configuration is versioned. Each save creates an immutable
+revision. Each session records the revisions that it uses.
 
 ## Using an integration in a notebook
 
@@ -126,6 +132,32 @@ can see the list and redacted configs; **`admin`** manages them — as does a
 
 New sessions pick up config changes; running sessions keep what they launched
 with (restart the session to apply).
+
+## Organization-wide integrations
+
+A [super admin](./auth.md#super-admins-marimohub_super_admins) can configure an
+integration once for the whole deployment. Use **Org integrations** in the user
+menu, or use the `/api/v1/org/integrations` API routes.
+
+Each organization integration applies to every project. It supplies
+configuration to new, non-ephemeral sessions in those projects. The project
+integration list shows inherited entries with an **org** badge. These entries
+are read-only in the project. Users with viewer access can see their metadata,
+but not their configuration.
+
+To override an organization integration, create a project integration with the
+same name. The project configuration then supplies new sessions in that
+project. To opt out instead, create the same-name project integration and leave
+it disabled. The list continues to show the inherited entry with an
+**overridden** badge.
+
+An organization integration that fails to render blocks new sessions in each
+project that inherits it. See the [failure model](#failure-model). To unblock one
+project, override the failing integration or opt out. To unblock all projects,
+disable the organization integration.
+
+Configuration changes apply to new sessions. Running sessions keep their
+existing configuration.
 
 ## Secret fields
 

@@ -11,6 +11,7 @@ import {
 import type { IntegrationId, ProjectId, UserId } from '../../ids';
 import { createIntegrationId } from '../../ids';
 import { paths } from '../../paths';
+import type { IntegrationPaths } from '../../paths';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -24,6 +25,7 @@ import type {
 	IntegrationVersionPage,
 	IntegrationVersionPageRequest,
 	KindDescriptor,
+	OrgIntegrationsProvider,
 	SessionRender,
 	SessionRenderContext,
 	TestIntegrationRequest,
@@ -70,6 +72,39 @@ const DEFAULT_VERSION_PAGE_SIZE = 100;
  * stops holding.
  */
 const VERSION_PROBE_SLACK = 32;
+
+/**
+ * Storage location of one integration tier. The machinery below is identical
+ * for both tiers; a scope pins where instances live, what `project_id` a head
+ * must carry (absent for the org tier), and how errors name the tier.
+ */
+interface IntegrationScope {
+	integration: (id: IntegrationId) => IntegrationPaths;
+	prefix: string;
+	nameClaim: (name: string) => string;
+	/** Stamped on and required of every head in the scope; absent for org. */
+	projectId?: ProjectId;
+	/** Locates the scope in user-facing errors, e.g. "in this project". */
+	where: string;
+}
+
+function projectScope(projectId: ProjectId): IntegrationScope {
+	const project = paths.project(projectId);
+	return {
+		integration: project.integration,
+		prefix: project.integrationsPrefix,
+		nameClaim: project.integrationNameClaim,
+		projectId,
+		where: 'in this project',
+	};
+}
+
+const ORG_SCOPE: IntegrationScope = {
+	integration: paths.orgIntegration,
+	prefix: paths.orgIntegrationsPrefix,
+	nameClaim: paths.orgIntegrationNameClaim,
+	where: 'at the org level',
+};
 
 /**
  * A head that no longer matches the caller's `If-Match`, raised from inside a CAS
@@ -126,7 +161,7 @@ function decodeVersionCursor(cursor: string | undefined): number | undefined {
 	return version;
 }
 
-export interface ProjectIntegrationsStoreOptions {
+export interface IntegrationsStoreOptions {
 	bucket: Bucket;
 	registry: IntegrationRegistry;
 	/** Shared managed-secret codec; absence disables secret-bearing configs. */
@@ -140,7 +175,11 @@ export interface ProjectIntegrationsStoreOptions {
 	metrics?: Metrics;
 }
 
-export class ProjectIntegrationsStore implements IntegrationsProvider {
+/**
+ * Scope-generic machinery shared by the project and org tiers. Not exported:
+ * consumers use the tier facades below, which pin the scope.
+ */
+class ScopedIntegrationsStore {
 	private readonly bucket: Bucket;
 	private readonly registry: IntegrationRegistry;
 	private readonly codec?: ManagedSecretCodec;
@@ -148,7 +187,7 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	private readonly now: () => string;
 	private readonly metrics: Metrics;
 
-	constructor(options: ProjectIntegrationsStoreOptions) {
+	constructor(options: IntegrationsStoreOptions) {
 		this.bucket = options.bucket;
 		this.registry = options.registry;
 		this.codec = options.codec;
@@ -163,28 +202,28 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		return this.registry.describeAll().map((d) => (testable ? d : { ...d, supports_test: false }));
 	}
 
-	async list(projectId: ProjectId): Promise<IntegrationEntry[]> {
-		const heads = await this.listHeads(projectId);
-		return heads.map(toEntry).sort((a, b) => a.name.localeCompare(b.name));
+	async list(scope: IntegrationScope): Promise<IntegrationEntry[]> {
+		const heads = await this.listHeads(scope);
+		return heads.map((h) => toEntry(scope, h)).sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	async get(projectId: ProjectId, id: IntegrationId): Promise<IntegrationDetail> {
-		const head = await this.getHead(projectId, id);
-		const { version, config } = await this.loadCurrent(projectId, head);
-		return this.toDetail(head, version, config);
+	async get(scope: IntegrationScope, id: IntegrationId): Promise<IntegrationDetail> {
+		const head = await this.getHead(scope, id);
+		const { version, config } = await this.loadCurrent(scope, head);
+		return this.toDetail(scope, head, version, config);
 	}
 
 	async create(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		input: CreateIntegrationInput,
 		actor: UserId,
 	): Promise<IntegrationDetail> {
 		const def = this.registry.get(input.kind);
 		assertValidIntegrationName(input.name);
-		await this.assertNameFree(projectId, input.name);
+		await this.assertNameFree(scope, input.name);
 
 		const id = createIntegrationId();
-		const config = await this.seal(projectId, id, def, input.config);
+		const config = await this.seal(scope, id, def, input.config);
 		const timestamp = this.now();
 		const version: IntegrationVersionRecord = {
 			schema_version: CURRENT_INTEGRATION_CONFIG_VERSION,
@@ -198,7 +237,7 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		};
 		const head: IntegrationRecord = {
 			id,
-			project_id: projectId,
+			...(scope.projectId !== undefined ? { project_id: scope.projectId } : {}),
 			kind: def.kind,
 			name: input.name,
 			enabled: true,
@@ -207,7 +246,7 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 			created_at: timestamp,
 			updated_at: timestamp,
 		};
-		const integrationPaths = paths.project(projectId).integration(id);
+		const integrationPaths = scope.integration(id);
 		const versionPath = integrationPaths.version(1);
 		// Claimed AFTER the head exists so a rival's `isHolderLive` probe can see it;
 		// the claim key is the atomic arbiter two concurrent creates race on. The
@@ -227,25 +266,25 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 					}),
 				compensate: () => this.bucket.delete(integrationPaths.head),
 			})
-			.step('claim_name', () => this.claimName(projectId, input.name, id))
+			.step('claim_name', () => this.claimName(scope, input.name, id))
 			.run();
-		return this.toDetail(head, version, config);
+		return this.toDetail(scope, head, version, config);
 	}
 
 	async update(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		id: IntegrationId,
 		input: UpdateIntegrationInput,
 		actor: UserId,
 		expectedVersion?: string,
 	): Promise<IntegrationDetail> {
-		const head = await this.getHead(projectId, id);
+		const head = await this.getHead(scope, id);
 		assertVersionMatch(head.updated_at, expectedVersion);
-		const headPath = paths.project(projectId).integration(id).head;
+		const headPath = scope.integration(id).head;
 		// Re-checked at every CAS, not just the read above: a delete that commits its
 		// tombstone underneath this PATCH must fail it (and compensate) rather than
 		// write to a head that is already gone.
-		const parseHead = (raw: unknown) => this.parseHead(projectId, id, raw);
+		const parseHead = (raw: unknown) => this.parseHead(scope, id, raw);
 		const headNotFound = { notFound: () => new NotFoundError(`Integration ${id} not found`) };
 		const newName = input.name !== undefined && input.name !== head.name ? input.name : undefined;
 		if (newName !== undefined) {
@@ -257,14 +296,14 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		// half-applied PATCH — e.g. a committed rename with a rejected config.
 		const { sealed } = await all({
 			nameAvailable: async () => {
-				if (newName !== undefined) await this.assertNameFree(projectId, newName);
+				if (newName !== undefined) await this.assertNameFree(scope, newName);
 			},
 			sealed: async () => {
 				if (input.config === undefined) return;
-				const previous = await this.loadCurrent(projectId, head);
+				const previous = await this.loadCurrent(scope, head);
 				return {
 					def: previous.def,
-					config: await this.seal(projectId, id, previous.def, input.config, previous.config),
+					config: await this.seal(scope, id, previous.def, input.config, previous.config),
 				};
 			},
 		});
@@ -299,17 +338,17 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 						// ordinary PATCH's later CAS into a 412 on any concurrent write.
 						if (expected !== undefined) expected = renamed.updated_at;
 					},
-					compensate: () => this.revertRename(projectId, id, newName, head.name),
+					compensate: () => this.revertRename(scope, id, newName, head.name),
 				})
 				.step('claim_name', {
-					do: () => this.claimName(projectId, newName, id),
-					compensate: () => this.releaseName(projectId, newName, id),
+					do: () => this.claimName(scope, newName, id),
+					compensate: () => this.releaseName(scope, newName, id),
 				});
 		}
 		if (sealed) {
 			transaction.step('append_version', {
 				do: async () => {
-					appended = await this.appendVersion(projectId, head, {
+					appended = await this.appendVersion(scope, head, {
 						schema_version: CURRENT_INTEGRATION_CONFIG_VERSION,
 						kind: sealed.def.kind,
 						kind_schema_version: sealed.def.schemaVersion,
@@ -321,7 +360,7 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 				},
 				compensate: async () => {
 					if (appended !== undefined) {
-						await this.bucket.delete(paths.project(projectId).integration(id).version(appended));
+						await this.bucket.delete(scope.integration(id).version(appended));
 					}
 				},
 			});
@@ -353,9 +392,9 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 			if (err instanceof StaleHeadError) throw err.precondition;
 			throw err;
 		}
-		if (newName !== undefined) await this.releaseName(projectId, head.name, id);
-		const { version, config } = await this.loadCurrent(projectId, updated!);
-		return this.toDetail(updated!, version, config);
+		if (newName !== undefined) await this.releaseName(scope, head.name, id);
+		const { version, config } = await this.loadCurrent(scope, updated!);
+		return this.toDetail(scope, updated!, version, config);
 	}
 
 	/**
@@ -370,14 +409,14 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	 * committed between the two CASes.
 	 */
 	private async revertRename(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		id: IntegrationId,
 		fromName: string,
 		toName: string,
 	): Promise<void> {
 		await mutateObject(
 			this.bucket,
-			paths.project(projectId).integration(id).head,
+			scope.integration(id).head,
 			(raw) => parseStored(IntegrationRecordSchema, raw, `integration ${id}`),
 			(current) =>
 				current.name === fromName && !isTombstoned(current)
@@ -398,16 +437,26 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	 * re-checks the token against the winner, so a stale `If-Match` answers 412
 	 * instead of erasing an edit the caller never saw.
 	 */
-	async delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<void> {
-		const integrationPaths = paths.project(projectId).integration(id);
+	async delete(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		expectedVersion?: string,
+	): Promise<boolean> {
+		const integrationPaths = scope.integration(id);
 		let name: string | undefined;
+		// Whether a head was actually removed (or an interrupted removal resumed) —
+		// an absent id (deleted earlier, or living in the OTHER tier) still succeeds
+		// but must not read as a deletion, e.g. in the audit trail.
+		let existed = false;
 		try {
-			name = await this.tombstoneHead(projectId, id, expectedVersion);
+			name = await this.tombstoneHead(scope, id, expectedVersion);
+			existed = name !== undefined;
 		} catch (err) {
 			if (err instanceof StaleHeadError) throw err.precondition;
 			// A head that cannot be parsed has no version to check and nothing to
 			// tombstone, but must still be removable — sweep its objects unguarded.
 			if (!(err instanceof ValidationError)) throw err;
+			existed = true;
 		}
 		const strays = (await listAllObjects(this.bucket, integrationPaths.base))
 			.map((o) => o.key)
@@ -418,7 +467,8 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		// the surviving objects in a directory no listing reports, so nothing would
 		// ever reclaim them.
 		await this.bucket.delete(integrationPaths.head);
-		if (name !== undefined) await this.releaseName(projectId, name, id);
+		if (name !== undefined) await this.releaseName(scope, name, id);
+		return existed;
 	}
 
 	/**
@@ -426,11 +476,11 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	 * is no head left to tombstone.
 	 */
 	private async tombstoneHead(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		id: IntegrationId,
 		expectedVersion: string | undefined,
 	): Promise<string | undefined> {
-		const headPath = paths.project(projectId).integration(id).head;
+		const headPath = scope.integration(id).head;
 		return withCasRetry(async () => {
 			const existing = await this.bucket.get(headPath);
 			if (!existing) return;
@@ -440,7 +490,7 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 			if (isTombstoned(raw)) {
 				return parseStored(IntegrationRecordSchema, raw, `integration ${id}`).name;
 			}
-			const head = this.parseHead(projectId, id, raw);
+			const head = this.parseHead(scope, id, raw);
 			assertHeadUnchanged(head, expectedVersion);
 			await this.bucket.put(headPath, JSON.stringify({ ...head, deleted_at: this.now() }), {
 				onlyIfEtagMatches: existing.etag,
@@ -450,12 +500,12 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	}
 
 	async listVersions(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		id: IntegrationId,
 		page: IntegrationVersionPageRequest = { limit: DEFAULT_VERSION_PAGE_SIZE },
 	): Promise<IntegrationVersionPage> {
-		const head = await this.getHead(projectId, id);
-		const integrationPaths = paths.project(projectId).integration(id);
+		const head = await this.getHead(scope, id);
+		const integrationPaths = scope.integration(id);
 		const after = decodeVersionCursor(page.cursor);
 		// `current_version` only ever grows, so every cursor this store mints is at
 		// or below the head it is read against; one above it is forged (or belongs
@@ -511,14 +561,14 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		};
 	}
 
-	async test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult> {
+	async test(scope: IntegrationScope, request: TestIntegrationRequest): Promise<TestResult> {
 		let def: IntegrationDefinition;
 		let resolved: Record<string, unknown>;
 		if ('id' in request) {
-			const head = await this.getHead(projectId, request.id);
-			const current = await this.loadCurrent(projectId, head);
+			const head = await this.getHead(scope, request.id);
+			const current = await this.loadCurrent(scope, head);
 			def = current.def;
-			resolved = await this.open(projectId, head.id, def, current.config);
+			resolved = await this.open(scope, head.id, def, current.config);
 		} else {
 			def = this.registry.get(request.kind);
 			// Run unsaved configs through the stored-config path without touching the bucket.
@@ -547,50 +597,45 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		return def.testConnection(parsed, probe);
 	}
 
-	async resolveForSession(
-		projectId: ProjectId,
+	/**
+	 * Loads, decrypts, validates, and renders one enabled head into the given
+	 * project's session. The storage scope and the render target are independent:
+	 * an org-scoped instance still renders with the session's project id.
+	 */
+	async renderOne(
+		scope: IntegrationScope,
+		head: IntegrationRecord,
+		renderProjectId: ProjectId,
 		context: SessionRenderContext,
-	): Promise<SessionRender | undefined> {
-		const heads = (await this.listHeads(projectId))
-			.filter((h) => h.enabled)
-			.sort((a, b) => a.name.localeCompare(b.name));
-		if (heads.length === 0) return undefined;
-
-		const rendered = await mapWithConcurrency(
-			heads,
-			BUCKET_SCAN_CONCURRENCY,
-			async (head): Promise<RenderedIntegration> => {
-				const { def, version, config } = await this.loadCurrent(projectId, head);
-				const resolved = await this.open(projectId, head.id, def, config);
-				const parsed = def.configSchema.safeParse(resolved);
-				if (!parsed.success) {
-					// Never surface the Zod issues here — the resolved config is plaintext.
-					throw new ValidationError(
-						`Integration "${head.name}" has a stored config that no longer matches ` +
-							`kind "${head.kind}" — edit and re-save it.`,
-					);
-				}
-				return {
-					id: head.id,
-					name: head.name,
-					kind: head.kind,
-					version: version.version,
-					requirements: def.requirements,
-					output: def.render({
-						config: parsed.data,
-						instanceName: head.name,
-						projectId,
-						principal: context.principal,
-						session: { sessionId: context.sessionId },
-					}),
-				};
-			},
-		);
-		return bundleIntegrations(rendered, context.sessionId);
+	): Promise<RenderedIntegration> {
+		const { def, version, config } = await this.loadCurrent(scope, head);
+		const resolved = await this.open(scope, head.id, def, config);
+		const parsed = def.configSchema.safeParse(resolved);
+		if (!parsed.success) {
+			// Never surface the Zod issues here — the resolved config is plaintext.
+			throw new ValidationError(
+				`Integration "${head.name}" has a stored config that no longer matches ` +
+					`kind "${head.kind}" — edit and re-save it.`,
+			);
+		}
+		return {
+			id: head.id,
+			name: head.name,
+			kind: head.kind,
+			version: version.version,
+			requirements: def.requirements,
+			output: def.render({
+				config: parsed.data,
+				instanceName: head.name,
+				projectId: renderProjectId,
+				principal: context.principal,
+				session: { sessionId: context.sessionId },
+			}),
+		};
 	}
 
-	private async listHeads(projectId: ProjectId): Promise<IntegrationRecord[]> {
-		const prefix = paths.project(projectId).integrationsPrefix;
+	async listHeads(scope: IntegrationScope): Promise<IntegrationRecord[]> {
+		const prefix = scope.prefix;
 		const dirs: string[] = [];
 		let cursor: string | undefined;
 		do {
@@ -608,32 +653,32 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 			const head = parseStored(IntegrationRecordSchema, raw, `${dir}integration.json`);
 			const rawId = dir.slice(prefix.length, -1);
 			if (!rawId) throw new ValidationError(`Invalid integration path "${dir}".`);
-			this.assertHeadIdentity(projectId, rawId as IntegrationId, head);
+			this.assertHeadIdentity(scope, rawId as IntegrationId, head);
 			return head;
 		});
 		return heads.filter((h) => h !== null);
 	}
 
-	private async getHead(projectId: ProjectId, id: IntegrationId): Promise<IntegrationRecord> {
-		const body = await this.bucket.get(paths.project(projectId).integration(id).head);
+	private async getHead(scope: IntegrationScope, id: IntegrationId): Promise<IntegrationRecord> {
+		const body = await this.bucket.get(scope.integration(id).head);
 		if (!body) throw new NotFoundError(`Integration ${id} not found`);
-		return this.parseHead(projectId, id, await body.json());
+		return this.parseHead(scope, id, await body.json());
 	}
 
 	/** A tombstoned head is gone as far as every reader and writer is concerned. */
-	private parseHead(projectId: ProjectId, id: IntegrationId, raw: unknown): IntegrationRecord {
+	private parseHead(scope: IntegrationScope, id: IntegrationId, raw: unknown): IntegrationRecord {
 		if (isTombstoned(raw)) throw new NotFoundError(`Integration ${id} not found`);
 		const head = parseStored(IntegrationRecordSchema, raw, `integration ${id}`);
-		this.assertHeadIdentity(projectId, id, head);
+		this.assertHeadIdentity(scope, id, head);
 		return head;
 	}
 
 	private async getVersion(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		head: IntegrationRecord,
 		version: number,
 	): Promise<IntegrationVersionRecord> {
-		const key = paths.project(projectId).integration(head.id).version(version);
+		const key = scope.integration(head.id).version(version);
 		const body = await this.bucket.get(key);
 		if (!body) throw new NotFoundError(`Integration ${head.id} version ${version} not found`);
 		const record = parseStored(IntegrationVersionRecordSchema, await body.json(), key);
@@ -651,15 +696,18 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		return record;
 	}
 
+	/**
+	 * A head must match both its id and its scope: a project head carries that
+	 * project's id, an org head carries none. A record reached through the wrong
+	 * tier's path fails here rather than leaking across scopes.
+	 */
 	private assertHeadIdentity(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		id: IntegrationId,
 		head: IntegrationRecord,
 	): void {
-		if (head.id !== id || head.project_id !== projectId) {
-			throw new ValidationError(
-				`Integration ${id} metadata does not match its project storage path.`,
-			);
+		if (head.id !== id || head.project_id !== scope.projectId) {
+			throw new ValidationError(`Integration ${id} metadata does not match its storage path.`);
 		}
 		assertValidIntegrationName(head.name);
 	}
@@ -679,12 +727,12 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 
 	/** Appends create-if-absent; concurrent writers retry at the next version. */
 	private async appendVersion(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		head: IntegrationRecord,
 		record: Omit<IntegrationVersionRecord, 'version'>,
 	): Promise<number> {
 		let version = head.current_version + 1;
-		const integrationPaths = paths.project(projectId).integration(head.id);
+		const integrationPaths = scope.integration(head.id);
 		return withCasRetry(async () => {
 			try {
 				await this.bucket.put(
@@ -702,17 +750,17 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		});
 	}
 
-	private async assertNameFree(projectId: ProjectId, name: string): Promise<void> {
-		const heads = await this.listHeads(projectId);
+	private async assertNameFree(scope: IntegrationScope, name: string): Promise<void> {
+		const heads = await this.listHeads(scope);
 		if (heads.some((h) => h.name === name)) {
-			throw new ValidationError(`An integration named "${name}" already exists in this project.`);
+			throw new ValidationError(`An integration named "${name}" already exists ${scope.where}.`);
 		}
 	}
 
-	private nameClaimConfig(projectId: ProjectId, name: string) {
+	private nameClaimConfig(scope: IntegrationScope, name: string) {
 		return {
 			bucket: this.bucket,
-			key: paths.project(projectId).integrationNameClaim(name),
+			key: scope.nameClaim(name),
 			serialize: (holder: string | null) =>
 				JSON.stringify({ integration_id: holder, claimed_at: this.now() }),
 			parseHolder: (raw: unknown): string | null => {
@@ -723,13 +771,13 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	}
 
 	// The claim is the atomic name arbiter; the earlier listing check is only a fast path.
-	private async claimName(projectId: ProjectId, name: string, id: IntegrationId): Promise<void> {
+	private async claimName(scope: IntegrationScope, name: string, id: IntegrationId): Promise<void> {
 		const claim = await acquireSingletonClaim(
 			{
-				...this.nameClaimConfig(projectId, name),
+				...this.nameClaimConfig(scope, name),
 				isHolderLive: async (holder) => {
 					try {
-						return (await this.getHead(projectId, holder as IntegrationId)).name === name;
+						return (await this.getHead(scope, holder as IntegrationId)).name === name;
 					} catch {
 						return false;
 					}
@@ -738,16 +786,20 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 			id,
 		);
 		if (!claim.acquired) {
-			throw new ValidationError(`An integration named "${name}" already exists in this project.`);
+			throw new ValidationError(`An integration named "${name}" already exists ${scope.where}.`);
 		}
 	}
 
-	private async releaseName(projectId: ProjectId, name: string, id: IntegrationId): Promise<void> {
-		await releaseSingletonClaim(this.nameClaimConfig(projectId, name), id);
+	private async releaseName(
+		scope: IntegrationScope,
+		name: string,
+		id: IntegrationId,
+	): Promise<void> {
+		await releaseSingletonClaim(this.nameClaimConfig(scope, name), id);
 	}
 
 	private async loadCurrent(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		head: IntegrationRecord,
 	): Promise<{
 		def: IntegrationDefinition;
@@ -755,7 +807,7 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		config: Record<string, unknown>;
 	}> {
 		const def = this.registry.get(head.kind);
-		const version = await this.getVersion(projectId, head, head.current_version);
+		const version = await this.getVersion(scope, head, head.current_version);
 		const config = this.migrated(head.name, def, version);
 		// A secret box outside the kind's registered paths (e.g. a migration that
 		// left a renamed field behind) would dodge redaction and leak ciphertext —
@@ -814,14 +866,14 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	}
 
 	private async seal(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		id: IntegrationId,
 		def: IntegrationDefinition,
 		authoring: Record<string, unknown>,
 		previous?: Record<string, unknown>,
 	): Promise<Record<string, unknown>> {
 		const codec = this.codec;
-		const contextFor = this.secretContext(projectId, id);
+		const contextFor = this.secretContext(scope, id);
 		return sealConfig({
 			schema: def.configSchema,
 			paths: this.registry.secretPathsOf(def.kind),
@@ -844,13 +896,13 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	}
 
 	private async open(
-		projectId: ProjectId,
+		scope: IntegrationScope,
 		id: IntegrationId,
 		def: IntegrationDefinition,
 		stored: Record<string, unknown>,
 	): Promise<Record<string, unknown>> {
 		const codec = this.codec;
-		const contextFor = this.secretContext(projectId, id);
+		const contextFor = this.secretContext(scope, id);
 		return openConfig({
 			stored,
 			paths: this.registry.secretPathsOf(def.kind),
@@ -872,29 +924,185 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 	 * Encryption context: head path + wildcard field path. Stable across version
 	 * bumps and array reorders (never a concrete index or version number), unique
 	 * per integration + field class — a leaked envelope cannot be replayed
-	 * elsewhere.
+	 * elsewhere (including across scopes: org and project head paths differ).
 	 */
-	private secretContext(projectId: ProjectId, id: IntegrationId): (at: string) => string {
-		const base = paths.project(projectId).integration(id).head;
+	private secretContext(scope: IntegrationScope, id: IntegrationId): (at: string) => string {
+		const base = scope.integration(id).head;
 		return (at) => `${base}#${at}`;
 	}
 
 	/** `config` must be the MIGRATED stored config (see `loadCurrent`), so the
 	 *  current kind's secret paths line up and redaction cannot miss a moved field. */
 	private toDetail(
+		scope: IntegrationScope,
 		head: IntegrationRecord,
 		version: IntegrationVersionRecord,
 		config: Record<string, unknown>,
 	): IntegrationDetail {
 		return {
-			...toEntry(head),
+			...toEntry(scope, head),
 			config: redactConfig(config, this.registry.secretPathsOf(head.kind)),
 			...(version.change_note ? { change_note: version.change_note } : {}),
 		};
 	}
 }
 
-function toEntry(head: IntegrationRecord): IntegrationEntry {
+/**
+ * Project-tier facade. Reads (`list`, `resolveForSession`) always merge the org
+ * tier in: org instances are inherited by every project, and a same-name
+ * project instance — enabled or not — shadows the org one, making it both the
+ * per-project override and the opt-out.
+ */
+export class ProjectIntegrationsStore implements IntegrationsProvider {
+	private readonly store: ScopedIntegrationsStore;
+
+	constructor(options: IntegrationsStoreOptions) {
+		this.store = new ScopedIntegrationsStore(options);
+	}
+
+	listKinds(): KindDescriptor[] {
+		return this.store.listKinds();
+	}
+
+	async list(projectId: ProjectId): Promise<IntegrationEntry[]> {
+		const scope = projectScope(projectId);
+		const [project, org] = await Promise.all([
+			this.store.listHeads(scope),
+			this.store.listHeads(ORG_SCOPE),
+		]);
+		const projectNames = new Set(project.map((h) => h.name));
+		return [
+			...project.map((h) => toEntry(scope, h)),
+			...org.map((h) => ({
+				...toEntry(ORG_SCOPE, h),
+				...(projectNames.has(h.name) ? { shadowed: true } : {}),
+			})),
+		].sort(
+			(a, b) =>
+				a.name.localeCompare(b.name) || (a.scope === b.scope ? 0 : a.scope === 'org' ? 1 : -1),
+		);
+	}
+
+	get(projectId: ProjectId, id: IntegrationId): Promise<IntegrationDetail> {
+		return this.store.get(projectScope(projectId), id);
+	}
+
+	create(
+		projectId: ProjectId,
+		input: CreateIntegrationInput,
+		actor: UserId,
+	): Promise<IntegrationDetail> {
+		return this.store.create(projectScope(projectId), input, actor);
+	}
+
+	update(
+		projectId: ProjectId,
+		id: IntegrationId,
+		input: UpdateIntegrationInput,
+		actor: UserId,
+		expectedVersion?: string,
+	): Promise<IntegrationDetail> {
+		return this.store.update(projectScope(projectId), id, input, actor, expectedVersion);
+	}
+
+	delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<boolean> {
+		return this.store.delete(projectScope(projectId), id, expectedVersion);
+	}
+
+	listVersions(
+		projectId: ProjectId,
+		id: IntegrationId,
+		page?: IntegrationVersionPageRequest,
+	): Promise<IntegrationVersionPage> {
+		return this.store.listVersions(projectScope(projectId), id, page);
+	}
+
+	test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult> {
+		return this.store.test(projectScope(projectId), request);
+	}
+
+	async resolveForSession(
+		projectId: ProjectId,
+		context: SessionRenderContext,
+	): Promise<SessionRender | undefined> {
+		const scope = projectScope(projectId);
+		const [project, org] = await Promise.all([
+			this.store.listHeads(scope),
+			this.store.listHeads(ORG_SCOPE),
+		]);
+		// Shadowing keys off existence, not `enabled`: a disabled same-name project
+		// instance still suppresses the org one (that is the opt-out), and it keeps
+		// the active set free of cross-scope name collisions.
+		const projectNames = new Set(project.map((h) => h.name));
+		const active = [
+			...org
+				.filter((h) => h.enabled && !projectNames.has(h.name))
+				.map((head) => ({ scope: ORG_SCOPE, head })),
+			...project.filter((h) => h.enabled).map((head) => ({ scope, head })),
+		].sort((a, b) => a.head.name.localeCompare(b.head.name));
+		if (active.length === 0) return undefined;
+
+		const rendered = await mapWithConcurrency(active, BUCKET_SCAN_CONCURRENCY, (item) =>
+			this.store.renderOne(item.scope, item.head, projectId, context),
+		);
+		return bundleIntegrations(rendered, context.sessionId);
+	}
+}
+
+/**
+ * Org-tier facade: deployment-wide instances under `_system/integrations/`.
+ * CRUD only — session rendering goes through `ProjectIntegrationsStore`, which
+ * merges this tier into every project.
+ */
+export class OrgIntegrationsStore implements OrgIntegrationsProvider {
+	private readonly store: ScopedIntegrationsStore;
+
+	constructor(options: IntegrationsStoreOptions) {
+		this.store = new ScopedIntegrationsStore(options);
+	}
+
+	listKinds(): KindDescriptor[] {
+		return this.store.listKinds();
+	}
+
+	list(): Promise<IntegrationEntry[]> {
+		return this.store.list(ORG_SCOPE);
+	}
+
+	get(id: IntegrationId): Promise<IntegrationDetail> {
+		return this.store.get(ORG_SCOPE, id);
+	}
+
+	create(input: CreateIntegrationInput, actor: UserId): Promise<IntegrationDetail> {
+		return this.store.create(ORG_SCOPE, input, actor);
+	}
+
+	update(
+		id: IntegrationId,
+		input: UpdateIntegrationInput,
+		actor: UserId,
+		expectedVersion?: string,
+	): Promise<IntegrationDetail> {
+		return this.store.update(ORG_SCOPE, id, input, actor, expectedVersion);
+	}
+
+	delete(id: IntegrationId, expectedVersion?: string): Promise<boolean> {
+		return this.store.delete(ORG_SCOPE, id, expectedVersion);
+	}
+
+	listVersions(
+		id: IntegrationId,
+		page?: IntegrationVersionPageRequest,
+	): Promise<IntegrationVersionPage> {
+		return this.store.listVersions(ORG_SCOPE, id, page);
+	}
+
+	test(request: TestIntegrationRequest): Promise<TestResult> {
+		return this.store.test(ORG_SCOPE, request);
+	}
+}
+
+function toEntry(scope: IntegrationScope, head: IntegrationRecord): IntegrationEntry {
 	return {
 		id: head.id,
 		kind: head.kind,
@@ -904,6 +1112,7 @@ function toEntry(head: IntegrationRecord): IntegrationEntry {
 		created_by: head.created_by,
 		created_at: head.created_at,
 		updated_at: head.updated_at,
+		...(scope.projectId === undefined ? { scope: 'org' as const } : {}),
 	};
 }
 

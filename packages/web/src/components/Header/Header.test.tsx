@@ -12,14 +12,33 @@ const USER = { id: 'usr-123', email: 'ada@example.com' };
  * `userEvent.setup()` installs its own `navigator.clipboard`, so the app's must
  * be stubbed afterwards or the copy silently succeeds against user-event's stub.
  */
-function setup(writeText: () => Promise<void> = () => Promise.resolve()) {
+function setup(
+	writeText: () => Promise<void> = () => Promise.resolve(),
+	me: Record<string, unknown> = USER,
+) {
 	installMatchMedia(false);
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = String(input);
-			if (url === '/api/v1/me') return jsonOk(USER);
+			if (url === '/api/v1/me') return jsonOk(me);
 			if (url === '/api/v1/me/tokens') return jsonOk([]);
+			if (url === '/api/v1/integrations/kinds') return jsonOk([]);
+			if (url === '/api/v1/org/integrations') {
+				return jsonOk([
+					{
+						id: 'intg-1',
+						kind: 'postgres',
+						name: 'warehouse',
+						enabled: true,
+						current_version: 1,
+						created_by: 'u',
+						created_at: '',
+						updated_at: '',
+						scope: 'org',
+					},
+				]);
+			}
 			throw new Error(`unexpected fetch: ${init?.method ?? 'GET'} ${url}`);
 		}),
 	);
@@ -101,5 +120,25 @@ describe('Header', () => {
 	it('hides the user menu until the identity resolves', () => {
 		setup();
 		expect(screen.queryByRole('button', { name: 'User menu' })).not.toBeInTheDocument();
+	});
+
+	it('offers Org integrations to super admins only', async () => {
+		const { user } = setup();
+		await openUserMenu(user);
+		expect(screen.queryByRole('menuitem', { name: /Org integrations/ })).not.toBeInTheDocument();
+	});
+
+	it('opens the org integrations dialog for a super admin and lists the org entries', async () => {
+		const { user } = setup(undefined, { ...USER, is_super_admin: true });
+		await openUserMenu(user);
+
+		await user.click(screen.getByRole('menuitem', { name: /Org integrations/ }));
+
+		await waitFor(() =>
+			expect(screen.getByRole('heading', { name: 'Org integrations' })).toBeInTheDocument(),
+		);
+		// The list must come from GET /org/integrations, not the project routes.
+		expect(await screen.findByText('warehouse')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Edit warehouse' })).toBeInTheDocument();
 	});
 });

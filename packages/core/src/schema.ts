@@ -464,7 +464,8 @@ export type FsSnapshot = z.infer<typeof FsSnapshotSchema>;
 // Mutable CAS-managed head; IntegrationVersionRecord objects are immutable.
 export const IntegrationRecordSchema = z.looseObject({
 	id: IntegrationIdSchema,
-	project_id: ProjectIdSchema,
+	/** Owning project; absent on org-scoped heads (`_system/integrations/…`). */
+	project_id: ProjectIdSchema.optional(),
 	/** Stable registry discriminator; changing it requires a migration. */
 	kind: z.string(),
 	/** Instance name used to derive rendered paths and environment variables. */

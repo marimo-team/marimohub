@@ -2,7 +2,7 @@
 
 This guide is for maintainers adding or changing integration kinds. For
 deployment configuration, project administration, and notebook usage, see the
-[project integrations guide](../docs/integrations.md). The object layout and
+[integrations guide](../docs/integrations.md). The object layout and
 concurrency protocol are specified in
 [`bucket_spec.md`](./bucket_spec.md) §4.12.
 
@@ -16,8 +16,11 @@ Integrations follow the repository's ports-and-adapters boundary:
   config schema, UI hints, renderer, optional connectivity probe, and migration.
 - `packages/core/src/services/integrations/registry.ts` turns registered
   definitions into JSON Schema descriptors for the API and web form.
-- `packages/core/src/services/integrations/ProjectIntegrationsStore.ts` owns
-  storage, versioning, name claims, secret handling, migrations, and rendering.
+- `packages/core/src/services/integrations/ProjectIntegrationsStore.ts` contains
+  shared storage, versioning, name-claim, secret, migration, and rendering
+  logic. `ProjectIntegrationsStore` uses this logic under
+  `projects/{pid}/integrations/`. `OrgIntegrationsStore` uses it under
+  `_system/integrations/`.
 - `packages/core/src/services/integrations/bundle.ts` merges rendered files and
   environment variables into the session payload. Structured YAML fragments
   sharing a path are recursively merged, with conflicting leaves rejected.
@@ -35,6 +38,17 @@ to the current kind schema, decrypts secret fields, and calls the kind's
 renderer. The session then records that version as its audit pin. Rendered files
 and environment variables are bundled outside the notebook workspace so
 credentials cannot be captured in a notebook version.
+
+Before rendering, `ProjectIntegrationsStore` combines the project and
+organization tiers. It includes each enabled organization integration unless
+the project has an integration with the same name. The project entry takes
+precedence even when it is disabled. This rule supports overrides and opt-outs,
+and it prevents duplicate names in the bundle.
+
+The renderer receives the session's project ID for integrations from either
+tier. Organization configuration and secret-encryption contexts remain under
+`_system/`. The `/api/v1/org/integrations` routes call `assertSuperAdmin`, which
+uses `MARIMOHUB_SUPER_ADMINS`.
 
 ## Adding a kind
 

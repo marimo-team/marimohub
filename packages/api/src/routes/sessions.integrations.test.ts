@@ -5,6 +5,7 @@ import {
 	defaultRegistry,
 	INTEGRATIONS_DIR,
 	INTEGRATIONS_DIR_ENV,
+	OrgIntegrationsStore,
 	ProjectIntegrationsStore,
 } from '@marimo-hub/core';
 import type { NotebookId, ProjectId } from '@marimo-hub/core';
@@ -152,5 +153,88 @@ describe('Session provisioning with integrations', () => {
 		expect(calls.setEnvVars).toHaveLength(0);
 		expect(calls.writeFile).toHaveLength(0);
 		expect(calls.startProcess).toHaveLength(0);
+	});
+
+	it('fails the session CLOSED when an INHERITED org integration cannot render', async () => {
+		// The project has no integrations of its own — the broken config comes
+		// entirely from the org tier, and its blast radius is every project.
+		const org = new OrgIntegrationsStore({ bucket, registry: defaultRegistry(), codec });
+		await org.create(
+			{
+				kind: 'postgres',
+				name: 'warehouse',
+				config: { host: 'h', database: 'd', username: 'u', password: 'pw' },
+			},
+			ACTOR,
+		);
+		const { request, calls } = api(makeStore(false));
+		await expectError(await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`), 422);
+		expect(calls.setEnvVars).toHaveLength(0);
+		expect(calls.writeFile).toHaveLength(0);
+		expect(calls.startProcess).toHaveLength(0);
+
+		// The per-project escape hatch: a disabled same-name project instance
+		// opts this project out of the broken org integration entirely.
+		const projectStore = makeStore(false);
+		const override = await projectStore.create(
+			pid,
+			{ kind: 'custom_env', name: 'warehouse', config: { vars: {} } },
+			ACTOR,
+		);
+		await projectStore.update(pid, override.id, { enabled: false }, ACTOR);
+		const optedOut = api(makeStore(false));
+		const session = await expectOk<Record<string, unknown>>(
+			await optedOut.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`),
+		);
+		expect(session.integrations).toBeUndefined();
+	});
+
+	it('renders inherited org integrations into the session and pins them', async () => {
+		const options = { bucket, registry: defaultRegistry(), codec };
+		const org = new OrgIntegrationsStore(options);
+		await org.create(
+			{ kind: 'custom_env', name: 'org-flags', config: { vars: { ORG_FLAG: 'on' } } },
+			ACTOR,
+		);
+		const store = makeStore();
+		await store.create(
+			pid,
+			{ kind: 'custom_env', name: 'flags', config: { vars: { MY_FLAG: 'on' } } },
+			ACTOR,
+		);
+
+		const { request, calls } = api(store);
+		const session = await expectOk<Record<string, unknown>>(
+			await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`),
+		);
+		expect(session.integrations).toEqual([
+			{ id: expect.stringMatching(/^intg-/), name: 'flags', kind: 'custom_env', version: 1 },
+			{ id: expect.stringMatching(/^intg-/), name: 'org-flags', kind: 'custom_env', version: 1 },
+		]);
+		const env = Object.assign({}, ...calls.setEnvVars);
+		expect(env.ORG_FLAG).toBe('on');
+		expect(env.MY_FLAG).toBe('on');
+	});
+
+	it('a same-name project integration overrides the inherited org config', async () => {
+		const options = { bucket, registry: defaultRegistry(), codec };
+		const org = new OrgIntegrationsStore(options);
+		await org.create(
+			{ kind: 'custom_env', name: 'flags', config: { vars: { SOURCE: 'org' } } },
+			ACTOR,
+		);
+		const store = makeStore();
+		await store.create(
+			pid,
+			{ kind: 'custom_env', name: 'flags', config: { vars: { SOURCE: 'project' } } },
+			ACTOR,
+		);
+
+		const { request, calls } = api(store);
+		const session = await expectOk<Record<string, unknown>>(
+			await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`),
+		);
+		expect(session.integrations).toHaveLength(1);
+		expect(Object.assign({}, ...calls.setEnvVars).SOURCE).toBe('project');
 	});
 });

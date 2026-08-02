@@ -1,4 +1,4 @@
-import { defaultRegistry, ProjectIntegrationsStore } from '@marimo-hub/core';
+import { defaultRegistry, OrgIntegrationsStore, ProjectIntegrationsStore } from '@marimo-hub/core';
 import type { Bucket, IntegrationProbe, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from '@marimo-hub/api';
 import type { Env } from './env';
@@ -18,7 +18,7 @@ export function makeIntegrations(
 	env: Env,
 	bucket: Bucket,
 	metrics?: Metrics,
-): Pick<ApiDeps, 'integrations'> {
+): Pick<ApiDeps, 'integrations' | 'orgIntegrations'> {
 	const setting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
 	if (setting === undefined || setting === '' || setting === 'off' || setting === 'none') {
 		return {};
@@ -29,14 +29,18 @@ export function makeIntegrations(
 			{ variable: 'MARIMOHUB_INTEGRATIONS', docs: 'docs/integrations.md' },
 		);
 	}
+	const options = {
+		bucket,
+		registry: defaultRegistry(),
+		codec: makeManagedCodec(env),
+		probe: makeProbe(env),
+		metrics,
+	};
 	return {
-		integrations: new ProjectIntegrationsStore({
-			bucket,
-			registry: defaultRegistry(),
-			codec: makeManagedCodec(env),
-			probe: makeProbe(env),
-			metrics,
-		}),
+		integrations: new ProjectIntegrationsStore(options),
+		// Org-wide instances are managed by super admins (MARIMOHUB_SUPER_ADMINS);
+		// with none configured the routes are unreachable and the tier stays empty.
+		orgIntegrations: new OrgIntegrationsStore(options),
 	};
 }
 

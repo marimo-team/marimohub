@@ -85,23 +85,29 @@ the only places concrete adapters are imported. **Reject PRs that violate this**
 
 ## Key invariant
 
-`_system/catalog.json` (see `packages/core/src/paths.ts`) is the only object in
-the content store mutated in place. All writes to it go through
+`_system/catalog.json` (see `packages/core/src/paths.ts`) is the only mutable
+pointer in the catalog snapshot chain. All writes to this object go through
 `CatalogService.mutateSnapshot`
-(`packages/core/src/services/catalog/CatalogService.ts`), which performs a
-compare-and-swap on the object's ETag (conditional PUT) with retry. Two other
-CAS-managed pointers exist, each with a single writer: the per-notebook app
-claim (`_system/apps/{pid}/{nid}.json`), written ONLY via
-`SessionService.claimApp`/`releaseApp`, and the per-integration head
-(`projects/{pid}/integrations/{iid}/integration.json`), written ONLY by
-`ProjectIntegrationsStore` — which also solely owns its immutable
-`versions/{n}.json` history (create-if-absent) and the per-name uniqueness
-claim `integrations/_names/{name}.json` (the app-claim pattern) — sole
-exception: deleting the owning notebook or project also deletes its
-claim/integration object(s) as cleanup. Everything else in
-the store is immutable, append-only, or an operational record (sessions,
-identities, tokens, secrets). Do not write the catalog pointer, the app claim,
-or an integration head by any other path.
+(`packages/core/src/services/catalog/CatalogService.ts`). This method uses an
+ETag compare-and-swap (conditional PUT) with retries.
+
+These CAS-managed records also have one writer each:
+
+- `SessionService.claimApp`/`releaseApp` owns each app claim at
+  `_system/apps/{pid}/{nid}.json`.
+- `ProjectIntegrationsStore` owns each project integration head at
+  `projects/{pid}/integrations/{iid}/integration.json`.
+- `OrgIntegrationsStore` owns each org integration head at
+  `_system/integrations/{iid}/integration.json`.
+
+Each integration store also owns its immutable `versions/{n}.json` history and
+its `integrations/_names/{name}.json` uniqueness claim. Version writes use
+create-if-absent. Name claims use the same pattern as app claims.
+
+Deleting a notebook or project can delete its subordinate claims and objects as
+cleanup. Everything else is immutable, append-only, or an operational record,
+such as a session, identity, token, or secret. Do not bypass the owners listed
+above.
 See [`development_docs/bucket_spec.md`](./development_docs/bucket_spec.md).
 
 ## Outstanding work

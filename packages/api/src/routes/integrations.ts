@@ -9,10 +9,12 @@ import type {
 	IntegrationDetail,
 	IntegrationEntry,
 	IntegrationsProvider,
+	OrgIntegrationsProvider,
 	TestIntegrationRequest,
 } from '@marimo-hub/core';
 import {
 	assertProjectRole,
+	assertSuperAdmin,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -28,13 +30,15 @@ import {
 import type { ApiDeps } from '../shared';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, pageSchema, PaginationQuery } from '../pagination';
 
-const IntegrationIdParam = ProjectIdParam.extend({
-	iid: z
-		.string()
-		.regex(IntegrationId.regex)
-		.refine(IntegrationId.is)
-		.openapi({ param: { name: 'iid', in: 'path' }, example: 'intg-7h2k9qm4xz7rp3w8' }),
-});
+const IidParam = z
+	.string()
+	.regex(IntegrationId.regex)
+	.refine(IntegrationId.is)
+	.openapi({ param: { name: 'iid', in: 'path' }, example: 'intg-7h2k9qm4xz7rp3w8' });
+
+const IntegrationIdParam = ProjectIdParam.extend({ iid: IidParam });
+
+const OrgIntegrationIdParam = z.object({ iid: IidParam });
 
 // Per-kind config shapes are dynamic (each kind owns a Zod schema, serialized to
 // clients as `KindDescriptor.json_schema`), so the route layer types config as an
@@ -78,6 +82,10 @@ const IntegrationEntrySchema = z
 		created_by: z.string(),
 		created_at: z.string(),
 		updated_at: z.string(),
+		/** Absent means project-owned; project listings mark inherited org instances `org`. */
+		scope: z.enum(['project', 'org']).optional(),
+		/** Org entries in a project listing: a same-name project integration overrides this one. */
+		shadowed: z.boolean().optional(),
 	})
 	.openapi('IntegrationEntry');
 
@@ -271,11 +279,138 @@ const testIntegration = createRoute({
 	},
 });
 
+// Org-scoped (deployment-wide) instances, inherited by every project. All
+// management is super-admin only — org integrations render into every
+// project's sessions, so no project role can be sufficient.
+const listOrgIntegrations = createRoute({
+	method: 'get',
+	path: '/org/integrations',
+	tags: ['Integrations'],
+	summary: 'List org-wide integrations (super admin only)',
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: z.array(IntegrationEntrySchema) }),
+			'Org integration instances (no config)',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
+const createOrgIntegration = createRoute({
+	method: 'post',
+	path: '/org/integrations',
+	tags: ['Integrations'],
+	summary: 'Create an org-wide integration (super admin only)',
+	request: { body: jsonBody(CreateIntegrationBody) },
+	responses: {
+		201: jsonContent(
+			z.object({ success: z.literal(true), data: IntegrationDetailSchema }),
+			'Integration created (config redacted)',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
+const getOrgIntegration = createRoute({
+	method: 'get',
+	path: '/org/integrations/{iid}',
+	tags: ['Integrations'],
+	summary: 'Get an org-wide integration with its redacted config (super admin only)',
+	request: { params: OrgIntegrationIdParam },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: IntegrationDetailSchema }),
+			'Integration detail (config redacted)',
+			EtagResponseHeader,
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
+const updateOrgIntegration = createRoute({
+	method: 'patch',
+	path: '/org/integrations/{iid}',
+	tags: ['Integrations'],
+	summary: 'Update an org-wide integration (super admin only)',
+	request: {
+		params: OrgIntegrationIdParam,
+		headers: IfMatchHeader,
+		body: jsonBody(UpdateIntegrationBody),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: IntegrationDetailSchema }),
+			'Integration updated (config redacted)',
+			EtagResponseHeader,
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 412),
+	},
+});
+
+const deleteOrgIntegration = createRoute({
+	method: 'delete',
+	path: '/org/integrations/{iid}',
+	tags: ['Integrations'],
+	summary: 'Delete an org-wide integration and its version history (super admin only)',
+	request: { params: OrgIntegrationIdParam, headers: IfMatchHeader },
+	responses: {
+		200: jsonContent(SuccessResponseSchema, 'Integration deleted'),
+		...commonErrors(),
+		...errorResponses(403, 404, 412),
+	},
+});
+
+const listOrgIntegrationVersions = createRoute({
+	method: 'get',
+	path: '/org/integrations/{iid}/versions',
+	tags: ['Integrations'],
+	summary: "List an org-wide integration's config versions (super admin only)",
+	request: { params: OrgIntegrationIdParam, query: PaginationQuery },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: pageSchema(IntegrationVersionSchema, 'IntegrationVersionPage'),
+			}),
+			'Version history, newest first',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404),
+	},
+});
+
+const testOrgIntegration = createRoute({
+	method: 'post',
+	path: '/org/integrations/test',
+	tags: ['Integrations'],
+	summary: 'Probe connectivity for an unsaved or stored org config (super admin only)',
+	request: { body: jsonBody(TestIntegrationBody) },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: TestResultSchema }),
+			'Probe outcome (never secret material)',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
 function requireIntegrations(deps: ApiDeps): IntegrationsProvider {
 	if (!deps.integrations) {
 		throw new NotFoundError('Integrations are not enabled on this deployment');
 	}
 	return deps.integrations;
+}
+
+function requireOrgIntegrations(deps: ApiDeps): OrgIntegrationsProvider {
+	if (!deps.orgIntegrations) {
+		throw new NotFoundError('Integrations are not enabled on this deployment');
+	}
+	return deps.orgIntegrations;
 }
 
 function entryResponse(e: IntegrationEntry) {
@@ -288,6 +423,8 @@ function entryResponse(e: IntegrationEntry) {
 		created_by: e.created_by,
 		created_at: e.created_at,
 		updated_at: e.updated_at,
+		...(e.scope !== undefined ? { scope: e.scope } : {}),
+		...(e.shadowed !== undefined ? { shadowed: e.shadowed } : {}),
 	};
 }
 
@@ -379,10 +516,14 @@ app.openapi(deleteIntegration, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
 	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
-	await integrations.delete(pid, iid, ifMatchToken(c));
-	await deps.services.events
-		.append({ event: 'integration.delete', actor: user.id, project_id: pid, integration_id: iid })
-		.catch(() => {});
+	// A no-op delete (already gone, or an id from the org tier) still succeeds
+	// but must not fabricate an audit-trail deletion.
+	const deleted = await integrations.delete(pid, iid, ifMatchToken(c));
+	if (deleted) {
+		await deps.services.events
+			.append({ event: 'integration.delete', actor: user.id, project_id: pid, integration_id: iid })
+			.catch(() => {});
+	}
 	return c.json({ success: true }, 200);
 });
 
@@ -449,6 +590,104 @@ app.openapi(testIntegration, async (c) => {
 	assertTestBudget(user.id);
 	const body = c.req.valid('json') as TestIntegrationRequest;
 	return c.json({ success: true, data: await integrations.test(pid, body) }, 200);
+});
+
+app.openapi(listOrgIntegrations, async (c) => {
+	const deps = c.get('deps');
+	const integrations = requireOrgIntegrations(deps);
+	assertSuperAdmin(c.get('user'), deps.policy);
+	const data = (await integrations.list()).map(entryResponse);
+	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(createOrgIntegration, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const integrations = requireOrgIntegrations(deps);
+	assertSuperAdmin(user, deps.policy);
+	const body = c.req.valid('json');
+	const detail = await integrations.create(body, user.id);
+	await deps.services.events
+		.append({
+			event: 'org_integration.create',
+			actor: user.id,
+			integration_id: detail.id,
+			integration_kind: detail.kind,
+			integration_name: detail.name,
+		})
+		.catch(() => {});
+	return c.json({ success: true, data: detailResponse(detail) }, 201);
+});
+
+app.openapi(getOrgIntegration, async (c) => {
+	const deps = c.get('deps');
+	const { iid } = c.req.valid('param');
+	const integrations = requireOrgIntegrations(deps);
+	assertSuperAdmin(c.get('user'), deps.policy);
+	const detail = await integrations.get(iid);
+	c.header('ETag', etagFor(detail.updated_at));
+	return c.json({ success: true, data: detailResponse(detail) }, 200);
+});
+
+app.openapi(updateOrgIntegration, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { iid } = c.req.valid('param');
+	const integrations = requireOrgIntegrations(deps);
+	assertSuperAdmin(user, deps.policy);
+	const body = c.req.valid('json');
+	const detail = await integrations.update(iid, body, user.id, ifMatchToken(c));
+	c.header('ETag', etagFor(detail.updated_at));
+	await deps.services.events
+		.append({
+			event: 'org_integration.update',
+			actor: user.id,
+			integration_id: iid,
+			integration_kind: detail.kind,
+			integration_name: detail.name,
+			config_changed: body.config !== undefined,
+			current_version: detail.current_version,
+		})
+		.catch(() => {});
+	return c.json({ success: true, data: detailResponse(detail) }, 200);
+});
+
+app.openapi(deleteOrgIntegration, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { iid } = c.req.valid('param');
+	const integrations = requireOrgIntegrations(deps);
+	assertSuperAdmin(user, deps.policy);
+	const deleted = await integrations.delete(iid, ifMatchToken(c));
+	if (deleted) {
+		await deps.services.events
+			.append({ event: 'org_integration.delete', actor: user.id, integration_id: iid })
+			.catch(() => {});
+	}
+	return c.json({ success: true }, 200);
+});
+
+app.openapi(listOrgIntegrationVersions, async (c) => {
+	const deps = c.get('deps');
+	const { iid } = c.req.valid('param');
+	const query = c.req.valid('query');
+	const integrations = requireOrgIntegrations(deps);
+	assertSuperAdmin(c.get('user'), deps.policy);
+	const page = await integrations.listVersions(iid, {
+		limit: Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE),
+		cursor: query.cursor,
+	});
+	return c.json({ success: true, data: page }, 200);
+});
+
+app.openapi(testOrgIntegration, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const integrations = requireOrgIntegrations(deps);
+	assertSuperAdmin(user, deps.policy);
+	assertTestBudget(user.id);
+	const body = c.req.valid('json') as TestIntegrationRequest;
+	return c.json({ success: true, data: await integrations.test(body) }, 200);
 });
 
 export default app;

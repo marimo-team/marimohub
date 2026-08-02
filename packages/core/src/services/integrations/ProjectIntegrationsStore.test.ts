@@ -14,7 +14,7 @@ import { ACTOR, MemoryBucket } from '../../testing';
 import { AesGcmSecretCodec } from '../secrets/AesGcmSecretCodec';
 import { INTEGRATIONS_DIR, INTEGRATIONS_DIR_ENV } from './bundle';
 import { defaultRegistry } from './kinds';
-import { ProjectIntegrationsStore } from './ProjectIntegrationsStore';
+import { OrgIntegrationsStore, ProjectIntegrationsStore } from './ProjectIntegrationsStore';
 import { IntegrationRegistry } from './registry';
 import { defineIntegration, envSegment } from './sdk';
 import { zSecret } from './secretFields';
@@ -280,8 +280,9 @@ describe('ProjectIntegrationsStore', () => {
 			ACTOR,
 		);
 		await store.update(pid, created.id, { config: { token: 't2' } }, ACTOR);
-		await store.delete(pid, created.id);
-		await store.delete(pid, created.id);
+		// The repeat succeeds but reports that nothing was removed.
+		await expect(store.delete(pid, created.id)).resolves.toBe(true);
+		await expect(store.delete(pid, created.id)).resolves.toBe(false);
 		await expect(store.get(pid, created.id)).rejects.toThrow(NotFoundError);
 		expect(await store.list(pid)).toEqual([]);
 	});
@@ -1302,5 +1303,171 @@ describe('ProjectIntegrationsStore', () => {
 			expect(kind.json_schema).toMatchObject({ type: 'object' });
 			expect(() => JSON.stringify(kind)).not.toThrow();
 		}
+	});
+});
+
+describe('OrgIntegrationsStore + project inheritance', () => {
+	let bucket: MemoryBucket;
+	let pid: ProjectId;
+	let org: OrgIntegrationsStore;
+	let project: ProjectIntegrationsStore;
+
+	beforeEach(() => {
+		bucket = new MemoryBucket();
+		pid = createProjectId();
+		const registry = new IntegrationRegistry();
+		registry.register(echoKind);
+		const options = { bucket, registry, codec, probe: stubProbe };
+		org = new OrgIntegrationsStore(options);
+		project = new ProjectIntegrationsStore(options);
+	});
+
+	it('stores org instances under _system/integrations/ with no project_id', async () => {
+		const detail = await org.create(
+			{ kind: 'echo', name: 'warehouse', config: { token: 'sekret' } },
+			ACTOR,
+		);
+		expect(detail.scope).toBe('org');
+		expect(detail.config).toMatchObject({ token: { $secret: { set: true } } });
+
+		const head = await bucket.get(paths.orgIntegration(detail.id).head);
+		expect(head).not.toBeNull();
+		expect(await head?.json()).not.toHaveProperty('project_id');
+		expect(await bucket.head(paths.orgIntegrationNameClaim('warehouse'))).toBeTruthy();
+		// Plaintext must never reach any bucket object.
+		for (const object of (await bucket.list({})).objects) {
+			const body = await bucket.get(object.key);
+			expect(await body?.text(), object.key).not.toContain('sekret');
+		}
+	});
+
+	it('org CRUD round-trips: update appends a version, delete frees the name', async () => {
+		const created = await org.create(
+			{ kind: 'echo', name: 'warehouse', config: { token: 'one' } },
+			ACTOR,
+		);
+		const updated = await org.update(
+			created.id,
+			{ config: { greeting: 'hello', token: 'two' }, change_note: 'rotate' },
+			ACTOR,
+		);
+		expect(updated.current_version).toBe(2);
+		expect((await org.listVersions(created.id)).items.map((v) => v.version)).toEqual([2, 1]);
+
+		await org.delete(created.id);
+		await expect(org.get(created.id)).rejects.toThrow(NotFoundError);
+		await org.create({ kind: 'echo', name: 'warehouse', config: { token: 'three' } }, ACTOR);
+	});
+
+	it('org names are claimed independently of project names', async () => {
+		await org.create({ kind: 'echo', name: 'prod', config: { token: 'o' } }, ACTOR);
+		// Same name in a project is allowed — that is the shadowing override.
+		await project.create(pid, { kind: 'echo', name: 'prod', config: { token: 'p' } }, ACTOR);
+		await expect(
+			org.create({ kind: 'echo', name: 'prod', config: { token: 'x' } }, ACTOR),
+		).rejects.toThrow(/already exists at the org level/);
+	});
+
+	it('project list appends inherited org entries, marking shadowed names', async () => {
+		await org.create({ kind: 'echo', name: 'shared', config: { token: 'o' } }, ACTOR);
+		await org.create({ kind: 'echo', name: 'aaa', config: { token: 'o' } }, ACTOR);
+		await project.create(pid, { kind: 'echo', name: 'shared', config: { token: 'p' } }, ACTOR);
+
+		const entries = await project.list(pid);
+		expect(entries.map((e) => ({ name: e.name, scope: e.scope, shadowed: e.shadowed }))).toEqual([
+			{ name: 'aaa', scope: 'org', shadowed: undefined },
+			{ name: 'shared', scope: undefined, shadowed: undefined },
+			{ name: 'shared', scope: 'org', shadowed: true },
+		]);
+	});
+
+	it('a disabled project instance still shadows in listings — matching what renders', async () => {
+		await org.create({ kind: 'echo', name: 'shared', config: { token: 'o' } }, ACTOR);
+		const override = await project.create(
+			pid,
+			{ kind: 'echo', name: 'shared', config: { token: 'p' } },
+			ACTOR,
+		);
+		await project.update(pid, override.id, { enabled: false }, ACTOR);
+
+		const entries = await project.list(pid);
+		expect(
+			entries.map((e) => ({ scope: e.scope, enabled: e.enabled, shadowed: e.shadowed })),
+		).toEqual([
+			{ scope: undefined, enabled: false, shadowed: undefined },
+			{ scope: 'org', enabled: true, shadowed: true },
+		]);
+	});
+
+	it('resolveForSession renders org instances into the project session', async () => {
+		await org.create({ kind: 'echo', name: 'warehouse', config: { token: 'org-tok' } }, ACTOR);
+		await project.create(pid, { kind: 'echo', name: 'db', config: { token: 'proj-tok' } }, ACTOR);
+
+		const sessionId = createSessionId();
+		const render = await project.resolveForSession(pid, renderContext(sessionId));
+		expect(render?.vars.ECHO_WAREHOUSE_TOKEN).toBe('org-tok');
+		expect(render?.vars.ECHO_DB_TOKEN).toBe('proj-tok');
+		expect(render?.attachments.map((a) => a.name)).toEqual(['db', 'warehouse']);
+
+		const manifest = render?.files.find((f) => f.path === `${INTEGRATIONS_DIR}/manifest.json`);
+		expect(JSON.parse(manifest?.content ?? '')).toMatchObject({
+			integrations: [{ name: 'db' }, { name: 'warehouse' }],
+		});
+	});
+
+	it('a same-name project instance shadows the org one — enabled overrides, disabled opts out', async () => {
+		await org.create({ kind: 'echo', name: 'warehouse', config: { token: 'org-tok' } }, ACTOR);
+		const override = await project.create(
+			pid,
+			{ kind: 'echo', name: 'warehouse', config: { token: 'proj-tok' } },
+			ACTOR,
+		);
+
+		let render = await project.resolveForSession(pid, renderContext(createSessionId()));
+		expect(render?.vars.ECHO_WAREHOUSE_TOKEN).toBe('proj-tok');
+		expect(render?.attachments).toHaveLength(1);
+
+		// Disabling the override does NOT resurrect the org instance: the
+		// same-name project instance is the opt-out.
+		await project.update(pid, override.id, { enabled: false }, ACTOR);
+		render = await project.resolveForSession(pid, renderContext(createSessionId()));
+		expect(render).toBeUndefined();
+
+		// Other projects are unaffected.
+		const other = createProjectId();
+		render = await project.resolveForSession(other, renderContext(createSessionId()));
+		expect(render?.vars.ECHO_WAREHOUSE_TOKEN).toBe('org-tok');
+	});
+
+	it('disabled org instances are skipped everywhere', async () => {
+		const created = await org.create(
+			{ kind: 'echo', name: 'warehouse', config: { token: 'o' } },
+			ACTOR,
+		);
+		await org.update(created.id, { enabled: false }, ACTOR);
+		expect(await project.resolveForSession(pid, renderContext(createSessionId()))).toBeUndefined();
+		expect((await project.list(pid)).map((e) => e.enabled)).toEqual([false]);
+	});
+
+	it('the project tier cannot reach an org instance by id', async () => {
+		const created = await org.create(
+			{ kind: 'echo', name: 'warehouse', config: { token: 'o' } },
+			ACTOR,
+		);
+		await expect(project.get(pid, created.id)).rejects.toThrow(NotFoundError);
+		// Idempotent success, but reported as a no-op — the org instance survives.
+		await expect(project.delete(pid, created.id)).resolves.toBe(false);
+		expect((await org.get(created.id)).name).toBe('warehouse');
+	});
+
+	it('a project head cannot be smuggled into the org tier', async () => {
+		const created = await project.create(
+			pid,
+			{ kind: 'echo', name: 'prod', config: { token: 'p' } },
+			ACTOR,
+		);
+		const head = await bucket.get(paths.project(pid).integration(created.id).head);
+		await bucket.put(paths.orgIntegration(created.id).head, (await head?.text()) ?? '');
+		await expect(org.get(created.id)).rejects.toThrow(/does not match its storage path/);
 	});
 });

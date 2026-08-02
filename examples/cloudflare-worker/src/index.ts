@@ -13,6 +13,7 @@ import {
 	createServices,
 	defaultRegistry,
 	MaintenanceLock,
+	OrgIntegrationsStore,
 	ProjectIntegrationsStore,
 	ReconciliationService,
 } from '@marimo-hub/core';
@@ -125,6 +126,11 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 		// No `probe` — Workers lack the DNS hooks the guarded egress policy needs,
 		// so connection testing stays disabled here.
 		integrations: new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec: secretCodec(env.SECRETS_KEK),
+		}),
+		orgIntegrations: new OrgIntegrationsStore({
 			bucket,
 			registry: defaultRegistry(),
 			codec: secretCodec(env.SECRETS_KEK),

@@ -10,6 +10,7 @@ import type {
 	IntegrationsProvider,
 	KernelProbe,
 	Millis,
+	OrgIntegrationsProvider,
 	PreflightReport,
 	Role,
 	SandboxExposure,
@@ -257,6 +258,12 @@ export interface ApiDeps {
 	secrets?: SecretsProvider;
 	/** Optional project integration provider; absence disables its routes and injection. */
 	integrations?: IntegrationsProvider;
+	/**
+	 * Org-scoped (deployment-wide) integrations, inherited by every project and
+	 * managed by super admins only. Wired alongside `integrations` — present iff
+	 * it is.
+	 */
+	orgIntegrations?: OrgIntegrationsProvider;
 	/**
 	 * Build/deploy identity surfaced read-only by `GET /api/v1/version` (the UI's
 	 * footer info popover). Baked into the image at build time and read from env

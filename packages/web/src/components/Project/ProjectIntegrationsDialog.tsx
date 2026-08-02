@@ -38,10 +38,11 @@ import {
 	useDeleteIntegration,
 	useIntegrationDetailQuery,
 	useIntegrationKindsQuery,
-	useProjectIntegrationsQuery,
+	useIntegrationsQuery,
 	useTestIntegration,
 	useUpdateIntegration,
 } from '@/api/hooks';
+import type { IntegrationsScope } from '@/api/hooks';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { toastError } from '@/lib/errors';
 import { filterBySearch } from '@/lib/search';
@@ -133,16 +134,47 @@ export function ProjectIntegrationsDialog({
 	onClose,
 	project,
 }: ProjectIntegrationsDialogProps) {
+	return (
+		<IntegrationsDialog
+			isOpen={isOpen}
+			onClose={onClose}
+			scope={{ pid: project.id }}
+			canManage={project.your_role === 'admin'}
+		/>
+	);
+}
+
+export interface OrgIntegrationsDialogProps {
+	isOpen: boolean;
+	onClose: () => void;
+}
+
+// No client-side gating: only super admins can open this, and the server
+// rejects everyone else anyway.
+export function OrgIntegrationsDialog({ isOpen, onClose }: OrgIntegrationsDialogProps) {
+	return <IntegrationsDialog isOpen={isOpen} onClose={onClose} scope="org" canManage />;
+}
+
+function IntegrationsDialog({
+	isOpen,
+	onClose,
+	scope,
+	canManage,
+}: {
+	isOpen: boolean;
+	onClose: () => void;
+	scope: IntegrationsScope;
+	canManage: boolean;
+}) {
 	const [view, setView] = useState<View>({ mode: 'list' });
 	const close = () => {
 		onClose();
 		setView({ mode: 'list' });
 	};
 	const kindsQuery = useIntegrationKindsQuery(isOpen);
-	const entriesQuery = useProjectIntegrationsQuery(project.id, isOpen);
+	const entriesQuery = useIntegrationsQuery(scope, isOpen);
 	const kinds = kindsQuery.data;
 	const entries = entriesQuery.data;
-	const isAdmin = project.your_role === 'admin';
 
 	const title =
 		view.mode === 'catalog'
@@ -151,7 +183,9 @@ export function ProjectIntegrationsDialog({
 				? `Add ${view.kind.title}`
 				: view.mode === 'edit'
 					? `Edit ${view.entry.name}`
-					: 'Integrations';
+					: scope === 'org'
+						? 'Org integrations'
+						: 'Integrations';
 
 	return (
 		<DialogModal
@@ -183,20 +217,20 @@ export function ProjectIntegrationsDialog({
 					<p className="text-muted-foreground">Integrations are not enabled on this deployment.</p>
 				) : view.mode === 'list' ? (
 					<ListView
-						project={project}
+						scope={scope}
 						entries={entries}
 						kinds={kinds}
-						isAdmin={isAdmin}
+						canManage={canManage}
 						onAdd={() => setView({ mode: 'catalog' })}
 						onEdit={(entry) => setView({ mode: 'edit', entry })}
 					/>
 				) : view.mode === 'catalog' ? (
 					<CatalogView kinds={kinds} onPick={(kind) => setView({ mode: 'create', kind })} />
 				) : view.mode === 'create' ? (
-					<EditorView project={project} kind={view.kind} onDone={() => setView({ mode: 'list' })} />
+					<EditorView scope={scope} kind={view.kind} onDone={() => setView({ mode: 'list' })} />
 				) : (
 					<EditorView
-						project={project}
+						scope={scope}
 						kind={kinds.find((k) => k.kind === view.entry.kind)}
 						entry={view.entry}
 						onDone={() => setView({ mode: 'list' })}
@@ -208,24 +242,27 @@ export function ProjectIntegrationsDialog({
 }
 
 function ListView({
-	project,
+	scope,
 	entries,
 	kinds,
-	isAdmin,
+	canManage,
 	onAdd,
 	onEdit,
 }: {
-	project: ProjectDetail;
+	scope: IntegrationsScope;
 	entries: IntegrationEntry[];
 	kinds: IntegrationKind[];
-	isAdmin: boolean;
+	canManage: boolean;
 	onAdd: () => void;
 	onEdit: (entry: IntegrationEntry) => void;
 }) {
 	const [query, setQuery] = useState('');
-	const updateIntegration = useUpdateIntegration(project.id);
-	const deleteIntegration = useDeleteIntegration(project.id);
+	const updateIntegration = useUpdateIntegration(scope);
+	const deleteIntegration = useDeleteIntegration(scope);
 	const confirmDelete = useDialogTarget<IntegrationEntry>();
+	// In a project listing, org entries are inherited: visible but managed only
+	// through the org dialog. A same-name project integration overrides them.
+	const isInherited = (entry: IntegrationEntry) => scope !== 'org' && entry.scope === 'org';
 	const kindsByName = new Map(kinds.map((kind) => [kind.kind, kind]));
 	const visibleEntries = filterBySearch(entries, query, (entry) => {
 		const kind = kindsByName.get(entry.kind);
@@ -260,10 +297,14 @@ function ListView({
 			<div className="flex flex-col gap-3 border-b pb-4">
 				<div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
 					<p className="max-w-3xl text-muted-foreground">
-						Connection config every session in this project receives as env vars and files. New
-						sessions pick up config changes; running ones keep what they started with.
+						{scope === 'org'
+							? 'Connection config every session in every project receives as env vars and ' +
+								'files. A project overrides (or opts out of) an org integration by creating ' +
+								'one with the same name.'
+							: 'Connection config every session in this project receives as env vars and files. New ' +
+								'sessions pick up config changes; running ones keep what they started with.'}
 					</p>
-					{isAdmin && (
+					{canManage && (
 						<Button variant="primary" onPress={onAdd} className="shrink-0">
 							<Plus className="size-4" aria-hidden />
 							Add integration
@@ -337,6 +378,22 @@ function ListView({
 													disabled
 												</span>
 											)}
+											{isInherited(entry) && (
+												<span
+													className="rounded-full border border-primary/20 bg-primary/[0.06] px-2 py-0.5 text-[10px] font-medium text-primary"
+													title="Managed by your org's super admins; inherited by every project."
+												>
+													org
+												</span>
+											)}
+											{entry.shadowed && (
+												<span
+													className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+													title="Overridden by this project's same-name integration."
+												>
+													overridden
+												</span>
+											)}
 										</span>
 										<span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
 											<span className="truncate">{kind?.title ?? entry.kind}</span>
@@ -345,7 +402,7 @@ function ListView({
 										</span>
 									</span>
 								</span>
-								{isAdmin && (
+								{canManage && !isInherited(entry) && (
 									<span className="flex shrink-0 items-center justify-end gap-1 border-t pt-2 sm:border-0 sm:pt-0">
 										<Button variant="ghost" size="sm" onPress={() => toggleEnabled(entry)}>
 											{entry.enabled ? 'Disable' : 'Enable'}
@@ -377,7 +434,7 @@ function ListView({
 				isOpen={confirmDelete.isOpen}
 				onClose={confirmDelete.close}
 				title="Delete integration"
-				description={`Delete "${confirmDelete.target?.name}"? New sessions in this project will no longer receive it.`}
+				description={`Delete "${confirmDelete.target?.name}"? New sessions in ${scope === 'org' ? 'every project' : 'this project'} will no longer receive it.`}
 				confirmLabel="Delete"
 				pendingLabel="Deleting..."
 				isPending={deleteIntegration.isPending}
@@ -518,18 +575,18 @@ function CatalogView({
 }
 
 function EditorView({
-	project,
+	scope,
 	kind,
 	entry,
 	onDone,
 }: {
-	project: ProjectDetail;
+	scope: IntegrationsScope;
 	kind: IntegrationKind | undefined;
 	entry?: IntegrationEntry;
 	onDone: () => void;
 }) {
 	const editing = entry !== undefined;
-	const detailQuery = useIntegrationDetailQuery(project.id, entry?.id);
+	const detailQuery = useIntegrationDetailQuery(scope, entry?.id);
 	const detail = detailQuery.data?.detail;
 	if (!kind) {
 		// A stored custom kind may be unavailable after a deployment change.
@@ -542,7 +599,7 @@ function EditorView({
 	return (
 		<EditorForm
 			key={detail?.id ?? kind.kind}
-			project={project}
+			scope={scope}
 			kind={kind}
 			initialName={detail?.name ?? ''}
 			initialConfig={
@@ -557,7 +614,7 @@ function EditorView({
 }
 
 function EditorForm({
-	project,
+	scope,
 	kind,
 	initialName,
 	initialConfig,
@@ -565,7 +622,7 @@ function EditorForm({
 	etag,
 	onDone,
 }: {
-	project: ProjectDetail;
+	scope: IntegrationsScope;
 	kind: IntegrationKind;
 	initialName: string;
 	initialConfig: Record<string, unknown>;
@@ -579,9 +636,9 @@ function EditorForm({
 	const [name, setName] = useState(initialName);
 	const [config, setConfig] = useState(initialConfig);
 	const [errors, setErrors] = useState<Record<string, string>>({});
-	const createIntegration = useCreateIntegration(project.id);
-	const updateIntegration = useUpdateIntegration(project.id);
-	const testIntegration = useTestIntegration(project.id);
+	const createIntegration = useCreateIntegration(scope);
+	const updateIntegration = useUpdateIntegration(scope);
+	const testIntegration = useTestIntegration(scope);
 	const isPending = createIntegration.isPending || updateIntegration.isPending;
 
 	const submit = async () => {
