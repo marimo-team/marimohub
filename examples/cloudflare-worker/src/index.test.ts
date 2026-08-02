@@ -55,4 +55,26 @@ describe('Cloudflare Worker configuration', () => {
 		const deps = buildDeps(new Request('https://hub.example.com'), baseEnv as unknown as Env);
 		expect(deps.policy.superAdmins).toBeUndefined();
 	});
+
+	it('defaults and canonicalizes editor sandbox sharing', () => {
+		expect(
+			buildDeps(new Request('https://hub.example.com'), baseEnv as unknown as Env).policy
+				.editorSandboxSharing,
+		).toBe('shared');
+		expect(
+			buildDeps(new Request('https://hub.example.com'), {
+				...baseEnv,
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: ' EXCLUSIVE ',
+			} as unknown as Env).policy.editorSandboxSharing,
+		).toBe('exclusive');
+	});
+
+	it('rejects an invalid editor sandbox sharing value', () => {
+		expect(() =>
+			buildDeps(new Request('https://hub.example.com'), {
+				...baseEnv,
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'per-user',
+			} as unknown as Env),
+		).toThrow('Invalid MARIMOHUB_EDITOR_SANDBOX_SHARING: per-user (expected shared, exclusive)');
+	});
 });

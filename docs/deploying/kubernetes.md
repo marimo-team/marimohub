@@ -65,9 +65,9 @@ MARIMOHUB_EDITOR_SANDBOX_SHARING=shared                     # shared | exclusive
 ```
 
 See [Configuration → Compute → Kubernetes](../configuration.md#compute) for every
-variable. Read [Editor sessions](../editor-sessions.md) before changing the
-sharing mode. Upgrades require draining edit sessions before replacing API
-replicas.
+variable. Before you change the sharing mode, follow the drain procedure in
+[Editor sessions](../editor-sessions.md#changing-the-sharing-mode). The same
+procedure applies when you upgrade from a release without editor claims.
 
 ## Topology
 

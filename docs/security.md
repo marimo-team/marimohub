@@ -110,7 +110,7 @@ code with the project's secrets and federated credentials injected. See
 [Notebook apps → Who can do what](/apps#who-can-do-what).
 
 Persistent editor access also depends on the
-[editor sandbox-sharing mode](/editor-sessions).
+[editor sandbox-sharing policy](/editor-sessions).
 Use `exclusive` when a sandbox contains user-specific files or settings. Use
 `shared` only when every project editor is trusted with the sandbox's process,
 files, environment, secrets, and credentials.

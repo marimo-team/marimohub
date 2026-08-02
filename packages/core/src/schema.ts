@@ -529,11 +529,17 @@ export const SessionSchema = z.looseObject({
 	 */
 	last_snapshot_at: z.iso.datetime().optional(),
 	/**
-	 * Set once the lifecycle sweep has saved + destroyed the sandbox of an
-	 * already-terminal (`expired`) record, so reclaim runs exactly once instead of
-	 * re-probing a long-gone sandbox every sweep until the record is reaped.
+	 * Set after sandbox destruction is confirmed. Claim replacement and
+	 * reconciliation use it to distinguish terminal records still awaiting teardown
+	 * from sandboxes that are already gone.
 	 */
 	sandbox_reclaimed_at: z.iso.datetime().optional(),
+	/**
+	 * Durable takeover checkpoint written after the strict source/workspace capture
+	 * and before sandbox destruction. A draining retry can safely skip a second
+	 * capture when destruction succeeded but a later session-record write failed.
+	 */
+	takeover_capture_completed_at: z.iso.datetime().optional(),
 	/**
 	 * A discard-only session. This includes viewer throwaways and explicit
 	 * temporary editors: nothing is written back at teardown — no version,
@@ -622,12 +628,12 @@ export const AppClaimSchema = z.object({
 
 export type AppClaim = z.infer<typeof AppClaimSchema>;
 
-export const EditorClaimSchema = z.object({
+export const EditorClaimSchema = z.looseObject({
 	session_id: SessionIdSchema.nullable(),
 	sharing: z.enum(['shared', 'exclusive']),
 	claimed_at: z.iso.datetime(),
 	transfer: z
-		.object({
+		.looseObject({
 			takeover_id: z.string().min(1).max(255),
 			requested_by: UserIdSchema,
 			expected_activity: z.enum(['active', 'idle', 'unknown', 'starting']),

@@ -8,9 +8,19 @@
 
 ## 1. Overview & Design Principles
 
-This document specifies the full bucket schema and architecture for running marimo notebook CRUD operations against S3-compatible storage, with no external database. The design is inspired by Apache Iceberg's metadata indirection pattern: a single atomic pointer (`catalog.json`) is the only mutable file in the system. Everything else is either immutable or append-only.
+This document defines the bucket schema for marimo notebook create, read,
+update, and delete operations. It uses S3-compatible storage without an
+external database. The content model follows the Apache Iceberg metadata
+indirection pattern. `catalog.json` is the only mutable content pointer, and
+immutable snapshots and versions retain history. `_system/` also stores mutable
+coordination records outside the content snapshot chain.
 
-> **Core Invariant:** `catalog.json` is the only file in the content store ever overwritten in place. Every other content write creates a new object. Reads are always consistent and concurrent writes are safe via conditional PUT (`If-Match` on ETag). Outside the content store, `_system/` carries a small set of mutable operational records — sessions (§4.8), the app claim (§4.8.1), identities (§4.10), tokens (§4.11) — that never touch the snapshot chain; the CAS-managed ones (`catalog.json`, session records, the app claim) are each written through exactly one service method.
+> **Core invariant:** `catalog.json` is the only content pointer overwritten in
+> place. Every content-history write creates a new object. `_system/` stores
+> mutable sessions (§4.8), app claims (§4.8.1), editor claims (§4.8.2),
+> identities (§4.10), and tokens (§4.11). These records do not participate in
+> the snapshot chain. Each CAS-managed record is written through its owning core
+> service.
 
 ### Design Goals
 
@@ -127,7 +137,7 @@ s3-bucket/
 
 | Path                                                           | Type     | Description                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | -------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_system/catalog.json`                                         | JSON     | Single entry point. Points to the current snapshot. Only file mutated in-place.                                                                                                                                                                                                                                                                                                                                                        |
+| `_system/catalog.json`                                         | JSON     | Single entry point. Points to the current snapshot. This is the only mutable content pointer.                                                                                                                                                                                                                                                                                                                                          |
 | `_system/snapshots/{id}.json`                                  | JSON     | Immutable index snapshot. Lists all projects and notebooks with metadata. Written once, never modified.                                                                                                                                                                                                                                                                                                                                |
 | `_system/sessions/{pid}/{sid}.json`                            | JSON     | Live session record, partitioned by project so a project-scoped read lists only `_system/sessions/{pid}/`. Created on notebook open, updated by heartbeat, and retired by an explicit stop or lifecycle deadline. Closing a browser tab does not immediately delete it.                                                                                                                                                                                                                                |
 | `_system/apps/{pid}/{nid}.json`                                | JSON     | Per-notebook app-singleton claim: names the app session that owns the notebook's shared app sandbox. Written create-if-absent by the create saga, replaced via ETag CAS when stale, CAS'd to a free marker (`session_id: null`) on teardown. All writes go through `SessionService.claimApp`/`releaseApp`. See §4.8.1.                                                                                                                 |
@@ -362,6 +372,40 @@ Write discipline (all through `SessionService.claimApp` / `releaseApp`, which de
 3. Every teardown path (explicit stop, lifecycle reaper, reconciliation, saga compensation) **frees** the claim when it names the session being torn down, by CAS'ing `session_id` to `null` rather than deleting the object. There is no conditional-delete primitive, so a read-then-delete would drop a claim a new holder acquired between the read and the delete — freeing the singleton under a running app and letting a third session acquire it. The CAS loses that race instead, leaving the new holder's claim intact. The cost is a pointer that outlives the app; rule 5's cleanup removes it.
 4. The create saga **re-asserts** the claim after the session is marked `running`: a slow provision can look like a wedged holder (rule 2) and lose the claim mid-provision, and a running holder is never stale — so the recheck is the last point a steal can be detected. A loser compensates (sandbox destroyed, record terminated) and attaches to the current holder.
 5. Cleanup deletes, outside `claimApp`/`releaseApp`: deleting a notebook (soft or hard) or hard-deleting a project also deletes the claim object(s) under it, so no claim outlives its notebook.
+
+### 4.8.2 `_system/editors/{pid}/{nid}.json`
+
+The editor claim is the persistence fence for edit sandboxes. Exactly one
+non-ephemeral session holds it. Under `shared`, every editor attaches to that
+holder. Under `exclusive`, only the holder attaches; another editor explicitly
+chooses a discard-only temporary session or a takeover.
+
+```json
+{
+	"session_id": "sess-…",
+	"sharing": "exclusive",
+	"claimed_at": "2026-07-31T12:00:00Z",
+	"transfer": {
+		"takeover_id": "client-idempotency-key",
+		"requested_by": "user_b",
+		"phase": "draining",
+		"requested_at": "2026-07-31T12:10:00Z"
+	}
+}
+```
+
+Claim acquisition, stale-holder replacement, release, and takeover phase
+changes use ETag CAS. Snapshot and teardown operations write notebook content
+only when the session still holds the claim.
+
+A takeover moves through three phases:
+
+1. `requested` reserves the expected holder and connection state.
+2. `draining` protects ownership while save or sandbox destruction retries.
+3. `ready` permits only the requester to create the replacement session.
+
+The create route completes the transfer after the replacement reaches
+`running`. A save or destruction failure does not create the replacement.
 
 ### 4.9 `_system/events/{YYYY-MM-DD}/{event-id}.json`
 

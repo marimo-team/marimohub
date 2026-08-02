@@ -195,4 +195,30 @@ describe('SessionRetirer', () => {
 		expect(calls.destroy).toBe(1);
 		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
 	});
+
+	it('resumes after destruction when the terminal status write fails', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		const capture = vi.spyOn(SandboxProvisioner.prototype, 'captureSession');
+		vi.spyOn(sessions, 'markTerminated').mockRejectedValueOnce(
+			new Error('session record unavailable'),
+		);
+		const service = retirer({ create: () => instance, proxy: async () => null });
+
+		await expect(
+			service.retireForTakeover(session, uid('user_01HXY00000000000000000001')),
+		).rejects.toThrow('session record unavailable');
+		const draining = await sessions.getSession(projectId, session.session_id);
+		expect(draining).toMatchObject({
+			status: 'terminating',
+			takeover_capture_completed_at: expect.any(String),
+			sandbox_reclaimed_at: expect.any(String),
+		});
+
+		await service.completeTakeoverDrain(draining);
+
+		expect(capture).toHaveBeenCalledTimes(1);
+		expect(calls.destroy).toBe(1);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+	});
 });

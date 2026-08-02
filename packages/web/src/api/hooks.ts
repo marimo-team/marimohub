@@ -1009,7 +1009,12 @@ export function useStopSession(projectId: string, notebookId: string) {
 	);
 }
 
-export function useEditorSessionQuery(projectId: string, notebookId: string, enabled = true) {
+export function useEditorSessionQuery(
+	projectId: string,
+	notebookId: string,
+	enabled = true,
+	currentUserId?: string,
+) {
 	return useQuery({
 		queryKey: sessionKeys.editor(projectId, notebookId),
 		queryFn: () =>
@@ -1019,7 +1024,8 @@ export function useEditorSessionQuery(projectId: string, notebookId: string, ena
 				}),
 			),
 		enabled,
-		refetchInterval: 10_000,
+		refetchInterval: (query) =>
+			currentUserId && query.state.data?.holder?.user_id === currentUserId ? false : 10_000,
 	});
 }
 

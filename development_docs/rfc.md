@@ -47,7 +47,7 @@ marimohub is meant to be used by enterprises, classrooms, and small data science
 1. **Multi-tenant / untrusted users.** v1 serves one trusted team. Untrusted, internet-facing multi-tenancy is out of scope (see §4, §9).
 2. **Read-side tenant isolation is opt-in.** By default every authenticated user can _see_ the whole catalog; writes are role-gated. Setting `MARIMOHUB_DEFAULT_ROLE=none` turns on per-caller catalog filtering (a non-member cannot see a project), implemented via a denormalized `member_ids` on each snapshot entry so the read model stays 2 GETs ([`bucket_spec.md` §12, §15](./bucket_spec.md)). Fine-grained multi-tenancy (per-notebook ACLs, per-user indexes) remains out of scope.
 3. **A query layer.** No "find notebooks by tag/author across projects" beyond what a single snapshot read supports. No DB means no ad-hoc queries by design.
-4. **Realtime multi-user editing of a notebook.** Collaborative editing remains the kernel/marimo runtime's concern. The hub coordinates one persistent sandbox through a CAS claim and supports shared or exclusive ownership. It does not implement document synchronization.
+4. **Realtime multi-user editing of a notebook.** Collaborative editing remains the kernel/marimo runtime's concern. The hub coordinates one persistent sandbox per notebook through a CAS claim. It supports shared or exclusive ownership but does not implement document synchronization.
 5. **Managed secrets and AI governance.** Not core concerns; handled by dedicated modules (§10).
 6. **Defending against malicious insiders or cross-user XSS.** Out of scope under the trusted-user assumption (§4, §8).
 

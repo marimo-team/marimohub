@@ -16,6 +16,16 @@ export interface SessionRetirerDeps {
 	workdir?: string;
 }
 
+export class TakeoverRetirementError extends Error {
+	readonly drainStarted: boolean;
+
+	constructor(cause: unknown, drainStarted: boolean) {
+		super(cause instanceof Error ? cause.message : 'Could not retire the editor for takeover');
+		this.name = 'TakeoverRetirementError';
+		this.drainStarted = drainStarted;
+	}
+}
+
 /**
  * The one seam through which a session ends. Every path that retires a session
  * — the DELETE route, the create route's dead-kernel retire, the lifecycle
@@ -63,19 +73,25 @@ export class SessionRetirer {
 	 * from capturing and destroying the same sandbox.
 	 */
 	async retireForTakeover(session: Session, requestedBy: Session['user_id']): Promise<void> {
-		const terminating = await this.deps.sessions.beginTerminating(
-			session.project_id,
-			session.session_id,
-			{
-				reason: 'takeover',
-				by: requestedBy,
-			},
-		);
-		if (!terminating.transitioned) {
-			throw new Error('Another request already started terminating the editor session');
+		let drainStarted = false;
+		try {
+			const terminating = await this.deps.sessions.beginTerminating(
+				session.project_id,
+				session.session_id,
+				{
+					reason: 'takeover',
+					by: requestedBy,
+				},
+			);
+			if (!terminating.transitioned) {
+				throw new Error('Another request already started terminating the editor session');
+			}
+			drainStarted = true;
+			await this.teardownForTakeover(terminating.session);
+			await this.deps.sessions.markTerminated(session.project_id, session.session_id);
+		} catch (err) {
+			throw new TakeoverRetirementError(err, drainStarted);
 		}
-		await this.teardownForTakeover(session);
-		await this.deps.sessions.markTerminated(session.project_id, session.session_id);
 	}
 
 	async completeTakeoverDrain(session: Session): Promise<void> {
@@ -84,34 +100,46 @@ export class SessionRetirer {
 	}
 
 	private async teardownForTakeover(session: Session): Promise<void> {
-		if (!session.sandbox_id) return;
+		if (!session.sandbox_id || session.sandbox_reclaimed_at) return;
 		const sandbox = this.deps.compute.create(session.sandbox_id);
-		const persisted = await this.provisioner.captureSession(
-			sandbox,
-			this.deps.notebooks,
-			this.deps.bucket,
-			session.project_id,
-			session.notebook_id,
-			session.user_id,
-			this.deps.persistWorkspace,
-			this.deps.workdir,
-			{ persistEdits: true },
-		);
-		if (persisted) {
-			await captureFilesystemSnapshot(
-				this.deps.compute,
-				this.deps.notebooks,
+		if (!session.takeover_capture_completed_at) {
+			const persisted = await this.provisioner.captureSession(
 				sandbox,
+				this.deps.notebooks,
+				this.deps.bucket,
 				session.project_id,
 				session.notebook_id,
-				{
-					compute_profile: session.compute_profile,
-					compute_resources: session.compute_resources,
-					owner_user_id: session.user_id,
-				},
+				session.user_id,
+				this.deps.persistWorkspace,
+				this.deps.workdir,
+				{ persistEdits: true },
+			);
+			if (persisted) {
+				await captureFilesystemSnapshot(
+					this.deps.compute,
+					this.deps.notebooks,
+					sandbox,
+					session.project_id,
+					session.notebook_id,
+					{
+						compute_profile: session.compute_profile,
+						compute_resources: session.compute_resources,
+						owner_user_id: session.user_id,
+					},
+				);
+			}
+			await this.deps.sessions.markTakeoverCaptureCompleted(
+				session.project_id,
+				session.session_id,
+				new Date().toISOString(),
 			);
 		}
 		await sandbox.destroy();
+		await this.deps.sessions.markSandboxReclaimed(
+			session.project_id,
+			session.session_id,
+			new Date().toISOString(),
+		);
 	}
 
 	/**

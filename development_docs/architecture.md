@@ -105,9 +105,10 @@ no separate database — **storage is the single source of truth**.
 **Why an object store is enough.** The schema uses an atomic pointer
 (`catalog.json`) swapped via conditional PUT (`If-Match` on ETag) as the only
 mutable content pointer. Immutable snapshots and versions retain content
-history; mutable operational records such as sessions and claims remain outside
-that chain and use their own write discipline. This gives consistent reads,
-safe concurrent writes, and free audit history without a transactional database.
+history. Mutable operational records, such as sessions and claims, remain
+outside that chain and use their own write discipline. This gives consistent
+reads, safe concurrent writes, and free audit history without a transactional
+database.
 The single hard requirement on an adapter is **strong
 read-after-write consistency plus conditional writes** — verify these for any
 S3-compatible target before adopting it.
@@ -174,10 +175,11 @@ A new compute backend only has to satisfy the `SandboxProvider` /
 unchanged whether the kernel runs in a Cloudflare Container, a Modal sandbox, or
 a local host subprocess.
 
-**Editor sessions.** `MARIMOHUB_EDITOR_SANDBOX_SHARING` selects one shared
-persistent sandbox or one exclusive owner with explicit temporary/takeover
-paths. A CAS claim under `_system/editors/{pid}/{nid}.json` is the persistence
-fence: only its holder may save. See [`docs/editor-sessions.md`](../docs/editor-sessions.md).
+**Editor sessions.** `MARIMOHUB_EDITOR_SANDBOX_SHARING` selects shared or
+exclusive access to one persistent sandbox per notebook. In exclusive mode,
+other editors can start a temporary sandbox or confirm a takeover. A CAS claim
+at `_system/editors/{pid}/{nid}.json` permits only its holder to save. See
+[`docs/editor-sessions.md`](../docs/editor-sessions.md).
 
 **App sessions (`mode: "app"`).** Besides the persistent edit session, a notebook
 can be served as a read-only application via `marimo run` — a second session

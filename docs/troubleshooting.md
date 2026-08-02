@@ -8,7 +8,7 @@ Common failures and what they mean. Most startup refusals are marimohub failing
 **closed** on purpose — the message tells you exactly what to fix.
 
 For `EDIT_SESSION_OWNED`, `EDIT_SESSION_CHANGED`, or a takeover that remains in
-draining state, see [Editor sessions](/editor-sessions#takeover-safety).
+the `draining` state, see [Editor sessions](/editor-sessions#takeover-safety).
 
 ## The server refuses to start
 

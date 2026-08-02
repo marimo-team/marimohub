@@ -70,6 +70,8 @@ describe('Session routes', () => {
 	});
 
 	const sessionsPath = (suffix = '') => `/projects/${pid}/notebooks/${nid}/sessions${suffix}`;
+	const editorSessionPath = (suffix = '') =>
+		`/projects/${pid}/notebooks/${nid}/editor-session${suffix}`;
 	const sandboxConfig = (overrides: Partial<ApiDeps['sandbox']> = {}): ApiDeps['sandbox'] => ({
 		bucket: { name: 'test', endpoint: '' },
 		hostname: 'localhost',
@@ -77,6 +79,24 @@ describe('Session routes', () => {
 		persistWorkspace: 'source',
 		...overrides,
 	});
+	const exclusiveApi = (
+		userId: ReturnType<typeof uid>,
+		compute: ApiDeps['compute'] = makeFakeCompute(),
+		extraDeps: Partial<ApiDeps> = {},
+	) =>
+		createTestApi({
+			bucket,
+			userId,
+			compute,
+			deps: {
+				...extraDeps,
+				policy: {
+					editorSandboxSharing: 'exclusive',
+					defaultRole: 'editor',
+					...extraDeps.policy,
+				},
+			},
+		}).request;
 
 	async function startSession(): Promise<string> {
 		const data = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
@@ -151,15 +171,8 @@ describe('Session routes', () => {
 			sharing: 'shared',
 		});
 
-		const exclusive = createTestApi({
-			bucket,
-			userId: STRANGER,
-			compute: makeFakeCompute(),
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
-		const state = await expectOk<EditorState>(
-			await exclusive('GET', `${sessionsPath().replace('/sessions', '')}/editor-session`),
-		);
+		const exclusive = exclusiveApi(STRANGER);
+		const state = await expectOk<EditorState>(await exclusive('GET', editorSessionPath()));
 		expect(state).toMatchObject({ sharing: 'exclusive', holder: null });
 
 		const replacement = await expectOk<ApiSession>(await exclusive('POST', sessionsPath()));
@@ -171,18 +184,8 @@ describe('Session routes', () => {
 	});
 
 	it('requires an explicit temporary choice when an exclusive session has another owner', async () => {
-		const exclusiveOwner = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute: makeFakeCompute(),
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
-		const exclusiveOther = createTestApi({
-			bucket,
-			userId: STRANGER,
-			compute: makeFakeCompute(),
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const exclusiveOther = exclusiveApi(STRANGER);
 		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
 		await expectError(await exclusiveOther('POST', sessionsPath()), 409, 'EDIT_SESSION_OWNED');
 		const temporary = await expectOk<ApiSession>(
@@ -194,12 +197,7 @@ describe('Session routes', () => {
 	});
 
 	it('does not restore a filesystem snapshot into a temporary editor sandbox', async () => {
-		const exclusiveOwner = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute: makeFakeCompute(),
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
+		const exclusiveOwner = exclusiveApi(ACTOR);
 		await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
 		await createServices(bucket).notebooks.setFsSnapshot(pid, nid, {
 			snapshot_id: 'snap-other-editor',
@@ -220,12 +218,7 @@ describe('Session routes', () => {
 			},
 			async deleteSnapshot() {},
 		};
-		const exclusiveOther = createTestApi({
-			bucket,
-			userId: STRANGER,
-			compute,
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
+		const exclusiveOther = exclusiveApi(STRANGER, compute);
 
 		const data = await expectOk<ApiSession>(
 			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
@@ -238,44 +231,24 @@ describe('Session routes', () => {
 	it('reports exclusive ownership and completes a warned takeover before replacement', async () => {
 		const ownerCompute = makeFakeCompute();
 		const otherCompute = makeFakeCompute();
-		const exclusiveOwner = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute: ownerCompute,
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
-		const exclusiveOther = createTestApi({
-			bucket,
-			userId: STRANGER,
-			compute: otherCompute,
-			deps: {
-				policy: {
-					editorSandboxSharing: 'exclusive',
-					defaultRole: 'editor',
-					maxConcurrentSessionsPerUser: 1,
-				},
-			},
-		}).request;
+		const exclusiveOwner = exclusiveApi(ACTOR, ownerCompute);
+		const exclusiveOther = exclusiveApi(STRANGER, otherCompute, {
+			policy: { maxConcurrentSessionsPerUser: 1 },
+		});
 		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
 		const temporary = await expectOk<ApiSession>(
 			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
 		);
-		const state = await expectOk<EditorState>(
-			await exclusiveOther('GET', `${sessionsPath().replace('/sessions', '')}/editor-session`),
-		);
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
 		expect(state.holder?.user_id).toBe(ACTOR);
 		expect(state.can_take_over).toBe(true);
 		await expectOk(
-			await exclusiveOther(
-				'POST',
-				`${sessionsPath().replace('/sessions', '')}/editor-session/takeover`,
-				{
-					takeover_id: 'takeover-test-1',
-					expected_holder_session_id: persistent.session_id,
-					expected_activity: state.holder!.activity.state,
-					acknowledge_disruption: true,
-				},
-			),
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-test-1',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
 		);
 		const replacement = await expectOk<ApiSession>(await exclusiveOther('POST', sessionsPath()));
 		expect(replacement.user_id).toBe(STRANGER);
@@ -289,37 +262,21 @@ describe('Session routes', () => {
 	});
 
 	it('keeps the claim protected when the strict takeover save fails', async () => {
-		const exclusiveOwner = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute: makeFakeCompute(),
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
+		const exclusiveOwner = exclusiveApi(ACTOR);
 		const failing = makeFakeSandbox();
 		failing.instance.readFile = async () => {
 			throw new Error('notebook unavailable');
 		};
-		const exclusiveOther = createTestApi({
-			bucket,
-			userId: STRANGER,
-			compute: fakeComputeFrom(failing.instance),
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(failing.instance));
 		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
-		const state = await expectOk<EditorState>(
-			await exclusiveOther('GET', `${sessionsPath().replace('/sessions', '')}/editor-session`),
-		);
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
 		await expectError(
-			await exclusiveOther(
-				'POST',
-				`${sessionsPath().replace('/sessions', '')}/editor-session/takeover`,
-				{
-					takeover_id: 'takeover-save-failure',
-					expected_holder_session_id: persistent.session_id,
-					expected_activity: state.holder!.activity.state,
-					acknowledge_disruption: true,
-				},
-			),
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-save-failure',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
 			503,
 			'SERVICE_UNAVAILABLE',
 		);
@@ -332,37 +289,21 @@ describe('Session routes', () => {
 	});
 
 	it('keeps a failed shutdown claim protected in draining state', async () => {
-		const exclusiveOwner = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute: makeFakeCompute(),
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
+		const exclusiveOwner = exclusiveApi(ACTOR);
 		const failing = makeFakeSandbox();
 		failing.instance.destroy = async () => {
 			throw new Error('destroy unavailable');
 		};
-		const exclusiveOther = createTestApi({
-			bucket,
-			userId: STRANGER,
-			compute: fakeComputeFrom(failing.instance),
-			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(failing.instance));
 		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
-		const state = await expectOk<EditorState>(
-			await exclusiveOther('GET', `${sessionsPath().replace('/sessions', '')}/editor-session`),
-		);
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
 		await expectError(
-			await exclusiveOther(
-				'POST',
-				`${sessionsPath().replace('/sessions', '')}/editor-session/takeover`,
-				{
-					takeover_id: 'takeover-destroy-failure',
-					expected_holder_session_id: persistent.session_id,
-					expected_activity: state.holder!.activity.state,
-					acknowledge_disruption: true,
-				},
-			),
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-destroy-failure',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
 			503,
 			'SERVICE_UNAVAILABLE',
 		);
@@ -374,32 +315,64 @@ describe('Session routes', () => {
 		await expectError(await exclusiveOther('POST', sessionsPath()), 409, 'TAKEOVER_IN_PROGRESS');
 	});
 
-	it('requires reconfirmation whenever the displayed activity changes', async () => {
+	it('does not adopt a concurrent normal stop as takeover draining', async () => {
 		const exclusiveOwner = createTestApi({
 			bucket,
 			userId: ACTOR,
 			compute: makeFakeCompute(),
 			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
-		const activitySandbox = makeFakeSandbox();
+		});
+		const takeoverSandbox = makeFakeSandbox();
 		const exclusiveOther = createTestApi({
 			bucket,
 			userId: STRANGER,
-			compute: fakeComputeFrom(activitySandbox.instance),
+			compute: fakeComputeFrom(takeoverSandbox.instance),
 			deps: { policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' } },
-		}).request;
+		});
+		const persistent = await expectOk<ApiSession>(
+			await exclusiveOwner.request('POST', sessionsPath()),
+		);
+		const state = await expectOk<EditorState>(
+			await exclusiveOther.request('GET', editorSessionPath()),
+		);
+		const normalStopServices = createServices(bucket);
+		vi.spyOn(exclusiveOther.deps.services.sessions, 'beginTerminating').mockImplementation(
+			async () => {
+				const stopped = await normalStopServices.sessions.beginTerminating(
+					pid,
+					persistent.session_id,
+				);
+				return { session: stopped.session, transitioned: false };
+			},
+		);
+
+		await expectError(
+			await exclusiveOther.request('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-normal-stop-race',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+
+		expect(takeoverSandbox.calls.destroy).toBe(0);
+		expect((await normalStopServices.sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
+	});
+
+	it('requires reconfirmation whenever the displayed activity changes', async () => {
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const activitySandbox = makeFakeSandbox();
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(activitySandbox.instance));
 		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
 		await expectError(
-			await exclusiveOther(
-				'POST',
-				`${sessionsPath().replace('/sessions', '')}/editor-session/takeover`,
-				{
-					takeover_id: 'takeover-unknown-change',
-					expected_holder_session_id: persistent.session_id,
-					expected_activity: 'active',
-					acknowledge_disruption: true,
-				},
-			),
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-unknown-change',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: 'active',
+				acknowledge_disruption: true,
+			}),
 			409,
 			'EDIT_SESSION_CHANGED',
 		);
@@ -409,16 +382,12 @@ describe('Session routes', () => {
 
 		activitySandbox.instance.exec = async () => ({ success: true, stdout: '0', stderr: '' });
 		await expectError(
-			await exclusiveOther(
-				'POST',
-				`${sessionsPath().replace('/sessions', '')}/editor-session/takeover`,
-				{
-					takeover_id: 'takeover-idle-change',
-					expected_holder_session_id: persistent.session_id,
-					expected_activity: 'active',
-					acknowledge_disruption: true,
-				},
-			),
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-idle-change',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: 'active',
+				acknowledge_disruption: true,
+			}),
 			409,
 			'EDIT_SESSION_CHANGED',
 		);

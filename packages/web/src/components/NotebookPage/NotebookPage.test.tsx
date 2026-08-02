@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
 import { Suspense } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotebookPage } from './NotebookPage';
 import { ThemeProvider } from '@/context/ThemeContext';
+import { sessionKeys } from '@/api/queryKeys';
 import type { Session } from '@/types';
 
 const PID = 'proj-x';
@@ -56,6 +57,8 @@ interface FetchOptions {
 	editorCanTakeOver?: boolean;
 	editorTransfer?: 'requested' | 'draining' | 'ready';
 	editorStateFailures?: number;
+	editorStateFailOn?: number[];
+	meFailures?: number;
 	mePromise?: Promise<{
 		id: string;
 		email: string;
@@ -69,6 +72,7 @@ function makeFetch(opts: FetchOptions) {
 	let takeoverComplete = false;
 	let sessionPostCount = 0;
 	let editorStateRequestCount = 0;
+	let meRequestCount = 0;
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? 'GET';
@@ -152,6 +156,16 @@ function makeFetch(opts: FetchOptions) {
 			});
 		}
 		if (url.endsWith('/me')) {
+			meRequestCount += 1;
+			if (meRequestCount <= (opts.meFailures ?? 0)) {
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'SERVICE_UNAVAILABLE', message: 'identity unavailable' },
+					}),
+					{ status: 503, headers: { 'content-type': 'application/json' } },
+				);
+			}
 			return ok(
 				opts.mePromise
 					? await opts.mePromise
@@ -160,7 +174,10 @@ function makeFetch(opts: FetchOptions) {
 		}
 		if (url.endsWith(`/notebooks/${NID}/editor-session`)) {
 			editorStateRequestCount += 1;
-			if (editorStateRequestCount <= (opts.editorStateFailures ?? 0)) {
+			if (
+				editorStateRequestCount <= (opts.editorStateFailures ?? 0) ||
+				opts.editorStateFailOn?.includes(editorStateRequestCount)
+			) {
 				return new Response(
 					JSON.stringify({
 						success: false,
@@ -214,13 +231,14 @@ function renderPage(variant: 'edit' | 'app' = 'edit') {
 			</QueryClientProvider>
 		</MemoryRouter>
 	);
-	return render(
+	const view = render(
 		<Routes>
 			<Route path="/projects/:pid/notebooks/:nid" element={<NotebookPage />} />
 			<Route path="/projects/:pid/notebooks/:nid/app" element={<NotebookPage variant="app" />} />
 		</Routes>,
 		{ wrapper },
 	);
+	return { ...view, client };
 }
 
 const sessionPosts = (impl: ReturnType<typeof makeFetch>) =>
@@ -318,6 +336,26 @@ describe('NotebookPage viewer modes', () => {
 		expect(await screen.findByText(/owns the saved editing session/)).toBeInTheDocument();
 	});
 
+	it('does not classify an exclusive holder when the current-user request fails', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'editor',
+			editorSharing: 'exclusive',
+			editorOwner: { id: 'me', activity: 'idle' },
+			meFailures: 1,
+		});
+		renderPage();
+
+		expect(
+			await screen.findByText('Unable to confirm whether you own the editor sandbox.'),
+		).toBeInTheDocument();
+		expect(screen.queryByText(/owns the saved editing session/)).toBeNull();
+		expect(sessionPosts(fetch)).toHaveLength(0);
+
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		await waitFor(() => expect(sessionPosts(fetch)).toHaveLength(1));
+	});
+
 	it('shows a transfer in progress without offering another takeover', async () => {
 		makeFetch({
 			role: 'editor',
@@ -402,6 +440,31 @@ describe('NotebookPage viewer modes', () => {
 		expect(sessionPosts(fetch)).toHaveLength(0);
 		await user.click(screen.getByRole('button', { name: 'Retry' }));
 		await waitFor(() => expect(sessionPosts(fetch)).toHaveLength(1));
+	});
+
+	it('keeps a temporary editor visible when an ownership refresh fails', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'editor',
+			editorSharing: 'exclusive',
+			editorOwner: { id: 'other', activity: 'idle' },
+			editorStateFailOn: [2],
+			session: runningSession({ ephemeral: true, editor_sandbox_sharing: 'exclusive' }),
+		});
+		const { client, container } = renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open temporary sandbox' }));
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+
+		await act(async () => {
+			await client.refetchQueries({ queryKey: sessionKeys.editor(PID, NID) });
+		});
+
+		expect(
+			fetch.mock.calls.filter(([url]) => String(url).endsWith('/editor-session')),
+		).toHaveLength(2);
+		expect(screen.queryByText('Unable to check who owns the editor sandbox.')).toBeNull();
+		expect(container.querySelector('iframe')).not.toBeNull();
 	});
 
 	it('editor: starts a session and embeds the kernel iframe, no banner', async () => {

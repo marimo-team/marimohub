@@ -125,7 +125,8 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		// `user_id` is intentionally surfaced (the "started by" attribution UI); the
 		// remaining fields are compute internals that stay server-side. The
 		// lifecycle-sweep bookkeeping (`expires_at`, `last_snapshot_at`,
-		// `sandbox_reclaimed_at`) stays internal until the UI surfaces the deadline.
+		// `sandbox_reclaimed_at`, `takeover_capture_completed_at`) stays internal until
+		// the UI surfaces the deadline.
 		const internalSessionFields = [
 			'runtime',
 			'sandbox_id',
@@ -134,6 +135,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'expires_at',
 			'last_snapshot_at',
 			'sandbox_reclaimed_at',
+			'takeover_capture_completed_at',
 		];
 		// `can` is response-only: the caller's evaluated grants, computed per
 		// request — never stored on the record.

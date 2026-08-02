@@ -7,8 +7,8 @@ description: Select and configure the sandbox backend that runs marimohub notebo
 Compute is where each notebook's Python kernel runs. The web UI connects to an
 on-demand sandbox created by the selected compute backend.
 
-See [Editor sessions](./editor-sessions.md) for how editors share those sandboxes,
-shared, isolated, and transferred between editors.
+See [Editor sessions](./editor-sessions.md) to choose shared or exclusive access
+to persistent editor sandboxes.
 
 Selector: `MARIMOHUB_COMPUTE_BACKEND`. Full variables:
 [Configuration -> Compute](./configuration.md#compute).

@@ -11,8 +11,9 @@ back to local auth.
 Selector: `MARIMOHUB_AUTH_BACKEND`. Full variables:
 [Configuration -> Auth](./configuration.md#auth).
 
-Project roles decide who can edit. [Editor sandbox sharing](./editor-sessions.md)
-controls whether those editors share one live sandbox or use exclusive ownership.
+Project roles decide who can edit a notebook. The
+[editor sandbox-sharing policy](./editor-sessions.md) controls whether those
+editors share one live sandbox or use exclusive ownership.
 
 ## Choose a backend
 

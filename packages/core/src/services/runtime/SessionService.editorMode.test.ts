@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import type { UserId } from '../../ids';
+import { paths } from '../../paths';
 import { MemoryBucket, uid } from '../../testing';
 import { SessionService } from './SessionService';
 
@@ -8,12 +9,14 @@ const USER_A = uid('user_a');
 const USER_B = uid('user_b');
 
 describe('SessionService editor claims', () => {
+	let bucket: MemoryBucket;
 	let sessions: SessionService;
 	const projectId = createProjectId();
 	const notebookId = createNotebookId();
 
 	beforeEach(() => {
-		sessions = new SessionService(new MemoryBucket());
+		bucket = new MemoryBucket();
+		sessions = new SessionService(bucket);
 	});
 
 	afterEach(() => vi.useRealTimers());
@@ -75,6 +78,137 @@ describe('SessionService editor claims', () => {
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
 			owner.session_id,
 		);
+	});
+
+	it('protects a claimed sandbox until teardown confirms it was reclaimed', async () => {
+		const owner = await sessions.createSession({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: USER_A,
+			sandbox_id: createSandboxId(),
+			mode: 'edit',
+			editor_sandbox_sharing: 'exclusive',
+		});
+		const runningOwner = await sessions.setRunning(
+			projectId,
+			owner.session_id,
+			'https://owner.example',
+		);
+		await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+		const replacement = await running(USER_B);
+
+		await sessions.beginTerminating(projectId, owner.session_id);
+		expect(
+			(
+				await sessions.claimEditor(
+					projectId,
+					notebookId,
+					replacement.session_id,
+					'exclusive',
+					USER_B,
+				)
+			).claimed,
+		).toBe(false);
+
+		await sessions.markTerminated(projectId, owner.session_id);
+		expect(
+			(
+				await sessions.claimEditor(
+					projectId,
+					notebookId,
+					replacement.session_id,
+					'exclusive',
+					USER_B,
+				)
+			).claimed,
+		).toBe(false);
+
+		await sessions.markSandboxReclaimed(
+			projectId,
+			runningOwner.session_id,
+			new Date().toISOString(),
+		);
+		expect(
+			(
+				await sessions.claimEditor(
+					projectId,
+					notebookId,
+					replacement.session_id,
+					'exclusive',
+					USER_B,
+				)
+			).claimed,
+		).toBe(true);
+	});
+
+	it('preserves unknown editor claim and transfer fields during CAS mutations', async () => {
+		const owner = await running(USER_A);
+		const key = paths.editorClaim(projectId, notebookId);
+		await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+		await sessions.reserveTakeover(projectId, notebookId, {
+			takeoverId: 'future-fields',
+			requestedBy: USER_B,
+			expectedHolder: owner.session_id,
+			expectedActivity: 'idle',
+		});
+		const stored = await bucket.get(key);
+		const claim = (await stored!.json()) as Record<string, unknown>;
+		await bucket.put(
+			key,
+			JSON.stringify({
+				...claim,
+				future_claim_field: { value: 1 },
+				transfer: {
+					...(claim.transfer as Record<string, unknown>),
+					future_transfer_field: ['kept'],
+				},
+			}),
+		);
+
+		await sessions.setTakeoverPhase(projectId, notebookId, 'future-fields', 'draining');
+
+		const updated = (await (await bucket.get(key))!.json()) as Record<string, unknown>;
+		expect(updated.future_claim_field).toEqual({ value: 1 });
+		expect(updated.transfer).toMatchObject({
+			phase: 'draining',
+			future_transfer_field: ['kept'],
+		});
+
+		const replacement = await running(USER_B);
+		await sessions.setTakeoverPhase(
+			projectId,
+			notebookId,
+			'future-fields',
+			'ready',
+			replacement.session_id,
+		);
+		await sessions.completeTakeover(projectId, notebookId, 'future-fields', replacement.session_id);
+		const completed = (await (await bucket.get(key))!.json()) as Record<string, unknown>;
+		expect(completed.future_claim_field).toEqual({ value: 1 });
+		expect(completed.transfer).toBeUndefined();
+	});
+
+	it('preserves unknown editor claim fields when replacing a free claim', async () => {
+		const owner = await running(USER_A);
+		const key = paths.editorClaim(projectId, notebookId);
+		await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+		await sessions.releaseEditorFor(owner);
+		const stored = await bucket.get(key);
+		await bucket.put(
+			key,
+			JSON.stringify({
+				...(await stored!.json()),
+				future_claim_field: 'kept',
+			}),
+		);
+		const replacement = await running(USER_B);
+
+		await sessions.claimEditor(projectId, notebookId, replacement.session_id, 'exclusive', USER_B);
+
+		expect(await (await bucket.get(key))!.json()).toMatchObject({
+			session_id: replacement.session_id,
+			future_claim_field: 'kept',
+		});
 	});
 
 	it.each(['terminated', 'failed'] as const)(

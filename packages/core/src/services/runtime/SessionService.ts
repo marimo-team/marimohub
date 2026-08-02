@@ -191,10 +191,20 @@ export class SessionService {
 		return this.mutate(projectId, id, (session) => ({ ...session, last_snapshot_at: at }));
 	}
 
-	/** Record that the lifecycle sweep saved + destroyed the sandbox of an
-	 * already-terminal record, so reclaim is attempted exactly once. */
+	/** Record provider-confirmed sandbox destruction for claim fencing and reconciliation. */
 	async markSandboxReclaimed(projectId: ProjectId, id: SessionId, at: string): Promise<Session> {
 		return this.mutate(projectId, id, (session) => ({ ...session, sandbox_reclaimed_at: at }));
+	}
+
+	async markTakeoverCaptureCompleted(
+		projectId: ProjectId,
+		id: SessionId,
+		at: string,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => ({
+			...session,
+			takeover_capture_completed_at: at,
+		}));
 	}
 
 	/** Refresh a live session's heartbeat (keeps it off the TTL reaper). Coalesced
@@ -577,13 +587,24 @@ export class SessionService {
 	): Promise<boolean> {
 		try {
 			const session = await this.getSession(projectId, holder);
+			if (
+				session.notebook_id !== notebookId ||
+				sessionMode(session) !== 'edit' ||
+				session.ephemeral
+			) {
+				return false;
+			}
+			if (session.status === 'running') return true;
+			if (
+				session.status === 'starting' &&
+				Date.now() - new Date(session.started_at).getTime() < HEARTBEAT_TTL_MS
+			) {
+				return true;
+			}
 			return (
-				session.notebook_id === notebookId &&
-				sessionMode(session) === 'edit' &&
-				!session.ephemeral &&
-				(session.status === 'running' ||
-					(session.status === 'starting' &&
-						Date.now() - new Date(session.started_at).getTime() < HEARTBEAT_TTL_MS))
+				!!session.sandbox_id &&
+				!session.sandbox_reclaimed_at &&
+				(session.status === 'terminating' || isTerminal(session.status))
 			);
 		} catch (err) {
 			if (err instanceof NotFoundError) return false;
@@ -641,8 +662,9 @@ export class SessionService {
 				) {
 					return { claimed: false, claim: current };
 				}
-				await this.bucket.put(key, JSON.stringify(next), { onlyIfEtagMatches: obj.etag });
-				return { claimed: true, claim: next };
+				const replacement = { ...current, ...next, transfer: undefined };
+				await this.bucket.put(key, JSON.stringify(replacement), { onlyIfEtagMatches: obj.etag });
+				return { claimed: true, claim: replacement };
 			},
 			{
 				onConflict: () => this.metrics.increment('sessions.editor_claim.conflict'),
@@ -794,9 +816,11 @@ export class SessionService {
 					throw new EditSessionChangedError();
 				}
 				return {
+					...claim,
 					session_id: replacementSessionId,
 					sharing: 'exclusive',
 					claimed_at: new Date().toISOString(),
+					transfer: undefined,
 				};
 			},
 		);

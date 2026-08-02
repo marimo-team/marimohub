@@ -137,26 +137,30 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const viewerHasEditKernel = !!viewerGrants?.includes('edit');
 	const staticView = !isApp && isViewer && viewerGrants !== undefined && !viewerHasEditKernel;
 	const resolvingMode = !isApp && isViewer && viewerGrants === undefined;
-	const { data: me, isFetched: userResolved } = useUserQuery();
+	const userQuery = useUserQuery();
+	const me = userQuery.data;
+	const currentUserId = me?.id;
 	const capabilitiesResolved = capabilities !== undefined || capabilitiesError;
 	const configuredEditorSharing = capabilities?.editor_sandbox_sharing ?? 'shared';
 	const needsEditorState =
 		!isApp && !isViewer && capabilitiesResolved && configuredEditorSharing === 'exclusive';
-	const editorStateQuery = useEditorSessionQuery(pid!, nid!, needsEditorState);
+	const editorStateQuery = useEditorSessionQuery(pid!, nid!, needsEditorState, currentUserId);
 	const editorState = editorStateQuery.data;
 	const otherOwner =
 		needsEditorState &&
-		userResolved &&
+		currentUserId !== undefined &&
 		editorState?.holder?.user_id !== undefined &&
-		editorState.holder.user_id !== me?.id;
+		editorState.holder.user_id !== currentUserId;
 	const showEditorChoice = !!otherOwner && editIntent !== 'temporary';
 	const editorDecisionReady =
 		isApp ||
 		isViewer ||
 		(capabilitiesResolved &&
 			(!needsEditorState ||
-				(editorStateQuery.isSuccess && (!editorState?.holder || userResolved))));
+				(editorStateQuery.isSuccess && (!editorState?.holder || currentUserId !== undefined))));
 	const editorStateFailed = needsEditorState && editorStateQuery.isError;
+	const identityStateFailed =
+		needsEditorState && editorStateQuery.isSuccess && !!editorState?.holder && userQuery.isError;
 	const takeover = useTakeoverEditorSession(pid!, nid!);
 
 	const {
@@ -319,6 +323,9 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	};
 	const sharedPersistentEditor =
 		!isApp && session?.editor_sandbox_sharing === 'shared' && !session.ephemeral;
+	const showEditorStateFailure = editorStateFailed && !session && !showEditorChoice;
+	const showIdentityStateFailure =
+		identityStateFailed && !session && !showEditorChoice && !showEditorStateFailure;
 
 	return (
 		<div className="flex h-dvh flex-col">
@@ -460,7 +467,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 				</div>
 			)}
 
-			{editorStateFailed && (
+			{showEditorStateFailure && (
 				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
 					<AlertTriangle className="size-8 text-destructive" />
 					<p className="max-w-md text-sm text-destructive">
@@ -481,8 +488,31 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 				</div>
 			)}
 
-			{(isProvisioning || resolvingMode || (!isApp && !isViewer && !editorDecisionReady)) &&
-				!editorStateFailed &&
+			{showIdentityStateFailure && (
+				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+					<AlertTriangle className="size-8 text-destructive" />
+					<p className="max-w-md text-sm text-destructive">
+						Unable to confirm whether you own the editor sandbox.
+					</p>
+					<div className="flex gap-2">
+						<Button
+							variant="primary"
+							isDisabled={userQuery.isFetching}
+							onPress={() => void userQuery.refetch()}
+						>
+							{userQuery.isFetching ? 'Checking...' : 'Retry'}
+						</Button>
+						<Button variant="ghost" onPress={backToProject}>
+							Back
+						</Button>
+					</div>
+				</div>
+			)}
+
+			{!session &&
+				(isProvisioning || resolvingMode || (!isApp && !isViewer && !editorDecisionReady)) &&
+				!showEditorStateFailure &&
+				!showIdentityStateFailure &&
 				!showEditorChoice && (
 					<div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
 						<div

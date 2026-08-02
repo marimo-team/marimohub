@@ -43,6 +43,7 @@ import {
 	EditSessionOwnedError,
 	EditSessionChangedError,
 	TakeoverInProgressError,
+	TakeoverRetirementError,
 	kernelActiveConnections,
 	ValidationError,
 	workspaceSourcePolicy,
@@ -683,11 +684,8 @@ app.openapi(takeoverEditorSession, async (c) => {
 		try {
 			await sessionRetirer(deps).retireForTakeover(holder, user.id);
 			await deps.services.sessions.setTakeoverPhase(pid, nid, body.takeover_id, 'ready');
-		} catch {
-			const current = await deps.services.sessions
-				.getSession(pid, holder.session_id)
-				.catch(() => holder);
-			if (current.status === 'terminating') {
+		} catch (err) {
+			if (err instanceof TakeoverRetirementError && err.drainStarted) {
 				await deps.services.sessions
 					.setTakeoverPhase(pid, nid, body.takeover_id, 'draining')
 					.catch(() => {});
@@ -1082,9 +1080,10 @@ app.openapi(createSession, async (c) => {
 
 					// Integrations: like secrets, FAILS CLOSED — a configured data source is
 					// load-bearing, so a render failure aborts provisioning rather than
-					// starting a sandbox with partial config. Never for an ephemeral sandbox.
+					// starting a sandbox with partial config. Viewer sandboxes are restricted;
+					// temporary editor sandboxes retain editor credentials.
 					const resolveIntegrationEnv = async () => {
-						if (!(deps.integrations && !ephemeral)) return;
+						if (!(deps.integrations && !restrictedViewerCredentials)) return;
 						try {
 							const render = await deps.integrations.resolveForSession(pid, {
 								sessionId: session!.session_id,

@@ -41,8 +41,12 @@ export function ConfirmDialog({
 	onConfirm,
 	children,
 }: ConfirmDialogProps) {
+	const handleClose = () => {
+		if (!isPending) onClose();
+	};
+
 	return (
-		<DialogModal isOpen={isOpen} onClose={onClose} title={title} width="sm">
+		<DialogModal isOpen={isOpen} onClose={handleClose} title={title} width="sm">
 			<form
 				aria-busy={isPending}
 				onSubmit={(e) => {
@@ -57,7 +61,7 @@ export function ConfirmDialog({
 					<p className="text-sm leading-relaxed text-muted-foreground">{description}</p>
 					{children}
 					<div className="flex justify-end gap-2 pt-2 max-md:flex-col">
-						<Button type="button" variant="ghost" onPress={onClose} isDisabled={isPending}>
+						<Button type="button" variant="ghost" onPress={handleClose} isDisabled={isPending}>
 							Cancel
 						</Button>
 						<Button

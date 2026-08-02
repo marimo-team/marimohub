@@ -35,8 +35,9 @@ the leading `v`. Start from
 [`charts/marimohub/ci/example-values.yaml`](https://github.com/marimo-team/marimohub/blob/main/charts/marimohub/ci/example-values.yaml).
 Reference the secret you created with `secrets.existingSecret: marimohub-secrets`.
 The full `MARIMOHUB_*` surface is in [Configuration](../configuration.md).
-Set `config.MARIMOHUB_EDITOR_SANDBOX_SHARING` to `shared` or `exclusive`; review
-the required drain procedure before changing it in an existing deployment.
+Set `config.MARIMOHUB_EDITOR_SANDBOX_SHARING` to `shared` or `exclusive`. Before
+you change it in an existing deployment, follow the required drain procedure in
+[Editor sessions](../editor-sessions.md#changing-the-sharing-mode).
 
 ## Update
 

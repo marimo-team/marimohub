@@ -151,7 +151,7 @@ export {
 	resolveRestoreSnapshot,
 } from './content/filesystemSnapshots';
 export { SessionService } from './runtime/SessionService';
-export { SessionRetirer } from './runtime/SessionRetirer';
+export { SessionRetirer, TakeoverRetirementError } from './runtime/SessionRetirer';
 export type { SessionRetirerDeps } from './runtime/SessionRetirer';
 
 /**
