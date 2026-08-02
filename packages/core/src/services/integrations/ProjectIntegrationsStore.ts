@@ -441,16 +441,22 @@ class ScopedIntegrationsStore {
 		scope: IntegrationScope,
 		id: IntegrationId,
 		expectedVersion?: string,
-	): Promise<void> {
+	): Promise<boolean> {
 		const integrationPaths = scope.integration(id);
 		let name: string | undefined;
+		// Whether a head was actually removed (or an interrupted removal resumed) —
+		// an absent id (deleted earlier, or living in the OTHER tier) still succeeds
+		// but must not read as a deletion, e.g. in the audit trail.
+		let existed = false;
 		try {
 			name = await this.tombstoneHead(scope, id, expectedVersion);
+			existed = name !== undefined;
 		} catch (err) {
 			if (err instanceof StaleHeadError) throw err.precondition;
 			// A head that cannot be parsed has no version to check and nothing to
 			// tombstone, but must still be removable — sweep its objects unguarded.
 			if (!(err instanceof ValidationError)) throw err;
+			existed = true;
 		}
 		const strays = (await listAllObjects(this.bucket, integrationPaths.base))
 			.map((o) => o.key)
@@ -462,6 +468,7 @@ class ScopedIntegrationsStore {
 		// ever reclaim them.
 		await this.bucket.delete(integrationPaths.head);
 		if (name !== undefined) await this.releaseName(scope, name, id);
+		return existed;
 	}
 
 	/**
@@ -998,7 +1005,7 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
 		return this.store.update(projectScope(projectId), id, input, actor, expectedVersion);
 	}
 
-	delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<void> {
+	delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<boolean> {
 		return this.store.delete(projectScope(projectId), id, expectedVersion);
 	}
 
@@ -1079,7 +1086,7 @@ export class OrgIntegrationsStore implements OrgIntegrationsProvider {
 		return this.store.update(ORG_SCOPE, id, input, actor, expectedVersion);
 	}
 
-	delete(id: IntegrationId, expectedVersion?: string): Promise<void> {
+	delete(id: IntegrationId, expectedVersion?: string): Promise<boolean> {
 		return this.store.delete(ORG_SCOPE, id, expectedVersion);
 	}
 

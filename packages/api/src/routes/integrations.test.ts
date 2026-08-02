@@ -654,12 +654,14 @@ describe('Org integrations routes', () => {
 
 		await expectOk(await asRoot('DELETE', `/org/integrations/${created.id}`));
 		await expectError(await asRoot('GET', `/org/integrations/${created.id}`), 404);
+		// The repeat is idempotent (200) but must not fabricate a second deletion.
+		await expectOk(await asRoot('DELETE', `/org/integrations/${created.id}`));
 
 		const events = await services.events.getEvents(new Date().toISOString().slice(0, 10));
 		const names = events.map((e) => e.event);
 		expect(names).toContain('org_integration.create');
 		expect(names).toContain('org_integration.update');
-		expect(names).toContain('org_integration.delete');
+		expect(names.filter((n) => n === 'org_integration.delete')).toHaveLength(1);
 		expect(JSON.stringify(events)).not.toContain('sup3r-secret');
 	});
 
@@ -700,6 +702,16 @@ describe('Org integrations routes', () => {
 			await asUser('PATCH', `/projects/${pid}/integrations/${orgId}`, { enabled: false }),
 			404,
 		);
+		// A project-route delete of the org id is an idempotent no-op: 200, the org
+		// instance survives, and no deletion enters the project's audit trail.
+		await expectOk(await asUser('DELETE', `/projects/${pid}/integrations/${orgId}`));
+		expect(await expectOk(await asRoot('GET', `/org/integrations/${orgId}`))).toMatchObject({
+			name: 'warehouse',
+		});
+		const events = await expectOk<Record<string, unknown>[]>(
+			await asUser('GET', `/projects/${pid}/events`),
+		);
+		expect(events.map((e) => e.event)).not.toContain('integration.delete');
 	});
 
 	it('404s (before the admin gate) when the deployment has integrations disabled', async () => {

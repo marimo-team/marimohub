@@ -23,6 +23,22 @@ function setup(
 			const url = String(input);
 			if (url === '/api/v1/me') return jsonOk(me);
 			if (url === '/api/v1/me/tokens') return jsonOk([]);
+			if (url === '/api/v1/integrations/kinds') return jsonOk([]);
+			if (url === '/api/v1/org/integrations') {
+				return jsonOk([
+					{
+						id: 'intg-1',
+						kind: 'postgres',
+						name: 'warehouse',
+						enabled: true,
+						current_version: 1,
+						created_by: 'u',
+						created_at: '',
+						updated_at: '',
+						scope: 'org',
+					},
+				]);
+			}
 			throw new Error(`unexpected fetch: ${init?.method ?? 'GET'} ${url}`);
 		}),
 	);
@@ -112,7 +128,7 @@ describe('Header', () => {
 		expect(screen.queryByRole('menuitem', { name: /Org integrations/ })).not.toBeInTheDocument();
 	});
 
-	it('opens the org integrations dialog for a super admin', async () => {
+	it('opens the org integrations dialog for a super admin and lists the org entries', async () => {
 		const { user } = setup(undefined, { ...USER, is_super_admin: true });
 		await openUserMenu(user);
 
@@ -121,5 +137,8 @@ describe('Header', () => {
 		await waitFor(() =>
 			expect(screen.getByRole('heading', { name: 'Org integrations' })).toBeInTheDocument(),
 		);
+		// The list must come from GET /org/integrations, not the project routes.
+		expect(await screen.findByText('warehouse')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Edit warehouse' })).toBeInTheDocument();
 	});
 });

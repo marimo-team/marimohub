@@ -516,10 +516,14 @@ app.openapi(deleteIntegration, async (c) => {
 	const { pid, iid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
 	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
-	await integrations.delete(pid, iid, ifMatchToken(c));
-	await deps.services.events
-		.append({ event: 'integration.delete', actor: user.id, project_id: pid, integration_id: iid })
-		.catch(() => {});
+	// A no-op delete (already gone, or an id from the org tier) still succeeds
+	// but must not fabricate an audit-trail deletion.
+	const deleted = await integrations.delete(pid, iid, ifMatchToken(c));
+	if (deleted) {
+		await deps.services.events
+			.append({ event: 'integration.delete', actor: user.id, project_id: pid, integration_id: iid })
+			.catch(() => {});
+	}
 	return c.json({ success: true }, 200);
 });
 
@@ -654,10 +658,12 @@ app.openapi(deleteOrgIntegration, async (c) => {
 	const { iid } = c.req.valid('param');
 	const integrations = requireOrgIntegrations(deps);
 	assertSuperAdmin(user, deps.policy);
-	await integrations.delete(iid, ifMatchToken(c));
-	await deps.services.events
-		.append({ event: 'org_integration.delete', actor: user.id, integration_id: iid })
-		.catch(() => {});
+	const deleted = await integrations.delete(iid, ifMatchToken(c));
+	if (deleted) {
+		await deps.services.events
+			.append({ event: 'org_integration.delete', actor: user.id, integration_id: iid })
+			.catch(() => {});
+	}
 	return c.json({ success: true }, 200);
 });
 

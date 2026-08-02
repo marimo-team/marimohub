@@ -199,9 +199,11 @@ export interface IntegrationsProvider {
 	 * changed since the caller read it, so a stale delete cannot erase an edit the
 	 * caller never saw. The check is atomic with the commit: an update landing
 	 * while the delete is in flight also produces 412, and nothing is removed.
-	 * Ignored once the integration is already gone.
+	 * Ignored once the integration is already gone. Resolves `false` when there
+	 * was nothing to delete — still a success, but callers must not record it as
+	 * a deletion (e.g. in the audit trail).
 	 */
-	delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<void>;
+	delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<boolean>;
 	listVersions(
 		projectId: ProjectId,
 		id: IntegrationId,
@@ -238,7 +240,7 @@ export interface OrgIntegrationsProvider {
 		actor: UserId,
 		expectedVersion?: string,
 	): Promise<IntegrationDetail>;
-	delete(id: IntegrationId, expectedVersion?: string): Promise<void>;
+	delete(id: IntegrationId, expectedVersion?: string): Promise<boolean>;
 	listVersions(
 		id: IntegrationId,
 		page?: IntegrationVersionPageRequest,

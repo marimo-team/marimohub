@@ -280,8 +280,9 @@ describe('ProjectIntegrationsStore', () => {
 			ACTOR,
 		);
 		await store.update(pid, created.id, { config: { token: 't2' } }, ACTOR);
-		await store.delete(pid, created.id);
-		await store.delete(pid, created.id);
+		// The repeat succeeds but reports that nothing was removed.
+		await expect(store.delete(pid, created.id)).resolves.toBe(true);
+		await expect(store.delete(pid, created.id)).resolves.toBe(false);
 		await expect(store.get(pid, created.id)).rejects.toThrow(NotFoundError);
 		expect(await store.list(pid)).toEqual([]);
 	});
@@ -1454,7 +1455,8 @@ describe('OrgIntegrationsStore + project inheritance', () => {
 			ACTOR,
 		);
 		await expect(project.get(pid, created.id)).rejects.toThrow(NotFoundError);
-		await expect(project.delete(pid, created.id)).resolves.toBeUndefined();
+		// Idempotent success, but reported as a no-op — the org instance survives.
+		await expect(project.delete(pid, created.id)).resolves.toBe(false);
 		expect((await org.get(created.id)).name).toBe('warehouse');
 	});
 

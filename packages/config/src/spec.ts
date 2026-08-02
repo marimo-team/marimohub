@@ -1205,17 +1205,35 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		],
 	},
 	{
-		name: 'Project integrations',
+		name: 'Integrations',
 		selector: 'MARIMOHUB_INTEGRATIONS',
 		selectorDefault: 'off',
-		description:
-			'Versioned, project-scoped data-source configs (PostgreSQL, PyIceberg REST/SQL/Hive/Glue/DynamoDB/BigQuery catalogs, Trino, PySpark over Spark Connect, custom env) that project admins register once and every session in the project receives as env vars + files. The hub injects connection config, not Python libraries — each kind lists the packages its contract assumes, added per notebook. Opt-in (`on`): enable only after every replica runs a release that preserves unknown session fields, so a rolling deploy cannot strip the session audit pin (see the two-phase policy in development_docs/migrations.md); it otherwise needs nothing but the deployment bucket. Secret config fields (passwords, tokens) are encrypted with the managed-secret KEK (`MARIMOHUB_SECRETS_KEK`); without it, only secret-free configs can be saved. A render failure fails the session closed (disable the broken integration to unblock). See docs/integrations.md.',
+		description: `Versioned data-source configuration supports PostgreSQL, PyIceberg catalogs,
+Trino, PySpark over Spark Connect, and custom environment variables. Project
+admins configure one project. Super admins can configure organization-wide
+integrations that are available to all projects.
+
+New, non-ephemeral sessions receive the applicable configuration as environment
+variables and files. The hub injects configuration, not Python libraries. Each
+kind lists the packages to add to the notebook.
+
+Enable this feature only after every replica can preserve unknown session
+fields. Otherwise, an older replica can remove the integration audit pin during
+a rolling deployment. See the two-phase policy in
+\`development_docs/migrations.md\`. The feature requires only the deployment
+bucket.
+
+Secret fields use the managed-secret KEK (\`MARIMOHUB_SECRETS_KEK\`). Without a
+KEK, you can save only configurations without secrets. A rendering error blocks
+the session. Disable or override the failing integration to restore access. See
+\`docs/integrations.md\`.`,
 		backends: [
 			{
 				name: 'On',
 				selectorValue: 'on',
-				description:
-					'Integrations CRUD + session injection enabled, stored under `projects/{pid}/integrations/`.',
+				description: `Integration management and session injection are enabled. Project entries use
+\`projects/{pid}/integrations/\`. Organization entries use
+\`_system/integrations/\`.`,
 				vars: [
 					{
 						id: 'MARIMOHUB_INTEGRATIONS_PROBE',
