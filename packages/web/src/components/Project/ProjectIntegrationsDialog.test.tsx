@@ -97,6 +97,10 @@ interface FetchOpts {
 	orgEntries?: IntegrationEntry[];
 	/** A second project offered by the import picker. */
 	sourceProject?: { id: string; name: string; your_role: string; entries: IntegrationEntry[] };
+	/** Serve the source project on a SECOND /projects page. */
+	pagedProjects?: boolean;
+	/** Delay the source project's detail (role) response. */
+	slowRole?: boolean;
 }
 
 /** Routes the dialog's list, detail, and probe requests through one mock. */
@@ -107,6 +111,8 @@ function makeFetch({
 	patchError = false,
 	orgEntries = [],
 	sourceProject,
+	pagedProjects = false,
+	slowRole = false,
 }: FetchOpts) {
 	const calls: {
 		url: string;
@@ -150,7 +156,18 @@ function makeFetch({
 		if (url.includes(`/projects/${PID}/integrations/test`) && method === 'POST') {
 			return ok({ ok: true, latency_ms: 5 });
 		}
-		if (url.endsWith('/api/v1/projects') && method === 'GET') {
+		if (
+			(url.endsWith('/api/v1/projects') || url.includes('/api/v1/projects?')) &&
+			method === 'GET'
+		) {
+			if (pagedProjects && sourceProject) {
+				return url.includes('cursor=')
+					? ok({
+							items: [{ id: sourceProject.id, name: sourceProject.name }],
+							next_cursor: null,
+						})
+					: ok({ items: [{ id: PID, name: 'Demo' }], next_cursor: 'page-2' });
+			}
 			const items = [
 				{ id: PID, name: 'Demo' },
 				...(sourceProject ? [{ id: sourceProject.id, name: sourceProject.name }] : []),
@@ -158,6 +175,7 @@ function makeFetch({
 			return ok({ items, next_cursor: null });
 		}
 		if (sourceProject && url.endsWith(`/projects/${sourceProject.id}`) && method === 'GET') {
+			if (slowRole) await new Promise((resolve) => setTimeout(resolve, 50));
 			return ok({
 				id: sourceProject.id,
 				name: sourceProject.name,
@@ -651,6 +669,32 @@ describe('ProjectIntegrationsDialog — import from another project', () => {
 				name: 'analytics-db',
 			});
 		});
+	});
+
+	it('offers projects from every /projects page, not just the first', async () => {
+		const user = userEvent.setup();
+		setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE, pagedProjects: true });
+		await openImport(user);
+		expect(await screen.findByTestId('import-source-row')).toBeInTheDocument();
+	});
+
+	it('never shows the pick/submit form before the source role resolves', async () => {
+		const user = userEvent.setup();
+		setup(
+			{},
+			{
+				kinds: [postgresKind],
+				entries: [],
+				sourceProject: { ...SOURCE, your_role: 'viewer' },
+				slowRole: true,
+			},
+		);
+		await openImport(user);
+		// While the role check is in flight, nothing selectable renders…
+		expect(screen.queryByTestId('import-source-row')).not.toBeInTheDocument();
+		// …and a viewer lands on the explanation, never a submittable form.
+		expect(await screen.findByText(/on both projects/)).toBeInTheDocument();
+		expect(screen.queryByTestId('import-source-row')).not.toBeInTheDocument();
 	});
 
 	it('explains that admin is required on the source project', async () => {

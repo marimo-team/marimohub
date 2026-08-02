@@ -4,6 +4,7 @@ import {
 	IntegrationId,
 	NotFoundError,
 	ProjectId,
+	requireRole,
 	ResourceExhaustedError,
 } from '@marimo-hub/core';
 import type {
@@ -25,6 +26,7 @@ import {
 	ifMatchToken,
 	jsonBody,
 	jsonContent,
+	loadVisibleProject,
 	ProjectIdParam,
 	SuccessResponseSchema,
 } from '../shared';
@@ -625,13 +627,16 @@ app.openapi(importIntegration, async (c) => {
 	// the caller must hold admin on BOTH sides (a super admin is admin
 	// everywhere). Destination first: its 404/403 must not confirm the source.
 	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
-	await assertProjectRole(
+	// Visibility before role for the SOURCE: any destination admin can probe an
+	// arbitrary id here, so a project the caller cannot see answers the same 404
+	// as one that does not exist; 403 is reserved for projects they can see.
+	const source = await loadVisibleProject(
 		deps.services.projects,
 		body.source_project_id,
 		user,
-		'admin',
 		deps.policy,
 	);
+	requireRole(source, user, 'admin', deps.policy);
 	const detail = await integrations.copy(
 		body.source_project_id,
 		body.source_integration_id,

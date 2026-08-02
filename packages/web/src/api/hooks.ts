@@ -505,12 +505,30 @@ export function useImportIntegration(projectId: string) {
 	);
 }
 
-/** Non-suspense twin of `useProjectsQuery` for pickers rendered inside dialogs. */
+/**
+ * Non-suspense project list for pickers rendered inside dialogs. Walks every
+ * page (unlike the first-page home list) so projects beyond the first page
+ * stay selectable; the sweep is bounded rather than unbounded on a cursor bug.
+ */
 export function useProjectPickerQuery(enabled: boolean) {
 	return useQuery({
-		queryKey: projectKeys.list(),
+		queryKey: projectKeys.pickerList(),
 		enabled,
-		queryFn: async () => (await apiData(apiClient.GET('/api/v1/projects'))).items,
+		queryFn: async () => {
+			const items = [];
+			let cursor: string | undefined;
+			for (let page = 0; page < 40; page++) {
+				const data = await apiData(
+					apiClient.GET('/api/v1/projects', {
+						params: { query: { limit: 500, ...(cursor ? { cursor } : {}) } },
+					}),
+				);
+				items.push(...data.items);
+				if (!data.next_cursor) break;
+				cursor = data.next_cursor;
+			}
+			return items;
+		},
 	});
 }
 

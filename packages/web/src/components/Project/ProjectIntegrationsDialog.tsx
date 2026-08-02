@@ -622,7 +622,10 @@ function ImportView({
 	const projectsQuery = useProjectPickerQuery(true);
 	const sourceProject = useProjectRoleQuery(sourcePid);
 	const isSourceAdmin = sourceProject.data?.your_role === 'admin';
-	const entriesQuery = useIntegrationsQuery({ pid: sourcePid ?? '' }, Boolean(sourcePid));
+	// Entries (and with them the pick/submit form) wait for a RESOLVED admin
+	// role — otherwise a viewer could select and submit before the role check
+	// lands and get a failed POST instead of the explanation below.
+	const entriesQuery = useIntegrationsQuery({ pid: sourcePid ?? '' }, isSourceAdmin);
 	const importIntegration = useImportIntegration(pid);
 	const kindsByName = new Map(kinds.map((kind) => [kind.kind, kind]));
 
@@ -689,7 +692,7 @@ function ImportView({
 				</p>
 			) : sourcePid && (entriesQuery.isError || sourceProject.isError) ? (
 				<p className="text-destructive">Could not load that project's integrations.</p>
-			) : sourcePid && entriesQuery.data !== undefined ? (
+			) : sourcePid && isSourceAdmin && entriesQuery.data !== undefined ? (
 				entries.length === 0 ? (
 					<p className="text-muted-foreground">That project has no integrations of its own.</p>
 				) : (

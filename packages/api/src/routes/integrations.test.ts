@@ -795,8 +795,9 @@ describe('Integration import route', () => {
 	});
 
 	it('requires admin on BOTH projects — dest-only admins are refused', async () => {
-		// An outsider who owns only the destination cannot pull configs out of a
-		// source project they hold no admin role on.
+		// An outsider who owns only the destination cannot even LEARN that the
+		// source exists: an invisible source answers the same 404 as a missing one,
+		// so the import route is not a project-id existence oracle.
 		const asOutsider = createTestApi({ bucket, userId: OUTSIDER, deps }).request;
 		const foreign = (
 			await expectOk<{ id: string }>(
@@ -806,10 +807,10 @@ describe('Integration import route', () => {
 		).id;
 		await expectError(
 			await asOutsider('POST', `/projects/${foreign}/integrations/import`, importBody()),
-			403,
+			404,
 		);
 
-		// Editor on the source is still not enough.
+		// Editor on the source can see it but still cannot export it: 403.
 		await expectOk(
 			await asOwner('POST', `/projects/${sourcePid}/members`, {
 				user_id: OUTSIDER,
