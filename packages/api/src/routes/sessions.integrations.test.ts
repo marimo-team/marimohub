@@ -155,6 +155,40 @@ describe('Session provisioning with integrations', () => {
 		expect(calls.startProcess).toHaveLength(0);
 	});
 
+	it('fails the session CLOSED when an INHERITED org integration cannot render', async () => {
+		// The project has no integrations of its own — the broken config comes
+		// entirely from the org tier, and its blast radius is every project.
+		const org = new OrgIntegrationsStore({ bucket, registry: defaultRegistry(), codec });
+		await org.create(
+			{
+				kind: 'postgres',
+				name: 'warehouse',
+				config: { host: 'h', database: 'd', username: 'u', password: 'pw' },
+			},
+			ACTOR,
+		);
+		const { request, calls } = api(makeStore(false));
+		await expectError(await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`), 422);
+		expect(calls.setEnvVars).toHaveLength(0);
+		expect(calls.writeFile).toHaveLength(0);
+		expect(calls.startProcess).toHaveLength(0);
+
+		// The per-project escape hatch: a disabled same-name project instance
+		// opts this project out of the broken org integration entirely.
+		const projectStore = makeStore(false);
+		const override = await projectStore.create(
+			pid,
+			{ kind: 'custom_env', name: 'warehouse', config: { vars: {} } },
+			ACTOR,
+		);
+		await projectStore.update(pid, override.id, { enabled: false }, ACTOR);
+		const optedOut = api(makeStore(false));
+		const session = await expectOk<Record<string, unknown>>(
+			await optedOut.request('POST', `/projects/${pid}/notebooks/${nid}/sessions`),
+		);
+		expect(session.integrations).toBeUndefined();
+	});
+
 	it('renders inherited org integrations into the session and pins them', async () => {
 		const options = { bucket, registry: defaultRegistry(), codec };
 		const org = new OrgIntegrationsStore(options);

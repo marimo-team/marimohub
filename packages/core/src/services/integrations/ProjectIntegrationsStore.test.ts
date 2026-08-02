@@ -1380,6 +1380,24 @@ describe('OrgIntegrationsStore + project inheritance', () => {
 		]);
 	});
 
+	it('a disabled project instance still shadows in listings — matching what renders', async () => {
+		await org.create({ kind: 'echo', name: 'shared', config: { token: 'o' } }, ACTOR);
+		const override = await project.create(
+			pid,
+			{ kind: 'echo', name: 'shared', config: { token: 'p' } },
+			ACTOR,
+		);
+		await project.update(pid, override.id, { enabled: false }, ACTOR);
+
+		const entries = await project.list(pid);
+		expect(
+			entries.map((e) => ({ scope: e.scope, enabled: e.enabled, shadowed: e.shadowed })),
+		).toEqual([
+			{ scope: undefined, enabled: false, shadowed: undefined },
+			{ scope: 'org', enabled: true, shadowed: true },
+		]);
+	});
+
 	it('resolveForSession renders org instances into the project session', async () => {
 		await org.create({ kind: 'echo', name: 'warehouse', config: { token: 'org-tok' } }, ACTOR);
 		await project.create(pid, { kind: 'echo', name: 'db', config: { token: 'proj-tok' } }, ACTOR);
@@ -1391,9 +1409,9 @@ describe('OrgIntegrationsStore + project inheritance', () => {
 		expect(render?.attachments.map((a) => a.name)).toEqual(['db', 'warehouse']);
 
 		const manifest = render?.files.find((f) => f.path === `${INTEGRATIONS_DIR}/manifest.json`);
-		expect(
-			JSON.parse(manifest?.content ?? '').integrations.map((i: { name: string }) => i.name),
-		).toEqual(['db', 'warehouse']);
+		expect(JSON.parse(manifest?.content ?? '')).toMatchObject({
+			integrations: [{ name: 'db' }, { name: 'warehouse' }],
+		});
 	});
 
 	it('a same-name project instance shadows the org one — enabled overrides, disabled opts out', async () => {

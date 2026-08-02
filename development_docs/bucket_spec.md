@@ -72,13 +72,13 @@ s3-bucket/
 │   │   └── {user-id}.json                  ← user display identity (mutable, last-writer-wins)
 │   ├── tokens/
 │   │   └── {token-id}.json                 ← personal access token record (mutable, last-writer-wins)
-│   ├── integrations/                       ← org-wide tier, inherited by every project (§4.12)
+│   ├── integrations/                       ← organization-wide integrations (§4.12)
 │   │   ├── _names/
-│   │   │   └── {name}.json                 ← per-name singleton claim (CAS, app-claim pattern)
+│   │   │   └── {name}.json                 ← name claim (CAS, app-claim pattern)
 │   │   └── {integration-id}/
-│   │       ├── integration.json            ← head: name/kind/enabled/current_version (CAS-managed)
+│   │       ├── integration.json            ← CAS-managed head
 │   │       └── versions/
-│   │           └── {000001}.json           ← immutable config version (create-if-absent)
+│   │           └── {000001}.json           ← immutable configuration version
 │   ├── logs/
 │   │   └── {YYYY-MM-DD}.log                ← append-only, rolled daily
 │   └── events/
@@ -141,7 +141,9 @@ s3-bucket/
 | `projects/{pid}/integrations/{iid}/integration.json`           | JSON     | Integration head: kind, instance name, `enabled`, and the `current_version` pointer. CAS-managed via ETag `mutateObject` — written only by `ProjectIntegrationsStore` (a version bump must be atomic against a concurrent edit). See §4.12.                                                                                                                                                                                            |
 | `projects/{pid}/integrations/{iid}/versions/{n}.json`          | JSON     | Immutable integration config version, keyed by zero-padded number so key order == version order. Written create-if-absent; a losing writer takes n+1. Secret fields are `{ "$secret": … }` ciphertext envelopes, never plaintext. Sessions pin these version numbers (the audit trail), so history is never rewritten.                                                                                                                 |
 | `projects/{pid}/integrations/_names/{name}.json`               | JSON     | Per-name singleton claim (`{ integration_id, claimed_at }`) anchoring integration-name uniqueness — the same claim class as the app claim, written only by `ProjectIntegrationsStore` via `acquireSingletonClaim`/`releaseSingletonClaim`. See §4.12.                                                                                                                                                                                  |
-| `_system/integrations/{iid}/…`                                 | JSON     | Org-wide integration tier: the exact record classes of `projects/{pid}/integrations/{iid}/…` (CAS-managed head, immutable versions, `_names/` claim) rooted at `_system` instead of a project. Heads carry **no** `project_id`. Written only by `OrgIntegrationsStore` (super-admin routes); rendered into every project's sessions unless shadowed by a same-name project instance. See §4.12.                                        |
+| `_system/integrations/{iid}/integration.json`                  | JSON     | Organization-wide integration head. It has the same fields as a project integration head, except it has no `project_id`. `OrgIntegrationsStore` is its only writer. See §4.12.                                                                                                                                                                                                                                                         |
+| `_system/integrations/{iid}/versions/{n}.json`                 | JSON     | Immutable organization-wide configuration version. It follows the same create-if-absent and secret-handling rules as a project integration version.                                                                                                                                                                                                                                                                                    |
+| `_system/integrations/_names/{name}.json`                      | JSON     | Organization-wide name claim. Claims are unique within this tier, so a project integration can use the same name.                                                                                                                                                                                                                                                                                                                      |
 | `projects/{pid}/notebooks/{nid}/meta.json`                     | JSON     | Notebook metadata: title, description, status, author, tags, last_run_at. Never contains code or paths.                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/README.md`                     | Markdown | Human-readable description and usage notes.                                                                                                                                                                                                                                                                                                                                                                                            |
 | `projects/{pid}/notebooks/{nid}/source.json`                   | JSON     | Typed source pointer. Declares where code lives + `current_version_id`. v1 supports `local`.                                                                                                                                                                                                                                                                                                                                           |
@@ -462,7 +464,21 @@ A project integration instance — a named, versioned configuration of a code-re
 
 **The name claim** (`_names/{name}.json`, name URI-encoded) anchors "one instance per name" the same way the app claim anchors "one app per notebook": `{ integration_id, claimed_at }`, acquired via `acquireSingletonClaim` (create-if-absent, ETag-CAS replace when stale) and released by CAS-ing `integration_id` to the free marker `null`, never a bare delete. Writers put the **head first, then claim** — a holder is _live_ iff its head still exists under that name, so the claim self-heals after a crash between the two writes, and two concurrent creates are arbitrated by the claim key: the loser deletes its own just-written objects. A rename claims the new name (reverting the head on conflict, so a combined rename+config PATCH that loses commits nothing) and then frees the old; delete frees the name last. Sole writer: `ProjectIntegrationsStore`. `_names/` cannot collide with an instance directory (ids are always `intg-…`), and listings skip it.
 
-**The org tier** (`_system/integrations/{iid}/…`) is the same two record classes plus name claim, rooted at `_system` instead of a project, and written **only** by `OrgIntegrationsStore` behind the super-admin routes. Org heads carry **no** `project_id` — a record reached through the wrong tier's path fails identity validation instead of leaking across scopes — and org secret envelopes are HKDF-bound to the `_system/…` head path, so they cannot be replayed into a project (or vice versa). At session render the project tier merges the org tier in: enabled org instances render into every project's session **unless** the project has an instance with the same name (enabled or not) — the same-name project instance is both the override and the opt-out. Name claims are per-tier, so an org `warehouse` and a project `warehouse` coexist by design; the shadowing rule, not the claim, resolves them.
+**The organization tier** stores the same head, version, and name-claim records
+under `_system/integrations/`. `OrgIntegrationsStore` is the only writer, and
+the API limits its management routes to super admins. Organization heads do not
+contain `project_id`. Identity validation rejects a record loaded through the
+wrong tier.
+
+Organization secrets use an HKDF context derived from the `_system/` head path.
+As a result, an envelope from one tier cannot be decrypted in the other tier.
+
+For a new non-ephemeral session, the project store combines both tiers. It uses
+an enabled organization integration unless the project has an integration with
+the same name. The project integration takes precedence even when it is
+disabled, which supports both overrides and opt-outs. Name claims are unique
+only within one tier, so both tiers can contain an integration named
+`warehouse`.
 
 ---
 

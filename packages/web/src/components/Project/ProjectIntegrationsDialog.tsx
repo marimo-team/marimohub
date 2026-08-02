@@ -149,8 +149,8 @@ export interface OrgIntegrationsDialogProps {
 	onClose: () => void;
 }
 
-/** Org-wide instances, inherited by every project. Reachable by super admins
- *  only (the server rejects everyone else). */
+// No client-side gating: only super admins can open this, and the server
+// rejects everyone else anyway.
 export function OrgIntegrationsDialog({ isOpen, onClose }: OrgIntegrationsDialogProps) {
 	return <IntegrationsDialog isOpen={isOpen} onClose={onClose} scope="org" canManage />;
 }

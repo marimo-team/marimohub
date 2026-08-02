@@ -422,17 +422,37 @@ Resolve `reference` entries with `backend: aws-sm` against AWS Secrets Manager. 
 | `MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS` | In-memory cache TTL for resolved values, bounding GetSecretValue calls across back-to-back provisions. `0` (default) disables caching. | — | `0` | — |
 | `MARIMOHUB_SECRETS_AWS_ROLE_ARN` | Reserved for the future `AssumeRoleWithWebIdentity` federation off the hub OIDC issuer (no long-lived hub credential). Not yet implemented. | — | — | `arn:aws:iam::123456789012:role/marimohub-secrets` |
 
-## Project integrations
+## Integrations
 
 Selected by `MARIMOHUB_INTEGRATIONS` (default `off`); one of `on`, `off`.
 
-Versioned, project-scoped data-source configs (PostgreSQL, PyIceberg REST/SQL/Hive/Glue/DynamoDB/BigQuery catalogs, Trino, PySpark over Spark Connect, custom env) that project admins register once and every session in the project receives as env vars + files. The hub injects connection config, not Python libraries — each kind lists the packages its contract assumes, added per notebook. Opt-in (`on`): enable only after every replica runs a release that preserves unknown session fields, so a rolling deploy cannot strip the session audit pin (see the two-phase policy in development_docs/migrations.md); it otherwise needs nothing but the deployment bucket. Secret config fields (passwords, tokens) are encrypted with the managed-secret KEK (`MARIMOHUB_SECRETS_KEK`); without it, only secret-free configs can be saved. A render failure fails the session closed (disable the broken integration to unblock). See docs/integrations.md.
+Versioned data-source configuration supports PostgreSQL, PyIceberg catalogs,
+Trino, PySpark over Spark Connect, and custom environment variables. Project
+admins configure one project. Super admins can configure organization-wide
+integrations that are available to all projects.
+
+New, non-ephemeral sessions receive the applicable configuration as environment
+variables and files. The hub injects configuration, not Python libraries. Each
+kind lists the packages to add to the notebook.
+
+Enable this feature only after every replica can preserve unknown session
+fields. Otherwise, an older replica can remove the integration audit pin during
+a rolling deployment. See the two-phase policy in
+`development_docs/migrations.md`. The feature requires only the deployment
+bucket.
+
+Secret fields use the managed-secret KEK (`MARIMOHUB_SECRETS_KEK`). Without a
+KEK, you can save only configurations without secrets. A rendering error blocks
+the session. Disable or override the failing integration to restore access. See
+`docs/integrations.md`.
 
 ### On
 
 `MARIMOHUB_INTEGRATIONS=on`
 
-Integrations CRUD + session injection enabled, stored under `projects/{pid}/integrations/`.
+Integration management and session injection are enabled. Project entries use
+`projects/{pid}/integrations/`. Organization entries use
+`_system/integrations/`.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |

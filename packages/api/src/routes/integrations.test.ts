@@ -641,6 +641,11 @@ describe('Org integrations routes', () => {
 			),
 			412,
 		);
+		// A stale delete must not erase the edit either.
+		await expectError(
+			await asRoot('DELETE', `/org/integrations/${created.id}`, undefined, { 'If-Match': etag! }),
+			412,
+		);
 
 		const versions = await expectOk<{ items: { version: number }[] }>(
 			await asRoot('GET', `/org/integrations/${created.id}/versions`),

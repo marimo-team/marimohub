@@ -358,10 +358,6 @@ export function useIntegrationKindsQuery(enabled = true) {
 	});
 }
 
-/**
- * Which integrations API surface a hook talks to: a project's instances, or the
- * org-wide tier (`/org/integrations…`, super-admin managed).
- */
 export type IntegrationsScope = { pid: string } | 'org';
 
 function integrationsListKey(scope: IntegrationsScope) {
