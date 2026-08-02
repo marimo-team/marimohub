@@ -491,6 +491,41 @@ export function useDeleteIntegration(scope: IntegrationsScope) {
 	);
 }
 
+/** Copies an integration from another project; the server re-encrypts secrets. */
+export function useImportIntegration(projectId: string) {
+	return useApiMutation(
+		(body: { source_project_id: string; source_integration_id: string; name?: string }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/integrations/import', {
+					params: { path: { pid: projectId } },
+					body,
+				}),
+			),
+		() => [projectKeys.integrations(projectId)],
+	);
+}
+
+/** Non-suspense twin of `useProjectsQuery` for pickers rendered inside dialogs. */
+export function useProjectPickerQuery(enabled: boolean) {
+	return useQuery({
+		queryKey: projectKeys.list(),
+		enabled,
+		queryFn: async () => (await apiData(apiClient.GET('/api/v1/projects'))).items,
+	});
+}
+
+/** Non-suspense project detail, used to check the caller's role before importing. */
+export function useProjectRoleQuery(projectId: string | undefined) {
+	return useQuery({
+		queryKey: projectKeys.detail(projectId ?? ''),
+		enabled: Boolean(projectId),
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}', { params: { path: { pid: projectId ?? '' } } }),
+			),
+	});
+}
+
 /** Tests either an unsaved config or a stored integration by id. */
 export function useTestIntegration(scope: IntegrationsScope) {
 	return useMutation({

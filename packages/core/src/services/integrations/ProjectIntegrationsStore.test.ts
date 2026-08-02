@@ -1284,6 +1284,97 @@ describe('ProjectIntegrationsStore', () => {
 		await store.create(pid, { kind: 'echo', name: 'prod', config: { token: 'c' } }, ACTOR);
 	});
 
+	describe('copy between projects', () => {
+		it('re-seals secrets for the destination: the copy outlives the source', async () => {
+			const store = makeStore(bucket);
+			const target = createProjectId();
+			const source = await store.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { greeting: 'hello', token: 'sekret' } },
+				ACTOR,
+			);
+			await store.update(pid, source.id, { config: { greeting: 'v2', token: 'sekret' } }, ACTOR);
+
+			const copy = await store.copy(pid, source.id, target, {}, ACTOR);
+			expect(copy.id).not.toBe(source.id);
+			expect(copy).toMatchObject({
+				name: 'prod',
+				enabled: true,
+				// The current config lands as a fresh history, not the source's numbering.
+				current_version: 1,
+				config: { greeting: 'v2', token: { $secret: { set: true } } },
+			});
+			expect(copy.change_note).toContain(`from project ${pid}`);
+			// Plaintext still never reaches the bucket.
+			for (const object of (await bucket.list({})).objects) {
+				const body = await bucket.get(object.key);
+				expect(await body?.text(), object.key).not.toContain('sekret');
+			}
+
+			// Deleting the source must not break the copy — a byte-copied envelope
+			// (bound to the source head path) would have.
+			await store.delete(pid, source.id);
+			const render = await store.resolveForSession(target, renderContext(createSessionId()));
+			expect(render?.vars.ECHO_PROD_TOKEN).toBe('sekret');
+			expect(render?.vars.ECHO_PROD_GREETING).toBe('v2');
+		});
+
+		it('honors a rename and rejects a name already taken in the destination', async () => {
+			const store = makeStore(bucket);
+			const target = createProjectId();
+			const source = await store.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { token: 't' } },
+				ACTOR,
+			);
+			await store.create(target, { kind: 'echo', name: 'prod', config: { token: 'x' } }, ACTOR);
+
+			await expect(store.copy(pid, source.id, target, {}, ACTOR)).rejects.toThrow(
+				/already exists in this project/,
+			);
+			const renamed = await store.copy(pid, source.id, target, { name: 'prod-copy' }, ACTOR);
+			expect(renamed.name).toBe('prod-copy');
+		});
+
+		it('404s on an unknown source and fails without a codec for secret configs', async () => {
+			const store = makeStore(bucket);
+			const target = createProjectId();
+			await expect(
+				store.copy(pid, 'intg-0000000000000000' as never, target, {}, ACTOR),
+			).rejects.toThrow(NotFoundError);
+
+			const source = await store.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { token: 't' } },
+				ACTOR,
+			);
+			await expect(
+				makeStore(bucket, false).copy(pid, source.id, target, {}, ACTOR),
+			).rejects.toThrow(/MARIMOHUB_SECRETS_KEK/);
+		});
+
+		it('the copy and the source evolve independently', async () => {
+			const store = makeStore(bucket);
+			const target = createProjectId();
+			const source = await store.create(
+				pid,
+				{ kind: 'echo', name: 'prod', config: { greeting: 'a', token: 't' } },
+				ACTOR,
+			);
+			const copy = await store.copy(pid, source.id, target, {}, ACTOR);
+
+			await store.update(
+				pid,
+				source.id,
+				{ config: { greeting: 'source-edit', token: 't' } },
+				ACTOR,
+			);
+			expect((await store.get(target, copy.id)).config.greeting).toBe('a');
+			await store.update(target, copy.id, { config: { greeting: 'copy-edit', token: 't' } }, ACTOR);
+			expect((await store.get(pid, source.id)).config.greeting).toBe('source-edit');
+		});
+	});
+
 	it('listKinds describes the default registry serializably', () => {
 		const store = new ProjectIntegrationsStore({ bucket, registry: defaultRegistry(), codec });
 		const kinds = store.listKinds();

@@ -3,6 +3,7 @@ import {
 	INTEGRATION_CATEGORIES,
 	IntegrationId,
 	NotFoundError,
+	ProjectId,
 	ResourceExhaustedError,
 } from '@marimo-hub/core';
 import type {
@@ -147,6 +148,23 @@ const TestIntegrationBody = z
 	])
 	.openapi('IntegrationTestRequest');
 
+const ImportIntegrationBody = z
+	.object({
+		source_project_id: z
+			.string()
+			.regex(ProjectId.regex)
+			.refine(ProjectId.is)
+			.openapi({ example: 'proj-7h2k9qm4xz7rp3w8' }),
+		source_integration_id: z
+			.string()
+			.regex(IntegrationId.regex)
+			.refine(IntegrationId.is)
+			.openapi({ example: 'intg-7h2k9qm4xz7rp3w8' }),
+		/** Name for the copy; defaults to the source instance's name. */
+		name: z.string().min(1).optional(),
+	})
+	.openapi('IntegrationImportRequest');
+
 const listKinds = createRoute({
 	method: 'get',
 	path: '/integrations/kinds',
@@ -260,6 +278,22 @@ const listIntegrationVersions = createRoute({
 		),
 		...commonErrors(),
 		...errorResponses(400, 403, 404),
+	},
+});
+
+const importIntegration = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/integrations/import',
+	tags: ['Integrations'],
+	summary: 'Copy an integration from another project (admin of both projects)',
+	request: { params: ProjectIdParam, body: jsonBody(ImportIntegrationBody) },
+	responses: {
+		201: jsonContent(
+			z.object({ success: z.literal(true), data: IntegrationDetailSchema }),
+			'Integration copied (config redacted; secrets re-encrypted for this project)',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
 	},
 });
 
@@ -580,6 +614,45 @@ function assertTestBudget(userId: string): void {
 export function trackedTestBudgets(): number {
 	return recentTestsByUser.size;
 }
+
+app.openapi(importIntegration, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid } = c.req.valid('param');
+	const integrations = requireIntegrations(deps);
+	const body = c.req.valid('json');
+	// The copy moves decrypted secret material across the project boundary, so
+	// the caller must hold admin on BOTH sides (a super admin is admin
+	// everywhere). Destination first: its 404/403 must not confirm the source.
+	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(
+		deps.services.projects,
+		body.source_project_id,
+		user,
+		'admin',
+		deps.policy,
+	);
+	const detail = await integrations.copy(
+		body.source_project_id,
+		body.source_integration_id,
+		pid,
+		{ name: body.name },
+		user.id,
+	);
+	await deps.services.events
+		.append({
+			event: 'integration.import',
+			actor: user.id,
+			project_id: pid,
+			integration_id: detail.id,
+			integration_kind: detail.kind,
+			integration_name: detail.name,
+			source_project_id: body.source_project_id,
+			source_integration_id: body.source_integration_id,
+		})
+		.catch(() => {});
+	return c.json({ success: true, data: detailResponse(detail) }, 201);
+});
 
 app.openapi(testIntegration, async (c) => {
 	const deps = c.get('deps');
