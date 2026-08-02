@@ -6,7 +6,7 @@ import { captureFilesystemSnapshot } from '../content/filesystemSnapshots';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import { sessionPersistsEdits } from './sessionState';
-import type { SessionService } from './SessionService';
+import type { SessionService, TakeoverDrainStage } from './SessionService';
 
 const TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS = Millis.minutes(1);
 
@@ -132,6 +132,21 @@ export class SessionRetirer {
 				throw new Error('The takeover drain lease is no longer owned by this request');
 			}
 		};
+		const advanceLease = async (stage: TakeoverDrainStage): Promise<void> => {
+			if (
+				leaseLost ||
+				!(await this.deps.sessions.advanceTakeoverDrainLease(
+					session.project_id,
+					session.notebook_id,
+					takeoverId,
+					leaseId,
+					stage,
+				))
+			) {
+				leaseLost = true;
+				throw new Error('The takeover drain lease is no longer owned by this request');
+			}
+		};
 		const renewalTimer = setInterval(() => {
 			void renewLease()
 				.then((renewed) => {
@@ -141,7 +156,7 @@ export class SessionRetirer {
 		}, TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS);
 		try {
 			const current = await this.deps.sessions.getSession(session.project_id, session.session_id);
-			await this.teardownForTakeover(current, assertLease);
+			await this.teardownForTakeover(current, { assertLease, advanceLease });
 			await assertLease();
 			await this.deps.sessions.markTerminated(session.project_id, session.session_id);
 			await this.deps.sessions.finishTakeoverDrainLease(
@@ -168,7 +183,10 @@ export class SessionRetirer {
 
 	private async teardownForTakeover(
 		session: Session,
-		assertLease: () => Promise<void> = async () => {},
+		lease: {
+			assertLease: () => Promise<void>;
+			advanceLease: (stage: TakeoverDrainStage) => Promise<void>;
+		} = { assertLease: async () => {}, advanceLease: async () => {} },
 	): Promise<void> {
 		if (!session.sandbox_id || session.sandbox_reclaimed_at) return;
 		const sandbox = this.deps.compute.create(session.sandbox_id);
@@ -184,8 +202,9 @@ export class SessionRetirer {
 				this.deps.workdir,
 				{ persistEdits: true },
 			);
-			await assertLease();
+			await lease.assertLease();
 			if (persisted) {
+				await lease.advanceLease('snapshotting');
 				await captureFilesystemSnapshot(
 					this.deps.compute,
 					this.deps.notebooks,
@@ -198,22 +217,26 @@ export class SessionRetirer {
 						owner_user_id: session.user_id,
 					},
 				);
-				await assertLease();
+				await lease.assertLease();
 			}
 			await this.deps.sessions.markTakeoverCaptureCompleted(
 				session.project_id,
 				session.session_id,
 				new Date().toISOString(),
 			);
+			await lease.advanceLease('destroying');
+		} else {
+			await lease.advanceLease('destroying');
 		}
-		await assertLease();
+		await lease.assertLease();
 		await sandbox.destroy();
-		await assertLease();
+		await lease.assertLease();
 		await this.deps.sessions.markSandboxReclaimed(
 			session.project_id,
 			session.session_id,
 			new Date().toISOString(),
 		);
+		await lease.advanceLease('finalizing');
 	}
 
 	/**

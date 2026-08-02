@@ -378,6 +378,9 @@ describe('SessionService editor claims', () => {
 		vi.advanceTimersByTime(10 * 60 * 1000);
 
 		await expect(
+			sessions.renewTakeoverDrainLease(projectId, notebookId, 'expired-lease', 'lease-abandoned'),
+		).resolves.toBe(false);
+		await expect(
 			sessions.acquireTakeoverDrainLease(projectId, notebookId, 'expired-lease', 'lease-recovery'),
 		).resolves.toBe(true);
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.transfer).toMatchObject({
@@ -412,6 +415,90 @@ describe('SessionService editor claims', () => {
 		).resolves.toBe(false);
 	});
 
+	it('stops renewing after thirty minutes without forward progress', async () => {
+		vi.useFakeTimers();
+		const owner = await running(USER_A);
+		await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+		await sessions.reserveTakeover(projectId, notebookId, {
+			takeoverId: 'stuck-lease',
+			requestedBy: USER_B,
+			expectedHolder: owner.session_id,
+			expectedActivity: 'idle',
+		});
+		await sessions.setTakeoverPhase(projectId, notebookId, 'stuck-lease', 'draining');
+		await sessions.acquireTakeoverDrainLease(projectId, notebookId, 'stuck-lease', 'lease-stuck');
+
+		for (let minute = 1; minute < 30; minute++) {
+			vi.advanceTimersByTime(60 * 1000);
+			await expect(
+				sessions.renewTakeoverDrainLease(projectId, notebookId, 'stuck-lease', 'lease-stuck'),
+			).resolves.toBe(true);
+		}
+		await expect(
+			sessions.advanceTakeoverDrainLease(
+				projectId,
+				notebookId,
+				'stuck-lease',
+				'lease-stuck',
+				'capturing',
+			),
+		).resolves.toBe(true);
+
+		vi.advanceTimersByTime(60 * 1000);
+		await expect(
+			sessions.renewTakeoverDrainLease(projectId, notebookId, 'stuck-lease', 'lease-stuck'),
+		).resolves.toBe(false);
+		await expect(
+			sessions.acquireTakeoverDrainLease(projectId, notebookId, 'stuck-lease', 'lease-recovery'),
+		).resolves.toBe(true);
+	});
+
+	it('starts a new no-progress window only when the drain stage advances', async () => {
+		vi.useFakeTimers();
+		const owner = await running(USER_A);
+		await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+		await sessions.reserveTakeover(projectId, notebookId, {
+			takeoverId: 'progressing-lease',
+			requestedBy: USER_B,
+			expectedHolder: owner.session_id,
+			expectedActivity: 'idle',
+		});
+		await sessions.setTakeoverPhase(projectId, notebookId, 'progressing-lease', 'draining');
+		await sessions.acquireTakeoverDrainLease(
+			projectId,
+			notebookId,
+			'progressing-lease',
+			'lease-owner',
+		);
+
+		for (let minute = 1; minute < 30; minute++) {
+			vi.advanceTimersByTime(60 * 1000);
+			await sessions.renewTakeoverDrainLease(
+				projectId,
+				notebookId,
+				'progressing-lease',
+				'lease-owner',
+			);
+		}
+		await expect(
+			sessions.advanceTakeoverDrainLease(
+				projectId,
+				notebookId,
+				'progressing-lease',
+				'lease-owner',
+				'snapshotting',
+			),
+		).resolves.toBe(true);
+
+		vi.advanceTimersByTime(2 * 60 * 1000);
+		await expect(
+			sessions.renewTakeoverDrainLease(projectId, notebookId, 'progressing-lease', 'lease-owner'),
+		).resolves.toBe(true);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.transfer).toMatchObject({
+			drain_lease_stage: 'snapshotting',
+		});
+	});
+
 	it('allows only the drain lease owner to finish recovery', async () => {
 		const owner = await running(USER_A);
 		await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
@@ -437,6 +524,8 @@ describe('SessionService editor claims', () => {
 		expect(transfer?.phase).toBe('ready');
 		expect(transfer).not.toHaveProperty('drain_lease_id');
 		expect(transfer).not.toHaveProperty('drain_lease_expires_at');
+		expect(transfer).not.toHaveProperty('drain_lease_stage');
+		expect(transfer).not.toHaveProperty('drain_lease_progress_deadline_at');
 	});
 
 	it('expires only an abandoned pre-drain takeover reservation', async () => {

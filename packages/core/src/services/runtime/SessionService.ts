@@ -59,6 +59,7 @@ const HEARTBEAT_TTL_MS = Millis.minutes(5);
 const TERMINAL_RETENTION_MS = Millis.hours(24);
 const TAKEOVER_REQUEST_TTL_MS = Millis.minutes(5);
 const TAKEOVER_DRAIN_LEASE_MS = Millis.minutes(10);
+const TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS = Millis.minutes(30);
 // Coalesce heartbeat persistence: an already-running session is only re-written
 // once its stored heartbeat is older than this. Bounds heartbeat writes to
 // ~1/interval/session regardless of client cadence, while staying well within
@@ -67,6 +68,15 @@ const HEARTBEAT_PERSIST_INTERVAL_MS = Millis.seconds(60);
 
 /** Sentinel for a session object that vanished between list and read. */
 const SKIP = Symbol('missing-session');
+
+export type TakeoverDrainStage = 'capturing' | 'snapshotting' | 'destroying' | 'finalizing';
+
+const TAKEOVER_DRAIN_STAGE_ORDER: Record<TakeoverDrainStage, number> = {
+	capturing: 0,
+	snapshotting: 1,
+	destroying: 2,
+	finalizing: 3,
+};
 
 /**
  * Total order over session records — every replica derives the same queue
@@ -792,7 +802,12 @@ export class SessionService {
 						...claim.transfer,
 						phase,
 						...(phase === 'ready'
-							? { drain_lease_id: undefined, drain_lease_expires_at: undefined }
+							? {
+									drain_lease_id: undefined,
+									drain_lease_expires_at: undefined,
+									drain_lease_stage: undefined,
+									drain_lease_progress_deadline_at: undefined,
+								}
 							: {}),
 						...(replacementSessionId ? { replacement_session_id: replacementSessionId } : {}),
 					},
@@ -824,12 +839,17 @@ export class SessionService {
 				if (activeLease && claim.transfer.drain_lease_id !== leaseId) return null;
 				acquired = true;
 				if (activeLease) return null;
+				const now = Date.now();
 				return {
 					...claim,
 					transfer: {
 						...claim.transfer,
 						drain_lease_id: leaseId,
-						drain_lease_expires_at: new Date(Date.now() + TAKEOVER_DRAIN_LEASE_MS).toISOString(),
+						drain_lease_expires_at: new Date(now + TAKEOVER_DRAIN_LEASE_MS).toISOString(),
+						drain_lease_stage: 'capturing',
+						drain_lease_progress_deadline_at: new Date(
+							now + TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS,
+						).toISOString(),
 					},
 				};
 			},
@@ -853,18 +873,86 @@ export class SessionService {
 				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
 					throw new EditSessionChangedError();
 				}
-				if (claim.transfer.drain_lease_id !== leaseId) return null;
+				const now = Date.now();
+				const expiresAt = Date.parse(claim.transfer.drain_lease_expires_at ?? '');
+				const progressDeadline = Date.parse(
+					claim.transfer.drain_lease_progress_deadline_at ??
+						claim.transfer.drain_lease_expires_at ??
+						'',
+				);
+				if (
+					claim.transfer.drain_lease_id !== leaseId ||
+					!Number.isFinite(expiresAt) ||
+					!Number.isFinite(progressDeadline) ||
+					expiresAt <= now ||
+					progressDeadline <= now
+				) {
+					return null;
+				}
 				renewed = true;
 				return {
 					...claim,
 					transfer: {
 						...claim.transfer,
-						drain_lease_expires_at: new Date(Date.now() + TAKEOVER_DRAIN_LEASE_MS).toISOString(),
+						drain_lease_expires_at: new Date(
+							Math.min(now + TAKEOVER_DRAIN_LEASE_MS, progressDeadline),
+						).toISOString(),
 					},
 				};
 			},
 		);
 		return renewed;
+	}
+
+	async advanceTakeoverDrainLease(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		takeoverId: string,
+		leaseId: string,
+		stage: TakeoverDrainStage,
+	): Promise<boolean> {
+		let advanced = false;
+		await mutateObject(
+			this.bucket,
+			paths.editorClaim(projectId, notebookId),
+			(raw) => EditorClaimSchema.parse(raw),
+			(claim) => {
+				advanced = false;
+				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
+					throw new EditSessionChangedError();
+				}
+				const now = Date.now();
+				const expiresAt = Date.parse(claim.transfer.drain_lease_expires_at ?? '');
+				if (
+					claim.transfer.drain_lease_id !== leaseId ||
+					!Number.isFinite(expiresAt) ||
+					expiresAt <= now
+				) {
+					return null;
+				}
+				const currentStage = claim.transfer.drain_lease_stage;
+				if (
+					currentStage &&
+					TAKEOVER_DRAIN_STAGE_ORDER[stage] <= TAKEOVER_DRAIN_STAGE_ORDER[currentStage]
+				) {
+					advanced = currentStage === stage;
+					return null;
+				}
+				advanced = true;
+				return {
+					...claim,
+					transfer: {
+						...claim.transfer,
+						drain_lease_stage: stage,
+						drain_lease_expires_at: new Date(now + TAKEOVER_DRAIN_LEASE_MS).toISOString(),
+						drain_lease_progress_deadline_at: new Date(
+							now + TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS,
+						).toISOString(),
+					},
+				};
+			},
+		);
+		return advanced;
 	}
 
 	async finishTakeoverDrainLease(
@@ -892,6 +980,8 @@ export class SessionService {
 						phase: 'ready',
 						drain_lease_id: undefined,
 						drain_lease_expires_at: undefined,
+						drain_lease_stage: undefined,
+						drain_lease_progress_deadline_at: undefined,
 					},
 				};
 			},
@@ -922,6 +1012,8 @@ export class SessionService {
 							...claim.transfer,
 							drain_lease_id: undefined,
 							drain_lease_expires_at: undefined,
+							drain_lease_stage: undefined,
+							drain_lease_progress_deadline_at: undefined,
 						},
 					};
 				},

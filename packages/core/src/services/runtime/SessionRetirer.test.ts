@@ -359,4 +359,44 @@ describe('SessionRetirer', () => {
 		expect(notebooks.commitSession).toHaveBeenCalledTimes(1);
 		expect(calls.destroy).toBe(1);
 	});
+
+	it('yields a drain that makes no progress for thirty minutes', async () => {
+		vi.useFakeTimers();
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		await reserveTakeover(session, 'stuck-capture');
+		await sessions.setTakeoverPhase(projectId, notebookId, 'stuck-capture', 'draining');
+		await sessions.beginTerminating(projectId, session.session_id, {
+			reason: 'takeover',
+			by: uid('user_01HXY00000000000000000001'),
+		});
+		let releaseCapture!: () => void;
+		let captureStarted!: () => void;
+		const captureGate = new Promise<void>((resolve) => {
+			releaseCapture = resolve;
+		});
+		const started = new Promise<void>((resolve) => {
+			captureStarted = resolve;
+		});
+		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockImplementation(async () => {
+			captureStarted();
+			await captureGate;
+			return true;
+		});
+		const service = retirer({ create: () => instance, proxy: async () => null });
+
+		const stuck = service.completeTakeoverDrain(session, 'stuck-capture', 'lease-stuck');
+		await started;
+		await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+		await expect(
+			sessions.acquireTakeoverDrainLease(projectId, notebookId, 'stuck-capture', 'lease-recovery'),
+		).resolves.toBe(true);
+
+		releaseCapture();
+		await expect(stuck).rejects.toThrow('no longer owned');
+		expect(calls.destroy).toBe(0);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.transfer).toMatchObject({
+			drain_lease_id: 'lease-recovery',
+		});
+	});
 });

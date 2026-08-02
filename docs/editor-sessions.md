@@ -80,8 +80,11 @@ Reconciliation can also destroy the old sandbox before the retry.
 
 Only one retry can drain the old sandbox at a time. A recovery attempt renews
 its lease every minute while it works. Concurrent requests must retry later. A
-lease expires after ten minutes without a successful renewal, so another API
-replica can continue recovery after the original operation is abandoned.
+lease expires after ten minutes without a successful renewal, and an expired
+holder cannot renew it. Renewal also stops after 30 minutes without progress.
+Finishing notebook capture, filesystem snapshotting, or sandbox destruction
+starts a new 30-minute progress window. Another API replica can then continue
+recovery if the original worker stopped or its current operation is stuck.
 
 If the requester has a temporary sandbox, it remains available until the
 replacement is running. marimohub then stops that temporary sandbox and
