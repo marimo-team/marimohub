@@ -37,12 +37,21 @@ export interface FieldHint {
 
 export type UiHints = Record<string, FieldHint>;
 
+/** Vendor brand presentation; cosmetic only. */
+export interface KindBrand {
+	/** simple-icons slug; omitted when no vendor mark exists. */
+	icon?: string;
+	/** `#rrggbb`; always present so consumers can tint icon-less fallbacks. */
+	color: string;
+}
+
 /** Serializable kind description used to build integration forms. */
 export interface KindDescriptor {
 	kind: string;
 	title: string;
 	description: string;
 	category: IntegrationCategory;
+	brand: KindBrand;
 	schema_version: number;
 	/** Form schema derived from the kind's Zod config schema. */
 	json_schema: Record<string, unknown>;

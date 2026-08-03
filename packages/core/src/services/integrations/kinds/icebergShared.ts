@@ -7,6 +7,9 @@ import { INTEGRATIONS_DIR } from '../bundle';
 export const HTTP_URL_REGEX = /^https?:\/\/(?![^/?#]*@)\S+$/;
 export const THRIFT_URL_REGEX = /^thrift:\/\/(?![^/?#]*@)\S+$/;
 
+/** Primary brand color from iceberg.apache.org (no simple-icons mark exists). */
+export const ICEBERG_BRAND_COLOR = '#0969DA';
+
 const url = () =>
 	z.string().regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials');
 

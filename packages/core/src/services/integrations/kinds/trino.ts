@@ -101,6 +101,7 @@ export const trino = defineIntegration({
 	title: 'Trino',
 	description: 'Trino DBAPI and SQLAlchemy connection with authentication and session options.',
 	category: 'engine',
+	brand: { icon: 'trino', color: '#DD00A1' },
 	schemaVersion: 2,
 	configSchema: trinoConfig,
 	requirements: ['trino[sqlalchemy,kerberos,gssapi]>=0.330'],

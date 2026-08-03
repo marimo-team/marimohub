@@ -30,6 +30,7 @@ export const customEnv = defineIntegration({
 	title: 'Custom environment',
 	description: 'Inject arbitrary environment variables — plain or secret — into every session.',
 	category: 'other',
+	brand: { color: '#64748B' },
 	schemaVersion: 1,
 	configSchema: customEnvConfig,
 	uiHints: {

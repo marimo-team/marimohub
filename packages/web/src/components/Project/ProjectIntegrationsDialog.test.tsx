@@ -17,6 +17,7 @@ const postgresKind: IntegrationKind = {
 	title: 'Postgres',
 	description: 'A postgres database',
 	category: 'database',
+	brand: { icon: 'postgresql', color: '#4169E1' },
 	schema_version: 1,
 	json_schema: {
 		type: 'object',
@@ -33,6 +34,7 @@ const customEnvKind: IntegrationKind = {
 	title: 'Custom env vars',
 	description: 'Arbitrary env vars injected into every session',
 	category: 'other',
+	brand: { color: '#64748B' },
 	schema_version: 1,
 	json_schema: { type: 'object', properties: {} },
 	ui_hints: {},

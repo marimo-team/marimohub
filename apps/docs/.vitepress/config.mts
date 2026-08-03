@@ -39,8 +39,8 @@ export default defineConfig({
 				// it from llms.txt where its missing h1 would list it as "Untitled".
 				excludeIndexPage: false,
 				ignoreFilesPerOutput: { llmsTxt: ['index.md'] },
-				// Mirrors srcExclude: setup/** are partials @include-d into the port pages.
-				ignoreFiles: ['README.md', 'setup/**'],
+				// Mirrors srcExclude: setup/** and partials/** are @include-d into pages.
+				ignoreFiles: ['README.md', 'setup/**', 'partials/**'],
 			}),
 		],
 	},
@@ -83,7 +83,7 @@ export default defineConfig({
 	// README.md is the GitHub folder index; index.md is the site home.
 	// setup/** are body-only partials pulled into the port pages via @include and
 	// rendered in the wizard — not standalone pages.
-	srcExclude: ['README.md', 'setup/**'],
+	srcExclude: ['README.md', 'setup/**', 'partials/**'],
 	rewrites: {
 		'deploying/README.md': 'deploying/index.md',
 	},

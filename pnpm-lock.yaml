@@ -93,6 +93,9 @@ catalogs:
     openapi-fetch:
       specifier: ^0.17.0
       version: 0.17.0
+    simple-icons:
+      specifier: ^16.27.0
+      version: 16.27.0
     smol-toml:
       specifier: ^1.7.0
       version: 1.7.0
@@ -124,7 +127,7 @@ catalogs:
       specifier: ^1.13.2
       version: 1.13.2
     yaml:
-      specifier: ^2.8.0
+      specifier: ^2.9.0
       version: 2.9.0
     zod:
       specifier: ^4.3.6
@@ -176,6 +179,9 @@ importers:
       markdown-it-container:
         specifier: ^4.0.0
         version: 4.0.0
+      simple-icons:
+        specifier: 'catalog:'
+        version: 16.27.0
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
@@ -194,6 +200,9 @@ importers:
       vue:
         specifier: ^3.5.13
         version: 3.5.38(typescript@6.0.3)
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.0
 
   apps/e2e:
     devDependencies:
@@ -1037,6 +1046,9 @@ importers:
       react-router-dom:
         specifier: ^7.18.0
         version: 7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      simple-icons:
+        specifier: 'catalog:'
+        version: 16.27.0
       sonner:
         specifier: 'catalog:'
         version: 2.0.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -4546,6 +4558,10 @@ packages:
   signal-exit@4.1.0:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
+
+  simple-icons@16.27.0:
+    resolution: {integrity: sha512-Rk2dCRVCPHnla9/mHmztJOlbkfncPDUMSOPozQO3+c+vr6Uwy9jhNHeuxxvNZgbF9ZwpoT1BCu1LNB4Q07VmZQ==}
+    engines: {node: '>=0.12.18'}
 
   sirv@3.0.2:
     resolution: {integrity: sha512-2wcC/oGxHis/BoHkkPwldgiPSYcpZK3JU28WoMVv55yHJgcZ8rlXvuG9iZggz+sU1d4bRgIGASwyWqjxu3FM0g==}
@@ -8790,6 +8806,8 @@ snapshots:
   siginfo@2.0.0: {}
 
   signal-exit@4.1.0: {}
+
+  simple-icons@16.27.0: {}
 
   sirv@3.0.2:
     dependencies:

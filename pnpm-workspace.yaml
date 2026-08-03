@@ -3,6 +3,8 @@ packages:
   - apps/*
   - examples/*
 
+blockExoticSubdeps: true
+
 catalog:
   '@aws-sdk/client-s3': ^3.1066.0
   '@aws-sdk/client-secrets-manager': ^3.1066.0
@@ -34,6 +36,7 @@ catalog:
   oauth4webapi: ^3.8.6
   ofetch: ^1.5.1
   openapi-fetch: ^0.17.0
+  simple-icons: ^16.27.0
   smol-toml: ^1.7.0
   sonner: ^2.0.7
   tailwind-merge: ^3.6.0
@@ -48,7 +51,7 @@ catalog:
   vite-plus: 0.1.24
   vitepress-plugin-llms: ^1.13.2
   vitest: npm:@voidzero-dev/vite-plus-test@0.1.24
-  yaml: ^2.8.0
+  yaml: ^2.9.0
   zod: ^4.3.6
 
 catalogMode: prefer
@@ -66,6 +69,8 @@ minimumReleaseAgeExclude:
   - brace-expansion
   - postcss
   - tar
+
+onlyBuiltDependencies: []
 
 overrides:
   brace-expansion: 5.0.8
@@ -87,7 +92,3 @@ peerDependencyRules:
 trustPolicy: no-downgrade
 
 verifyDepsBeforeRun: install
-
-blockExoticSubdeps: true
-
-onlyBuiltDependencies: []

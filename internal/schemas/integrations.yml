@@ -16,6 +16,7 @@ paths:
       every session.
     x-kind-schema-version: 1
     x-category: other
+    x-brand-color: '#64748B'
     x-secret-paths:
       - secrets.*.value
     x-supports-test: false
@@ -47,6 +48,8 @@ paths:
     description: Use Google BigQuery as the Iceberg metastore.
     x-kind-schema-version: 1
     x-category: catalog
+    x-brand-color: '#669DF6'
+    x-brand-icon: googlebigquery
     x-secret-paths:
       - credentials.credentials_json
       - storage.credentials.access_key_id
@@ -89,6 +92,7 @@ paths:
     description: Use an AWS DynamoDB table as the Iceberg catalog.
     x-kind-schema-version: 1
     x-category: catalog
+    x-brand-color: '#4053D6'
     x-secret-paths:
       - credentials.access_key_id
       - credentials.secret_access_key
@@ -137,6 +141,7 @@ paths:
       static credentials.
     x-kind-schema-version: 1
     x-category: catalog
+    x-brand-color: '#232F3E'
     x-secret-paths:
       - credentials.access_key_id
       - credentials.secret_access_key
@@ -184,6 +189,8 @@ paths:
     description: Connect PyIceberg to a Hive Metastore over Thrift.
     x-kind-schema-version: 1
     x-category: catalog
+    x-brand-color: '#FDEE21'
+    x-brand-icon: apachehive
     x-secret-paths:
       - ugi
       - storage.credentials.access_key_id
@@ -227,6 +234,7 @@ paths:
       Gravitino, or Glue.
     x-kind-schema-version: 2
     x-category: catalog
+    x-brand-color: '#0969DA'
     x-secret-paths:
       - auth.token
       - auth.password
@@ -273,6 +281,7 @@ paths:
     description: Store Iceberg catalog metadata in PostgreSQL or SQLite through SQLAlchemy.
     x-kind-schema-version: 1
     x-category: catalog
+    x-brand-color: '#0969DA'
     x-secret-paths:
       - uri
       - storage.credentials.access_key_id
@@ -315,6 +324,8 @@ paths:
     description: Direct Postgres connection for SQL cells and SQLAlchemy.
     x-kind-schema-version: 2
     x-category: database
+    x-brand-color: '#4169E1'
+    x-brand-icon: postgresql
     x-secret-paths:
       - password
     x-supports-test: false
@@ -348,6 +359,8 @@ paths:
     description: Remote PySpark DataFrame sessions over Spark Connect.
     x-kind-schema-version: 1
     x-category: engine
+    x-brand-color: '#E25A1C'
+    x-brand-icon: apachespark
     x-secret-paths:
       - auth.token
       - metadata.*.value
@@ -383,6 +396,8 @@ paths:
       session options.
     x-kind-schema-version: 2
     x-category: engine
+    x-brand-color: '#DD00A1'
+    x-brand-icon: trino
     x-secret-paths:
       - auth.password
       - auth.token

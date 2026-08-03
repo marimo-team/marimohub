@@ -7,6 +7,7 @@ import { zSecret } from '../secretFields';
 import {
 	extraPropertiesSchema,
 	HTTP_URL_REGEX,
+	ICEBERG_BRAND_COLOR,
 	icebergRuntimeSchema,
 	icebergStorageSchema,
 	icebergStorageUiHints,
@@ -127,6 +128,7 @@ export const icebergRest = defineIntegration({
 	title: 'Iceberg REST Catalog',
 	description: 'Connect to an Iceberg REST catalog such as Polaris, Unity, Gravitino, or Glue.',
 	category: 'catalog',
+	brand: { color: ICEBERG_BRAND_COLOR },
 	schemaVersion: 2,
 	configSchema: icebergRestConfig,
 	requirements: ['pyiceberg[pyarrow,s3fs,gcsfs,adlfs,hf,rest-sigv4,gcp-auth,entra-auth]>=0.11'],

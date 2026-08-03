@@ -119,6 +119,7 @@ export const postgres = defineIntegration({
 	title: 'PostgreSQL',
 	description: 'Direct Postgres connection for SQL cells and SQLAlchemy.',
 	category: 'database',
+	brand: { icon: 'postgresql', color: '#4169E1' },
 	schemaVersion: 2,
 	configSchema: pgConfig,
 	// The rendered URL uses the plain `postgresql://` scheme, which SQLAlchemy

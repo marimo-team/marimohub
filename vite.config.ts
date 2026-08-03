@@ -11,6 +11,7 @@ export default defineConfig({
 		'packages/config/src/**':
 			"bash -c 'pnpm --filter @marimo-hub/config test && pnpm --filter @marimo-hub/docs test'",
 		'docs/configuration.md': "bash -c 'pnpm --filter @marimo-hub/config test'",
+		'docs/partials/integrations/**': "bash -c 'pnpm --filter @marimo-hub/docs test'",
 		'apps/docs/.vitepress/wizard/**': "bash -c 'pnpm --filter @marimo-hub/docs test'",
 	},
 	fmt: {
