@@ -43,8 +43,15 @@ jobs:
 
       - run: vp check
       - run: vp run audit:prod
-      - run: vp run -r test
-      - run: vp run -r build
+
+      # Build resolves packages from source, not dist, so it's independent of the
+      # tests — run both concurrently. `pnpm test` uses the threads pool; the bare
+      # `vp run -r test` CI used before did not.
+      - name: Test and build
+        run: |
+          pnpm exec concurrently -n test,build -c blue,magenta \
+            'pnpm test' \
+            'pnpm build'
 
       - name: Save Vite Task cache
         if: success() && github.event_name == 'push'
