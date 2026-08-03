@@ -33,44 +33,46 @@ export const SQL_CONNECTION_HINTS: UiHints = {
 };
 
 /**
- * Authority with no userinfo, so a configured endpoint cannot smuggle
+ * An http(s) URL with no userinfo, so a configured endpoint cannot smuggle
  * credentials (or whitespace, which splits a request line) into anything the
- * hub renders or probes. Requiring it to be non-empty is what stops
- * `https:///api`, which WHATWG parsing resolves to the host `api` — a different
- * server than the one the operator typed.
+ * hub renders or probes.
  */
-const URL_PORT = String.raw`(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?`;
-const URL_AUTHORITY = String.raw`(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)${URL_PORT}`;
-
-/** An http(s) URL: authority required, path/query/fragment optional. */
-export const HTTP_URL_REGEX = new RegExp(String.raw`^https?://${URL_AUTHORITY}(?:[/?#]\S*)?$`);
+export const HTTP_URL_REGEX = /^https?:\/\/(?![^/?#]*@)\S+$/;
 
 /**
  * The same, minus a query or fragment: for a base URL the runtime appends a
  * path to, where `?`/`#` would push that path into the query string.
  */
-export const SERVICE_URL_REGEX = new RegExp(String.raw`^https?://${URL_AUTHORITY}(?:/[^\s?#]*)?$`);
+export const SERVICE_URL_REGEX = /^https?:\/\/(?![^/?#]*@)[^\s?#]+$/;
 
 /**
- * A pattern cannot express everything the URL parser rejects — a stray percent
- * escape (`https://%zz`) satisfies the shape above and still fails to parse. The
- * refinement is invisible to JSON Schema, so the form keeps the pattern as its
- * client-side check while a save that would only fail later, inside
- * {@link serviceUrl} or the probe, is refused here instead.
+ * The shape above is what the form checks as you type; this is the one that
+ * decides a save, because it can use the URL parser and a pattern cannot.
+ *
+ * - `https:///api` has an empty authority, which WHATWG parsing resolves to the
+ *   host `api` — a different server than the operator typed, and one that would
+ *   receive whatever credential the endpoint carries.
+ * - `https://host:65536` and `https://%zz` fail to parse at all, so they would
+ *   surface as a connection test dying inside {@link serviceUrl} rather than as
+ *   the configuration error they are.
+ * - Port 0 parses but cannot be connected to.
  */
-const parses = (value: string) => URL.canParse(value);
+function isUsableUrl(value: string): boolean {
+	if (/^https?:\/\/\//.test(value) || !URL.canParse(value)) return false;
+	return new URL(value).port !== '0';
+}
 
 export const httpUrlField = () =>
 	z
 		.string()
 		.regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials')
-		.refine(parses, 'Not a valid URL');
+		.refine(isUsableUrl, 'Not a reachable http(s) URL');
 
 export const serviceUrlField = () =>
 	z
 		.string()
 		.regex(SERVICE_URL_REGEX, 'Must be an http(s) URL with no credentials, query, or fragment')
-		.refine(parses, 'Not a valid URL');
+		.refine(isUsableUrl, 'Not a reachable http(s) URL');
 
 /** Appends a path to a configured base URL, tolerating a trailing slash. */
 export function serviceUrl(base: string, path: string): string {
