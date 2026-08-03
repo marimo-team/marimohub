@@ -30,15 +30,30 @@ export function logOperationalError(
 	fields: Record<string, unknown>,
 	err: unknown,
 ): void {
-	const context = { ...fields };
-	for (const key of ['ts', 'level', 'event', 'error']) delete context[key];
-	console.error(
-		JSON.stringify({
+	let line: string;
+	try {
+		const context = { ...fields };
+		for (const key of ['ts', 'level', 'event', 'error']) delete context[key];
+		line = JSON.stringify({
 			...context,
 			ts: new Date().toISOString(),
 			level: 'error',
 			event,
 			error: safeError(err),
-		}),
-	);
+		});
+	} catch {
+		try {
+			line = JSON.stringify({
+				ts: new Date().toISOString(),
+				level: 'error',
+				event: 'operational_log_serialization_failed',
+				attempted_event: typeof event === 'string' ? event.slice(0, 128) : 'unknown',
+			});
+		} catch {
+			line = '{"level":"error","event":"operational_log_serialization_failed"}';
+		}
+	}
+	try {
+		console.error(line);
+	} catch {}
 }

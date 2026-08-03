@@ -288,6 +288,10 @@ describe('ReconciliationService', () => {
 		const result = await reconciler.reconcile({ orphanGraceMs: 1_000 });
 
 		expect(result.orphansReaped).toBe(0);
+		const marker = await (await bucket.get(paths.reconcileOrphan(inflightId)))!.json<{
+			first_seen: number;
+		}>();
+		expect(marker.first_seen).toBeLessThanOrEqual(Date.now());
 		const line = log.mock.calls.find((call) =>
 			String(call[0]).includes('corrupt_orphan_marker_replaced'),
 		)?.[0] as string;

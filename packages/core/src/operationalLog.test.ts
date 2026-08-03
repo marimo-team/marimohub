@@ -65,4 +65,22 @@ describe('logOperationalError', () => {
 		expect(line.error.status).toBeUndefined();
 		expect(line.error.issues).toHaveLength(20);
 	});
+
+	it('falls back to a safe payload when context serialization fails', () => {
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const fields: Record<string, unknown> = { secret: 'do-not-log' };
+		fields.self = fields;
+
+		expect(() =>
+			logOperationalError('stored_object_skipped', fields, new Error('also-do-not-log')),
+		).not.toThrow();
+
+		const line = spy.mock.calls[0]?.[0] as string;
+		expect(JSON.parse(line)).toMatchObject({
+			level: 'error',
+			event: 'operational_log_serialization_failed',
+			attempted_event: 'stored_object_skipped',
+		});
+		expect(line).not.toContain('do-not-log');
+	});
 });

@@ -795,39 +795,28 @@ app.openapi(createSession, async (c) => {
 		(MODE_POLICY[mode].persistsEdits
 			? undefined
 			: (notebook.source.current_version_id ?? undefined));
-
-	const { compute, bucket: bucketHandle, sandbox } = deps;
-	// The notebook's stored choice, resolved leniently: "default"/absent → first
-	// configured image; a choice that fell off the list falls back with a warning
-	// rather than blocking the session.
-	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
+	const logStoredConfigFallback = (config: 'base_image' | 'compute_profile') =>
 		logEvent({
 			level: 'error',
 			event: 'stored_config_fallback',
 			request_id: c.get('requestId') ?? null,
-			config: 'base_image',
+			config,
 			project_id: pid,
 			notebook_id: nid,
 			reason: 'selection_unavailable',
 			recovered: true,
-		}),
+		});
+
+	const { compute, bucket: bucketHandle, sandbox } = deps;
+	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
+		logStoredConfigFallback('base_image'),
 	);
 	const retryWithDefault = mode === 'edit' && body?.compute_profile === 'default';
 	const requestedComputeProfile = resolveComputeProfile(
 		sandbox,
 		retryWithDefault ? undefined : notebook.meta.compute_profile,
 		sandbox.computeProfileOverride === 'editors' && profileOverrideEligible,
-		() =>
-			logEvent({
-				level: 'error',
-				event: 'stored_config_fallback',
-				request_id: c.get('requestId') ?? null,
-				config: 'compute_profile',
-				project_id: pid,
-				notebook_id: nid,
-				reason: 'selection_unavailable',
-				recovered: true,
-			}),
+		() => logStoredConfigFallback('compute_profile'),
 	);
 	const provisioner = new SandboxProvisioner(compute);
 

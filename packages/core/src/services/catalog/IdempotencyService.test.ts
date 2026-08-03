@@ -4,7 +4,10 @@ import { paths } from '../../paths';
 import { IdempotencyService } from './IdempotencyService';
 
 describe('IdempotencyService', () => {
-	afterEach(() => vi.useRealTimers());
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
 
 	it('returns null before a key is recorded, the data after', async () => {
 		const svc = new IdempotencyService(new MemoryBucket());
@@ -54,6 +57,36 @@ describe('IdempotencyService', () => {
 		} finally {
 			log.mockRestore();
 		}
+	});
+
+	it('keeps repair read failures non-fatal after a lost create race', async () => {
+		const bucket = new MemoryBucket();
+		const svc = new IdempotencyService(bucket);
+		await svc.record('u1:POST /projects', 'k1', { id: 'first' });
+		vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('transient read failure'));
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await expect(svc.record('u1:POST /projects', 'k1', { id: 'second' })).resolves.toBeUndefined();
+		expect(log.mock.calls[0]?.[0]).toContain('idempotency_record_repair_failed');
+	});
+
+	it('keeps repair write failures non-fatal after a corrupt-record race', async () => {
+		const bucket = new MemoryBucket();
+		const svc = new IdempotencyService(bucket);
+		await svc.record('u1:POST /projects', 'k1', { id: 'first' });
+		const { objects } = await bucket.list({ prefix: paths.idempotencyPrefix });
+		await bucket.put(objects[0].key, '{not-json');
+		const originalPut = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+			if (options?.onlyIfEtagMatches) return Promise.reject(new Error('transient write failure'));
+			return originalPut(key, value, options);
+		});
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await expect(
+			svc.record('u1:POST /projects', 'k1', { id: 'recovered' }),
+		).resolves.toBeUndefined();
+		expect(log.mock.calls[0]?.[0]).toContain('idempotency_record_repair_failed');
 	});
 
 	it('prune deletes records past the retention window and keeps recent ones', async () => {

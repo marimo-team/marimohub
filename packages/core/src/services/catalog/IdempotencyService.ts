@@ -71,23 +71,41 @@ export class IdempotencyService {
 			await this.bucket.put(objectKey, JSON.stringify(record), { onlyIfNotExists: true });
 		} catch (err) {
 			if (!(err instanceof PreconditionFailedError)) throw err;
-			const existing = await this.bucket.get(objectKey);
+			let existing;
+			try {
+				existing = await this.bucket.get(objectKey);
+			} catch (repairErr) {
+				logOperationalError(
+					'idempotency_record_repair_failed',
+					{ operation: 'idempotency.record', object: objectKey },
+					repairErr,
+				);
+				return;
+			}
 			if (!existing) return;
+			let corruption: unknown;
 			try {
 				await readStored(IdempotencyRecordSchema, existing, objectKey);
+				return;
 			} catch (readErr) {
-				try {
-					await this.bucket.put(objectKey, JSON.stringify(record), {
-						onlyIfEtagMatches: existing.etag,
-					});
-					logOperationalError(
-						'corrupt_idempotency_record_replaced',
-						{ operation: 'idempotency.record', object: objectKey },
-						readErr,
-					);
-				} catch (replaceErr) {
-					if (!(replaceErr instanceof PreconditionFailedError)) throw replaceErr;
-				}
+				corruption = readErr;
+			}
+			try {
+				await this.bucket.put(objectKey, JSON.stringify(record), {
+					onlyIfEtagMatches: existing.etag,
+				});
+				logOperationalError(
+					'corrupt_idempotency_record_replaced',
+					{ operation: 'idempotency.record', object: objectKey },
+					corruption,
+				);
+			} catch (replaceErr) {
+				if (replaceErr instanceof PreconditionFailedError) return;
+				logOperationalError(
+					'idempotency_record_repair_failed',
+					{ operation: 'idempotency.record', object: objectKey },
+					replaceErr,
+				);
 			}
 		}
 	}
