@@ -92,6 +92,14 @@ describe('Footer', () => {
 		expect(link).toHaveAttribute('href', 'https://github.com/marimo-team/marimohub/commit/a1b2c3d');
 	});
 
+	it('renders git-describe versions as plain text — no such release tag exists', async () => {
+		const { user } = setup({ version: { ...VERSION, version: '0.2.0-5-gdeadbeef' } });
+		await openPopover(user);
+
+		expect(await screen.findByText('0.2.0-5-gdeadbeef')).toBeInTheDocument();
+		expect(screen.queryByRole('link', { name: /0\.2\.0/ })).not.toBeInTheDocument();
+	});
+
 	it('renders dev builds as plain text', async () => {
 		const { user } = setup({ version: { ...VERSION, version: 'dev' } });
 		await openPopover(user);
