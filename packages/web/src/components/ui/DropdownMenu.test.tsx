@@ -11,7 +11,7 @@ function setup(onAction = vi.fn()) {
 			icon={<MoreHorizontal />}
 			options={[
 				{ id: 'download-file', label: 'Download notebook file' },
-				{ id: 'delete', label: 'Delete', danger: true },
+				{ id: 'delete', label: 'Delete', danger: true, separatorBefore: true },
 			]}
 			onAction={onAction}
 		/>,
@@ -35,5 +35,14 @@ describe('DropdownMenu', () => {
 
 		expect(onAction).toHaveBeenCalledTimes(1);
 		expect(onAction).toHaveBeenCalledWith('download-file');
+	});
+
+	it('renders separators before grouped options', async () => {
+		const user = userEvent.setup();
+		setup();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+
+		expect(screen.getByRole('separator')).toBeInTheDocument();
 	});
 });

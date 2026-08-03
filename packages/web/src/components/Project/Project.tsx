@@ -408,61 +408,100 @@ export function Project() {
 		});
 	};
 
-	const notebookActions = (nb: NotebookEntry): DropdownMenuOption[] => [
-		{ id: 'rename', label: 'Rename', icon: <Pencil className="size-4" /> },
-		{ id: 'duplicate', label: 'Duplicate', icon: <Copy className="size-4" /> },
-		// The shared app: start it, open the running one, or stop it — each item
-		// gated by the caller's server-evaluated grants on the live session.
-		// Derived from the 5s session poll, so an item can be ~5s stale: a racing
-		// "Run as app" harmlessly attaches (create reuses per mode); a racing
-		// "Stop app" 404s into a toast.
-		...(() => {
-			const app = sessionByNotebook.get(nb.id)?.app;
-			if (!app) {
-				return canStartApps
+	const notebookActions = (nb: NotebookEntry): DropdownMenuOption[] => {
+		const live = sessionByNotebook.get(nb.id);
+		const app = live?.app;
+		// Session polling can leave these actions about five seconds stale. Starting
+		// an app is idempotent, while a raced stop is surfaced by the existing toast.
+		const runtimeActions: DropdownMenuOption[] = [
+			...(live?.edit
+				? [
+						{
+							id: 'stop-kernel',
+							label: 'Stop Kernel',
+							icon: <Power className="size-4" />,
+							danger: true,
+						},
+					]
+				: []),
+			...(!app
+				? canStartApps
 					? [{ id: 'run-app', label: 'Run as app', icon: <Play className="size-4" /> }]
-					: [];
-			}
-			return [
-				...(app.can?.attach
-					? [{ id: 'open-app', label: 'Open app', icon: <AppWindow className="size-4" /> }]
-					: []),
-				...(app.can?.stop
+					: []
+				: [
+						...(app.can?.attach
+							? [{ id: 'open-app', label: 'Open app', icon: <AppWindow className="size-4" /> }]
+							: []),
+						...(app.can?.stop
+							? [
+									{
+										id: 'stop-app',
+										label: 'Stop app',
+										icon: <Power className="size-4" />,
+										danger: true,
+									},
+								]
+							: []),
+					]),
+		];
+
+		const groups: DropdownMenuOption[][] = [
+			[
+				{ id: 'rename', label: 'Rename', icon: <Pencil className="size-4" /> },
+				{ id: 'duplicate', label: 'Duplicate', icon: <Copy className="size-4" /> },
+			],
+			runtimeActions,
+			[
+				...(offersImageChoice
 					? [
 							{
-								id: 'stop-app',
-								label: 'Stop app',
-								icon: <Power className="size-4" />,
-								danger: true,
+								id: 'change-image',
+								label: 'Change base image',
+								icon: <Container className="size-4" />,
 							},
 						]
 					: []),
-			];
-		})(),
-		...(offersImageChoice
-			? [{ id: 'change-image', label: 'Change base image', icon: <Container className="size-4" /> }]
-			: []),
-		...(offersComputeChoice
-			? [{ id: 'change-compute', label: 'Change compute…', icon: <Cpu className="size-4" /> }]
-			: []),
-		{ id: 'history', label: 'Version history', icon: <History className="size-4" /> },
-		...(nb.source_type === 'git'
-			? [
-					{
-						id: 'sync-settings',
-						label: 'Sync settings',
-						icon: <RefreshCw className="size-4" />,
-					},
-				]
-			: []),
-		{ id: 'download-file', label: 'Download notebook file', icon: <Download className="size-4" /> },
-		{
-			id: 'download-workspace',
-			label: 'Download workspace',
-			icon: <FolderArchive className="size-4" />,
-		},
-		{ id: 'delete', label: 'Delete', icon: <Trash2 className="size-4" />, danger: true },
-	];
+				...(offersComputeChoice
+					? [
+							{
+								id: 'change-compute',
+								label: 'Change compute…',
+								icon: <Cpu className="size-4" />,
+							},
+						]
+					: []),
+				...(nb.source_type === 'git'
+					? [
+							{
+								id: 'sync-settings',
+								label: 'Sync settings',
+								icon: <RefreshCw className="size-4" />,
+							},
+						]
+					: []),
+				{ id: 'history', label: 'Version history', icon: <History className="size-4" /> },
+			],
+			[
+				{
+					id: 'download-file',
+					label: 'Download notebook file',
+					icon: <Download className="size-4" />,
+				},
+				{
+					id: 'download-workspace',
+					label: 'Download workspace',
+					icon: <FolderArchive className="size-4" />,
+				},
+			],
+			[{ id: 'delete', label: 'Delete', icon: <Trash2 className="size-4" />, danger: true }],
+		];
+
+		return groups
+			.filter((group) => group.length > 0)
+			.flatMap((group, index) =>
+				index === 0 ? group : [{ ...group[0], separatorBefore: true }, ...group.slice(1)],
+			);
+	};
 
 	const filteredNotebooks = filterBySearch(notebooks, search.query, (nb) => nb.title);
 
@@ -628,6 +667,8 @@ export function Project() {
 											onAction={(key) => {
 												if (key === 'rename') renameModal.open(nb);
 												else if (key === 'duplicate') handleDuplicate(nb);
+												else if (key === 'stop-kernel' && live?.edit)
+													stopModal.open({ notebook: nb, session: live.edit });
 												else if (key === 'run-app' || key === 'open-app')
 													void navigate(`/projects/${pid}/notebooks/${nb.id}/app`, {
 														state: { title: nb.title },

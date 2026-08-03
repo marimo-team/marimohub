@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { MenuTrigger, Button, Popover, Menu, MenuItem } from 'react-aria-components';
+import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
 import { cn } from '@/lib/utils';
 
 export interface DropdownMenuOption {
@@ -7,6 +7,7 @@ export interface DropdownMenuOption {
 	id: string;
 	label: ReactNode;
 	icon?: ReactNode;
+	separatorBefore?: boolean;
 	/** Render the item in the destructive style (e.g. Delete). */
 	danger?: boolean;
 }
@@ -50,7 +51,10 @@ export function DropdownMenu({
 				className="z-50 min-w-[200px] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg entering:animate-in entering:fade-in-0 entering:zoom-in-95 exiting:animate-out exiting:fade-out-0 exiting:zoom-out-95"
 			>
 				<Menu className="outline-none" onAction={(key) => onAction(String(key))}>
-					{options.map((opt) => (
+					{options.flatMap((opt) => [
+						...(opt.separatorBefore
+							? [<Separator key={`${opt.id}-separator`} className="h-px bg-border" />]
+							: []),
 						<MenuItem
 							key={opt.id}
 							id={opt.id}
@@ -63,8 +67,8 @@ export function DropdownMenu({
 						>
 							{opt.icon}
 							{opt.label}
-						</MenuItem>
-					))}
+						</MenuItem>,
+					])}
 				</Menu>
 			</Popover>
 		</MenuTrigger>

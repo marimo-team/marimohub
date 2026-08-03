@@ -321,6 +321,30 @@ describe('Project — Create Notebook', () => {
 });
 
 describe('Project — Notebook Actions', () => {
+	it('groups related notebook actions with separators', async () => {
+		const user = userEvent.setup();
+		makeFetch();
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		const menu = await screen.findByRole('menu');
+
+		expect(within(menu).getAllByRole('separator')).toHaveLength(4);
+		expect(
+			within(menu)
+				.getAllByRole('menuitem')
+				.map((item) => item.textContent),
+		).toEqual([
+			'Rename',
+			'Duplicate',
+			'Run as app',
+			'Version history',
+			'Download notebook file',
+			'Download workspace',
+			'Delete',
+		]);
+	});
+
 	it('deletes a notebook only after confirmation', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
@@ -743,6 +767,23 @@ describe('Project — Notebook Actions', () => {
 		await renderProject();
 
 		await user.click(await screen.findByRole('button', { name: 'Shut down kernel' }));
+		await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Shut Down' }));
+
+		await waitFor(() =>
+			expect(
+				calls.some(
+					(c) => c.method === 'DELETE' && c.url.endsWith('/notebooks/nb-1/sessions/sess-1'),
+				),
+			).toBe(true),
+		);
+	});
+
+	it('stops a running session from the notebook menu', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({ sessions: [runningSession()] });
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Stop Kernel');
 		await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Shut Down' }));
 
 		await waitFor(() =>
