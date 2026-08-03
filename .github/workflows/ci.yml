@@ -29,7 +29,26 @@ jobs:
           cache: true
           run-install: |
             - args: ['--frozen-lockfile']
+
+      # Forks must not read the shared cache; only main pushes can update it.
+      - name: Restore Vite Task cache
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        id: vite-task-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-${{ runner.os }}-${{ runner.arch }}-
+
       - run: vp check
       - run: vp run audit:prod
       - run: vp run -r test
       - run: vp run -r build
+
+      - name: Save Vite Task cache
+        if: success() && github.event_name == 'push'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
