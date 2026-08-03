@@ -69,6 +69,7 @@ minimumReleaseAgeExclude:
   - brace-expansion
   - postcss
   - tar
+  - undici
 
 onlyBuiltDependencies: []
 
