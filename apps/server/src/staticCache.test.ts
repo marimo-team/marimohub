@@ -7,6 +7,7 @@ import {
 	cacheControlForStaticPath,
 	IMMUTABLE_ASSET_CACHE_CONTROL,
 	REVALIDATE_STATIC_CACHE_CONTROL,
+	serveSpaFallback,
 	serveStaticWithCache,
 } from './staticCache';
 
@@ -50,7 +51,7 @@ describe('cacheControlForStaticPath', () => {
 
 		const app = new Hono();
 		app.use('/*', serveStaticWithCache({ root }));
-		app.get('*', serveStaticWithCache({ path: join(root, 'index.html') }));
+		app.get('*', serveSpaFallback(root));
 
 		expect((await app.request('/')).headers.get('Cache-Control')).toBe(
 			REVALIDATE_STATIC_CACHE_CONTROL,
@@ -62,8 +63,14 @@ describe('cacheControlForStaticPath', () => {
 			IMMUTABLE_ASSET_CACHE_CONTROL,
 		);
 
-		const missingAssetApp = new Hono();
-		missingAssetApp.use('/*', serveStaticWithCache({ root }));
-		expect((await missingAssetApp.request('/missing.js')).status).toBe(404);
+		const missingAsset = await app.request('/assets/missing.js');
+		expect(missingAsset.status).toBe(404);
+		expect(missingAsset.headers.get('Cache-Control')).not.toBe(IMMUTABLE_ASSET_CACHE_CONTROL);
+
+		const invalidRange = await app.request('/assets/index-C8a1b2.js', {
+			headers: { Range: 'bytes=999-' },
+		});
+		expect(invalidRange.status).toBe(416);
+		expect(invalidRange.headers.get('Cache-Control')).toBe(REVALIDATE_STATIC_CACHE_CONTROL);
 	});
 });

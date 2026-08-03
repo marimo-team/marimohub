@@ -5,6 +5,10 @@ import type { MiddlewareHandler } from 'hono';
 export const REVALIDATE_STATIC_CACHE_CONTROL = 'public, max-age=0, must-revalidate';
 export const IMMUTABLE_ASSET_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
+function isAssetPath(requestPath: string): boolean {
+	return requestPath === '/assets' || requestPath.startsWith('/assets/');
+}
+
 /**
  * Return the cache policy for a file served by the SPA.
  *
@@ -25,8 +29,23 @@ export function serveStaticWithCache(options: ServeStaticOptions): MiddlewareHan
 		const response = await handler(context, next);
 		if (response instanceof Response) {
 			const requestPath = options.path ?? context.req.path;
-			response.headers.set('Cache-Control', cacheControlForStaticPath(requestPath));
+			const isCacheableResponse =
+				(response.status >= 200 && response.status < 300) || response.status === 304;
+			response.headers.set(
+				'Cache-Control',
+				isCacheableResponse
+					? cacheControlForStaticPath(requestPath)
+					: REVALIDATE_STATIC_CACHE_CONTROL,
+			);
 		}
 		return response;
+	};
+}
+
+export function serveSpaFallback(staticRoot: string): MiddlewareHandler {
+	const handler = serveStaticWithCache({ path: `${staticRoot}/index.html` });
+	return async (context, next) => {
+		if (isAssetPath(context.req.path)) return next();
+		return handler(context, next);
 	};
 }

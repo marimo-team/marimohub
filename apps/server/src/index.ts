@@ -14,7 +14,7 @@ import { createFromEnv, isConfigError } from '@marimo-hub/config';
 import { startMaintenance, startSessionLifecycle } from './cron';
 import { logEvent } from './log';
 import { WideEventMetrics } from './metrics';
-import { serveStaticWithCache } from './staticCache';
+import { serveSpaFallback, serveStaticWithCache } from './staticCache';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 
 // Process-level safety net. A rejected promise with no catch handler — e.g. a
@@ -105,7 +105,7 @@ app.use('*', secureHeaders());
 // a single-page-app fallback to index.html.
 const staticRoot = process.env.MARIMOHUB_STATIC_ROOT ?? './public';
 app.use('/*', serveStaticWithCache({ root: staticRoot }));
-app.get('*', serveStaticWithCache({ path: `${staticRoot}/index.html` }));
+app.get('*', serveSpaFallback(staticRoot));
 
 // Maintenance + session-lifecycle loops — run on a single replica (the
 // marimohub-maintenance Deployment). The bucket-CAS leases inside are
