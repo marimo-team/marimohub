@@ -3,6 +3,7 @@ import { DomainError } from '../../errors';
 import type {
 	IntegrationCategory,
 	IntegrationProbe,
+	KindBrand,
 	TestResult,
 	UiHints,
 } from '../../ports/integrations';
@@ -49,6 +50,8 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	title: string;
 	description: string;
 	category: IntegrationCategory;
+	/** Vendor icon and color for docs and UI chrome. */
+	brand: KindBrand;
 	/**
 	 * Version of the config *shape*. Bump on an incompatible schema change and
 	 * provide `migrate` for stored configs — a live old version without a migrate

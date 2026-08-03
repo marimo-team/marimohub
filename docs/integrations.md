@@ -28,38 +28,30 @@ revision. Each session records the revisions that it uses.
 
 ## Using an integration in a notebook
 
-Each _kind_ documents its sandbox contract in the add-integration form. In v1:
+Each kind documents its sandbox contract — the env vars and files it renders —
+in its section below and in the add-integration form. `<NAME>` is the
+integration's instance name upper-cased with `-` → `_` (`prod` → `PROD`).
 
-| Kind                           | What the sandbox gets                                                                                                                                                                                                                                                                          |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PostgreSQL**                 | `MARIMOHUB_PG_<NAME>_URL` (a SQLAlchemy-ready `postgresql://…` URL) plus `_HOST/_PORT/_DATABASE/_USER/_PASSWORD`, and a secret-free descriptor at `$MARIMOHUB_INTEGRATIONS_DIR/postgres/<name>.json`.                                                                                          |
-| **Iceberg REST Catalog**       | A PyIceberg catalog supporting no auth, bearer tokens, Basic, OAuth2 client credentials, AWS SigV4, Google ADC/service accounts, and Entra; REST/TLS tuning; access delegation; and documented remote FileIO families.                                                                         |
-| **Iceberg SQL Catalog**        | PostgreSQL or SQLite catalog metadata, including SQLAlchemy initialization, liveness, and logging options. The SQLAlchemy URI is encrypted because it commonly embeds credentials.                                                                                                             |
-| **Iceberg Hive Catalog**       | Hive Metastore Thrift connection, Hive 2 compatibility, Kerberos, UGI, and FileIO configuration.                                                                                                                                                                                               |
-| **Iceberg AWS Glue Catalog**   | Glue catalog/account/endpoint/retry configuration with ambient, profile, encrypted static, or shared catalog/FileIO AWS credentials.                                                                                                                                                           |
-| **Iceberg DynamoDB Catalog**   | DynamoDB table/region configuration with ambient, profile, encrypted static, or shared catalog/FileIO AWS credentials.                                                                                                                                                                         |
-| **Iceberg BigQuery Metastore** | BigQuery project/location configuration with ADC or encrypted service-account JSON and independent FileIO configuration.                                                                                                                                                                       |
-| **Trino**                      | `MARIMOHUB_TRINO_<NAME>_URL` plus connection env vars and `trino/<name>.json`. Supports Basic, JWT, OAuth2, client certificates, Kerberos, GSSAPI, TLS verification, headers, extra credentials, roles, session properties, spooling, retries, timeouts, isolation, and compatibility options. |
-| **PySpark (Spark Connect)**    | `MARIMOHUB_PYSPARK_<NAME>_REMOTE`, optional `_TOKEN`, and `pyspark/<name>.json` with the SparkSession settings. Supports token auth, user identity, gRPC keepalive/metadata, and plain or encrypted Spark configuration.                                                                       |
-| **Custom environment**         | Exactly the env vars you configure — plain or secret.                                                                                                                                                                                                                                          |
+Every session also gets `MARIMOHUB_INTEGRATIONS_DIR` (default
+`/tmp/marimohub-integrations`) containing each integration's rendered files and
+a `manifest.json` naming the instances, kinds, and config versions in play. The
+directory sits outside the workspace, so rendered config is never captured back
+into the notebook's files.
 
-All Iceberg kinds are written into
-`$MARIMOHUB_INTEGRATIONS_DIR/.pyiceberg.yaml`; `PYICEBERG_HOME` points there,
-so `pyiceberg.catalog.load_catalog("<name>")` works directly. The typed storage
-selector covers catalog-provided credentials, S3/compatible stores, GCS, ADLS,
-HDFS, and Hugging Face. Process-wide worker/compatibility settings and PyArrow
-read behavior are also typed. Non-secret PyIceberg options that are not
-first-class fields remain available through `extra_properties`;
-credential-shaped keys are rejected there so secrets cannot bypass encryption.
+Each kind declares the Python packages its contract assumes (**Notebook
+packages** below, echoed into `manifest.json`). Add them to the notebook's
+dependencies like any other package — the hub injects connection config, not
+Python libraries.
 
-PyIceberg's in-memory catalog is intentionally not an integration kind: the
-official documentation describes it as non-concurrent test/demo state, so it
-cannot serve as a reusable project data source. Custom catalog implementations
-and custom REST authentication managers are also excluded because accepting an
-arbitrary Python class path would turn configuration into code loading.
+In the configuration references below, fields are shown as dotted paths into
+the config; `field: value` sub-tables list the extra fields available when a
+selector takes that value.
 
-`<NAME>` is the integration's instance name upper-cased with `-` → `_`
-(`prod` → `PROD`). Example:
+## PostgreSQL
+
+The sandbox gets `MARIMOHUB_PG_<NAME>_URL` (a SQLAlchemy-ready
+`postgresql://…` URL) plus `_HOST/_PORT/_DATABASE/_USER/_PASSWORD`, and a
+secret-free descriptor at `$MARIMOHUB_INTEGRATIONS_DIR/postgres/<name>.json`.
 
 ```python
 import os
@@ -68,24 +60,7 @@ import sqlalchemy
 engine = sqlalchemy.create_engine(os.environ["MARIMOHUB_PG_PROD_URL"])
 ```
 
-For PySpark, pass the named remote URL to `SparkSession.builder.remote()`, then
-apply the settings from the JSON descriptor before calling `getOrCreate()`.
-This integration targets Spark Connect. Provisioning a classic Spark driver or
-cluster remains the compute backend's responsibility.
-
-Each kind declares the Python packages its contract assumes (shown on the kind
-card, e.g. `sqlalchemy>=2, psycopg2-binary>=2.9` for PostgreSQL, `pyiceberg` for
-Iceberg) and echoes them into `manifest.json`. Add them to the notebook's
-dependencies like any other package — the hub injects connection config, not
-Python libraries.
-
-Every session also gets `MARIMOHUB_INTEGRATIONS_DIR` (default
-`/tmp/marimohub-integrations`) containing each integration's rendered files and
-a `manifest.json` naming the instances, kinds, and config versions in play. The
-directory sits outside the workspace, so rendered config is never captured back
-into the notebook's files.
-
-### PostgreSQL and TLS
+### TLS and certificates
 
 New PostgreSQL integrations default to libpq's `verify-full`, which checks both
 the certificate chain and the hostname. libpq does not consult the system trust
@@ -106,6 +81,113 @@ point it elsewhere:
   integration's other files and `sslrootcert` points there.
 
 Set one or the other, not both.
+
+<!--@include: ./partials/integrations/postgres.md-->
+
+## Iceberg catalogs
+
+All Iceberg kinds are written into
+`$MARIMOHUB_INTEGRATIONS_DIR/.pyiceberg.yaml`; `PYICEBERG_HOME` points there,
+so `pyiceberg.catalog.load_catalog("<name>")` works directly:
+
+```python
+from pyiceberg.catalog import load_catalog
+
+catalog = load_catalog("prod")
+```
+
+The typed storage selector (`storage.scheme`) covers catalog-provided
+credentials, S3/compatible stores, GCS, ADLS, HDFS, and Hugging Face.
+Process-wide worker/compatibility settings and PyArrow read behavior are also
+typed. Non-secret PyIceberg options that are not first-class fields remain
+available through `extra_properties`; credential-shaped keys are rejected there
+so secrets cannot bypass encryption.
+
+PyIceberg's in-memory catalog is intentionally not an integration kind: the
+official documentation describes it as non-concurrent test/demo state, so it
+cannot serve as a reusable project data source. Custom catalog implementations
+and custom REST authentication managers are also excluded because accepting an
+arbitrary Python class path would turn configuration into code loading. A few
+PyIceberg settings apply to the whole process rather than one catalog; see the
+[failure model](#failure-model) for how conflicting values are handled.
+
+### Iceberg REST Catalog
+
+Connects to an Iceberg REST catalog such as Polaris, Unity, Gravitino, or Glue.
+Supports no auth, bearer tokens, Basic, OAuth2 client credentials, AWS SigV4,
+Google ADC/service accounts, and Entra; REST/TLS tuning; access delegation; and
+the documented remote FileIO families.
+
+<!--@include: ./partials/integrations/iceberg_rest.md-->
+
+### Iceberg SQL Catalog
+
+Stores catalog metadata in PostgreSQL or SQLite, with SQLAlchemy
+initialization, liveness, and logging options. The SQLAlchemy URI is encrypted
+because it commonly embeds credentials.
+
+<!--@include: ./partials/integrations/iceberg_sql.md-->
+
+### Iceberg Hive Catalog
+
+Connects PyIceberg to a Hive Metastore over Thrift, with Hive 2 compatibility,
+Kerberos, and UGI options.
+
+<!--@include: ./partials/integrations/iceberg_hive.md-->
+
+### Iceberg AWS Glue Catalog
+
+Uses AWS Glue as the metastore, with catalog/account/endpoint/retry
+configuration and ambient, profile, encrypted static, or shared
+catalog/FileIO AWS credentials.
+
+<!--@include: ./partials/integrations/iceberg_glue.md-->
+
+### Iceberg DynamoDB Catalog
+
+Uses an AWS DynamoDB table as the catalog, with the same ambient, profile,
+encrypted static, or shared catalog/FileIO AWS credential choices.
+
+<!--@include: ./partials/integrations/iceberg_dynamodb.md-->
+
+### Iceberg BigQuery Metastore
+
+Uses Google BigQuery as the metastore, with ADC or encrypted service-account
+JSON and independent FileIO configuration. BigQuery requires
+`legacy-current-snapshot-id`, so it cannot share a project with a catalog that
+disables it (see the [failure model](#failure-model)).
+
+<!--@include: ./partials/integrations/iceberg_bigquery.md-->
+
+## Trino
+
+The sandbox gets `MARIMOHUB_TRINO_<NAME>_URL` plus connection env vars and a
+descriptor at `$MARIMOHUB_INTEGRATIONS_DIR/trino/<name>.json`. Supports Basic,
+JWT, OAuth2, client certificates, Kerberos, GSSAPI, TLS verification, headers,
+extra credentials, roles, session properties, spooling, retries, timeouts,
+isolation, and compatibility options.
+
+<!--@include: ./partials/integrations/trino.md-->
+
+## PySpark (Spark Connect)
+
+The sandbox gets `MARIMOHUB_PYSPARK_<NAME>_REMOTE`, optional `_TOKEN`, and
+`pyspark/<name>.json` with the SparkSession settings. Supports token auth, user
+identity, gRPC keepalive/metadata, and plain or encrypted Spark configuration.
+
+Pass the named remote URL to `SparkSession.builder.remote()`, then apply the
+settings from the JSON descriptor before calling `getOrCreate()`. This
+integration targets Spark Connect. Provisioning a classic Spark driver or
+cluster remains the compute backend's responsibility.
+
+<!--@include: ./partials/integrations/pyspark.md-->
+
+## Custom environment
+
+Injects exactly the env vars you configure — plain or secret — into every
+session.
+
+<!--@include: ./partials/integrations/custom_env.md-->
 
 ## Managing integrations
 

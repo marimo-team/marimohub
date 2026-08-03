@@ -24,6 +24,7 @@
 		"react-aria-components": "^1.16.0",
 		"react-dom": "^19.1.1",
 		"react-router-dom": "^7.18.0",
+		"simple-icons": "catalog:",
 		"sonner": "catalog:",
 		"tailwind-merge": "catalog:",
 		"tailwindcss": "catalog:",

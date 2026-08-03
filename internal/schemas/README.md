@@ -42,6 +42,11 @@ These are not HTTP APIs — OpenAPI is used as a diffable schema container:
   decrypt-and-reseal migration.
 - Each integration kind is its own path: retiring a kind is breaking, adding
   one is additive.
+- `x-brand-icon`/`x-brand-color` carry each kind's vendor presentation
+  (simple-icons slug + hex). `integrations.yml` also drives the per-kind
+  config-reference partials in `docs/partials/integrations/`, regenerated and
+  drift-guarded by `apps/docs/.vitepress/integrations-docs/generate.test.ts`
+  as part of `pnpm schemas:generate`.
 
 ## Breaking-change CI
 

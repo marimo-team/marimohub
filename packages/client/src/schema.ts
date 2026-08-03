@@ -5713,6 +5713,12 @@ export interface components {
 			description: string;
 			/** @enum {string} */
 			category: 'database' | 'catalog' | 'engine' | 'storage' | 'other';
+			brand: {
+				/** @example postgresql */
+				icon?: string;
+				/** @example #4169E1 */
+				color: string;
+			};
 			schema_version: number;
 			json_schema: {
 				[key: string]: unknown;

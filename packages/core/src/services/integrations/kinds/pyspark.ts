@@ -57,6 +57,7 @@ export const pyspark = defineIntegration({
 	title: 'PySpark (Spark Connect)',
 	description: 'Remote PySpark DataFrame sessions over Spark Connect.',
 	category: 'engine',
+	brand: { icon: 'apachespark', color: '#E25A1C' },
 	schemaVersion: 1,
 	configSchema: pysparkConfig,
 	requirements: ['pyspark[connect]>=4.2'],

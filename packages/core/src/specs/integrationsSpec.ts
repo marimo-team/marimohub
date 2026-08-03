@@ -25,6 +25,8 @@ export function buildIntegrationsSpec(): Record<string, unknown> {
 			description: d.description,
 			'x-kind-schema-version': d.schema_version,
 			'x-category': d.category,
+			'x-brand-color': d.brand.color,
+			...(d.brand.icon !== undefined && { 'x-brand-icon': d.brand.icon }),
 			'x-secret-paths': registry.secretPathsOf(d.kind).map((p) => p.join('.')),
 			'x-supports-test': d.supports_test,
 			'x-requirements': d.requirements,

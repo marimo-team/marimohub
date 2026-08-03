@@ -10,7 +10,7 @@ interface LinkItem {
 }
 
 const DOCS_ROOT = fileURLToPath(new URL('../../../docs', import.meta.url));
-const EXCLUDED_DOCS = [/^README\.md$/, /^setup\//];
+const EXCLUDED_DOCS = [/^README\.md$/, /^setup\//, /^partials\//];
 
 function listMarkdownFiles(dir: string): string[] {
 	const entries = readdirSync(dir).sort();

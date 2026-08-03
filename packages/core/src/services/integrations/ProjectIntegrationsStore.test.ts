@@ -32,6 +32,7 @@ const echoKind = defineIntegration({
 	title: 'Echo',
 	description: 'test kind',
 	category: 'other',
+	brand: { color: '#000000' },
 	schemaVersion: 1,
 	configSchema: z.object({
 		greeting: z.string().default('hi'),
@@ -262,6 +263,7 @@ describe('ProjectIntegrationsStore', () => {
 				title: 'Leaky',
 				description: 'test kind',
 				category: 'other',
+				brand: { color: '#000000' },
 				schemaVersion: 1,
 				configSchema: z.object({ token: zSecret() }),
 				render({ config }) {
@@ -539,6 +541,7 @@ describe('ProjectIntegrationsStore', () => {
 			title: 'Echo',
 			description: 'test kind',
 			category: 'other',
+			brand: { color: '#000000' },
 			schemaVersion: 2,
 			configSchema: z.object({ greeting2: z.string(), token: zSecret() }),
 			render({ config, instanceName }) {

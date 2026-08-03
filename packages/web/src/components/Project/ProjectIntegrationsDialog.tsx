@@ -5,11 +5,9 @@ import {
 	Braces,
 	Database,
 	FlaskConical,
-	Flame,
 	FolderInput,
 	HardDrive,
 	Library,
-	Network,
 	Pencil,
 	Plus,
 	Puzzle,
@@ -48,6 +46,7 @@ import {
 	useUpdateIntegration,
 } from '@/api/hooks';
 import type { IntegrationsScope } from '@/api/hooks';
+import { BRAND_ICONS } from './brandIcons';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { toastError } from '@/lib/errors';
 import { filterBySearch } from '@/lib/search';
@@ -104,10 +103,8 @@ const CATEGORY_PRESENTATION: Record<
 	},
 };
 
+// Lucide fallbacks for kinds without a vendor mark in `brand.icon`.
 const KIND_ICONS: Record<string, typeof Database> = {
-	postgres: Database,
-	trino: Network,
-	pyspark: Flame,
 	custom_env: Braces,
 };
 
@@ -116,10 +113,14 @@ const CATEGORY_ORDER = Object.keys(CATEGORY_PRESENTATION) as IntegrationCategory
 function getKindPresentation(kind: IntegrationKind | undefined) {
 	const category = kind?.category ?? 'other';
 	const presentation = CATEGORY_PRESENTATION[category];
+	const brandIcon = kind?.brand.icon === undefined ? undefined : BRAND_ICONS[kind.brand.icon];
 	const Icon =
+		brandIcon ??
 		(kind?.kind.startsWith('iceberg_') ? Snowflake : kind && KIND_ICONS[kind.kind]) ??
 		presentation.icon;
-	return { ...presentation, Icon };
+	// A brand hex can't be a Tailwind class, so vendor logos are tinted inline.
+	const iconStyle = brandIcon && kind ? { color: kind.brand.color } : undefined;
+	return { ...presentation, Icon, iconStyle };
 }
 
 type View =
@@ -391,7 +392,7 @@ function ListView({
 									<span
 										className={`flex size-10 shrink-0 items-center justify-center rounded-lg ${presentation.iconClassName}`}
 									>
-										<Icon className="size-5" aria-hidden />
+										<Icon className="size-5" style={presentation.iconStyle} aria-hidden />
 									</span>
 									<span className="flex min-w-0 flex-col gap-1">
 										<span className="flex min-w-0 items-center gap-1.5">
@@ -576,7 +577,7 @@ function CatalogView({
 										<span
 											className={`flex size-10 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105 motion-reduce:transform-none ${presentation.iconClassName}`}
 										>
-											<Icon className="size-5" aria-hidden />
+											<Icon className="size-5" style={presentation.iconStyle} aria-hidden />
 										</span>
 										<span
 											className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${presentation.badgeClassName}`}
@@ -729,7 +730,7 @@ function CopyView({
 											<span
 												className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${presentation.iconClassName}`}
 											>
-												<Icon className="size-4.5" aria-hidden />
+												<Icon className="size-4.5" style={presentation.iconStyle} aria-hidden />
 											</span>
 											<span className="flex min-w-0 flex-col">
 												<code className="truncate text-xs font-medium">{entry.name}</code>

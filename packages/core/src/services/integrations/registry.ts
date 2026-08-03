@@ -42,6 +42,7 @@ export class IntegrationRegistry {
 			title: def.title,
 			description: def.description,
 			category: def.category,
+			brand: def.brand,
 			schema_version: def.schemaVersion,
 			json_schema: this.jsonSchema(kind),
 			ui_hints: def.uiHints ?? {},

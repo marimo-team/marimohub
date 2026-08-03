@@ -1074,6 +1074,19 @@ components:
             - engine
             - storage
             - other
+        brand:
+          type: object
+          properties:
+            icon:
+              type: string
+              minLength: 1
+              example: postgresql
+            color:
+              type: string
+              pattern: ^#[0-9A-Fa-f]{6}$
+              example: '#4169E1'
+          required:
+            - color
         schema_version:
           type: integer
           exclusiveMinimum: 0
@@ -1116,6 +1129,7 @@ components:
         - title
         - description
         - category
+        - brand
         - schema_version
         - json_schema
         - ui_hints

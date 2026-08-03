@@ -63,6 +63,13 @@ const KindDescriptorSchema = z
 		title: z.string(),
 		description: z.string(),
 		category: z.enum(INTEGRATION_CATEGORIES),
+		brand: z.object({
+			icon: z.string().min(1).optional().openapi({ example: 'postgresql' }),
+			color: z
+				.string()
+				.regex(/^#[0-9A-Fa-f]{6}$/)
+				.openapi({ example: '#4169E1' }),
+		}),
 		schema_version: z.number().int().positive(),
 		json_schema: z.record(z.string(), z.unknown()),
 		ui_hints: z.record(

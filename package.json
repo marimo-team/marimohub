@@ -15,7 +15,7 @@
 		"test:coverage:web": "pnpm --filter @marimo-hub/web test --coverage",
 		"audit:prod": "node scripts/audit-production.mjs",
 		"e2e": "pnpm --filter @marimo-hub/e2e e2e",
-		"schemas:generate": "pnpm --filter @marimo-hub/api openapi:generate && pnpm --filter @marimo-hub/core schemas:generate && vp fmt internal/schemas",
+		"schemas:generate": "pnpm --filter @marimo-hub/api openapi:generate && pnpm --filter @marimo-hub/core schemas:generate && vp fmt internal/schemas && pnpm --filter @marimo-hub/client generate && pnpm --filter @marimo-hub/docs integrations:generate",
 		"build": "vp run -r build",
 		"release": "node scripts/release.mjs",
 		"prepare": "vp config"
