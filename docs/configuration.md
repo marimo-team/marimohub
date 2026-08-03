@@ -426,7 +426,7 @@ Resolve `reference` entries with `backend: aws-sm` against AWS Secrets Manager. 
 
 Selected by `MARIMOHUB_INTEGRATIONS` (default `off`); one of `on`, `off`.
 
-Versioned data-source configuration supports SQL databases and warehouses,
+Versioned data-source configuration supports databases and warehouses,
 query engines, PyIceberg catalogs, object storage, ML platforms, and custom
 environment variables — see the [integrations guide](./integrations.md) for the
 full list. Project admins configure one project. Super admins can configure

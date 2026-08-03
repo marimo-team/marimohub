@@ -7,3 +7,28 @@ the PR merges — a stale entry masks future accidental breaks.
 A break here means stored integration configs stop validating, or a secret
 path moved — the latter always needs a decrypt-and-reseal migration (bump the
 kind's `schemaVersion` and add a `migrate` step).
+
+## Tightened http(s) URL validation (PR #66)
+
+The shared endpoint pattern now requires a non-empty authority. It previously
+accepted `https:///api`, which WHATWG URL parsing resolves to the host `api` —
+so a typo silently pointed a catalog URI, and the bearer token sent with it, at
+a different server. The only values it stops accepting are ones that could not
+have worked: an empty authority, a non-numeric port, or whitespace.
+
+The `oneOf` findings are an artifact of the same change. Three Iceberg storage
+branches carry a URL field, so oasdiff cannot pair them across the rename and
+reports each as removed and re-added.
+
+- GET /kinds/iceberg_bigquery/config — added `subschema #2, subschema #3, subschema #6` to the `storage` response property `oneOf` list for the response status `200`
+- PUT /kinds/iceberg_bigquery/config — removed `subschema #2, subschema #3, subschema #6` from the `storage` request property `oneOf` list
+- GET /kinds/iceberg_dynamodb/config — added `subschema #2, subschema #3, subschema #6` to the `storage` response property `oneOf` list for the response status `200`
+- PUT /kinds/iceberg_dynamodb/config — removed `subschema #2, subschema #3, subschema #6` from the `storage` request property `oneOf` list
+- GET /kinds/iceberg_glue/config — added `subschema #2, subschema #3, subschema #6` to the `storage` response property `oneOf` list for the response status `200`
+- PUT /kinds/iceberg_glue/config — removed `subschema #2, subschema #3, subschema #6` from the `storage` request property `oneOf` list
+- GET /kinds/iceberg_hive/config — added `subschema #2, subschema #3, subschema #6` to the `storage` response property `oneOf` list for the response status `200`
+- PUT /kinds/iceberg_hive/config — removed `subschema #2, subschema #3, subschema #6` from the `storage` request property `oneOf` list
+- GET /kinds/iceberg_rest/config — added `subschema #2, subschema #3, subschema #6` to the `storage` response property `oneOf` list for the response status `200`
+- PUT /kinds/iceberg_rest/config — removed `subschema #2, subschema #3, subschema #6` from the `storage` request property `oneOf` list
+- GET /kinds/iceberg_sql/config — added `subschema #2, subschema #3, subschema #6` to the `storage` response property `oneOf` list for the response status `200`
+- PUT /kinds/iceberg_sql/config — removed `subschema #2, subschema #3, subschema #6` from the `storage` request property `oneOf` list

@@ -33,14 +33,46 @@ export const SQL_CONNECTION_HINTS: UiHints = {
 };
 
 /**
- * An http(s) URL with no userinfo, so a configured endpoint cannot smuggle
+ * Authority with no userinfo, so a configured endpoint cannot smuggle
  * credentials (or whitespace, which splits a request line) into anything the
- * hub renders or probes.
+ * hub renders or probes. Requiring it to be non-empty is what stops
+ * `https:///api`, which WHATWG parsing resolves to the host `api` — a different
+ * server than the one the operator typed.
  */
-export const HTTP_URL_REGEX = /^https?:\/\/(?![^/?#]*@)\S+$/;
+const URL_AUTHORITY = String.raw`(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?`;
+
+/** An http(s) URL: authority required, path/query/fragment optional. */
+export const HTTP_URL_REGEX = new RegExp(String.raw`^https?://${URL_AUTHORITY}(?:[/?#]\S*)?$`);
+
+/**
+ * The same, minus a query or fragment: for a base URL the runtime appends a
+ * path to, where `?`/`#` would push that path into the query string.
+ */
+export const SERVICE_URL_REGEX = new RegExp(String.raw`^https?://${URL_AUTHORITY}(?:/[^\s?#]*)?$`);
+
+/** Appends a path to a configured base URL, tolerating a trailing slash. */
+export function serviceUrl(base: string, path: string): string {
+	const url = new URL(base);
+	url.pathname = `${url.pathname.replace(/\/$/, '')}/${path}`;
+	return url.toString();
+}
 
 /** Region name only, so one can be interpolated into a rendered AWS endpoint. */
 export const AWS_REGION_REGEX = /^[a-z0-9-]+$/;
+
+/**
+ * Rules both stores share: 3–63 characters, starting and ending alphanumeric,
+ * no adjacent dots, and not shaped like an IPv4 address. Rejecting these at save
+ * time turns a typo into a form error instead of a runtime failure the notebook
+ * hits later. The two differ in one character — GCS allows an underscore and S3
+ * does not — so they get one regex each rather than a subset that would reject a
+ * legitimate GCS bucket.
+ */
+const BUCKET_RULES = String.raw`(?=.{3,63}$)(?!(?:\d{1,3}\.){3}\d{1,3}$)(?!.*\.\.)`;
+export const S3_BUCKET_REGEX = new RegExp(String.raw`^${BUCKET_RULES}[a-z0-9][a-z0-9.-]*[a-z0-9]$`);
+export const GCS_BUCKET_REGEX = new RegExp(
+	String.raw`^${BUCKET_RULES}[a-z0-9][a-z0-9._-]*[a-z0-9]$`,
+);
 
 /**
  * CA bundle shipped by the images built in this repo, which are Debian-based.

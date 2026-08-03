@@ -229,6 +229,29 @@ export const trino = defineIntegration({
 						'connect through MARIMOHUB_TRINO_<NAME>_URL.',
 				);
 			}
+			// Nothing carries this deployment's trust material into the discovered
+			// connection: a private CA would fail to verify there, and a disabled
+			// check would silently become an enabled one.
+			if (config.tls.verification !== 'system') {
+				throw new ValidationError(
+					'marimo discovers Trino with the runtime default TLS verification, so a custom ' +
+						'CA or disabled verification cannot be carried over. Leave ambient_env off ' +
+						'and connect through MARIMOHUB_TRINO_<NAME>_URL.',
+				);
+			}
+			// marimo uses TRINO_USER for both the query user and the Basic credential,
+			// so the two have to be the same name for the discovered connection to
+			// authenticate at all.
+			if (
+				config.auth.method === 'basic' &&
+				config.user !== undefined &&
+				config.user !== config.auth.username
+			) {
+				throw new ValidationError(
+					'marimo authenticates the discovered connection as TRINO_USER, so ambient_env ' +
+						'needs the query user and the Basic username to match (or no query user).',
+				);
+			}
 		}
 	},
 

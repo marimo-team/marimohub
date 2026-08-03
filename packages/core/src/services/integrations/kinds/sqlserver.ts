@@ -30,7 +30,15 @@ const driverSchema = z
 		}),
 		z.object({ name: z.literal('pymssql') }),
 	])
-	.default({ name: 'pyodbc' });
+	// Spelled out rather than just the discriminator: the form builds its initial
+	// state from this default, and a bare `{ name: 'pyodbc' }` would show
+	// encryption off and no driver — the opposite of what saving it renders.
+	.default({
+		name: 'pyodbc',
+		odbc_driver: 'ODBC Driver 18 for SQL Server',
+		encrypt: true,
+		trust_server_certificate: false,
+	});
 
 const sqlServerConfig = z.object({
 	host: hostField('Server hostname, e.g. mssql.internal'),

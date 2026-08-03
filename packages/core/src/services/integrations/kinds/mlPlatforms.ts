@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import { basicAuthHeader, defineIntegration, probeEndpoint } from '../sdk';
 import { zSecret } from '../secretFields';
-import { HTTP_URL_REGEX, renderConnection } from './common';
+import { renderConnection, SERVICE_URL_REGEX, serviceUrl } from './common';
 
 const NAME_REGEX = /^[A-Za-z0-9._-]+$/;
 
@@ -13,7 +13,7 @@ const wandbConfig = z.object({
 	api_key: zSecret().describe('API key from wandb.ai/authorize'),
 	base_url: z
 		.string()
-		.regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials')
+		.regex(SERVICE_URL_REGEX, 'Must be an http(s) URL with no credentials, query, or fragment')
 		.default('https://api.wandb.ai')
 		.describe('Set this for a self-hosted or dedicated-cloud deployment'),
 	entity: z
@@ -79,7 +79,7 @@ export const wandb = defineIntegration({
 	testConnection(config, probe) {
 		return probeEndpoint({
 			probe,
-			url: `${config.base_url}/graphql`,
+			url: serviceUrl(config.base_url, 'graphql'),
 			init: {
 				method: 'POST',
 				headers: {
@@ -105,7 +105,7 @@ const huggingFaceConfig = z.object({
 	token: zSecret().describe('Access token from huggingface.co/settings/tokens'),
 	endpoint: z
 		.string()
-		.regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials')
+		.regex(SERVICE_URL_REGEX, 'Must be an http(s) URL with no credentials, query, or fragment')
 		.default('https://huggingface.co')
 		.describe('Set this for an Enterprise Hub deployment'),
 	enable_hf_transfer: z
@@ -149,7 +149,7 @@ export const huggingFace = defineIntegration({
 	testConnection(config, probe) {
 		return probeEndpoint({
 			probe,
-			url: `${config.endpoint}/api/whoami-v2`,
+			url: serviceUrl(config.endpoint, 'api/whoami-v2'),
 			init: { headers: { Authorization: `Bearer ${config.token}` } },
 			carriesSecrets: true,
 			describe(body) {

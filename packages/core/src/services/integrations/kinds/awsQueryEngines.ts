@@ -66,9 +66,12 @@ export const redshift = defineIntegration({
 
 const athenaConfig = z.object({
 	region: z.string().regex(AWS_REGION_REGEX, 'Region name only, e.g. us-east-1'),
+	// The `@` exclusion is not cosmetic: this field is stored and displayed in
+	// plaintext (and kept in the version history), so a URI carrying userinfo
+	// would persist a credential where nothing decrypts it.
 	s3_staging_dir: z
 		.string()
-		.regex(/^s3:\/\/[^\s?#]+$/, 'Must be an s3:// URI')
+		.regex(/^s3:\/\/(?![^/]*@)[^\s?#]+$/, 'Must be an s3:// URI with no embedded credentials')
 		.describe('Bucket prefix Athena writes query results to'),
 	database: z
 		.string()
@@ -110,9 +113,11 @@ export const athena = defineIntegration({
 		const isStatic = config.auth.method === 'static';
 		// PyAthena's documented ambient form keeps the empty userinfo (`://:@`),
 		// which is what makes it fall through to boto3's provider chain.
+		// China is its own partition, with its own DNS suffix; GovCloud is not.
+		const suffix = config.region.startsWith('cn-') ? 'amazonaws.com.cn' : 'amazonaws.com';
 		const url = connectionUrl({
 			scheme: 'awsathena+rest',
-			host: `athena.${config.region}.amazonaws.com`,
+			host: `athena.${config.region}.${suffix}`,
 			port: 443,
 			segments: [config.database],
 			username: isStatic ? config.auth.access_key_id : '',

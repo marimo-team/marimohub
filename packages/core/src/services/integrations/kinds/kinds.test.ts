@@ -27,6 +27,7 @@ import { gcs, s3 } from './objectStores';
 import { postgres } from './postgres';
 import { pyspark } from './pyspark';
 import { snowflake } from './snowflake';
+import { sqlserver } from './sqlserver';
 import { trino } from './trino';
 
 /** Fixed session context for deterministic render comparisons. */
@@ -1281,6 +1282,15 @@ describe('connection kinds (golden)', () => {
 		expect(bundle.vars.GOOGLE_APPLICATION_CREDENTIALS).toBe(`${INTEGRATIONS_DIR}/gcs/gcs-sa.json`);
 	});
 
+	// The dialect reads both from the query string; a schema in the path is not a
+	// default schema, it is dropped.
+	it('databricks: catalog and schema ride in the query, not the path', () => {
+		expect(renderFixture(databricks, { schema: 'sales' }).env?.MARIMOHUB_DATABRICKS_PROD_URL).toBe(
+			'databricks://token:dapi-token@dbc-1234abcd-5678.cloud.databricks.com:443' +
+				'?http_path=%2Fsql%2F1.0%2Fwarehouses%2Fabc123&catalog=main&schema=sales',
+		);
+	});
+
 	it('databricks: token auth renders a URL, an OAuth service principal does not', () => {
 		expect(renderFixture(databricks).env?.MARIMOHUB_DATABRICKS_PROD_URL).toBe(
 			'databricks://token:dapi-token@dbc-1234abcd-5678.cloud.databricks.com:443' +
@@ -1305,6 +1315,26 @@ describe('connection kinds (golden)', () => {
 		);
 	});
 
+	// China is a separate partition with its own DNS suffix; GovCloud is not.
+	it.each([
+		['cn-north-1', 'athena.cn-north-1.amazonaws.com.cn'],
+		['us-gov-west-1', 'athena.us-gov-west-1.amazonaws.com'],
+	])('athena: %s resolves to %s', (region, host) => {
+		expect(renderFixture(athena, { region }).env?.MARIMOHUB_ATHENA_PROD_URL).toContain(
+			`@${host}:443/`,
+		);
+	});
+
+	// Stored and shown in plaintext, and kept in the version history — nothing
+	// would ever decrypt a credential smuggled in here.
+	it('athena: rejects a staging URI carrying credentials', () => {
+		expect(
+			athena.configSchema.safeParse(
+				fixtureFor(athena, { s3_staging_dir: 's3://AKIA:secret@bucket/prefix' }),
+			).success,
+		).toBe(false);
+	});
+
 	it('mongodb: an SRV connection resolves its members from DNS, so it carries no port', () => {
 		const out = renderFixture(mongodb);
 		expect(out.env?.MARIMOHUB_MONGODB_PROD_URL).toBe(
@@ -1320,6 +1350,65 @@ describe('connection kinds (golden)', () => {
 		const out = renderFixture(motherduck);
 		expect(out.env?.MARIMOHUB_MOTHERDUCK_PROD_URL).toBe('md:analytics?motherduck_token=md-token');
 		expect(descriptorOf(out).url_env).toBe('MARIMOHUB_MOTHERDUCK_PROD_URL');
+	});
+
+	// `https:///api` parses to the host `api`, so an empty authority would send
+	// credentials somewhere the operator never named.
+	it.each(['https:///api', 'https://user:pw@host', 'https://', 'https://ho st'])(
+		'endpoint fields reject %s',
+		(endpoint) => {
+			expect(huggingFace.configSchema.safeParse({ token: 't', endpoint }).success).toBe(false);
+			expect(s3.configSchema.safeParse({ endpoint_url: endpoint }).success).toBe(false);
+		},
+	);
+
+	it.each([
+		['https://hub.internal', 'https://hub.internal/api/whoami-v2'],
+		['https://hub.internal/', 'https://hub.internal/api/whoami-v2'],
+		['https://hub.internal/prefix/', 'https://hub.internal/prefix/api/whoami-v2'],
+	])('huggingface: probes %s at %s', async (endpoint, expected) => {
+		const calls: string[] = [];
+		const probe: IntegrationProbe = {
+			fetch: (url) => {
+				calls.push(url);
+				return Promise.resolve({ ok: true, status: 200, json: async () => ({ name: 'ada' }) });
+			},
+		};
+		const config = huggingFace.configSchema.parse({ token: 'hf-token', endpoint });
+		await huggingFace.testConnection?.(config, probe);
+		expect(calls[0]).toBe(expected);
+	});
+
+	it('sqlserver: the default driver the form shows is the one a save renders', () => {
+		const shown = sqlserver.configSchema.shape.driver.def.defaultValue;
+		expect(shown).toEqual({
+			name: 'pyodbc',
+			odbc_driver: 'ODBC Driver 18 for SQL Server',
+			encrypt: true,
+			trust_server_certificate: false,
+		});
+		const url = renderFixture(sqlserver).env?.MARIMOHUB_MSSQL_PROD_URL ?? '';
+		expect(url).toContain('Encrypt=yes');
+		expect(url).toContain('TrustServerCertificate=no');
+	});
+
+	it.each([
+		['my..bucket', false],
+		['192.168.1.1', false],
+		['ab', false],
+		['UPPER', false],
+		['my-bucket', true],
+		['my.bucket.name', true],
+	])('object stores reject the invalid bucket name %s', (bucket, valid) => {
+		expect(s3.configSchema.safeParse({ bucket }).success).toBe(valid);
+		expect(gcs.configSchema.safeParse({ bucket }).success).toBe(valid);
+	});
+
+	// GCS accepts an underscore where S3 does not, so they are validated apart
+	// rather than against a subset that would reject a real GCS bucket.
+	it('gcs accepts an underscore in a bucket name; s3 does not', () => {
+		expect(gcs.configSchema.safeParse({ bucket: 'my_bucket' }).success).toBe(true);
+		expect(s3.configSchema.safeParse({ bucket: 'my_bucket' }).success).toBe(false);
 	});
 
 	it('wandb and huggingface keep their caches out of the notebook workspace', () => {
@@ -1429,6 +1518,13 @@ describe('marimo data-source discovery', () => {
 		[{ default_catalog: undefined }, /requires default_catalog/],
 		[{ auth: { method: 'jwt', token: 'jwt-token' } }, /Basic auth over HTTPS/],
 		[{ auth: { method: 'none' } }, /Basic auth over HTTPS/],
+		// Nothing carries a private CA or a disabled check into the discovered
+		// connection, so it would verify differently than the configured one.
+		[{ tls: { verification: 'custom_ca', ca_bundle: 'CA' } }, /custom CA or disabled/],
+		[{ tls: { verification: 'disabled' } }, /custom CA or disabled/],
+		// marimo authenticates as TRINO_USER, so a separate query user cannot be
+		// expressed — the discovered connection would use the wrong credential.
+		[{ user: 'analyst' }, /match/],
 	])('trino: refuses discovery it cannot express (%j)', (overrides, message) => {
 		const config = trino.configSchema.parse(fixtureFor(trino, { ambient_env: true, ...overrides }));
 		expect(() => trino.validate?.(config)).toThrow(message);

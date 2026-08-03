@@ -11,12 +11,12 @@ import {
 	AMBIENT_ENV_DESCRIPTION,
 	AWS_REGION_REGEX,
 	awsAuthSchema,
+	GCS_BUCKET_REGEX,
 	HTTP_URL_REGEX,
 	renderConnection,
 	renderFile,
+	S3_BUCKET_REGEX,
 } from './common';
-
-const S3_BUCKET_REGEX = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 
 const s3Config = z.object({
 	bucket: z
@@ -113,7 +113,7 @@ export const s3 = defineIntegration({
 const gcsConfig = z.object({
 	bucket: z
 		.string()
-		.min(1)
+		.regex(GCS_BUCKET_REGEX, 'Not a valid bucket name')
 		.optional()
 		.describe('Default bucket for notebook code; the credentials are not restricted to it'),
 	project_id: z.string().min(1).optional().describe('Project billed for the requests'),

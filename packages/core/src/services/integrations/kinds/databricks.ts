@@ -55,8 +55,13 @@ export const databricks = defineIntegration({
 						port: 443,
 						username: 'token',
 						password: config.auth.token,
-						segments: [config.schema],
-						query: { http_path: config.http_path, catalog: config.catalog },
+						// The dialect reads catalog and schema from the query string; a
+						// path segment here is not the default schema, it is ignored.
+						query: {
+							http_path: config.http_path,
+							catalog: config.catalog,
+							schema: config.schema,
+						},
 					})
 				: undefined;
 		return renderConnection({

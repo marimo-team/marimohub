@@ -1210,7 +1210,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		name: 'Integrations',
 		selector: 'MARIMOHUB_INTEGRATIONS',
 		selectorDefault: 'off',
-		description: `Versioned data-source configuration supports SQL databases and warehouses,
+		description: `Versioned data-source configuration supports databases and warehouses,
 query engines, PyIceberg catalogs, object storage, ML platforms, and custom
 environment variables — see the [integrations guide](./integrations.md) for the
 full list. Project admins configure one project. Super admins can configure

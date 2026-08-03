@@ -61,8 +61,9 @@ describe('Integrations routes', () => {
 		const kinds = await expectOk<Record<string, unknown>[]>(
 			await request('GET', '/integrations/kinds'),
 		);
-		// The registry's own membership is asserted in core; what matters here is
-		// that every registered kind survives the route's serialization.
+		// The shipped set is pinned by name in core's own registry test; what this
+		// one adds is that every registered kind survives the route's serialization.
+		expect(kinds.length).toBeGreaterThan(0);
 		expect(kinds.map((k) => String(k.kind)).sort((a, b) => a.localeCompare(b))).toEqual(
 			defaultRegistry()
 				.list()
