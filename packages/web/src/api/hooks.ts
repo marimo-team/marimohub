@@ -82,10 +82,11 @@ export function useVersionQuery() {
 }
 
 /** Deployment capability flags (e.g. whether WIF is configured). */
-export function useCapabilitiesQuery() {
+export function useCapabilitiesQuery(enabled = true) {
 	return useQuery({
 		queryKey: systemKeys.capabilities(),
 		queryFn: () => apiData(apiClient.GET('/api/v1/capabilities')),
+		enabled,
 		...IMMUTABLE_QUERY,
 	});
 }
