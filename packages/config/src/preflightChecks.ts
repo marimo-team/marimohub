@@ -189,10 +189,16 @@ async function checkCompute(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
 		await probe.call(deps.compute);
 		return { status: 'ok', message: `${backend} compute reachable` };
 	} catch (err) {
+		const remediation =
+			backend === 'docker'
+				? 'Install the Docker CLI in the server environment and ensure it can reach the daemon (mount /var/run/docker.sock or set DOCKER_HOST).'
+				: backend === 'podman'
+					? 'Install the Podman CLI in the server environment and ensure it can reach the Podman service.'
+					: 'Check the compute backend credentials and endpoint.';
 		return {
 			status: 'fail',
 			message: `${backend} compute unreachable: ${errMsg(err)}`,
-			remediation: 'Check the compute backend credentials and endpoint.',
+			remediation,
 		};
 	}
 }

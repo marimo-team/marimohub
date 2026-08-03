@@ -343,6 +343,17 @@ export class ContainerCompute implements SandboxProvider {
 		return null;
 	}
 
+	async healthCheck(): Promise<void> {
+		const res = await this.runner.run(['info']);
+		if (res.exitCode === 0) return;
+
+		const detail = (res.stderr || res.stdout).trim();
+		if (res.exitCode === 127 || /\bENOENT\b/.test(detail)) {
+			throw new Error(`${this.config.engine} CLI is not installed or is not on PATH`);
+		}
+		throw new Error(`${this.config.engine} daemon is unavailable${detail ? `: ${detail}` : ''}`);
+	}
+
 	async listActive(): Promise<ActiveSandbox[]> {
 		const res = await this.runner.run([
 			'ps',

@@ -276,6 +276,37 @@ describe('DockerCompute', () => {
 		expect(res.stderr).toBeTruthy();
 	});
 
+	it('healthCheck verifies that the Docker daemon is reachable', async () => {
+		const { runner, calls } = fakeRunner(defaultHandler);
+
+		await expect(new DockerCompute({}, runner).healthCheck()).resolves.toBeUndefined();
+		expect(calls).toContainEqual({ args: ['info'], stdin: undefined });
+	});
+
+	it('healthCheck identifies a missing Docker CLI', async () => {
+		const { runner } = fakeRunner(() => ({
+			stdout: '',
+			stderr: 'Error: spawn docker ENOENT',
+			exitCode: 127,
+		}));
+
+		await expect(new DockerCompute({}, runner).healthCheck()).rejects.toThrow(
+			'docker CLI is not installed or is not on PATH',
+		);
+	});
+
+	it('healthCheck identifies an unavailable Docker daemon', async () => {
+		const { runner } = fakeRunner(() => ({
+			stdout: '',
+			stderr: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock',
+			exitCode: 1,
+		}));
+
+		await expect(new DockerCompute({}, runner).healthCheck()).rejects.toThrow(
+			'docker daemon is unavailable: Cannot connect to the Docker daemon',
+		);
+	});
+
 	it('listActive: parses container names into sandbox ids', async () => {
 		const { runner } = fakeRunner((args) => {
 			if (args[0] === 'ps')

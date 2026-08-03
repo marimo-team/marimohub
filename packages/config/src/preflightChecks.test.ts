@@ -190,6 +190,23 @@ describe('compute check', () => {
 		});
 		expect((await run({}, deps)).by('compute')?.status).toBe('fail');
 	});
+
+	it('provides Docker-specific remediation when its probe fails', async () => {
+		const deps = makeDeps({
+			compute: {
+				healthCheck: async () => {
+					throw new Error('docker CLI is not installed or is not on PATH');
+				},
+			} as never,
+		});
+		const { by } = await run({ MARIMOHUB_COMPUTE_BACKEND: 'docker' }, deps);
+
+		expect(by('compute')).toMatchObject({
+			status: 'fail',
+			message: 'docker compute unreachable: docker CLI is not installed or is not on PATH',
+			remediation: expect.stringContaining('/var/run/docker.sock'),
+		});
+	});
 });
 
 describe('wif check', () => {
