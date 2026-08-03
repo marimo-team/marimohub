@@ -168,9 +168,7 @@ function collectRows(schema: JsonSchema, base: string, rows: string[], blocks: s
 		} else if (prop.type === 'object' && prop.properties) {
 			collectRows(prop, path, rows, blocks);
 		} else if (prop.type === 'array' && prop.items?.type === 'object' && prop.items.properties) {
-			if (prop.description) {
-				rows.push(row(path, 'object[]', required.has(name), undefined, prop.description, false));
-			}
+			rows.push(row(path, 'object[]', required.has(name), undefined, prop.description, false));
 			collectRows(prop.items, `${path}[]`, rows, blocks);
 		} else {
 			rows.push(

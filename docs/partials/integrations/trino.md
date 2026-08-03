@@ -21,12 +21,16 @@ Fields marked 🔒 are secret: encrypted at rest and write-only after save.
 | `source` | string |  |  |  |
 | `session_properties` | map&lt;string, string&gt; |  |  |  |
 | `roles` | map&lt;string, string&gt; |  |  |  |
+| `client_tags` | object[] |  |  |  |
 | `client_tags[].value` | string | Yes |  |  |
+| `http_headers` | object[] |  |  |  |
 | `http_headers[].name` | string | Yes |  |  |
 | `http_headers[].value` 🔒 | string | Yes |  |  |
+| `extra_credentials` | object[] |  |  |  |
 | `extra_credentials[].name` | string | Yes |  |  |
 | `extra_credentials[].value` 🔒 | string | Yes |  |  |
 | `timezone` | string |  |  |  |
+| `encoding` | object[] |  |  |  |
 | `encoding[].value` | `json`, `json+lz4`, `json+zstd` | Yes |  |  |
 | `max_attempts` | integer |  |  |  |
 | `request_timeout_seconds` | number |  |  |  |

@@ -21,9 +21,11 @@ Fields marked 🔒 are secret: encrypted at rest and write-only after save.
 | `keepalive.time_ms` | integer |  | `60000` |  |
 | `keepalive.timeout_ms` | integer |  | `20000` |  |
 | `keepalive.without_calls` | boolean |  | `true` |  |
+| `metadata` | object[] |  |  |  |
 | `metadata[].name` | string | Yes |  |  |
 | `metadata[].value` 🔒 | string | Yes |  |  |
 | `spark_config` | map&lt;string, string&gt; |  |  |  |
+| `secret_spark_config` | object[] |  |  |  |
 | `secret_spark_config[].name` | string | Yes |  |  |
 | `secret_spark_config[].value` 🔒 | string | Yes |  |  |
 

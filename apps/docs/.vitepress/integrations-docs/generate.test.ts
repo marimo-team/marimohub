@@ -47,8 +47,9 @@ describe('integration docs partials', () => {
 		}
 	});
 
-	it('every x-brand-icon resolves in simple-icons and x-brand-color matches its hex', () => {
+	it('every kind has a well-formed brand color, and icons resolve with matching hex', () => {
 		for (const [kind, item] of kindsOf(spec)) {
+			expect(item['x-brand-color'], `${kind}: x-brand-color`).toMatch(/^#[0-9A-Fa-f]{6}$/);
 			const slug = item['x-brand-icon'];
 			if (slug === undefined) continue;
 			const icon = iconsBySlug.get(slug);
