@@ -72,6 +72,19 @@ it, or set `*`.
 `MARIMOHUB_COMPUTE_BACKEND=none` — notebooks are browsable but kernels can't
 start. Pick a real backend. See [Compute](/compute).
 
+### Docker/Podman: "compute unreachable" or `spawn docker ENOENT`
+
+The `docker`/`podman` backend shells out to that CLI, which the published image
+does not ship. Add the static CLI to a derived image **and** give it the daemon —
+mount `/var/run/docker.sock` (or set `DOCKER_HOST`). The boot `preflight_check`
+for `compute` names which half is missing:
+
+- `CLI is not installed or is not on PATH` → add the CLI to the image.
+- `daemon is unavailable` → mount the socket, or fix `DOCKER_HOST`.
+
+See the derived Dockerfile in
+[Deploying on a single instance](/deploying/single-instance#add-the-docker-cli-to-the-image).
+
 ### Kernel never becomes reachable (Kubernetes / CoreWeave)
 
 The browser connects **directly** to the kernel host, so this is almost always
