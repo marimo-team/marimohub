@@ -370,29 +370,41 @@ function integrationsListKey(scope: IntegrationsScope) {
 	return scope === 'org' ? integrationKeys.org() : projectKeys.integrations(scope.pid);
 }
 
-async function listAllIntegrations(scope: IntegrationsScope): Promise<IntegrationEntry[]> {
-	const items: IntegrationEntry[] = [];
+interface CursorPage<T> {
+	items: T[];
+	next_cursor: string | null;
+}
+
+async function listAllCursorPages<T>(
+	loadPage: (cursor: string | undefined) => Promise<CursorPage<T>>,
+	repeatedCursorMessage: string,
+): Promise<T[]> {
+	const items: T[] = [];
 	const followed = new Set<string>();
 	let cursor: string | undefined;
 	do {
+		const page = await loadPage(cursor);
+		items.push(...page.items);
+		cursor = page.next_cursor ?? undefined;
+		if (cursor !== undefined) {
+			if (followed.has(cursor)) throw new Error(repeatedCursorMessage);
+			followed.add(cursor);
+		}
+	} while (cursor !== undefined);
+	return items;
+}
+
+async function listAllIntegrations(scope: IntegrationsScope): Promise<IntegrationEntry[]> {
+	return listAllCursorPages(async (cursor) => {
 		const query = { limit: 500, ...(cursor ? { cursor } : {}) };
-		const page = await apiData(
+		return apiData(
 			scope === 'org'
 				? apiClient.GET('/api/v1/org/integrations', { params: { query } })
 				: apiClient.GET('/api/v1/projects/{pid}/integrations', {
 						params: { path: { pid: scope.pid }, query },
 					}),
 		);
-		items.push(...page.items);
-		cursor = page.next_cursor ?? undefined;
-		if (cursor !== undefined) {
-			if (followed.has(cursor)) {
-				throw new Error('Integration listing did not advance; refusing a partial result.');
-			}
-			followed.add(cursor);
-		}
-	} while (cursor !== undefined);
-	return items;
+	}, 'Integration listing did not advance; refusing a partial result.');
 }
 
 /**
@@ -541,27 +553,16 @@ export function useProjectPickerQuery(enabled: boolean) {
 	return useQuery({
 		queryKey: projectKeys.pickerList(),
 		enabled,
-		queryFn: async () => {
-			const items = [];
-			const followed = new Set<string>();
-			let cursor: string | undefined;
-			do {
-				const data = await apiData(
-					apiClient.GET('/api/v1/projects', {
-						params: { query: { limit: 500, ...(cursor ? { cursor } : {}) } },
-					}),
-				);
-				items.push(...data.items);
-				cursor = data.next_cursor ?? undefined;
-				if (cursor !== undefined) {
-					if (followed.has(cursor)) {
-						throw new Error('Project listing did not advance; refusing a partial roster.');
-					}
-					followed.add(cursor);
-				}
-			} while (cursor !== undefined);
-			return items;
-		},
+		queryFn: () =>
+			listAllCursorPages(
+				(cursor) =>
+					apiData(
+						apiClient.GET('/api/v1/projects', {
+							params: { query: { limit: 500, ...(cursor ? { cursor } : {}) } },
+						}),
+					),
+				'Project listing did not advance; refusing a partial roster.',
+			),
 	});
 }
 

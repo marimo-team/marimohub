@@ -44,6 +44,16 @@ function renderDefinition(def: IntegrationDefinition, config: unknown, name = 'p
 	return def.render(input(config, def, name));
 }
 
+function captureValidationError(run: () => unknown): ValidationError {
+	try {
+		run();
+	} catch (error) {
+		expect(error).toBeInstanceOf(ValidationError);
+		return error as ValidationError;
+	}
+	throw new Error('Expected a ValidationError');
+}
+
 const FIXTURES: Record<string, unknown> = {
 	postgres: {
 		host: 'db.internal',
@@ -1115,6 +1125,17 @@ describe('cross-kind bundle', () => {
 		).toThrow(/invalid file path/);
 	});
 
+	it('escapes control characters in unsafe rendered path errors', () => {
+		const error = captureValidationError(() =>
+			bundleIntegrations(
+				[synthetic('unsafe', { files: [{ path: 'a/secret\n.json', content: 'x' }] })],
+				createSessionId(),
+			),
+		);
+		expect(String(error)).toContain('a/secret\\n.json');
+		expect(String(error)).not.toContain('a/secret\n.json');
+	});
+
 	it('rejects manifest replacement and cross-integration file collisions', () => {
 		expect(() =>
 			bundleIntegrations(
@@ -1174,15 +1195,11 @@ describe('cross-kind bundle', () => {
 			],
 		];
 		for (const rendered of messages) {
-			try {
-				bundleIntegrations(rendered, createSessionId());
-				throw new Error('Expected bundleIntegrations to reject');
-			} catch (error) {
-				expect(String(error)).not.toContain(secret);
-			}
+			const error = captureValidationError(() => bundleIntegrations(rendered, createSessionId()));
+			expect(String(error)).not.toContain(secret);
 		}
 
-		try {
+		const error = captureValidationError(() =>
 			bundleIntegrations(
 				[
 					{
@@ -1195,11 +1212,9 @@ describe('cross-kind bundle', () => {
 					},
 				],
 				createSessionId(),
-			);
-			throw new Error('Expected bundleIntegrations to reject');
-		} catch (error) {
-			expect(String(error)).not.toContain(secret);
-		}
+			),
+		);
+		expect(String(error)).not.toContain(secret);
 	});
 
 	it('rejects conflicting environment values but permits an identical shared value', () => {

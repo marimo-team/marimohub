@@ -669,9 +669,16 @@ GET projects/{pid}/notebooks/{nid}/source.json
 // Step 2: Resolve code based on source.type
 if source.type === "local":
   GET projects/{pid}/notebooks/{nid}/workspace/notebook.py
+if source.type === "git" and source.current_version_id === null:
+  return NOT_FOUND (the synced notebook has not been synced)
 if source.type === "git":
-  GET projects/{pid}/notebooks/{nid}/versions/{current_version_id}/workspace/{entry_notebook}
+  GET projects/{pid}/notebooks/{nid}/versions/{source.current_version_id}/workspace/{source.entry_notebook}
 ```
+
+For a `git` source, `source.entry_notebook` is the validated notebook path from
+`source.json`, relative to `source.root_path`. A successful push confirms that
+this path exists in the immutable workspace before it updates
+`source.current_version_id`.
 
 ### 7.3 Write: Create or Update a Local Notebook
 

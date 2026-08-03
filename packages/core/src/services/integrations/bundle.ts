@@ -286,7 +286,7 @@ function normalizeRelativePath(path: string, instance: string): string {
 		segments.some((s) => s === '' || s === '.' || s === '..')
 	) {
 		throw new ValidationError(
-			`Integration "${instance}" rendered an invalid file path "${path}": paths must be ` +
+			`Integration "${instance}" rendered an invalid file path ${JSON.stringify(path)}: paths must be ` +
 				'relative, POSIX, free of control characters, and free of "." / ".." segments.',
 		);
 	}

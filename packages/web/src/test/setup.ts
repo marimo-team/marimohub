@@ -8,7 +8,7 @@ const REACT_ARIA_WARNING =
 	/<Focusable> child must have an interactive ARIA role|If you do not provide a visible label/;
 
 beforeEach(() => {
-	consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+	consoleWarn = vi.spyOn(console, 'warn');
 });
 
 if (!HTMLElement.prototype.setPointerCapture) {

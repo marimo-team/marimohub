@@ -8,6 +8,7 @@ import {
 import type { UserId } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
+import type { Page } from '../pagination';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 import { trackedTestBudgets } from './integrations';
 
@@ -27,11 +28,6 @@ const PG_CONFIG = {
 	username: 'svc',
 	password: 'sup3r-secret',
 };
-
-interface Page<T> {
-	items: T[];
-	next_cursor: string | null;
-}
 
 describe('Integrations routes', () => {
 	let bucket: MemoryBucket;

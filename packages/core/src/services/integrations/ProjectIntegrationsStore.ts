@@ -686,12 +686,6 @@ class ScopedIntegrationsStore {
 				limit: MAX_INTEGRATIONS_PER_SCOPE + 2,
 			});
 			dirs.push(...page.delimitedPrefixes);
-			const count = dirs.filter((dir) => !dir.endsWith('/_names/')).length;
-			if (count > MAX_INTEGRATIONS_PER_SCOPE) {
-				throw new ResourceExhaustedError(
-					`Integration limit exceeded ${scope.where} (${MAX_INTEGRATIONS_PER_SCOPE}).`,
-				);
-			}
 			cursor = page.truncated ? page.cursor : undefined;
 		} while (cursor);
 
@@ -707,7 +701,13 @@ class ScopedIntegrationsStore {
 			this.assertHeadIdentity(scope, rawId as IntegrationId, head);
 			return head;
 		});
-		return heads.filter((h) => h !== null);
+		const liveHeads = heads.filter((h) => h !== null);
+		if (liveHeads.length > MAX_INTEGRATIONS_PER_SCOPE) {
+			throw new ResourceExhaustedError(
+				`Integration limit exceeded ${scope.where} (${MAX_INTEGRATIONS_PER_SCOPE}).`,
+			);
+		}
+		return liveHeads;
 	}
 
 	private async getHead(scope: IntegrationScope, id: IntegrationId): Promise<IntegrationRecord> {

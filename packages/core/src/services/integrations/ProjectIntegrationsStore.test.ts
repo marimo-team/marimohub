@@ -171,6 +171,24 @@ describe('ProjectIntegrationsStore', () => {
 		await bucket.delete(
 			(await bucket.list({ prefix: paths.project(pid).integrationsPrefix })).objects[0].key,
 		);
+		for (let index = 0; index < 3; index++) {
+			const id = createIntegrationId();
+			await bucket.put(
+				paths.project(pid).integration(id).head,
+				JSON.stringify({
+					id,
+					project_id: pid,
+					kind: 'echo',
+					name: `deleted-${index}`,
+					enabled: true,
+					current_version: 1,
+					created_by: ACTOR,
+					created_at: createdAt,
+					updated_at: createdAt,
+					deleted_at: createdAt,
+				}),
+			);
+		}
 		expect(await paged.list(pid)).toHaveLength(MAX_INTEGRATIONS_PER_SCOPE);
 	});
 
