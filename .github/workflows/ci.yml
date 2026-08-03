@@ -32,7 +32,7 @@ jobs:
 
       # Forks must not read the shared cache; only main pushes can update it.
       - name: Restore Vite Task cache
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         id: vite-task-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
