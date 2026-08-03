@@ -55,7 +55,7 @@ interface BucketObject {
 	schema: z.ZodType;
 	summary: string;
 	mutability: Mutability;
-	/** The sole writer, for CAS-managed records (see CLAUDE.md "Key invariant"). */
+	/** The sole writer, for CAS-managed records (see AGENTS.md "Key invariant"). */
 	owner?: string;
 	tag: string;
 }
@@ -307,7 +307,7 @@ export function buildBucketSpec(): Record<string, unknown> {
 				'`packages/core/src/paths.ts`. This is not an HTTP API: paths are bucket',
 				'key templates, GET models what readers must accept, PUT models what',
 				'writers produce. `x-mutability`/`x-owner` mirror the write-ownership',
-				'invariants in CLAUDE.md and development_docs/bucket_spec.md.',
+				'invariants in AGENTS.md and development_docs/bucket_spec.md.',
 				'',
 				'Deliberately excluded (no zod schema; internal operational records or',
 				'non-JSON artifacts): idempotency records, integration name claims,',

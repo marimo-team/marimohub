@@ -37,7 +37,7 @@ These are not HTTP APIs — OpenAPI is used as a diffable schema container:
   field invalidates already-stored objects (PUT).
 - Schemas use zod's input io, matching what `parseStored` accepts (defaulted
   fields stay optional).
-- `x-mutability`/`x-owner` mirror the write-ownership invariants in CLAUDE.md.
+- `x-mutability`/`x-owner` mirror the write-ownership invariants in AGENTS.md.
   `x-secret-paths` tracks where secret envelopes live; moving one requires a
   decrypt-and-reseal migration.
 - Each integration kind is its own path: retiring a kind is breaking, adding
