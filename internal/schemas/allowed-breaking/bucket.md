@@ -8,5 +8,5 @@ A break here means already-stored bucket objects stop parsing or readers lose
 required fields — allowlist one only with a migration or upgrade seam in place
 (see development_docs/migrations.md).
 
-GET /projects/{pid}/secrets/{name}.json api path removed without deprecation
-PUT /projects/{pid}/secrets/{name}.json api path removed without deprecation
+GET /projects/{pid}/secrets/{name}.json `api path removed without deprecation`
+PUT /projects/{pid}/secrets/{name}.json `api path removed without deprecation`

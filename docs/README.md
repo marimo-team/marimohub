@@ -24,7 +24,7 @@ Every deployment picks storage, compute, and auth.
 - [Sandbox image](./sandbox-image.md) - the container contract for notebook
   kernels.
 - [Managed AI](./ai.md) - server-managed AI keys for notebook assistants.
-- [Environment & access](./environment-and-access.md) - choose integration configuration or federated cloud access.
+- [Environment & cloud access](./environment-and-access.md) - choose integration configuration or federated cloud access.
 - [Integrations](./integrations.md) - databases, warehouses, query engines,
   PyIceberg catalogs, object storage, ML platforms, and environment variables.
 - [Integration secret sources](./integration-secrets.md) - inline encrypted values and external references.

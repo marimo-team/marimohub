@@ -289,12 +289,17 @@ async function checkIntegrationSecrets(deps: ApiDeps): Promise<CheckOutcome> {
 		...(sources.inline ? ['inline encryption'] : []),
 		...sources.references.map((reference) => reference.backend),
 	];
+	if (available.length === 0) {
+		return {
+			status: 'warn',
+			message: 'integration secret sources: none',
+			remediation:
+				'Configure MARIMOHUB_SECRETS_KEK or an external secret resolver before saving secret fields.',
+		};
+	}
 	return {
 		status: 'ok',
-		message:
-			available.length > 0
-				? `integration secret sources: ${available.join(', ')}`
-				: 'integration secret sources: none',
+		message: `integration secret sources: ${available.join(', ')}`,
 	};
 }
 

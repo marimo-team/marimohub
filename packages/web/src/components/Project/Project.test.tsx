@@ -151,8 +151,8 @@ describe('environment and access', () => {
 		makeFetch({ capabilities: { federation: { available: false } } });
 		await renderProject();
 		const user = userEvent.setup();
-		await user.click(screen.getByRole('button', { name: 'Environment & access' }));
-		expect(screen.getByRole('heading', { name: 'Environment & access' })).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Environment & cloud access' }));
+		expect(screen.getByRole('heading', { name: 'Environment & cloud access' })).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: /Integrations/ })).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: /Cloud access/ })).toBeInTheDocument();
 	});

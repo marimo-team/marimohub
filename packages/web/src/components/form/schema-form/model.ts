@@ -41,11 +41,23 @@ export const KEEP_SECRET = { $secret: { kind: 'managed', set: true } } as const;
 
 export const isSecretNode = (node: JsonSchemaNode): boolean => node[SECRET_MARK] === true;
 
-export function hasSecretNode(node: JsonSchemaNode): boolean {
+export function needsSecretSource(node: JsonSchemaNode, value: unknown, required = true): boolean {
+	if (!required && (value === undefined || value === '')) return false;
+	const branch = branchForValue(node, value);
+	if (branch) return needsSecretSource(branch, value, required);
 	if (isSecretNode(node)) return true;
-	if (Object.values(node.properties ?? {}).some(hasSecretNode)) return true;
-	if ([...(node.oneOf ?? []), ...(node.anyOf ?? [])].some(hasSecretNode)) return true;
-	return node.items !== undefined && hasSecretNode(node.items);
+	if (node.type === 'object') {
+		const record = (value as Record<string, unknown>) ?? {};
+		return Object.entries(node.properties ?? {}).some(([key, child]) =>
+			needsSecretSource(child, record[key], isRequired(node, key)),
+		);
+	}
+	if (node.type === 'array') {
+		return ((value as unknown[]) ?? []).some((item) =>
+			needsSecretSource(node.items ?? {}, item, true),
+		);
+	}
+	return false;
 }
 
 export function isKeepMarker(value: unknown): boolean {
@@ -153,7 +165,7 @@ export function pruneForSubmit(node: JsonSchemaNode, value: unknown): unknown {
 			const pruned = pruneForSubmit(child, record[key]);
 			if (pruned === undefined) continue;
 			if (!isRequired(node, key)) {
-				if (pruned === '' && !isSecretNode(child)) continue;
+				if (pruned === '') continue;
 				// An untouched optional list is empty, and an optional array without a
 				// schema default may forbid `[]` outright (e.g. Trino's `encoding` is
 				// `min(1).optional()`); a declared default means `[]` is a legal choice.
@@ -185,6 +197,7 @@ export function validateValue(
 	if (branch) return validateValue(branch, value, path, required, secretSources);
 
 	if (isSecretNode(node)) {
+		if (!required && (value === undefined || value === '')) return errors;
 		if (!secretSources.inline && secretSources.references.length === 0) {
 			at(
 				path,

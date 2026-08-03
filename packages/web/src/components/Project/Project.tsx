@@ -544,8 +544,8 @@ export function Project() {
 							<Users className="size-4" />
 						</IconButton>
 						<IconButton
-							label="Environment & access"
-							tooltip="Environment & access"
+							label="Environment & cloud access"
+							tooltip="Environment & cloud access"
 							onPress={environmentModal.open}
 						>
 							<Settings2 className="size-4" />

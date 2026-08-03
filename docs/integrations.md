@@ -476,61 +476,48 @@ project can have one active Hugging Face integration.
 ## Environment variables
 
 Adds the exact environment variables that you configure. It supports plain
-variables, scalar secret variables, and secret JSON bundles with optional prefixes.
+variables, secret variables, and secret JSON bundles with optional prefixes.
 
 <!--@include: ./partials/integrations/custom_env.md-->
 
 ## Managing integrations
 
-Open a project and select **Environment & access**. Then select **Integrations**.
-Members (`viewer`+) can see the list and protected configuration. An **`admin`** manages it, as does a
-[super admin](./auth.md#super-admins-marimohub_super_admins), on every project.
+Open a project and select **Environment & cloud access**. Then select **Integrations**.
+Members can view the list and protected configuration. Project admins and
+[super admins](./auth.md#super-admins-marimohub_super_admins) can make changes.
 
-- **Add** — pick a kind from the catalog; the form is generated from the kind's
-  schema (conditional sections switch with the auth method). **Test** probes
-  connectivity server-side for kinds that support it (Iceberg, Trino,
-  ClickHouse, Databricks, Weights & Biases, Hugging Face) before you save. Because the probe is a server-side request to an admin-supplied address,
-  it runs behind an egress policy: by default only public addresses are allowed
-  (private, loopback, link-local/metadata ranges are rejected; redirects are
-  never followed; responses are size- and time-capped; probes are rate-limited).
-  Set `MARIMOHUB_INTEGRATIONS_PROBE=private` if your catalogs/engines live on a
-  private network, or `off` to disable testing.
-- **Edit** — a new immutable config version is appended; the version history is
-  listed under `GET …/integrations/{iid}/versions`. Stored secret values show as
-  an encrypted-value marker and are kept unless you replace them. External
-  references show their backend and locator metadata. **Test connection** uses
-  the current draft, including edited locators and unchanged encrypted values.
-  The button appears only for kinds that support a connection test.
-- **Enable / disable** — disabled integrations are skipped at session launch.
-  This is also the escape hatch when a broken config is failing sessions.
-- **Delete** — removes the instance and its entire version history.
-- **Copy** — copy an integration from another project (**Add integration** →
-  **Copy from another project**, or `POST …/integrations/copy`). You need
-  the `admin` role on **both** projects; a super admin qualifies everywhere.
-  The copy takes the source's current config and starts its own version history
-  at v1. Inline values are decrypted and encrypted for the destination.
-  External-reference metadata is preserved unchanged. The two copies are
-  independent afterwards: editing or deleting one never affects the other. The
-  audit trail records the copy with its source project and integration.
+- **Add** selects a kind and opens its schema-based form.
+- **Test connection** runs against the current draft for supported kinds. It
+  includes edited references and unchanged inline values.
+- **Edit** appends an immutable configuration version. List versions at
+  `GET …/integrations/{iid}/versions`.
+- **Enable or disable** controls whether new sessions receive the integration.
+  Disable a broken integration to restore session access.
+- **Delete** removes the integration and its complete version history.
+- **Copy from another project** copies the current version and starts at v1.
+  You need admin access to both projects. Inline values get new encryption for
+  the destination. External references remain unchanged.
 
-New sessions pick up config changes; running sessions keep what they launched
-with (restart the session to apply).
+Connection tests run from the server. The default egress policy permits only
+public targets. It blocks redirects and private, loopback, link-local, metadata,
+and CGNAT addresses. It also limits response size, duration, and request rate.
+
+Set `MARIMOHUB_INTEGRATIONS_PROBE=private` for private targets. Set it to `off`
+to disable connection tests.
+
+New sessions use configuration changes. Restart a running session to apply them.
 
 ### Updates and concurrency
 
-The API treats an integration as one versioned resource. It does not expose
-separate create, update, or delete operations for its secret fields. An update
-submits the complete configuration and appends one immutable version.
+The API updates an integration as one resource. Each update submits the complete
+configuration and appends an immutable version.
 
-Read the integration ETag before an automated update. Send that ETag as
-`If-Match` with the write. If another client has updated the integration, the
-server rejects the write. Managed markers keep unchanged inline values, while
-external references include their complete backend and locator metadata.
+For automation, read the integration ETag and send it as `If-Match`. If another
+client changed the integration, the server rejects the update.
 
-Replacing an inline value does not overwrite its older ciphertext. The old
-ciphertext remains in immutable versions until you delete the entire
-integration. See [Integration secret sources](./integration-secrets.md) for the
-retention and testing rules.
+Managed markers keep unchanged inline values. References include their complete
+backend and locator. See [Integration secret sources](./integration-secrets.md)
+for retention and testing rules.
 
 ## Organization-wide integrations
 
@@ -560,26 +547,19 @@ existing configuration.
 
 ## Secret fields
 
-Each secret field can use an inline encrypted value or an external reference.
-Inline values require `MARIMOHUB_SECRETS_KEK`. The API and storage formats call
-inline encrypted values `managed`. API reads appear as
-`{ "$secret": { "kind": "managed", "set": true } }`.
-
-An external reference contains a configured backend and locator. The API shows
-this metadata but never returns the resolved value. See
-[Integration secret sources](./integration-secrets.md).
+Each secret field uses an inline encrypted value or an external reference.
+API reads return a marker for inline values or metadata for references. They
+never return a resolved value. See
+[Integration secret sources](./integration-secrets.md) for setup and API shapes.
 
 ## Failure model
 
-Integration rendering **fails a session closed**. A missing secret backend,
-resolver error, invalid configuration, or decrypt error stops session creation.
-The error does not disclose a secret value or locator. Disable the integration
-to restore project access while you correct the configuration.
+Integration rendering fails closed. A secret-source or configuration error
+stops session creation without disclosing secret values or locators.
 
-Saving an external reference does not fetch its value. **Test connection**
-resolves the current draft only for supported kinds. **Environment variables**
-has no pre-save connection test, so bundle and resolution errors can first
-appear during session creation.
+Saving a reference does not fetch its value. **Test connection** resolves the
+current draft for supported kinds. **Environment variables** has no connection
+test, so its resolution errors can first appear during session creation.
 
 Environment-name precedence is integrations &lt; hub, WIF, AI, and marimo
 configuration. An integration cannot replace a hub-controlled value.

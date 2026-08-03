@@ -35,7 +35,7 @@ export function ProjectEnvironmentDialog({
 	};
 
 	return (
-		<DialogModal isOpen={isOpen} onClose={close} title="Environment & access" width="xl">
+		<DialogModal isOpen={isOpen} onClose={close} title="Environment & cloud access" width="xl">
 			{area === 'overview' ? (
 				<div className="grid gap-3 sm:grid-cols-2">
 					<AreaCard
@@ -48,7 +48,7 @@ export function ProjectEnvironmentDialog({
 					<AreaCard
 						icon={Cloud}
 						title="Cloud access"
-						description="Short-lived federated credentials, without storing a cloud key."
+						description="Short-lived federated credentials without a stored cloud key. This does not control project roles or permissions."
 						status={
 							cloudAccessAvailable
 								? project.federation?.enabled

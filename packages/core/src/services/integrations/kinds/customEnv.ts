@@ -25,6 +25,10 @@ const customEnvConfig = z.object({
 	secret_bundles: z
 		.array(
 			z.object({
+				name: z
+					.string()
+					.regex(ENV_NAME_PATTERN)
+					.describe('Stable name used to retain this bundle across edits'),
 				value: zSecret().describe('A JSON object containing environment variable values'),
 				prefix: z.string().regex(ENV_NAME_PATTERN).optional(),
 			}),
@@ -58,6 +62,13 @@ export const customEnv = defineIntegration({
 				throw new ValidationError(`Env var "${name}" is defined twice in this integration.`);
 			}
 			seen.add(name);
+		}
+		const bundleNames = new Set<string>();
+		for (const bundle of config.secret_bundles) {
+			if (bundleNames.has(bundle.name)) {
+				throw new ValidationError(`JSON secret bundle "${bundle.name}" is defined twice.`);
+			}
+			bundleNames.add(bundle.name);
 		}
 	},
 

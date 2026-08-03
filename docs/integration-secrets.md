@@ -4,24 +4,21 @@ description: Configure inline encryption and external secret references for inte
 
 # Integration secret sources
 
-An integration schema marks passwords, tokens, and private keys as secret
-fields. Each secret field uses one configured source.
+Integration schemas mark passwords, tokens, and private keys as secret fields.
+Each populated secret field uses one configured source.
 
-The integration catalog reports the available sources for every kind. The
-editor shows only sources that the deployment configures.
+The editor shows the sources that are available for the selected integration.
+If no source is available, configure inline encryption or an external resolver.
 
-If the editor shows no valid source, configure an inline encryption key or a
-supported external resolver. The editor blocks the save until a source is
-available.
-
-| Source                    | The hub stores                         | Use it when                                         |
-| ------------------------- | -------------------------------------- | --------------------------------------------------- |
-| Inline encrypted value    | Ciphertext in each integration version | The hub must manage the value                       |
-| External secret reference | A backend name and locator             | An external manager owns the value and its rotation |
+| Source                    | The hub stores                         | Use it when                                    |
+| ------------------------- | -------------------------------------- | ---------------------------------------------- |
+| Inline encrypted value    | Ciphertext in each integration version | The hub manages the value                      |
+| External secret reference | A backend name and locator             | An external manager owns and rotates the value |
 
 ## Inline encrypted values
 
-An inline value is plaintext only during the save request. The hub encrypts it before it writes the integration version.
+An inline value is plaintext only during the save request. The hub encrypts it
+before it writes the integration version.
 
 Configure a generated 32-byte key:
 
@@ -29,34 +26,33 @@ Configure a generated 32-byte key:
 MARIMOHUB_SECRETS_KEK="$(openssl rand -base64 32)"
 ```
 
-You can set `MARIMOHUB_SECRETS_KEK_ID` to label new envelopes. Keep the key outside the deployment bucket.
+You can set `MARIMOHUB_SECRETS_KEK_ID` to label new envelopes. Keep the KEK
+outside the deployment bucket.
 
-The API and storage formats call an inline encrypted value `managed`. The API returns this marker instead of its value:
+The API and storage formats call an inline encrypted value `managed`. API reads
+return this marker instead of the value:
 
 ```json
 { "$secret": { "kind": "managed", "set": true } }
 ```
 
-The marker keeps an existing inline encrypted value during an edit. It cannot
-keep an external reference. To retain or change a reference, submit its
-complete backend and locator metadata. The API never returns the ciphertext
-envelope through an integration response.
+The marker keeps an existing value during an edit. The integration API returns
+neither its plaintext nor its ciphertext.
 
-CAUTION: Keep a backup of the KEK. Existing inline values cannot be decrypted after the key is lost.
+CAUTION: Keep a backup of the KEK. If you lose it, the hub cannot decrypt existing inline values.
 
 ### Retention and deletion
 
 Each save creates an immutable integration version. Replacing an inline value
-creates a new ciphertext envelope. It does not overwrite the envelope in an
-older version.
+adds new ciphertext and leaves the old version unchanged.
 
-Old ciphertext remains in the integration history until you delete the entire
-integration. The API does not provide per-field secret deletion.
-This retention is a tradeoff of versioned integration storage.
+Old ciphertext remains until you delete the integration and its version
+history. The API does not support separate deletion of one secret field.
 
 ## External secret references
 
-An external reference stores a backend name and a locator. The hub does not store the resolved value in the integration version.
+An external reference stores a backend name and locator. The integration
+version does not contain the resolved value.
 
 The authoring shape is:
 
@@ -70,21 +66,20 @@ The authoring shape is:
 }
 ```
 
-API reads return the same reference metadata. Reference metadata is not secret,
-but resolved values never appear in API responses.
+API reads return the backend and locator. They never return the resolved value.
 
-During a save, the hub checks the backend and the required reference fields. It
-does not fetch the referenced value or validate it with the provider.
+| Operation           | Reference behavior                                |
+| ------------------- | ------------------------------------------------- |
+| Save                | Validates the format and backend without a fetch  |
+| **Test connection** | Resolves the current draft for supported kinds    |
+| Session creation    | Resolves references for every enabled integration |
 
-**Test connection** resolves references in the current draft when the
-integration kind supports that test. **Environment variables** does not support
-a connection test. Session creation resolves references for every enabled
-integration.
+**Environment variables** does not support **Test connection**. Make sure that
+its locators exist before you save them.
 
-A missing backend or resolver error stops the operation. Logs omit plaintext
-values, locators, and provider error messages. At present, the API reports a
-provider failure as HTTP 422. This includes outages and throttling events. The
-API does not return HTTP 503 for these failures.
+A missing backend or resolver error stops the operation. Logs omit plaintext,
+locators, and provider error details. The API currently reports provider
+outages and throttling as HTTP 422, not HTTP 503.
 
 ### AWS Secrets Manager
 
@@ -94,23 +89,28 @@ Set a region to enable the `aws-sm` backend:
 MARIMOHUB_SECRETS_AWS_REGION=us-east-1
 ```
 
-Alternatively, set `MARIMOHUB_SECRETS_AWS=true` when the AWS configuration supplies the region.
+If the AWS environment supplies the region, enable the resolver with:
 
-The resolver uses the default AWS credential chain. Static access-key variables are available for non-AWS deployments.
+```bash
+MARIMOHUB_SECRETS_AWS=true
+```
 
-A locator uses `secret-id-or-arn[#json-key]`. The optional JSON key selects one
-string field from a JSON secret. Omit the key when a JSON secret bundle must
-resolve to the complete object.
+The resolver uses the default AWS credential chain. For a non-AWS deployment,
+you can set static credentials:
+
+```bash
+MARIMOHUB_SECRETS_AWS_ACCESS_KEY_ID=...
+MARIMOHUB_SECRETS_AWS_SECRET_ACCESS_KEY=...
+```
+
+Set both credential variables or neither. A partial pair causes startup to
+fail. Static credentials do not enable the resolver. You must also set the
+region or enable the resolver flag.
+
+A locator uses `secret-id-or-arn[#json-key]`. The optional key selects one
+string from a JSON secret. Omit it to resolve the complete JSON object.
 
 The hub needs `secretsmanager:GetSecretValue`. It does not write to AWS Secrets Manager.
-
-## Copy and inheritance
-
-A project copy keeps external reference markers unchanged. It decrypts and
-encrypts inline values for the destination integration.
-
-Organization integrations use the same sources. A project inherits each
-enabled organization integration unless it overrides that integration name.
 
 ## Environment variable bundles
 
@@ -120,31 +120,32 @@ The **Environment variables** integration supports three inputs:
 - Secret variables store one protected scalar per environment name.
 - Secret JSON bundles expand a protected JSON object into multiple environment variables.
 
-An optional prefix applies to every key in a JSON bundle. Environment names
-must use uppercase letters, digits, and underscores.
+Environment variable names, prefixes, and bundle names use uppercase letters,
+digits, and underscores.
 
-The hub validates plain and scalar-secret names when you save. It validates a
-bundle's JSON, generated names, and collisions only during session creation.
-An invalid bundle can therefore be saved. New sessions then fail closed until
-you correct it. Reserved hub variables are not allowed.
+The hub validates plain-variable and secret-variable names during save. It
+validates bundle JSON, generated names, and collisions during session creation.
+An invalid bundle can be saved, but new sessions fail until you correct it.
 
-CAUTION: JSON bundle rows do not yet have stable identifiers. An unchanged
-inline value is matched to a row by its array position. If you delete or reorder
-rows, re-enter the inline value for every remaining bundle before you save.
-This step prevents an old value from binding to the wrong prefix.
+Each bundle name must be unique and stable. The hub uses it to keep the correct
+value after you delete or reorder rows.
+
+If you change the stable name, enter the inline value again before you save.
 
 ## Editing through the API
 
-Secret fields belong to the complete integration configuration. To change one
-field, read the integration, update its configuration, and submit the current
-ETag with the write. Managed markers keep other inline values unchanged.
+The API updates the complete integration configuration. It does not provide
+separate operations for each secret field.
 
-This model provides version history and concurrency checks. It does not provide
-the separate create, update, and delete operations of a standalone secret
-resource.
+Before an update, read the integration and its ETag. Send the ETag as `If-Match`
+with the complete configuration. Managed markers keep unchanged inline values.
+References must include their complete backend and locator.
 
-## Compatibility assumption
+Copies decrypt and encrypt inline values for the destination. They keep
+external references unchanged. Organization integrations use the same secret
+sources as project integrations.
 
-The standalone project-secret routes, bucket objects, and
-`MARIMOHUB_SECRETS_BACKEND` setting were removed without a migration. This is
-safe only for installations that did not use that unreleased subsystem.
+## Upgrade note
+
+The standalone project-secret subsystem was unreleased. This change removes its
+routes, bucket objects, and `MARIMOHUB_SECRETS_BACKEND`. No migration is provided.

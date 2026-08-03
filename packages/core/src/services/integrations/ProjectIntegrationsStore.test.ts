@@ -337,6 +337,84 @@ describe('ProjectIntegrationsStore', () => {
 		expect(render?.vars.ECHO_PROD_GREETING).toBe('edited');
 	});
 
+	it('matches retained JSON bundles by stable name after reordering rows', async () => {
+		const store = new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec,
+			probe: stubProbe,
+		});
+		const created = await store.create(
+			pid,
+			{
+				kind: 'custom_env',
+				name: 'env',
+				config: {
+					secret_bundles: [
+						{ name: 'A', prefix: 'A_', value: '{"TOKEN":"secret-a"}' },
+						{ name: 'B', prefix: 'B_', value: '{"TOKEN":"secret-b"}' },
+					],
+				},
+			},
+			ACTOR,
+		);
+		await store.update(
+			pid,
+			created.id,
+			{
+				config: {
+					secret_bundles: [
+						{ name: 'B', prefix: 'B_', value: { $secret: { kind: 'managed', set: true } } },
+						{ name: 'A', prefix: 'A_', value: { $secret: { kind: 'managed', set: true } } },
+					],
+				},
+			},
+			ACTOR,
+		);
+
+		const render = await store.resolveForSession(pid, renderContext(createSessionId()));
+		expect(render?.vars).toMatchObject({ A_TOKEN: 'secret-a', B_TOKEN: 'secret-b' });
+	});
+
+	it('keeps the correct JSON bundle secret after deleting an earlier row', async () => {
+		const store = new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec,
+			probe: stubProbe,
+		});
+		const created = await store.create(
+			pid,
+			{
+				kind: 'custom_env',
+				name: 'env',
+				config: {
+					secret_bundles: [
+						{ name: 'A', prefix: 'A_', value: '{"TOKEN":"secret-a"}' },
+						{ name: 'B', prefix: 'B_', value: '{"TOKEN":"secret-b"}' },
+					],
+				},
+			},
+			ACTOR,
+		);
+		await store.update(
+			pid,
+			created.id,
+			{
+				config: {
+					secret_bundles: [
+						{ name: 'B', prefix: 'B_', value: { $secret: { kind: 'managed', set: true } } },
+					],
+				},
+			},
+			ACTOR,
+		);
+
+		const render = await store.resolveForSession(pid, renderContext(createSessionId()));
+		expect(render?.vars.B_TOKEN).toBe('secret-b');
+		expect(render?.vars.A_TOKEN).toBeUndefined();
+	});
+
 	it('concurrent config updates land as distinct versions with the highest winning', async () => {
 		const store = makeStore(bucket);
 		const created = await store.create(
@@ -555,15 +633,46 @@ describe('ProjectIntegrationsStore', () => {
 		expect((await store.get(pid, created.id)).config.token).toEqual({
 			$secret: { kind: 'reference', backend: 'vault', locator },
 		});
-		let error: unknown;
-		try {
-			await store.resolveForSession(pid, renderContext(createSessionId()));
-		} catch (caught) {
-			error = caught;
+		for (const operation of [
+			() => store.test(pid, { source: 'stored' as const, id: created.id }),
+			() => store.resolveForSession(pid, renderContext(createSessionId())),
+		]) {
+			let error: unknown;
+			try {
+				await operation();
+			} catch (caught) {
+				error = caught;
+			}
+			expect(String(error)).not.toContain(locator);
+			expect(String(error)).not.toContain(providerMessage);
+			expect(String(error)).toContain('backend "vault"');
 		}
-		expect(String(error)).not.toContain(locator);
-		expect(String(error)).not.toContain(providerMessage);
-		expect(String(error)).toContain('backend "vault"');
+		expect(resolve).toHaveBeenCalledTimes(2);
+	});
+
+	it('resolves a stored reference before running its connection test', async () => {
+		const resolve = vi.fn(async () => 'valid');
+		const store = makeStore(bucket, true, [{ ...vaultResolver, resolve }]);
+		const created = await store.create(
+			pid,
+			{
+				kind: 'echo',
+				name: 'prod',
+				config: {
+					greeting: 'stored',
+					token: {
+						$secret: { kind: 'reference', backend: 'vault', locator: 'hidden/path' },
+					},
+				},
+			},
+			ACTOR,
+		);
+
+		await expect(store.test(pid, { source: 'stored', id: created.id })).resolves.toEqual({
+			ok: true,
+			details: 'greeting=stored',
+		});
+		expect(resolve).toHaveBeenCalledWith({ backend: 'vault', locator: 'hidden/path' });
 	});
 
 	it('test() runs the probe on unsaved config without persisting anything', async () => {

@@ -7,6 +7,7 @@ import {
 	hintFor,
 	isKeepMarker,
 	KEEP_SECRET,
+	needsSecretSource,
 	pruneForSubmit,
 	validateValue,
 } from './model';
@@ -116,6 +117,21 @@ describe('validateValue', () => {
 		expect(validateValue(schema, value)).toEqual({ 'props.BAD_KEY': 'Invalid name "BAD_KEY"' });
 	});
 
+	it('does not require a source for an omitted optional secret', () => {
+		const optionalSecretSchema: JsonSchemaNode = {
+			type: 'object',
+			properties: {
+				password: { type: 'string', minLength: 1, 'x-marimohub-secret': true },
+			},
+		};
+		const unavailable = { inline: false, references: [] };
+		expect(validateValue(optionalSecretSchema, { password: '' }, '', true, unavailable)).toEqual(
+			{},
+		);
+		expect(needsSecretSource(optionalSecretSchema, { password: '' })).toBe(false);
+		expect(needsSecretSource(optionalSecretSchema, { password: 'set' })).toBe(true);
+	});
+
 	function validValue() {
 		return {
 			host: 'db.internal',
@@ -208,6 +224,16 @@ describe('pruneForSubmit', () => {
 		};
 		expect(pruneForSubmit(optionalStringSchema, { nickname: '' })).toEqual({});
 		expect(pruneForSubmit(optionalStringSchema, { nickname: 'bud' })).toEqual({ nickname: 'bud' });
+	});
+
+	it('drops an empty optional secret', () => {
+		const optionalSecretSchema: JsonSchemaNode = {
+			type: 'object',
+			properties: {
+				password: { type: 'string', minLength: 1, 'x-marimohub-secret': true },
+			},
+		};
+		expect(pruneForSubmit(optionalSecretSchema, { password: '' })).toEqual({});
 	});
 });
 

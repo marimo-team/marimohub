@@ -4,7 +4,7 @@
 
 ::: details Environment variables configuration reference
 
-Fields marked 🔒 are secret: encrypted at rest and write-only after save.
+Fields marked 🔒 use an encrypted value or an external reference. API responses never contain the resolved value.
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -13,6 +13,7 @@ Fields marked 🔒 are secret: encrypted at rest and write-only after save.
 | `secrets[].name` | string | Yes |  |  |
 | `secrets[].value` 🔒 | string | Yes |  |  |
 | `secret_bundles` | object[] |  |  | JSON secret objects expanded into one environment variable per key |
+| `secret_bundles[].name` | string | Yes |  | Stable name used to retain this bundle across edits |
 | `secret_bundles[].value` 🔒 | string | Yes |  | A JSON object containing environment variable values |
 | `secret_bundles[].prefix` | string |  |  |  |
 

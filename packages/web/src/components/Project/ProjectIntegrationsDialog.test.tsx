@@ -71,6 +71,30 @@ const secretKind: IntegrationKind = {
 	},
 };
 
+const clickhouseKind: IntegrationKind = {
+	...postgresKind,
+	kind: 'clickhouse',
+	title: 'ClickHouse',
+	secret_sources: { inline: false, references: [] },
+	json_schema: {
+		type: 'object',
+		required: ['host'],
+		properties: {
+			host: { type: 'string' },
+			port: { type: 'integer', default: 8443 },
+			secure: { type: 'boolean', default: true },
+			verify: { type: 'boolean', default: true },
+			database: { type: 'string', default: 'default' },
+			username: { type: 'string', default: 'default' },
+			password: {
+				type: 'string',
+				minLength: 1,
+				'x-marimohub-secret': true,
+			},
+		},
+	},
+};
+
 const entry = (over: Partial<IntegrationEntry> = {}): IntegrationEntry => ({
 	id: 'i_1',
 	kind: 'postgres',
@@ -460,6 +484,34 @@ describe('ProjectIntegrationsPanel — create flow', () => {
 
 		expect(await screen.findByText(/lowercase letters, digits, and hyphens/i)).toBeInTheDocument();
 		expect(calls.find((c) => c.method === 'POST')).toBeUndefined();
+	});
+
+	it('creates a passwordless ClickHouse integration without a configured secret source', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({}, { kinds: [clickhouseKind], entries: [] });
+
+		await user.click(await screen.findByRole('button', { name: /add integration/i }));
+		await user.click(screen.getByText('ClickHouse'));
+		expect(screen.queryByText(/no integration secret source/i)).not.toBeInTheDocument();
+		await user.type(screen.getByLabelText('Name'), 'analytics');
+		await user.type(screen.getByLabelText('Host'), 'clickhouse.internal');
+		await user.click(screen.getByRole('button', { name: /add integration/i }));
+
+		await waitFor(() => {
+			const post = calls.find((call) => call.method === 'POST');
+			expect(post?.body).toEqual({
+				kind: 'clickhouse',
+				name: 'analytics',
+				config: {
+					host: 'clickhouse.internal',
+					port: 8443,
+					secure: true,
+					verify: true,
+					database: 'default',
+					username: 'default',
+				},
+			});
+		});
 	});
 });
 

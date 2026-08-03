@@ -9,12 +9,12 @@ import {
 	branchForValue,
 	buildDefaults,
 	groupFields,
-	hasSecretNode,
 	hintFor,
 	isKeepMarker,
 	isRecordNode,
 	isSecretNode,
 	KEEP_SECRET,
+	needsSecretSource,
 	referenceSecret,
 	unionBranches,
 } from './model';
@@ -50,7 +50,9 @@ export function SchemaForm({
 }: SchemaFormProps) {
 	const groups = groupFields(schema, hints);
 	const hasUnavailableSecrets =
-		hasSecretNode(schema) && !secretSources.inline && secretSources.references.length === 0;
+		needsSecretSource(schema, value) &&
+		!secretSources.inline &&
+		secretSources.references.length === 0;
 	const setField = (key: string, next: unknown) => onChange({ ...value, [key]: next });
 	return (
 		<div className="flex flex-col gap-4">

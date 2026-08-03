@@ -1059,37 +1059,49 @@ describe('kind renders (golden)', () => {
 			secrets: [{ name: 'SAME', value: 'b' }],
 		});
 		expect(() => customEnv.validate?.(duplicate)).toThrow(/defined twice/);
+		const duplicateBundles = customEnv.configSchema.parse({
+			secret_bundles: [
+				{ name: 'APP_CONFIG', value: '{}' },
+				{ name: 'APP_CONFIG', value: '{}' },
+			],
+		});
+		expect(() => customEnv.validate?.(duplicateBundles)).toThrow(
+			/bundle "APP_CONFIG" is defined twice/,
+		);
 	});
 
-	it('custom_env: expands secret JSON bundles with prefixes and rejects collisions', () => {
-		const config = customEnv.configSchema.parse({
+	it('custom_env: validates names and collisions after secret JSON bundles resolve', () => {
+		const validateAndRender = (raw: unknown) => {
+			const config = customEnv.configSchema.parse(raw);
+			customEnv.validate?.(config);
+			return customEnv.render(input(config, customEnv));
+		};
+		const out = validateAndRender({
 			vars: { PLAIN: 'yes' },
-			secret_bundles: [{ prefix: 'APP_', value: '{"TOKEN":"secret","RETRIES":3,"ENABLED":true}' }],
+			secret_bundles: [
+				{
+					name: 'APP_CONFIG',
+					prefix: 'APP_',
+					value: '{"TOKEN":"secret","RETRIES":3,"ENABLED":true}',
+				},
+			],
 		});
-		expect(customEnv.render(input(config, customEnv)).env).toEqual({
+		expect(out.env).toEqual({
 			PLAIN: 'yes',
 			APP_TOKEN: 'secret',
 			APP_RETRIES: '3',
 			APP_ENABLED: 'true',
 		});
 		expect(() =>
-			customEnv.render(
-				input(
-					customEnv.configSchema.parse({
-						vars: { APP_TOKEN: 'plain' },
-						secret_bundles: [{ prefix: 'APP_', value: '{"TOKEN":"secret"}' }],
-					}),
-					customEnv,
-				),
-			),
+			validateAndRender({
+				vars: { APP_TOKEN: 'plain' },
+				secret_bundles: [{ name: 'APP_CONFIG', prefix: 'APP_', value: '{"TOKEN":"secret"}' }],
+			}),
 		).toThrow(/defined more than once/);
 		expect(() =>
-			customEnv.render(
-				input(
-					customEnv.configSchema.parse({ secret_bundles: [{ value: '{"bad-name":"x"}' }] }),
-					customEnv,
-				),
-			),
+			validateAndRender({
+				secret_bundles: [{ name: 'BAD_KEYS', value: '{"bad-name":"x"}' }],
+			}),
 		).toThrow(ValidationError);
 	});
 

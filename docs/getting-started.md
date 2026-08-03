@@ -37,7 +37,7 @@ Optional capabilities:
 
 - [Managed AI](./ai.md) gives notebook users an AI assistant without exposing the
   upstream provider key.
-- [Environment & access](./environment-and-access.md) configures data sources,
+- [Environment & cloud access](./environment-and-access.md) configures data sources,
   environment variables, secret sources, and federated cloud access.
 - [Syncing](./syncing.md) serves read-only notebooks whose source of truth is
   pushed in from another system.

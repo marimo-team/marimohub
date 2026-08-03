@@ -1125,25 +1125,24 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Integration secret sources',
 		description:
-			'Configure how integration secret fields are supplied. Inline values are encrypted before storage. External references store only backend and locator metadata. Supported connection tests and new sessions resolve them. Saving does not fetch the value. Resolution fails closed. See docs/integration-secrets.md.',
+			'Configure secret fields with inline encryption or external references. Saving a reference validates its format and backend without fetching the value. Supported connection tests and new sessions resolve references. Resolution fails closed. See the [secret-source guide](./integration-secrets.md).',
 		backends: [
 			{
 				name: 'Inline encrypted values',
-				description:
-					'Encrypt secret fields with an operator-held key before an integration version is written to the deployment bucket.',
+				description: 'Encrypt marked secret fields before the hub writes an integration version.',
 				vars: [
 					{
 						id: 'MARIMOHUB_SECRETS_KEK',
 						name: 'Integration-secret KEK',
 						description:
-							'Generated 32-byte key material in canonical base64 or hex encoding. The hub derives a per-object AES-256-GCM key, so integration versions contain only ciphertext. Unset disables inline encrypted values. Losing the key makes existing inline values unrecoverable.',
+							'Generated 32-byte key in canonical base64 or hex encoding. The hub derives a per-object AES-256-GCM key. Marked secret fields contain ciphertext. Other fields remain plaintext. If unset, inline values are unavailable. If lost, existing inline values cannot be decrypted.',
 						secret: true,
 					},
 					{
 						id: 'MARIMOHUB_SECRETS_KEK_ID',
 						name: 'KEK label',
 						description:
-							'Optional label stamped on envelopes so a KEK swap fails with "unknown KEK" instead of a bare cipher error. Defaults to a fingerprint of the KEK.',
+							'Optional label for new envelopes. A KEK change then reports "unknown KEK" instead of a cipher error. The default is a KEK fingerprint.',
 						optIn: true,
 					},
 				],
@@ -1151,39 +1150,39 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'AWS Secrets Manager references',
 				description:
-					'Resolve integration references with `backend: aws-sm`. The hub needs only `secretsmanager:GetSecretValue` and never writes to the manager. A locator is `secret-id-or-arn[#json-key]`. Enabled by a region or `MARIMOHUB_SECRETS_AWS=true`.',
+					'Resolve references with `backend: aws-sm`. The hub needs `secretsmanager:GetSecretValue` and does not write to AWS Secrets Manager. A locator uses `secret-id-or-arn[#json-key]`. Set a region or `MARIMOHUB_SECRETS_AWS=true` to enable the resolver.',
 				vars: [
 					{
 						id: 'MARIMOHUB_SECRETS_AWS',
 						name: 'Enable AWS Secrets Manager',
 						description:
-							'Set to `true` to enable the resolver without a region env var (e.g. when the region comes from the ambient AWS config). Optional if a region is set.',
+							'Set to `true` when the AWS environment supplies the region. A region variable also enables the resolver.',
 						example: 'true',
 					},
 					{
 						id: 'MARIMOHUB_SECRETS_AWS_REGION',
 						name: 'AWS region',
-						description: 'AWS region of the secrets; required by the SDK if not ambient.',
+						description:
+							'AWS region of the secrets. Omit it only when the AWS environment supplies it.',
 						example: 'us-east-1',
 					},
 					{
 						id: 'MARIMOHUB_SECRETS_AWS_ACCESS_KEY_ID',
 						name: 'AWS access key id',
 						description:
-							'Static-credential override for non-AWS deployments; omit on AWS to use the default provider chain (IRSA / role / ambient). All-or-nothing with the secret key.',
+							'Static credential for non-AWS deployments. Set it with the secret access key. Omit both to use the default AWS credential chain.',
 						secret: true,
 					},
 					{
 						id: 'MARIMOHUB_SECRETS_AWS_SECRET_ACCESS_KEY',
 						name: 'AWS secret access key',
-						description: 'Paired with the access key id for the static-credential override.',
+						description: 'Static credential paired with the access key ID.',
 						secret: true,
 					},
 					{
 						id: 'MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS',
 						name: 'Resolve cache TTL (seconds)',
-						description:
-							'In-memory cache TTL for resolved values, bounding GetSecretValue calls across back-to-back provisions. `0` (default) disables caching.',
+						description: 'Cache duration for resolved values. A value of `0` disables caching.',
 						default: '0',
 					},
 				],
@@ -1194,11 +1193,10 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		name: 'Integrations',
 		selector: 'MARIMOHUB_INTEGRATIONS',
 		selectorDefault: 'off',
-		description: `Versioned data-source configuration supports databases and warehouses,
-query engines, PyIceberg catalogs, object storage, ML platforms, and
-environment variables — see the [integrations guide](./integrations.md) for the
-full list. Project admins configure one project. Super admins can configure
-organization-wide integrations that are available to all projects.
+		description: `Integrations provide versioned configuration for data sources and environment
+variables. See the [integrations guide](./integrations.md) for supported kinds.
+Project admins manage project integrations. Super admins manage organization
+integrations.
 
 New, non-ephemeral sessions receive the applicable configuration as environment
 variables and files. The hub injects configuration, not Python libraries. Each
@@ -1210,12 +1208,9 @@ a rolling deployment. See the two-phase policy in
 \`development_docs/migrations.md\`. The feature requires only the deployment
 bucket.
 
-Secret fields accept inline encrypted values when \`MARIMOHUB_SECRETS_KEK\` is
-configured, or external references when a resolver is configured. References
-resolve during supported connection tests or session rendering. Saving a
-reference does not fetch its value. A rendering error blocks the session.
-Disable or override the failing integration to restore access. See
-\`docs/integration-secrets.md\`.`,
+Secret fields use inline encryption or an external resolver. A rendering error
+blocks session creation. Disable or override the integration to restore access.
+See the [secret-source guide](./integration-secrets.md).`,
 		backends: [
 			{
 				name: 'On',

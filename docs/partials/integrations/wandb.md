@@ -6,7 +6,7 @@
 
 ::: details Weights & Biases configuration reference
 
-Fields marked 🔒 are secret: encrypted at rest and write-only after save.
+Fields marked 🔒 use an encrypted value or an external reference. API responses never contain the resolved value.
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

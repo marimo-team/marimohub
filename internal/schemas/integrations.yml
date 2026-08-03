@@ -1225,6 +1225,10 @@ components:
           items:
             type: object
             properties:
+              name:
+                type: string
+                pattern: ^[A-Z_][A-Z0-9_]*$
+                description: Stable name used to retain this bundle across edits
               value:
                 type: string
                 minLength: 1
@@ -1234,6 +1238,7 @@ components:
                 type: string
                 pattern: ^[A-Z_][A-Z0-9_]*$
             required:
+              - name
               - value
     databricks:
       type: object

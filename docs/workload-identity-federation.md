@@ -61,24 +61,29 @@ example below; the full reference is
 
 ## Enable it for a project
 
-WIF is a deployment-wide _capability_; a project receives no credentials until a
-project **admin** opts it in. In the project, select **Environment & access**.
-Then select **Cloud access** and **Federated cloud access**.
+WIF is a deployment capability. A project receives no credentials until an
+admin enables it. Select **Environment & cloud access**, **Cloud access**, and
+**Federated cloud access**.
 
-The project update API (`PUT /api/v1/projects/{pid}`) uses the same `federation` field:
+For an API update, get the project and save its `ETag` response header. Then
+send a guarded update:
 
-```json
+```http
+PATCH /api/v1/projects/{pid}
+If-Match: "<ETag from GET /api/v1/projects/{pid}>"
+Content-Type: application/json
+
 { "federation": { "enabled": true, "target": "default" } }
 ```
 
-- `enabled` — **when** to authenticate: `false`/omitted means no federated
-  credentials, even while the deployment has WIF configured.
-- `target` — **for what**: which registered federation target (and thus which
-  cloud). Omit to use `default`.
+The API permits an update without `If-Match`. Use the header to prevent a stale
+client from overwriting a concurrent update.
 
-A project that is enabled but names an unregistered target starts without
-credentials (logged, non-fatal). Actual resource permission is still governed by
-the cloud-side policy for that project's `sub`.
+- `enabled` controls whether the project receives federated credentials.
+- `target` selects a registered federation target. Omit it to use `default`.
+
+If the target is not registered, the session starts without credentials and
+logs the error. The cloud policy for the project `sub` controls resource access.
 
 ## What the notebook receives
 

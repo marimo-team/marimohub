@@ -252,8 +252,10 @@ describe('integrations.secrets check', () => {
 			} as never,
 		});
 		expect((await run({}, deps)).by('integrations.secrets')).toMatchObject({
-			status: 'ok',
+			status: 'warn',
 			message: 'integration secret sources: none',
+			remediation:
+				'Configure MARIMOHUB_SECRETS_KEK or an external secret resolver before saving secret fields.',
 		});
 	});
 });

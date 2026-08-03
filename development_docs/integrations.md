@@ -165,10 +165,9 @@ item to its stored value. Without it, matching falls back to the array position.
 Deleting or reordering items can then attach stored ciphertext to the wrong
 item.
 
-The current `custom_env.secret_bundles` schema is a known exception. Until it
-has stable row identity, clients must replace every retained inline bundle
-value after a delete or reorder. Add deletion and reorder coverage for every
-new secret-bearing array.
+The `custom_env.secret_bundles` schema follows this rule. Its deletion and
+reorder tests make sure that each retained ciphertext stays with its named
+bundle. Add the same coverage for every new secret-bearing array.
 
 Do not move a `zSecret()` field in a normal schema migration. Its envelope is
 bound to the old path and must be decrypted and resealed under the new one.

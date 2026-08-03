@@ -30,6 +30,6 @@ the credential type and location, then rotate it.
 
 - [Security model](./docs/security.md)
 - [Operations](./docs/operations.md)
-- [Environment & access](./docs/environment-and-access.md)
+- [Environment & cloud access](./docs/environment-and-access.md)
 - [Integration secret sources](./docs/integration-secrets.md)
 - [Configuration](./docs/configuration.md)

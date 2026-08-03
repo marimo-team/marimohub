@@ -39,7 +39,7 @@ const RESERVED_NAMES = new Set<string>([
 ]);
 
 /** Prefixes the hub reserves for its own injected environment. */
-const RESERVED_PREFIXES = ['MARIMO', 'MARIMOHUB_'];
+const RESERVED_PREFIXES = ['MARIMO'];
 
 export function assertValidEnvironmentName(name: string): void {
 	if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
