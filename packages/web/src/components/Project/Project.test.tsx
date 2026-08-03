@@ -42,6 +42,11 @@ const runningSession = (): Session =>
 		sandbox_url: 'https://sandbox.example/kernel',
 	}) as Session;
 
+const stoppableSession = (): Session => ({
+	...runningSession(),
+	can: { attach: true, stop: true },
+});
+
 function makeFetch(
 	options: {
 		notebooks?: NotebookEntry[];
@@ -321,6 +326,30 @@ describe('Project — Create Notebook', () => {
 });
 
 describe('Project — Notebook Actions', () => {
+	it('groups related notebook actions with separators', async () => {
+		const user = userEvent.setup();
+		makeFetch();
+		await renderProject();
+
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		const menu = await screen.findByRole('menu');
+
+		expect(within(menu).getAllByRole('separator')).toHaveLength(4);
+		expect(
+			within(menu)
+				.getAllByRole('menuitem')
+				.map((item) => item.textContent),
+		).toEqual([
+			'Rename',
+			'Duplicate',
+			'Run as app',
+			'Version history',
+			'Download notebook file',
+			'Download workspace',
+			'Delete',
+		]);
+	});
+
 	it('deletes a notebook only after confirmation', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
@@ -739,7 +768,7 @@ describe('Project — Notebook Actions', () => {
 
 	it('stops a running session from the row action', async () => {
 		const user = userEvent.setup();
-		const calls = makeFetch({ sessions: [runningSession()] });
+		const calls = makeFetch({ sessions: [stoppableSession()] });
 		await renderProject();
 
 		await user.click(await screen.findByRole('button', { name: 'Shut down kernel' }));
@@ -752,5 +781,32 @@ describe('Project — Notebook Actions', () => {
 				),
 			).toBe(true),
 		);
+	});
+
+	it('stops a running session from the notebook menu', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({ sessions: [stoppableSession()] });
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Shut down kernel');
+		await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Shut Down' }));
+
+		await waitFor(() =>
+			expect(
+				calls.some(
+					(c) => c.method === 'DELETE' && c.url.endsWith('/notebooks/nb-1/sessions/sess-1'),
+				),
+			).toBe(true),
+		);
+	});
+
+	it('hides kernel shutdown actions without the session stop grant', async () => {
+		const user = userEvent.setup();
+		makeFetch({ sessions: [runningSession()] });
+		await renderProject();
+
+		expect(screen.queryByRole('button', { name: 'Shut down kernel' })).not.toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
+		expect(screen.queryByRole('menuitem', { name: 'Shut down kernel' })).not.toBeInTheDocument();
 	});
 });
