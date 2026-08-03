@@ -11,6 +11,7 @@ import { createIntegrationId, createProjectId, createSessionId } from '../../ids
 import type { ProjectId, SessionId } from '../../ids';
 import { paths } from '../../paths';
 import type { Bucket, BucketListOptions } from '../../ports/bucket';
+import type { SecretResolver } from '../../ports/secrets';
 import { ACTOR, MemoryBucket } from '../../testing';
 import { AesGcmSecretCodec } from '../secrets/AesGcmSecretCodec';
 import { INTEGRATIONS_DIR, INTEGRATIONS_DIR_ENV } from './bundle';
@@ -53,16 +54,25 @@ const echoKind = defineIntegration({
 
 const stubProbe = { fetch: () => Promise.reject(new Error('no network in tests')) };
 
-function makeStore(bucket: MemoryBucket, withCodec = true) {
+function makeStore(bucket: MemoryBucket, withCodec = true, resolvers: SecretResolver[] = []) {
 	const registry = new IntegrationRegistry();
 	registry.register(echoKind);
 	return new ProjectIntegrationsStore({
 		bucket,
 		registry,
 		codec: withCodec ? codec : undefined,
+		resolvers,
 		probe: stubProbe,
 	});
 }
+
+const vaultResolver: SecretResolver = {
+	backend: 'vault',
+	title: 'Vault',
+	locatorPlaceholder: 'path/to/secret',
+	locatorHelp: 'Use a Vault secret path.',
+	resolve: async ({ locator }) => `resolved:${locator}`,
+};
 
 function pagedDelimiterBucket(inner: Bucket, pageSize: number): Bucket {
 	return {
@@ -327,6 +337,84 @@ describe('ProjectIntegrationsStore', () => {
 		expect(render?.vars.ECHO_PROD_GREETING).toBe('edited');
 	});
 
+	it('matches retained JSON bundles by stable name after reordering rows', async () => {
+		const store = new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec,
+			probe: stubProbe,
+		});
+		const created = await store.create(
+			pid,
+			{
+				kind: 'custom_env',
+				name: 'env',
+				config: {
+					secret_bundles: [
+						{ name: 'A', prefix: 'A_', value: '{"TOKEN":"secret-a"}' },
+						{ name: 'B', prefix: 'B_', value: '{"TOKEN":"secret-b"}' },
+					],
+				},
+			},
+			ACTOR,
+		);
+		await store.update(
+			pid,
+			created.id,
+			{
+				config: {
+					secret_bundles: [
+						{ name: 'B', prefix: 'B_', value: { $secret: { kind: 'managed', set: true } } },
+						{ name: 'A', prefix: 'A_', value: { $secret: { kind: 'managed', set: true } } },
+					],
+				},
+			},
+			ACTOR,
+		);
+
+		const render = await store.resolveForSession(pid, renderContext(createSessionId()));
+		expect(render?.vars).toMatchObject({ A_TOKEN: 'secret-a', B_TOKEN: 'secret-b' });
+	});
+
+	it('keeps the correct JSON bundle secret after deleting an earlier row', async () => {
+		const store = new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec,
+			probe: stubProbe,
+		});
+		const created = await store.create(
+			pid,
+			{
+				kind: 'custom_env',
+				name: 'env',
+				config: {
+					secret_bundles: [
+						{ name: 'A', prefix: 'A_', value: '{"TOKEN":"secret-a"}' },
+						{ name: 'B', prefix: 'B_', value: '{"TOKEN":"secret-b"}' },
+					],
+				},
+			},
+			ACTOR,
+		);
+		await store.update(
+			pid,
+			created.id,
+			{
+				config: {
+					secret_bundles: [
+						{ name: 'B', prefix: 'B_', value: { $secret: { kind: 'managed', set: true } } },
+					],
+				},
+			},
+			ACTOR,
+		);
+
+		const render = await store.resolveForSession(pid, renderContext(createSessionId()));
+		expect(render?.vars.B_TOKEN).toBe('secret-b');
+		expect(render?.vars.A_TOKEN).toBeUndefined();
+	});
+
 	it('concurrent config updates land as distinct versions with the highest winning', async () => {
 		const store = makeStore(bucket);
 		const created = await store.create(
@@ -493,6 +581,100 @@ describe('ProjectIntegrationsStore', () => {
 		).rejects.toThrow(/MARIMOHUB_SECRETS_KEK/);
 	});
 
+	it('advertises configured secret sources and validates external backends on save', async () => {
+		const store = makeStore(bucket, true, [vaultResolver]);
+		expect(store.listKinds()[0].secret_sources).toEqual({
+			inline: true,
+			references: [
+				{
+					backend: 'vault',
+					title: 'Vault',
+					locator_placeholder: 'path/to/secret',
+					locator_help: 'Use a Vault secret path.',
+				},
+			],
+		});
+		await expect(
+			store.create(
+				pid,
+				{
+					kind: 'echo',
+					name: 'prod',
+					config: {
+						token: {
+							$secret: { kind: 'reference', backend: 'missing', locator: 'hidden/path' },
+						},
+					},
+				},
+				ACTOR,
+			),
+		).rejects.toThrow(/Unknown secret backend "missing"/);
+	});
+
+	it('resolves references only when testing or rendering and sanitizes failures', async () => {
+		const locator = 'hidden/path#token';
+		const providerMessage = 'provider response contained plaintext';
+		const resolve = vi.fn(async () => {
+			throw new Error(providerMessage);
+		});
+		const store = makeStore(bucket, true, [{ ...vaultResolver, resolve }]);
+		const created = await store.create(
+			pid,
+			{
+				kind: 'echo',
+				name: 'prod',
+				config: {
+					token: { $secret: { kind: 'reference', backend: 'vault', locator } },
+				},
+			},
+			ACTOR,
+		);
+		expect(resolve).not.toHaveBeenCalled();
+		expect((await store.get(pid, created.id)).config.token).toEqual({
+			$secret: { kind: 'reference', backend: 'vault', locator },
+		});
+		for (const operation of [
+			() => store.test(pid, { source: 'stored' as const, id: created.id }),
+			() => store.resolveForSession(pid, renderContext(createSessionId())),
+		]) {
+			let error: unknown;
+			try {
+				await operation();
+			} catch (caught) {
+				error = caught;
+			}
+			expect(String(error)).not.toContain(locator);
+			expect(String(error)).not.toContain(providerMessage);
+			expect(String(error)).toContain('backend "vault"');
+		}
+		expect(resolve).toHaveBeenCalledTimes(2);
+	});
+
+	it('resolves a stored reference before running its connection test', async () => {
+		const resolve = vi.fn(async () => 'valid');
+		const store = makeStore(bucket, true, [{ ...vaultResolver, resolve }]);
+		const created = await store.create(
+			pid,
+			{
+				kind: 'echo',
+				name: 'prod',
+				config: {
+					greeting: 'stored',
+					token: {
+						$secret: { kind: 'reference', backend: 'vault', locator: 'hidden/path' },
+					},
+				},
+			},
+			ACTOR,
+		);
+
+		await expect(store.test(pid, { source: 'stored', id: created.id })).resolves.toEqual({
+			ok: true,
+			details: 'greeting=stored',
+		});
+		expect(resolve).toHaveBeenCalledWith({ backend: 'vault', locator: 'hidden/path' });
+	});
+
 	it('test() runs the probe on unsaved config without persisting anything', async () => {
 		const store = makeStore(bucket);
 		const result = await store.test(pid, {
@@ -523,6 +705,22 @@ describe('ProjectIntegrationsStore', () => {
 			ACTOR,
 		);
 		expect((await store.test(pid, { source: 'stored', id: created.id })).ok).toBe(true);
+	});
+
+	it('tests edited draft fields while resolving managed keep-markers from storage', async () => {
+		const store = makeStore(bucket);
+		const created = await store.create(
+			pid,
+			{ kind: 'echo', name: 'prod', config: { greeting: 'old', token: 'valid' } },
+			ACTOR,
+		);
+		const result = await store.test(pid, {
+			source: 'draft',
+			id: created.id,
+			kind: 'echo',
+			config: { greeting: 'edited', token: { $secret: { kind: 'managed', set: true } } },
+		});
+		expect(result).toEqual({ ok: true, details: 'greeting=edited' });
 	});
 
 	it('without a probe, testing is disabled and kinds report supports_test: false', async () => {
@@ -587,7 +785,10 @@ describe('ProjectIntegrationsStore', () => {
 		it('get() returns the migrated shape with current-path redaction', async () => {
 			const created = await createV1();
 			const detail = await v2store().get(pid, created.id);
-			expect(detail.config).toEqual({ greeting2: 'hi!', token: { $secret: { set: true } } });
+			expect(detail.config).toEqual({
+				greeting2: 'hi!',
+				token: { $secret: { kind: 'managed', set: true } },
+			});
 		});
 
 		it('merge-keep resolves against the migrated previous config', async () => {
@@ -1498,6 +1699,32 @@ describe('ProjectIntegrationsStore', () => {
 			const render = await store.resolveForSession(target, renderContext(createSessionId()));
 			expect(render?.vars.ECHO_PROD_TOKEN).toBe('sekret');
 			expect(render?.vars.ECHO_PROD_GREETING).toBe('v2');
+		});
+
+		it('preserves external references without resolving them during copy', async () => {
+			const resolve = vi.fn(vaultResolver.resolve);
+			const store = makeStore(bucket, true, [{ ...vaultResolver, resolve }]);
+			const target = createProjectId();
+			const source = await store.create(
+				pid,
+				{
+					kind: 'echo',
+					name: 'prod',
+					config: {
+						token: {
+							$secret: { kind: 'reference', backend: 'vault', locator: 'apps/prod#token' },
+						},
+					},
+				},
+				ACTOR,
+			);
+			const copy = await store.copy(pid, source.id, target, {}, ACTOR);
+			expect(resolve).not.toHaveBeenCalled();
+			expect(copy.config.token).toEqual({
+				$secret: { kind: 'reference', backend: 'vault', locator: 'apps/prod#token' },
+			});
+			const rendered = await store.resolveForSession(target, renderContext(createSessionId()));
+			expect(rendered?.vars.ECHO_PROD_TOKEN).toBe('resolved:apps/prod#token');
 		});
 
 		it('honors a rename and rejects a name already taken in the destination', async () => {

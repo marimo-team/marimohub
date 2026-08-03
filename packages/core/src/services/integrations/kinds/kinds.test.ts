@@ -590,7 +590,7 @@ describe('kind renders (golden)', () => {
 			user_id: 'ada',
 			user_agent: 'marimohub',
 			app_name: 'analytics',
-			metadata: [{ name: 'x-project', value: 'project-secret' }],
+			metadata: [{ name: 'x-project', value: 'project-value' }],
 			spark_config: { 'spark.sql.session.timeZone': 'UTC' },
 			secret_spark_config: [{ name: 'spark.hadoop.fs.s3a.secret.key', value: 's3-secret' }],
 		});
@@ -599,7 +599,7 @@ describe('kind renders (golden)', () => {
 		expect(remote).toContain('sc://spark.internal:15003/;use_ssl=true');
 		expect(remote).toContain('token=spark-token');
 		expect(remote).toContain('user_id=ada');
-		expect(remote).toContain('x-project=project-secret');
+		expect(remote).toContain('x-project=project-value');
 		expect(out.env?.MARIMOHUB_PYSPARK_PROD_TOKEN).toBe('spark-token');
 		const descriptor = JSON.parse(out.files?.[0]?.content ?? '') as Record<string, unknown>;
 		expect(descriptor).toMatchObject({
@@ -1059,6 +1059,50 @@ describe('kind renders (golden)', () => {
 			secrets: [{ name: 'SAME', value: 'b' }],
 		});
 		expect(() => customEnv.validate?.(duplicate)).toThrow(/defined twice/);
+		const duplicateBundles = customEnv.configSchema.parse({
+			secret_bundles: [
+				{ name: 'APP_CONFIG', value: '{}' },
+				{ name: 'APP_CONFIG', value: '{}' },
+			],
+		});
+		expect(() => customEnv.validate?.(duplicateBundles)).toThrow(
+			/bundle "APP_CONFIG" is defined twice/,
+		);
+	});
+
+	it('custom_env: validates names and collisions after secret JSON bundles resolve', () => {
+		const validateAndRender = (raw: unknown) => {
+			const config = customEnv.configSchema.parse(raw);
+			customEnv.validate?.(config);
+			return customEnv.render(input(config, customEnv));
+		};
+		const out = validateAndRender({
+			vars: { PLAIN: 'yes' },
+			secret_bundles: [
+				{
+					name: 'APP_CONFIG',
+					prefix: 'APP_',
+					value: '{"TOKEN":"secret","RETRIES":3,"ENABLED":true}',
+				},
+			],
+		});
+		expect(out.env).toEqual({
+			PLAIN: 'yes',
+			APP_TOKEN: 'secret',
+			APP_RETRIES: '3',
+			APP_ENABLED: 'true',
+		});
+		expect(() =>
+			validateAndRender({
+				vars: { APP_TOKEN: 'plain' },
+				secret_bundles: [{ name: 'APP_CONFIG', prefix: 'APP_', value: '{"TOKEN":"secret"}' }],
+			}),
+		).toThrow(/defined more than once/);
+		expect(() =>
+			validateAndRender({
+				secret_bundles: [{ name: 'BAD_KEYS', value: '{"bad-name":"x"}' }],
+			}),
+		).toThrow(ValidationError);
 	});
 
 	it('every kind renders deterministically (same input → identical output)', () => {

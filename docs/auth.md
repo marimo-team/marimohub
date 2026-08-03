@@ -132,7 +132,7 @@ each tier includes everything the previous one grants.
   [notebook apps](./apps.md) — start one, open it, and keep it alive while they
   have it open. The app is the same shared, per-notebook session editors use
   (viewers cannot stop or restart it). Note that the app kernel runs notebook
-  code with the project's secrets and federated credentials, so enable this
+  code with the project's integration secrets and federated credentials, so enable this
   only for audiences you trust with what the app can reach. Opening a notebook
   (rather than its app) still shows the static snapshot.
 - `ephemeral-sandbox`: additionally, opening a notebook provisions a real

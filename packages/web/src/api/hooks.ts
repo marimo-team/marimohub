@@ -253,92 +253,6 @@ export function useRemoveMember(projectId: string) {
 	);
 }
 
-/** A 404 from the secrets routes means the deployment has the feature disabled. */
-export function isSecretsDisabledError(err: unknown): boolean {
-	return isApiErrorCode(err, 'NOT_FOUND');
-}
-
-/**
- * List a project's secret entries (metadata only — never a value). Resolves to
- * `null` when the deployment has secrets disabled (the route 404s) so the UI can
- * hide the section instead of surfacing an error.
- */
-export function useProjectSecretsQuery(projectId: string, enabled = true) {
-	return useQuery({
-		queryKey: projectKeys.secrets(projectId),
-		enabled,
-		retry: (count, err) => !isSecretsDisabledError(err) && count < 2,
-		queryFn: async () => {
-			try {
-				return await apiData(
-					apiClient.GET('/api/v1/projects/{pid}/secrets', {
-						params: { path: { pid: projectId } },
-					}),
-				);
-			} catch (err) {
-				if (isSecretsDisabledError(err)) return null;
-				throw err;
-			}
-		},
-	});
-}
-
-interface ReferenceInput {
-	name: string;
-	backend: string;
-	locator: string;
-	expand?: 'json';
-	prefix?: string;
-}
-
-/** The reference body sent to PUT/validate (the `name` lives in the path). */
-function referenceBody({ backend, locator, expand, prefix }: ReferenceInput) {
-	return {
-		kind: 'reference' as const,
-		backend,
-		locator,
-		...(expand ? { expand } : {}),
-		...(prefix ? { prefix } : {}),
-	};
-}
-
-export function usePutSecret(projectId: string) {
-	return useApiMutation(
-		(input: ReferenceInput) =>
-			apiData(
-				apiClient.PUT('/api/v1/projects/{pid}/secrets/{name}', {
-					params: { path: { pid: projectId, name: input.name } },
-					body: referenceBody(input),
-				}),
-			),
-		() => [projectKeys.secrets(projectId)],
-	);
-}
-
-export function useValidateSecret(projectId: string) {
-	return useMutation({
-		mutationFn: (input: ReferenceInput) =>
-			apiData(
-				apiClient.POST('/api/v1/projects/{pid}/secrets/validate', {
-					params: { path: { pid: projectId } },
-					body: referenceBody(input),
-				}),
-			),
-	});
-}
-
-export function useDeleteSecret(projectId: string) {
-	return useApiMutation(
-		(name: string) =>
-			apiData(
-				apiClient.DELETE('/api/v1/projects/{pid}/secrets/{name}', {
-					params: { path: { pid: projectId, name } },
-				}),
-			),
-		() => [projectKeys.secrets(projectId)],
-	);
-}
-
 // Integrations
 
 /** A 404 from the integrations routes means the deployment has them disabled. */
@@ -528,7 +442,7 @@ export function useDeleteIntegration(scope: IntegrationsScope) {
 	);
 }
 
-/** Copies an integration from another project; the server re-encrypts secrets. */
+/** Copies an integration; the server re-encrypts inline values and preserves references. */
 export function useCopyIntegration(projectId: string) {
 	return useApiMutation(
 		(body: { source_project_id: string; source_integration_id: string; name?: string }) =>
@@ -583,7 +497,7 @@ export function useTestIntegration(scope: IntegrationsScope) {
 	return useMutation({
 		mutationFn: (
 			body:
-				| { source: 'draft'; kind: string; config: Record<string, unknown> }
+				| { source: 'draft'; kind: string; config: Record<string, unknown>; id?: string }
 				| { source: 'stored'; id: string },
 		) =>
 			apiData(

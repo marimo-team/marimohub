@@ -28,11 +28,9 @@ export type {
 	UpdateSyncedNotebookSourceInput,
 } from '../integrations/syncedSource';
 export { ProjectService } from './content/ProjectService';
-export { ProjectSecretsStore } from './secrets/ProjectSecretsStore';
-export type { ProjectSecretsStoreOptions } from './secrets/ProjectSecretsStore';
 export { AesGcmSecretCodec } from './secrets/AesGcmSecretCodec';
 export type { AesGcmSecretCodecOptions } from './secrets/AesGcmSecretCodec';
-export { assertValidSecretName } from './secrets/secretName';
+export { assertValidEnvironmentName } from './integrations/environmentName';
 export {
 	MAX_INTEGRATIONS_PER_SCOPE,
 	OrgIntegrationsStore,

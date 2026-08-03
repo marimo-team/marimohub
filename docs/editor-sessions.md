@@ -27,8 +27,8 @@ not trust each other, do not use this mode. marimo handles simultaneous editing,
 and marimohub does not make later editors read-only.
 
 Treat a shared sandbox as a shared login. Every attached editor can use the same
-Python process, files, environment variables, project secrets, and federated
-credentials. The sandbox also uses the configuration and AI identity issued to
+Python process, files, integration configuration, and federated credentials.
+The sandbox also uses the configuration and AI identity issued to
 the editor who started it. Any editor can stop or restart the sandbox, which
 disconnects everyone. Saves are attributed to the editor who started the
 sandbox.
@@ -46,8 +46,8 @@ owner and the connection state before they start more compute:
 
 A second editor can start an isolated temporary sandbox or take over the
 persistent sandbox. A temporary sandbox uses the normal editor compute profile.
-Unlike a viewer sandbox, it receives project secrets, federated credentials,
-an AI identity for that editor, and project integration configuration.
+Unlike a restricted viewer sandbox, it receives integration configuration,
+federated credentials, and an AI identity for that editor.
 
 The temporary sandbox loads a copy of the workspace. It does not save:
 

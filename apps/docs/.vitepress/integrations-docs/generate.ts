@@ -84,7 +84,10 @@ function renderPartial(kind: string, item: KindPathItem, schema: JsonSchema): st
 	// Collapsed: ten kinds' tables on one page would swamp the prose.
 	lines.push('', `::: details ${item.summary} configuration reference`);
 	if (hasSecret(schema)) {
-		lines.push('', 'Fields marked 🔒 are secret: encrypted at rest and write-only after save.');
+		lines.push(
+			'',
+			'Fields marked 🔒 use an encrypted value or an external reference. API responses never contain the resolved value.',
+		);
 	}
 	lines.push('', renderObject(schema, '').trimEnd(), '', ':::');
 	return `${lines

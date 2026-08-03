@@ -72,6 +72,9 @@ catalogs:
     concurrently:
       specifier: ^10.0.3
       version: 10.0.3
+    hono:
+      specifier: ^4.12.31
+      version: 4.12.31
     jose:
       specifier: ^6.1.3
       version: 6.2.3
@@ -120,12 +123,18 @@ catalogs:
     ulidx:
       specifier: ^2.4.1
       version: 2.4.1
+    vite:
+      specifier: npm:@voidzero-dev/vite-plus-core@0.1.24
+      version: 0.1.24
     vite-plus:
       specifier: 0.1.24
       version: 0.1.24
     vitepress-plugin-llms:
       specifier: ^1.13.2
       version: 1.13.2
+    vitest:
+      specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+      version: 0.1.24
     yaml:
       specifier: ^2.9.0
       version: 2.9.0
@@ -134,13 +143,7 @@ catalogs:
       version: 4.4.3
 
 overrides:
-  brace-expansion: 5.0.8
-  hono: 4.12.31
-  postcss: 8.5.20
-  tar: 7.5.21
-  vite: npm:@voidzero-dev/vite-plus-core@0.1.24
-  vitepress>vite: ^5.4.0
-  vitest: npm:@voidzero-dev/vite-plus-test@0.1.24
+  brace-expansion@>=5.0.0 <5.0.9: 5.0.9
 
 importers:
 
@@ -195,7 +198,7 @@ importers:
         specifier: 'catalog:'
         version: 1.13.2
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
       vue:
         specifier: ^3.5.13
@@ -234,7 +237,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       hono:
-        specifier: 4.12.31
+        specifier: 'catalog:'
         version: 4.12.31
     devDependencies:
       '@marimo-hub/tsconfig':
@@ -250,7 +253,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   examples/cloudflare-worker:
@@ -299,7 +302,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   examples/e2b-template:
@@ -351,7 +354,7 @@ importers:
         specifier: ^0.8.2
         version: 0.8.3
       hono:
-        specifier: 4.12.31
+        specifier: 'catalog:'
         version: 4.12.31
     devDependencies:
       '@marimo-hub/tsconfig':
@@ -367,7 +370,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
       yaml:
         specifier: 'catalog:'
@@ -395,7 +398,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/auth-dev:
@@ -417,7 +420,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/auth-oidc:
@@ -426,7 +429,7 @@ importers:
         specifier: workspace:*
         version: link:../core
       hono:
-        specifier: 4.12.31
+        specifier: 'catalog:'
         version: 4.12.31
       jose:
         specifier: 'catalog:'
@@ -448,7 +451,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/client:
@@ -473,7 +476,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/compute-cloudflare:
@@ -504,7 +507,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/compute-commons:
@@ -522,7 +525,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/compute-container:
@@ -547,7 +550,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/compute-coreweave:
@@ -575,7 +578,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/compute-e2b:
@@ -600,7 +603,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/compute-kubernetes:
@@ -628,7 +631,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/compute-local:
@@ -653,7 +656,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/compute-modal:
@@ -681,7 +684,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/config:
@@ -738,7 +741,7 @@ importers:
         specifier: workspace:*
         version: link:../storage-s3
       hono:
-        specifier: 4.12.31
+        specifier: 'catalog:'
         version: 4.12.31
     devDependencies:
       '@marimo-hub/tsconfig':
@@ -754,7 +757,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/core:
@@ -788,7 +791,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/credentials-aws:
@@ -816,7 +819,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/credentials-coreweave:
@@ -844,7 +847,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/secrets-aws:
@@ -869,7 +872,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/storage-azure:
@@ -900,7 +903,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/storage-fs:
@@ -922,7 +925,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/storage-gcs:
@@ -950,7 +953,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/storage-r2:
@@ -975,7 +978,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/storage-s3:
@@ -1000,7 +1003,7 @@ importers:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/ts-config: {}
@@ -1102,13 +1105,13 @@ importers:
         specifier: 'catalog:'
         version: 6.0.3
       vite:
-        specifier: npm:@voidzero-dev/vite-plus-core@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(jiti@2.7.0)(typescript@6.0.3)(yaml@2.9.0)'
       vite-plus:
         specifier: 'catalog:'
         version: 0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(@voidzero-dev/vite-plus-core@0.1.24(@types/node@25.9.3)(jiti@2.7.0)(typescript@6.0.3)(yaml@2.9.0))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(yaml@2.9.0)
       vitest:
-        specifier: npm:@voidzero-dev/vite-plus-test@0.1.24
+        specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-test@0.1.24(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8(@voidzero-dev/vite-plus-test@0.1.24))(jiti@2.7.0)(jsdom@29.1.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)'
 
 packages:
@@ -1774,19 +1777,19 @@ packages:
     resolution: {integrity: sha512-ZcnNVhKTmyDJeg0UlnZjvM73JBsTAuhrH/J4fjwGOw59PwOW51r4J+p6CsKZWXdKSme4MFqU62CZMOsdDrU4CA==}
     engines: {node: '>=20'}
     peerDependencies:
-      hono: 4.12.31
+      hono: ^4
 
   '@hono/zod-openapi@1.4.0':
     resolution: {integrity: sha512-AFchqR1N/NxfI4hUOSGI2/g8zLROxA1OE7Oh5JJFlTaGxhrdRyH+93gd0tIBpb0z8s9r8hUoNnaOBfHbdb4NMw==}
     engines: {node: '>=16.0.0'}
     peerDependencies:
-      hono: 4.12.31
+      hono: '>=4.10.0'
       zod: ^4.0.0
 
   '@hono/zod-validator@0.8.0':
     resolution: {integrity: sha512-5uS4S1/LKtZQYvD4BtpPUFkOv8d1wNxHHrChm26buMiEYc1FrHWvDUaKVBwkiVtvSExHSpLGDvcnpI2Copyj9w==}
     peerDependencies:
-      hono: 4.12.31
+      hono: '>=4.10.0'
       zod: ^3.25.0 || ^4.0.0
 
   '@iconify-json/simple-icons@1.2.86':
@@ -3300,6 +3303,9 @@ packages:
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
 
+  balanced-match@1.0.2:
+    resolution: {integrity: sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==}
+
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
     engines: {node: 18 || 20 || >=22}
@@ -3357,8 +3363,11 @@ packages:
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
 
-  brace-expansion@5.0.8:
-    resolution: {integrity: sha512-JZyDyq3D4AUifKTPOB7DELf6XsB3WdPuNxCtob1vFXPsSXhdAiHBWJ/tJ8HAc9aH84BK+5JFZLNkJKx3G9kzQg==}
+  brace-expansion@2.1.4:
+    resolution: {integrity: sha512-hGfVzPxthbf3+2yjg/RBs60cB0FhqBS/zvdV/4wn4/BmN0bNMMHPc4V/BbFieqf1TKAGGAHnY4eSjajCl0f2Xg==}
+
+  brace-expansion@5.0.9:
+    resolution: {integrity: sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg==}
     engines: {node: 20 || >=22}
 
   buffer-equal-constant-time@1.0.1:
@@ -4918,7 +4927,7 @@ packages:
     hasBin: true
     peerDependencies:
       markdown-it-mathjax3: ^4
-      postcss: 8.5.20
+      postcss: ^8
     peerDependenciesMeta:
       markdown-it-mathjax3:
         optional: true
@@ -7267,6 +7276,8 @@ snapshots:
 
   bail@2.0.2: {}
 
+  balanced-match@1.0.2: {}
+
   balanced-match@4.0.4: {}
 
   bare-events@2.9.1: {}
@@ -7312,7 +7323,11 @@ snapshots:
 
   bowser@2.14.1: {}
 
-  brace-expansion@5.0.8:
+  brace-expansion@2.1.4:
+    dependencies:
+      balanced-match: 1.0.2
+
+  brace-expansion@5.0.9:
     dependencies:
       balanced-match: 4.0.4
 
@@ -8218,11 +8233,11 @@ snapshots:
 
   minimatch@10.2.5:
     dependencies:
-      brace-expansion: 5.0.8
+      brace-expansion: 5.0.9
 
   minimatch@5.1.9:
     dependencies:
-      brace-expansion: 5.0.8
+      brace-expansion: 2.1.4
 
   minipass@7.1.3: {}
 

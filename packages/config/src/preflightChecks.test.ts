@@ -218,6 +218,48 @@ describe('wif check', () => {
 	});
 });
 
+describe('integrations.secrets check', () => {
+	it('is absent when integrations are disabled', async () => {
+		expect((await run({}, makeDeps())).by('integrations.secrets')).toBeUndefined();
+	});
+
+	it('reports each configured integration secret source', async () => {
+		const deps = makeDeps({
+			integrations: {
+				secretSources: () => ({
+					inline: true,
+					references: [
+						{
+							backend: 'aws-sm',
+							title: 'AWS Secrets Manager',
+							locator_placeholder: 'Secret ID',
+							locator_help: 'Enter a secret ID.',
+						},
+					],
+				}),
+			} as never,
+		});
+		expect((await run({}, deps)).by('integrations.secrets')).toMatchObject({
+			status: 'ok',
+			message: 'integration secret sources: inline encryption, aws-sm',
+		});
+	});
+
+	it('reports that integrations have no usable secret source', async () => {
+		const deps = makeDeps({
+			integrations: {
+				secretSources: () => ({ inline: false, references: [] }),
+			} as never,
+		});
+		expect((await run({}, deps)).by('integrations.secrets')).toMatchObject({
+			status: 'warn',
+			message: 'integration secret sources: none',
+			remediation:
+				'Configure MARIMOHUB_SECRETS_KEK or an external secret resolver before saving secret fields.',
+		});
+	});
+});
+
 describe('compute.object-storage-wif check', () => {
 	const osEnv: Env = {
 		MARIMOHUB_COMPUTE_BACKEND: 'coreweave',

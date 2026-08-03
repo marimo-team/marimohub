@@ -282,12 +282,25 @@ async function checkAi(deps: ApiDeps): Promise<CheckOutcome> {
 	}
 }
 
-async function checkSecrets(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
-	if (!deps.secrets) return { status: 'skipped', message: 'project secrets disabled' };
-	const awsEnabled =
-		Boolean(env.MARIMOHUB_SECRETS_AWS_REGION) || env.MARIMOHUB_SECRETS_AWS === 'true';
-	const backends = awsEnabled ? 'bucket + aws-sm' : 'bucket';
-	return { status: 'ok', message: `project secrets enabled (${backends})` };
+async function checkIntegrationSecrets(deps: ApiDeps): Promise<CheckOutcome> {
+	const sources = deps.integrations?.secretSources();
+	if (!sources) return { status: 'skipped', message: 'integrations disabled' };
+	const available = [
+		...(sources.inline ? ['inline encryption'] : []),
+		...sources.references.map((reference) => reference.backend),
+	];
+	if (available.length === 0) {
+		return {
+			status: 'warn',
+			message: 'integration secret sources: none',
+			remediation:
+				'Configure MARIMOHUB_SECRETS_KEK or an external secret resolver before saving secret fields.',
+		};
+	}
+	return {
+		status: 'ok',
+		message: `integration secret sources: ${available.join(', ')}`,
+	};
 }
 
 export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] {
@@ -301,6 +314,8 @@ export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] 
 	];
 	if (deps.wif) checks.push({ name: 'wif', run: () => checkWif(deps) });
 	if (deps.ai) checks.push({ name: 'ai.upstream', run: () => checkAi(deps) });
-	if (deps.secrets) checks.push({ name: 'secrets', run: () => checkSecrets(env, deps) });
+	if (deps.integrations) {
+		checks.push({ name: 'integrations.secrets', run: () => checkIntegrationSecrets(deps) });
+	}
 	return checks;
 }

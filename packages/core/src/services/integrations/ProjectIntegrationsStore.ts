@@ -25,6 +25,7 @@ import type {
 	IntegrationVersionMeta,
 	IntegrationVersionPage,
 	IntegrationVersionPageRequest,
+	IntegrationSecretSources,
 	KindDescriptor,
 	SessionRender,
 	SessionRenderContext,
@@ -32,7 +33,7 @@ import type {
 	TestResult,
 	UpdateIntegrationInput,
 } from '../../ports/integrations';
-import type { ManagedSecretCodec } from '../../ports/secrets';
+import type { ManagedSecretCodec, SecretRef, SecretResolver } from '../../ports/secrets';
 import { metricsObserver, saga } from '../../saga';
 import {
 	CURRENT_INTEGRATION_CONFIG_VERSION,
@@ -53,6 +54,7 @@ import type { RenderedIntegration } from './bundle';
 import type { IntegrationRegistry } from './registry';
 import {
 	findStraySecretBoxes,
+	configForCopy,
 	openConfig,
 	redactConfig,
 	sealConfig,
@@ -168,8 +170,9 @@ function decodeVersionCursor(cursor: string | undefined): number | undefined {
 export interface IntegrationsStoreOptions {
 	bucket: Bucket;
 	registry: IntegrationRegistry;
-	/** Shared managed-secret codec; absence disables secret-bearing configs. */
+	/** Shared managed-secret codec; absence disables inline secret values. */
 	codec?: ManagedSecretCodec;
+	resolvers?: SecretResolver[];
 	/**
 	 * The only network path exposed to kind probes; implementations enforce egress policy.
 	 */
@@ -187,6 +190,7 @@ class ScopedIntegrationsStore {
 	private readonly bucket: Bucket;
 	private readonly registry: IntegrationRegistry;
 	private readonly codec?: ManagedSecretCodec;
+	private readonly resolvers: Map<string, SecretResolver>;
 	private readonly probe?: IntegrationProbe;
 	private readonly now: () => string;
 	private readonly metrics: Metrics;
@@ -195,6 +199,9 @@ class ScopedIntegrationsStore {
 		this.bucket = options.bucket;
 		this.registry = options.registry;
 		this.codec = options.codec;
+		this.resolvers = new Map(
+			(options.resolvers ?? []).map((resolver) => [resolver.backend, resolver]),
+		);
 		this.probe = options.probe;
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.metrics = options.metrics ?? noopMetrics;
@@ -203,7 +210,27 @@ class ScopedIntegrationsStore {
 	listKinds(): KindDescriptor[] {
 		// A deployment without a guarded probe must not advertise the Test action.
 		const testable = this.probe !== undefined;
-		return this.registry.describeAll().map((d) => (testable ? d : { ...d, supports_test: false }));
+		const secret_sources = this.secretSources();
+		return this.registry.describeAll().map((descriptor) => ({
+			...descriptor,
+			supports_test: testable && descriptor.supports_test,
+			secret_sources,
+		}));
+	}
+
+	secretSources(): IntegrationSecretSources {
+		return {
+			inline: this.codec !== undefined,
+			references: [...this.resolvers.values()]
+				.map(({ backend, title, locatorPlaceholder, locatorHelp, docsUrl }) => ({
+					backend,
+					title,
+					locator_placeholder: locatorPlaceholder,
+					locator_help: locatorHelp,
+					...(docsUrl ? { docs_url: docsUrl } : {}),
+				}))
+				.sort((a, b) => a.title.localeCompare(b.title)),
+		};
 	}
 
 	async list(scope: IntegrationScope): Promise<IntegrationEntry[]> {
@@ -579,10 +606,20 @@ class ScopedIntegrationsStore {
 	): Promise<IntegrationDetail> {
 		const head = await this.getHead(source, id);
 		const { def, config } = await this.loadCurrent(source, head);
-		// Envelopes are bound to the SOURCE head path, so decrypt here and let
-		// `create` re-seal under the destination's context. The plaintext exists
-		// only in this frame — never in a response or a bucket object.
-		const resolved = await this.open(source, head.id, def, config);
+		const codec = this.codec;
+		const contextFor = this.secretContext(source, head.id);
+		const resolved = await configForCopy({
+			stored: config,
+			paths: this.registry.secretPathsOf(def.kind),
+			decrypt: (envelope, at) => {
+				if (!codec) {
+					throw new ValidationError(
+						'Cannot copy inline secret fields: MARIMOHUB_SECRETS_KEK is not configured.',
+					);
+				}
+				return codec.decrypt(envelope, { path: contextFor(at) });
+			},
+		});
 		return this.create(
 			target,
 			{
@@ -605,20 +642,35 @@ class ScopedIntegrationsStore {
 			resolved = await this.open(scope, head.id, def, current.config);
 		} else {
 			def = this.registry.get(request.kind);
-			// Run unsaved configs through the stored-config path without touching the bucket.
-			const transient = transientSealer();
-			const stored = await sealConfig({
-				schema: def.configSchema,
-				paths: this.registry.secretPathsOf(def.kind),
-				authoring: request.config,
-				seal: transient,
-				check: def.validate?.bind(def),
-			});
-			resolved = await openConfig({
-				stored,
-				paths: this.registry.secretPathsOf(def.kind),
-				open: transient,
-			});
+			if (request.id !== undefined) {
+				const head = await this.getHead(scope, request.id);
+				if (head.kind !== request.kind) {
+					throw new ValidationError(
+						'Draft integration kind does not match the stored integration.',
+					);
+				}
+				const current = await this.loadCurrent(scope, head);
+				const stored = await this.seal(scope, head.id, def, request.config, current.config);
+				resolved = await this.open(scope, head.id, def, stored);
+			} else {
+				// New drafts use an in-memory codec so testing does not require persistence.
+				const transient = transientSealer(
+					(ref) => this.storeReference(ref),
+					(ref, at) => this.resolveReference(ref, at),
+				);
+				const stored = await sealConfig({
+					schema: def.configSchema,
+					paths: this.registry.secretPathsOf(def.kind),
+					authoring: request.config,
+					seal: transient,
+					check: def.validate?.bind(def),
+				});
+				resolved = await openConfig({
+					stored,
+					paths: this.registry.secretPathsOf(def.kind),
+					open: transient,
+				});
+			}
 		}
 		if (!def.testConnection) {
 			throw new ValidationError(`Integration kind "${def.kind}" does not support testing.`);
@@ -942,6 +994,7 @@ class ScopedIntegrationsStore {
 					const envelope = await codec.encrypt(plaintext, { path: contextFor(at) });
 					return { $secret: { kind: 'managed', envelope } };
 				},
+				reference: (ref) => this.storeReference(ref),
 			},
 		});
 	}
@@ -967,8 +1020,36 @@ class ScopedIntegrationsStore {
 					}
 					return codec.decrypt(envelope, { path: contextFor(at) });
 				},
+				resolve: (ref, at) => this.resolveReference(ref, at),
 			},
 		});
+	}
+
+	private storeReference(ref: SecretRef): Promise<StoredSecretValue> {
+		if (!this.resolvers.has(ref.backend)) {
+			throw new ValidationError(
+				`Unknown secret backend "${ref.backend}" — no resolver is configured for it.`,
+			);
+		}
+		return Promise.resolve({
+			$secret: { kind: 'reference', backend: ref.backend, locator: ref.locator },
+		});
+	}
+
+	private async resolveReference(ref: SecretRef, at: string): Promise<string> {
+		const resolver = this.resolvers.get(ref.backend);
+		if (!resolver) {
+			throw new ValidationError(
+				`Cannot resolve secret field "${at}": backend "${ref.backend}" is not configured.`,
+			);
+		}
+		try {
+			return await resolver.resolve(ref);
+		} catch {
+			throw new ValidationError(
+				`Cannot resolve secret field "${at}" with backend "${ref.backend}".`,
+			);
+		}
 	}
 
 	/**
@@ -1013,6 +1094,10 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 
 	listKinds(): KindDescriptor[] {
 		return this.store.listKinds();
+	}
+
+	secretSources(): IntegrationSecretSources {
+		return this.store.secretSources();
 	}
 
 	async list(projectId: ProjectId): Promise<IntegrationEntry[]> {
@@ -1132,6 +1217,10 @@ export class OrgIntegrationsStore implements OrgIntegrationsService {
 		return this.store.listKinds();
 	}
 
+	secretSources(): IntegrationSecretSources {
+		return this.store.secretSources();
+	}
+
 	list(): Promise<IntegrationEntry[]> {
 		return this.store.list(ORG_SCOPE);
 	}
@@ -1190,7 +1279,10 @@ function nextTimestamp(current: string, candidate: string): string {
 }
 
 /** In-memory seal/open pair used to validate unsaved configs. */
-function transientSealer() {
+function transientSealer(
+	reference: (ref: SecretRef) => Promise<StoredSecretValue>,
+	resolve: (ref: SecretRef, at: string) => Promise<string>,
+) {
 	const values = new Map<string, string>();
 	return {
 		encrypt: (plaintext: string): Promise<StoredSecretValue> => {
@@ -1210,5 +1302,7 @@ function transientSealer() {
 			}
 			return Promise.resolve(value);
 		},
+		reference: (ref: SecretRef) => reference(ref),
+		resolve: (ref: SecretRef, at: string) => resolve(ref, at),
 	};
 }

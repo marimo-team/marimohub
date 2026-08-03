@@ -50,7 +50,7 @@ describe('VIEWER_SESSION_MODES', () => {
 	});
 
 	// Pinned: flipping either silently changes what viewers get — a non-ephemeral
-	// viewer edit session would persist (and carry WIF/secrets); an ephemeral app
+	// viewer edit session would persist (and carry WIF/integration credentials); an ephemeral app
 	// would fork the shared singleton per viewer.
 	it('a viewer edit session is their own throwaway; a viewer app is the shared singleton', () => {
 		expect(MODE_POLICY.edit.viewerSession).toBe('ephemeral');

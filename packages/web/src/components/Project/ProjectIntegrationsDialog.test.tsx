@@ -4,10 +4,17 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
-import { OrgIntegrationsDialog, ProjectIntegrationsDialog } from './ProjectIntegrationsDialog';
+import { OrgIntegrationsDialog, ProjectIntegrationsPanel } from './ProjectIntegrationsDialog';
 import type { IntegrationDetail, IntegrationEntry, IntegrationKind, ProjectDetail } from '@/types';
 
 const PID = 'p_1';
+
+const awsSecretSource = {
+	backend: 'aws-sm',
+	title: 'AWS Secrets Manager',
+	locator_placeholder: 'Secret ID or ARN, optionally followed by #json-key',
+	locator_help: 'Use secret-id-or-arn[#json-key].',
+};
 
 const project = (over: Partial<ProjectDetail> = {}): ProjectDetail =>
 	({ id: PID, name: 'Demo', your_role: 'admin', ...over }) as ProjectDetail;
@@ -27,6 +34,7 @@ const postgresKind: IntegrationKind = {
 	ui_hints: {},
 	supports_test: false,
 	requirements: ['sqlalchemy>=2'],
+	secret_sources: { inline: false, references: [] },
 };
 
 const customEnvKind: IntegrationKind = {
@@ -40,15 +48,44 @@ const customEnvKind: IntegrationKind = {
 	ui_hints: {},
 	supports_test: true,
 	requirements: [],
+	secret_sources: { inline: false, references: [] },
 };
 
 const secretKind: IntegrationKind = {
 	...postgresKind,
+	secret_sources: {
+		inline: true,
+		references: [awsSecretSource],
+	},
 	json_schema: {
 		type: 'object',
 		required: ['host', 'password'],
 		properties: {
 			host: { type: 'string' },
+			password: {
+				type: 'string',
+				minLength: 1,
+				'x-marimohub-secret': true,
+			},
+		},
+	},
+};
+
+const clickhouseKind: IntegrationKind = {
+	...postgresKind,
+	kind: 'clickhouse',
+	title: 'ClickHouse',
+	secret_sources: { inline: false, references: [] },
+	json_schema: {
+		type: 'object',
+		required: ['host'],
+		properties: {
+			host: { type: 'string' },
+			port: { type: 'integer', default: 8443 },
+			secure: { type: 'boolean', default: true },
+			verify: { type: 'boolean', default: true },
+			database: { type: 'string', default: 'default' },
+			username: { type: 'string', default: 'default' },
 			password: {
 				type: 'string',
 				minLength: 1,
@@ -248,11 +285,11 @@ function makeFetch({
 }
 
 function setup(
-	overrides: Partial<React.ComponentProps<typeof ProjectIntegrationsDialog>> = {},
+	overrides: Partial<React.ComponentProps<typeof ProjectIntegrationsPanel>> = {},
 	fetchOpts: FetchOpts = { kinds: [postgresKind, customEnvKind], entries: [] },
 ) {
 	const calls = makeFetch(fetchOpts);
-	const onClose = vi.fn();
+	const onBack = vi.fn();
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={client}>
@@ -260,11 +297,10 @@ function setup(
 			<Toaster />
 		</QueryClientProvider>
 	);
-	render(
-		<ProjectIntegrationsDialog isOpen onClose={onClose} project={project()} {...overrides} />,
-		{ wrapper },
-	);
-	return { onClose, calls };
+	render(<ProjectIntegrationsPanel project={project()} onBack={onBack} {...overrides} />, {
+		wrapper,
+	});
+	return { onBack, calls };
 }
 
 beforeEach(() => {
@@ -283,7 +319,7 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe('ProjectIntegrationsDialog — disabled deployment', () => {
+describe('ProjectIntegrationsPanel — disabled deployment', () => {
 	it('shows a disabled message when the kinds/list routes 404', async () => {
 		setup({}, { kinds: null, entries: null });
 		expect(
@@ -292,7 +328,7 @@ describe('ProjectIntegrationsDialog — disabled deployment', () => {
 	});
 });
 
-describe('ProjectIntegrationsDialog — query failures', () => {
+describe('ProjectIntegrationsPanel — query failures', () => {
 	it('a failed kinds query shows an error instead of a permanent skeleton', async () => {
 		setup({}, { kinds: 'error', entries: [] });
 		expect(await screen.findByText(/Could not load integrations/)).toBeInTheDocument();
@@ -307,7 +343,7 @@ describe('ProjectIntegrationsDialog — query failures', () => {
 	}, 10_000);
 });
 
-describe('ProjectIntegrationsDialog — kind catalog', () => {
+describe('ProjectIntegrationsPanel — kind catalog', () => {
 	it("shows each kind's declared notebook packages on its card", async () => {
 		setup({}, { kinds: [postgresKind, customEnvKind], entries: [] });
 		await userEvent.click(await screen.findByRole('button', { name: /Add integration/ }));
@@ -352,7 +388,7 @@ describe('ProjectIntegrationsDialog — kind catalog', () => {
 	});
 });
 
-describe('ProjectIntegrationsDialog — list view', () => {
+describe('ProjectIntegrationsPanel — list view', () => {
 	it('renders rows with name, kind title, and a disabled badge', async () => {
 		setup(
 			{},
@@ -409,7 +445,7 @@ describe('ProjectIntegrationsDialog — list view', () => {
 	});
 });
 
-describe('ProjectIntegrationsDialog — create flow', () => {
+describe('ProjectIntegrationsPanel — create flow', () => {
 	it('picks a kind from the catalog, fills the form, and POSTs the pruned config', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({}, { kinds: [postgresKind, customEnvKind], entries: [] });
@@ -449,14 +485,42 @@ describe('ProjectIntegrationsDialog — create flow', () => {
 		expect(await screen.findByText(/lowercase letters, digits, and hyphens/i)).toBeInTheDocument();
 		expect(calls.find((c) => c.method === 'POST')).toBeUndefined();
 	});
+
+	it('creates a passwordless ClickHouse integration without a configured secret source', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({}, { kinds: [clickhouseKind], entries: [] });
+
+		await user.click(await screen.findByRole('button', { name: /add integration/i }));
+		await user.click(screen.getByText('ClickHouse'));
+		expect(screen.queryByText(/no integration secret source/i)).not.toBeInTheDocument();
+		await user.type(screen.getByLabelText('Name'), 'analytics');
+		await user.type(screen.getByLabelText('Host'), 'clickhouse.internal');
+		await user.click(screen.getByRole('button', { name: /add integration/i }));
+
+		await waitFor(() => {
+			const post = calls.find((call) => call.method === 'POST');
+			expect(post?.body).toEqual({
+				kind: 'clickhouse',
+				name: 'analytics',
+				config: {
+					host: 'clickhouse.internal',
+					port: 8443,
+					secure: true,
+					verify: true,
+					database: 'default',
+					username: 'default',
+				},
+			});
+		});
+	});
 });
 
-describe('ProjectIntegrationsDialog — edit flow', () => {
+describe('ProjectIntegrationsPanel — edit flow', () => {
 	const detail: IntegrationDetail = {
 		...entry(),
 		config: {
 			host: 'db.internal',
-			password: { $secret: { set: true } },
+			password: { $secret: { kind: 'managed', set: true } },
 		},
 	};
 
@@ -479,7 +543,7 @@ describe('ProjectIntegrationsDialog — edit flow', () => {
 				name: 'prod-db',
 				config: {
 					host: 'db2.internal',
-					password: { $secret: { set: true } },
+					password: { $secret: { kind: 'managed', set: true } },
 				},
 			});
 		});
@@ -514,6 +578,36 @@ describe('ProjectIntegrationsDialog — edit flow', () => {
 		});
 	});
 
+	it('tests unsaved edits while identifying the stored integration for keep-markers', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup(
+			{},
+			{
+				kinds: [{ ...secretKind, supports_test: true }],
+				entries: [entry()],
+				details: { i_1: detail },
+			},
+		);
+		await user.click(await screen.findByRole('button', { name: 'Edit prod-db' }));
+		const host = await screen.findByLabelText('Host');
+		await user.clear(host);
+		await user.type(host, 'edited.internal');
+		await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+		await waitFor(() => {
+			const test = calls.find((call) => call.url.includes('/integrations/test'));
+			expect(test?.body).toEqual({
+				source: 'draft',
+				id: 'i_1',
+				kind: 'postgres',
+				config: {
+					host: 'edited.internal',
+					password: { $secret: { kind: 'managed', set: true } },
+				},
+			});
+		});
+	});
+
 	it('keeps the editor and its values open when PATCH fails', async () => {
 		const user = userEvent.setup();
 		setup(
@@ -537,7 +631,7 @@ describe('ProjectIntegrationsDialog — edit flow', () => {
 	});
 });
 
-describe('ProjectIntegrationsDialog — delete flow', () => {
+describe('ProjectIntegrationsPanel — delete flow', () => {
 	it('confirms via ConfirmDialog before deleting', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({}, { kinds: [postgresKind], entries: [entry()] });
@@ -554,7 +648,7 @@ describe('ProjectIntegrationsDialog — delete flow', () => {
 	});
 });
 
-describe('ProjectIntegrationsDialog — enable/disable', () => {
+describe('ProjectIntegrationsPanel — enable/disable', () => {
 	it('PATCHes {enabled: false} when disabling an enabled integration', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({}, { kinds: [postgresKind], entries: [entry({ enabled: true })] });
@@ -570,7 +664,7 @@ describe('ProjectIntegrationsDialog — enable/disable', () => {
 	});
 });
 
-describe('ProjectIntegrationsDialog — inherited org integrations', () => {
+describe('ProjectIntegrationsPanel — inherited org integrations', () => {
 	it('marks inherited entries and hides their controls, even for a project admin', async () => {
 		setup(
 			{},
@@ -642,7 +736,7 @@ describe('OrgIntegrationsDialog', () => {
 	});
 });
 
-describe('ProjectIntegrationsDialog — copy from another project', () => {
+describe('ProjectIntegrationsPanel — copy from another project', () => {
 	const SOURCE = {
 		id: 'p_2',
 		name: 'Analytics',

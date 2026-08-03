@@ -76,6 +76,20 @@ describe('makeIntegrations', () => {
 			new MemoryBucket(),
 		).integrations;
 		const detail = await withKek?.create(pid, input, ACTOR);
-		expect(detail?.config.password).toEqual({ $secret: { set: true } });
+		expect(detail?.config.password).toEqual({ $secret: { kind: 'managed', set: true } });
+	});
+
+	it('advertises and uses configured external secret sources', async () => {
+		const integrations = makeIntegrations(
+			{
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_SECRETS_AWS_REGION: 'us-east-1',
+			},
+			new MemoryBucket(),
+		).integrations;
+		expect(integrations?.listKinds()[0].secret_sources).toMatchObject({
+			inline: false,
+			references: [{ backend: 'aws-sm', title: 'AWS Secrets Manager' }],
+		});
 	});
 });

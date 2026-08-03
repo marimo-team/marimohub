@@ -25,7 +25,6 @@ import {
 	SessionSchema,
 	SnapshotSchema,
 	SourceSchema,
-	StoredSecretSchema,
 	TokenSchema,
 	VersionSchema,
 } from '../schema';
@@ -95,14 +94,6 @@ const OBJECTS: BucketObject[] = [
 		tag: 'project',
 	},
 	{
-		name: 'StoredSecret',
-		key: template(project.secret('{name}')),
-		schema: StoredSecretSchema,
-		summary: 'Project-scoped secret: an external reference or an encrypted managed value.',
-		mutability: 'last-writer-wins',
-		tag: 'project',
-	},
-	{
 		name: 'NotebookMeta',
 		key: notebook.meta,
 		schema: NotebookMetaSchema,
@@ -155,7 +146,8 @@ const OBJECTS: BucketObject[] = [
 		name: 'IntegrationVersionRecord',
 		key: integrationVersionTemplate(projectIntegration.version(0)),
 		schema: IntegrationVersionRecordSchema,
-		summary: 'Immutable integration config revision (secret fields sealed as envelopes).',
+		summary:
+			'Immutable integration config revision (secret fields stored as managed envelopes or external references).',
 		mutability: 'immutable',
 		tag: 'integration',
 	},

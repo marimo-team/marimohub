@@ -2,7 +2,7 @@
 // remain valid when array entries are reordered.
 import { z } from 'zod';
 import { ValidationError } from '../../errors';
-import type { SecretEnvelope } from '../../ports/secrets';
+import type { SecretEnvelope, SecretRef } from '../../ports/secrets';
 
 /** JSON Schema keyword used to mark secret-bearing fields. */
 export const SECRET_MARK = 'x-marimohub-secret';
@@ -21,10 +21,18 @@ export const zSecret = () =>
 /** Prevents plaintext secrets from appearing in structural validation errors. */
 const PLACEHOLDER = '__marimohub_secret__';
 
-export type StoredSecretValue = { $secret: { kind: 'managed'; envelope: SecretEnvelope } };
-export type RedactedSecretValue = { $secret: { set: true } };
+export type ManagedStoredSecretValue = {
+	$secret: { kind: 'managed'; envelope: SecretEnvelope };
+};
+export type ReferenceSecretValue = {
+	$secret: { kind: 'reference'; backend: string; locator: string };
+};
+export type StoredSecretValue = ManagedStoredSecretValue | ReferenceSecretValue;
+export type RedactedSecretValue = { $secret: { kind: 'managed'; set: true } };
 
-export const REDACTED_SECRET: RedactedSecretValue = { $secret: { set: true } };
+export const REDACTED_SECRET: RedactedSecretValue = {
+	$secret: { kind: 'managed', set: true },
+};
 
 /** Schema path whose `'*'` segment spans every array item. */
 export type SecretPath = string[];
@@ -36,11 +44,28 @@ function isSecretBox(value: unknown): value is { $secret: unknown } {
 /** Whether an edit asks to retain the previously stored secret value. */
 export function isKeepMarker(value: unknown): boolean {
 	if (!isSecretBox(value)) return false;
-	const inner = value.$secret;
-	return typeof inner === 'object' && (inner as Record<string, unknown>)?.set === true;
+	const inner = value.$secret as Record<string, unknown> | null;
+	return (
+		typeof inner === 'object' &&
+		inner?.set === true &&
+		(inner.kind === undefined || inner.kind === 'managed')
+	);
 }
 
-function isStoredSecret(value: unknown): value is StoredSecretValue {
+export function isReferenceSecret(value: unknown): value is ReferenceSecretValue {
+	if (!isSecretBox(value)) return false;
+	const inner = value.$secret as Record<string, unknown> | null;
+	return (
+		typeof inner === 'object' &&
+		inner?.kind === 'reference' &&
+		typeof inner.backend === 'string' &&
+		inner.backend.length > 0 &&
+		typeof inner.locator === 'string' &&
+		inner.locator.length > 0
+	);
+}
+
+function isManagedStoredSecret(value: unknown): value is ManagedStoredSecretValue {
 	if (!isSecretBox(value)) return false;
 	const inner = value.$secret as Record<string, unknown> | null;
 	const envelope =
@@ -57,6 +82,10 @@ function isStoredSecret(value: unknown): value is StoredSecretValue {
 		typeof envelope.iv === 'string' &&
 		typeof envelope.ciphertext === 'string'
 	);
+}
+
+function isStoredSecret(value: unknown): value is StoredSecretValue {
+	return isManagedStoredSecret(value) || isReferenceSecret(value);
 }
 
 /** Collects every marked secret path from a kind's JSON Schema. */
@@ -131,6 +160,7 @@ const dotted = (path: readonly (string | number)[]): string => path.join('.');
 export interface SealContext {
 	/** Encrypts plaintext under the wildcard schema path in `at`. */
 	encrypt(plaintext: string, at: string): Promise<StoredSecretValue>;
+	reference(ref: SecretRef, at: string): Promise<StoredSecretValue>;
 }
 
 /**
@@ -156,12 +186,12 @@ export async function sealConfig(options: {
 	for (const path of paths) {
 		for (const concrete of expandPath(sanitized, path)) {
 			const value = getAt(sanitized, concrete);
-			if (typeof value === 'string' || isKeepMarker(value)) {
+			if (typeof value === 'string' || isKeepMarker(value) || isReferenceSecret(value)) {
 				setAt(sanitized, concrete, PLACEHOLDER);
 			} else if (value !== undefined) {
 				// Anything else (e.g. a forged stored envelope) is rejected outright.
 				throw new ValidationError(
-					`Secret field "${dotted(concrete)}" must be a string or { $secret: { set: true } }.`,
+					`Secret field "${dotted(concrete)}" must be an encrypted value, an external reference, or a keep marker.`,
 				);
 			}
 		}
@@ -181,11 +211,20 @@ export async function sealConfig(options: {
 			const original = getAt(authoring, concrete);
 			if (typeof original === 'string') {
 				setAt(stored, concrete, await seal.encrypt(original, dotted(path)));
+			} else if (isReferenceSecret(original)) {
+				setAt(
+					stored,
+					concrete,
+					await seal.reference(
+						{ backend: original.$secret.backend, locator: original.$secret.locator },
+						dotted(path),
+					),
+				);
 			} else {
 				const kept = findPrevious(previous, path, concrete, stored);
-				if (!kept) {
+				if (!kept || !isManagedStoredSecret(kept)) {
 					throw new ValidationError(
-						`Secret field "${dotted(concrete)}" has no stored value to keep — provide one.`,
+						`Secret field "${dotted(concrete)}" has no stored encrypted value to keep — provide one.`,
 					);
 				}
 				setAt(stored, concrete, kept);
@@ -234,7 +273,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
 
-/** Replaces stored secret envelopes with API-safe keep markers. */
+/** Redacts ciphertext while retaining external-reference metadata. */
 export function redactConfig(
 	stored: Record<string, unknown>,
 	paths: SecretPath[],
@@ -242,7 +281,7 @@ export function redactConfig(
 	const redacted = structuredClone(stored);
 	for (const path of paths) {
 		for (const concrete of expandPath(redacted, path)) {
-			if (isSecretBox(getAt(redacted, concrete))) {
+			if (isManagedStoredSecret(getAt(redacted, concrete))) {
 				setAt(redacted, concrete, structuredClone(REDACTED_SECRET));
 			}
 		}
@@ -306,9 +345,9 @@ export function findStraySecretBoxes(
 export interface OpenContext {
 	/** Decrypts an envelope under the wildcard schema path in `at`. */
 	decrypt(envelope: SecretEnvelope, at: string): Promise<string>;
+	resolve(ref: SecretRef, at: string): Promise<string>;
 }
 
-/** Resolves stored secret envelopes for the server-side render path. */
 export async function openConfig(options: {
 	stored: Record<string, unknown>;
 	paths: SecretPath[];
@@ -325,8 +364,43 @@ export async function openConfig(options: {
 					`Secret field "${dotted(concrete)}" holds an unsupported stored shape.`,
 				);
 			}
-			setAt(resolved, concrete, await open.decrypt(value.$secret.envelope, dotted(path)));
+			if (isManagedStoredSecret(value)) {
+				setAt(resolved, concrete, await open.decrypt(value.$secret.envelope, dotted(path)));
+			} else {
+				setAt(
+					resolved,
+					concrete,
+					await open.resolve(
+						{ backend: value.$secret.backend, locator: value.$secret.locator },
+						dotted(path),
+					),
+				);
+			}
 		}
 	}
 	return resolved;
+}
+
+/** Decrypts inline values for a copy while leaving external references intact. */
+export async function configForCopy(options: {
+	stored: Record<string, unknown>;
+	paths: SecretPath[];
+	decrypt(envelope: SecretEnvelope, at: string): Promise<string>;
+}): Promise<Record<string, unknown>> {
+	const copied = structuredClone(options.stored);
+	for (const path of options.paths) {
+		for (const concrete of expandPath(copied, path)) {
+			const value = getAt(copied, concrete);
+			if (value === undefined) continue;
+			if (!isStoredSecret(value)) {
+				throw new ValidationError(
+					`Secret field "${dotted(concrete)}" holds an unsupported stored shape.`,
+				);
+			}
+			if (isManagedStoredSecret(value)) {
+				setAt(copied, concrete, await options.decrypt(value.$secret.envelope, dotted(path)));
+			}
+		}
+	}
+	return copied;
 }

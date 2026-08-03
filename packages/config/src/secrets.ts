@@ -1,46 +1,25 @@
-/**
- * Wire the project-secrets provider from `MARIMOHUB_SECRETS_BACKEND`. Unset →
- * disabled (the routes 404, nothing is injected). `bucket` builds a
- * `ProjectSecretsStore` over the deployment bucket; external-manager resolvers
- * (AWS Secrets Manager, …) are registered here from their own secrets env vars.
- * Managed (encrypted-in-bucket) entries attach a codec when configured; the store
- * works reference-only without one.
- */
-import { AesGcmSecretCodec, ProjectSecretsStore } from '@marimo-hub/core';
-import type { Bucket, ManagedSecretCodec, SecretResolver } from '@marimo-hub/core';
+import { AesGcmSecretCodec } from '@marimo-hub/core';
+import type { ManagedSecretCodec, SecretResolver } from '@marimo-hub/core';
 import { createAwsSecretsManagerResolver } from '@marimo-hub/secrets-aws';
-import type { ApiDeps } from '@marimo-hub/api';
 import { parseIntEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 
-const DOCS = 'docs/secrets.md';
+const DOCS = 'docs/integration-secrets.md';
 
-export function makeSecrets(env: Env, bucket: Bucket): Pick<ApiDeps, 'secrets'> {
-	const backend = env.MARIMOHUB_SECRETS_BACKEND?.trim().toLowerCase();
-	if (backend === undefined || backend === '' || backend === 'none') return {};
-	if (backend !== 'bucket') {
-		throw new ConfigError(
-			`Unknown MARIMOHUB_SECRETS_BACKEND: ${env.MARIMOHUB_SECRETS_BACKEND} (supported: bucket, none).`,
-			{ variable: 'MARIMOHUB_SECRETS_BACKEND', docs: DOCS },
-		);
-	}
+export interface IntegrationSecretSources {
+	codec?: ManagedSecretCodec;
+	resolvers: SecretResolver[];
+}
 
+export function makeSecretSources(env: Env): IntegrationSecretSources {
 	const resolvers: SecretResolver[] = [];
 	const aws = makeAwsResolver(env);
 	if (aws) resolvers.push(aws);
-
-	return {
-		secrets: new ProjectSecretsStore({ bucket, resolvers, managed: makeManagedCodec(env) }),
-	};
+	return { codec: makeManagedCodec(env), resolvers };
 }
 
-/**
- * Encrypted-in-bucket codec for `managed` entries, from `MARIMOHUB_SECRETS_KEK`.
- * Shared with the integrations store (secret config fields use the same codec).
- * Unset → undefined: managed values are rejected with a clear error at write time.
- */
-export function makeManagedCodec(env: Env): ManagedSecretCodec | undefined {
+function makeManagedCodec(env: Env): ManagedSecretCodec | undefined {
 	const kek = env.MARIMOHUB_SECRETS_KEK?.trim();
 	if (!kek) return undefined;
 	try {
@@ -53,12 +32,6 @@ export function makeManagedCodec(env: Env): ManagedSecretCodec | undefined {
 	}
 }
 
-/**
- * Register the AWS Secrets Manager resolver when configured. Enabled by a region
- * (or an explicit `MARIMOHUB_SECRETS_AWS=true`). Credentials default to the AWS
- * provider chain (IRSA / role / ambient); a static override is all-or-nothing.
- * `MARIMOHUB_SECRETS_AWS_ROLE_ARN` is reserved for future OIDC federation.
- */
 function makeAwsResolver(env: Env): SecretResolver | undefined {
 	const region = env.MARIMOHUB_SECRETS_AWS_REGION?.trim();
 	const enabled = env.MARIMOHUB_SECRETS_AWS?.trim().toLowerCase() === 'true';

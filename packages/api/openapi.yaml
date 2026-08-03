@@ -968,93 +968,6 @@ components:
           type: string
           enum:
             - temporary
-    SecretEntry:
-      type: object
-      properties:
-        name:
-          type: string
-        kind:
-          type: string
-          enum:
-            - managed
-            - reference
-        ref:
-          type: object
-          properties:
-            backend:
-              type: string
-              example: aws-sm
-            locator:
-              type: string
-              example: prod/ai#OPENAI_API_KEY
-            expand:
-              type: string
-              enum:
-                - json
-            prefix:
-              type: string
-          required:
-            - backend
-            - locator
-        created_by:
-          type: string
-        created_at:
-          type: string
-        updated_at:
-          type: string
-      required:
-        - name
-        - kind
-        - created_by
-        - created_at
-        - updated_at
-    SecretInput:
-      oneOf:
-        - type: object
-          properties:
-            kind:
-              type: string
-              enum:
-                - managed
-            value:
-              type: string
-              minLength: 1
-          required:
-            - kind
-            - value
-        - type: object
-          properties:
-            kind:
-              type: string
-              enum:
-                - reference
-            backend:
-              type: string
-              minLength: 1
-              example: aws-sm
-            locator:
-              type: string
-              minLength: 1
-              example: prod/ai#OPENAI_API_KEY
-            expand:
-              type: string
-              enum:
-                - json
-            prefix:
-              type: string
-          required:
-            - kind
-            - backend
-            - locator
-    SecretValidateResult:
-      type: object
-      properties:
-        ok:
-          type: boolean
-        reason:
-          type: string
-      required:
-        - ok
     IntegrationKind:
       type: object
       properties:
@@ -1120,6 +1033,41 @@ components:
                 type: string
         supports_test:
           type: boolean
+        secret_sources:
+          type: object
+          properties:
+            inline:
+              type: boolean
+            references:
+              type: array
+              items:
+                type: object
+                properties:
+                  backend:
+                    type: string
+                    minLength: 1
+                    example: aws-sm
+                  title:
+                    type: string
+                    minLength: 1
+                    example: AWS Secrets Manager
+                  locator_placeholder:
+                    type: string
+                    minLength: 1
+                  locator_help:
+                    type: string
+                    minLength: 1
+                  docs_url:
+                    type: string
+                    format: uri
+                required:
+                  - backend
+                  - title
+                  - locator_placeholder
+                  - locator_help
+          required:
+            - inline
+            - references
         requirements:
           type: array
           items:
@@ -1134,6 +1082,7 @@ components:
         - json_schema
         - ui_hints
         - supports_test
+        - secret_sources
         - requirements
     IntegrationPage:
       type: object
@@ -1284,6 +1233,9 @@ components:
             config:
               type: object
               additionalProperties: {}
+            id:
+              type: string
+              pattern: ^intg-[0-9a-z]{16}$
           required:
             - source
             - kind
@@ -4183,296 +4135,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/v1/projects/{pid}/secrets:
-    get:
-      tags:
-        - Secrets
-      summary: List a project's secrets (metadata only — never a value)
-      parameters:
-        - schema:
-            type: string
-            pattern: ^proj-[0-9a-z]{16}$
-            example: proj-7h2k9qm4xz7rp3w8
-          required: true
-          name: pid
-          in: path
-      responses:
-        '200':
-          description: Secret entries (names, kinds, reference locators)
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    enum:
-                      - true
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/SecretEntry'
-                required:
-                  - success
-                  - data
-        '401':
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Insufficient role
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          description: Not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
-          description: Service unavailable
-          headers:
-            Retry-After:
-              schema:
-                type: string
-                description: Seconds to wait before retrying.
-                example: '5'
-              required: true
-              description: Seconds to wait before retrying.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /api/v1/projects/{pid}/secrets/{name}:
-    put:
-      tags:
-        - Secrets
-      summary: Create or overwrite a project secret (admin only)
-      parameters:
-        - schema:
-            type: string
-            pattern: ^proj-[0-9a-z]{16}$
-            example: proj-7h2k9qm4xz7rp3w8
-          required: true
-          name: pid
-          in: path
-        - schema:
-            type: string
-            example: OPENAI_API_KEY
-          required: true
-          name: name
-          in: path
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SecretInput'
-      responses:
-        '200':
-          description: Secret created or overwritten
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    enum:
-                      - true
-                  data:
-                    $ref: '#/components/schemas/SecretEntry'
-                required:
-                  - success
-                  - data
-        '401':
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Insufficient role
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          description: Not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
-          description: Service unavailable
-          headers:
-            Retry-After:
-              schema:
-                type: string
-                description: Seconds to wait before retrying.
-                example: '5'
-              required: true
-              description: Seconds to wait before retrying.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-    delete:
-      tags:
-        - Secrets
-      summary: Delete a project secret (admin only)
-      parameters:
-        - schema:
-            type: string
-            pattern: ^proj-[0-9a-z]{16}$
-            example: proj-7h2k9qm4xz7rp3w8
-          required: true
-          name: pid
-          in: path
-        - schema:
-            type: string
-            example: OPENAI_API_KEY
-          required: true
-          name: name
-          in: path
-      responses:
-        '200':
-          description: Secret deleted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SuccessResponse'
-        '401':
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Insufficient role
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          description: Not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
-          description: Service unavailable
-          headers:
-            Retry-After:
-              schema:
-                type: string
-                description: Seconds to wait before retrying.
-                example: '5'
-              required: true
-              description: Seconds to wait before retrying.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /api/v1/projects/{pid}/secrets/validate:
-    post:
-      tags:
-        - Secrets
-      summary: Test that a reference resolves, without saving it (admin only)
-      description: 'Dry-run: attempts to resolve the reference so a broken locator
-        surfaces before it fails a session closed. Never returns the value —
-        only ok/reason.'
-      parameters:
-        - schema:
-            type: string
-            pattern: ^proj-[0-9a-z]{16}$
-            example: proj-7h2k9qm4xz7rp3w8
-          required: true
-          name: pid
-          in: path
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SecretInput'
-      responses:
-        '200':
-          description: Whether the input resolves
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    enum:
-                      - true
-                  data:
-                    $ref: '#/components/schemas/SecretValidateResult'
-                required:
-                  - success
-                  - data
-        '401':
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Insufficient role
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          description: Not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
-          description: Service unavailable
-          headers:
-            Retry-After:
-              schema:
-                type: string
-                description: Seconds to wait before retrying.
-                example: '5'
-              required: true
-              description: Seconds to wait before retrying.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/integrations/kinds:
     get:
       tags:
@@ -5099,8 +4761,8 @@ paths:
               $ref: '#/components/schemas/IntegrationCopyRequest'
       responses:
         '201':
-          description: Integration copied (config redacted; secrets re-encrypted for this
-            project)
+          description: Integration copied (inline secrets re-encrypted; external
+            references preserved)
           content:
             application/json:
               schema:

@@ -166,16 +166,15 @@ ENV UV_INDEX=internal=https://pypi.example.com/simple
 # ...so credentials can be supplied per index, without putting them in the URL.
 # The infix is the index name, uppercased. Never bake real values into the
 # image (anyone who can pull it can read them) — inject them at runtime
-# instead, e.g. as project secrets (see below).
+# instead, through the Environment variables integration (see below).
 ENV UV_INDEX_INTERNAL_USERNAME=notebooks
 # UV_INDEX_INTERNAL_PASSWORD is injected at runtime, not baked in.
 ```
 
-For the credentials, `UV_*` names are valid [project secret](./secrets.md)
-entries and are injected before the kernel starts, so `uv sync` sees them: keep
-`UV_INDEX_INTERNAL_PASSWORD` in your secret manager as a `reference` entry.
-Like all secrets, it is never injected into a viewer's ephemeral sandbox, so
-private deps won't resolve there.
+For credentials, add the `UV_*` names to the
+[Environment variables integration](./environment-and-access.md). Store the
+password as an [external reference](./integration-secrets.md). The hub resolves
+it before `uv sync` starts. A restricted viewer sandbox does not receive it.
 
 `uv sync` runs once at session start — an index change applies to new sessions,
 not already-running kernels.

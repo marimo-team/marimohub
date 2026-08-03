@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronRight, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { TextField as AriaTextField, FieldError, Label, TextArea } from 'react-aria-components';
@@ -14,9 +14,11 @@ import {
 	isRecordNode,
 	isSecretNode,
 	KEEP_SECRET,
+	needsSecretSource,
+	referenceSecret,
 	unionBranches,
 } from './model';
-import type { FieldHint, JsonSchemaNode, UiHints } from './model';
+import type { FieldHint, JsonSchemaNode, SecretSources, UiHints } from './model';
 
 // Stable ids for editable rows (kv pairs, list items): keying by index would
 // remount inputs on removal and lose focus; keying by content remounts per
@@ -33,14 +35,33 @@ export interface SchemaFormProps {
 	errors?: Record<string, string>;
 	/** Whether secret keep-markers should expose the Replace control. */
 	editing?: boolean;
+	secretSources?: SecretSources;
 }
 
 /** Controlled form for the integration JSON Schema dialect. */
-export function SchemaForm({ schema, hints, value, onChange, errors, editing }: SchemaFormProps) {
+export function SchemaForm({
+	schema,
+	hints,
+	value,
+	onChange,
+	errors,
+	editing,
+	secretSources = { inline: true, references: [] },
+}: SchemaFormProps) {
 	const groups = groupFields(schema, hints);
+	const hasUnavailableSecrets =
+		needsSecretSource(schema, value) &&
+		!secretSources.inline &&
+		secretSources.references.length === 0;
 	const setField = (key: string, next: unknown) => onChange({ ...value, [key]: next });
 	return (
 		<div className="flex flex-col gap-4">
+			{hasUnavailableSecrets && (
+				<p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+					This integration requires protected values, but this deployment has no integration secret
+					source. Ask an administrator to configure inline encryption or an external secret backend.
+				</p>
+			)}
 			{groups.map((group) => (
 				// Groups partition the fields, so the first field key is unique.
 				<GroupSection key={group.fields[0].key} title={group.title} advanced={group.advanced}>
@@ -54,6 +75,7 @@ export function SchemaForm({ schema, hints, value, onChange, errors, editing }: 
 							onChange={(next) => setField(key, next)}
 							errors={errors}
 							editing={editing}
+							secretSources={secretSources}
 						/>
 					))}
 				</GroupSection>
@@ -103,6 +125,7 @@ interface SchemaFieldProps {
 	onChange: (next: unknown) => void;
 	errors?: Record<string, string>;
 	editing?: boolean;
+	secretSources: SecretSources;
 }
 
 function SchemaField(props: SchemaFieldProps) {
@@ -223,7 +246,7 @@ function TextAreaField({
 }
 
 function UnionField(props: SchemaFieldProps & { label: string }) {
-	const { path, node, hints, value, onChange, errors, editing, label } = props;
+	const { path, node, hints, value, onChange, errors, editing, secretSources, label } = props;
 	const branches = unionBranches(node) ?? [];
 	const active = branchForValue(node, value) ?? branches[0];
 	const discriminator = branchDiscriminator(active);
@@ -262,6 +285,7 @@ function UnionField(props: SchemaFieldProps & { label: string }) {
 							onChange={(next) => onChange({ ...record, [key]: next })}
 							errors={errors}
 							editing={editing}
+							secretSources={secretSources}
 						/>
 					))}
 			</div>
@@ -270,7 +294,7 @@ function UnionField(props: SchemaFieldProps & { label: string }) {
 }
 
 function NestedObjectField(props: SchemaFieldProps & { label: string }) {
-	const { path, node, hints, value, onChange, errors, editing, label } = props;
+	const { path, node, hints, value, onChange, errors, editing, secretSources, label } = props;
 	const record = (value as Record<string, unknown>) ?? {};
 	return (
 		<div className="flex flex-col gap-2">
@@ -286,6 +310,7 @@ function NestedObjectField(props: SchemaFieldProps & { label: string }) {
 						onChange={(next) => onChange({ ...record, [key]: next })}
 						errors={errors}
 						editing={editing}
+						secretSources={secretSources}
 					/>
 				))}
 			</div>
@@ -300,11 +325,59 @@ function SecretField({
 	hint,
 	error,
 	editing,
+	secretSources,
 	label,
 }: SchemaFieldProps & { hint?: FieldHint; error?: string; label: string }) {
-	if (isKeepMarker(value)) {
+	const reference = referenceSecret(value);
+	const initialManaged = useRef(isKeepMarker(value));
+	const lastInline = useRef<unknown>(isKeepMarker(value) || typeof value === 'string' ? value : '');
+	const lastReference = useRef(reference);
+	if (reference) lastReference.current = reference;
+	else if (isKeepMarker(value) || typeof value === 'string') lastInline.current = value;
+	const options = [
+		...(secretSources.inline ? ['inline'] : []),
+		...(secretSources.references.length > 0 ? ['reference'] : []),
+	];
+	if (options.length === 0) {
 		return (
-			<div className="flex flex-col gap-1.5">
+			<div className="flex items-center justify-between rounded-md border border-input bg-muted/30 px-3 py-2">
+				<span className="text-xs font-medium text-muted-foreground">{label}</span>
+				<span className="text-xs text-muted-foreground">Unavailable</span>
+			</div>
+		);
+	}
+	const usesReference =
+		secretSources.references.length > 0 && (reference !== undefined || !secretSources.inline);
+	const selected = usesReference ? 'reference' : 'inline';
+	const externalValue =
+		reference ??
+		lastReference.current ??
+		({
+			$secret: {
+				kind: 'reference',
+				backend: secretSources.references[0]?.backend ?? '',
+				locator: '',
+			},
+		} as const);
+	const choose = (source: string) => {
+		if (source === 'inline') onChange(lastInline.current);
+		else onChange(externalValue);
+	};
+
+	const sourceSelector = options.length > 1 && (
+		<Segmented
+			label="Source"
+			options={options}
+			optionLabels={{ inline: 'Encrypted value', reference: 'External secret' }}
+			value={selected}
+			onChange={choose}
+		/>
+	);
+
+	if (isKeepMarker(value) && selected === 'inline') {
+		return (
+			<div className="flex flex-col gap-2">
+				{sourceSelector}
 				<span className="text-xs font-medium text-muted-foreground">{label}</span>
 				<div className="flex h-9 items-center justify-between rounded-md border border-input bg-muted/40 px-3">
 					<span className="text-sm tracking-widest text-muted-foreground">•••••••• (set)</span>
@@ -315,31 +388,92 @@ function SecretField({
 			</div>
 		);
 	}
-	return (
-		<FieldShell description={node.description}>
-			<div className="flex items-end gap-1.5">
-				<div className="min-w-0 flex-1">
-					<TextField
-						label={label}
-						type="password"
-						autoComplete="new-password"
-						placeholder={hint?.placeholder}
-						value={typeof value === 'string' ? value : ''}
-						onChange={onChange}
-						error={error}
-					/>
-				</div>
-				{editing && (
-					<IconButton
-						label="Keep stored value"
-						tooltip="Keep stored value"
-						onPress={() => onChange(structuredClone(KEEP_SECRET))}
+	if (selected === 'reference') {
+		const selectedSource = secretSources.references.find(
+			(source) => source.backend === externalValue.$secret.backend,
+		);
+		const backendAvailable = selectedSource !== undefined;
+		return (
+			<div className="flex flex-col gap-2">
+				<span className="text-xs font-medium text-muted-foreground">{label}</span>
+				{sourceSelector}
+				<label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+					Secret manager
+					<select
+						className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+						value={backendAvailable ? externalValue.$secret.backend : ''}
+						onChange={(event) =>
+							onChange({
+								$secret: { ...externalValue.$secret, backend: event.target.value },
+							})
+						}
 					>
-						<RotateCcw className="size-4" />
-					</IconButton>
+						{!backendAvailable && (
+							<option value="" disabled>
+								Unavailable backend: {externalValue.$secret.backend}
+							</option>
+						)}
+						{secretSources.references.map((source) => (
+							<option key={source.backend} value={source.backend}>
+								{source.title}
+							</option>
+						))}
+					</select>
+				</label>
+				<TextField
+					label="Secret locator"
+					placeholder={selectedSource?.locator_placeholder}
+					value={externalValue.$secret.locator}
+					onChange={(locator) => onChange({ $secret: { ...externalValue.$secret, locator } })}
+					error={error}
+				/>
+				{selectedSource && (
+					<p className="text-xs text-muted-foreground">
+						{selectedSource.locator_help}{' '}
+						{selectedSource.docs_url && (
+							<a
+								href={selectedSource.docs_url}
+								target="_blank"
+								rel="noreferrer"
+								className="font-medium text-primary hover:underline"
+							>
+								Learn more
+							</a>
+						)}
+					</p>
 				)}
+				{node.description && <p className="text-xs text-muted-foreground">{node.description}</p>}
 			</div>
-		</FieldShell>
+		);
+	}
+	return (
+		<div className="flex flex-col gap-2">
+			{sourceSelector}
+			<FieldShell description={node.description}>
+				<div className="flex items-end gap-1.5">
+					<div className="min-w-0 flex-1">
+						<TextField
+							label={label}
+							type="password"
+							autoComplete="new-password"
+							placeholder={hint?.placeholder}
+							value={typeof value === 'string' ? value : ''}
+							onChange={onChange}
+							error={error}
+						/>
+					</div>
+					{editing && initialManaged.current && !isKeepMarker(value) && (
+						<IconButton
+							label="Restore stored encrypted value"
+							tooltip="Restore stored encrypted value"
+							onPress={() => onChange(structuredClone(KEEP_SECRET))}
+						>
+							<RotateCcw className="size-4" />
+						</IconButton>
+					)}
+				</div>
+			</FieldShell>
+		</div>
 	);
 }
 
@@ -423,7 +557,7 @@ function KvPairsField({
 
 /** Renders a schema array whose items are uniform objects. */
 function ObjectListField(props: SchemaFieldProps & { label: string }) {
-	const { path, node, hints, value, onChange, errors, editing, label } = props;
+	const { path, node, hints, value, onChange, errors, editing, secretSources, label } = props;
 	const itemSchema = node.items ?? {};
 	const [rows, setRows] = useState<{ id: number; item: Record<string, unknown> }[]>(() =>
 		((value as Record<string, unknown>[]) ?? []).map((item) => ({ id: rowId(), item })),
@@ -454,6 +588,7 @@ function ObjectListField(props: SchemaFieldProps & { label: string }) {
 								}
 								errors={errors}
 								editing={editing}
+								secretSources={secretSources}
 							/>
 						</div>
 					))}
@@ -492,12 +627,14 @@ function Segmented({
 	options,
 	value,
 	onChange,
+	optionLabels,
 }: {
 	label: string;
 	description?: string;
 	options: string[];
 	value: string;
 	onChange: (next: string) => void;
+	optionLabels?: Record<string, string>;
 }) {
 	return (
 		<div className="flex flex-col gap-1.5">
@@ -515,7 +652,7 @@ function Segmented({
 								: 'text-muted-foreground hover:text-foreground',
 						)}
 					>
-						{humanize(option)}
+						{optionLabels?.[option] ?? humanize(option)}
 					</button>
 				))}
 			</div>

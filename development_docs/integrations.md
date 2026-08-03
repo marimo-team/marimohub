@@ -33,9 +33,10 @@ API code must not import vendor adapters.
 
 The kind's Zod schema is the source for write validation, secret-field
 discovery, generated JSON Schema, and the schema-driven web form. At session
-launch, the store loads each enabled integration's current version, migrates it
-to the current kind schema, decrypts secret fields, and calls the kind's
-renderer. The session then records that version as its audit pin. Rendered files
+launch, the store loads each enabled integration's current version and migrates
+it to the current kind schema. It decrypts managed fields and resolves external
+references before it calls the renderer. The session then records that version
+as its audit pin. Rendered files
 and environment variables are bundled outside the notebook workspace so
 credentials cannot be captured in a notebook version.
 
@@ -157,6 +158,16 @@ paths from JSON Schema and transforms values through three shapes:
 Encryption context combines the integration head path with the wildcard field
 path. A secret in an array therefore remains decryptable after item reordering,
 but an envelope copied to another integration or field does not.
+
+Every array item that contains `zSecret()` must have a required, unique, and
+stable `name` field. Keep-marker resolution uses this field to match an edited
+item to its stored value. Without it, matching falls back to the array position.
+Deleting or reordering items can then attach stored ciphertext to the wrong
+item.
+
+The `custom_env.secret_bundles` schema follows this rule. Its deletion and
+reorder tests make sure that each retained ciphertext stays with its named
+bundle. Add the same coverage for every new secret-bearing array.
 
 Do not move a `zSecret()` field in a normal schema migration. Its envelope is
 bound to the old path and must be decrypted and resealed under the new one.

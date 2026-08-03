@@ -20,10 +20,6 @@ export type GitNotebookCreateResult = components['schemas']['GitNotebookCreateRe
 /** A freshly minted sync URL + write-once token (from creation or rotation). */
 export type SyncToken = components['schemas']['SyncToken'];
 export type Session = components['schemas']['Session'];
-/** A project secret entry (metadata only — never a managed value). */
-export type SecretEntry = components['schemas']['SecretEntry'];
-/** The create/overwrite payload for a project secret. */
-export type SecretInput = components['schemas']['SecretInput'];
 /** An integration kind's catalog card and config form schema. */
 export type IntegrationKind = components['schemas']['IntegrationKind'];
 /** A project integration list item without config. */

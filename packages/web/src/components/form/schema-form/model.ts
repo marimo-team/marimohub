@@ -1,3 +1,5 @@
+import type { IntegrationKind } from '@/types';
+
 /** Mirrors core's JSON Schema keyword for secret-bearing fields. */
 export const SECRET_MARK = 'x-marimohub-secret';
 
@@ -32,18 +34,55 @@ export interface FieldHint {
 
 export type UiHints = Record<string, FieldHint | undefined>;
 
+export type SecretSources = IntegrationKind['secret_sources'];
+
 /** Submitted for an untouched secret to retain its stored value. */
-export const KEEP_SECRET = { $secret: { set: true } } as const;
+export const KEEP_SECRET = { $secret: { kind: 'managed', set: true } } as const;
 
 export const isSecretNode = (node: JsonSchemaNode): boolean => node[SECRET_MARK] === true;
 
+export function needsSecretSource(node: JsonSchemaNode, value: unknown, required = true): boolean {
+	if (!required && (value === undefined || value === '')) return false;
+	const branch = branchForValue(node, value);
+	if (branch) return needsSecretSource(branch, value, required);
+	if (isSecretNode(node)) return true;
+	if (node.type === 'object') {
+		const record = (value as Record<string, unknown>) ?? {};
+		return Object.entries(node.properties ?? {}).some(([key, child]) =>
+			needsSecretSource(child, record[key], isRequired(node, key)),
+		);
+	}
+	if (node.type === 'array') {
+		return ((value as unknown[]) ?? []).some((item) =>
+			needsSecretSource(node.items ?? {}, item, true),
+		);
+	}
+	return false;
+}
+
 export function isKeepMarker(value: unknown): boolean {
-	return (
-		typeof value === 'object' &&
-		value !== null &&
-		'$secret' in value &&
-		(value as { $secret?: { set?: unknown } }).$secret?.set === true
-	);
+	if (typeof value !== 'object' || value === null || !('$secret' in value)) return false;
+	const inner = (value as { $secret?: unknown }).$secret;
+	if (typeof inner !== 'object' || inner === null) return false;
+	const record = inner as Record<string, unknown>;
+	return record.set === true && (record.kind === undefined || record.kind === 'managed');
+}
+
+export function referenceSecret(
+	value: unknown,
+): { $secret: { kind: 'reference'; backend: string; locator: string } } | undefined {
+	if (typeof value !== 'object' || value === null || !('$secret' in value)) return undefined;
+	const inner = (value as { $secret?: unknown }).$secret;
+	if (typeof inner !== 'object' || inner === null) return undefined;
+	const record = inner as Record<string, unknown>;
+	if (record.kind !== 'reference') return undefined;
+	return {
+		$secret: {
+			kind: 'reference',
+			backend: typeof record.backend === 'string' ? record.backend : '',
+			locator: typeof record.locator === 'string' ? record.locator : '',
+		},
+	};
 }
 
 export const unionBranches = (node: JsonSchemaNode): JsonSchemaNode[] | undefined =>
@@ -126,7 +165,7 @@ export function pruneForSubmit(node: JsonSchemaNode, value: unknown): unknown {
 			const pruned = pruneForSubmit(child, record[key]);
 			if (pruned === undefined) continue;
 			if (!isRequired(node, key)) {
-				if (pruned === '' && !isSecretNode(child)) continue;
+				if (pruned === '') continue;
 				// An untouched optional list is empty, and an optional array without a
 				// schema default may forbid `[]` outright (e.g. Trino's `encoding` is
 				// `min(1).optional()`); a declared default means `[]` is a legal choice.
@@ -148,16 +187,42 @@ export function validateValue(
 	value: unknown,
 	path = '',
 	required = true,
+	secretSources: SecretSources = { inline: true, references: [] },
 ): Record<string, string> {
 	const errors: Record<string, string> = {};
 	const at = (p: string, message: string) => {
 		errors[p] = message;
 	};
 	const branch = branchForValue(node, value);
-	if (branch) return validateValue(branch, value, path, required);
+	if (branch) return validateValue(branch, value, path, required, secretSources);
 
 	if (isSecretNode(node)) {
-		if (required && value === '') at(path, 'Required');
+		if (!required && (value === undefined || value === '')) return errors;
+		if (!secretSources.inline && secretSources.references.length === 0) {
+			at(
+				path,
+				'No integration secret source is configured. Ask an administrator to configure one.',
+			);
+			return errors;
+		}
+		const reference = referenceSecret(value);
+		if (reference) {
+			if (
+				!secretSources.references.some((source) => source.backend === reference.$secret.backend)
+			) {
+				at(path, 'Select an available external secret backend.');
+			} else if (reference.$secret.locator.trim() === '') {
+				at(path, 'Locator is required.');
+			}
+		} else if (isKeepMarker(value)) {
+			if (!secretSources.inline) at(path, 'Encrypted values are not available on this deployment.');
+		} else if (typeof value === 'string') {
+			if (!secretSources.inline && value !== '') {
+				at(path, 'Encrypted values are not available on this deployment.');
+			} else if (required && value === '') at(path, 'Required');
+		} else {
+			at(path, 'Select a secret source.');
+		}
 		return errors;
 	}
 	switch (node.type) {
@@ -174,13 +239,19 @@ export function validateValue(
 			const record = (value as Record<string, unknown>) ?? {};
 			for (const [key, child] of Object.entries(node.properties ?? {})) {
 				const childPath = path ? `${path}.${key}` : key;
-				Object.assign(errors, validateValue(child, record[key], childPath, isRequired(node, key)));
+				Object.assign(
+					errors,
+					validateValue(child, record[key], childPath, isRequired(node, key), secretSources),
+				);
 			}
 			return errors;
 		}
 		case 'array': {
 			((value as unknown[]) ?? []).forEach((item, i) => {
-				Object.assign(errors, validateValue(node.items ?? {}, item, `${path}[${i}]`, true));
+				Object.assign(
+					errors,
+					validateValue(node.items ?? {}, item, `${path}[${i}]`, true, secretSources),
+				);
 			});
 			return errors;
 		}

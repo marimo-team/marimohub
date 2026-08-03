@@ -133,47 +133,6 @@ paths:
       responses:
         '204':
           description: Stored.
-  /projects/{pid}/secrets/{name}.json:
-    summary: 'Project-scoped secret: an external reference or an encrypted managed
-      value.'
-    parameters:
-      - name: pid
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: name
-        in: path
-        required: true
-        schema:
-          type: string
-    x-mutability: last-writer-wins
-    get:
-      operationId: read_projects_secrets_json
-      summary: Read StoredSecret
-      tags:
-        - project
-      responses:
-        '200':
-          description: The stored object.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StoredSecret'
-    put:
-      operationId: write_projects_secrets_json
-      summary: Write StoredSecret
-      tags:
-        - project
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StoredSecret'
-      responses:
-        '204':
-          description: Stored.
   /projects/{pid}/notebooks/{nid}/meta.json:
     summary: Notebook metadata record.
     parameters:
@@ -421,7 +380,8 @@ paths:
         '204':
           description: Stored.
   /projects/{pid}/integrations/{iid}/versions/{n}.json:
-    summary: Immutable integration config revision (secret fields sealed as envelopes).
+    summary: Immutable integration config revision (secret fields stored as managed
+      envelopes or external references).
     parameters:
       - name: pid
         in: path
@@ -1003,83 +963,6 @@ components:
         - created_at
         - updated_at
         - tags
-    StoredSecret:
-      oneOf:
-        - type: object
-          properties:
-            kind:
-              type: string
-              const: reference
-            backend:
-              type: string
-            locator:
-              type: string
-            expand:
-              type: string
-              const: json
-            prefix:
-              type: string
-            name:
-              type: string
-            created_by:
-              type: string
-            created_at:
-              type: string
-              format: date-time
-              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
-            updated_at:
-              type: string
-              format: date-time
-              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
-          required:
-            - kind
-            - backend
-            - locator
-            - name
-            - created_by
-            - created_at
-            - updated_at
-        - type: object
-          properties:
-            kind:
-              type: string
-              const: managed
-            envelope:
-              type: object
-              properties:
-                kek_id:
-                  type: string
-                alg:
-                  type: string
-                  const: A256GCM
-                iv:
-                  type: string
-                ciphertext:
-                  type: string
-              required:
-                - kek_id
-                - alg
-                - iv
-                - ciphertext
-            name:
-              type: string
-            created_by:
-              type: string
-            created_at:
-              type: string
-              format: date-time
-              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
-            updated_at:
-              type: string
-              format: date-time
-              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
-          required:
-            - kind
-            - envelope
-            - name
-            - created_by
-            - created_at
-            - updated_at
     NotebookMeta:
       type: object
       properties:

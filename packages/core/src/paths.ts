@@ -65,10 +65,6 @@ export interface IntegrationPaths {
 export interface ProjectPaths {
 	meta: string;
 	notebook: (nid: NotebookId) => NotebookPaths;
-	/** Project-scoped secret entry: `projects/{pid}/secrets/<name>.json`. */
-	secret: (name: string) => string;
-	/** Prefix of the project's secrets: `projects/{pid}/secrets/`. */
-	secretsPrefix: string;
 	/** Project-scoped integration instance: `projects/{pid}/integrations/{iid}/…`. */
 	integration: (iid: IntegrationId) => IntegrationPaths;
 	/** Prefix of the project's integrations: `projects/{pid}/integrations/`. */
@@ -136,8 +132,6 @@ function projectPaths(pid: ProjectId): ProjectPaths {
 	return {
 		meta: `${base}/project.json`,
 		notebook: (nid: NotebookId) => notebookPaths(base, nid),
-		secret: (name: string) => `${base}/secrets/${encodeURIComponent(name)}.json`,
-		secretsPrefix: `${base}/secrets/`,
 		integration: (iid: IntegrationId) => integrationPaths(base, iid),
 		integrationsPrefix: `${base}/integrations/`,
 		integrationNameClaim: (name: string) =>

@@ -1,5 +1,5 @@
 # @marimo-hub/secrets-aws
 
-`SecretResolver` adapter reading `reference`-kind project secrets from AWS Secrets Manager (read-only `GetSecretValue`).
+`SecretResolver` adapter for integration references in AWS Secrets Manager (read-only `GetSecretValue`).
 
-Part of [marimohub](../../README.md). See [docs/secrets.md](../../docs/secrets.md) for configuration.
+Part of [marimohub](../../README.md). See [integration secret sources](../../docs/integration-secrets.md) for configuration.
