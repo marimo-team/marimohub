@@ -71,13 +71,6 @@ export const customEnv = defineIntegration({
 			}
 			seen.add(name);
 		}
-		const bundleNames = new Set<string>();
-		for (const bundle of config.secret_bundles) {
-			if (bundleNames.has(bundle.name)) {
-				throw new ValidationError(`JSON secret bundle "${bundle.name}" is defined twice.`);
-			}
-			bundleNames.add(bundle.name);
-		}
 	},
 
 	render({ config }) {

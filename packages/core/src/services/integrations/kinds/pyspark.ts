@@ -100,7 +100,6 @@ export const pyspark = defineIntegration({
 			throw new ValidationError('Spark Connect token authentication requires TLS.');
 		}
 		const metadataNames = config.metadata.map(({ name }) => name);
-		assertUnique(metadataNames, 'metadata key');
 		for (const name of metadataNames) {
 			if (!METADATA_KEY_REGEX.test(name) || name.endsWith('-bin')) {
 				throw new ValidationError(`Invalid Spark Connect metadata key "${name}".`);
@@ -110,7 +109,6 @@ export const pyspark = defineIntegration({
 			}
 		}
 		const secretNames = config.secret_spark_config.map(({ name }) => name);
-		assertUnique(secretNames, 'secret Spark configuration key');
 		for (const key of Object.keys(config.spark_config)) {
 			if (key.trim() === '') throw new ValidationError('Spark configuration keys cannot be empty.');
 			if (SENSITIVE_CONFIG_REGEX.test(key)) {
@@ -178,9 +176,3 @@ export const pyspark = defineIntegration({
 		};
 	},
 });
-
-function assertUnique(values: string[], label: string): void {
-	if (new Set(values).size !== values.length) {
-		throw new ValidationError(`Duplicate ${label}.`);
-	}
-}

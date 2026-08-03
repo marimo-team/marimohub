@@ -9,10 +9,9 @@ import {
 	probeEndpoint,
 } from '../sdk';
 import { zSecret } from '../secretFields';
-import { discoveryEnvField } from './common';
+import { discoveryEnvField, HTTP_HEADER_NAME_REGEX } from './common';
 
 const IDENTIFIER_REGEX = /^[A-Za-z0-9_.-]+$/;
-const HEADER_NAME_REGEX = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const TIMEZONE_REGEX = /^[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)*$/;
 const mutualAuthenticationSchema = z.enum(['required', 'optional', 'disabled']);
 
@@ -77,9 +76,15 @@ const trinoConfig = z.strictObject({
 	source: z.string().min(1).optional(),
 	session_properties: z.record(z.string(), z.string()).default({}),
 	roles: z.record(z.string(), z.string()).default({}),
-	client_tags: z.array(z.strictObject({ value: z.string().min(1) })).default([]),
+	client_tags: z
+		.array(z.strictObject({ value: z.string().min(1) }))
+		.refine((items) => new Set(items.map(({ value }) => value)).size === items.length, {
+			message: 'Duplicate client tag',
+		})
+		.meta({ 'x-unique-by': 'value' })
+		.default([]),
 	http_headers: z
-		.array(z.strictObject({ name: z.string().regex(HEADER_NAME_REGEX), value: zSecret() }))
+		.array(z.strictObject({ name: z.string().regex(HTTP_HEADER_NAME_REGEX), value: zSecret() }))
 		.refine((items) => new Set(items.map(({ name }) => name.toLowerCase())).size === items.length, {
 			message: 'Duplicate HTTP header name (case-insensitive)',
 		})
@@ -178,20 +183,8 @@ export const trino = defineIntegration({
 		if (config.tls.verification !== 'system' && config.http_scheme !== 'https') {
 			throw new ValidationError('TLS verification settings require HTTPS.');
 		}
-		assertUnique(
-			config.client_tags.map(({ value }) => value),
-			'client tag',
-		);
-		assertUnique(
-			config.http_headers.map(({ name }) => name.toLowerCase()),
-			'HTTP header',
-		);
-		assertUnique(
-			config.extra_credentials.map(({ name }) => name),
-			'extra credential',
-		);
 		for (const { name } of config.http_headers) {
-			if (!HEADER_NAME_REGEX.test(name)) {
+			if (!HTTP_HEADER_NAME_REGEX.test(name)) {
 				throw new ValidationError(`Invalid HTTP header name "${name}".`);
 			}
 			if (
@@ -409,7 +402,7 @@ export const trino = defineIntegration({
 
 function assertSafeHttpHeaders(headers: { name: string; value: string }[]): void {
 	for (const { name, value } of headers) {
-		if (!HEADER_NAME_REGEX.test(name)) {
+		if (!HTTP_HEADER_NAME_REGEX.test(name)) {
 			throw new ValidationError(`Invalid HTTP header name "${name}".`);
 		}
 		if (/[\r\n]/.test(value)) {

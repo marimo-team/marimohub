@@ -71,7 +71,10 @@ const athenaConfig = z.strictObject({
 	// would persist a credential where nothing decrypts it.
 	s3_staging_dir: z
 		.string()
-		.regex(/^s3:\/\/[^@\s?#]+$/, 'Must be an s3:// URI with no embedded credentials')
+		.regex(
+			/^s3:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$/,
+			'Must be an s3:// URI with no embedded credentials',
+		)
 		.meta({ format: 'uri' })
 		.describe('Bucket prefix Athena writes query results to'),
 	database: z

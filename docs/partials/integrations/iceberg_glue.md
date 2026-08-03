@@ -14,7 +14,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `catalog_id` | string |  |  |  |
 | `region` | string |  |  |  |
 | `endpoint` | string |  |  |  |
-| `credentials.method` | `ambient`, `static`, `profile` |  | `ambient` | Glue Catalog credentials only. When explicit, these override unified credentials for Glue calls. |
+| `credentials.method` | `ambient`, `static`, `profile` |  | `ambient` | Glue Catalog credentials only. When explicit, these override unified credentials for Glue calls. The catalog region uses the region field; PyIceberg exposes role assumption through unified credentials. |
 | `unified_credentials.method` | `none`, `static`, `profile`, `role` |  | `none` | Client credentials shared by Glue and S3 FileIO. Glue-specific and storage-specific credentials override these. |
 | `skip_archive` | boolean |  | `true` |  |
 | `max_retries` | integer |  | `10` |  |

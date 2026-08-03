@@ -17,7 +17,7 @@ import {
 	storageProperties,
 	validateExtraProperties,
 } from './icebergShared';
-import { httpUrlField } from './common';
+import { HTTP_HEADER_NAME_REGEX, httpUrlField } from './common';
 
 const httpUrl = httpUrlField;
 
@@ -98,7 +98,7 @@ const icebergRestConfig = z.strictObject({
 			table_cache_max_entries: 100,
 		}),
 	headers: z
-		.record(z.string(), z.string())
+		.record(z.string().regex(HTTP_HEADER_NAME_REGEX), z.string())
 		.default({})
 		.describe('Additional HTTP headers sent to the REST catalog'),
 	extra_properties: extraPropertiesSchema,
@@ -189,24 +189,7 @@ export const icebergRest = defineIntegration({
 				);
 			}
 		}
-		for (const [key, value] of Object.entries(config.headers)) {
-			if (!/^[A-Za-z0-9-]+$/.test(key)) {
-				throw new ValidationError(`Invalid HTTP header name "${key}".`);
-			}
-			if (/[\r\n]/.test(value)) {
-				throw new ValidationError(`HTTP header "${key}" contains a line break.`);
-			}
-			if (key.toLowerCase() === 'x-iceberg-access-delegation') {
-				throw new ValidationError(
-					'X-Iceberg-Access-Delegation is managed by the access delegation field.',
-				);
-			}
-			if (/authorization|cookie|token|secret|api-key/i.test(key)) {
-				throw new ValidationError(
-					`Header "${key}" looks credential-bearing; use a typed authentication field.`,
-				);
-			}
-		}
+		assertSafeHeaders(config.headers);
 		if (
 			config.auth.method === 'sigv4' &&
 			Object.keys(config.extra_properties).some((key) => key.startsWith('rest.sigv4'))
@@ -231,6 +214,7 @@ export const icebergRest = defineIntegration({
 	},
 
 	render({ config, instanceName }) {
+		assertSafeHeaders(config.headers);
 		const files: { path: string; content: string }[] = [];
 		const properties: Record<string, unknown> = {
 			uri: config.uri,
@@ -287,6 +271,7 @@ export const icebergRest = defineIntegration({
 	},
 
 	async testConnection(config, probe) {
+		assertSafeHeaders(config.headers);
 		const start = performance.now();
 		if (
 			config.auth.method === 'sigv4' ||
@@ -339,6 +324,27 @@ export const icebergRest = defineIntegration({
 		}
 	},
 });
+
+function assertSafeHeaders(headers: Record<string, string>): void {
+	for (const [key, value] of Object.entries(headers)) {
+		if (!HTTP_HEADER_NAME_REGEX.test(key)) {
+			throw new ValidationError(`Invalid HTTP header name "${key}".`);
+		}
+		if (/[\r\n]/.test(value)) {
+			throw new ValidationError(`HTTP header "${key}" contains a line break.`);
+		}
+		if (key.toLowerCase() === 'x-iceberg-access-delegation') {
+			throw new ValidationError(
+				'X-Iceberg-Access-Delegation is managed by the access delegation field.',
+			);
+		}
+		if (/authorization|cookie|token|secret|api-key/i.test(key)) {
+			throw new ValidationError(
+				`Header "${key}" looks credential-bearing; use a typed authentication field.`,
+			);
+		}
+	}
+}
 
 /**
  * `/v1/config` under the catalog URI's path. String concatenation would append

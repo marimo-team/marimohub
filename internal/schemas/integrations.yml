@@ -1099,7 +1099,7 @@ components:
           pattern: ^[a-z0-9-]+$
         s3_staging_dir:
           type: string
-          pattern: ^s3:\/\/[^@\s?#]+$
+          pattern: ^s3:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
           description: Bucket prefix Athena writes query results to
         database:
@@ -1165,7 +1165,7 @@ components:
           pattern: ^[a-z0-9-]+$
         s3_staging_dir:
           type: string
-          pattern: ^s3:\/\/[^@\s?#]+$
+          pattern: ^s3:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
           description: Bucket prefix Athena writes query results to
         database:
@@ -1978,7 +1978,7 @@ components:
           default: https://huggingface.co
           description: Set this for an Enterprise Hub deployment
           type: string
-          pattern: ^https?:\/\/[^@\s?#]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
@@ -2002,7 +2002,7 @@ components:
           default: https://huggingface.co
           description: Set this for an Enterprise Hub deployment
           type: string
-          pattern: ^https?:\/\/[^@\s?#]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
@@ -2139,7 +2139,9 @@ components:
           default:
             method: ambient
           description: DynamoDB Catalog credentials only. When explicit, these override
-            unified credentials for DynamoDB calls.
+            unified credentials for DynamoDB calls. The catalog region uses the
+            region field; PyIceberg exposes role assumption through unified
+            credentials.
           oneOf:
             - type: object
               properties:
@@ -2290,7 +2292,9 @@ components:
           default:
             method: ambient
           description: DynamoDB Catalog credentials only. When explicit, these override
-            unified credentials for DynamoDB calls.
+            unified credentials for DynamoDB calls. The catalog region uses the
+            region field; PyIceberg exposes role assumption through unified
+            credentials.
           oneOf:
             - type: object
               properties:
@@ -2445,14 +2449,16 @@ components:
           minLength: 1
         endpoint:
           type: string
-          pattern: ^https?:\/\/[^@\s]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
         credentials:
           default:
             method: ambient
           description: Glue Catalog credentials only. When explicit, these override
-            unified credentials for Glue calls.
+            unified credentials for Glue calls. The catalog region uses the
+            region field; PyIceberg exposes role assumption through unified
+            credentials.
           oneOf:
             - type: object
               properties:
@@ -2615,14 +2621,16 @@ components:
           minLength: 1
         endpoint:
           type: string
-          pattern: ^https?:\/\/[^@\s]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
         credentials:
           default:
             method: ambient
           description: Glue Catalog credentials only. When explicit, these override
-            unified credentials for Glue calls.
+            unified credentials for Glue calls. The catalog region uses the
+            region field; PyIceberg exposes role assumption through unified
+            credentials.
           oneOf:
             - type: object
               properties:
@@ -2876,7 +2884,7 @@ components:
       properties:
         uri:
           type: string
-          pattern: ^https?:\/\/[^@\s]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
           description: REST catalog base URI, e.g. https://catalog.internal/api/catalog
@@ -2936,7 +2944,7 @@ components:
                   const: oauth2_client_credentials
                 token_endpoint:
                   type: string
-                  pattern: ^https?:\/\/[^@\s]+$
+                  pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
                   format: uri
                   x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and
                     no port 0
@@ -3097,6 +3105,7 @@ components:
           type: object
           propertyNames:
             type: string
+            pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$
           additionalProperties:
             type: string
         extra_properties:
@@ -3110,7 +3119,7 @@ components:
       properties:
         uri:
           type: string
-          pattern: ^https?:\/\/[^@\s]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
           description: REST catalog base URI, e.g. https://catalog.internal/api/catalog
@@ -3170,7 +3179,7 @@ components:
                   const: oauth2_client_credentials
                 token_endpoint:
                   type: string
-                  pattern: ^https?:\/\/[^@\s]+$
+                  pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
                   format: uri
                   x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and
                     no port 0
@@ -3342,6 +3351,7 @@ components:
           type: object
           propertyNames:
             type: string
+            pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$
           additionalProperties:
             type: string
         extra_properties:
@@ -4372,7 +4382,7 @@ components:
           description: S3-compatible endpoint, e.g. https://minio.internal:9000; omit for
             AWS S3
           type: string
-          pattern: ^https?:\/\/[^@\s]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
         auth:
@@ -4445,7 +4455,7 @@ components:
           description: S3-compatible endpoint, e.g. https://minio.internal:9000; omit for
             AWS S3
           type: string
-          pattern: ^https?:\/\/[^@\s]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
         auth:
@@ -5041,6 +5051,7 @@ components:
             required:
               - value
             additionalProperties: false
+          x-unique-by: value
         http_headers:
           default: []
           type: array
@@ -5373,6 +5384,7 @@ components:
             required:
               - value
             additionalProperties: false
+          x-unique-by: value
         http_headers:
           default: []
           type: array
@@ -5488,7 +5500,7 @@ components:
           default: https://api.wandb.ai
           description: Set this for a self-hosted or dedicated-cloud deployment
           type: string
-          pattern: ^https?:\/\/[^@\s?#]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
@@ -5522,7 +5534,7 @@ components:
           default: https://api.wandb.ai
           description: Set this for a self-hosted or dedicated-cloud deployment
           type: string
-          pattern: ^https?:\/\/[^@\s?#]+$
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
@@ -5567,7 +5579,7 @@ components:
               minLength: 1
             endpoint:
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             credentials:
@@ -5633,7 +5645,7 @@ components:
               minLength: 1
             signer_uri:
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             signer_endpoint:
@@ -5644,7 +5656,7 @@ components:
               type: boolean
             proxy_uri:
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             connect_timeout:
@@ -5731,7 +5743,7 @@ components:
                 type: string
             service_host:
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             default_location:
@@ -5912,7 +5924,7 @@ components:
             endpoint:
               default: https://huggingface.co
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             token:
@@ -5970,7 +5982,7 @@ components:
               minLength: 1
             endpoint:
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             credentials:
@@ -6036,7 +6048,7 @@ components:
               minLength: 1
             signer_uri:
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             signer_endpoint:
@@ -6047,7 +6059,7 @@ components:
               type: boolean
             proxy_uri:
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             connect_timeout:
@@ -6138,7 +6150,7 @@ components:
                 type: string
             service_host:
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             default_location:
@@ -6329,7 +6341,7 @@ components:
             endpoint:
               default: https://huggingface.co
               type: string
-              pattern: ^https?:\/\/[^@\s]+$
+              pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
             token:

@@ -37,13 +37,16 @@ export const SQL_CONNECTION_HINTS: UiHints = {
  * credentials (or whitespace, which splits a request line) into anything the
  * hub renders or probes.
  */
-export const HTTP_URL_REGEX = /^https?:\/\/[^@\s]+$/;
+export const HTTP_URL_REGEX = /^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$/;
 
 /**
  * The same, minus a query or fragment: for a base URL the runtime appends a
  * path to, where `?`/`#` would push that path into the query string.
  */
-export const SERVICE_URL_REGEX = /^https?:\/\/[^@\s?#]+$/;
+export const SERVICE_URL_REGEX = /^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$/;
+
+/** RFC 9110 token grammar used by HTTP field names. */
+export const HTTP_HEADER_NAME_REGEX = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
 /**
  * The shape above is what the form checks as you type; this is the one that

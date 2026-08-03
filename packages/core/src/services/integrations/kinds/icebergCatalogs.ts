@@ -49,6 +49,13 @@ const SQL_OWNED = new Set([
 	'pool_pre_ping',
 ]);
 
+function sqlCatalogExtras(uri: string): string[] {
+	const dialect = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(uri)?.[1].split('+')[0].toLowerCase();
+	if (dialect === 'sqlite') return ['sql-sqlite'];
+	if (dialect === 'postgres' || dialect === 'postgresql') return ['sql-postgres'];
+	return ['sql-postgres', 'sql-sqlite'];
+}
+
 export const icebergSql = defineIntegration({
 	kind: 'iceberg_sql',
 	title: 'Iceberg SQL Catalog',
@@ -59,7 +66,7 @@ export const icebergSql = defineIntegration({
 	configSchema: sqlConfig,
 	requirements: ['pyiceberg[pyarrow,sql-postgres,sql-sqlite,s3fs,gcsfs,adlfs,hf]>=0.11'],
 	resolveRequirements: (config) =>
-		icebergRequirements(['pyarrow', 'sql-postgres', 'sql-sqlite'], config),
+		icebergRequirements(['pyarrow', ...sqlCatalogExtras(config.uri)], config),
 	uiHints: {
 		uri: { group: 'Connection', order: 1, widget: 'password' },
 		...commonUiHints,
@@ -126,7 +133,10 @@ export const icebergHive = defineIntegration({
 	configSchema: hiveConfig,
 	requirements: ['pyiceberg[pyarrow,hive,hive-kerberos,s3fs,gcsfs,adlfs,hf]>=0.11'],
 	resolveRequirements: (config) =>
-		icebergRequirements(['pyarrow', 'hive', 'hive-kerberos'], config),
+		icebergRequirements(
+			['pyarrow', 'hive', ...(config.kerberos.enabled ? ['hive-kerberos'] : [])],
+			config,
+		),
 	uiHints: {
 		uri: { group: 'Connection', order: 1 },
 		...commonUiHints,
@@ -169,7 +179,7 @@ const glueConfig = z.strictObject({
 	credentials: awsCredentialsSchema
 		.default({ method: 'ambient' })
 		.describe(
-			'Glue Catalog credentials only. When explicit, these override unified credentials for Glue calls.',
+			'Glue Catalog credentials only. When explicit, these override unified credentials for Glue calls. The catalog region uses the region field; PyIceberg exposes role assumption through unified credentials.',
 		),
 	unified_credentials: unifiedAwsCredentialsSchema.describe(
 		'Client credentials shared by Glue and S3 FileIO. Glue-specific and storage-specific credentials override these.',
@@ -264,7 +274,7 @@ const dynamodbConfig = z.strictObject({
 	credentials: awsCredentialsSchema
 		.default({ method: 'ambient' })
 		.describe(
-			'DynamoDB Catalog credentials only. When explicit, these override unified credentials for DynamoDB calls.',
+			'DynamoDB Catalog credentials only. When explicit, these override unified credentials for DynamoDB calls. The catalog region uses the region field; PyIceberg exposes role assumption through unified credentials.',
 		),
 	unified_credentials: unifiedAwsCredentialsSchema.describe(
 		'Client credentials shared by DynamoDB and S3 FileIO. DynamoDB-specific and storage-specific credentials override these.',

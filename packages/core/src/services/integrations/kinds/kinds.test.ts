@@ -561,6 +561,9 @@ describe('kind renders (golden)', () => {
 				}),
 			),
 		).toThrow(/HTTPS/);
+		expect(() => parse({ client_tags: [{ value: 'batch' }, { value: 'batch' }] })).toThrow(
+			/Duplicate client tag/,
+		);
 		expect(() =>
 			trino.validate?.(
 				parse({
@@ -580,6 +583,14 @@ describe('kind renders (golden)', () => {
 		expect(() =>
 			trino.validate?.(parse({ encoding: [{ value: 'json' }, { value: 'json' }] })),
 		).toThrow(/Duplicate spooling encoding/);
+	});
+
+	it('trino publishes client-tag value uniqueness', () => {
+		const properties = defaultRegistry().describe('trino').json_schema.properties as Record<
+			string,
+			Record<string, unknown>
+		>;
+		expect(properties.client_tags['x-unique-by']).toBe('value');
 	});
 
 	it('trino rejects invalid header names and line breaks before rendering', () => {
@@ -726,17 +737,19 @@ describe('kind renders (golden)', () => {
 	});
 
 	it('iceberg_rest rejects header injection and credential-shaped custom headers', () => {
-		for (const headers of [
-			{ 'X-Trace': 'safe\r\nAuthorization: Bearer injected' },
-			{ Authorization: 'Bearer plain-text-secret' },
-		]) {
-			const config = icebergRest.configSchema.parse({
-				uri: 'https://catalog.internal',
-				auth: { method: 'none' },
-				headers,
-			});
-			expect(() => icebergRest.validate?.(config)).toThrow(ValidationError);
-		}
+		const injected = icebergRest.configSchema.parse({
+			uri: 'https://catalog.internal',
+			auth: { method: 'none' },
+			headers: { 'X-Trace': 'safe\r\nAuthorization: Bearer injected' },
+		});
+		expect(() => icebergRest.render(input(injected, icebergRest))).toThrow(ValidationError);
+
+		const credential = icebergRest.configSchema.parse({
+			uri: 'https://catalog.internal',
+			auth: { method: 'none' },
+			headers: { Authorization: 'Bearer plain-text-secret' },
+		});
+		expect(() => icebergRest.validate?.(credential)).toThrow(ValidationError);
 	});
 
 	it('iceberg_rest rejects credentials and TLS material over cleartext http', () => {
@@ -950,28 +963,62 @@ describe('kind renders (golden)', () => {
 		['iceberg_glue', icebergGlue, 'glue'],
 		['iceberg_dynamodb', icebergDynamoDb, 'dynamodb'],
 	] as const)(
-		'%s gives service-specific credentials precedence over shared client credentials',
+		'%s renders catalog-specific and shared AWS credentials independently',
 		(_kind, def, prefix) => {
-			const config = def.configSchema.parse({
-				...(FIXTURES[def.kind] as Record<string, unknown>),
-				credentials: {
-					method: 'static',
-					access_key_id: 'SERVICE_KEY',
-					secret_access_key: 'service-secret',
-				},
-				unified_credentials: {
-					method: 'static',
-					access_key_id: 'CLIENT_KEY',
-					secret_access_key: 'client-secret',
-				},
-			});
-			const catalog = renderedCatalog(renderDefinition(def, config), 'prod');
-			expect(catalog).toMatchObject({
-				[`${prefix}.access-key-id`]: 'SERVICE_KEY',
-				[`${prefix}.secret-access-key`]: 'service-secret',
-				'client.access-key-id': 'CLIENT_KEY',
-				'client.secret-access-key': 'client-secret',
-			});
+			const serviceCredentials = {
+				method: 'static',
+				access_key_id: 'SERVICE_KEY',
+				secret_access_key: 'service-secret',
+			};
+			const clientCredentials = {
+				method: 'static',
+				access_key_id: 'CLIENT_KEY',
+				secret_access_key: 'client-secret',
+			};
+			const cases = [
+				[{ method: 'ambient' }, { method: 'none' }, {}],
+				[
+					serviceCredentials,
+					{ method: 'none' },
+					{
+						[`${prefix}.access-key-id`]: 'SERVICE_KEY',
+						[`${prefix}.secret-access-key`]: 'service-secret',
+					},
+				],
+				[
+					{ method: 'ambient' },
+					clientCredentials,
+					{
+						'client.access-key-id': 'CLIENT_KEY',
+						'client.secret-access-key': 'client-secret',
+					},
+				],
+				[
+					serviceCredentials,
+					clientCredentials,
+					{
+						[`${prefix}.access-key-id`]: 'SERVICE_KEY',
+						[`${prefix}.secret-access-key`]: 'service-secret',
+						'client.access-key-id': 'CLIENT_KEY',
+						'client.secret-access-key': 'client-secret',
+					},
+				],
+			] as const;
+			for (const [credentials, unifiedCredentials, expected] of cases) {
+				const config = def.configSchema.parse({
+					credentials,
+					unified_credentials: unifiedCredentials,
+				});
+				const catalog = renderedCatalog(renderDefinition(def, config), 'prod');
+				for (const key of [
+					`${prefix}.access-key-id`,
+					`${prefix}.secret-access-key`,
+					'client.access-key-id',
+					'client.secret-access-key',
+				]) {
+					expect(catalog[key], key).toBe(expected[key as keyof typeof expected]);
+				}
+			}
 		},
 	);
 
@@ -1187,6 +1234,27 @@ describe('kind renders (golden)', () => {
 		expect(icebergRest.resolveRequirements?.(rest)).toEqual([
 			'pyiceberg[pyarrow,rest-sigv4,s3fs]>=0.11',
 		]);
+
+		const sqlPostgres = icebergSql.configSchema.parse({
+			uri: 'postgresql+psycopg2://catalog:secret@db.internal/iceberg',
+		});
+		const sqlSqlite = icebergSql.configSchema.parse({ uri: 'sqlite:////tmp/iceberg.db' });
+		expect(icebergSql.resolveRequirements?.(sqlPostgres)).toEqual([
+			'pyiceberg[pyarrow,sql-postgres]>=0.11',
+		]);
+		expect(icebergSql.resolveRequirements?.(sqlSqlite)).toEqual([
+			'pyiceberg[pyarrow,sql-sqlite]>=0.11',
+		]);
+
+		const hive = icebergHive.configSchema.parse({ uri: 'thrift://hive.internal:9083' });
+		const hiveKerberos = icebergHive.configSchema.parse({
+			uri: 'thrift://hive.internal:9083',
+			kerberos: { enabled: true },
+		});
+		expect(icebergHive.resolveRequirements?.(hive)).toEqual(['pyiceberg[hive,pyarrow]>=0.11']);
+		expect(icebergHive.resolveRequirements?.(hiveKerberos)).toEqual([
+			'pyiceberg[hive,hive-kerberos,pyarrow]>=0.11',
+		]);
 	});
 
 	it('rejects hosts, URIs, and identifiers that could smuggle URL structure', () => {
@@ -1251,6 +1319,26 @@ describe('kind renders (golden)', () => {
 				},
 			}).success,
 		).toBe(false);
+	});
+
+	it('URL fields allow @ in paths but not in the authority', () => {
+		expect(
+			icebergRest.configSchema.safeParse({
+				...(FIXTURES.iceberg_rest as object),
+				uri: 'https://catalog.internal/users/alice@example.com',
+			}).success,
+		).toBe(true);
+		expect(
+			wandb.configSchema.safeParse({
+				...(FIXTURES.wandb as object),
+				base_url: 'https://api.example.com/users/alice@example.com',
+			}).success,
+		).toBe(true);
+		expect(
+			athena.configSchema.safeParse(
+				fixtureFor(athena, { s3_staging_dir: 's3://staging/users/alice@example.com' }),
+			).success,
+		).toBe(true);
 	});
 });
 

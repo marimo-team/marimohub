@@ -114,4 +114,19 @@ describe('integration schema contracts', () => {
 			},
 		]);
 	});
+
+	it('declares every cross-kind environment conflict in both directions', () => {
+		const claims = Object.entries(doc.paths).map(([path, item]) => ({
+			kind: path.split('/')[2],
+			env: (item['x-env'] as string[] | undefined) ?? [],
+			conflicts: (item['x-env-conflicts-with'] as string[] | undefined) ?? [],
+		}));
+		for (const left of claims) {
+			for (const right of claims) {
+				if (left.kind === right.kind || !left.env.some((name) => right.env.includes(name)))
+					continue;
+				expect(left.conflicts, `${left.kind} → ${right.kind}`).toContain(right.kind);
+			}
+		}
+	});
 });
