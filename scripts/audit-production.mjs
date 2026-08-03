@@ -4,8 +4,8 @@ const allowedAdvisories = new Map([
 	['GHSA-qwww-vcr4-c8h2', 'React Router unstable RSC APIs are not used by the marimohub SPA.'],
 ]);
 
-const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-const result = spawnSync(pnpm, ['audit', '--prod', '--json'], { encoding: 'utf8' });
+const vp = process.platform === 'win32' ? 'vp.exe' : 'vp';
+const result = spawnSync(vp, ['pm', 'audit', '--', '--prod', '--json'], { encoding: 'utf8' });
 if (result.error) throw result.error;
 
 let report;
