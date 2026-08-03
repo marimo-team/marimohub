@@ -7,7 +7,6 @@
  * state lives in object storage + compute — so this scales horizontally.
  */
 import { serve } from '@hono/node-server';
-import { serveStatic } from '@hono/node-server/serve-static';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createApi } from '@marimo-hub/api';
@@ -15,6 +14,7 @@ import { createFromEnv, isConfigError } from '@marimo-hub/config';
 import { startMaintenance, startSessionLifecycle } from './cron';
 import { logEvent } from './log';
 import { WideEventMetrics } from './metrics';
+import { serveStaticWithCache } from './staticCache';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 
 // Process-level safety net. A rejected promise with no catch handler — e.g. a
@@ -104,8 +104,8 @@ app.use('*', secureHeaders());
 // so they take precedence; everything else falls through to static assets, with
 // a single-page-app fallback to index.html.
 const staticRoot = process.env.MARIMOHUB_STATIC_ROOT ?? './public';
-app.use('/*', serveStatic({ root: staticRoot }));
-app.get('*', serveStatic({ path: `${staticRoot}/index.html` }));
+app.use('/*', serveStaticWithCache({ root: staticRoot }));
+app.get('*', serveStaticWithCache({ path: `${staticRoot}/index.html` }));
 
 // Maintenance + session-lifecycle loops — run on a single replica (the
 // marimohub-maintenance Deployment). The bucket-CAS leases inside are
