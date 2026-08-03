@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react-swc';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
@@ -11,7 +12,7 @@ export default defineConfig({
 	plugins: lazyPlugins(() => [react(), tailwindcss()]),
 	resolve: {
 		alias: {
-			'@': path.resolve(__dirname, './src'),
+			'@': path.resolve(fileURLToPath(new URL('.', import.meta.url)), './src'),
 		},
 	},
 	server: {
@@ -43,6 +44,7 @@ export default defineConfig({
 	// (lib/*) run fine here too. `setup.ts` wires jest-dom matchers + auto-cleanup.
 	test: {
 		environment: 'jsdom',
+		pool: 'threads',
 		setupFiles: ['./src/test/setup.ts'],
 		include: ['src/**/*.test.{ts,tsx}'],
 		// The root config excludes this package from its coverage run (the `@/`
