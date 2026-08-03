@@ -28,6 +28,8 @@
 			"matchDatasources": ["pypi"],
 			"matchPackageNames": ["marimo"],
 			"matchFileNames": ["images/marimo-sandbox/Dockerfile"],
+			"groupName": "marimo sandbox image",
+			"groupSlug": "marimo-sandbox",
 			"schedule": ["* 0-4 * * *"]
 		}
 	]
