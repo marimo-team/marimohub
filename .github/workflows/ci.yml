@@ -43,8 +43,18 @@ jobs:
 
       - run: vp check
       - run: vp run audit:prod
-      - run: vp run -r test
-      - run: vp run -r build
+
+      # Build resolves packages from source, not dist, so it's independent of the
+      # tests — run both at once. `--configLoader=runner`/`--pool=threads` cut the
+      # per-worker cold starts the old bare `vp run -r test` paid.
+      - name: Test and build
+        run: |
+          vp run -r test --configLoader=runner --pool=threads & test_pid=$!
+          vp run -r build & build_pid=$!
+          rc=0
+          wait $test_pid || rc=1
+          wait $build_pid || rc=1
+          exit $rc
 
       - name: Save Vite Task cache
         if: success() && github.event_name == 'push'
