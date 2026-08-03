@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import type { SandboxId } from '../../ids';
 import { paths } from '../../paths';
@@ -33,6 +33,10 @@ describe('ReconciliationService', () => {
 	const healthyId = createSandboxId();
 	const orphanId = createSandboxId();
 	const inflightId = createSandboxId();
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 
 	beforeEach(() => {
 		bucket = new MemoryBucket();

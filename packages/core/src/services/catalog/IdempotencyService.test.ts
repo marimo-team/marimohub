@@ -31,6 +31,31 @@ describe('IdempotencyService', () => {
 		expect(await svc.lookup('u1:POST /projects', 'k1')).toEqual({ data: { id: 'first' } });
 	});
 
+	it('replaces a corrupt record after treating lookup as a miss', async () => {
+		const bucket = new MemoryBucket();
+		const svc = new IdempotencyService(bucket);
+		await svc.record('u1:POST /projects', 'k1', { id: 'first' });
+		const { objects } = await bucket.list({ prefix: paths.idempotencyPrefix });
+		await bucket.put(objects[0].key, '{"secret":"do-not-log"');
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		try {
+			expect(await svc.lookup('u1:POST /projects', 'k1')).toBeNull();
+			await svc.record('u1:POST /projects', 'k1', { id: 'recovered' });
+			expect(await svc.lookup('u1:POST /projects', 'k1')).toEqual({
+				data: { id: 'recovered' },
+			});
+			expect(
+				log.mock.calls.some((call) =>
+					String(call[0]).includes('corrupt_idempotency_record_replaced'),
+				),
+			).toBe(true);
+			expect(log.mock.calls.map((call) => String(call[0])).join('\n')).not.toContain('do-not-log');
+		} finally {
+			log.mockRestore();
+		}
+	});
+
 	it('prune deletes records past the retention window and keeps recent ones', async () => {
 		vi.useFakeTimers();
 		const bucket = new MemoryBucket();

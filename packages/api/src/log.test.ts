@@ -118,4 +118,21 @@ describe('bestEffort', () => {
 		});
 		expect(line).not.toContain('do-not-log');
 	});
+
+	it('does not let context fields override reserved event fields', async () => {
+		const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+		await bestEffort(
+			'audit_append',
+			{ level: 'info', event: 'spoofed', operation: 'spoofed', error: 'spoofed', safe: true },
+			() => Promise.reject(new Error('hidden')),
+		);
+
+		expect(JSON.parse(spy.mock.calls[0]?.[0] as string)).toMatchObject({
+			level: 'error',
+			event: 'best_effort_operation_failed',
+			operation: 'audit_append',
+			safe: true,
+			error: { error_name: 'Error' },
+		});
+	});
 });

@@ -701,9 +701,19 @@ export class NotebookService {
 			result.delimitedPrefixes,
 			BUCKET_SCAN_CONCURRENCY,
 			async (pfx) => {
-				const obj = await this.bucket.get(`${pfx}version.json`);
+				const key = `${pfx}version.json`;
+				const obj = await this.bucket.get(key);
 				if (!obj) return; // listed-then-deleted race; skip rather than fail.
-				return readStored(VersionSchema, obj, `${pfx}version.json`);
+				try {
+					return await readStored(VersionSchema, obj, key);
+				} catch (err) {
+					logOperationalError(
+						'stored_object_skipped',
+						{ operation: 'notebook.version_list', object: key },
+						err,
+					);
+					return;
+				}
 			},
 		);
 		return fetched.filter((v): v is Version => v !== undefined);

@@ -183,9 +183,9 @@ export class SyncedNotebookService {
 		const nb = paths.project(projectId).notebook(notebookId);
 		const obj = await this.bucket.get(nb.integrationSyncToken);
 		if (!obj) return false;
+		let record;
 		try {
-			const record = await readStored(SyncTokenRecordSchema, obj, nb.integrationSyncToken);
-			return await verifySyncTokenRecord(record, token);
+			record = await readStored(SyncTokenRecordSchema, obj, nb.integrationSyncToken);
 		} catch (err) {
 			logOperationalError(
 				'stored_object_skipped',
@@ -194,6 +194,7 @@ export class SyncedNotebookService {
 			);
 			return false;
 		}
+		return verifySyncTokenRecord(record, token);
 	}
 
 	async sync(

@@ -58,6 +58,8 @@ export const CURRENT_VERSION_VERSION = 1;
 /** Current version stamped onto newly-written events. */
 export const CURRENT_EVENT_VERSION = 1;
 
+const MAX_STORED_OBJECT_ISSUES = 20;
+
 /**
  * Parse an object read from storage, turning a schema mismatch into a labeled
  * error. Diagnostics retain field paths and issue codes, but not stored values
@@ -87,7 +89,7 @@ export function parseStored<T>(schema: z.ZodType<T>, value: unknown, what: strin
 	const result = schema.safeParse(value);
 	if (result.success) return result.data;
 	throw new StoredObjectError(what, 'schema_mismatch', {
-		issues: result.error.issues.map((issue) => ({
+		issues: result.error.issues.slice(0, MAX_STORED_OBJECT_ISSUES).map((issue) => ({
 			path: issue.path.map(String).join('.'),
 			code: issue.code,
 		})),

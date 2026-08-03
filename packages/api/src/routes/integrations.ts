@@ -38,25 +38,7 @@ import {
 	paginate,
 	PaginationQuery,
 } from '../pagination';
-import { bestEffort } from '../log';
-
-function appendAudit(
-	request: { requestId?: string; method: string; path: string; userId: string },
-	event: string,
-	action: () => Promise<void>,
-): Promise<void> {
-	return bestEffort(
-		'audit_append',
-		{
-			request_id: request.requestId ?? null,
-			method: request.method,
-			path: request.path,
-			user: request.userId,
-			audit_event: event,
-		},
-		action,
-	);
-}
+import { appendAudit } from '../log';
 
 const IntegrationIdSchema = z.string().regex(IntegrationId.regex).refine(IntegrationId.is);
 const IntegrationNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);

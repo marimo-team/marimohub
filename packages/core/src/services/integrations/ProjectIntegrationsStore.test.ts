@@ -546,6 +546,28 @@ describe('ProjectIntegrationsStore', () => {
 		expect(await store.list(pid)).toEqual([]);
 	});
 
+	it('deletes a malformed head and logs without its bytes', async () => {
+		const store = makeStore(bucket);
+		const created = await store.create(
+			pid,
+			{ kind: 'echo', name: 'prod', config: { token: 't' } },
+			ACTOR,
+		);
+		const integrationPaths = paths.project(pid).integration(created.id);
+		await bucket.put(integrationPaths.head, '{"secret":"do-not-log"');
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		try {
+			await expect(store.delete(pid, created.id)).resolves.toBe(true);
+			expect(await bucket.list({ prefix: integrationPaths.base })).toMatchObject({ objects: [] });
+			const line = log.mock.calls[0]?.[0] as string;
+			expect(line).toContain('corrupt_integration_head_deleted');
+			expect(line).not.toContain('do-not-log');
+		} finally {
+			log.mockRestore();
+		}
+	});
+
 	it('resolveForSession renders enabled instances only; none → undefined', async () => {
 		const store = makeStore(bucket);
 		expect(await store.resolveForSession(pid, renderContext(createSessionId()))).toBeUndefined();

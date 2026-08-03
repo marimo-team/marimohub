@@ -12,11 +12,11 @@ function safeError(err: unknown): Record<string, unknown> {
 	const out: Record<string, unknown> = { name: value.name };
 	for (const key of ['code', 'status', 'operation', 'reason', 'object', 'cause_name'] as const) {
 		const field = value[key];
-		if (typeof field === 'number') out[key] = field;
+		if (typeof field === 'number' && Number.isFinite(field)) out[key] = field;
 		if (typeof field === 'string' && field.length <= 256) out[key] = field;
 	}
 	if (Array.isArray(value.issues)) {
-		out.issues = value.issues.map((issue) => ({
+		out.issues = value.issues.slice(0, 20).map((issue) => ({
 			path: typeof issue.path === 'string' ? issue.path : undefined,
 			code: typeof issue.code === 'string' ? issue.code : undefined,
 		}));
@@ -30,12 +30,14 @@ export function logOperationalError(
 	fields: Record<string, unknown>,
 	err: unknown,
 ): void {
+	const context = { ...fields };
+	for (const key of ['ts', 'level', 'event', 'error']) delete context[key];
 	console.error(
 		JSON.stringify({
+			...context,
 			ts: new Date().toISOString(),
 			level: 'error',
 			event,
-			...fields,
 			error: safeError(err),
 		}),
 	);

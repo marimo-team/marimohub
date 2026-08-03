@@ -13,6 +13,7 @@ import type { IntegrationId, ProjectId, UserId } from '../../ids';
 import { createIntegrationId } from '../../ids';
 import { paths } from '../../paths';
 import type { IntegrationPaths } from '../../paths';
+import { logOperationalError } from '../../operationalLog';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -42,6 +43,7 @@ import {
 	parseStored,
 	readStored,
 	readStoredJson,
+	StoredObjectError,
 } from '../../schema';
 import type { IntegrationRecord, IntegrationVersionRecord } from '../../schema';
 import { listAllObjects } from '../catalog/storage';
@@ -493,7 +495,12 @@ class ScopedIntegrationsStore {
 			if (err instanceof StaleHeadError) throw err.precondition;
 			// A head that cannot be parsed has no version to check and nothing to
 			// tombstone, but must still be removable — sweep its objects unguarded.
-			if (!(err instanceof ValidationError)) throw err;
+			if (!(err instanceof ValidationError || err instanceof StoredObjectError)) throw err;
+			logOperationalError(
+				'corrupt_integration_head_deleted',
+				{ operation: 'integration.delete', object: integrationPaths.head },
+				err,
+			);
 			existed = true;
 		}
 		const strays = (await listAllObjects(this.bucket, integrationPaths.base))

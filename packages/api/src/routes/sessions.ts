@@ -49,7 +49,7 @@ import {
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
-import { bestEffort, errorMetadata, logEvent } from '../log';
+import { appendAudit, errorMetadata, logEvent } from '../log';
 import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
 	assertSessionAccess,
@@ -622,15 +622,9 @@ app.openapi(takeoverEditorSession, async (c) => {
 	});
 	let failed = false;
 	const audit = (event: string) =>
-		bestEffort(
-			'audit_append',
-			{
-				request_id: c.get('requestId') ?? null,
-				method: c.req.method,
-				path: c.req.path,
-				user: user.id,
-				audit_event: event,
-			},
+		appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			event,
 			() =>
 				deps.services.events.append({
 					event,
@@ -815,6 +809,7 @@ app.openapi(createSession, async (c) => {
 			project_id: pid,
 			notebook_id: nid,
 			reason: 'selection_unavailable',
+			recovered: true,
 		}),
 	);
 	const retryWithDefault = mode === 'edit' && body?.compute_profile === 'default';
@@ -831,6 +826,7 @@ app.openapi(createSession, async (c) => {
 				project_id: pid,
 				notebook_id: nid,
 				reason: 'selection_unavailable',
+				recovered: true,
 			}),
 	);
 	const provisioner = new SandboxProvisioner(compute);
@@ -1325,15 +1321,9 @@ app.openapi(createSession, async (c) => {
 	// whole admitted audience, so who started it belongs in the project's event log.
 	// Best-effort like every audit append.
 	if (MODE_POLICY[mode].singleton) {
-		await bestEffort(
-			'audit_append',
-			{
-				request_id: c.get('requestId') ?? null,
-				method: c.req.method,
-				path: c.req.path,
-				user: user.id,
-				audit_event: 'app.start',
-			},
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			'app.start',
 			() =>
 				deps.services.events.append({
 					event: 'app.start',

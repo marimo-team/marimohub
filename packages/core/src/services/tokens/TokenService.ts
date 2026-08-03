@@ -1,7 +1,7 @@
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import { NotFoundError, ResourceExhaustedError } from '../../errors';
+import { NotFoundError, PreconditionFailedError, ResourceExhaustedError } from '../../errors';
 import { createTokenId, TokenId } from '../../ids';
 import type { UserId } from '../../ids';
 import { timingSafeEqual } from '../../internal/hmac';
@@ -280,6 +280,7 @@ export class TokenService {
 			entry.record = updated;
 			entry.etag = written.etag;
 		} catch (err) {
+			if (err instanceof PreconditionFailedError) return;
 			logOperationalError(
 				'token_usage_touch_failed',
 				{ operation: 'token.touch', object: paths.token(entry.record.id) },

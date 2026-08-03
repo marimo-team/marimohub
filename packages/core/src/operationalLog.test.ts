@@ -45,4 +45,24 @@ describe('logOperationalError', () => {
 			},
 		});
 	});
+
+	it('caps issue metadata, omits non-finite numbers, and protects reserved fields', () => {
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const err = Object.assign(new Error('hidden'), {
+			status: Number.POSITIVE_INFINITY,
+			issues: Array.from({ length: 50 }, (_, i) => ({ path: `items.${i}`, code: 'invalid_type' })),
+		});
+
+		logOperationalError(
+			'stored_object_skipped',
+			{ level: 'info', event: 'spoofed', error: 'spoofed' },
+			err,
+		);
+
+		const line = JSON.parse(spy.mock.calls[0]?.[0] as string) as Record<string, any>;
+		expect(line.level).toBe('error');
+		expect(line.event).toBe('stored_object_skipped');
+		expect(line.error.status).toBeUndefined();
+		expect(line.error.issues).toHaveLength(20);
+	});
 });

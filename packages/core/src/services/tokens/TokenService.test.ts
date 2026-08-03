@@ -244,9 +244,15 @@ describe('TokenService', () => {
 				await bucket.delete(key);
 				return { id, email: 'owner@x.io', name: 'Owner', updated_at: '2026-07-24T00:00:00.000Z' };
 			});
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-			expect(await tokens.verify(token)).toBeTruthy(); // this call still passes...
-			expect(await bucket.get(key)).toBeNull(); // ...but the object stays deleted.
+			try {
+				expect(await tokens.verify(token)).toBeTruthy(); // this call still passes...
+				expect(await bucket.get(key)).toBeNull(); // ...but the object stays deleted.
+				expect(log).not.toHaveBeenCalled();
+			} finally {
+				log.mockRestore();
+			}
 		});
 
 		it('serves from the positive cache within the TTL, refreshes past it', async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { HTTPException } from 'hono/http-exception';
 import {
 	ConflictError,
@@ -10,6 +10,10 @@ import {
 	UnavailableError,
 } from '@marimo-hub/core';
 import { createInitializedBucket, createTestApi, expectPage } from './testing';
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 // Each row drives exactly one branch of the real `createApi` onError handler.
 // The message is the class name so the snapshot stays readable and deterministic.

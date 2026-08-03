@@ -23,7 +23,7 @@ export function errorMetadata(err: unknown): Record<string, string | number> {
 		['error_operation', e.operation],
 	] as const) {
 		// Enum-ish identifiers only — anything else is free-form text of unknown origin.
-		if (typeof value === 'number') out[key] = value;
+		if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
 		if (typeof value === 'string' && value.length <= 64) out[key] = value;
 	}
 	return out;
@@ -37,14 +37,34 @@ export async function bestEffort(
 	try {
 		await action();
 	} catch (err) {
+		const context = { ...fields };
+		for (const key of ['level', 'event', 'operation', 'error']) delete context[key];
 		logEvent({
+			...context,
 			level: 'error',
 			event: 'best_effort_operation_failed',
 			operation,
-			...fields,
 			error: errorMetadata(err),
 		});
 	}
+}
+
+export function appendAudit(
+	request: { requestId?: string; method: string; path: string; userId: string },
+	event: string,
+	action: () => Promise<void>,
+): Promise<void> {
+	return bestEffort(
+		'audit_append',
+		{
+			request_id: request.requestId ?? null,
+			method: request.method,
+			path: request.path,
+			user: request.userId,
+			audit_event: event,
+		},
+		action,
+	);
 }
 
 /**
@@ -80,7 +100,7 @@ export function describeError(err: unknown, depth = 3): Record<string, unknown> 
 	// ZodError (duck-typed): surface the failing field paths so a corrupted stored
 	// object is identifiable from the log instead of a bare stack.
 	if (Array.isArray(e.issues)) {
-		out.issues = e.issues.map((i) => ({
+		out.issues = e.issues.slice(0, 20).map((i) => ({
 			path: Array.isArray(i.path) ? i.path.join('.') : i.path,
 			...(i.code ? { code: i.code } : {}),
 			...(i.message ? { message: i.message } : {}),

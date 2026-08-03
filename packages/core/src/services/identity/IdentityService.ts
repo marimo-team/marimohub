@@ -110,16 +110,20 @@ export class IdentityService {
 		}
 		// Single-flight: concurrent misses share one scan instead of each running
 		// their own list + N GETs.
-		this.refreshing ??= this.refresh().finally(() => {
-			this.refreshing = null;
-		});
+		if (!this.refreshing) {
+			this.refreshing = this.refresh().finally(() => {
+				this.refreshing = null;
+			});
+			if (this.directory) {
+				this.refreshing.catch((err) => {
+					logOperationalError('identity_directory_refresh_failed', {}, err);
+				});
+			}
+		}
 		if (this.directory) {
 			// Stale-while-revalidate: 30s staleness is already accepted, so don't
 			// make a keystroke-driven search pay the full rescan latency. A failed
 			// background refresh keeps serving the stale entries.
-			this.refreshing.catch((err) => {
-				logOperationalError('identity_directory_refresh_failed', {}, err);
-			});
 			return this.directory.entries;
 		}
 		return this.refreshing;

@@ -60,6 +60,7 @@ export class IdempotencyService {
 
 	/** Record a first-use response. Best-effort: a lost create-if-absent race is ignored. */
 	async record(scope: string, key: string, data: unknown): Promise<void> {
+		const objectKey = paths.idempotencyKey(await digestKey(scope, key));
 		const record: IdempotencyRecord = {
 			schema_version: 1,
 			scope,
@@ -67,13 +68,27 @@ export class IdempotencyService {
 			created_at: new Date().toISOString(),
 		};
 		try {
-			await this.bucket.put(
-				paths.idempotencyKey(await digestKey(scope, key)),
-				JSON.stringify(record),
-				{ onlyIfNotExists: true },
-			);
+			await this.bucket.put(objectKey, JSON.stringify(record), { onlyIfNotExists: true });
 		} catch (err) {
 			if (!(err instanceof PreconditionFailedError)) throw err;
+			const existing = await this.bucket.get(objectKey);
+			if (!existing) return;
+			try {
+				await readStored(IdempotencyRecordSchema, existing, objectKey);
+			} catch (readErr) {
+				try {
+					await this.bucket.put(objectKey, JSON.stringify(record), {
+						onlyIfEtagMatches: existing.etag,
+					});
+					logOperationalError(
+						'corrupt_idempotency_record_replaced',
+						{ operation: 'idempotency.record', object: objectKey },
+						readErr,
+					);
+				} catch (replaceErr) {
+					if (!(replaceErr instanceof PreconditionFailedError)) throw replaceErr;
+				}
+			}
 		}
 	}
 

@@ -72,6 +72,20 @@ describe('parseStored', () => {
 			expect(JSON.stringify(err)).not.toContain('secret bytes');
 		}
 	});
+
+	it('caps retained schema issues', () => {
+		const many = z.array(z.number());
+		try {
+			parseStored(
+				many,
+				Array.from({ length: 50 }, () => 'bad'),
+				'_system/many.json',
+			);
+			expect.unreachable('should have thrown');
+		} catch (err) {
+			expect((err as { issues: unknown[] }).issues).toHaveLength(20);
+		}
+	});
 });
 
 describe('id schemas', () => {
