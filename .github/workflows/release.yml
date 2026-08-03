@@ -157,7 +157,7 @@ jobs:
     steps:
       - name: Notify Slack - Release Success
         if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
+        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}
           webhook-type: incoming-webhook
@@ -177,7 +177,7 @@ jobs:
 
       - name: Notify Slack - Release Failed
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
-        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
+        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}
           webhook-type: incoming-webhook
