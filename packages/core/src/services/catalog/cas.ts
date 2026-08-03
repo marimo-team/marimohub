@@ -1,6 +1,8 @@
 import type { Bucket } from '../../ports/bucket';
 import { sleep } from '../../duration';
 import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
+import { logOperationalError } from '../../operationalLog';
+import { readStoredJson } from '../../schema';
 
 // Compare-and-swap helpers for the object store — one tested retry loop shared by
 // the catalog pointer and session records.
@@ -98,8 +100,13 @@ export async function acquireSingletonClaim(
 		}
 		let current: string | null | undefined;
 		try {
-			current = cfg.parseHolder(await existing.json());
-		} catch {
+			current = cfg.parseHolder(await readStoredJson(existing, cfg.key));
+		} catch (err) {
+			logOperationalError(
+				'corrupt_singleton_claim_replaced',
+				{ operation: 'singleton_claim.acquire', object: cfg.key },
+				err,
+			);
 			// Corrupt claim — stale by definition; replaced below.
 		}
 		if (current === holder) return { acquired: true, holder };
@@ -129,7 +136,7 @@ export async function releaseSingletonClaim(
 	try {
 		const existing = await cfg.bucket.get(cfg.key);
 		if (!existing) return;
-		if (cfg.parseHolder(await existing.json()) !== holder) return;
+		if (cfg.parseHolder(await readStoredJson(existing, cfg.key)) !== holder) return;
 		await cfg.bucket.put(cfg.key, cfg.serialize(null), { onlyIfEtagMatches: existing.etag });
 	} catch (err) {
 		// A losing CAS means someone re-acquired underneath us — exactly the claim
@@ -138,7 +145,13 @@ export async function releaseSingletonClaim(
 		// reconciliation pass survives it, but never silently.
 		if (err instanceof PreconditionFailedError) return;
 		if (cfg.onReleaseError) cfg.onReleaseError(err);
-		else console.warn(`releaseSingletonClaim: ${cfg.key}: ${String(err)}`);
+		else {
+			logOperationalError(
+				'singleton_claim_release_failed',
+				{ operation: 'singleton_claim.release', object: cfg.key },
+				err,
+			);
+		}
 	}
 }
 
@@ -157,7 +170,7 @@ export async function mutateObject<T>(
 	return withCasRetry(async () => {
 		const obj = await bucket.get(key);
 		if (!obj) throw options.notFound?.() ?? new NotFoundError(`Object ${key} not found`);
-		const current = parse(await obj.json());
+		const current = parse(await readStoredJson(obj, key));
 		const next = apply(current);
 		if (!next) return current;
 		await bucket.put(key, JSON.stringify(next), { onlyIfEtagMatches: obj.etag });

@@ -3,7 +3,7 @@ import { Millis } from '../../duration';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
-import { CatalogSchema } from '../../schema';
+import { CatalogSchema, readStored } from '../../schema';
 import { listAllObjects } from './storage';
 
 // Every commit writes a new catalog snapshot; at ~20 writes/day that is
@@ -54,7 +54,7 @@ export class MaintenanceService {
 		const catalogObj = await this.bucket.get(paths.catalog);
 		if (!catalogObj) return 0; // uninitialized — nothing to prune
 
-		const catalog = CatalogSchema.parse(await catalogObj.json());
+		const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
 		const protectedKeys = new Set<string>([paths.snapshot(catalog.current_snapshot_id)]);
 		if (catalog.previous_snapshot_id) {
 			protectedKeys.add(paths.snapshot(catalog.previous_snapshot_id));

@@ -4,7 +4,10 @@ import { paths } from '../../paths';
 import { IdempotencyService } from './IdempotencyService';
 
 describe('IdempotencyService', () => {
-	afterEach(() => vi.useRealTimers());
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
 
 	it('returns null before a key is recorded, the data after', async () => {
 		const svc = new IdempotencyService(new MemoryBucket());
@@ -29,6 +32,61 @@ describe('IdempotencyService', () => {
 		await svc.record('u1:POST /projects', 'k1', { id: 'second' });
 
 		expect(await svc.lookup('u1:POST /projects', 'k1')).toEqual({ data: { id: 'first' } });
+	});
+
+	it('replaces a corrupt record after treating lookup as a miss', async () => {
+		const bucket = new MemoryBucket();
+		const svc = new IdempotencyService(bucket);
+		await svc.record('u1:POST /projects', 'k1', { id: 'first' });
+		const { objects } = await bucket.list({ prefix: paths.idempotencyPrefix });
+		await bucket.put(objects[0].key, '{"secret":"do-not-log"');
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		try {
+			expect(await svc.lookup('u1:POST /projects', 'k1')).toBeNull();
+			await svc.record('u1:POST /projects', 'k1', { id: 'recovered' });
+			expect(await svc.lookup('u1:POST /projects', 'k1')).toEqual({
+				data: { id: 'recovered' },
+			});
+			expect(
+				log.mock.calls.some((call) =>
+					String(call[0]).includes('corrupt_idempotency_record_replaced'),
+				),
+			).toBe(true);
+			expect(log.mock.calls.map((call) => String(call[0])).join('\n')).not.toContain('do-not-log');
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('keeps repair read failures non-fatal after a lost create race', async () => {
+		const bucket = new MemoryBucket();
+		const svc = new IdempotencyService(bucket);
+		await svc.record('u1:POST /projects', 'k1', { id: 'first' });
+		vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('transient read failure'));
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await expect(svc.record('u1:POST /projects', 'k1', { id: 'second' })).resolves.toBeUndefined();
+		expect(log.mock.calls[0]?.[0]).toContain('idempotency_record_repair_failed');
+	});
+
+	it('keeps repair write failures non-fatal after a corrupt-record race', async () => {
+		const bucket = new MemoryBucket();
+		const svc = new IdempotencyService(bucket);
+		await svc.record('u1:POST /projects', 'k1', { id: 'first' });
+		const { objects } = await bucket.list({ prefix: paths.idempotencyPrefix });
+		await bucket.put(objects[0].key, '{not-json');
+		const originalPut = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation((key, value, options) => {
+			if (options?.onlyIfEtagMatches) return Promise.reject(new Error('transient write failure'));
+			return originalPut(key, value, options);
+		});
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await expect(
+			svc.record('u1:POST /projects', 'k1', { id: 'recovered' }),
+		).resolves.toBeUndefined();
+		expect(log.mock.calls[0]?.[0]).toContain('idempotency_record_repair_failed');
 	});
 
 	it('prune deletes records past the retention window and keeps recent ones', async () => {

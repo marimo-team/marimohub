@@ -58,17 +58,65 @@ export const CURRENT_VERSION_VERSION = 1;
 /** Current version stamped onto newly-written events. */
 export const CURRENT_EVENT_VERSION = 1;
 
+const MAX_STORED_OBJECT_ISSUES = 20;
+
 /**
- * Parse an object read from storage, turning a schema mismatch into a clearly
- * labeled error. A bare `ZodError` reaching the request path becomes an opaque
- * 500; wrapping it with `what` (the object's identity) and keeping the `ZodError`
- * as `cause` means the server log says exactly which stored object is corrupted —
- * while the client still gets the standard sanitized 500.
+ * Parse an object read from storage, turning a schema mismatch into a labeled
+ * error. Diagnostics retain field paths and issue codes, but not stored values
+ * or validator messages.
  */
+export class StoredObjectError extends Error {
+	readonly reason: 'invalid_json' | 'schema_mismatch';
+	readonly object: string;
+	readonly issues?: { path: string; code: string }[];
+	readonly cause_name?: string;
+
+	constructor(
+		what: string,
+		reason: 'invalid_json' | 'schema_mismatch',
+		options?: { issues?: { path: string; code: string }[]; causeName?: string },
+	) {
+		super(`Corrupted stored object: ${what}`);
+		this.name = 'StoredObjectError';
+		this.object = what;
+		this.reason = reason;
+		this.issues = options?.issues;
+		this.cause_name = options?.causeName;
+	}
+}
+
 export function parseStored<T>(schema: z.ZodType<T>, value: unknown, what: string): T {
 	const result = schema.safeParse(value);
 	if (result.success) return result.data;
-	throw new Error(`Corrupted stored object: ${what}`, { cause: result.error });
+	throw new StoredObjectError(what, 'schema_mismatch', {
+		issues: result.error.issues.slice(0, MAX_STORED_OBJECT_ISSUES).map((issue) => ({
+			path: issue.path.map(String).join('.'),
+			code: issue.code,
+		})),
+	});
+}
+
+export async function readStored<T>(
+	schema: z.ZodType<T>,
+	body: { json(): Promise<unknown> },
+	what: string,
+): Promise<T> {
+	return parseStored(schema, await readStoredJson(body, what), what);
+}
+
+export async function readStoredJson(
+	body: { json(): Promise<unknown> },
+	what: string,
+): Promise<unknown> {
+	let value: unknown;
+	try {
+		value = await body.json();
+	} catch (err) {
+		throw new StoredObjectError(what, 'invalid_json', {
+			causeName: err instanceof Error ? err.name : `non-error(${typeof err})`,
+		});
+	}
+	return value;
 }
 
 // --- ID schemas ---

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import type { SandboxId } from '../../ids';
 import { paths } from '../../paths';
@@ -33,6 +33,10 @@ describe('ReconciliationService', () => {
 	const healthyId = createSandboxId();
 	const orphanId = createSandboxId();
 	const inflightId = createSandboxId();
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 
 	beforeEach(() => {
 		bucket = new MemoryBucket();
@@ -274,6 +278,25 @@ describe('ReconciliationService', () => {
 			first_seen: number;
 		}>();
 		expect(marker.first_seen).toBeLessThanOrEqual(Date.now());
+	});
+
+	it('Rule 3: replaces malformed marker JSON and logs without its bytes', async () => {
+		compute.active = [{ id: inflightId }];
+		await bucket.put(paths.reconcileOrphan(inflightId), '{"secret":"do-not-log"');
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		const result = await reconciler.reconcile({ orphanGraceMs: 1_000 });
+
+		expect(result.orphansReaped).toBe(0);
+		const marker = await (await bucket.get(paths.reconcileOrphan(inflightId)))!.json<{
+			first_seen: number;
+		}>();
+		expect(marker.first_seen).toBeLessThanOrEqual(Date.now());
+		const line = log.mock.calls.find((call) =>
+			String(call[0]).includes('corrupt_orphan_marker_replaced'),
+		)?.[0] as string;
+		expect(line).toContain('invalid_json');
+		expect(line).not.toContain('do-not-log');
 	});
 
 	it('Rule 1: force-destroys and still counts reclaimed when teardown throws', async () => {

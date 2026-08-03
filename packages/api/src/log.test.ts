@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { describeError, logEvent } from './log';
+import { bestEffort, describeError, logEvent } from './log';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -97,5 +97,42 @@ describe('describeError', () => {
 			{ path: 'meta.title', message: 'Required' },
 			{ path: 'status', message: 'Invalid enum value' },
 		]);
+	});
+});
+
+describe('bestEffort', () => {
+	it('logs failures without arbitrary error messages', async () => {
+		const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+		await bestEffort('audit_append', { audit_event: 'integration.create' }, () =>
+			Promise.reject(new Error('bucket credential do-not-log')),
+		);
+
+		expect(spy).toHaveBeenCalledOnce();
+		const line = spy.mock.calls[0]?.[0] as string;
+		expect(JSON.parse(line)).toMatchObject({
+			level: 'error',
+			event: 'best_effort_operation_failed',
+			operation: 'audit_append',
+			audit_event: 'integration.create',
+			error: { error_name: 'Error' },
+		});
+		expect(line).not.toContain('do-not-log');
+	});
+
+	it('does not let context fields override reserved event fields', async () => {
+		const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+		await bestEffort(
+			'audit_append',
+			{ level: 'info', event: 'spoofed', operation: 'spoofed', error: 'spoofed', safe: true },
+			() => Promise.reject(new Error('hidden')),
+		);
+
+		expect(JSON.parse(spy.mock.calls[0]?.[0] as string)).toMatchObject({
+			level: 'error',
+			event: 'best_effort_operation_failed',
+			operation: 'audit_append',
+			safe: true,
+			error: { error_name: 'Error' },
+		});
 	});
 });

@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	AesGcmSecretCodec,
 	defaultRegistry,
+	IntegrationId,
 	OrgIntegrationsStore,
+	paths,
+	ProjectId,
 	ProjectIntegrationsStore,
 } from '@marimo-hub/core';
 import type { UserId } from '@marimo-hub/core';
@@ -105,6 +108,31 @@ describe('Integrations routes', () => {
 		expect(JSON.stringify(events)).not.toContain('sup3r-secret');
 	});
 
+	it('returns a sanitized 500 and logs safe diagnostics for malformed stored JSON', async () => {
+		const pid = await createProject();
+		const created = await createPg(pid);
+		const key = paths
+			.project(ProjectId.parse(pid))
+			.integration(IntegrationId.parse(created.id)).head;
+		await bucket.put(key, '{"password":"stored-secret-do-not-log"');
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+		const res = await request('GET', `/projects/${pid}/integrations/${created.id}`);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(res.status).toBe(500);
+		expect(body).toMatchObject({
+			success: false,
+			error: { code: 'INTERNAL_ERROR', message: 'Internal server error' },
+		});
+		expect(JSON.stringify(body)).not.toContain(key);
+		expect(JSON.stringify(body)).not.toContain('stored-secret-do-not-log');
+		const line = log.mock.calls[0]?.[0] as string;
+		expect(line).toContain('StoredObjectError');
+		expect(line).toContain('invalid_json');
+		expect(line).toContain(key);
+		expect(line).not.toContain('stored-secret-do-not-log');
+	});
+
 	it('update with config appends a version; keep-marker preserves the secret', async () => {
 		const pid = await createProject();
 		const created = await createPg(pid);
@@ -143,6 +171,29 @@ describe('Integrations routes', () => {
 		);
 		expect(events.map((event) => event.event)).toContain('integration.update');
 		expect(JSON.stringify(events)).not.toContain(replacement);
+	});
+
+	it('keeps a committed write successful and logs when its audit append fails', async () => {
+		const pid = await createProject();
+		const local = createTestApi({ bucket, userId: ACTOR, deps: integrationsDeps(bucket) });
+		vi.spyOn(local.deps.services.events, 'append').mockRejectedValue(
+			new Error('storage credential do-not-log'),
+		);
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+		const res = await local.request('POST', `/projects/${pid}/integrations`, {
+			kind: 'postgres',
+			name: 'audit-failure',
+			config: PG_CONFIG,
+		});
+
+		expect(res.status).toBe(201);
+		const line = log.mock.calls.find((call) =>
+			String(call[0]).includes('audit_append'),
+		)?.[0] as string;
+		expect(line).toContain('best_effort_operation_failed');
+		expect(line).toContain('integration.create');
+		expect(line).not.toContain('do-not-log');
 	});
 
 	it('version history paginates newest-first with a cursor', async () => {

@@ -12,6 +12,7 @@ import {
 	EventSchema,
 	NotebookIdSchema,
 	parseStored,
+	readStored,
 	ProjectIdSchema,
 	ProjectMemberSchema,
 	ProjectSchema,
@@ -40,16 +41,49 @@ describe('parseStored', () => {
 		expect(parseStored(schema, { a: 1 }, 'thing')).toEqual({ a: 1 });
 	});
 
-	it('throws a labeled error that keeps the ZodError as cause', () => {
+	it('throws a labeled error with value-free schema diagnostics', () => {
 		try {
-			parseStored(schema, { a: 'nope' }, '_system/catalog.json');
+			parseStored(schema, { a: 'do-not-log-this' }, '_system/catalog.json');
 			expect.unreachable('should have thrown');
 		} catch (err) {
 			expect(err).toBeInstanceOf(Error);
 			expect((err as Error).message).toBe('Corrupted stored object: _system/catalog.json');
-			// The ZodError is preserved so logs can surface the failing field path.
-			expect((err as Error).cause).toBeDefined();
-			expect((err as { cause: { issues: unknown[] } }).cause.issues).toHaveLength(1);
+			expect(err).toMatchObject({
+				reason: 'schema_mismatch',
+				object: '_system/catalog.json',
+				issues: [{ path: 'a', code: 'invalid_type' }],
+			});
+			expect(JSON.stringify(err)).not.toContain('do-not-log-this');
+		}
+	});
+
+	it('labels invalid JSON without retaining parser text or bytes', async () => {
+		const body = {
+			json: () => Promise.reject(new SyntaxError('secret bytes at position 7')),
+		};
+		await expect(readStored(schema, body, 'projects/x/project.json')).rejects.toMatchObject({
+			reason: 'invalid_json',
+			object: 'projects/x/project.json',
+			cause_name: 'SyntaxError',
+		});
+		try {
+			await readStored(schema, body, 'projects/x/project.json');
+		} catch (err) {
+			expect(JSON.stringify(err)).not.toContain('secret bytes');
+		}
+	});
+
+	it('caps retained schema issues', () => {
+		const many = z.array(z.number());
+		try {
+			parseStored(
+				many,
+				Array.from({ length: 50 }, () => 'bad'),
+				'_system/many.json',
+			);
+			expect.unreachable('should have thrown');
+		} catch (err) {
+			expect((err as { issues: unknown[] }).issues).toHaveLength(20);
 		}
 	});
 });

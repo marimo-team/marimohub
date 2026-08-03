@@ -977,14 +977,13 @@ describe('SandboxProvisioner', () => {
 
 			// ...and the otherwise-masked commit failure is logged, not dropped.
 			expect(
-				errorSpy.mock.calls.some(
-					([msg, err]) =>
-						typeof msg === 'string' &&
-						msg.includes('commitSession failed') &&
-						err instanceof Error &&
-						err.message === 'commit boom',
-				),
+				errorSpy.mock.calls.some(([line]) => {
+					if (typeof line !== 'string') return false;
+					const event = JSON.parse(line) as Record<string, unknown>;
+					return event.event === 'session_commit_failed';
+				}),
 			).toBe(true);
+			expect(errorSpy.mock.calls.join('\n')).not.toContain('commit boom');
 			expect(calls.destroy).toBe(0);
 			errorSpy.mockRestore();
 		});

@@ -20,9 +20,10 @@ import type {
 } from '../../integrations/syncedSource';
 import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
+import { logOperationalError } from '../../operationalLog';
 import type { VersionPaths } from '../../paths';
 import { compensableWrite, metricsObserver, saga } from '../../saga';
-import { NotebookMetaSchema, SourceSchema } from '../../schema';
+import { NotebookMetaSchema, parseStored, readStored, SourceSchema } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject } from '../catalog/cas';
 import { buildNotebookEntry, buildNotebookMeta, buildVersion } from './notebookMeta';
@@ -139,7 +140,7 @@ export class SyncedNotebookService {
 		const source = await mutateObject(
 			this.bucket,
 			nb.source,
-			(raw) => assertSyncedSource(SourceSchema.parse(raw)),
+			(raw) => assertSyncedSource(parseStored(SourceSchema, raw, nb.source)),
 			(current) => {
 				const active = gitSourceConfig(current);
 				if (current.pending_config && gitSourceConfigsEqual(current.pending_config, desired)) {
@@ -159,7 +160,7 @@ export class SyncedNotebookService {
 		await mutateObject(
 			this.bucket,
 			nb.meta,
-			(raw) => NotebookMetaSchema.parse(raw),
+			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
 			(current) => ({ ...current, updated_at: now }),
 		);
 		await this.catalog.updateNotebookEntry(
@@ -182,15 +183,18 @@ export class SyncedNotebookService {
 		const nb = paths.project(projectId).notebook(notebookId);
 		const obj = await this.bucket.get(nb.integrationSyncToken);
 		if (!obj) return false;
-		let rawRecord: unknown;
+		let record;
 		try {
-			rawRecord = await obj.json();
-		} catch {
+			record = await readStored(SyncTokenRecordSchema, obj, nb.integrationSyncToken);
+		} catch (err) {
+			logOperationalError(
+				'stored_object_skipped',
+				{ operation: 'sync_token.verify', object: nb.integrationSyncToken },
+				err,
+			);
 			return false;
 		}
-		const record = SyncTokenRecordSchema.safeParse(rawRecord);
-		if (!record.success) return false;
-		return verifySyncTokenRecord(record.data, token);
+		return verifySyncTokenRecord(record, token);
 	}
 
 	async sync(
@@ -246,7 +250,7 @@ export class SyncedNotebookService {
 				const advancedSource = await mutateObject(
 					this.bucket,
 					nb.source,
-					(raw) => SourceSchema.parse(raw),
+					(raw) => parseStored(SourceSchema, raw, nb.source),
 					(current) => {
 						const git = assertSyncedSource(current);
 						const currentPrepared = prepareSync(git, input);

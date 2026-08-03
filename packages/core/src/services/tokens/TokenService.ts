@@ -1,14 +1,15 @@
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import { NotFoundError, ResourceExhaustedError } from '../../errors';
+import { NotFoundError, PreconditionFailedError, ResourceExhaustedError } from '../../errors';
 import { createTokenId, TokenId } from '../../ids';
 import type { UserId } from '../../ids';
 import { timingSafeEqual } from '../../internal/hmac';
 import { toHex } from '../../internal/hex';
 import type { AuthUser } from '../../ports/auth';
 import { paths } from '../../paths';
-import { TokenSchema, toPublicToken } from '../../schema';
+import { logOperationalError } from '../../operationalLog';
+import { readStored, TokenSchema, toPublicToken } from '../../schema';
 import type { PublicToken, Token } from '../../schema';
 import { listAllKeys } from '../catalog/storage';
 import type { IdentityService } from '../identity/IdentityService';
@@ -74,15 +75,13 @@ export async function hashPatSecret(secret: string): Promise<string> {
  * a single corrupt record must never take down verify/list/revoke (it just reads
  * as an invalid credential). Returns null on any failure.
  */
-async function parseTokenBody(obj: BucketObjectBody): Promise<Token | null> {
-	let raw: unknown;
+async function parseTokenBody(obj: BucketObjectBody, key: string): Promise<Token | null> {
 	try {
-		raw = await obj.json();
-	} catch {
+		return await readStored(TokenSchema, obj, key);
+	} catch (err) {
+		logOperationalError('stored_object_skipped', { operation: 'token.read', object: key }, err);
 		return null;
 	}
-	const parsed = TokenSchema.safeParse(raw);
-	return parsed.success ? parsed.data : null;
 }
 
 /** Whether a token is still live at `nowMs` (a missing expiry never expires). */
@@ -174,7 +173,7 @@ export class TokenService {
 		const keys = await listAllKeys(this.bucket, paths.tokensPrefix);
 		const records = await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
 			const obj = await this.bucket.get(key);
-			return obj ? parseTokenBody(obj) : null;
+			return obj ? parseTokenBody(obj, key) : null;
 		});
 		return records
 			.filter((r): r is Token => r?.user_id === userId)
@@ -192,7 +191,7 @@ export class TokenService {
 		// A corrupt record can't prove ownership and already fails `verify`, so treat
 		// it as not-found rather than 500ing a security-relevant "make it stop
 		// working" call.
-		const record = obj ? await parseTokenBody(obj) : null;
+		const record = obj ? await parseTokenBody(obj, paths.token(tokenId)) : null;
 		if (!record || record.user_id !== userId) {
 			throw new NotFoundError(`Token ${tokenId} not found`);
 		}
@@ -244,7 +243,7 @@ export class TokenService {
 			this.cache.delete(tokenId);
 			return null;
 		}
-		const record = await parseTokenBody(obj);
+		const record = await parseTokenBody(obj, paths.token(tokenId));
 		if (!record) return null;
 
 		// Resolve `{email, name}` through the identity directory — every issuer has
@@ -280,7 +279,13 @@ export class TokenService {
 			// Keep the cache coherent so a same-process re-verify uses the new ETag.
 			entry.record = updated;
 			entry.etag = written.etag;
-		} catch {
+		} catch (err) {
+			if (err instanceof PreconditionFailedError) return;
+			logOperationalError(
+				'token_usage_touch_failed',
+				{ operation: 'token.touch', object: paths.token(entry.record.id) },
+				err,
+			);
 			// Usage bookkeeping only — swallow and keep serving the request.
 		}
 	}

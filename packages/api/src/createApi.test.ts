@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { HTTPException } from 'hono/http-exception';
 import {
 	ConflictError,
@@ -10,6 +10,10 @@ import {
 	UnavailableError,
 } from '@marimo-hub/core';
 import { createInitializedBucket, createTestApi, expectPage } from './testing';
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 // Each row drives exactly one branch of the real `createApi` onError handler.
 // The message is the class name so the snapshot stays readable and deterministic.
@@ -52,6 +56,24 @@ describe('createApi onError mapping', () => {
 		const res = await app.request('/_throw');
 		expect(res.status).toBe(418);
 		expect(await res.text()).toContain('teapot');
+	});
+
+	it('sanitizes and logs a 5xx HTTPException', async () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const { app } = createTestApi();
+		app.get('/_throw', () => {
+			throw new HTTPException(503, { message: 'upstream secret do-not-return' });
+		});
+
+		const res = await app.request('/_throw');
+		expect(res.status).toBe(503);
+		expect(await res.json()).toEqual({
+			success: false,
+			error: { code: 'INTERNAL_ERROR', message: 'Internal server error' },
+		});
+		expect(log).toHaveBeenCalledOnce();
+		expect(log.mock.calls[0]?.[0]).toContain('request_error');
+		expect(log.mock.calls[0]?.[0]).not.toContain('do-not-return');
 	});
 });
 

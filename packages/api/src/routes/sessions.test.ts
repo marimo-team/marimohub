@@ -531,21 +531,25 @@ describe('Session routes', () => {
 			expect(compute.lastCreateOptions).toMatchObject({ image: 'img-b' });
 		});
 
-		it('falls back to the default image (with a warning) when the stored image fell off the list', async () => {
+		it('falls back to the default image and logs without the stored value', async () => {
 			const meta = await createServices(bucket).notebooks.getNotebook(pid, nid);
 			await bucket.put(
 				`projects/${pid}/notebooks/${nid}/meta.json`,
 				JSON.stringify({ ...meta.meta, base_image: 'img-gone' }),
 			);
 
-			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 			try {
 				const compute = makeFakeCompute();
 				await expectOk<ApiSession>(await imageApi(compute)('POST', sessionsPath()));
 				expect(compute.lastCreateOptions).toMatchObject({ image: 'img-a' });
-				expect(warn.mock.calls.some((c) => String(c[0]).includes('img-gone'))).toBe(true);
+				const line = log.mock.calls.find((c) =>
+					String(c[0]).includes('stored_config_fallback'),
+				)?.[0] as string;
+				expect(line).toContain('selection_unavailable');
+				expect(line).not.toContain('img-gone');
 			} finally {
-				warn.mockRestore();
+				log.mockRestore();
 			}
 		});
 
@@ -733,7 +737,7 @@ describe('Session routes', () => {
 			ACTOR,
 		);
 		const compute = makeFakeCompute();
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		try {
 			const request = createTestApi({
 				bucket,
@@ -750,9 +754,13 @@ describe('Session routes', () => {
 			const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 			expect(data.compute_profile).toBe('small');
 			expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 1 });
-			expect(warn.mock.calls.some((call) => String(call[0]).includes('removed'))).toBe(true);
+			const line = log.mock.calls.find((call) =>
+				String(call[0]).includes('stored_config_fallback'),
+			)?.[0] as string;
+			expect(line).toContain('selection_unavailable');
+			expect(line).not.toContain('removed');
 		} finally {
-			warn.mockRestore();
+			log.mockRestore();
 		}
 	});
 

@@ -13,6 +13,7 @@ import type { IntegrationId, ProjectId, UserId } from '../../ids';
 import { createIntegrationId } from '../../ids';
 import { paths } from '../../paths';
 import type { IntegrationPaths } from '../../paths';
+import { logOperationalError } from '../../operationalLog';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -40,6 +41,9 @@ import {
 	IntegrationRecordSchema,
 	IntegrationVersionRecordSchema,
 	parseStored,
+	readStored,
+	readStoredJson,
+	StoredObjectError,
 } from '../../schema';
 import type { IntegrationRecord, IntegrationVersionRecord } from '../../schema';
 import { listAllObjects } from '../catalog/storage';
@@ -491,7 +495,12 @@ class ScopedIntegrationsStore {
 			if (err instanceof StaleHeadError) throw err.precondition;
 			// A head that cannot be parsed has no version to check and nothing to
 			// tombstone, but must still be removable — sweep its objects unguarded.
-			if (!(err instanceof ValidationError)) throw err;
+			if (!(err instanceof ValidationError || err instanceof StoredObjectError)) throw err;
+			logOperationalError(
+				'corrupt_integration_head_deleted',
+				{ operation: 'integration.delete', object: integrationPaths.head },
+				err,
+			);
 			existed = true;
 		}
 		const strays = (await listAllObjects(this.bucket, integrationPaths.base))
@@ -520,7 +529,7 @@ class ScopedIntegrationsStore {
 		return withCasRetry(async () => {
 			const existing = await this.bucket.get(headPath);
 			if (!existing) return;
-			const raw = await existing.json();
+			const raw = await readStoredJson(existing, headPath);
 			// Already committed by an interrupted delete: resume its sweep (and its
 			// name release) rather than answer 412 on a token no live head can match.
 			if (isTombstoned(raw)) {
@@ -572,7 +581,7 @@ class ScopedIntegrationsStore {
 					const key = integrationPaths.version(version);
 					const body = await this.bucket.get(key);
 					if (!body) return null;
-					const record = parseStored(IntegrationVersionRecordSchema, await body.json(), key);
+					const record = await readStored(IntegrationVersionRecordSchema, body, key);
 					this.assertVersionIdentity(head, version, record, key);
 					return record;
 				},
@@ -679,8 +688,14 @@ class ScopedIntegrationsStore {
 		if (!probe) {
 			throw new ValidationError('Connection testing is not enabled on this deployment.');
 		}
-		const parsed = def.configSchema.parse(resolved);
-		return def.testConnection(parsed, probe);
+		// Never surface the Zod issues here — the resolved config is plaintext.
+		const parsed = def.configSchema.safeParse(resolved);
+		if (!parsed.success) {
+			throw new ValidationError(
+				`Stored config no longer matches kind "${def.kind}" — edit and re-save it.`,
+			);
+		}
+		return def.testConnection(parsed.data, probe);
 	}
 
 	/**
@@ -745,7 +760,7 @@ class ScopedIntegrationsStore {
 		const heads = await mapWithConcurrency(instanceDirs, BUCKET_SCAN_CONCURRENCY, async (dir) => {
 			const body = await this.bucket.get(`${dir}integration.json`);
 			if (!body) return null; // deleted between list and get — skip
-			const raw = await body.json();
+			const raw = await readStoredJson(body, `${dir}integration.json`);
 			if (isTombstoned(raw)) return null; // a committed delete, sweep pending
 			const head = parseStored(IntegrationRecordSchema, raw, `${dir}integration.json`);
 			const rawId = dir.slice(prefix.length, -1);
@@ -765,7 +780,7 @@ class ScopedIntegrationsStore {
 	private async getHead(scope: IntegrationScope, id: IntegrationId): Promise<IntegrationRecord> {
 		const body = await this.bucket.get(scope.integration(id).head);
 		if (!body) throw new NotFoundError(`Integration ${id} not found`);
-		return this.parseHead(scope, id, await body.json());
+		return this.parseHead(scope, id, await readStoredJson(body, scope.integration(id).head));
 	}
 
 	/** A tombstoned head is gone as far as every reader and writer is concerned. */
@@ -784,7 +799,7 @@ class ScopedIntegrationsStore {
 		const key = scope.integration(head.id).version(version);
 		const body = await this.bucket.get(key);
 		if (!body) throw new NotFoundError(`Integration ${head.id} version ${version} not found`);
-		const record = parseStored(IntegrationVersionRecordSchema, await body.json(), key);
+		const record = await readStored(IntegrationVersionRecordSchema, body, key);
 		// The record ENVELOPE version (distinct from the kind's schemaVersion):
 		// interpreting a newer envelope with these semantics could mis-handle
 		// fields it added. Older envelopes route through an upgrade seam here once

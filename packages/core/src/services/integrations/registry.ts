@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ValidationError } from '../../errors';
+import { logOperationalError } from '../../operationalLog';
 import type { KindDescriptor } from '../../ports/integrations';
 import type { IntegrationDefinition } from './sdk';
 import { secretPaths } from './secretFields';
@@ -21,7 +22,30 @@ export class IntegrationRegistry {
 		if (this.defs.has(def.kind)) {
 			throw new Error(`Duplicate integration kind "${def.kind}"`);
 		}
+		let inputSchema: Record<string, unknown>;
+		let storedSchema: Record<string, unknown>;
+		let paths: SecretPath[];
+		try {
+			inputSchema = decorateJsonSchema(
+				z.toJSONSchema(def.configSchema, { io: 'input' }) as Record<string, unknown>,
+			);
+			storedSchema = decorateJsonSchema(
+				z.toJSONSchema(def.configSchema, { io: 'output' }) as Record<string, unknown>,
+				true,
+			);
+			paths = secretPaths(inputSchema);
+		} catch (err) {
+			logOperationalError(
+				'integration_kind_disabled',
+				{ operation: 'integration.registry.register', integration_kind: def.kind },
+				err,
+			);
+			return;
+		}
 		this.defs.set(def.kind, def);
+		this.inputSchemas.set(def.kind, inputSchema);
+		this.storedSchemas.set(def.kind, storedSchema);
+		this.paths.set(def.kind, paths);
 	}
 
 	/** Resolves user-supplied kind names or throws a validation error. */
@@ -62,25 +86,14 @@ export class IntegrationRegistry {
 
 	/** Generates the strict authoring schema; defaulted fields remain optional. */
 	jsonSchema(kind: string): Record<string, unknown> {
-		const cached = this.inputSchemas.get(kind);
-		if (cached) return cached;
-		const schema = decorateJsonSchema(
-			z.toJSONSchema(this.get(kind).configSchema, { io: 'input' }) as Record<string, unknown>,
-		);
-		this.inputSchemas.set(kind, schema);
-		return schema;
+		this.get(kind);
+		return this.inputSchemas.get(kind)!;
 	}
 
 	/** Generates the persisted shape: defaults materialized and secrets sealed. */
 	storedJsonSchema(kind: string): Record<string, unknown> {
-		const cached = this.storedSchemas.get(kind);
-		if (cached) return cached;
-		const schema = decorateJsonSchema(
-			z.toJSONSchema(this.get(kind).configSchema, { io: 'output' }) as Record<string, unknown>,
-			true,
-		);
-		this.storedSchemas.set(kind, schema);
-		return schema;
+		this.get(kind);
+		return this.storedSchemas.get(kind)!;
 	}
 
 	secretPathsOf(kind: string): SecretPath[] {

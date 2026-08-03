@@ -160,6 +160,23 @@ describe('IdentityService', () => {
 				vi.useRealTimers();
 			}
 		});
+
+		it('logs a failed shared stale-cache refresh once', async () => {
+			vi.useFakeTimers();
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				await identities.search('ada');
+				vi.advanceTimersByTime(31_000);
+				vi.spyOn(bucket, 'list').mockRejectedValue(new Error('directory unavailable'));
+
+				await Promise.all(Array.from({ length: 20 }, () => identities.search('ada')));
+				await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(1));
+				expect(log.mock.calls[0]?.[0]).toContain('identity_directory_refresh_failed');
+			} finally {
+				log.mockRestore();
+				vi.useRealTimers();
+			}
+		});
 	});
 
 	describe('getByEmail', () => {

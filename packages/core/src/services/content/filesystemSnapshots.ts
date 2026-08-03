@@ -2,6 +2,7 @@ import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { asFilesystemSnapshots } from '../../ports/sandbox';
 import type { ComputeResources, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { FsSnapshot } from '../../schema';
+import { logOperationalError } from '../../operationalLog';
 import type { NotebookService } from './NotebookService';
 
 /**
@@ -85,7 +86,11 @@ export async function captureFilesystemSnapshot(
 			await fs.deleteSnapshot(previous.snapshot_id); // latest-wins GC
 		}
 	} catch (err) {
-		console.error(`fs snapshot capture failed for notebook ${notebookId}:`, err);
+		logOperationalError(
+			'filesystem_snapshot_capture_failed',
+			{ operation: 'filesystem_snapshot.capture', project_id: projectId, notebook_id: notebookId },
+			err,
+		);
 	}
 }
 
@@ -105,7 +110,15 @@ export async function reapFilesystemSnapshots(
 		try {
 			await fs.deleteSnapshot(snap.snapshot_id);
 			reaped++;
-		} catch {
+		} catch (err) {
+			logOperationalError(
+				'filesystem_snapshot_delete_failed',
+				{
+					operation: 'filesystem_snapshot.delete',
+					snapshot_id: snap.snapshot_id,
+				},
+				err,
+			);
 			// Best-effort: a later sweep retries if the snapshot survives.
 		}
 	}

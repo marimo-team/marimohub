@@ -11,7 +11,7 @@ import {
 	SubdomainExposure,
 } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
-import { describeError, logEvent } from './log';
+import { describeError, errorMetadata, logEvent } from './log';
 import { createAiProxy } from './routes/ai';
 import eventsApp from './routes/events';
 import gitSyncApp from './routes/gitSync';
@@ -126,6 +126,19 @@ export function createApi(rawDeps: ApiDeps) {
 				{ 400: 'BAD_REQUEST', 401: 'UNAUTHORIZED', 403: 'FORBIDDEN', 404: 'NOT_FOUND' }[
 					res.status
 				] ?? (res.status >= 500 ? 'INTERNAL_ERROR' : 'BAD_REQUEST');
+			if (res.status >= 500) {
+				logEvent({
+					level: 'error',
+					event: 'request_error',
+					request_id: c.get('requestId') ?? null,
+					method: c.req.method,
+					path: c.req.path,
+					user: c.get('user')?.id ?? null,
+					status: res.status,
+					error: errorMetadata(err),
+				});
+				return fail(c, code, 'Internal server error', res.status);
+			}
 			return fail(c, code, err.message || res.statusText || 'Request failed', res.status);
 		}
 		if (err instanceof DomainError) {
@@ -304,12 +317,13 @@ export function createApi(rawDeps: ApiDeps) {
 			await deps.services.identities.upsert(user);
 		} catch (err) {
 			logEvent({
-				level: 'warn',
+				level: 'error',
 				event: 'identity_upsert_failed',
+				request_id: c.get('requestId') ?? null,
 				method: c.req.method,
 				path: c.req.path,
 				user: user.id,
-				error: describeError(err),
+				error: errorMetadata(err),
 			});
 		}
 

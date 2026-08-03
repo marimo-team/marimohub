@@ -4,7 +4,8 @@ import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { createEventId } from '../../ids';
 import type { UserId } from '../../ids';
 import { paths } from '../../paths';
-import { EventSchema } from '../../schema';
+import { logOperationalError } from '../../operationalLog';
+import { EventSchema, readStored } from '../../schema';
 import type { Event } from '../../schema';
 
 export class EventService {
@@ -47,9 +48,13 @@ export class EventService {
 					// One corrupt/legacy event object must not make the whole day's audit
 					// log unreadable — skip it (logged) rather than throwing.
 					try {
-						return EventSchema.parse(await body.json());
+						return await readStored(EventSchema, body, obj.key);
 					} catch (err) {
-						console.warn(`getEvents: skipping unreadable event ${obj.key}: ${String(err)}`);
+						logOperationalError(
+							'stored_object_skipped',
+							{ operation: 'event.list', object: obj.key },
+							err,
+						);
 						return;
 					}
 				},

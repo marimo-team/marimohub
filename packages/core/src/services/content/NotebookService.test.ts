@@ -420,6 +420,21 @@ describe('NotebookService', () => {
 
 			expect(await notebooks.synced.verifyToken(projectId, meta.id, sync_token)).toBe(false);
 		});
+
+		it('surfaces token verification failures after a valid sidecar read', async () => {
+			const { meta, sync_token } = await create();
+			const digest = vi
+				.spyOn(crypto.subtle, 'digest')
+				.mockRejectedValueOnce(new Error('crypto unavailable'));
+
+			try {
+				await expect(notebooks.synced.verifyToken(projectId, meta.id, sync_token)).rejects.toThrow(
+					'crypto unavailable',
+				);
+			} finally {
+				digest.mockRestore();
+			}
+		});
 	});
 
 	describe('getNotebook', () => {
@@ -949,6 +964,31 @@ describe('NotebookService', () => {
 
 			const versions = await notebooks.listVersions(projectId, created.id);
 			expect(versions).toHaveLength(3);
+		});
+
+		it('skips a corrupt version record and logs without its bytes', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			await notebooks.updateNotebook(projectId, created.id, { code: 'v2' }, ACTOR);
+			const versions = await notebooks.listVersions(projectId, created.id);
+			const key = paths
+				.project(projectId)
+				.notebook(created.id)
+				.version(versions[0].version_id).meta;
+			await bucket.put(key, '{"secret":"do-not-log"');
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			try {
+				expect(await notebooks.listVersions(projectId, created.id)).toHaveLength(1);
+				const line = log.mock.calls[0]?.[0] as string;
+				expect(line).toContain('notebook.version_list');
+				expect(line).not.toContain('do-not-log');
+			} finally {
+				log.mockRestore();
+			}
 		});
 
 		it('getVersion returns specific version code', async () => {
