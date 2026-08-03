@@ -20,6 +20,7 @@
 		"build": "vp pack",
 		"test": "vp test",
 		"check": "vp check",
+		"schemas:generate": "UPDATE_SCHEMAS=1 vp test internal-schemas.spec",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {

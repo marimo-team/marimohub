@@ -1,0 +1,1703 @@
+openapi: 3.1.0
+info:
+  title: marimohub bucket objects
+  version: 1.0.0
+  description: |-
+    Machine-checkable description of every JSON object marimohub persists in
+    its storage bucket, generated from the zod schemas in
+    `packages/core/src/schema.ts` and the key templates in
+    `packages/core/src/paths.ts`. This is not an HTTP API: paths are bucket
+    key templates, GET models what readers must accept, PUT models what
+    writers produce. `x-mutability`/`x-owner` mirror the write-ownership
+    invariants in CLAUDE.md and development_docs/bucket_spec.md.
+
+    Deliberately excluded (no zod schema; internal operational records or
+    non-JSON artifacts): idempotency records, integration name claims,
+    reconcile orphan markers, advisory locks, and version/workspace file
+    artifacts (notebook.py, pyproject.toml, notebook.html, session.json,
+    README.md, workspace files).
+tags:
+  - name: catalog
+    description: Catalog pointer and snapshots (`_system/`)
+  - name: project
+    description: Per-project records (`projects/{pid}/`)
+  - name: notebook
+    description: Per-notebook records
+  - name: integration
+    description: Project- and org-scoped integration records
+  - name: session
+    description: Session records and sandbox claims
+  - name: auth
+    description: Identities and personal access tokens
+  - name: ops
+    description: Operational records
+paths:
+  /_system/catalog.json:
+    summary: The one mutable pointer in the catalog snapshot chain.
+    parameters: []
+    x-mutability: cas
+    x-owner: CatalogService.mutateSnapshot
+    get:
+      operationId: read_system_catalog_json
+      summary: Read Catalog
+      tags:
+        - catalog
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Catalog'
+    put:
+      operationId: write_system_catalog_json
+      summary: Write Catalog
+      tags:
+        - catalog
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Catalog'
+      responses:
+        '204':
+          description: Stored.
+  /_system/snapshots/{snapshot_id}.json:
+    summary: Immutable full-catalog snapshot addressed by the catalog pointer.
+    parameters:
+      - name: snapshot_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_system_snapshots_json
+      summary: Read Snapshot
+      tags:
+        - catalog
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+    put:
+      operationId: write_system_snapshots_json
+      summary: Write Snapshot
+      tags:
+        - catalog
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Snapshot'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/project.json:
+    summary: 'Project record: members, federation opt-in, status.'
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: last-writer-wins
+    get:
+      operationId: read_projects_project_json
+      summary: Read Project
+      tags:
+        - project
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+    put:
+      operationId: write_projects_project_json
+      summary: Write Project
+      tags:
+        - project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Project'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/secrets/{name}.json:
+    summary: 'Project-scoped secret: an external reference or an encrypted managed
+      value.'
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: last-writer-wins
+    get:
+      operationId: read_projects_secrets_json
+      summary: Read StoredSecret
+      tags:
+        - project
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoredSecret'
+    put:
+      operationId: write_projects_secrets_json
+      summary: Write StoredSecret
+      tags:
+        - project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoredSecret'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/meta.json:
+    summary: Notebook metadata record.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: last-writer-wins
+    get:
+      operationId: read_projects_notebooks_meta_json
+      summary: Read NotebookMeta
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotebookMeta'
+    put:
+      operationId: write_projects_notebooks_meta_json
+      summary: Write NotebookMeta
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotebookMeta'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/source.json:
+    summary: 'Notebook source descriptor: local head pointer or git-sync state.'
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: last-writer-wins
+    get:
+      operationId: read_projects_notebooks_source_json
+      summary: Read Source
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+    put:
+      operationId: write_projects_notebooks_source_json
+      summary: Write Source
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Source'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/versions/{vid}/version.json:
+    summary: Immutable saved-version record beside the version folder.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: vid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_projects_notebooks_versions_version_json
+      summary: Read Version
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Version'
+    put:
+      operationId: write_projects_notebooks_versions_version_json
+      summary: Write Version
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Version'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/fs_snapshot.json:
+    summary: Pointer to the notebook’s current provider-native filesystem snapshot.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: last-writer-wins
+    get:
+      operationId: read_projects_notebooks_fs_snapshot_json
+      summary: Read FsSnapshot
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FsSnapshot'
+    put:
+      operationId: write_projects_notebooks_fs_snapshot_json
+      summary: Write FsSnapshot
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FsSnapshot'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/integration_sync_token.json:
+    summary: Hashed push-sync token for a git-synced notebook.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: last-writer-wins
+    get:
+      operationId: read_projects_notebooks_integration_sync_token_json
+      summary: Read SyncTokenRecord
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncTokenRecord'
+    put:
+      operationId: write_projects_notebooks_integration_sync_token_json
+      summary: Write SyncTokenRecord
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncTokenRecord'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/integrations/{iid}/integration.json:
+    summary: 'Project integration head: kind, name, enabled, current_version pointer.'
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: iid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ProjectIntegrationsStore
+    get:
+      operationId: read_projects_integrations_integration_json
+      summary: Read IntegrationRecord
+      tags:
+        - integration
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationRecord'
+    put:
+      operationId: write_projects_integrations_integration_json
+      summary: Write IntegrationRecord
+      tags:
+        - integration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationRecord'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/integrations/{iid}/versions/{n}.json:
+    summary: Immutable integration config revision (secret fields sealed as envelopes).
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: iid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: n
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_projects_integrations_versions_json
+      summary: Read IntegrationVersionRecord
+      tags:
+        - integration
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationVersionRecord'
+    put:
+      operationId: write_projects_integrations_versions_json
+      summary: Write IntegrationVersionRecord
+      tags:
+        - integration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationVersionRecord'
+      responses:
+        '204':
+          description: Stored.
+  /_system/integrations/{iid}/integration.json:
+    summary: Org integration head, inherited by every project.
+    parameters:
+      - name: iid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: OrgIntegrationsStore
+    get:
+      operationId: read_system_integrations_integration_json
+      summary: Read IntegrationRecord
+      tags:
+        - integration
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationRecord'
+    put:
+      operationId: write_system_integrations_integration_json
+      summary: Write IntegrationRecord
+      tags:
+        - integration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationRecord'
+      responses:
+        '204':
+          description: Stored.
+  /_system/integrations/{iid}/versions/{n}.json:
+    summary: Immutable org integration config revision.
+    parameters:
+      - name: iid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: n
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    get:
+      operationId: read_system_integrations_versions_json
+      summary: Read IntegrationVersionRecord
+      tags:
+        - integration
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationVersionRecord'
+    put:
+      operationId: write_system_integrations_versions_json
+      summary: Write IntegrationVersionRecord
+      tags:
+        - integration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationVersionRecord'
+      responses:
+        '204':
+          description: Stored.
+  /_system/sessions/{pid}/{sid}.json:
+    summary: Session lifecycle record, partitioned by project.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: sid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: SessionService
+    get:
+      operationId: read_system_sessions_json
+      summary: Read Session
+      tags:
+        - session
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+    put:
+      operationId: write_system_sessions_json
+      summary: Write Session
+      tags:
+        - session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Session'
+      responses:
+        '204':
+          description: Stored.
+  /_system/apps/{pid}/{nid}.json:
+    summary: Per-notebook app-sandbox singleton claim.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: SessionService.claimApp/releaseApp
+    get:
+      operationId: read_system_apps_json
+      summary: Read AppClaim
+      tags:
+        - session
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppClaim'
+    put:
+      operationId: write_system_apps_json
+      summary: Write AppClaim
+      tags:
+        - session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppClaim'
+      responses:
+        '204':
+          description: Stored.
+  /_system/editors/{pid}/{nid}.json:
+    summary: Per-notebook editor claim, including takeover transfer state.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: SessionService
+    get:
+      operationId: read_system_editors_json
+      summary: Read EditorClaim
+      tags:
+        - session
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EditorClaim'
+    put:
+      operationId: write_system_editors_json
+      summary: Write EditorClaim
+      tags:
+        - session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EditorClaim'
+      responses:
+        '204':
+          description: Stored.
+  /_system/identities/{uid}.json:
+    summary: User directory record mapping the auth sub to its display identity.
+    parameters:
+      - name: uid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: last-writer-wins
+    get:
+      operationId: read_system_identities_json
+      summary: Read Identity
+      tags:
+        - auth
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Identity'
+    put:
+      operationId: write_system_identities_json
+      summary: Write Identity
+      tags:
+        - auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Identity'
+      responses:
+        '204':
+          description: Stored.
+  /_system/tokens/{tid}.json:
+    summary: Personal access token record (hash only; the secret never lands here).
+    parameters:
+      - name: tid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: last-writer-wins
+    get:
+      operationId: read_system_tokens_json
+      summary: Read Token
+      tags:
+        - auth
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+    put:
+      operationId: write_system_tokens_json
+      summary: Write Token
+      tags:
+        - auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Token'
+      responses:
+        '204':
+          description: Stored.
+  /_system/events/{date}/{id}.json:
+    summary: Append-only audit event.
+    parameters:
+      - name: date
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: append-only
+    get:
+      operationId: read_system_events_json
+      summary: Read Event
+      tags:
+        - ops
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+    put:
+      operationId: write_system_events_json
+      summary: Write Event
+      tags:
+        - ops
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Event'
+      responses:
+        '204':
+          description: Stored.
+components:
+  schemas:
+    Catalog:
+      type: object
+      properties:
+        version:
+          type: number
+          const: 1
+        updated_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        current_snapshot_id:
+          type: string
+        current_snapshot_key:
+          type: string
+        previous_snapshot_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+      required:
+        - version
+        - updated_at
+        - current_snapshot_id
+        - current_snapshot_key
+        - previous_snapshot_id
+    Snapshot:
+      type: object
+      properties:
+        snapshot_id:
+          type: string
+        schema_version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        operation:
+          type: string
+        actor:
+          type: string
+        projects:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              description:
+                type: string
+              owner:
+                type: string
+              status:
+                default: active
+                type: string
+                enum:
+                  - active
+                  - deleted
+              created_at:
+                type: string
+                format: date-time
+                pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+              updated_at:
+                type: string
+                format: date-time
+                pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+              notebook_count:
+                type: integer
+                minimum: 0
+                maximum: 9007199254740991
+              notebooks:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    title:
+                      type: string
+                    description:
+                      type: string
+                    status:
+                      type: string
+                      enum:
+                        - draft
+                        - active
+                        - archived
+                        - deleted
+                    source_type:
+                      type: string
+                      enum:
+                        - local
+                        - git
+                    author:
+                      type: string
+                    created_at:
+                      type: string
+                      format: date-time
+                      pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                    updated_at:
+                      type: string
+                      format: date-time
+                      pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                    tags:
+                      type: array
+                      items:
+                        type: string
+                    last_run_at:
+                      anyOf:
+                        - type: string
+                          format: date-time
+                          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                        - type: 'null'
+                    compute_profile:
+                      type: string
+                    key_prefix:
+                      type: string
+                  required:
+                    - id
+                    - title
+                    - description
+                    - status
+                    - source_type
+                    - author
+                    - created_at
+                    - updated_at
+                    - tags
+                    - last_run_at
+                    - key_prefix
+                  additionalProperties: {}
+              member_ids:
+                type: array
+                items:
+                  type: string
+              member_emails:
+                type: array
+                items:
+                  type: string
+            required:
+              - id
+              - name
+              - description
+              - owner
+              - created_at
+              - updated_at
+              - notebook_count
+              - notebooks
+            additionalProperties: {}
+      required:
+        - snapshot_id
+        - schema_version
+        - created_at
+        - operation
+        - actor
+        - projects
+      additionalProperties: {}
+    Project:
+      type: object
+      properties:
+        schema_version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        owner:
+          type: string
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              user_id:
+                type: string
+              email:
+                type: string
+              role:
+                type: string
+                enum:
+                  - admin
+                  - editor
+                  - viewer
+            required:
+              - role
+        federation:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            target:
+              type: string
+          required:
+            - enabled
+        status:
+          default: active
+          type: string
+          enum:
+            - active
+            - deleted
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        updated_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        tags:
+          type: array
+          items:
+            type: string
+      required:
+        - schema_version
+        - id
+        - name
+        - description
+        - owner
+        - members
+        - created_at
+        - updated_at
+        - tags
+    StoredSecret:
+      oneOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              const: reference
+            backend:
+              type: string
+            locator:
+              type: string
+            expand:
+              type: string
+              const: json
+            prefix:
+              type: string
+            name:
+              type: string
+            created_by:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            updated_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          required:
+            - kind
+            - backend
+            - locator
+            - name
+            - created_by
+            - created_at
+            - updated_at
+        - type: object
+          properties:
+            kind:
+              type: string
+              const: managed
+            envelope:
+              type: object
+              properties:
+                kek_id:
+                  type: string
+                alg:
+                  type: string
+                  const: A256GCM
+                iv:
+                  type: string
+                ciphertext:
+                  type: string
+              required:
+                - kek_id
+                - alg
+                - iv
+                - ciphertext
+            name:
+              type: string
+            created_by:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            updated_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+          required:
+            - kind
+            - envelope
+            - name
+            - created_by
+            - created_at
+            - updated_at
+    NotebookMeta:
+      type: object
+      properties:
+        schema_version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        id:
+          type: string
+        project_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum:
+            - draft
+            - active
+            - archived
+            - deleted
+        author:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        updated_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        last_run_at:
+          anyOf:
+            - type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            - type: 'null'
+        tags:
+          type: array
+          items:
+            type: string
+        runtime:
+          type: object
+          properties:
+            python_version:
+              type: string
+            marimo_version:
+              type: string
+        base_image:
+          type: string
+        compute_profile:
+          type: string
+      required:
+        - schema_version
+        - id
+        - project_id
+        - title
+        - description
+        - status
+        - author
+        - created_at
+        - updated_at
+        - last_run_at
+        - tags
+    Source:
+      oneOf:
+        - type: object
+          properties:
+            schema_version:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            type:
+              type: string
+              const: local
+            current_version_id:
+              type: string
+          required:
+            - schema_version
+            - type
+            - current_version_id
+        - type: object
+          properties:
+            schema_version:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            type:
+              type: string
+              const: git
+            provider:
+              type: string
+              const: github
+            repo:
+              type: string
+            branch:
+              type: string
+            root_path:
+              type: string
+            entry_notebook:
+              type: string
+            pending_config:
+              type: object
+              properties:
+                repo:
+                  type: string
+                branch:
+                  type: string
+                root_path:
+                  type: string
+                entry_notebook:
+                  type: string
+              required:
+                - repo
+                - branch
+                - root_path
+                - entry_notebook
+            sync_mode:
+              type: string
+              const: push
+            current_version_id:
+              anyOf:
+                - type: string
+                - type: 'null'
+            commit:
+              anyOf:
+                - type: string
+                - type: 'null'
+            last_synced_at:
+              anyOf:
+                - type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                - type: 'null'
+          required:
+            - schema_version
+            - type
+            - provider
+            - repo
+            - branch
+            - root_path
+            - entry_notebook
+            - sync_mode
+            - current_version_id
+            - commit
+            - last_synced_at
+    Version:
+      type: object
+      properties:
+        schema_version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        version_id:
+          type: string
+        notebook_id:
+          type: string
+        saved_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        author:
+          type: string
+        message:
+          type: string
+        parent_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        html_snapshot:
+          type: object
+          properties:
+            captured_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            size_bytes:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+          required:
+            - captured_at
+            - size_bytes
+        session_snapshot:
+          type: object
+          properties:
+            captured_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            size_bytes:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+          required:
+            - captured_at
+            - size_bytes
+        commit:
+          type: string
+      required:
+        - schema_version
+        - version_id
+        - notebook_id
+        - saved_at
+        - author
+        - message
+        - parent_id
+    FsSnapshot:
+      type: object
+      properties:
+        snapshot_id:
+          type: string
+        captured_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        size_bytes:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        compute_profile:
+          type: string
+        compute_resources:
+          type: object
+          properties:
+            cpu:
+              type: number
+            memory_bytes:
+              type: number
+        owner_user_id:
+          type: string
+      required:
+        - snapshot_id
+        - captured_at
+    SyncTokenRecord:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        token_sha256:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - schema_version
+        - token_sha256
+        - created_at
+    IntegrationRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        current_version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        updated_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - id
+        - kind
+        - name
+        - enabled
+        - current_version
+        - created_by
+        - created_at
+        - updated_at
+      additionalProperties: {}
+    IntegrationVersionRecord:
+      type: object
+      properties:
+        schema_version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        kind:
+          type: string
+        kind_schema_version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        config:
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties: {}
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        change_note:
+          type: string
+      required:
+        - schema_version
+        - version
+        - kind
+        - kind_schema_version
+        - config
+        - created_by
+        - created_at
+    Session:
+      type: object
+      properties:
+        session_id:
+          type: string
+        notebook_id:
+          type: string
+        project_id:
+          type: string
+        user_id:
+          type: string
+        status:
+          type: string
+          enum:
+            - starting
+            - running
+            - terminating
+            - terminated
+            - failed
+            - expired
+        started_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        last_heartbeat:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        expires_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        last_snapshot_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        sandbox_reclaimed_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        takeover_capture_completed_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        ephemeral:
+          type: boolean
+        editor_sandbox_sharing:
+          type: string
+          enum:
+            - shared
+            - exclusive
+        ended_reason:
+          type: string
+          enum:
+            - takeover
+        ended_by_user_id:
+          type: string
+        mode:
+          type: string
+          enum:
+            - edit
+            - app
+        source_version_id:
+          type: string
+        active_connections:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        connections_checked_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        runtime:
+          type: object
+          properties:
+            python_version:
+              type: string
+            marimo_version:
+              type: string
+        sandbox_id:
+          type: string
+        sandbox_url:
+          type: string
+        compute_profile:
+          type: string
+        compute_resources:
+          type: object
+          properties:
+            cpu:
+              type: number
+            memory_bytes:
+              type: number
+        compute_from_snapshot:
+          type: boolean
+        sandbox_origin_url:
+          type: string
+        used_fallback:
+          type: boolean
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required:
+            - code
+            - message
+        integrations:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              kind:
+                type: string
+              version:
+                type: integer
+                exclusiveMinimum: 0
+                maximum: 9007199254740991
+            required:
+              - id
+              - name
+              - kind
+              - version
+      required:
+        - session_id
+        - notebook_id
+        - project_id
+        - user_id
+        - status
+        - started_at
+        - last_heartbeat
+      additionalProperties: {}
+    AppClaim:
+      type: object
+      properties:
+        session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        claimed_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - session_id
+        - claimed_at
+    EditorClaim:
+      type: object
+      properties:
+        session_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        sharing:
+          type: string
+          enum:
+            - shared
+            - exclusive
+        claimed_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        transfer:
+          type: object
+          properties:
+            takeover_id:
+              type: string
+              minLength: 1
+              maxLength: 255
+            requested_by:
+              type: string
+            expected_activity:
+              type: string
+              enum:
+                - active
+                - idle
+                - unknown
+                - starting
+            phase:
+              type: string
+              enum:
+                - requested
+                - draining
+                - ready
+            requested_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            drain_lease_id:
+              type: string
+              minLength: 1
+              maxLength: 255
+            drain_lease_expires_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            drain_lease_stage:
+              type: string
+              enum:
+                - capturing
+                - snapshotting
+                - destroying
+                - finalizing
+            drain_lease_progress_deadline_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            replacement_session_id:
+              type: string
+          required:
+            - takeover_id
+            - requested_by
+            - expected_activity
+            - phase
+            - requested_at
+          additionalProperties: {}
+      required:
+        - session_id
+        - sharing
+        - claimed_at
+      additionalProperties: {}
+    Identity:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - id
+        - email
+        - name
+        - updated_at
+    Token:
+      type: object
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        name:
+          type: string
+        hash:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        expires_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        last_used_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - id
+        - user_id
+        - name
+        - hash
+        - created_at
+      additionalProperties: {}
+    Event:
+      type: object
+      properties:
+        schema_version:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        ts:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        event:
+          type: string
+        actor:
+          type: string
+      required:
+        - schema_version
+        - ts
+        - event
+        - actor
+      additionalProperties: {}

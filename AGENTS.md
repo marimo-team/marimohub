@@ -67,6 +67,11 @@ the only places concrete adapters are imported. **Reject PRs that violate this**
   exception: routes serving raw content (e.g. the notebook HTML snapshot at
   `GET …/notebooks/{nid}/html`) return the bytes directly on success; their
   errors still use the envelope.
+- **Committed specs.** `packages/api/openapi.yaml` and
+  `internal/schemas/{bucket,integrations}.yml` are generated from the zod
+  schemas; drift tests fail the build when they are stale. Regenerate with
+  `pnpm schemas:generate`. CI diffs each spec against `main` with oasdiff and
+  fails on breaking changes. See `internal/schemas/README.md`.
 - **Frontend** (`packages/web`) is a React 19 SPA using Tailwind v4
   (`@tailwindcss/vite`) with shadcn-style UI (`class-variance-authority`,
   `clsx`, `tailwind-merge`, `lucide-react`, `sonner`) plus

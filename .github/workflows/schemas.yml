@@ -1,0 +1,72 @@
+name: Schemas
+
+# Breaking-change gate for the committed specs (see internal/schemas/README.md).
+# Freshness is enforced by the drift tests in `vp run -r test`; this job only
+# diffs each spec against the base branch. Vetted breaks are allowlisted per
+# spec in internal/schemas/allowed-breaking/.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/api/openapi.yaml'
+      - 'internal/schemas/**'
+      - '.github/workflows/schemas.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  breaking:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Fetch base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+      # Single static binary, checksum-pinned like the SHA-pinned actions above.
+      - name: Install oasdiff
+        env:
+          OASDIFF_VERSION: 1.27.0
+          OASDIFF_SHA256: 335de79be8df706735f7ab3edc35186e853c8add93d489d67e4e7fd70a07d08a
+        run: |
+          curl -fsSL -o /tmp/oasdiff.tar.gz "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          echo "${OASDIFF_SHA256}  /tmp/oasdiff.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/oasdiff.tar.gz -C /tmp oasdiff
+          sudo install /tmp/oasdiff /usr/local/bin/oasdiff
+      - name: Diff specs against base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          base="origin/$BASE_REF"
+          failed=0
+          for entry in \
+            'packages/api/openapi.yaml api' \
+            'internal/schemas/bucket.yml bucket' \
+            'internal/schemas/integrations.yml integrations'
+          do
+            spec="${entry% *}"
+            name="${entry#* }"
+            if ! git cat-file -e "$base:$spec" 2>/dev/null; then
+              echo "::notice file=$spec::no $base baseline yet; skipping breaking-change check"
+              continue
+            fi
+            if git diff --quiet "$base" -- "$spec"; then
+              continue
+            fi
+            git show "$base:$spec" > "/tmp/base-$name.yml"
+            ignore=()
+            allow="internal/schemas/allowed-breaking/$name.md"
+            if [ -f "$allow" ]; then
+              ignore=(--err-ignore "$allow" --warn-ignore "$allow")
+            fi
+            {
+              echo "## \`$spec\`"
+              oasdiff changelog "/tmp/base-$name.yml" "$spec" --format markdown
+            } >> "$GITHUB_STEP_SUMMARY"
+            oasdiff breaking "/tmp/base-$name.yml" "$spec" \
+              --fail-on ERR --format githubactions "${ignore[@]}" || failed=1
+          done
+          exit "$failed"
