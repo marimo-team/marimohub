@@ -38,6 +38,7 @@ Fields marked 🔒 are secret: encrypted at rest and write-only after save.
 | `isolation_level` | `AUTOCOMMIT`, `READ_UNCOMMITTED`, `READ_COMMITTED`, `REPEATABLE_READ`, `SERIALIZABLE` |  | `AUTOCOMMIT` |  |
 | `legacy_primitive_types` | boolean |  | `false` |  |
 | `legacy_prepared_statements` | boolean |  |  |  |
+| `ambient_env` | boolean |  | `false` | Also export TRINO_HOST, TRINO_PORT, TRINO_USER, TRINO_CATALOG, and TRINO_PASSWORD so marimo's data-source discovery offers this connection. Only one integration per session can claim them. |
 
 **`auth.method: basic`**
 

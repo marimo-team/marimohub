@@ -6,9 +6,10 @@ import {
 	defineIntegration,
 	envSegment,
 	HOSTNAME_REGEX,
-	probeErrorDetails,
+	probeEndpoint,
 } from '../sdk';
 import { zSecret } from '../secretFields';
+import { discoveryEnvField } from './common';
 
 const IDENTIFIER_REGEX = /^[A-Za-z0-9_.-]+$/;
 const HEADER_NAME_REGEX = /^[A-Za-z0-9-]+$/;
@@ -94,6 +95,9 @@ const trinoConfig = z.object({
 		.default('AUTOCOMMIT'),
 	legacy_primitive_types: z.boolean().default(false),
 	legacy_prepared_statements: z.boolean().optional(),
+	ambient_env: discoveryEnvField(
+		'TRINO_HOST, TRINO_PORT, TRINO_USER, TRINO_CATALOG, and TRINO_PASSWORD',
+	),
 });
 
 export const trino = defineIntegration({
@@ -146,6 +150,7 @@ export const trino = defineIntegration({
 			advanced: true,
 			widget: 'toggle',
 		},
+		ambient_env: { group: 'Discovery', order: 60, widget: 'toggle', advanced: true },
 	},
 
 	validate(config) {
@@ -203,6 +208,28 @@ export const trino = defineIntegration({
 				'spooling encoding',
 			);
 		}
+		if (config.ambient_env) {
+			if (!config.default_catalog) {
+				throw new ValidationError(
+					'marimo discovers a Trino connection only when a catalog is set, so ambient_env ' +
+						'requires default_catalog.',
+				);
+			}
+			// The connection marimo builds from TRINO_* uses Basic auth over HTTPS when
+			// it sees a password and plain HTTP otherwise. Any other combination here
+			// would advertise a connection that cannot authenticate or cannot reach the
+			// coordinator, so it is refused rather than rendered.
+			const discoverable =
+				config.auth.method === 'basic' ||
+				(config.auth.method === 'none' && config.http_scheme === 'http');
+			if (!discoverable) {
+				throw new ValidationError(
+					'marimo discovers Trino as Basic auth over HTTPS, or no auth over HTTP. This ' +
+						'authentication mode cannot be expressed that way — leave ambient_env off and ' +
+						'connect through MARIMOHUB_TRINO_<NAME>_URL.',
+				);
+			}
+		}
 	},
 
 	migrate(stored) {
@@ -248,6 +275,16 @@ export const trino = defineIntegration({
 				? {
 						[`${prefix}_AUTH_USER`]: config.auth.username,
 						[`${prefix}_PASSWORD`]: config.auth.password,
+					}
+				: {}),
+			...(config.ambient_env
+				? {
+						TRINO_HOST: config.host,
+						TRINO_PORT: String(config.port),
+						TRINO_USER: user,
+						TRINO_CATALOG: config.default_catalog ?? '',
+						...(config.default_schema ? { TRINO_SCHEMA: config.default_schema } : {}),
+						...(config.auth.method === 'basic' ? { TRINO_PASSWORD: config.auth.password } : {}),
 					}
 				: {}),
 		});
@@ -301,7 +338,7 @@ export const trino = defineIntegration({
 		};
 	},
 
-	async testConnection(config, probe) {
+	testConnection(config, probe) {
 		if (
 			config.auth.method === 'oauth2' ||
 			config.auth.method === 'certificate' ||
@@ -309,34 +346,25 @@ export const trino = defineIntegration({
 			config.auth.method === 'gssapi' ||
 			config.tls.verification !== 'system'
 		) {
-			return {
+			return Promise.resolve({
 				ok: false,
 				latency_ms: 0,
 				details: 'This authentication or TLS mode can only be exercised inside the sandbox',
-			};
+			});
 		}
-		const start = performance.now();
-		try {
-			const headers = Object.fromEntries(
-				config.http_headers.map(({ name, value }) => [name, value]),
-			);
-			addProbeAuth(headers, config.auth);
-			const res = await probe.fetch(
-				`${config.http_scheme}://${config.host}:${config.port}/v1/info`,
-				{ headers },
-			);
-			const latency_ms = Math.round(performance.now() - start);
-			if (!res.ok) return { ok: false, latency_ms, details: `HTTP ${res.status}` };
-			const info = (await res.json()) as { nodeVersion?: { version?: string } } | undefined;
-			const version = info?.nodeVersion?.version;
-			return { ok: true, latency_ms, details: version ? `Trino ${version}` : 'reachable' };
-		} catch (err) {
-			return {
-				ok: false,
-				latency_ms: Math.round(performance.now() - start),
-				details: probeErrorDetails(err, config.auth.method !== 'none'),
-			};
-		}
+		const headers = Object.fromEntries(config.http_headers.map(({ name, value }) => [name, value]));
+		addProbeAuth(headers, config.auth);
+		return probeEndpoint({
+			probe,
+			url: `${config.http_scheme}://${config.host}:${config.port}/v1/info`,
+			init: { headers },
+			carriesSecrets: config.auth.method !== 'none',
+			describe(body) {
+				const version = (body as { nodeVersion?: { version?: string } } | undefined)?.nodeVersion
+					?.version;
+				return version ? `Trino ${version}` : 'reachable';
+			},
+		});
 	},
 });
 

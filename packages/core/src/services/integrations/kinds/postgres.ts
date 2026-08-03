@@ -1,8 +1,15 @@
 import { z } from 'zod';
-import { ValidationError } from '../../../errors';
 import { INTEGRATIONS_DIR } from '../bundle';
 import { defineIntegration, envSegment, HOSTNAME_REGEX } from '../sdk';
-import { zSecret } from '../secretFields';
+import {
+	caFields,
+	DEFAULT_CA_PATH,
+	discoveryEnvField,
+	portField,
+	SQL_CONNECTION_HINTS,
+	sqlCredentials,
+	validateCaFields,
+} from './common';
 
 // The shared host shape covers names and IPv4 literals only; a Postgres server
 // may sit on a bare IPv6 address. The regex is the security boundary and nothing
@@ -61,28 +68,6 @@ function isPgHost(host: string): boolean {
 // bundles an OpenSSL whose defaults point at the wheel builder's scratch
 // directory (`/host/tmp/libpq.build/certs`) — so `system` fails to verify too.
 // Naming a bundle is what makes `verify-full` usable as the default.
-//
-// This particular path is Debian's, matching the images built in this repo. A
-// deployment may run any base image (RHEL keeps its bundle under
-// `/etc/pki/tls/certs`) and the `local` compute backend runs on the developer's
-// own machine, where the path is typically absent — hence `ca_path`, so the
-// trust source is a config field rather than one image's layout.
-const DEFAULT_CA_PATH = '/etc/ssl/certs/ca-certificates.crt';
-
-const trustFields = {
-	ca_bundle: z
-		.string()
-		.min(1)
-		.optional()
-		.describe('PEM CA bundle to trust, written into the session'),
-	ca_path: z
-		.string()
-		.min(1)
-		.optional()
-		.describe(
-			`Absolute path to a CA bundle the runtime already ships (default ${DEFAULT_CA_PATH})`,
-		),
-};
 
 // `require` encrypts but authenticates nothing: any server that completes the
 // handshake is accepted, so it stays available as an explicit choice while new
@@ -92,8 +77,8 @@ const sslSchema = z
 		z.object({ mode: z.literal('disable') }),
 		z.object({ mode: z.literal('prefer') }),
 		z.object({ mode: z.literal('require') }),
-		z.object({ mode: z.literal('verify-ca'), ...trustFields }),
-		z.object({ mode: z.literal('verify-full'), ...trustFields }),
+		z.object({ mode: z.literal('verify-ca'), ...caFields }),
+		z.object({ mode: z.literal('verify-full'), ...caFields }),
 	])
 	.default({ mode: 'verify-full' })
 	.describe('libpq sslmode; `verify-full` checks the CA chain and the hostname');
@@ -107,11 +92,11 @@ const pgConfig = z.object({
 		})
 		.refine(isPgHost, 'Not a valid hostname or IP literal')
 		.describe('Server hostname, e.g. db.internal'),
-	port: z.number().int().min(1).max(65535).default(5432),
+	port: portField(5432),
 	database: z.string().min(1),
-	username: z.string().min(1),
-	password: zSecret().describe('Password for the database user'),
+	...sqlCredentials,
 	ssl: sslSchema,
+	ambient_env: discoveryEnvField('PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and PGSSLMODE'),
 });
 
 export const postgres = defineIntegration({
@@ -126,27 +111,14 @@ export const postgres = defineIntegration({
 	// resolves via psycopg2.
 	requirements: ['sqlalchemy>=2', 'psycopg2-binary>=2.9'],
 	uiHints: {
-		host: { group: 'Connection', order: 1 },
-		port: { group: 'Connection', order: 2, widget: 'number' },
-		database: { group: 'Connection', order: 3 },
-		username: { group: 'Authentication', order: 10 },
-		password: { group: 'Authentication', order: 11, widget: 'password' },
+		...SQL_CONNECTION_HINTS,
 		ssl: { group: 'Connection', order: 4 },
 		'ssl.ca_bundle': { widget: 'textarea' },
+		ambient_env: { group: 'Discovery', order: 60, widget: 'toggle', advanced: true },
 	},
 
 	validate(config) {
-		if (!('ca_path' in config.ssl)) return;
-		const { ca_bundle, ca_path } = config.ssl;
-		if (ca_path === undefined) return;
-		if (ca_bundle !== undefined) {
-			throw new ValidationError('Set only one of ssl.ca_bundle or ssl.ca_path');
-		}
-		// libpq resolves `sslrootcert` from the kernel's working directory, which is
-		// not the one the operator had in mind when typing a relative path.
-		if (!ca_path.startsWith('/') || ca_path.split('/').includes('..')) {
-			throw new ValidationError('ssl.ca_path must be an absolute path with no ".." segment');
-		}
+		if ('ca_path' in config.ssl) validateCaFields(config.ssl, 'ssl');
 	},
 
 	migrate(stored, fromVersion) {
@@ -206,6 +178,21 @@ export const postgres = defineIntegration({
 				[`MARIMOHUB_PG_${seg}_DATABASE`]: config.database,
 				[`MARIMOHUB_PG_${seg}_USER`]: config.username,
 				[`MARIMOHUB_PG_${seg}_PASSWORD`]: config.password,
+				// marimo's discovery builds its connection from PGHOST/PGUSER/PGDATABASE
+				// and never sets an sslmode, so PGSSLMODE and PGSSLROOTCERT are what
+				// keep that connection as verified as the URL above — libpq reads them
+				// for any parameter the caller left unspecified.
+				...(config.ambient_env
+					? {
+							PGHOST: config.host,
+							PGPORT: String(config.port),
+							PGDATABASE: config.database,
+							PGUSER: config.username,
+							PGPASSWORD: config.password,
+							PGSSLMODE: config.ssl.mode,
+							...(caPath ? { PGSSLROOTCERT: caPath } : {}),
+						}
+					: {}),
 			},
 			files,
 			manifestExtra: { host: config.host, database: config.database },

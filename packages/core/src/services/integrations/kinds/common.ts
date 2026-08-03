@@ -1,0 +1,305 @@
+// Shared pieces for connection-shaped kinds: the sandbox contract they all
+// render, URL assembly, and the TLS trust material several of them accept.
+import { z } from 'zod';
+import { ValidationError } from '../../../errors';
+import type { UiHints } from '../../../ports/integrations';
+import { INTEGRATIONS_DIR } from '../bundle';
+import { envSegment, HOSTNAME_REGEX } from '../sdk';
+import type { RenderOutput } from '../sdk';
+import { zSecret } from '../secretFields';
+
+/** Bare server hostname for a kind that renders it into a URL authority. */
+export const hostField = (description: string) =>
+	z
+		.string()
+		.regex(HOSTNAME_REGEX, 'Hostname only — no scheme, port, path, or credentials')
+		.describe(description);
+
+export const portField = (fallback: number) => z.number().int().min(1).max(65535).default(fallback);
+
+/** The credential pair a SQL database takes when it authenticates by password. */
+export const sqlCredentials = {
+	username: z.string().min(1),
+	password: zSecret().describe('Password for the database user'),
+};
+
+/** Form layout shared by the host/port/database/username/password kinds. */
+export const SQL_CONNECTION_HINTS: UiHints = {
+	host: { group: 'Connection', order: 1 },
+	port: { group: 'Connection', order: 2, widget: 'number' },
+	database: { group: 'Connection', order: 3 },
+	username: { group: 'Authentication', order: 10 },
+	password: { group: 'Authentication', order: 11, widget: 'password' },
+};
+
+/**
+ * An http(s) URL with no userinfo, so a configured endpoint cannot smuggle
+ * credentials (or whitespace, which splits a request line) into anything the
+ * hub renders or probes.
+ */
+export const HTTP_URL_REGEX = /^https?:\/\/(?![^/?#]*@)\S+$/;
+
+/** Region name only, so one can be interpolated into a rendered AWS endpoint. */
+export const AWS_REGION_REGEX = /^[a-z0-9-]+$/;
+
+/**
+ * CA bundle shipped by the images built in this repo, which are Debian-based.
+ * A deployment may run any base image (RHEL keeps its bundle under
+ * `/etc/pki/tls/certs`) and the `local` compute backend runs on the developer's
+ * own machine, so every verifying kind also takes a `ca_path` override.
+ */
+export const DEFAULT_CA_PATH = '/etc/ssl/certs/ca-certificates.crt';
+
+/** Trust material for a kind that verifies its server's certificate chain. */
+export const caFields = {
+	ca_bundle: z
+		.string()
+		.min(1)
+		.optional()
+		.describe('PEM CA bundle to trust, written into the session'),
+	ca_path: z
+		.string()
+		.min(1)
+		.optional()
+		.describe(
+			`Absolute path to a CA bundle the runtime already ships (default ${DEFAULT_CA_PATH})`,
+		),
+};
+
+export interface CaFields {
+	ca_bundle?: string;
+	ca_path?: string;
+}
+
+export function validateCaFields(trust: CaFields, field: string): void {
+	if (trust.ca_bundle !== undefined && trust.ca_path !== undefined) {
+		throw new ValidationError(`Set only one of ${field}.ca_bundle or ${field}.ca_path`);
+	}
+	// A client library resolves a relative path from the kernel's working
+	// directory, which is not the one the operator had in mind when typing it.
+	if (
+		trust.ca_path !== undefined &&
+		(!trust.ca_path.startsWith('/') || trust.ca_path.split('/').includes('..'))
+	) {
+		throw new ValidationError(`${field}.ca_path must be an absolute path with no ".." segment`);
+	}
+}
+
+/**
+ * Queues a rendered file and returns the absolute path notebook code reads it
+ * from. Rendered paths are relative to the integrations dir; only the sandbox
+ * sees the absolute one.
+ */
+export function renderFile(
+	files: { path: string; content: string }[],
+	path: string,
+	content: string,
+): string {
+	files.push({ path, content });
+	return `${INTEGRATIONS_DIR}/${path}`;
+}
+
+/** Absolute path to the bundle to verify against, writing a pasted PEM out first. */
+export function resolveCaPath(options: {
+	trust: CaFields;
+	dir: string;
+	instanceName: string;
+	files: { path: string; content: string }[];
+}): string {
+	const { trust, dir, instanceName, files } = options;
+	if (trust.ca_bundle === undefined) return trust.ca_path ?? DEFAULT_CA_PATH;
+	return renderFile(files, `${dir}/${instanceName}-ca.pem`, trust.ca_bundle);
+}
+
+/** The keys an AWS SDK reads for a long-lived (or session) key pair. */
+export const awsStaticCredentials = {
+	access_key_id: zSecret(),
+	secret_access_key: zSecret(),
+	session_token: zSecret().optional(),
+};
+
+/**
+ * Credentials for an AWS SDK. `ambient` leaves the SDK's own provider chain
+ * alone — the instance profile, or the federated credentials the hub injects
+ * when workload identity is enabled.
+ */
+export const awsAuthSchema = z
+	.discriminatedUnion('method', [
+		z.object({ method: z.literal('ambient') }),
+		z.object({ method: z.literal('static'), ...awsStaticCredentials }),
+	])
+	.default({ method: 'ambient' });
+
+/**
+ * Shared wording for the `ambient_env` switch on kinds whose clients read
+ * credentials from the vendor's standard variables and take no explicit
+ * connection argument.
+ */
+export const AMBIENT_ENV_DESCRIPTION =
+	'Also export the vendor-standard variables so libraries pick this up with no ' +
+	'configuration. Only one integration per session can claim them.';
+
+/**
+ * The same switch for a kind whose client takes an explicit URL: the standard
+ * names are what marimo's data-source discovery scans for, so setting them is
+ * what turns an integration into a one-click connection in the notebook UI.
+ * Off by default — the names are process-wide, and a project with a prod and a
+ * staging instance of one kind is ordinary.
+ */
+export const discoveryEnvField = (names: string) =>
+	z
+		.boolean()
+		.default(false)
+		.describe(
+			`Also export ${names} so marimo's data-source discovery offers this connection. ` +
+				'Only one integration per session can claim them.',
+		);
+
+type FieldValue = string | number | boolean | undefined;
+
+export interface ConnectionRender {
+	/** Env infix: `MARIMOHUB_<TOOL>_<NAME>_<FIELD>`. */
+	tool: string;
+	/** Directory for this kind's rendered files, relative to the integrations dir. */
+	dir: string;
+	instanceName: string;
+	/** Connection fields; `undefined` entries are dropped. */
+	fields: Record<string, FieldValue>;
+	/** Fields whose value is secret — the descriptor names their variable instead. */
+	secretFields?: readonly string[];
+	/** Extra descriptor entries. Never secret: the file is meant to be readable. */
+	descriptor?: Record<string, unknown>;
+	files?: { path: string; content: string }[];
+	/** Vendor-standard names this instance claims in addition to its own. */
+	ambient?: Record<string, string | undefined>;
+	manifestExtra?: Record<string, unknown>;
+}
+
+/**
+ * The contract every connection-shaped kind renders: one env var per field,
+ * plus `<dir>/<name>.json` describing the connection. The descriptor mirrors
+ * each field under its lower-cased name — except a secret one, which appears as
+ * `<field>_env` naming the variable that holds it, so notebook code can
+ * introspect the connection without the file carrying the credential.
+ */
+export function renderConnection(spec: ConnectionRender): RenderOutput {
+	const prefix = `MARIMOHUB_${spec.tool}_${envSegment(spec.instanceName)}`;
+	const secret = new Set(spec.secretFields ?? []);
+	const env: Record<string, string> = {};
+	const descriptor: Record<string, unknown> = {};
+
+	for (const [field, value] of Object.entries(spec.fields)) {
+		if (value === undefined) continue;
+		const name = `${prefix}_${field}`;
+		env[name] = String(value);
+		if (secret.has(field)) descriptor[`${field.toLowerCase()}_env`] = name;
+		else descriptor[field.toLowerCase()] = value;
+	}
+
+	const ambient = Object.entries(spec.ambient ?? {}).filter(
+		(entry): entry is [string, string] => entry[1] !== undefined,
+	);
+	for (const [name, value] of ambient) env[name] = value;
+
+	return {
+		env,
+		files: [
+			...(spec.files ?? []),
+			{
+				path: `${spec.dir}/${spec.instanceName}.json`,
+				content: `${JSON.stringify(
+					{
+						...descriptor,
+						...(ambient.length > 0 ? { ambient_env: ambient.map(([name]) => name) } : {}),
+						...spec.descriptor,
+					},
+					null,
+					'\t',
+				)}\n`,
+			},
+		],
+		manifestExtra: spec.manifestExtra,
+	};
+}
+
+/**
+ * {@link renderConnection} for a SQL database reached by URL. Fixes the field
+ * set those kinds share, and with it the rule that the URL is as secret as the
+ * password it embeds — a kind that spelled its own field map could forget that.
+ */
+export function renderSqlConnection(options: {
+	tool: string;
+	dir: string;
+	instanceName: string;
+	url: string;
+	config: {
+		host: string;
+		port: number;
+		database: string;
+		username: string;
+		password?: string;
+	};
+	/** Fields beyond the shared set, e.g. a TLS mode the driver reads separately. */
+	fields?: Record<string, FieldValue>;
+	/** Driver-standard names this instance claims, for marimo's discovery. */
+	ambient?: Record<string, string | undefined>;
+	descriptor?: Record<string, unknown>;
+	files?: { path: string; content: string }[];
+}): RenderOutput {
+	const { config } = options;
+	return renderConnection({
+		tool: options.tool,
+		dir: options.dir,
+		instanceName: options.instanceName,
+		fields: {
+			URL: options.url,
+			HOST: config.host,
+			PORT: config.port,
+			DATABASE: config.database,
+			USER: config.username,
+			PASSWORD: config.password,
+			...options.fields,
+		},
+		secretFields: ['URL', 'PASSWORD'],
+		ambient: options.ambient,
+		descriptor: options.descriptor,
+		files: options.files,
+		manifestExtra: { host: config.host, database: config.database },
+	});
+}
+
+export interface ConnectionUrl {
+	scheme: string;
+	host: string;
+	port?: number;
+	/** Path segments after the authority, percent-encoded here. */
+	segments?: (string | undefined)[];
+	/** An empty string renders as `user:@host`, which some drivers require. */
+	username?: string;
+	password?: string;
+	query?: Record<string, string | undefined>;
+}
+
+/**
+ * A driver connection URL. Credentials and path segments are percent-encoded
+ * and an IPv6 literal is bracketed, so the result parses as a URL whatever the
+ * configured values contain.
+ */
+export function connectionUrl(spec: ConnectionUrl): string {
+	const auth =
+		spec.username === undefined
+			? ''
+			: `${encodeURIComponent(spec.username)}:${encodeURIComponent(spec.password ?? '')}@`;
+	const authority = spec.host.includes(':') ? `[${spec.host}]` : spec.host;
+	const port = spec.port === undefined ? '' : `:${spec.port}`;
+	const path = (spec.segments ?? [])
+		.filter((segment): segment is string => segment !== undefined && segment !== '')
+		.map((segment) => `/${encodeURIComponent(segment)}`)
+		.join('');
+	const query = new URLSearchParams();
+	for (const [key, value] of Object.entries(spec.query ?? {})) {
+		if (value !== undefined) query.set(key, value);
+	}
+	const search = query.size === 0 ? '' : `?${query}`;
+	return `${spec.scheme}://${auth}${authority}${port}${path}${search}`;
+}

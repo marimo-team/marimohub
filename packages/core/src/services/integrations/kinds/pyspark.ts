@@ -3,6 +3,7 @@ import { ValidationError } from '../../../errors';
 import { INTEGRATIONS_DIR } from '../bundle';
 import { defineIntegration, envSegment, HOSTNAME_REGEX } from '../sdk';
 import { zSecret } from '../secretFields';
+import { discoveryEnvField } from './common';
 
 const METADATA_KEY_REGEX = /^[0-9a-z_.-]+$/;
 // Spark property names separate words with `.`, `-`, or `_` interchangeably
@@ -50,6 +51,7 @@ const pysparkConfig = z.object({
 	metadata: z.array(z.object({ name: z.string().min(1), value: zSecret() })).default([]),
 	spark_config: z.record(z.string(), z.string()).default({}),
 	secret_spark_config: z.array(z.object({ name: z.string().min(1), value: zSecret() })).default([]),
+	ambient_env: discoveryEnvField('SPARK_REMOTE'),
 });
 
 export const pyspark = defineIntegration({
@@ -76,6 +78,7 @@ export const pyspark = defineIntegration({
 		spark_config: { group: 'Spark config', order: 60, advanced: true, widget: 'kv-pairs' },
 		secret_spark_config: { group: 'Spark config', order: 61, advanced: true },
 		'secret_spark_config.*.value': { widget: 'password' },
+		ambient_env: { group: 'Discovery', order: 70, widget: 'toggle', advanced: true },
 	},
 
 	validate(config) {
@@ -135,6 +138,9 @@ export const pyspark = defineIntegration({
 				[`${prefix}_REMOTE`]: remote,
 				[`${prefix}_CONFIG`]: configPath,
 				...(config.auth.method === 'token' ? { [`${prefix}_TOKEN`]: config.auth.token } : {}),
+				// The same string: SPARK_REMOTE is what `SparkSession.builder` reads on
+				// its own, so this needs no separate contract.
+				...(config.ambient_env ? { SPARK_REMOTE: remote } : {}),
 			},
 			files: [
 				{

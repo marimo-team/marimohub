@@ -1210,10 +1210,11 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		name: 'Integrations',
 		selector: 'MARIMOHUB_INTEGRATIONS',
 		selectorDefault: 'off',
-		description: `Versioned data-source configuration supports PostgreSQL, PyIceberg catalogs,
-Trino, PySpark over Spark Connect, and custom environment variables. Project
-admins configure one project. Super admins can configure organization-wide
-integrations that are available to all projects.
+		description: `Versioned data-source configuration supports SQL databases and warehouses,
+query engines, PyIceberg catalogs, object storage, ML platforms, and custom
+environment variables — see the [integrations guide](./integrations.md) for the
+full list. Project admins configure one project. Super admins can configure
+organization-wide integrations that are available to all projects.
 
 New, non-ephemeral sessions receive the applicable configuration as environment
 variables and files. The hub injects configuration, not Python libraries. Each

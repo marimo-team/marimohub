@@ -4,6 +4,7 @@ import type {
 	IntegrationCategory,
 	IntegrationProbe,
 	KindBrand,
+	ProbeRequestInit,
 	TestResult,
 	UiHints,
 } from '../../ports/integrations';
@@ -225,4 +226,37 @@ export function basicAuthHeader(username: string, password: string): string {
 export function probeErrorDetails(err: unknown, containsSecrets: boolean): string {
 	if (containsSecrets) return 'request failed';
 	return err instanceof Error ? err.message : 'request failed';
+}
+
+/**
+ * A one-request connectivity probe with the envelope every kind needs: latency
+ * measurement, `HTTP <status>` for a non-2xx, and a transport error rendered
+ * through {@link probeErrorDetails} so it cannot quote the credentials the
+ * request carried.
+ *
+ * `describe` turns a successful response into the detail shown to the user. It
+ * receives the parsed JSON body, which is `undefined` when the response was not
+ * JSON, so a kind that only cares about reachability can ignore it.
+ */
+export async function probeEndpoint(options: {
+	probe: IntegrationProbe;
+	url: string;
+	init?: ProbeRequestInit;
+	/** Whether this request carried a credential. */
+	carriesSecrets: boolean;
+	describe(body: unknown): string;
+}): Promise<TestResult> {
+	const start = performance.now();
+	const elapsed = () => Math.round(performance.now() - start);
+	try {
+		const res = await options.probe.fetch(options.url, options.init);
+		if (!res.ok) return { ok: false, latency_ms: elapsed(), details: `HTTP ${res.status}` };
+		return { ok: true, latency_ms: elapsed(), details: options.describe(await res.json()) };
+	} catch (err) {
+		return {
+			ok: false,
+			latency_ms: elapsed(),
+			details: probeErrorDetails(err, options.carriesSecrets),
+		};
+	}
 }

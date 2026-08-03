@@ -6,7 +6,10 @@ import type { IntegrationProbe, ProbeRequestInit } from '../../../ports/integrat
 import { bundleIntegrations, INTEGRATIONS_DIR } from '../bundle';
 import { SECRET_MARK } from '../secretFields';
 import type { IntegrationDefinition, RenderInput } from '../sdk';
+import { athena } from './awsQueryEngines';
+import { bigquery } from './bigquery';
 import { customEnv } from './customEnv';
+import { databricks } from './databricks';
 import {
 	icebergBigQuery,
 	icebergDynamoDb,
@@ -16,8 +19,14 @@ import {
 } from './icebergCatalogs';
 import { icebergRest } from './icebergRest';
 import { defaultRegistry } from './index';
+import { huggingFace, wandb } from './mlPlatforms';
+import { mongodb } from './mongodb';
+import { motherduck } from './motherduck';
+import { mysql } from './mysql';
+import { gcs, s3 } from './objectStores';
 import { postgres } from './postgres';
 import { pyspark } from './pyspark';
+import { snowflake } from './snowflake';
 import { trino } from './trino';
 
 /** Fixed session context for deterministic render comparisons. */
@@ -42,6 +51,32 @@ function renderedCatalog(
 
 function renderDefinition(def: IntegrationDefinition, config: unknown, name = 'prod') {
 	return def.render(input(config, def, name));
+}
+
+/** The kind's fixture with the fields a single test cares about replaced. */
+function fixtureFor(def: IntegrationDefinition, overrides: object = {}): object {
+	return { ...(FIXTURES[def.kind] as object), ...overrides };
+}
+
+function renderFixture(def: IntegrationDefinition, overrides: object = {}, name = 'prod') {
+	return renderDefinition(def, fixtureFor(def, overrides), name);
+}
+
+/** Plaintext values sitting at a kind's schema-marked secret paths. */
+function secretValuesOf(config: unknown, paths: string[][]): string[] {
+	const marked = new Set(paths.map((path) => path.join('.')));
+	const values: string[] = [];
+	const walk = (value: unknown, path: string[]): void => {
+		if (typeof value === 'string') {
+			if (marked.has(path.join('.'))) values.push(value);
+		} else if (Array.isArray(value)) {
+			for (const item of value) walk(item, [...path, '*']);
+		} else if (typeof value === 'object' && value !== null) {
+			for (const [key, child] of Object.entries(value)) walk(child, [...path, key]);
+		}
+	};
+	walk(config, []);
+	return values;
 }
 
 function captureValidationError(run: () => unknown): ValidationError {
@@ -105,6 +140,80 @@ const FIXTURES: Record<string, unknown> = {
 		location: 'US',
 		warehouse: 'gs://warehouse/bigquery',
 	},
+	mysql: {
+		host: 'mysql.internal',
+		database: 'analytics',
+		username: 'svc user',
+		password: 'p@ss:word',
+	},
+	sqlserver: {
+		host: 'mssql.internal',
+		database: 'analytics',
+		username: 'svc',
+		password: 'mssql-pw',
+	},
+	mongodb: {
+		host: 'cluster0.abcde.mongodb.net',
+		database: 'analytics',
+		auth: { method: 'password', username: 'svc', password: 'mongo-pw' },
+	},
+	clickhouse: {
+		host: 'ch.internal',
+		database: 'analytics',
+		username: 'svc',
+		password: 'ch-pw',
+	},
+	snowflake: {
+		account: 'myorg-account1',
+		user: 'svc',
+		auth: { method: 'password', password: 'sf-pw' },
+		warehouse: 'compute_wh',
+		database: 'analytics',
+		schema: 'public',
+	},
+	bigquery: {
+		project_id: 'analytics-prod',
+		dataset: 'events',
+		location: 'US',
+		auth: { method: 'service_account', credentials_json: '{"private_key":"bq-key"}' },
+	},
+	redshift: {
+		host: 'wg.123456789012.us-east-1.redshift-serverless.amazonaws.com',
+		database: 'analytics',
+		username: 'svc',
+		password: 'rs-pw',
+	},
+	motherduck: { token: 'md-token', database: 'analytics' },
+	databricks: {
+		host: 'dbc-1234abcd-5678.cloud.databricks.com',
+		http_path: '/sql/1.0/warehouses/abc123',
+		auth: { method: 'personal_access_token', token: 'dapi-token' },
+		catalog: 'main',
+	},
+	athena: {
+		region: 'us-east-1',
+		s3_staging_dir: 's3://staging/athena/',
+		auth: { method: 'static', access_key_id: 'AKIAATHENA', secret_access_key: 'athena-secret' },
+	},
+	s3: {
+		bucket: 'lake',
+		region: 'us-east-1',
+		endpoint_url: 'https://minio.internal:9000',
+		path_style: true,
+		auth: { method: 'static', access_key_id: 'AKIAEXAMPLE', secret_access_key: 's3-secret' },
+	},
+	gcs: {
+		bucket: 'lake',
+		project_id: 'analytics-prod',
+		auth: { method: 'service_account', credentials_json: '{"type":"service_account"}' },
+	},
+	azure_blob: {
+		account_name: 'lakeaccount',
+		container: 'raw',
+		auth: { method: 'account_key', account_key: 'azure-key' },
+	},
+	wandb: { api_key: 'wandb-key', entity: 'marimo', project: 'hub' },
+	huggingface: { token: 'hf-token' },
 	custom_env: {
 		vars: { MY_FLAG: 'on' },
 		secrets: [{ name: 'MY_TOKEN', value: 'tok' }],
@@ -1039,6 +1148,306 @@ describe('kind renders (golden)', () => {
 	});
 });
 
+/** Kinds whose sandbox contract is rendered by `renderConnection`. */
+const CONNECTION_KINDS = [
+	'mysql',
+	'sqlserver',
+	'mongodb',
+	'clickhouse',
+	'snowflake',
+	'bigquery',
+	'redshift',
+	'motherduck',
+	'databricks',
+	'athena',
+	's3',
+	'gcs',
+	'azure_blob',
+	'wandb',
+	'huggingface',
+];
+
+describe('connection kinds (golden)', () => {
+	const descriptorOf = (output: { files?: { path: string; content: string }[] }, name = 'prod') =>
+		JSON.parse(
+			output.files?.find(({ path }) => path.endsWith(`/${name}.json`))?.content ?? '{}',
+		) as Record<string, unknown>;
+
+	it('mysql: verifies the chain and hostname against the image CA bundle by default', () => {
+		const out = renderFixture(mysql);
+		const url = new URL(out.env?.MARIMOHUB_MYSQL_PROD_URL ?? '');
+		expect(url.protocol).toBe('mysql+pymysql:');
+		expect(url.username).toBe('svc%20user');
+		expect(url.searchParams.get('ssl_ca')).toBe('/etc/ssl/certs/ca-certificates.crt');
+		expect(descriptorOf(out).ssl).toEqual({
+			mode: 'verify_identity',
+			ca_path: '/etc/ssl/certs/ca-certificates.crt',
+		});
+		// The image's bundle is referenced, never copied into the sandbox.
+		expect(out.files?.map(({ path }) => path)).toEqual(['mysql/prod.json']);
+	});
+
+	it('mysql: a pasted CA lands outside the workspace and ssl_ca points at it', () => {
+		const out = renderFixture(mysql, { ssl: { mode: 'verify_identity', ca_bundle: 'CA' } });
+		const caPath = `${INTEGRATIONS_DIR}/mysql/prod-ca.pem`;
+		expect(new URL(out.env?.MARIMOHUB_MYSQL_PROD_URL ?? '').searchParams.get('ssl_ca')).toBe(
+			caPath,
+		);
+		expect(out.files?.find(({ path }) => path === 'mysql/prod-ca.pem')?.content).toBe('CA');
+	});
+
+	it('mysql: a disabled connection renders no TLS argument at all', () => {
+		const out = renderFixture(mysql, { ssl: { mode: 'disabled' } });
+		expect(out.env?.MARIMOHUB_MYSQL_PROD_URL).not.toContain('ssl_ca');
+	});
+
+	it.each([
+		[{ mode: 'verify_identity', ca_bundle: 'CA', ca_path: '/etc/ssl/certs/ca.crt' }, /only one of/],
+		[{ mode: 'verify_identity', ca_path: 'certs/ca.crt' }, /absolute path/],
+		[{ mode: 'verify_identity', ca_path: '/etc/../ca.crt' }, /absolute path/],
+	])('mysql: rejects the CA settings %j', (ssl, message) => {
+		const config = mysql.configSchema.parse(fixtureFor(mysql, { ssl }));
+		expect(() => mysql.validate?.(config)).toThrow(message);
+	});
+
+	it('s3: claims the ambient AWS variables and the addressing style boto3 has no variable for', () => {
+		const out = renderFixture(s3);
+		expect(out.env).toMatchObject({
+			AWS_ACCESS_KEY_ID: 'AKIAEXAMPLE',
+			AWS_SECRET_ACCESS_KEY: 's3-secret',
+			AWS_REGION: 'us-east-1',
+			AWS_DEFAULT_REGION: 'us-east-1',
+			// Scoped to S3 so unrelated AWS calls still reach their own endpoints.
+			AWS_ENDPOINT_URL_S3: 'https://minio.internal:9000',
+			AWS_CONFIG_FILE: `${INTEGRATIONS_DIR}/s3/prod-aws.conf`,
+			MARIMOHUB_S3_PROD_BUCKET: 'lake',
+		});
+		expect(out.env?.AWS_ENDPOINT_URL).toBeUndefined();
+		expect(out.files?.find(({ path }) => path === 's3/prod-aws.conf')?.content).toContain(
+			'addressing_style = path',
+		);
+		expect(descriptorOf(out).ambient_env).toContain('AWS_ACCESS_KEY_ID');
+	});
+
+	it('s3: an instance that claims nothing ambient stays under its own prefix', () => {
+		const out = renderFixture(s3, { ambient_env: false });
+		expect(Object.keys(out.env ?? {}).every((name) => name.startsWith('MARIMOHUB_S3_PROD_'))).toBe(
+			true,
+		);
+		expect(out.files?.some(({ path }) => path.endsWith('-aws.conf'))).toBe(false);
+	});
+
+	it('snowflake: a password rides in the URL, a key pair rides in a file', () => {
+		expect(renderFixture(snowflake).env?.MARIMOHUB_SNOWFLAKE_PROD_URL).toBe(
+			'snowflake://svc:sf-pw@myorg-account1/analytics/public?warehouse=compute_wh',
+		);
+
+		const keyPair = renderFixture(snowflake, {
+			auth: { method: 'key_pair', private_key: 'PEM', private_key_passphrase: 'phrase' },
+		});
+		expect(keyPair.env?.MARIMOHUB_SNOWFLAKE_PROD_URL).toBeUndefined();
+		expect(keyPair.env?.MARIMOHUB_SNOWFLAKE_PROD_PRIVATE_KEY_PATH).toBe(
+			`${INTEGRATIONS_DIR}/snowflake/prod-key.pem`,
+		);
+		expect(keyPair.files?.find(({ path }) => path === 'snowflake/prod-key.pem')?.content).toBe(
+			'PEM',
+		);
+	});
+
+	it('bigquery: the service-account key is referenced by path, never inlined', () => {
+		const out = renderFixture(bigquery);
+		const path = `${INTEGRATIONS_DIR}/bigquery/prod-sa.json`;
+		expect(out.env?.MARIMOHUB_BIGQUERY_PROD_URL).toBe(
+			`bigquery://analytics-prod/events?credentials_path=${encodeURIComponent(path)}&location=US`,
+		);
+		expect(out.files?.find((file) => file.path === 'bigquery/prod-sa.json')?.content).toContain(
+			'bq-key',
+		);
+		// Left to a GCS integration by default, so the two can coexist.
+		expect(out.env?.GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+		const claimed = renderFixture(bigquery, { ambient_env: true });
+		expect(claimed.env?.GOOGLE_APPLICATION_CREDENTIALS).toBe(path);
+	});
+
+	it('bigquery and gcs can both hold a key without fighting over the Google variables', () => {
+		const rendered = [bigquery, gcs].map((def, index) => ({
+			id: `intg-000000000000000${index}` as never,
+			name: def.kind,
+			kind: def.kind,
+			version: 1,
+			output: renderFixture(def, {}, def.kind),
+		}));
+		const bundle = bundleIntegrations(rendered, createSessionId());
+		expect(bundle.vars.GOOGLE_APPLICATION_CREDENTIALS).toBe(`${INTEGRATIONS_DIR}/gcs/gcs-sa.json`);
+	});
+
+	it('databricks: token auth renders a URL, an OAuth service principal does not', () => {
+		expect(renderFixture(databricks).env?.MARIMOHUB_DATABRICKS_PROD_URL).toBe(
+			'databricks://token:dapi-token@dbc-1234abcd-5678.cloud.databricks.com:443' +
+				'?http_path=%2Fsql%2F1.0%2Fwarehouses%2Fabc123&catalog=main',
+		);
+
+		const oauth = renderFixture(databricks, {
+			auth: { method: 'oauth_m2m', client_id: 'cid', client_secret: 'csec' },
+		});
+		expect(oauth.env?.MARIMOHUB_DATABRICKS_PROD_URL).toBeUndefined();
+		expect(oauth.env?.MARIMOHUB_DATABRICKS_PROD_CLIENT_SECRET).toBe('csec');
+	});
+
+	it('athena: ambient credentials keep the empty userinfo PyAthena needs', () => {
+		const ambient = renderFixture(athena, { auth: { method: 'ambient' } });
+		expect(ambient.env?.MARIMOHUB_ATHENA_PROD_URL).toBe(
+			'awsathena+rest://:@athena.us-east-1.amazonaws.com:443/default' +
+				'?s3_staging_dir=s3%3A%2F%2Fstaging%2Fathena%2F&work_group=primary&catalog_name=AwsDataCatalog',
+		);
+		expect(renderFixture(athena).env?.MARIMOHUB_ATHENA_PROD_URL).toContain(
+			'awsathena+rest://AKIAATHENA:athena-secret@athena.us-east-1.amazonaws.com:443/',
+		);
+	});
+
+	it('mongodb: an SRV connection resolves its members from DNS, so it carries no port', () => {
+		const out = renderFixture(mongodb);
+		expect(out.env?.MARIMOHUB_MONGODB_PROD_URL).toBe(
+			'mongodb+srv://svc:mongo-pw@cluster0.abcde.mongodb.net/analytics?authSource=admin&tls=true',
+		);
+		expect(out.env?.MARIMOHUB_MONGODB_PROD_PORT).toBeUndefined();
+
+		const direct = renderFixture(mongodb, { scheme: 'mongodb' });
+		expect(direct.env?.MARIMOHUB_MONGODB_PROD_URL).toContain('mongodb.net:27017/');
+	});
+
+	it('motherduck: the token rides in the md: string because DuckDB wants a lower-case name', () => {
+		const out = renderFixture(motherduck);
+		expect(out.env?.MARIMOHUB_MOTHERDUCK_PROD_URL).toBe('md:analytics?motherduck_token=md-token');
+		expect(descriptorOf(out).url_env).toBe('MARIMOHUB_MOTHERDUCK_PROD_URL');
+	});
+
+	it('wandb and huggingface keep their caches out of the notebook workspace', () => {
+		expect(renderFixture(wandb).env).toEqual({
+			WANDB_API_KEY: 'wandb-key',
+			WANDB_BASE_URL: 'https://api.wandb.ai',
+			WANDB_ENTITY: 'marimo',
+			WANDB_PROJECT: 'hub',
+			WANDB_MODE: 'online',
+			WANDB_DIR: '/tmp/marimohub-wandb',
+		});
+		expect(renderFixture(huggingFace).env).toEqual({
+			HF_TOKEN: 'hf-token',
+			HF_ENDPOINT: 'https://huggingface.co',
+			HF_HOME: '/tmp/marimohub-huggingface',
+		});
+	});
+
+	// The descriptor exists so notebook code can introspect a connection. That is
+	// only safe while it names each secret's variable instead of quoting its value.
+	// The Iceberg and PySpark kinds are excluded on purpose: their rendered files
+	// are the tool's own configuration document, which the tool expects to hold
+	// credentials.
+	it('every connection descriptor names its secrets rather than carrying them', () => {
+		const registry = defaultRegistry();
+		for (const kind of CONNECTION_KINDS) {
+			const def = registry.get(kind);
+			const descriptor = descriptorOf(renderFixture(def));
+			const secrets = secretValuesOf(
+				def.configSchema.parse(FIXTURES[kind]),
+				registry.secretPathsOf(kind),
+			);
+			expect(secrets.length, `${kind} fixture must configure a secret`).toBeGreaterThan(0);
+			for (const value of secrets) {
+				expect(JSON.stringify(descriptor), `${def.kind} descriptor`).not.toContain(value);
+			}
+		}
+	});
+});
+
+// These names are marimo's, not ours: each plugin under
+// `marimo/_data/data_source_discovery/plugins` offers a connection only when
+// every one of its required variables is set, so pinning them here is what keeps
+// a rename — on either side — from silently turning discovery off.
+const DISCOVERY_CONTRACT = [
+	{ kind: 'postgres', required: ['PGHOST', 'PGUSER', 'PGDATABASE'], overrides: {} },
+	{
+		kind: 'mysql',
+		required: ['MYSQL_HOST', 'MYSQL_USER', 'MYSQL_DATABASE', 'MYSQL_PASSWORD'],
+		overrides: { ssl: { mode: 'disabled' } },
+	},
+	{ kind: 'trino', required: ['TRINO_HOST', 'TRINO_USER', 'TRINO_CATALOG'], overrides: {} },
+	{ kind: 'pyspark', required: ['SPARK_REMOTE'], overrides: {} },
+	{ kind: 's3', required: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'], overrides: {} },
+];
+
+describe('marimo data-source discovery', () => {
+	it.each(DISCOVERY_CONTRACT)(
+		'$kind sets every variable the discovery plugin requires',
+		({ kind, required, overrides }) => {
+			const def = defaultRegistry().get(kind);
+			const config = def.configSchema.parse(fixtureFor(def, { ambient_env: true, ...overrides }));
+			expect(() => def.validate?.(config)).not.toThrow();
+			const env = renderDefinition(def, config).env ?? {};
+			for (const name of required) {
+				expect(env[name], `${kind} must set ${name}`).toBeTruthy();
+			}
+		},
+	);
+
+	it.each(DISCOVERY_CONTRACT.filter(({ kind }) => kind !== 's3'))(
+		'$kind claims nothing outside its own prefix until asked',
+		({ kind, required }) => {
+			const env = renderFixture(defaultRegistry().get(kind), { ambient_env: false }).env ?? {};
+			for (const name of required) expect(env[name], name).toBeUndefined();
+		},
+	);
+
+	// libpq reads PGSSLMODE for any parameter the caller left unset, and the
+	// connection marimo builds sets none — so these are what stop a discovered
+	// connection from being a weaker one to the same server.
+	it('postgres: the discovered connection verifies exactly like the rendered URL', () => {
+		const env = renderFixture(postgres, { ambient_env: true }).env ?? {};
+		expect(env.PGSSLMODE).toBe('verify-full');
+		expect(env.PGSSLROOTCERT).toBe('/etc/ssl/certs/ca-certificates.crt');
+
+		const custom = renderFixture(postgres, {
+			ambient_env: true,
+			ssl: { mode: 'verify-ca', ca_bundle: 'CA' },
+		}).env;
+		expect(custom?.PGSSLMODE).toBe('verify-ca');
+		expect(custom?.PGSSLROOTCERT).toBe(`${INTEGRATIONS_DIR}/postgres/prod-ca.pem`);
+	});
+
+	it('mysql: refuses to advertise a TLS connection PyMySQL would open in plaintext', () => {
+		const config = mysql.configSchema.parse(fixtureFor(mysql, { ambient_env: true }));
+		expect(() => mysql.validate?.(config)).toThrow(/plaintext/);
+	});
+
+	it('trino: exports the password so the discovered connection authenticates over HTTPS', () => {
+		const env = renderFixture(trino, { ambient_env: true }).env ?? {};
+		expect(env.TRINO_CATALOG).toBe('hive');
+		expect(env.TRINO_PASSWORD).toBe('pw');
+	});
+
+	it.each([
+		[{ default_catalog: undefined }, /requires default_catalog/],
+		[{ auth: { method: 'jwt', token: 'jwt-token' } }, /Basic auth over HTTPS/],
+		[{ auth: { method: 'none' } }, /Basic auth over HTTPS/],
+	])('trino: refuses discovery it cannot express (%j)', (overrides, message) => {
+		const config = trino.configSchema.parse(fixtureFor(trino, { ambient_env: true, ...overrides }));
+		expect(() => trino.validate?.(config)).toThrow(message);
+	});
+
+	it('two instances claiming the same variables fail the session, naming both', () => {
+		const rendered = ['prod', 'staging'].map((name, index) => ({
+			id: `intg-00000000000000${index}0` as never,
+			name,
+			kind: 'postgres',
+			version: 1,
+			output: renderFixture(postgres, { ambient_env: true, host: `${name}.internal` }, name),
+		}));
+		expect(() => bundleIntegrations(rendered, createSessionId())).toThrow(
+			/"prod" and "staging" set the same environment variable/,
+		);
+	});
+});
+
 describe('cross-kind bundle', () => {
 	const synthetic = (
 		name: string,
@@ -1063,7 +1472,7 @@ describe('cross-kind bundle', () => {
 				output: def.render(input(FIXTURES[def.kind], def, `inst-${def.kind.replaceAll('_', '-')}`)),
 			}));
 		const bundle = bundleIntegrations(rendered, sessionId);
-		expect(bundle.attachments).toHaveLength(10);
+		expect(bundle.attachments).toHaveLength(defaultRegistry().list().length);
 		expect(bundle.files.every((f) => f.path.startsWith(`${INTEGRATIONS_DIR}/`))).toBe(true);
 		const pyiceberg = bundle.files.find((file) => file.path.endsWith('/.pyiceberg.yaml'));
 		const config = parse(pyiceberg?.content ?? '') as {
@@ -1444,26 +1853,26 @@ describe('testConnection goes through the injected probe only', () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it('probe failures never echo configured secret values in result details', async () => {
-		const secret = 'do-not-return-this-secret';
-		const probe: IntegrationProbe = {
-			fetch: () => Promise.reject(new Error(`transport failed with ${secret}`)),
-		};
-		const trinoConfig = trino.configSchema.parse({
-			host: 'trino.internal',
-			auth: { method: 'basic', username: 'svc', password: secret },
-		});
-		const icebergConfig = icebergRest.configSchema.parse({
-			uri: 'https://catalog.internal',
-			auth: { method: 'bearer_token', token: secret },
-		});
-
-		const results = await Promise.all([
-			trino.testConnection?.(trinoConfig, probe),
-			icebergRest.testConnection?.(icebergConfig, probe),
-		]);
-		for (const result of results) {
-			expect(result?.details).not.toContain(secret);
+	// A transport error can quote the request it failed on, so every probe has to
+	// sanitize it. Driven off the registry rather than a hand-picked pair: a new
+	// kind's probe is covered the moment it is registered.
+	it('no probe echoes a configured secret when the transport fails', async () => {
+		const registry = defaultRegistry();
+		for (const def of registry.list()) {
+			if (!def.testConnection) continue;
+			const config = def.configSchema.parse(FIXTURES[def.kind]);
+			const secrets = secretValuesOf(config, registry.secretPathsOf(def.kind));
+			expect(secrets.length, `${def.kind} fixture must configure a secret`).toBeGreaterThan(0);
+			const probe: IntegrationProbe = {
+				fetch: () => Promise.reject(new Error(`transport failed with ${secrets.join(' ')}`)),
+			};
+			const result = await def.testConnection(config, probe);
+			// A kind that reported no detail at all would pass the check below for
+			// the wrong reason.
+			expect(typeof result.details, def.kind).toBe('string');
+			for (const value of secrets) {
+				expect(result.details, def.kind).not.toContain(value);
+			}
 		}
 	});
 });

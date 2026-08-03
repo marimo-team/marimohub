@@ -10,6 +10,148 @@ info:
     kind, and its component schema is the config contract stored in
     `versions/{n}.json` records and rendered into sandboxes.
 paths:
+  /kinds/athena/config:
+    summary: Amazon Athena
+    description: Query S3 data with Athena through PyAthena and SQLAlchemy.
+    x-kind-schema-version: 1
+    x-category: engine
+    x-brand-color: '#8C4FFF'
+    x-secret-paths:
+      - auth.access_key_id
+      - auth.secret_access_key
+      - auth.session_token
+    x-supports-test: false
+    x-requirements:
+      - pyathena[sqlalchemy]>=3.9
+    get:
+      operationId: read_athena_config
+      summary: Stored athena config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/athena'
+    put:
+      operationId: write_athena_config
+      summary: Input athena config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/athena'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/azure_blob/config:
+    summary: Azure Blob Storage
+    description: Azure Blob or ADLS Gen2 containers for adlfs, polars, and duckdb.
+    x-kind-schema-version: 1
+    x-category: storage
+    x-brand-color: '#0078D4'
+    x-secret-paths:
+      - auth.account_key
+      - auth.sas_token
+      - auth.connection_string
+      - auth.client_secret
+    x-supports-test: false
+    x-requirements:
+      - adlfs>=2024.7
+      - azure-storage-blob>=12.22
+      - azure-identity>=1.17
+    get:
+      operationId: read_azure_blob_config
+      summary: Stored azure_blob config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/azure_blob'
+    put:
+      operationId: write_azure_blob_config
+      summary: Input azure_blob config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/azure_blob'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/bigquery/config:
+    summary: BigQuery
+    description: Query BigQuery from SQL cells, with ADC or a service-account key.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#669DF6'
+    x-brand-icon: googlebigquery
+    x-secret-paths:
+      - auth.credentials_json
+    x-supports-test: false
+    x-requirements:
+      - google-cloud-bigquery>=3.25
+      - sqlalchemy-bigquery>=1.11
+    get:
+      operationId: read_bigquery_config
+      summary: Stored bigquery config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/bigquery'
+    put:
+      operationId: write_bigquery_config
+      summary: Input bigquery config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/bigquery'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/clickhouse/config:
+    summary: ClickHouse
+    description: ClickHouse HTTP interface for clickhouse-connect and SQLAlchemy.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#FFCC01'
+    x-brand-icon: clickhouse
+    x-secret-paths:
+      - password
+    x-supports-test: true
+    x-requirements:
+      - clickhouse-connect>=0.8
+    get:
+      operationId: read_clickhouse_config
+      summary: Stored clickhouse config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/clickhouse'
+    put:
+      operationId: write_clickhouse_config
+      summary: Input clickhouse config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/clickhouse'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/custom_env/config:
     summary: Custom environment
     description: Inject arbitrary environment variables — plain or secret — into
@@ -40,6 +182,112 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/custom_env'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/databricks/config:
+    summary: Databricks SQL
+    description: Databricks SQL warehouse connection for SQL cells and SQLAlchemy.
+    x-kind-schema-version: 1
+    x-category: engine
+    x-brand-color: '#FF3621'
+    x-brand-icon: databricks
+    x-secret-paths:
+      - auth.token
+      - auth.client_secret
+    x-supports-test: true
+    x-requirements:
+      - databricks-sql-connector>=3.4
+      - databricks-sqlalchemy>=1.0
+    get:
+      operationId: read_databricks_config
+      summary: Stored databricks config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/databricks'
+    put:
+      operationId: write_databricks_config
+      summary: Input databricks config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/databricks'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/gcs/config:
+    summary: Google Cloud Storage
+    description: GCS buckets for gcsfs, polars, and duckdb, with ADC or a
+      service-account key.
+    x-kind-schema-version: 1
+    x-category: storage
+    x-brand-color: '#AECBFA'
+    x-brand-icon: googlecloudstorage
+    x-secret-paths:
+      - auth.credentials_json
+    x-supports-test: false
+    x-requirements:
+      - gcsfs>=2024.6
+      - google-cloud-storage>=2.18
+    get:
+      operationId: read_gcs_config
+      summary: Stored gcs config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/gcs'
+    put:
+      operationId: write_gcs_config
+      summary: Input gcs config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/gcs'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/huggingface/config:
+    summary: Hugging Face
+    description: Authenticate the Hub client for gated models and private datasets.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#FFD21E'
+    x-brand-icon: huggingface
+    x-secret-paths:
+      - token
+    x-supports-test: true
+    x-requirements:
+      - huggingface-hub>=0.25
+    get:
+      operationId: read_huggingface_config
+      summary: Stored huggingface config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/huggingface'
+    put:
+      operationId: write_huggingface_config
+      summary: Input huggingface config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/huggingface'
       responses:
         '204':
           description: Accepted.
@@ -319,6 +567,109 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/mongodb/config:
+    summary: MongoDB
+    description: MongoDB or Atlas cluster reachable from PyMongo.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#47A248'
+    x-brand-icon: mongodb
+    x-secret-paths:
+      - auth.password
+    x-supports-test: false
+    x-requirements:
+      - pymongo>=4.9
+    get:
+      operationId: read_mongodb_config
+      summary: Stored mongodb config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mongodb'
+    put:
+      operationId: write_mongodb_config
+      summary: Input mongodb config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/mongodb'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/motherduck/config:
+    summary: MotherDuck
+    description: MotherDuck cloud DuckDB, attached from a duckdb connection.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#FFF000'
+    x-brand-icon: duckdb
+    x-secret-paths:
+      - token
+    x-supports-test: false
+    x-requirements:
+      - duckdb>=1.1
+    get:
+      operationId: read_motherduck_config
+      summary: Stored motherduck config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/motherduck'
+    put:
+      operationId: write_motherduck_config
+      summary: Input motherduck config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/motherduck'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/mysql/config:
+    summary: MySQL
+    description: Direct MySQL or MariaDB connection for SQL cells and SQLAlchemy.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#4479A1'
+    x-brand-icon: mysql
+    x-secret-paths:
+      - password
+    x-supports-test: false
+    x-requirements:
+      - sqlalchemy>=2
+      - pymysql>=1.1
+    get:
+      operationId: read_mysql_config
+      summary: Stored mysql config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/mysql'
+    put:
+      operationId: write_mysql_config
+      summary: Input mysql config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/mysql'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/postgres/config:
     summary: PostgreSQL
     description: Direct Postgres connection for SQL cells and SQLAlchemy.
@@ -390,6 +741,149 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/redshift/config:
+    summary: Amazon Redshift
+    description: Redshift cluster or serverless workgroup for SQL cells and SQLAlchemy.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#8C4FFF'
+    x-secret-paths:
+      - password
+    x-supports-test: false
+    x-requirements:
+      - sqlalchemy-redshift>=0.14
+      - redshift-connector>=2.1
+    get:
+      operationId: read_redshift_config
+      summary: Stored redshift config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/redshift'
+    put:
+      operationId: write_redshift_config
+      summary: Input redshift config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/redshift'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/s3/config:
+    summary: S3 object storage
+    description: Amazon S3 or an S3-compatible store (MinIO, Cloudflare R2, Ceph).
+    x-kind-schema-version: 1
+    x-category: storage
+    x-brand-color: '#569A31'
+    x-secret-paths:
+      - auth.access_key_id
+      - auth.secret_access_key
+      - auth.session_token
+    x-supports-test: false
+    x-requirements:
+      - boto3>=1.35
+      - s3fs>=2024.6
+    get:
+      operationId: read_s3_config
+      summary: Stored s3 config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/s3'
+    put:
+      operationId: write_s3_config
+      summary: Input s3 config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/s3'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/snowflake/config:
+    summary: Snowflake
+    description: Snowflake warehouse connection for SQL cells and SQLAlchemy.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#29B5E8'
+    x-brand-icon: snowflake
+    x-secret-paths:
+      - auth.password
+      - auth.private_key
+      - auth.private_key_passphrase
+      - auth.token
+    x-supports-test: false
+    x-requirements:
+      - snowflake-connector-python>=3.12
+      - snowflake-sqlalchemy>=1.7
+    get:
+      operationId: read_snowflake_config
+      summary: Stored snowflake config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/snowflake'
+    put:
+      operationId: write_snowflake_config
+      summary: Input snowflake config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/snowflake'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/sqlserver/config:
+    summary: Microsoft SQL Server
+    description: SQL Server or Azure SQL connection for SQL cells and SQLAlchemy.
+    x-kind-schema-version: 1
+    x-category: database
+    x-brand-color: '#CC2927'
+    x-secret-paths:
+      - password
+    x-supports-test: false
+    x-requirements:
+      - sqlalchemy>=2
+      - pyodbc>=5.1
+      - pymssql>=2.3
+    get:
+      operationId: read_sqlserver_config
+      summary: Stored sqlserver config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/sqlserver'
+    put:
+      operationId: write_sqlserver_config
+      summary: Input sqlserver config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/sqlserver'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/trino/config:
     summary: Trino
     description: Trino DBAPI and SQLAlchemy connection with authentication and
@@ -429,8 +923,271 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/wandb/config:
+    summary: Weights & Biases
+    description: Log runs to Weights & Biases from notebook code, with no
+      wandb.login() call.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#FFBE00'
+    x-brand-icon: weightsandbiases
+    x-secret-paths:
+      - api_key
+    x-supports-test: true
+    x-requirements:
+      - wandb>=0.18
+    get:
+      operationId: read_wandb_config
+      summary: Stored wandb config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/wandb'
+    put:
+      operationId: write_wandb_config
+      summary: Input wandb config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/wandb'
+      responses:
+        '204':
+          description: Accepted.
 components:
   schemas:
+    athena:
+      type: object
+      properties:
+        region:
+          type: string
+          pattern: ^[a-z0-9-]+$
+        s3_staging_dir:
+          type: string
+          pattern: ^s3:\/\/[^\s?#]+$
+          description: Bucket prefix Athena writes query results to
+        database:
+          default: default
+          type: string
+          pattern: ^[A-Za-z0-9_]+$
+        workgroup:
+          default: primary
+          type: string
+          pattern: ^[A-Za-z0-9._-]+$
+        catalog:
+          default: AwsDataCatalog
+          type: string
+          pattern: ^[A-Za-z0-9._-]+$
+        auth:
+          default:
+            method: ambient
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: ambient
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                access_key_id:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                secret_access_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                session_token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+      required:
+        - region
+        - s3_staging_dir
+    azure_blob:
+      type: object
+      properties:
+        account_name:
+          type: string
+          pattern: ^[a-z0-9]{3,24}$
+        container:
+          description: Default container for notebook code
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$
+        endpoint_suffix:
+          default: core.windows.net
+          description: Sovereign clouds use their own, e.g. core.chinacloudapi.cn
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: ambient
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: account_key
+                account_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - account_key
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: sas_token
+                sas_token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - sas_token
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: connection_string
+                connection_string:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - connection_string
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: service_principal
+                tenant_id:
+                  type: string
+                  minLength: 1
+                client_id:
+                  type: string
+                  minLength: 1
+                client_secret:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - tenant_id
+                - client_id
+                - client_secret
+        ambient_env:
+          default: true
+          description: Also export the vendor-standard variables so libraries pick this up
+            with no configuration. Only one integration per session can claim
+            them.
+          type: boolean
+      required:
+        - account_name
+        - auth
+    bigquery:
+      type: object
+      properties:
+        project_id:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+          description: Google Cloud project that owns the datasets
+        dataset:
+          description: Default dataset for unqualified table names
+          type: string
+          pattern: ^[A-Za-z0-9_]+$
+        location:
+          description: Dataset location, e.g. US or europe-west4
+          type: string
+          minLength: 1
+        auth:
+          default:
+            method: ambient
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: ambient
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: service_account
+                credentials_json:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - credentials_json
+        ambient_env:
+          default: false
+          description: Also export the vendor-standard variables so libraries pick this up
+            with no configuration. Only one integration per session can claim
+            them.
+          type: boolean
+      required:
+        - project_id
+    clickhouse:
+      type: object
+      properties:
+        host:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+          description: Server hostname, e.g. abc123.us-east-1.aws.clickhouse.cloud
+        port:
+          default: 8443
+          description: HTTP interface port
+          type: integer
+          minimum: 1
+          maximum: 65535
+        secure:
+          default: true
+          description: Use HTTPS for the HTTP interface
+          type: boolean
+        verify:
+          default: true
+          description: Verify the server certificate (clickhouse-connect `verify`)
+          type: boolean
+        database:
+          default: default
+          type: string
+          minLength: 1
+        username:
+          default: default
+          type: string
+          minLength: 1
+        password:
+          description: Omit for a user with no password
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+      required:
+        - host
     custom_env:
       type: object
       properties:
@@ -460,6 +1217,119 @@ components:
             required:
               - name
               - value
+    databricks:
+      type: object
+      properties:
+        host:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+          description: Workspace hostname, e.g. dbc-1234abcd-5678.cloud.databricks.com
+        http_path:
+          type: string
+          pattern: ^\/[A-Za-z0-9._\-/]+$
+          description: SQL warehouse or cluster HTTP path
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: personal_access_token
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - token
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: oauth_m2m
+                client_id:
+                  type: string
+                  minLength: 1
+                client_secret:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - client_id
+                - client_secret
+        catalog:
+          description: Unity Catalog name for unqualified tables
+          type: string
+          minLength: 1
+        schema:
+          description: Session default schema
+          type: string
+          minLength: 1
+      required:
+        - host
+        - http_path
+        - auth
+    gcs:
+      type: object
+      properties:
+        bucket:
+          description: Default bucket for notebook code; the credentials are not
+            restricted to it
+          type: string
+          minLength: 1
+        project_id:
+          description: Project billed for the requests
+          type: string
+          minLength: 1
+        auth:
+          default:
+            method: ambient
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: ambient
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: service_account
+                credentials_json:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - credentials_json
+        ambient_env:
+          default: true
+          description: Also export the vendor-standard variables so libraries pick this up
+            with no configuration. Only one integration per session can claim
+            them.
+          type: boolean
+    huggingface:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          description: Access token from huggingface.co/settings/tokens
+        endpoint:
+          default: https://huggingface.co
+          description: Set this for an Enterprise Hub deployment
+          type: string
+          pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+        enable_hf_transfer:
+          default: false
+          description: Faster large-file downloads; requires the hf_transfer package
+          type: boolean
+      required:
+        - token
     iceberg_bigquery:
       type: object
       properties:
@@ -3143,6 +4013,170 @@ components:
             type: string
       required:
         - uri
+    mongodb:
+      type: object
+      properties:
+        scheme:
+          default: mongodb+srv
+          type: string
+          enum:
+            - mongodb+srv
+            - mongodb
+        host:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+          description: Cluster hostname, e.g. cluster0.abcde.mongodb.net
+        port:
+          default: 27017
+          description: Ignored for mongodb+srv
+          type: integer
+          minimum: 1
+          maximum: 65535
+        database:
+          description: Default database for `client.get_database()`
+          type: string
+          minLength: 1
+        auth:
+          default:
+            method: none
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: password
+                username:
+                  type: string
+                  minLength: 1
+                password:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                auth_source:
+                  default: admin
+                  type: string
+                  minLength: 1
+              required:
+                - method
+                - username
+                - password
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+        tls:
+          default:
+            mode: enabled
+          oneOf:
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  const: enabled
+                ca_bundle:
+                  description: PEM CA bundle to trust, written into the session
+                  type: string
+                  minLength: 1
+                ca_path:
+                  description: Absolute path to a CA bundle the runtime already ships (default
+                    /etc/ssl/certs/ca-certificates.crt)
+                  type: string
+                  minLength: 1
+              required:
+                - mode
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  const: disabled
+              required:
+                - mode
+      required:
+        - host
+    motherduck:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          description: MotherDuck service token
+        database:
+          description: Database to attach; omit to attach every database in the account
+          type: string
+          pattern: ^[A-Za-z0-9_-]+$
+        saas_mode:
+          default: false
+          description: Block local file and extension access from the MotherDuck session
+          type: boolean
+      required:
+        - token
+    mysql:
+      type: object
+      properties:
+        host:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+          description: Server hostname, e.g. mysql.internal
+        port:
+          default: 3306
+          type: integer
+          minimum: 1
+          maximum: 65535
+        database:
+          type: string
+          minLength: 1
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          description: Password for the database user
+        ssl:
+          default:
+            mode: verify_identity
+          description: '`verify_identity` checks the CA chain and the hostname; `disabled`
+            is plaintext'
+          oneOf:
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  const: verify_identity
+                ca_bundle:
+                  description: PEM CA bundle to trust, written into the session
+                  type: string
+                  minLength: 1
+                ca_path:
+                  description: Absolute path to a CA bundle the runtime already ships (default
+                    /etc/ssl/certs/ca-certificates.crt)
+                  type: string
+                  minLength: 1
+              required:
+                - mode
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  const: disabled
+              required:
+                - mode
+        ambient_env:
+          default: false
+          description: Also export MYSQL_HOST, MYSQL_TCP_PORT, MYSQL_DATABASE, MYSQL_USER,
+            and MYSQL_PASSWORD so marimo's data-source discovery offers this
+            connection. Only one integration per session can claim them.
+          type: boolean
+      required:
+        - host
+        - database
+        - username
+        - password
     postgres:
       type: object
       properties:
@@ -3224,6 +4258,12 @@ components:
                   minLength: 1
               required:
                 - mode
+        ambient_env:
+          default: false
+          description: Also export PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and
+            PGSSLMODE so marimo's data-source discovery offers this connection.
+            Only one integration per session can claim them.
+          type: boolean
       required:
         - host
         - database
@@ -3339,8 +4379,239 @@ components:
             required:
               - name
               - value
+        ambient_env:
+          default: false
+          description: Also export SPARK_REMOTE so marimo's data-source discovery offers
+            this connection. Only one integration per session can claim them.
+          type: boolean
       required:
         - host
+    redshift:
+      type: object
+      properties:
+        host:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+          description: Cluster or workgroup endpoint, e.g.
+            wg.123456789012.us-east-1.redshift-serverless.amazonaws.com
+        port:
+          default: 5439
+          type: integer
+          minimum: 1
+          maximum: 65535
+        database:
+          type: string
+          minLength: 1
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          description: Password for the database user
+        ssl_mode:
+          default: verify-ca
+          type: string
+          enum:
+            - verify-ca
+            - verify-full
+      required:
+        - host
+        - database
+        - username
+        - password
+    s3:
+      type: object
+      properties:
+        bucket:
+          description: Default bucket for notebook code; the credentials are not
+            restricted to it
+          type: string
+          pattern: ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$
+        region:
+          description: Region name, e.g. us-east-1
+          type: string
+          pattern: ^[a-z0-9-]+$
+        endpoint_url:
+          description: S3-compatible endpoint, e.g. https://minio.internal:9000; omit for
+            AWS S3
+          type: string
+          pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+        auth:
+          default:
+            method: ambient
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: ambient
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                access_key_id:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                secret_access_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                session_token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+        path_style:
+          default: false
+          description: Address buckets as `endpoint/bucket`, which most S3-compatible
+            stores require
+          type: boolean
+        ambient_env:
+          default: true
+          description: Also export the vendor-standard variables so libraries pick this up
+            with no configuration. Only one integration per session can claim
+            them.
+          type: boolean
+    snowflake:
+      type: object
+      properties:
+        account:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+          description: Account identifier, e.g. myorg-account1
+        user:
+          type: string
+          minLength: 1
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: password
+                password:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - password
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: key_pair
+                private_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  description: PKCS#8 private key PEM, written into the session
+                private_key_passphrase:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - private_key
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: oauth
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - token
+        warehouse:
+          description: Warehouse the session runs on
+          type: string
+          minLength: 1
+        database:
+          description: Session default database
+          type: string
+          minLength: 1
+        schema:
+          description: Session default schema
+          type: string
+          minLength: 1
+        role:
+          description: Role the session assumes
+          type: string
+          minLength: 1
+      required:
+        - account
+        - user
+        - auth
+    sqlserver:
+      type: object
+      properties:
+        host:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+          description: Server hostname, e.g. mssql.internal
+        port:
+          default: 1433
+          type: integer
+          minimum: 1
+          maximum: 65535
+        database:
+          type: string
+          minLength: 1
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          description: Password for the database user
+        driver:
+          default:
+            name: pyodbc
+          oneOf:
+            - type: object
+              properties:
+                name:
+                  type: string
+                  const: pyodbc
+                odbc_driver:
+                  default: ODBC Driver 18 for SQL Server
+                  description: Must be installed in the sandbox image
+                  type: string
+                  pattern: ^[A-Za-z0-9 ._-]+$
+                encrypt:
+                  default: true
+                  type: boolean
+                trust_server_certificate:
+                  default: false
+                  description: Accept any server certificate — encrypts without authenticating
+                  type: boolean
+              required:
+                - name
+            - type: object
+              properties:
+                name:
+                  type: string
+                  const: pymssql
+              required:
+                - name
+      required:
+        - host
+        - database
+        - username
+        - password
     trino:
       type: object
       properties:
@@ -3629,6 +4900,41 @@ components:
           type: boolean
         legacy_prepared_statements:
           type: boolean
+        ambient_env:
+          default: false
+          description: Also export TRINO_HOST, TRINO_PORT, TRINO_USER, TRINO_CATALOG, and
+            TRINO_PASSWORD so marimo's data-source discovery offers this
+            connection. Only one integration per session can claim them.
+          type: boolean
       required:
         - host
         - auth
+    wandb:
+      type: object
+      properties:
+        api_key:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          description: API key from wandb.ai/authorize
+        base_url:
+          default: https://api.wandb.ai
+          description: Set this for a self-hosted or dedicated-cloud deployment
+          type: string
+          pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+        entity:
+          description: Default team or user
+          type: string
+          pattern: ^[A-Za-z0-9._-]+$
+        project:
+          type: string
+          pattern: ^[A-Za-z0-9._-]+$
+        mode:
+          default: online
+          description: '`offline` records runs to disk without contacting the server'
+          type: string
+          enum:
+            - online
+            - offline
+      required:
+        - api_key

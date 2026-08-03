@@ -1560,16 +1560,31 @@ describe('ProjectIntegrationsStore', () => {
 		const store = new ProjectIntegrationsStore({ bucket, registry: defaultRegistry(), codec });
 		const kinds = store.listKinds();
 		expect(kinds.map((k) => k.kind).sort()).toEqual([
+			'athena',
+			'azure_blob',
+			'bigquery',
+			'clickhouse',
 			'custom_env',
+			'databricks',
+			'gcs',
+			'huggingface',
 			'iceberg_bigquery',
 			'iceberg_dynamodb',
 			'iceberg_glue',
 			'iceberg_hive',
 			'iceberg_rest',
 			'iceberg_sql',
+			'mongodb',
+			'motherduck',
+			'mysql',
 			'postgres',
 			'pyspark',
+			'redshift',
+			's3',
+			'snowflake',
+			'sqlserver',
 			'trino',
+			'wandb',
 		]);
 		for (const kind of kinds) {
 			expect(kind.json_schema).toMatchObject({ type: 'object' });
