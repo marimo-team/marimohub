@@ -39,7 +39,8 @@ export const SQL_CONNECTION_HINTS: UiHints = {
  * `https:///api`, which WHATWG parsing resolves to the host `api` — a different
  * server than the one the operator typed.
  */
-const URL_AUTHORITY = String.raw`(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?`;
+const URL_PORT = String.raw`(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?`;
+const URL_AUTHORITY = String.raw`(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)${URL_PORT}`;
 
 /** An http(s) URL: authority required, path/query/fragment optional. */
 export const HTTP_URL_REGEX = new RegExp(String.raw`^https?://${URL_AUTHORITY}(?:[/?#]\S*)?$`);
@@ -49,6 +50,27 @@ export const HTTP_URL_REGEX = new RegExp(String.raw`^https?://${URL_AUTHORITY}(?
  * path to, where `?`/`#` would push that path into the query string.
  */
 export const SERVICE_URL_REGEX = new RegExp(String.raw`^https?://${URL_AUTHORITY}(?:/[^\s?#]*)?$`);
+
+/**
+ * A pattern cannot express everything the URL parser rejects — a stray percent
+ * escape (`https://%zz`) satisfies the shape above and still fails to parse. The
+ * refinement is invisible to JSON Schema, so the form keeps the pattern as its
+ * client-side check while a save that would only fail later, inside
+ * {@link serviceUrl} or the probe, is refused here instead.
+ */
+const parses = (value: string) => URL.canParse(value);
+
+export const httpUrlField = () =>
+	z
+		.string()
+		.regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials')
+		.refine(parses, 'Not a valid URL');
+
+export const serviceUrlField = () =>
+	z
+		.string()
+		.regex(SERVICE_URL_REGEX, 'Must be an http(s) URL with no credentials, query, or fragment')
+		.refine(parses, 'Not a valid URL');
 
 /** Appends a path to a configured base URL, tolerating a trailing slash. */
 export function serviceUrl(base: string, path: string): string {
@@ -61,17 +83,24 @@ export function serviceUrl(base: string, path: string): string {
 export const AWS_REGION_REGEX = /^[a-z0-9-]+$/;
 
 /**
- * Rules both stores share: 3–63 characters, starting and ending alphanumeric,
- * no adjacent dots, and not shaped like an IPv4 address. Rejecting these at save
- * time turns a typo into a form error instead of a runtime failure the notebook
- * hits later. The two differ in one character — GCS allows an underscore and S3
- * does not — so they get one regex each rather than a subset that would reject a
- * legitimate GCS bucket.
+ * Rules both stores share: start and end alphanumeric, no adjacent dots, and
+ * not shaped like an IPv4 address. Rejecting these at save time turns a typo
+ * into a form error instead of a runtime failure the notebook hits later.
+ *
+ * Each store gets its own regex because the rest genuinely differs, and a
+ * validator that rejects a real bucket is worse than one that misses a bad
+ * name: GCS allows an underscore, and a dotted GCS name may run to 222
+ * characters as long as every dot-separated part stays within 63.
  */
-const BUCKET_RULES = String.raw`(?=.{3,63}$)(?!(?:\d{1,3}\.){3}\d{1,3}$)(?!.*\.\.)`;
-export const S3_BUCKET_REGEX = new RegExp(String.raw`^${BUCKET_RULES}[a-z0-9][a-z0-9.-]*[a-z0-9]$`);
+const BUCKET_SHARED = String.raw`(?!(?:\d{1,3}\.){3}\d{1,3}$)(?!.*\.\.)`;
+
+export const S3_BUCKET_REGEX = new RegExp(
+	String.raw`^(?=.{3,63}$)${BUCKET_SHARED}[a-z0-9][a-z0-9.-]*[a-z0-9]$`,
+);
+
+/** `goog` and `google` are reserved by Google, so such a bucket cannot exist. */
 export const GCS_BUCKET_REGEX = new RegExp(
-	String.raw`^${BUCKET_RULES}[a-z0-9][a-z0-9._-]*[a-z0-9]$`,
+	String.raw`^(?=.{3,222}$)(?!.*[^.]{64})(?!goog)(?!.*google)${BUCKET_SHARED}[a-z0-9][a-z0-9._-]*[a-z0-9]$`,
 );
 
 /**

@@ -6,7 +6,6 @@ import { basicAuthHeader, defineIntegration, probeErrorDetails } from '../sdk';
 import { zSecret } from '../secretFields';
 import {
 	extraPropertiesSchema,
-	HTTP_URL_REGEX,
 	ICEBERG_BRAND_COLOR,
 	icebergRuntimeSchema,
 	icebergStorageSchema,
@@ -17,9 +16,9 @@ import {
 	storageProperties,
 	validateExtraProperties,
 } from './icebergShared';
+import { httpUrlField } from './common';
 
-const httpUrl = () =>
-	z.string().regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials');
+const httpUrl = httpUrlField;
 
 const authSchema = z.discriminatedUnion('method', [
 	z.object({ method: z.literal('none') }),

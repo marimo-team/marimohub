@@ -12,7 +12,7 @@ import {
 	AWS_REGION_REGEX,
 	awsAuthSchema,
 	GCS_BUCKET_REGEX,
-	HTTP_URL_REGEX,
+	httpUrlField,
 	renderConnection,
 	renderFile,
 	S3_BUCKET_REGEX,
@@ -29,9 +29,7 @@ const s3Config = z.object({
 		.regex(AWS_REGION_REGEX, 'Region name only, e.g. us-east-1')
 		.optional()
 		.describe('Region name, e.g. us-east-1'),
-	endpoint_url: z
-		.string()
-		.regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials')
+	endpoint_url: httpUrlField()
 		.optional()
 		.describe('S3-compatible endpoint, e.g. https://minio.internal:9000; omit for AWS S3'),
 	auth: awsAuthSchema,

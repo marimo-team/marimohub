@@ -1353,12 +1353,26 @@ describe('connection kinds (golden)', () => {
 	});
 
 	// `https:///api` parses to the host `api`, so an empty authority would send
-	// credentials somewhere the operator never named.
-	it.each(['https:///api', 'https://user:pw@host', 'https://', 'https://ho st'])(
-		'endpoint fields reject %s',
+	// credentials somewhere the operator never named. The out-of-range port and
+	// the stray percent escape are where `new URL` throws — without them a save
+	// succeeds and the connection test dies building its own URL.
+	it.each([
+		'https:///api',
+		'https://user:pw@host',
+		'https://',
+		'https://ho st',
+		'https://host:65536',
+		'https://host:0',
+		'https://%zz',
+	])('endpoint fields reject %s', (endpoint) => {
+		expect(huggingFace.configSchema.safeParse({ token: 't', endpoint }).success).toBe(false);
+		expect(s3.configSchema.safeParse({ endpoint_url: endpoint }).success).toBe(false);
+	});
+
+	it.each(['https://host:65535', 'https://[::1]:8443/p', 'http://minio.internal:9000'])(
+		'endpoint fields accept %s',
 		(endpoint) => {
-			expect(huggingFace.configSchema.safeParse({ token: 't', endpoint }).success).toBe(false);
-			expect(s3.configSchema.safeParse({ endpoint_url: endpoint }).success).toBe(false);
+			expect(s3.configSchema.safeParse({ endpoint_url: endpoint }).success).toBe(true);
 		},
 	);
 
@@ -1404,11 +1418,25 @@ describe('connection kinds (golden)', () => {
 		expect(gcs.configSchema.safeParse({ bucket }).success).toBe(valid);
 	});
 
-	// GCS accepts an underscore where S3 does not, so they are validated apart
-	// rather than against a subset that would reject a real GCS bucket.
-	it('gcs accepts an underscore in a bucket name; s3 does not', () => {
-		expect(gcs.configSchema.safeParse({ bucket: 'my_bucket' }).success).toBe(true);
+	// Validated apart because the provider rules genuinely differ; a shared
+	// subset would reject buckets that exist.
+	it('gcs takes the names its own rules allow, and refuses the reserved ones', () => {
+		const dotted = ['a'.repeat(63), 'b'.repeat(63), 'c'.repeat(63), 'd'.repeat(30)].join('.');
+		expect(dotted).toHaveLength(222);
+		for (const [bucket, valid] of [
+			['my_bucket', true],
+			[dotted, true],
+			[`${dotted}e`, false],
+			// Each dot-separated part is still capped at 63.
+			['x'.repeat(64), false],
+			['goog-bucket', false],
+			['my-google-bucket', false],
+		] as const) {
+			expect(gcs.configSchema.safeParse({ bucket }).success, bucket.slice(0, 20)).toBe(valid);
+		}
+		// S3 has neither the underscore nor the 222-character dotted form.
 		expect(s3.configSchema.safeParse({ bucket: 'my_bucket' }).success).toBe(false);
+		expect(s3.configSchema.safeParse({ bucket: dotted }).success).toBe(false);
 	});
 
 	it('wandb and huggingface keep their caches out of the notebook workspace', () => {

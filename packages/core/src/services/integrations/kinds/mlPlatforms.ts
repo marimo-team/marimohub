@@ -5,15 +5,13 @@
 import { z } from 'zod';
 import { basicAuthHeader, defineIntegration, probeEndpoint } from '../sdk';
 import { zSecret } from '../secretFields';
-import { renderConnection, SERVICE_URL_REGEX, serviceUrl } from './common';
+import { renderConnection, serviceUrl, serviceUrlField } from './common';
 
 const NAME_REGEX = /^[A-Za-z0-9._-]+$/;
 
 const wandbConfig = z.object({
 	api_key: zSecret().describe('API key from wandb.ai/authorize'),
-	base_url: z
-		.string()
-		.regex(SERVICE_URL_REGEX, 'Must be an http(s) URL with no credentials, query, or fragment')
+	base_url: serviceUrlField()
 		.default('https://api.wandb.ai')
 		.describe('Set this for a self-hosted or dedicated-cloud deployment'),
 	entity: z
@@ -103,9 +101,7 @@ const HF_HOME = '/tmp/marimohub-huggingface';
 
 const huggingFaceConfig = z.object({
 	token: zSecret().describe('Access token from huggingface.co/settings/tokens'),
-	endpoint: z
-		.string()
-		.regex(SERVICE_URL_REGEX, 'Must be an http(s) URL with no credentials, query, or fragment')
+	endpoint: serviceUrlField()
 		.default('https://huggingface.co')
 		.describe('Set this for an Enterprise Hub deployment'),
 	enable_hf_transfer: z

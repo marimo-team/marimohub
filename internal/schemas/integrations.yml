@@ -1277,7 +1277,7 @@ components:
           description: Default bucket for notebook code; the credentials are not
             restricted to it
           type: string
-          pattern: ^(?=.{3,63}$)(?!(?:\d{1,3}\.){3}\d{1,3}$)(?!.*\.\.)[a-z0-9][a-z0-9._-]*[a-z0-9]$
+          pattern: ^(?=.{3,222}$)(?!.*[^.]{64})(?!goog)(?!.*google)(?!(?:\d{1,3}\.){3}\d{1,3}$)(?!.*\.\.)[a-z0-9][a-z0-9._-]*[a-z0-9]$
         project_id:
           description: Project billed for the requests
           type: string
@@ -1323,7 +1323,7 @@ components:
           default: https://huggingface.co
           description: Set this for an Enterprise Hub deployment
           type: string
-          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:\/[^\s?#]*)?$
+          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:\/[^\s?#]*)?$
         enable_hf_transfer:
           default: false
           description: Faster large-file downloads; requires the hf_transfer package
@@ -1386,7 +1386,7 @@ components:
                   minLength: 1
                 endpoint:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 credentials:
                   default:
                     method: ambient
@@ -1441,7 +1441,7 @@ components:
                   minLength: 1
                 signer_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 signer_endpoint:
                   type: string
                   minLength: 1
@@ -1450,7 +1450,7 @@ components:
                   type: boolean
                 proxy_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 connect_timeout:
                   type: number
                   exclusiveMinimum: 0
@@ -1529,7 +1529,7 @@ components:
                     type: string
                 service_host:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 default_location:
                   type: string
                   minLength: 1
@@ -1690,7 +1690,7 @@ components:
                 endpoint:
                   default: https://huggingface.co
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 token:
                   type: string
                   minLength: 1
@@ -1865,7 +1865,7 @@ components:
                   minLength: 1
                 endpoint:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 credentials:
                   default:
                     method: ambient
@@ -1920,7 +1920,7 @@ components:
                   minLength: 1
                 signer_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 signer_endpoint:
                   type: string
                   minLength: 1
@@ -1929,7 +1929,7 @@ components:
                   type: boolean
                 proxy_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 connect_timeout:
                   type: number
                   exclusiveMinimum: 0
@@ -2008,7 +2008,7 @@ components:
                     type: string
                 service_host:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 default_location:
                   type: string
                   minLength: 1
@@ -2169,7 +2169,7 @@ components:
                 endpoint:
                   default: https://huggingface.co
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 token:
                   type: string
                   minLength: 1
@@ -2212,7 +2212,7 @@ components:
           minLength: 1
         endpoint:
           type: string
-          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
         credentials:
           default:
             method: ambient
@@ -2358,7 +2358,7 @@ components:
                   minLength: 1
                 endpoint:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 credentials:
                   default:
                     method: ambient
@@ -2413,7 +2413,7 @@ components:
                   minLength: 1
                 signer_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 signer_endpoint:
                   type: string
                   minLength: 1
@@ -2422,7 +2422,7 @@ components:
                   type: boolean
                 proxy_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 connect_timeout:
                   type: number
                   exclusiveMinimum: 0
@@ -2501,7 +2501,7 @@ components:
                     type: string
                 service_host:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 default_location:
                   type: string
                   minLength: 1
@@ -2662,7 +2662,7 @@ components:
                 endpoint:
                   default: https://huggingface.co
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 token:
                   type: string
                   minLength: 1
@@ -2742,7 +2742,7 @@ components:
                   minLength: 1
                 endpoint:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 credentials:
                   default:
                     method: ambient
@@ -2797,7 +2797,7 @@ components:
                   minLength: 1
                 signer_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 signer_endpoint:
                   type: string
                   minLength: 1
@@ -2806,7 +2806,7 @@ components:
                   type: boolean
                 proxy_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 connect_timeout:
                   type: number
                   exclusiveMinimum: 0
@@ -2885,7 +2885,7 @@ components:
                     type: string
                 service_host:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 default_location:
                   type: string
                   minLength: 1
@@ -3046,7 +3046,7 @@ components:
                 endpoint:
                   default: https://huggingface.co
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 token:
                   type: string
                   minLength: 1
@@ -3082,7 +3082,7 @@ components:
       properties:
         uri:
           type: string
-          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
           description: REST catalog base URI, e.g. https://catalog.internal/api/catalog
         warehouse:
           description: Warehouse name/path if the server hosts several
@@ -3135,7 +3135,7 @@ components:
                   const: oauth2_client_credentials
                 token_endpoint:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 client_id:
                   type: string
                   minLength: 1
@@ -3224,7 +3224,7 @@ components:
                   minLength: 1
                 endpoint:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 credentials:
                   default:
                     method: ambient
@@ -3279,7 +3279,7 @@ components:
                   minLength: 1
                 signer_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 signer_endpoint:
                   type: string
                   minLength: 1
@@ -3288,7 +3288,7 @@ components:
                   type: boolean
                 proxy_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 connect_timeout:
                   type: number
                   exclusiveMinimum: 0
@@ -3367,7 +3367,7 @@ components:
                     type: string
                 service_host:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 default_location:
                   type: string
                   minLength: 1
@@ -3528,7 +3528,7 @@ components:
                 endpoint:
                   default: https://huggingface.co
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 token:
                   type: string
                   minLength: 1
@@ -3678,7 +3678,7 @@ components:
                   minLength: 1
                 endpoint:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 credentials:
                   default:
                     method: ambient
@@ -3733,7 +3733,7 @@ components:
                   minLength: 1
                 signer_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 signer_endpoint:
                   type: string
                   minLength: 1
@@ -3742,7 +3742,7 @@ components:
                   type: boolean
                 proxy_uri:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 connect_timeout:
                   type: number
                   exclusiveMinimum: 0
@@ -3821,7 +3821,7 @@ components:
                     type: string
                 service_host:
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 default_location:
                   type: string
                   minLength: 1
@@ -3982,7 +3982,7 @@ components:
                 endpoint:
                   default: https://huggingface.co
                   type: string
-                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+                  pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
                 token:
                   type: string
                   minLength: 1
@@ -4437,7 +4437,7 @@ components:
           description: S3-compatible endpoint, e.g. https://minio.internal:9000; omit for
             AWS S3
           type: string
-          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:[/?#]\S*)?$
+          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:[/?#]\S*)?$
         auth:
           default:
             method: ambient
@@ -4924,7 +4924,7 @@ components:
           default: https://api.wandb.ai
           description: Set this for a self-hosted or dedicated-cloud deployment
           type: string
-          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::\d+)?(?:\/[^\s?#]*)?$
+          pattern: ^https?:\/\/(?:\[[0-9A-Fa-f:.]+\]|[^\s/?#@[\]:]+)(?::(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(?:\/[^\s?#]*)?$
         entity:
           description: Default team or user
           type: string

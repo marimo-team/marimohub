@@ -6,7 +6,6 @@ import {
 	awsCredentialProperties,
 	awsCredentialsSchema,
 	extraPropertiesSchema,
-	HTTP_URL_REGEX,
 	ICEBERG_BRAND_COLOR,
 	icebergRuntimeSchema,
 	icebergStorageSchema,
@@ -21,6 +20,7 @@ import {
 	unifiedAwsUiHints,
 	validateExtraProperties,
 } from './icebergShared';
+import { httpUrlField } from './common';
 
 const commonUiHints = {
 	warehouse: { group: 'Connection', order: 2 },
@@ -160,10 +160,7 @@ const glueConfig = z.object({
 		.regex(/^\d{12}$/, 'Must be a 12-digit AWS account ID')
 		.optional(),
 	region: z.string().min(1).optional(),
-	endpoint: z
-		.string()
-		.regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials')
-		.optional(),
+	endpoint: httpUrlField().optional(),
 	credentials: awsCredentialsSchema.default({ method: 'ambient' }),
 	unified_credentials: unifiedAwsCredentialsSchema,
 	skip_archive: z.boolean().default(true),
