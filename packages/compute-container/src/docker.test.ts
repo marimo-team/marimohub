@@ -295,7 +295,7 @@ describe('DockerCompute', () => {
 		);
 	});
 
-	it('healthCheck identifies an unavailable Docker daemon', async () => {
+	it('healthCheck identifies an unreachable Docker daemon', async () => {
 		const { runner } = fakeRunner(() => ({
 			stdout: '',
 			stderr: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock',
@@ -303,7 +303,19 @@ describe('DockerCompute', () => {
 		}));
 
 		await expect(new DockerCompute({}, runner).healthCheck()).rejects.toThrow(
-			'docker daemon is unavailable: Cannot connect to the Docker daemon',
+			'docker is not reachable: Cannot connect to the Docker daemon',
+		);
+	});
+
+	it('healthCheck distinguishes a non-executable CLI (EACCES) from a missing one', async () => {
+		const { runner } = fakeRunner(() => ({
+			stdout: '',
+			stderr: 'Error: spawn docker EACCES',
+			exitCode: 127,
+		}));
+
+		await expect(new DockerCompute({}, runner).healthCheck()).rejects.toThrow(
+			'docker CLI is not executable (permission denied)',
 		);
 	});
 
