@@ -197,7 +197,7 @@ describe('SessionService editor claims', () => {
 		await bucket.put(
 			key,
 			JSON.stringify({
-				...(await stored!.json()),
+				...(await stored!.json<Record<string, unknown>>()),
 				future_claim_field: 'kept',
 			}),
 		);

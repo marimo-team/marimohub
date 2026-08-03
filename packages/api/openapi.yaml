@@ -12,6 +12,10 @@ tags:
     description: Notebook CRUD and versioning
   - name: Sessions
     description: Notebook session lifecycle
+  - name: Integrations
+    description: Project and organization integrations
+  - name: Secrets
+    description: Project secret management
   - name: Users
     description: User identity resolution
   - name: System
@@ -1056,6 +1060,7 @@ components:
       properties:
         kind:
           type: string
+          minLength: 1
           example: postgres
         title:
           type: string
@@ -1071,6 +1076,7 @@ components:
             - other
         schema_version:
           type: integer
+          exclusiveMinimum: 0
         json_schema:
           type: object
           additionalProperties: {}
@@ -1115,25 +1121,46 @@ components:
         - ui_hints
         - supports_test
         - requirements
+    IntegrationPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationEntry'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
     IntegrationEntry:
       type: object
       properties:
         id:
           type: string
+          pattern: ^intg-[0-9a-z]{16}$
         kind:
           type: string
+          minLength: 1
         name:
           type: string
+          pattern: ^[a-z][a-z0-9-]{0,31}$
         enabled:
           type: boolean
         current_version:
           type: integer
+          exclusiveMinimum: 0
         created_by:
           type: string
+          minLength: 1
         created_at:
           type: string
+          format: date-time
         updated_at:
           type: string
+          format: date-time
         scope:
           type: string
           enum:
@@ -1150,6 +1177,7 @@ components:
         - created_by
         - created_at
         - updated_at
+        - scope
     IntegrationDetail:
       allOf:
         - $ref: '#/components/schemas/IntegrationEntry'
@@ -1181,12 +1209,16 @@ components:
       properties:
         version:
           type: integer
+          exclusiveMinimum: 0
         kind_schema_version:
           type: integer
+          exclusiveMinimum: 0
         created_by:
           type: string
+          minLength: 1
         created_at:
           type: string
+          format: date-time
         change_note:
           type: string
       required:
@@ -1194,7 +1226,7 @@ components:
         - kind_schema_version
         - created_by
         - created_at
-    IntegrationImportRequest:
+    IntegrationCopyRequest:
       type: object
       properties:
         source_project_id:
@@ -1207,10 +1239,11 @@ components:
           example: intg-7h2k9qm4xz7rp3w8
         name:
           type: string
-          minLength: 1
+          pattern: ^[a-z][a-z0-9-]{0,31}$
       required:
         - source_project_id
         - source_integration_id
+      additionalProperties: false
     IntegrationTestResult:
       type: object
       properties:
@@ -1218,14 +1251,19 @@ components:
           type: boolean
         latency_ms:
           type: number
+          minimum: 0
         details:
           type: string
       required:
         - ok
     IntegrationTestRequest:
-      anyOf:
+      oneOf:
         - type: object
           properties:
+            source:
+              type: string
+              enum:
+                - draft
             kind:
               type: string
               minLength: 1
@@ -1233,15 +1271,23 @@ components:
               type: object
               additionalProperties: {}
           required:
+            - source
             - kind
             - config
+          additionalProperties: false
         - type: object
           properties:
+            source:
+              type: string
+              enum:
+                - stored
             id:
               type: string
               pattern: ^intg-[0-9a-z]{16}$
           required:
+            - source
             - id
+          additionalProperties: false
     User:
       type: object
       properties:
@@ -4476,6 +4522,19 @@ paths:
           required: true
           name: pid
           in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
       responses:
         '200':
           description: Integration instances (no config)
@@ -4489,12 +4548,16 @@ paths:
                     enum:
                       - true
                   data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/IntegrationEntry'
+                    $ref: '#/components/schemas/IntegrationPage'
                 required:
                   - success
                   - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Authentication required
           content:
@@ -4557,7 +4620,7 @@ paths:
                   minLength: 1
                 name:
                   type: string
-                  minLength: 1
+                  pattern: ^[a-z][a-z0-9-]{0,31}$
                   example: prod
                 config:
                   type: object
@@ -4569,6 +4632,7 @@ paths:
                 - kind
                 - name
                 - config
+              additionalProperties: false
       responses:
         '201':
           description: Integration created (config redacted)
@@ -4586,6 +4650,12 @@ paths:
                 required:
                   - success
                   - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Authentication required
           content:
@@ -4743,7 +4813,7 @@ paths:
               properties:
                 name:
                   type: string
-                  minLength: 1
+                  pattern: ^[a-z][a-z0-9-]{0,31}$
                 enabled:
                   type: boolean
                 config:
@@ -4752,6 +4822,7 @@ paths:
                 change_note:
                   type: string
                   maxLength: 500
+              additionalProperties: false
       responses:
         '200':
           description: Integration updated (config redacted)
@@ -4993,7 +5064,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/v1/projects/{pid}/integrations/import:
+  /api/v1/projects/{pid}/integrations/copy:
     post:
       tags:
         - Integrations
@@ -5011,7 +5082,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/IntegrationImportRequest'
+              $ref: '#/components/schemas/IntegrationCopyRequest'
       responses:
         '201':
           description: Integration copied (config redacted; secrets re-encrypted for this
@@ -5162,6 +5233,20 @@ paths:
       tags:
         - Integrations
       summary: List org-wide integrations (super admin only)
+      parameters:
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
       responses:
         '200':
           description: Org integration instances (no config)
@@ -5175,12 +5260,16 @@ paths:
                     enum:
                       - true
                   data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/IntegrationEntry'
+                    $ref: '#/components/schemas/IntegrationPage'
                 required:
                   - success
                   - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Authentication required
           content:
@@ -5235,7 +5324,7 @@ paths:
                   minLength: 1
                 name:
                   type: string
-                  minLength: 1
+                  pattern: ^[a-z][a-z0-9-]{0,31}$
                   example: prod
                 config:
                   type: object
@@ -5247,6 +5336,7 @@ paths:
                 - kind
                 - name
                 - config
+              additionalProperties: false
       responses:
         '201':
           description: Integration created (config redacted)
@@ -5407,7 +5497,7 @@ paths:
               properties:
                 name:
                   type: string
-                  minLength: 1
+                  pattern: ^[a-z][a-z0-9-]{0,31}$
                 enabled:
                   type: boolean
                 config:
@@ -5416,6 +5506,7 @@ paths:
                 change_note:
                   type: string
                   maxLength: 500
+              additionalProperties: false
       responses:
         '200':
           description: Integration updated (config redacted)

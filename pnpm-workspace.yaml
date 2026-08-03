@@ -4,15 +4,14 @@ packages:
   - examples/*
 
 catalog:
+  '@aws-sdk/client-s3': ^3.1066.0
+  '@aws-sdk/client-secrets-manager': ^3.1066.0
   '@azure/core-auth': ^1.11.0
   '@azure/identity': ^4.13.1
   '@azure/storage-blob': ^12.33.0
-  '@aws-sdk/client-s3': ^3.1066.0
-  '@aws-sdk/client-secrets-manager': ^3.1066.0
-  '@vitest/coverage-v8': 4.1.8
   '@cloudflare/sandbox': ^0.12.1
   '@cloudflare/workers-types': ^4.20260610.1
-  '@hono/node-server': ^2.0.4
+  '@hono/node-server': ^2.0.10
   '@hono/zod-openapi': ^1.2.2
   '@tailwindcss/vite': ^4.3.0
   '@tanstack/react-form': ^1.33.0
@@ -22,11 +21,12 @@ catalog:
   '@testing-library/react': ^16.3.2
   '@testing-library/user-event': ^14.6.1
   '@types/node': ^25.9.3
+  '@vitest/coverage-v8': 4.1.8
   better-all: ^0.0.7
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
   concurrently: ^10.0.3
-  hono: ^4.7.0
+  hono: ^4.12.31
   jose: ^6.1.3
   jsdom: ^29.1.1
   lucide-react: ^1.17.0
@@ -34,8 +34,8 @@ catalog:
   oauth4webapi: ^3.8.6
   ofetch: ^1.5.1
   openapi-fetch: ^0.17.0
-  sonner: ^2.0.7
   smol-toml: ^1.7.0
+  sonner: ^2.0.7
   tailwind-merge: ^3.6.0
   tailwindcss: ^4.3.0
   tailwindcss-react-aria-components: ^2.1.1
@@ -51,20 +51,25 @@ catalog:
 
 catalogMode: prefer
 
-# Never install a package version published in the last 14 days (20160 minutes).
-# Guards against compromised/just-published releases and not-yet-shaken-out bugs.
-# (pnpm strips these comments when it rewrites this file on `pnpm update`.)
+# Do not install a package version published in the last 14 days.
 minimumReleaseAge: 20160
 
-# Exempt vitepress's bundled Algolia docs-search family — a build-only transitive
-# we don't control that ships lockstep releases often fresher than the cooldown,
-# which would otherwise wedge `pnpm install`.
+# Exempt the docs-search packages because they publish coordinated releases
+# more often than the cooldown permits.
 minimumReleaseAgeExclude:
   - '@algolia/*'
   - algoliasearch
   - '@marimo-team/*'
+  # Security fixes take precedence over the release-age cooldown.
+  - brace-expansion
+  - postcss
+  - tar
 
 overrides:
+  brace-expansion: 5.0.8
+  hono: 4.12.31
+  postcss: 8.5.18
+  tar: 7.5.21
   vite: 'catalog:'
   vitepress>vite: ^5.4.0
   vitest: 'catalog:'
@@ -76,7 +81,11 @@ peerDependencyRules:
   allowedVersions:
     vite: '*'
     vitest: '*'
-verifyDepsBeforeRun: install
-blockExoticSubdeps: true
+
 trustPolicy: no-downgrade
+
+verifyDepsBeforeRun: install
+
+blockExoticSubdeps: true
+
 onlyBuiltDependencies: []

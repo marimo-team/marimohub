@@ -36,7 +36,6 @@ traffic:
 ```bash
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
 MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net
-MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m
 ```
 
 `MARIMOHUB_COMPUTE_IMAGE` is the per-kernel container you bring. It also accepts
@@ -44,6 +43,11 @@ a comma-separated list of images — the first is the default, and the rest are
 selectable per notebook (for `e2b`, `MARIMOHUB_COMPUTE_E2B_TEMPLATE` takes a
 list of template ids the same way). See [Sandbox image](./sandbox-image.md) for
 the contract, a pre-warmed example, and how multiple images behave.
+
+The hub uses `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` for its backend-independent
+session lifecycle. It saves the session before it asks the compute provider to
+stop the sandbox. For Modal, the adapter sets the provider-side idle timeout to
+1.5 times this value as a fallback if the scheduled lifecycle sweep cannot run.
 
 `MARIMOHUB_SANDBOX_EXPOSURE` controls how kernels reach the browser:
 

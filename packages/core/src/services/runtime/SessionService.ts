@@ -846,7 +846,7 @@ export class SessionService {
 						...claim.transfer,
 						drain_lease_id: leaseId,
 						drain_lease_expires_at: new Date(now + TAKEOVER_DRAIN_LEASE_MS).toISOString(),
-						drain_lease_stage: 'capturing',
+						drain_lease_stage: 'capturing' as const,
 						drain_lease_progress_deadline_at: new Date(
 							now + TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS,
 						).toISOString(),
@@ -977,7 +977,7 @@ export class SessionService {
 					...claim,
 					transfer: {
 						...claim.transfer,
-						phase: 'ready',
+						phase: 'ready' as const,
 						drain_lease_id: undefined,
 						drain_lease_expires_at: undefined,
 						drain_lease_stage: undefined,

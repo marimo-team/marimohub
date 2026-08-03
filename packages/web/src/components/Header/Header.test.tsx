@@ -24,20 +24,23 @@ function setup(
 			if (url === '/api/v1/me') return jsonOk(me);
 			if (url === '/api/v1/me/tokens') return jsonOk([]);
 			if (url === '/api/v1/integrations/kinds') return jsonOk([]);
-			if (url === '/api/v1/org/integrations') {
-				return jsonOk([
-					{
-						id: 'intg-1',
-						kind: 'postgres',
-						name: 'warehouse',
-						enabled: true,
-						current_version: 1,
-						created_by: 'u',
-						created_at: '',
-						updated_at: '',
-						scope: 'org',
-					},
-				]);
+			if (url.startsWith('/api/v1/org/integrations?')) {
+				return jsonOk({
+					items: [
+						{
+							id: 'intg-1',
+							kind: 'postgres',
+							name: 'warehouse',
+							enabled: true,
+							current_version: 1,
+							created_by: 'u',
+							created_at: '',
+							updated_at: '',
+							scope: 'org',
+						},
+					],
+					next_cursor: null,
+				});
 			}
 			throw new Error(`unexpected fetch: ${init?.method ?? 'GET'} ${url}`);
 		}),

@@ -64,7 +64,7 @@ export function ChangeBaseImageDialog({
 				The image "{notebook.title}" runs on. Takes effect the next time a session starts.
 			</p>
 			<form.AppField name="baseImage">
-				{(f) => <f.RadioGroupField options={baseImageOptions(images)} />}
+				{(f) => <f.RadioGroupField label="Base image" options={baseImageOptions(images)} />}
 			</form.AppField>
 		</FormDialog>
 	);

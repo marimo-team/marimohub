@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { NotFoundError } from 'modal';
 import type { SandboxId } from '@marimo-hub/core';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
-import { modalProfileResources, ModalCompute, parseModalDuration } from './index';
+import { modalProfileResources, ModalCompute } from './index';
 import type {
 	ModalClientLike,
 	ModalFileInfoLike,
@@ -151,7 +151,7 @@ function makeCompute(world: ReturnType<typeof makeWorld>, overrides = {}) {
 			tokenSecret: 'token-secret',
 			image: 'ghcr.io/acme/marimo:latest',
 			appName: 'hub-app',
-			idleTimeout: '20m',
+			idleFallbackMs: 45 * 60_000,
 			...overrides,
 		},
 		world.client,
@@ -174,7 +174,7 @@ describe('ModalCompute', () => {
 			cpu: 1.5,
 			memoryMiB: 2048,
 			encryptedPorts: [2718],
-			idleTimeoutMs: 20 * 60_000,
+			idleTimeoutMs: 45 * 60_000,
 			timeoutMs: 24 * 60 * 60_000,
 			tags: {
 				'marimohub.owner': 'hub-app',
@@ -409,16 +409,5 @@ describe('ModalCompute', () => {
 			}),
 		).rejects.toThrow(/file copy fallback/);
 		expect(await compute.proxy(new Request('https://example.com'))).toBeNull();
-	});
-});
-
-describe('parseModalDuration', () => {
-	it('parses supported units and rejects invalid values during construction', () => {
-		expect(parseModalDuration(undefined)).toBeUndefined();
-		expect(parseModalDuration('500ms')).toBe(500);
-		expect(parseModalDuration('20m')).toBe(1_200_000);
-		expect(parseModalDuration('1.5h')).toBe(5_400_000);
-		expect(() => parseModalDuration('soon')).toThrow(/Invalid Modal idle timeout/);
-		expect(() => parseModalDuration('0s')).toThrow(/must be positive/);
 	});
 });

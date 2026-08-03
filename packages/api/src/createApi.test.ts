@@ -67,3 +67,60 @@ describe('createApi identity refresh is best-effort', () => {
 		expect(await expectPage(res)).toEqual([]);
 	});
 });
+
+describe('createApi CSRF guard', () => {
+	async function postProject(
+		headers: Record<string, string>,
+		policy: { allowedOrigins?: string[] } = {},
+	) {
+		const bucket = await createInitializedBucket();
+		return createTestApi({ bucket, deps: { policy } }).request(
+			'POST',
+			'/projects',
+			{ name: 'Project', description: '' },
+			headers,
+		);
+	}
+
+	it('rejects null origins and reverse-proxy host rewriting unless explicitly allowlisted', async () => {
+		expect((await postProject({ origin: 'null' })).status).toBe(403);
+		expect(
+			(
+				await postProject({
+					origin: 'https://public.example',
+					host: 'internal.example:3000',
+				})
+			).status,
+		).toBe(403);
+		expect(
+			(
+				await postProject(
+					{
+						origin: 'https://public.example',
+						host: 'internal.example:3000',
+					},
+					{ allowedOrigins: ['https://public.example'] },
+				)
+			).status,
+		).toBe(201);
+	});
+
+	it('fails closed when Origin and Fetch Metadata conflict', async () => {
+		expect(
+			(
+				await postProject({
+					origin: 'http://localhost',
+					'sec-fetch-site': 'cross-site',
+				})
+			).status,
+		).toBe(403);
+		expect(
+			(
+				await postProject({
+					origin: 'https://evil.example',
+					'sec-fetch-site': 'same-origin',
+				})
+			).status,
+		).toBe(403);
+	});
+});

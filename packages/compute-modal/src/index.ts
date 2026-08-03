@@ -40,8 +40,8 @@ export interface ModalConfig {
 	apiBase?: string;
 	/** Modal app name that owns the sandboxes. */
 	appName?: string;
-	/** Idle timeout before Modal auto-stops the sandbox (e.g. `20m`). */
-	idleTimeout?: string;
+	/** Provider-side fallback, set later than marimohub's graceful idle deadline. */
+	idleFallbackMs?: number;
 }
 
 export interface ModalProcessLike {
@@ -123,18 +123,6 @@ export function modalProfileResources(resources: ComputeResources | undefined): 
 	};
 }
 
-export function parseModalDuration(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/.exec(value);
-	if (!match) throw new Error(`Invalid Modal idle timeout ${JSON.stringify(value)}`);
-	const multipliers = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
-	const duration = Number(match[1]) * multipliers[match[2] as keyof typeof multipliers];
-	if (!Number.isFinite(duration) || duration <= 0) {
-		throw new Error(`Modal idle timeout must be positive, got ${JSON.stringify(value)}`);
-	}
-	return Math.round(duration);
-}
-
 function isNotFound(error: unknown): boolean {
 	return (
 		error instanceof NotFoundError || (error instanceof Error && error.name === 'NotFoundError')
@@ -199,7 +187,6 @@ class ModalSandboxInstance implements SandboxInstance {
 		private readonly client: ModalClientLike,
 		private readonly resources: ReturnType<typeof modalProfileResources>,
 		private readonly reuse: boolean,
-		private readonly idleTimeoutMs: number | undefined,
 	) {}
 
 	private createSandbox(): Promise<ModalSandboxLike> {
@@ -213,7 +200,9 @@ class ModalSandboxInstance implements SandboxInstance {
 				},
 				encryptedPorts: [KERNEL_PORT],
 				timeoutMs: MAX_SANDBOX_LIFETIME_MS,
-				...(this.idleTimeoutMs !== undefined ? { idleTimeoutMs: this.idleTimeoutMs } : {}),
+				...(this.config.idleFallbackMs !== undefined
+					? { idleTimeoutMs: this.config.idleFallbackMs }
+					: {}),
 				...this.resources,
 			}),
 		);
@@ -438,13 +427,11 @@ class ModalSandboxInstance implements SandboxInstance {
 
 export class ModalCompute implements SandboxProvider {
 	private readonly client: ModalClientLike;
-	private readonly idleTimeoutMs: number | undefined;
 
 	constructor(
 		private readonly config: ModalConfig,
 		client?: ModalClientLike,
 	) {
-		this.idleTimeoutMs = parseModalDuration(config.idleTimeout);
 		this.client =
 			client ??
 			(new ModalClient({
@@ -462,7 +449,6 @@ export class ModalCompute implements SandboxProvider {
 			this.client,
 			modalProfileResources(options?.resources),
 			options?.reuse ?? true,
-			this.idleTimeoutMs,
 		);
 	}
 

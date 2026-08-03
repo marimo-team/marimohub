@@ -73,6 +73,6 @@ off the storage hot path.
 
 ## Audit
 
-Token lifecycle is recorded in the audit event stream as `token.created` and
-`token.revoked`, stamped with the acting user. These are account-level events;
+Token lifecycle is recorded in the audit event stream as `token.create` and
+`token.revoke`, stamped with the acting user. These are account-level events;
 they do not appear in any single project's audit log.

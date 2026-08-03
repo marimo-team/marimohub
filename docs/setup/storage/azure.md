@@ -18,7 +18,8 @@ service-principal environment variables, and Azure developer credentials work
 without additional marimohub secrets.
 
 For Azurite, local development, or a legacy deployment, use a connection string
-instead. It takes precedence over the account URL:
+instead. Set either the connection string or the account URL. The server rejects
+configuration that sets both.
 
 ```bash
 MARIMOHUB_STORAGE_BACKEND=azure

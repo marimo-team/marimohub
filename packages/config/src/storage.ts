@@ -66,6 +66,19 @@ export function makeStorage(env: Env): Bucket {
 				remediation: 'Set it to the Azure Blob Storage container that backs the hub.',
 				docs: 'docs/configuration.md#storage',
 			});
+			if (
+				env.MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING &&
+				env.MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL
+			) {
+				throw new ConfigError(
+					'MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING and MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL are mutually exclusive',
+					{
+						variable: 'MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING',
+						remediation: 'Set one Azure authentication mode and remove the other variable.',
+						docs: 'docs/configuration.md#storage',
+					},
+				);
+			}
 			if (env.MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING) {
 				return new AzureStorage({
 					container,

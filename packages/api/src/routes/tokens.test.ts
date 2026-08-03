@@ -162,7 +162,7 @@ describe('Token routes', () => {
 		expect(doc.paths['/api/v1/me/tokens/{tokenId}'].delete.security).toEqual([{ cookieAuth: [] }]);
 	});
 
-	it('emits token.created / token.revoked audit events', async () => {
+	it('emits token.create / token.revoke audit events', async () => {
 		const { deps, request: req } = createTestApi({ bucket, userId: ACTOR });
 		await req('GET', '/me');
 		const created = await expectOk<TokenMeta>(
@@ -174,7 +174,7 @@ describe('Token routes', () => {
 		const day = new Date().toISOString().slice(0, 10);
 		const events = await deps.services.events.getEvents(day);
 		const tokenEvents = events.filter((e) => e.event.startsWith('token.'));
-		expect(tokenEvents.map((e) => e.event)).toEqual(['token.created', 'token.revoked']);
+		expect(tokenEvents.map((e) => e.event)).toEqual(['token.create', 'token.revoke']);
 		expect(tokenEvents[0]).toMatchObject({ actor: ACTOR, token_id: created.id });
 	});
 

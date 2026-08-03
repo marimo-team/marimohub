@@ -312,11 +312,11 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 	const deps: ApiDeps = {
 		services,
 		bucket,
-		// The provider-side lifetime cap (CoreWeave/E2B) defaults to 2× the session
-		// TTL: an orphan backstop only, so the record-driven sweep always gets to
-		// save + teardown gracefully before the provider hard-kills.
+		// Provider-side limits trail the graceful lifecycle deadlines: Modal idle by
+		// 1.5× and CoreWeave/E2B lifetime by 2×.
 		compute: makeCompute(env, {
 			sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
+			sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
 		}),
 		// Personal access tokens ride on every deployment: a `mhub_pat_` bearer
 		// resolves through the TokenService, everything else through the SSO adapter.

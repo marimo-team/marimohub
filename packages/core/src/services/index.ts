@@ -34,10 +34,12 @@ export { AesGcmSecretCodec } from './secrets/AesGcmSecretCodec';
 export type { AesGcmSecretCodecOptions } from './secrets/AesGcmSecretCodec';
 export { assertValidSecretName } from './secrets/secretName';
 export {
+	MAX_INTEGRATIONS_PER_SCOPE,
 	OrgIntegrationsStore,
 	ProjectIntegrationsStore,
 } from './integrations/ProjectIntegrationsStore';
 export type { IntegrationsStoreOptions } from './integrations/ProjectIntegrationsStore';
+export type { OrgIntegrationsService, ProjectIntegrationsService } from './integrations/contracts';
 export { IntegrationRegistry } from './integrations/registry';
 export { defineIntegration, envSegment } from './integrations/sdk';
 export type { IntegrationDefinition, RenderInput, RenderOutput } from './integrations/sdk';

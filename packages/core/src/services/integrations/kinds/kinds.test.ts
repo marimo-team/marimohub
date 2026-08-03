@@ -44,6 +44,16 @@ function renderDefinition(def: IntegrationDefinition, config: unknown, name = 'p
 	return def.render(input(config, def, name));
 }
 
+function captureValidationError(run: () => unknown): ValidationError {
+	try {
+		run();
+	} catch (error) {
+		expect(error).toBeInstanceOf(ValidationError);
+		return error as ValidationError;
+	}
+	throw new Error('Expected a ValidationError');
+}
+
 const FIXTURES: Record<string, unknown> = {
 	postgres: {
 		host: 'db.internal',
@@ -1103,6 +1113,9 @@ describe('cross-kind bundle', () => {
 		'a/./file.json',
 		'a//file.json',
 		'a\\file.json',
+		'a/secret\0.json',
+		'a/secret\n.json',
+		'a/secret\u007f.json',
 	])('rejects an unsafe rendered path: %s', (path) => {
 		expect(() =>
 			bundleIntegrations(
@@ -1110,6 +1123,17 @@ describe('cross-kind bundle', () => {
 				createSessionId(),
 			),
 		).toThrow(/invalid file path/);
+	});
+
+	it('escapes control characters in unsafe rendered path errors', () => {
+		const error = captureValidationError(() =>
+			bundleIntegrations(
+				[synthetic('unsafe', { files: [{ path: 'a/secret\n.json', content: 'x' }] })],
+				createSessionId(),
+			),
+		);
+		expect(String(error)).toContain('a/secret\\n.json');
+		expect(String(error)).not.toContain('a/secret\n.json');
 	});
 
 	it('rejects manifest replacement and cross-integration file collisions', () => {
@@ -1151,6 +1175,47 @@ describe('cross-kind bundle', () => {
 			).toThrow(/forbidden or malformed env name/);
 		},
 	);
+
+	it.each(['secret\0value', 'secret\nvalue', 'secret\tvalue', 'secret\u007fvalue'])(
+		'rejects a rendered environment value containing a control character',
+		(value) => {
+			expect(() =>
+				bundleIntegrations([synthetic('unsafe', { env: { SAFE_NAME: value } })], createSessionId()),
+			).toThrow(/control character/);
+		},
+	);
+
+	it('does not echo rendered environment or YAML values in validation errors', () => {
+		const secret = 'do-not-log-this-secret';
+		const messages = [
+			[synthetic('unsafe', { env: { SAFE_NAME: `${secret}\n` } })],
+			[
+				synthetic('first', { env: { SHARED: secret } }),
+				synthetic('second', { env: { SHARED: 'other' } }),
+			],
+		];
+		for (const rendered of messages) {
+			const error = captureValidationError(() => bundleIntegrations(rendered, createSessionId()));
+			expect(String(error)).not.toContain(secret);
+		}
+
+		const error = captureValidationError(() =>
+			bundleIntegrations(
+				[
+					{
+						...synthetic('first', {}),
+						output: { yamlFiles: [{ path: 'shared.yaml', value: { option: secret } }] },
+					},
+					{
+						...synthetic('second', {}),
+						output: { yamlFiles: [{ path: 'shared.yaml', value: { option: 'other' } }] },
+					},
+				],
+				createSessionId(),
+			),
+		);
+		expect(String(error)).not.toContain(secret);
+	});
 
 	it('rejects conflicting environment values but permits an identical shared value', () => {
 		expect(() =>

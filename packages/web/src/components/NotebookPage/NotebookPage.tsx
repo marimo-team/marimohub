@@ -17,7 +17,6 @@ import {
 	IconLink,
 	StatusDot,
 	SessionStatusDot,
-	Tooltip,
 	UserLabel,
 } from '@/components/ui';
 import {
@@ -392,9 +391,10 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 						/>
 					)}
 					{error ? (
-						<Tooltip content="Error">
-							<StatusDot className="bg-destructive" />
-						</Tooltip>
+						<span className="inline-flex items-center" title="Error">
+							<StatusDot className="bg-destructive" aria-hidden="true" />
+							<span className="sr-only">Error</span>
+						</span>
 					) : session ? (
 						<SessionStatusDot
 							session={session}
@@ -403,9 +403,10 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 						/>
 					) : (
 						isProvisioning && (
-							<Tooltip content="Starting">
-								<StatusDot className="bg-yellow-500" pulse />
-							</Tooltip>
+							<span className="inline-flex items-center" title="Starting">
+								<StatusDot className="bg-yellow-500" pulse aria-hidden="true" />
+								<span className="sr-only">Starting</span>
+							</span>
 						)
 					)}
 					{/* Stop/Restart render from the server-evaluated grants: editors on

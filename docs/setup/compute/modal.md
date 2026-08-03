@@ -11,7 +11,7 @@ MARIMOHUB_COMPUTE_BACKEND=modal
 MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=…              # secret
 MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=…          # secret
 MARIMOHUB_COMPUTE_IMAGE=ghcr.io/orgname/marimo-sandbox:latest
-MARIMOHUB_COMPUTE_IDLE_TIMEOUT=20m              # auto-stop idle kernels to control spend
+MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS=1800     # save and stop after 30 idle minutes
 ```
 
 ::: tip No infrastructure to run
@@ -21,7 +21,9 @@ running kernels. The easiest path if you don't already run a cluster.
 
 The adapter creates and reconnects to sandboxes through Modal's supported
 JavaScript SDK. Compute profiles are passed as the SDK's `cpu` and `memoryMiB`
-sandbox options.
+sandbox options. The adapter sets Modal's provider-side idle timeout to 1.5 times
+`MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`. This leaves time for the hub to save
+and stop the session first.
 
 ::: warning Cold starts & shared workspaces
 A freshly-started kernel can take a few seconds to boot; a warm sandbox image

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Seconds } from '@marimo-hub/core';
+import { Millis, Seconds } from '@marimo-hub/core';
 import { ModalCompute } from '@marimo-hub/compute-modal';
 import { LocalCompute } from '@marimo-hub/compute-local';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
@@ -24,6 +24,7 @@ const configOf = (provider: unknown) =>
 				host?: string;
 				bindHost?: string;
 				network?: string;
+				idleFallbackMs?: number;
 			};
 		}
 	).config;
@@ -49,6 +50,12 @@ describe('makeCompute backend selection', () => {
 
 	it('selects modal', () => {
 		expect(makeCompute(modalEnv)).toBeInstanceOf(ModalCompute);
+	});
+
+	it('sets the Modal idle fallback to 1.5x the graceful session timeout', () => {
+		expect(
+			configOf(makeCompute(modalEnv, { sessionIdleTimeoutMs: Millis.minutes(30) })).idleFallbackMs,
+		).toBe(Millis.minutes(45));
 	});
 
 	it('selects docker', () => {
@@ -332,6 +339,15 @@ describe('makeCompute local port range', () => {
 
 	it.each(['2718', '2718_2723', 'abc-def', '2718-'])(
 		'throws ConfigError on the malformed range %o',
+		(ports) => {
+			expect(() =>
+				makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'local', MARIMOHUB_COMPUTE_LOCAL_PORTS: ports }),
+			).toThrow(/Invalid MARIMOHUB_COMPUTE_LOCAL_PORTS/);
+		},
+	);
+
+	it.each(['3000-2999', '0-1', '1-65536', `${'9'.repeat(400)}-${'9'.repeat(400)}`])(
+		'throws ConfigError on the invalid range %o',
 		(ports) => {
 			expect(() =>
 				makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'local', MARIMOHUB_COMPUTE_LOCAL_PORTS: ports }),

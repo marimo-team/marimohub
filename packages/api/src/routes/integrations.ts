@@ -10,8 +10,8 @@ import {
 import type {
 	IntegrationDetail,
 	IntegrationEntry,
-	IntegrationsProvider,
-	OrgIntegrationsProvider,
+	ProjectIntegrationsService,
+	OrgIntegrationsService,
 	TestIntegrationRequest,
 } from '@marimo-hub/core';
 import {
@@ -31,7 +31,16 @@ import {
 	SuccessResponseSchema,
 } from '../shared';
 import type { ApiDeps } from '../shared';
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, pageSchema, PaginationQuery } from '../pagination';
+import {
+	DEFAULT_PAGE_SIZE,
+	MAX_PAGE_SIZE,
+	pageSchema,
+	paginate,
+	PaginationQuery,
+} from '../pagination';
+
+const IntegrationIdSchema = z.string().regex(IntegrationId.regex).refine(IntegrationId.is);
+const IntegrationNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 
 const IidParam = z
 	.string()
@@ -50,11 +59,11 @@ const ConfigSchema = z.record(z.string(), z.unknown());
 
 const KindDescriptorSchema = z
 	.object({
-		kind: z.string().openapi({ example: 'postgres' }),
+		kind: z.string().min(1).openapi({ example: 'postgres' }),
 		title: z.string(),
 		description: z.string(),
 		category: z.enum(INTEGRATION_CATEGORIES),
-		schema_version: z.number().int(),
+		schema_version: z.number().int().positive(),
 		json_schema: z.record(z.string(), z.unknown()),
 		ui_hints: z.record(
 			z.string(),
@@ -77,16 +86,15 @@ const KindDescriptorSchema = z
 
 const IntegrationEntrySchema = z
 	.object({
-		id: z.string(),
-		kind: z.string(),
-		name: z.string(),
+		id: IntegrationIdSchema,
+		kind: z.string().min(1),
+		name: IntegrationNameSchema,
 		enabled: z.boolean(),
-		current_version: z.number().int(),
-		created_by: z.string(),
-		created_at: z.string(),
-		updated_at: z.string(),
-		/** Absent means project-owned; project listings mark inherited org instances `org`. */
-		scope: z.enum(['project', 'org']).optional(),
+		current_version: z.number().int().positive(),
+		created_by: z.string().min(1),
+		created_at: z.iso.datetime(),
+		updated_at: z.iso.datetime(),
+		scope: z.enum(['project', 'org']),
 		/** Org entries in a project listing: a same-name project integration overrides this one. */
 		shadowed: z.boolean().optional(),
 	})
@@ -101,10 +109,10 @@ const IntegrationDetailSchema = IntegrationEntrySchema.extend({
 
 const IntegrationVersionSchema = z
 	.object({
-		version: z.number().int(),
-		kind_schema_version: z.number().int(),
-		created_by: z.string(),
-		created_at: z.string(),
+		version: z.number().int().positive(),
+		kind_schema_version: z.number().int().positive(),
+		created_by: z.string().min(1),
+		created_at: z.iso.datetime(),
 		change_note: z.string().optional(),
 	})
 	.openapi('IntegrationVersion');
@@ -112,22 +120,24 @@ const IntegrationVersionSchema = z
 const TestResultSchema = z
 	.object({
 		ok: z.boolean(),
-		latency_ms: z.number().optional(),
+		latency_ms: z.number().nonnegative().optional(),
 		/** User-safe probe details; never secret material. */
 		details: z.string().optional(),
 	})
 	.openapi('IntegrationTestResult');
 
-const CreateIntegrationBody = z.object({
-	kind: z.string().min(1),
-	name: z.string().min(1).openapi({ example: 'prod' }),
-	config: ConfigSchema,
-	change_note: z.string().max(500).optional(),
-});
+const CreateIntegrationBody = z
+	.object({
+		kind: z.string().min(1),
+		name: IntegrationNameSchema.openapi({ example: 'prod' }),
+		config: ConfigSchema,
+		change_note: z.string().max(500).optional(),
+	})
+	.strict();
 
 const UpdateIntegrationBody = z
 	.object({
-		name: z.string().min(1).optional(),
+		name: IntegrationNameSchema.optional(),
 		enabled: z.boolean().optional(),
 		/** When present, appends a config version and preserves untouched secrets. */
 		config: ConfigSchema.optional(),
@@ -141,16 +151,19 @@ const UpdateIntegrationBody = z
 	.refine(
 		(body) => body.change_note === undefined || body.config !== undefined,
 		'change_note requires config.',
-	);
+	)
+	.strict();
 
 const TestIntegrationBody = z
-	.union([
-		z.object({ kind: z.string().min(1), config: ConfigSchema }),
-		z.object({ id: z.string().regex(IntegrationId.regex).refine(IntegrationId.is) }),
+	.discriminatedUnion('source', [
+		z
+			.object({ source: z.literal('draft'), kind: z.string().min(1), config: ConfigSchema })
+			.strict(),
+		z.object({ source: z.literal('stored'), id: IntegrationIdSchema }).strict(),
 	])
 	.openapi('IntegrationTestRequest');
 
-const ImportIntegrationBody = z
+const CopyIntegrationBody = z
 	.object({
 		source_project_id: z
 			.string()
@@ -163,9 +176,10 @@ const ImportIntegrationBody = z
 			.refine(IntegrationId.is)
 			.openapi({ example: 'intg-7h2k9qm4xz7rp3w8' }),
 		/** Name for the copy; defaults to the source instance's name. */
-		name: z.string().min(1).optional(),
+		name: IntegrationNameSchema.optional(),
 	})
-	.openapi('IntegrationImportRequest');
+	.strict()
+	.openapi('IntegrationCopyRequest');
 
 const listKinds = createRoute({
 	method: 'get',
@@ -186,14 +200,17 @@ const listIntegrations = createRoute({
 	path: '/projects/{pid}/integrations',
 	tags: ['Integrations'],
 	summary: "List a project's integrations",
-	request: { params: ProjectIdParam },
+	request: { params: ProjectIdParam, query: PaginationQuery },
 	responses: {
 		200: jsonContent(
-			z.object({ success: z.literal(true), data: z.array(IntegrationEntrySchema) }),
+			z.object({
+				success: z.literal(true),
+				data: pageSchema(IntegrationEntrySchema, 'IntegrationPage'),
+			}),
 			'Integration instances (no config)',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(400, 403, 404),
 	},
 });
 
@@ -209,7 +226,7 @@ const createIntegration = createRoute({
 			'Integration created (config redacted)',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(400, 403, 404),
 	},
 });
 
@@ -283,12 +300,12 @@ const listIntegrationVersions = createRoute({
 	},
 });
 
-const importIntegration = createRoute({
+const copyIntegration = createRoute({
 	method: 'post',
-	path: '/projects/{pid}/integrations/import',
+	path: '/projects/{pid}/integrations/copy',
 	tags: ['Integrations'],
 	summary: 'Copy an integration from another project (admin of both projects)',
-	request: { params: ProjectIdParam, body: jsonBody(ImportIntegrationBody) },
+	request: { params: ProjectIdParam, body: jsonBody(CopyIntegrationBody) },
 	responses: {
 		201: jsonContent(
 			z.object({ success: z.literal(true), data: IntegrationDetailSchema }),
@@ -323,13 +340,17 @@ const listOrgIntegrations = createRoute({
 	path: '/org/integrations',
 	tags: ['Integrations'],
 	summary: 'List org-wide integrations (super admin only)',
+	request: { query: PaginationQuery },
 	responses: {
 		200: jsonContent(
-			z.object({ success: z.literal(true), data: z.array(IntegrationEntrySchema) }),
+			z.object({
+				success: z.literal(true),
+				data: pageSchema(IntegrationEntrySchema, 'IntegrationPage'),
+			}),
 			'Org integration instances (no config)',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(400, 403, 404),
 	},
 });
 
@@ -435,14 +456,14 @@ const testOrgIntegration = createRoute({
 	},
 });
 
-function requireIntegrations(deps: ApiDeps): IntegrationsProvider {
+function requireIntegrations(deps: ApiDeps): ProjectIntegrationsService {
 	if (!deps.integrations) {
 		throw new NotFoundError('Integrations are not enabled on this deployment');
 	}
 	return deps.integrations;
 }
 
-function requireOrgIntegrations(deps: ApiDeps): OrgIntegrationsProvider {
+function requireOrgIntegrations(deps: ApiDeps): OrgIntegrationsService {
 	if (!deps.orgIntegrations) {
 		throw new NotFoundError('Integrations are not enabled on this deployment');
 	}
@@ -459,7 +480,7 @@ function entryResponse(e: IntegrationEntry) {
 		created_by: e.created_by,
 		created_at: e.created_at,
 		updated_at: e.updated_at,
-		...(e.scope !== undefined ? { scope: e.scope } : {}),
+		scope: e.scope,
 		...(e.shadowed !== undefined ? { shadowed: e.shadowed } : {}),
 	};
 }
@@ -483,9 +504,13 @@ app.openapi(listIntegrations, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
+	const query = c.req.valid('query');
 	const integrations = requireIntegrations(deps);
 	await assertProjectRole(deps.services.projects, pid, user, 'viewer', deps.policy);
-	const data = (await integrations.list(pid)).map(entryResponse);
+	const data = paginate((await integrations.list(pid)).map(entryResponse), query, {
+		key: (entry) => entry.updated_at,
+		tiebreak: (entry) => entry.id,
+	});
 	return c.json({ success: true, data }, 200);
 });
 
@@ -503,6 +528,7 @@ app.openapi(createIntegration, async (c) => {
 			event: 'integration.create',
 			actor: user.id,
 			project_id: pid,
+			integration_scope: 'project',
 			integration_id: detail.id,
 			integration_kind: detail.kind,
 			integration_name: detail.name,
@@ -536,6 +562,7 @@ app.openapi(updateIntegration, async (c) => {
 			event: 'integration.update',
 			actor: user.id,
 			project_id: pid,
+			integration_scope: 'project',
 			integration_id: iid,
 			integration_kind: detail.kind,
 			integration_name: detail.name,
@@ -557,7 +584,13 @@ app.openapi(deleteIntegration, async (c) => {
 	const deleted = await integrations.delete(pid, iid, ifMatchToken(c));
 	if (deleted) {
 		await deps.services.events
-			.append({ event: 'integration.delete', actor: user.id, project_id: pid, integration_id: iid })
+			.append({
+				event: 'integration.delete',
+				actor: user.id,
+				project_id: pid,
+				integration_scope: 'project',
+				integration_id: iid,
+			})
 			.catch(() => {});
 	}
 	return c.json({ success: true }, 200);
@@ -617,7 +650,7 @@ export function trackedTestBudgets(): number {
 	return recentTestsByUser.size;
 }
 
-app.openapi(importIntegration, async (c) => {
+app.openapi(copyIntegration, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
@@ -646,9 +679,10 @@ app.openapi(importIntegration, async (c) => {
 	);
 	await deps.services.events
 		.append({
-			event: 'integration.import',
+			event: 'integration.copy',
 			actor: user.id,
 			project_id: pid,
+			integration_scope: 'project',
 			integration_id: detail.id,
 			integration_kind: detail.kind,
 			integration_name: detail.name,
@@ -674,7 +708,11 @@ app.openapi(listOrgIntegrations, async (c) => {
 	const deps = c.get('deps');
 	const integrations = requireOrgIntegrations(deps);
 	assertSuperAdmin(c.get('user'), deps.policy);
-	const data = (await integrations.list()).map(entryResponse);
+	const query = c.req.valid('query');
+	const data = paginate((await integrations.list()).map(entryResponse), query, {
+		key: (entry) => entry.updated_at,
+		tiebreak: (entry) => entry.id,
+	});
 	return c.json({ success: true, data }, 200);
 });
 
@@ -687,8 +725,9 @@ app.openapi(createOrgIntegration, async (c) => {
 	const detail = await integrations.create(body, user.id);
 	await deps.services.events
 		.append({
-			event: 'org_integration.create',
+			event: 'integration.create',
 			actor: user.id,
+			integration_scope: 'org',
 			integration_id: detail.id,
 			integration_kind: detail.kind,
 			integration_name: detail.name,
@@ -718,8 +757,9 @@ app.openapi(updateOrgIntegration, async (c) => {
 	c.header('ETag', etagFor(detail.updated_at));
 	await deps.services.events
 		.append({
-			event: 'org_integration.update',
+			event: 'integration.update',
 			actor: user.id,
+			integration_scope: 'org',
 			integration_id: iid,
 			integration_kind: detail.kind,
 			integration_name: detail.name,
@@ -739,7 +779,12 @@ app.openapi(deleteOrgIntegration, async (c) => {
 	const deleted = await integrations.delete(iid, ifMatchToken(c));
 	if (deleted) {
 		await deps.services.events
-			.append({ event: 'org_integration.delete', actor: user.id, integration_id: iid })
+			.append({
+				event: 'integration.delete',
+				actor: user.id,
+				integration_scope: 'org',
+				integration_id: iid,
+			})
 			.catch(() => {});
 	}
 	return c.json({ success: true }, 200);

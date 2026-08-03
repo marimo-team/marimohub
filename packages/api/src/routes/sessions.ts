@@ -632,10 +632,15 @@ app.openapi(takeoverEditorSession, async (c) => {
 				takeover_id: body.takeover_id,
 			})
 			.catch(() => {});
-	try {
+	const assertAccess = async () => {
 		const project = await deps.services.projects.getProject(pid);
 		if (project.status === 'deleted') throw new NotFoundError(`Project ${pid} not found`);
 		requireRole(project, user, 'editor', deps.policy);
+		const notebook = await deps.services.notebooks.getNotebook(pid, nid);
+		if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
+	};
+	try {
+		await assertAccess();
 		const currentClaim = await deps.services.sessions.getEditorClaim(pid, nid);
 		if (effectiveEditorSharing(currentClaim, deps.policy.editorSandboxSharing) !== 'exclusive') {
 			throw new BadRequestError('Takeover is only available in exclusive editor mode');
@@ -658,7 +663,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 				const completed = await sessionRetirer(deps).completeTakeoverDrain(
 					holder,
 					body.takeover_id,
-					globalThis.crypto.randomUUID(),
+					crypto.randomUUID(),
 				);
 				if (!completed) throw new Error('Another request owns the takeover drain lease');
 				await audit('session.takeover.success');
@@ -685,6 +690,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 				'The current editor activity changed; refresh and confirm the takeover again',
 			);
 		}
+		await assertAccess();
 		try {
 			await sessionRetirer(deps).retireForTakeover(holder, user.id);
 			await deps.services.sessions.setTakeoverPhase(pid, nid, body.takeover_id, 'ready');
@@ -704,6 +710,9 @@ app.openapi(takeoverEditorSession, async (c) => {
 		return c.json({ success: true }, 200);
 	} catch (err) {
 		failed = true;
+		await deps.services.sessions
+			.cancelRequestedTakeover(pid, nid, body.takeover_id)
+			.catch(() => {});
 		observer.tag('error', err instanceof Error ? err.name : 'unknown');
 		await audit('session.takeover.failure');
 		throw err;

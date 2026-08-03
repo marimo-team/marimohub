@@ -33,7 +33,24 @@ function parsePortRange(value: string | undefined): { start: number; end: number
 				remediation: 'Use a numeric range like 2718-2723.',
 			},
 		);
-	return { start: Number(m[1]), end: Number(m[2]) };
+	const start = Number(m[1]);
+	const end = Number(m[2]);
+	if (
+		!Number.isSafeInteger(start) ||
+		!Number.isSafeInteger(end) ||
+		start < 1 ||
+		end > 65_535 ||
+		start > end
+	) {
+		throw new ConfigError(
+			`Invalid MARIMOHUB_COMPUTE_LOCAL_PORTS: ${value} (ports must be 1-65535 and start must not exceed end)`,
+			{
+				variable: 'MARIMOHUB_COMPUTE_LOCAL_PORTS',
+				remediation: 'Use an ascending TCP port range like 2718-2723.',
+			},
+		);
+	}
+	return { start, end };
 }
 
 const computeVar = (env: Env, key: string, backend: string) =>
@@ -50,6 +67,8 @@ export interface ComputeOptions {
 	 * reject an explicit cap below it.
 	 */
 	sessionMaxLifetimeSeconds?: Seconds;
+	/** Effective marimohub idle deadline; Modal uses 1.5× this as a fallback. */
+	sessionIdleTimeoutMs?: Millis;
 }
 
 /**
@@ -156,7 +175,9 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				// App name scopes reconciler enumeration (listActive) to sandboxes this
 				// deployment owns, so it never reaps co-tenant sandboxes in the workspace.
 				appName: env.MARIMOHUB_COMPUTE_MODAL_APP_NAME,
-				idleTimeout: env.MARIMOHUB_COMPUTE_IDLE_TIMEOUT,
+				...(opts?.sessionIdleTimeoutMs !== undefined
+					? { idleFallbackMs: Math.ceil(opts.sessionIdleTimeoutMs * 1.5) }
+					: {}),
 			});
 		}
 		case 'coreweave':

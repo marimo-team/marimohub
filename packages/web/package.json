@@ -23,7 +23,7 @@
 		"react": "^19.1.1",
 		"react-aria-components": "^1.16.0",
 		"react-dom": "^19.1.1",
-		"react-router-dom": "^7.11.0",
+		"react-router-dom": "^7.18.0",
 		"sonner": "catalog:",
 		"tailwind-merge": "catalog:",
 		"tailwindcss": "catalog:",

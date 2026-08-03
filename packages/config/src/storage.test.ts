@@ -41,15 +41,15 @@ describe('makeStorage backend selection', () => {
 		).toBeInstanceOf(AzureStorage);
 	});
 
-	it('gives an Azure connection string precedence over the account URL', () => {
-		expect(
+	it('rejects both Azure authentication modes together', () => {
+		expect(() =>
 			makeStorage({
 				MARIMOHUB_STORAGE_BACKEND: 'azure',
 				MARIMOHUB_STORAGE_AZURE_CONTAINER: 'hub',
 				MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING: 'UseDevelopmentStorage=true',
 				MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL: 'not a URL',
 			}),
-		).toBeInstanceOf(AzureStorage);
+		).toThrow(/mutually exclusive/);
 	});
 
 	it('requires the Azure container and an account URL when no connection string is set', () => {

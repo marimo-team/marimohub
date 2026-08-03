@@ -39,6 +39,8 @@ const OPENAPI_DOC = {
 		{ name: 'Projects', description: 'Project management' },
 		{ name: 'Notebooks', description: 'Notebook CRUD and versioning' },
 		{ name: 'Sessions', description: 'Notebook session lifecycle' },
+		{ name: 'Integrations', description: 'Project and organization integrations' },
+		{ name: 'Secrets', description: 'Project secret management' },
 		{ name: 'Users', description: 'User identity resolution' },
 		{ name: 'System', description: 'Deployment metadata' },
 	],
@@ -239,7 +241,7 @@ export function createApi(rawDeps: ApiDeps) {
 	//   - `Sec-Fetch-Site` (Fetch Metadata): sent by modern browsers on every
 	//     request and far less likely than `Origin` to be stripped by a proxy.
 	//     `cross-site`/`same-site` means it came from another (sub)domain.
-	//   - `Origin`: rejected when its host differs from the `Host` header.
+	//   - `Origin`: rejected when its full origin differs from the request origin.
 	// Either signal can clear via the allowlist. Requests with NEITHER header
 	// (non-browser callers — the generated client, server-to-server, the CLI) are
 	// allowed, so this never breaks programmatic use. Safe methods
@@ -258,13 +260,25 @@ export function createApi(rawDeps: ApiDeps) {
 		}
 
 		if (origin) {
-			let originHost: string | null = null;
+			let sourceOrigin: string | null = null;
 			try {
-				originHost = new URL(origin).host;
+				sourceOrigin = new URL(origin).origin;
 			} catch {
-				originHost = null;
+				sourceOrigin = null;
 			}
-			const sameOrigin = originHost !== null && originHost === c.req.header('host');
+			const requestUrl = new URL(c.req.url);
+			const destinationHost = c.req.header('host') ?? requestUrl.host;
+			const forwardedProtocol = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim();
+			const protocol = forwardedProtocol || requestUrl.protocol.slice(0, -1);
+			let destinationOrigin: string | null = null;
+			try {
+				destinationOrigin = deps.sandbox.appBaseUrl
+					? new URL(deps.sandbox.appBaseUrl).origin
+					: new URL(`${protocol}://${destinationHost}`).origin;
+			} catch {
+				destinationOrigin = null;
+			}
+			const sameOrigin = sourceOrigin !== null && sourceOrigin === destinationOrigin;
 			if (!sameOrigin && !allowlisted) return reject();
 		}
 		return next();

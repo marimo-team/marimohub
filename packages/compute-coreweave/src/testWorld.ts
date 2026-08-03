@@ -171,6 +171,9 @@ export function makeWorld(opts?: {
 	function reconnect(entry: { fake: FakeSandbox }, cwId: string) {
 		return {
 			sandboxId: cwId,
+			wait: async (options?: { intervalMs?: number }) => {
+				entry.fake.waitCalls.push(options ?? {});
+			},
 			commands: {
 				run: async (command: readonly string[]) => {
 					entry.fake.runCalls.push([...command]);
