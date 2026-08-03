@@ -3,24 +3,19 @@ import { ValidationError } from '../../../errors';
 import type { RenderOutput } from '../sdk';
 import { zSecret } from '../secretFields';
 import { INTEGRATIONS_DIR } from '../bundle';
+import { awsStaticCredentials, httpUrlField } from './common';
 
-export const HTTP_URL_REGEX = /^https?:\/\/(?![^/?#]*@)\S+$/;
+export { HTTP_URL_REGEX } from './common';
 export const THRIFT_URL_REGEX = /^thrift:\/\/(?![^/?#]*@)\S+$/;
 
 /** Primary brand color from iceberg.apache.org (no simple-icons mark exists). */
 export const ICEBERG_BRAND_COLOR = '#0969DA';
 
-const url = () =>
-	z.string().regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials');
+const url = httpUrlField;
 
 export const awsCredentialsSchema = z.discriminatedUnion('method', [
 	z.object({ method: z.literal('ambient') }),
-	z.object({
-		method: z.literal('static'),
-		access_key_id: zSecret(),
-		secret_access_key: zSecret(),
-		session_token: zSecret().optional(),
-	}),
+	z.object({ method: z.literal('static'), ...awsStaticCredentials }),
 	z.object({
 		method: z.literal('profile'),
 		profile_name: z.string().min(1),
@@ -33,9 +28,7 @@ export const unifiedAwsCredentialsSchema = z
 		z.object({
 			method: z.literal('static'),
 			region: z.string().min(1).optional(),
-			access_key_id: zSecret(),
-			secret_access_key: zSecret(),
-			session_token: zSecret().optional(),
+			...awsStaticCredentials,
 		}),
 		z.object({
 			method: z.literal('profile'),

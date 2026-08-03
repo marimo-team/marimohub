@@ -1,13 +1,17 @@
 ---
-description: Configure project and organization data sources for notebook sessions, including PostgreSQL, PyIceberg, Trino, PySpark, and custom environment variables.
+description: Configure project and organization data sources for notebook sessions, including PostgreSQL, MySQL, Snowflake, BigQuery, Databricks, PyIceberg, Trino, object storage, and ML platforms.
 ---
 
 # Integrations
 
 A **project admin** can connect a data source once for one project. A
 [super admin](./auth.md#super-admins-marimohub_super_admins) can connect a data
-source for the whole organization. Supported sources include PostgreSQL,
-PyIceberg catalogs, Trino, Spark Connect, and custom environment variables.
+source for the whole organization. Supported sources include the common SQL
+databases and warehouses (PostgreSQL, MySQL, SQL Server, MongoDB, ClickHouse,
+Snowflake, BigQuery, Redshift, MotherDuck), query engines (Trino, Spark Connect,
+Databricks SQL, Athena), PyIceberg catalogs, object storage (S3, GCS, Azure
+Blob), ML platforms (Weights & Biases, Hugging Face), and custom environment
+variables.
 
 Each new, non-ephemeral session receives the applicable connection
 configuration as environment variables and files. Notebook code never accesses
@@ -47,6 +51,64 @@ In the configuration references below, fields are shown as dotted paths into
 the config; `field: value` sub-tables list the extra fields available when a
 selector takes that value.
 
+### Connection variables and descriptors
+
+Most kinds render one variable per connection field, named
+`MARIMOHUB_<TOOL>_<NAME>_<FIELD>` (for example `MARIMOHUB_MYSQL_PROD_URL`),
+alongside a descriptor at
+`$MARIMOHUB_INTEGRATIONS_DIR/<tool>/<name>.json` that mirrors the same fields.
+A secret is never written into the descriptor: it appears there as
+`<field>_env`, naming the variable that holds it. Notebook code can therefore
+read the shape of a connection from one file without that file carrying a
+credential.
+
+### Vendor-standard variables and one-click connections
+
+Some kinds also set the variable names their ecosystem already expects, under
+the `ambient_env` switch. There are two reasons to do that:
+
+- **Object stores and ML platforms** are reached through libraries that read
+  those variables and take no connection argument — `duckdb` and `polars` expect
+  `AWS_ACCESS_KEY_ID`, `wandb` expects `WANDB_API_KEY`. These default **on**;
+  Weights & Biases and Hugging Face have no other channel, so they always set
+  them.
+- **Databases and engines** already hand notebook code an explicit URL, so they
+  default **off**. Turning `ambient_env` on publishes the names marimo's
+  data-source discovery scans for, which makes the integration show up as a
+  one-click connection in the notebook's data-source panel with no code to copy.
+
+| Kind             | What marimo looks for                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| PostgreSQL       | `PGHOST`, `PGUSER`, `PGDATABASE` — also `PGPORT`, `PGPASSWORD`, `PGSSLMODE`, `PGSSLROOTCERT`      |
+| MySQL            | `MYSQL_HOST`, `MYSQL_USER`, `MYSQL_DATABASE`, `MYSQL_PASSWORD` — also `MYSQL_TCP_PORT`            |
+| Trino            | `TRINO_HOST`, `TRINO_USER`, `TRINO_CATALOG` — also `TRINO_PORT`, `TRINO_PASSWORD`, `TRINO_SCHEMA` |
+| PySpark          | `SPARK_REMOTE`                                                                                    |
+| S3               | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` — plus region and endpoint. On by default            |
+| Iceberg catalogs | the rendered `.pyiceberg.yaml`, found through `PYICEBERG_HOME`. Always set                        |
+
+Because these names are process-wide, only one integration per session can claim
+a given variable. Two that set the same name to different values fail the session
+with an error naming both — see the [failure model](#failure-model). That is also
+why the database kinds default off: a project with a prod and a staging
+PostgreSQL is ordinary, and only one of them can own `PGHOST`. When
+[workload identity federation](./workload-identity-federation.md) is enabled it
+injects `AWS_*` for the session's own bucket, and hub-injected variables win over
+integrations.
+
+Two combinations are refused at save time rather than rendered, because the
+connection marimo would build is weaker than the one you configured:
+
+- **MySQL with TLS on.** The discovered connection is a PyMySQL URL with no TLS
+  arguments, and PyMySQL reads none from the environment, so it would be a
+  plaintext path to a server this integration requires TLS for.
+- **Trino with anything but Basic-over-HTTPS or no-auth-over-HTTP.** Discovery
+  cannot express JWT, OAuth2, Kerberos, or certificate authentication, so the
+  suggested connection could not authenticate.
+
+PostgreSQL has no such caveat: libpq reads `PGSSLMODE` and `PGSSLROOTCERT` for
+any parameter the caller leaves unset, so a discovered connection verifies
+exactly like the rendered URL.
+
 ## PostgreSQL
 
 The sandbox gets `MARIMOHUB_PG_<NAME>_URL` (a SQLAlchemy-ready
@@ -82,7 +144,127 @@ point it elsewhere:
 
 Set one or the other, not both.
 
+Turn on `ambient_env` to also export `PGHOST`, `PGUSER`, `PGDATABASE`,
+`PGPORT`, `PGPASSWORD`, and the TLS pair, which is what makes this connection
+[discoverable in the notebook](#vendor-standard-variables-and-one-click-connections).
+
 <!--@include: ./partials/integrations/postgres.md-->
+
+## MySQL
+
+The sandbox gets `MARIMOHUB_MYSQL_<NAME>_URL` (a `mysql+pymysql://` URL) plus
+`_HOST/_PORT/_DATABASE/_USER/_PASSWORD`, and a descriptor at
+`$MARIMOHUB_INTEGRATIONS_DIR/mysql/<name>.json`. Works with MariaDB too.
+
+New connections verify TLS: the rendered URL names a CA bundle, which makes
+PyMySQL check both the chain and the hostname. Paste a private CA as
+**CA bundle**, or point **CA path** at one the image already ships. The
+intermediate MySQL modes are deliberately absent — they are spelled with
+boolean-ish URL arguments whose meaning depends on how a driver version coerces
+the string `"false"`, so the choice here is verified TLS or none.
+
+`ambient_env` exports the `MYSQL_*` names for
+[discovery](#vendor-standard-variables-and-one-click-connections), and is
+available only on a connection with TLS disabled — see the caveat there.
+
+<!--@include: ./partials/integrations/mysql.md-->
+
+## Microsoft SQL Server
+
+The sandbox gets `MARIMOHUB_MSSQL_<NAME>_URL` plus the usual connection
+variables and a descriptor at
+`$MARIMOHUB_INTEGRATIONS_DIR/sqlserver/<name>.json`.
+
+Pick the driver your image has. **pyodbc** (default) encrypts and verifies by
+default and needs the named ODBC driver installed in the sandbox image;
+**pymssql** needs no system driver but leaves encryption to FreeTDS
+negotiation, so it cannot enforce it.
+
+<!--@include: ./partials/integrations/sqlserver.md-->
+
+## MongoDB
+
+The sandbox gets `MARIMOHUB_MONGODB_<NAME>_URL` for `pymongo.MongoClient`, plus
+`_HOST/_DATABASE/_USER/_PASSWORD` and a descriptor at
+`$MARIMOHUB_INTEGRATIONS_DIR/mongodb/<name>.json`.
+
+`mongodb+srv` (the default) resolves the replica-set members from DNS, which is
+how Atlas and most managed deployments are addressed; it ignores the port. A
+literal seed list of several members is not supported — use SRV, or point at one
+member with the `mongodb` scheme.
+
+<!--@include: ./partials/integrations/mongodb.md-->
+
+## ClickHouse
+
+The sandbox gets `MARIMOHUB_CLICKHOUSE_<NAME>_HOST/_PORT/_SECURE/_DATABASE/_USER/_PASSWORD`
+for `clickhouse_connect.get_client()`, a `clickhouse+http://` URL for
+SQLAlchemy, and a descriptor at
+`$MARIMOHUB_INTEGRATIONS_DIR/clickhouse/<name>.json`. **Test** probes the HTTP
+interface with `SELECT version()`.
+
+<!--@include: ./partials/integrations/clickhouse.md-->
+
+## Snowflake
+
+The sandbox gets `MARIMOHUB_SNOWFLAKE_<NAME>_ACCOUNT/_USER/_WAREHOUSE/_DATABASE/_SCHEMA/_ROLE`
+plus the credential for the chosen method, and a descriptor at
+`$MARIMOHUB_INTEGRATIONS_DIR/snowflake/<name>.json`.
+
+Password authentication also renders `_URL` for `snowflake-sqlalchemy`. A key
+pair cannot be expressed in a URL, so the PKCS#8 key is written beside the
+integration and `_PRIVATE_KEY_PATH` points at it — pass it to
+`snowflake.connector.connect()` instead of a URL.
+
+<!--@include: ./partials/integrations/snowflake.md-->
+
+## BigQuery
+
+The sandbox gets `MARIMOHUB_BIGQUERY_<NAME>_URL` (a `bigquery://` URL for
+`sqlalchemy-bigquery`) plus `_PROJECT_ID/_DATASET/_LOCATION`, and a descriptor
+at `$MARIMOHUB_INTEGRATIONS_DIR/bigquery/<name>.json`.
+
+A service-account key is written to a file and referenced by path — the URL
+carries the path, never the key. `ambient_env` is off by default here, unlike
+the storage kinds: the URL already names the key file, so leaving
+`GOOGLE_APPLICATION_CREDENTIALS` to a [GCS integration](#google-cloud-storage),
+whose client reads nothing else, keeps the two from colliding. Turn it on if you
+want `bigquery.Client()` with no arguments to work and no GCS integration is
+claiming it.
+
+<!--@include: ./partials/integrations/bigquery.md-->
+
+## Amazon Redshift
+
+The sandbox gets `MARIMOHUB_REDSHIFT_<NAME>_URL` (a
+`redshift+redshift_connector://` URL) plus the usual connection variables and a
+descriptor at `$MARIMOHUB_INTEGRATIONS_DIR/redshift/<name>.json`.
+
+Both offered SSL modes verify the chain against the driver's bundled Amazon
+trust store; `verify-full` also checks the hostname. Disabling TLS is not
+offered — the driver takes that as a real boolean, which a URL argument cannot
+carry unambiguously.
+
+<!--@include: ./partials/integrations/redshift.md-->
+
+## MotherDuck
+
+The sandbox gets `MARIMOHUB_MOTHERDUCK_<NAME>_URL`, an `md:` connection string
+to hand to `duckdb.connect()`, plus `_TOKEN` and a descriptor at
+`$MARIMOHUB_INTEGRATIONS_DIR/motherduck/<name>.json`.
+
+```python
+import duckdb
+import os
+
+con = duckdb.connect(os.environ["MARIMOHUB_MOTHERDUCK_PROD_URL"])
+```
+
+DuckDB's own `motherduck_token` variable is lower-case, which the hub cannot
+emit (rendered names are POSIX-shell-safe upper-snake only), so the token rides
+in the connection string instead.
+
+<!--@include: ./partials/integrations/motherduck.md-->
 
 ## Iceberg catalogs
 
@@ -167,6 +349,10 @@ JWT, OAuth2, client certificates, Kerberos, GSSAPI, TLS verification, headers,
 extra credentials, roles, session properties, spooling, retries, timeouts,
 isolation, and compatibility options.
 
+`ambient_env` exports `TRINO_HOST`, `TRINO_USER`, `TRINO_CATALOG`, and the rest
+for [discovery](#vendor-standard-variables-and-one-click-connections). It needs
+a default catalog, and an authentication mode discovery can express.
+
 <!--@include: ./partials/integrations/trino.md-->
 
 ## PySpark (Spark Connect)
@@ -180,7 +366,112 @@ settings from the JSON descriptor before calling `getOrCreate()`. This
 integration targets Spark Connect. Provisioning a classic Spark driver or
 cluster remains the compute backend's responsibility.
 
+`ambient_env` also exports the same string as `SPARK_REMOTE`, which
+`SparkSession.builder` reads on its own and marimo
+[discovers](#vendor-standard-variables-and-one-click-connections) — so
+`getOrCreate()` needs no arguments at all.
+
 <!--@include: ./partials/integrations/pyspark.md-->
+
+## Databricks SQL
+
+The sandbox gets `MARIMOHUB_DATABRICKS_<NAME>_HOST/_HTTP_PATH/_CATALOG/_SCHEMA`
+for `databricks.sql.connect()`, plus the credential for the chosen method and a
+descriptor at `$MARIMOHUB_INTEGRATIONS_DIR/databricks/<name>.json`. Personal
+access tokens also render `_URL` for `databricks-sqlalchemy`; an OAuth service
+principal cannot be expressed in a URL, so it renders `_CLIENT_ID` and
+`_CLIENT_SECRET` instead. **Test** calls the workspace SCIM identity endpoint.
+
+<!--@include: ./partials/integrations/databricks.md-->
+
+## Amazon Athena
+
+The sandbox gets `MARIMOHUB_ATHENA_<NAME>_URL` for PyAthena's SQLAlchemy
+dialect, plus `_REGION/_DATABASE/_WORKGROUP/_CATALOG/_S3_STAGING_DIR` and a
+descriptor at `$MARIMOHUB_INTEGRATIONS_DIR/athena/<name>.json`. Athena writes
+query results to the staging prefix, so the credentials need write access to it.
+
+With ambient credentials the URL keeps PyAthena's empty userinfo (`://:@`),
+which is what makes the driver fall through to boto3's provider chain — an
+instance profile, or an [S3 integration](#s3) that claims the ambient AWS
+variables.
+
+<!--@include: ./partials/integrations/athena.md-->
+
+## Object storage
+
+These kinds carry no query engine. They configure the credentials that `duckdb`,
+`polars`, `pandas`, and the `fsspec` family use to read objects directly, and
+they are how an Iceberg or Athena setup gets access to the data files behind its
+metadata. See
+[vendor-standard variables](#vendor-standard-variables-and-one-click-connections) for what `ambient_env`
+claims and how collisions are reported.
+
+### S3
+
+The sandbox gets `MARIMOHUB_S3_<NAME>_BUCKET/_REGION/_ENDPOINT_URL/_ADDRESSING_STYLE`
+plus static credentials when configured, and a descriptor at
+`$MARIMOHUB_INTEGRATIONS_DIR/s3/<name>.json`. With `ambient_env` on it also sets
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`,
+`AWS_DEFAULT_REGION`, and `AWS_ENDPOINT_URL_S3`.
+
+The endpoint is S3-scoped on purpose: the unscoped `AWS_ENDPOINT_URL` would
+point STS and every other AWS service at the same store. Path-style addressing
+has no variable of its own — boto3 reads it from a config file — so choosing it
+also renders one and sets `AWS_CONFIG_FILE`, which replaces any other profile
+file the image ships.
+
+Works with MinIO, Cloudflare R2, Ceph, and other S3-compatible stores: set the
+endpoint and, for most of them, path-style addressing.
+
+<!--@include: ./partials/integrations/s3.md-->
+
+### Google Cloud Storage
+
+The sandbox gets `MARIMOHUB_GCS_<NAME>_BUCKET/_PROJECT_ID/_CREDENTIALS_PATH` and
+a descriptor at `$MARIMOHUB_INTEGRATIONS_DIR/gcs/<name>.json`. A service-account
+key is written to a file; with `ambient_env` on, `GOOGLE_APPLICATION_CREDENTIALS`
+and `GOOGLE_CLOUD_PROJECT` point at it, which is what `gcsfs` and
+`google-cloud-storage` read.
+
+<!--@include: ./partials/integrations/gcs.md-->
+
+### Azure Blob Storage
+
+The sandbox gets `MARIMOHUB_AZURE_<NAME>_ACCOUNT_NAME/_ACCOUNT_URL/_CONTAINER`
+plus the credential for the chosen method, and a descriptor at
+`$MARIMOHUB_INTEGRATIONS_DIR/azure/<name>.json`. With `ambient_env` on it sets
+the `AZURE_STORAGE_*` names `adlfs` reads, and a service principal's
+`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET` for
+`DefaultAzureCredential`.
+
+<!--@include: ./partials/integrations/azure_blob.md-->
+
+## Weights & Biases
+
+Sets `WANDB_API_KEY`, `WANDB_BASE_URL`, `WANDB_ENTITY`, `WANDB_PROJECT`, and
+`WANDB_MODE`, so `wandb.init()` needs no `wandb.login()` and no key in the
+notebook. `WANDB_DIR` points run files at `/tmp`, outside the workspace, so they
+are not captured into a notebook version. **Test** authenticates against the
+GraphQL API.
+
+Because the client only reads these standard names, one project can have one
+active Weights & Biases integration.
+
+<!--@include: ./partials/integrations/wandb.md-->
+
+## Hugging Face
+
+Sets `HF_TOKEN` and `HF_ENDPOINT`, which authenticates `huggingface_hub`,
+`transformers`, and `datasets` for gated models and private repositories.
+`HF_HOME` points the model cache at `/tmp`, outside the workspace — model
+weights are large and must not be captured into a notebook version. **Test**
+calls `/api/whoami-v2`.
+
+As with Weights & Biases, the client reads only these standard names, so one
+project can have one active Hugging Face integration.
+
+<!--@include: ./partials/integrations/huggingface.md-->
 
 ## Custom environment
 
@@ -197,8 +488,8 @@ can see the list and redacted configs; **`admin`** manages them — as does a
 
 - **Add** — pick a kind from the catalog; the form is generated from the kind's
   schema (conditional sections switch with the auth method). **Test** probes
-  connectivity server-side for kinds that support it (Iceberg, Trino) before you
-  save. Because the probe is a server-side request to an admin-supplied address,
+  connectivity server-side for kinds that support it (Iceberg, Trino,
+  ClickHouse, Databricks, Weights & Biases, Hugging Face) before you save. Because the probe is a server-side request to an admin-supplied address,
   it runs behind an egress policy: by default only public addresses are allowed
   (private, loopback, link-local/metadata ranges are rejected; redirects are
   never followed; responses are size- and time-capped; probes are rate-limited).

@@ -426,10 +426,11 @@ Resolve `reference` entries with `backend: aws-sm` against AWS Secrets Manager. 
 
 Selected by `MARIMOHUB_INTEGRATIONS` (default `off`); one of `on`, `off`.
 
-Versioned data-source configuration supports PostgreSQL, PyIceberg catalogs,
-Trino, PySpark over Spark Connect, and custom environment variables. Project
-admins configure one project. Super admins can configure organization-wide
-integrations that are available to all projects.
+Versioned data-source configuration supports databases and warehouses,
+query engines, PyIceberg catalogs, object storage, ML platforms, and custom
+environment variables — see the [integrations guide](./integrations.md) for the
+full list. Project admins configure one project. Super admins can configure
+organization-wide integrations that are available to all projects.
 
 New, non-ephemeral sessions receive the applicable configuration as environment
 variables and files. The hub injects configuration, not Python libraries. Each

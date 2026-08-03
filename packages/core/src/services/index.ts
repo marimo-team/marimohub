@@ -50,17 +50,32 @@ export {
 	INTEGRATIONS_DIR_ENV,
 } from './integrations/bundle';
 export {
+	athena,
+	azureBlob,
+	bigquery,
+	clickhouse,
 	customEnv,
+	databricks,
 	defaultRegistry,
+	gcs,
+	huggingFace,
 	icebergBigQuery,
 	icebergDynamoDb,
 	icebergGlue,
 	icebergHive,
 	icebergRest,
 	icebergSql,
+	mongodb,
+	motherduck,
+	mysql,
 	postgres,
 	pyspark,
+	redshift,
+	s3,
+	snowflake,
+	sqlserver,
 	trino,
+	wandb,
 } from './integrations/kinds';
 export { ReconciliationService } from './runtime/ReconciliationService';
 export type { ReconcileResult } from './runtime/ReconciliationService';

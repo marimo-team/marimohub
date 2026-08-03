@@ -1,0 +1,5 @@
+# Generated from the zod integration schemas via `pnpm schemas:generate`.
+# Committed on purpose (docs @include, oasdiff breaking-change CI, drift tests),
+# but marked generated so GitHub collapses them in PR diffs.
+docs/partials/integrations/*.md   linguist-generated=true
+internal/schemas/integrations.yml linguist-generated=true

@@ -16,6 +16,7 @@ Fields marked 🔒 are secret: encrypted at rest and write-only after save.
 | `username` | string | Yes |  |  |
 | `password` 🔒 | string | Yes |  | Password for the database user |
 | `ssl.mode` | `disable`, `prefer`, `require`, `verify-ca`, `verify-full` |  | `verify-full` | libpq sslmode; `verify-full` checks the CA chain and the hostname |
+| `ambient_env` | boolean |  | `false` | Also export PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and PGSSLMODE so marimo's data-source discovery offers this connection. Only one integration per session can claim them. |
 
 **`ssl.mode: verify-ca`**
 

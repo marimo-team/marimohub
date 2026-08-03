@@ -61,18 +61,15 @@ describe('Integrations routes', () => {
 		const kinds = await expectOk<Record<string, unknown>[]>(
 			await request('GET', '/integrations/kinds'),
 		);
-		expect(kinds.map((k) => String(k.kind)).sort((a, b) => a.localeCompare(b))).toEqual([
-			'custom_env',
-			'iceberg_bigquery',
-			'iceberg_dynamodb',
-			'iceberg_glue',
-			'iceberg_hive',
-			'iceberg_rest',
-			'iceberg_sql',
-			'postgres',
-			'pyspark',
-			'trino',
-		]);
+		// The shipped set is pinned by name in core's own registry test; what this
+		// one adds is that every registered kind survives the route's serialization.
+		expect(kinds.length).toBeGreaterThan(0);
+		expect(kinds.map((k) => String(k.kind)).sort((a, b) => a.localeCompare(b))).toEqual(
+			defaultRegistry()
+				.list()
+				.map((def) => def.kind)
+				.sort((a, b) => a.localeCompare(b)),
+		);
 		const pg = kinds.find((k) => k.kind === 'postgres');
 		expect(pg).toMatchObject({
 			category: 'database',

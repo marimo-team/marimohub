@@ -28,6 +28,7 @@ Fields marked 🔒 are secret: encrypted at rest and write-only after save.
 | `secret_spark_config` | object[] |  |  |  |
 | `secret_spark_config[].name` | string | Yes |  |  |
 | `secret_spark_config[].value` 🔒 | string | Yes |  |  |
+| `ambient_env` | boolean |  | `false` | Also export SPARK_REMOTE so marimo's data-source discovery offers this connection. Only one integration per session can claim them. |
 
 **`auth.method: token`**
 

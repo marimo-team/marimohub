@@ -26,8 +26,9 @@ Every deployment picks storage, compute, and auth.
 - [Managed AI](./ai.md) - server-managed AI keys for notebook assistants.
 - [Project secrets](./secrets.md) - operator-controlled credentials for notebook
   sandboxes.
-- [Integrations](./integrations.md) - data sources (Postgres, PyIceberg catalogs,
-  Trino, PySpark over Spark Connect, custom env) for new, non-ephemeral sessions.
+- [Integrations](./integrations.md) - data sources (SQL databases and
+  warehouses, query engines, PyIceberg catalogs, object storage, ML platforms,
+  custom env) for new, non-ephemeral sessions.
 - [Syncing](./syncing.md) - read-only notebooks pushed from external systems.
 - [Workload Identity Federation](./workload-identity-federation.md) - short-lived
   cloud credentials from notebooks (CoreWeave, AWS).
