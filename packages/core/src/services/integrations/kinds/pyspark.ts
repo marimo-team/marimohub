@@ -108,7 +108,7 @@ export const pyspark = defineIntegration({
 				throw new ValidationError(`Spark Connect parameter "${name}" has a typed field.`);
 			}
 		}
-		const secretNames = config.secret_spark_config.map(({ name }) => name);
+		const secretNames = new Set(config.secret_spark_config.map(({ name }) => name));
 		for (const key of Object.keys(config.spark_config)) {
 			if (key.trim() === '') throw new ValidationError('Spark configuration keys cannot be empty.');
 			if (SENSITIVE_CONFIG_REGEX.test(key)) {
@@ -116,7 +116,7 @@ export const pyspark = defineIntegration({
 					`Spark configuration "${key}" looks credential-bearing; use secret Spark config.`,
 				);
 			}
-			if (secretNames.includes(key)) {
+			if (secretNames.has(key)) {
 				throw new ValidationError(`Spark configuration "${key}" is configured twice.`);
 			}
 		}

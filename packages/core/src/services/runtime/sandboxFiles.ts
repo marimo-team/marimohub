@@ -39,7 +39,9 @@ async function withRetry<T>(op: () => Promise<T>, attempts = SANDBOX_WRITE_ATTEM
 			return await op();
 		} catch (err) {
 			if (attempt >= attempts) throw err;
-			await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+			await new Promise((resolve) => {
+				setTimeout(resolve, 100 * attempt);
+			});
 		}
 	}
 }

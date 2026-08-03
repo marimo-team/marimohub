@@ -31,6 +31,7 @@ export class ComputeProfileConfigError extends ConfigError {
 			remediation: 'Use name:cpu=<cores>;mem=<Mi|Gi|Ti>, with lowercase names and unique keys.',
 			docs: 'docs/configuration.md#compute',
 		});
+		this.name = 'ComputeProfileConfigError';
 	}
 }
 

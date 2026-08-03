@@ -11,7 +11,9 @@
 // Private duplicate of core's `duration.ts` sleep: this package is
 // intentionally zero-dep (no `core` import), so it keeps its own copy.
 function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
 }
 
 /**
