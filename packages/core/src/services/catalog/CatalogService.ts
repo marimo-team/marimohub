@@ -5,7 +5,7 @@ import { NotInitializedError, PreconditionFailedError } from '../../errors';
 import { createSnapshotId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
-import { CURRENT_SNAPSHOT_VERSION, CatalogSchema, parseStored, SnapshotSchema } from '../../schema';
+import { CURRENT_SNAPSHOT_VERSION, CatalogSchema, readStored, SnapshotSchema } from '../../schema';
 import type { Catalog, Snapshot, SnapshotNotebookEntry, SnapshotProjectEntry } from '../../schema';
 import { withCasRetry } from './cas';
 import type { EventService } from './EventService';
@@ -94,14 +94,14 @@ export class CatalogService {
 			throw new NotInitializedError('Catalog not found — call initialize() first');
 		}
 
-		const catalog = parseStored(CatalogSchema, await catalogObj.json(), paths.catalog);
+		const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
 		const snapshotObj = await this.bucket.get(catalog.current_snapshot_key);
 		if (!snapshotObj) {
 			throw new NotInitializedError(`Snapshot ${catalog.current_snapshot_id} not found`);
 		}
 
 		return upgradeSnapshot(
-			parseStored(SnapshotSchema, await snapshotObj.json(), catalog.current_snapshot_key),
+			await readStored(SnapshotSchema, snapshotObj, catalog.current_snapshot_key),
 		);
 	}
 
@@ -122,7 +122,7 @@ export class CatalogService {
 				}
 
 				const catalogEtag = catalogObj.etag;
-				const catalog = parseStored(CatalogSchema, await catalogObj.json(), paths.catalog);
+				const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
 
 				const snapshotObj = await this.bucket.get(catalog.current_snapshot_key);
 				if (!snapshotObj) {
@@ -130,7 +130,7 @@ export class CatalogService {
 				}
 
 				const currentSnapshot = upgradeSnapshot(
-					parseStored(SnapshotSchema, await snapshotObj.json(), catalog.current_snapshot_key),
+					await readStored(SnapshotSchema, snapshotObj, catalog.current_snapshot_key),
 				);
 
 				const newSnapshotId = createSnapshotId();

@@ -2,7 +2,9 @@ import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
 import { PreconditionFailedError } from '../../errors';
+import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
+import { parseStored, StoredObjectError } from '../../schema';
 
 /**
  * Advisory lease for the single-writer maintenance sweep, built on the same
@@ -52,7 +54,7 @@ export class MaintenanceLock {
 			return this.tryCreate(body);
 		}
 
-		const current = this.parse(await existing.text());
+		const current = this.parse(await existing.text(), 'maintenance_lock.acquire');
 		const heldByOther = current && current.holder !== holder;
 		if (heldByOther && new Date(current.expires_at).getTime() > now) {
 			return false; // someone else holds it and it hasn't expired
@@ -76,9 +78,15 @@ export class MaintenanceLock {
 	async release(holder: string): Promise<void> {
 		const existing = await this.bucket.get(this.key);
 		if (!existing) return;
-		const current = this.parse(await existing.text());
+		const current = this.parse(await existing.text(), 'maintenance_lock.release');
 		if (!current || current.holder !== holder) return;
-		await this.bucket.delete(this.key).catch(() => {});
+		await this.bucket.delete(this.key).catch((err) => {
+			logOperationalError(
+				'maintenance_lock_release_failed',
+				{ operation: 'maintenance_lock.release', object: this.key },
+				err,
+			);
+		});
 	}
 
 	private async tryCreate(body: string): Promise<boolean> {
@@ -91,11 +99,19 @@ export class MaintenanceLock {
 		}
 	}
 
-	private parse(text: string): LockRecord | null {
+	private parse(text: string, operation: string): LockRecord | null {
 		try {
-			const result = LockRecordSchema.safeParse(JSON.parse(text));
-			return result.success ? result.data : null;
-		} catch {
+			return parseStored(LockRecordSchema, JSON.parse(text), this.key);
+		} catch (err) {
+			const safeError =
+				err instanceof SyntaxError
+					? new StoredObjectError(this.key, 'invalid_json', { causeName: err.name })
+					: err;
+			logOperationalError(
+				'corrupt_maintenance_lock_ignored',
+				{ operation, object: this.key },
+				safeError,
+			);
 			return null;
 		}
 	}

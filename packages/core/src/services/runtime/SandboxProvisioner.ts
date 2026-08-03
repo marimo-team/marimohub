@@ -7,6 +7,7 @@ import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { paths } from '../../paths';
+import { logOperationalError } from '../../operationalLog';
 import type {
 	ComputeResources,
 	SandboxInstance,
@@ -541,7 +542,11 @@ export class SandboxProvisioner {
 		if (workspace.status === 'rejected') {
 			// A workspace failure would otherwise mask the commit failure — surface both.
 			if (commitError) {
-				console.error(`commitSession failed for notebook ${notebookId}:`, commitError);
+				logOperationalError(
+					'session_commit_failed',
+					{ operation: 'sandbox.commit_session', notebook_id: notebookId },
+					commitError,
+				);
 			}
 			throw workspace.reason;
 		}
@@ -601,7 +606,11 @@ export class SandboxProvisioner {
 			);
 		} catch (err) {
 			// Non-fatal: still destroy the sandbox so it does not linger and bill.
-			console.error(`captureSession failed during teardown for notebook ${notebookId}:`, err);
+			logOperationalError(
+				'session_capture_failed',
+				{ operation: 'sandbox.teardown.capture_session', notebook_id: notebookId },
+				err,
+			);
 		}
 		if (persisted) {
 			// Snapshot before destroy, once the session state above is final. Both are
@@ -614,8 +623,9 @@ export class SandboxProvisioner {
 					owner_user_id: actor,
 				});
 			} catch (err) {
-				console.error(
-					`captureFilesystemSnapshot failed during teardown for notebook ${notebookId}:`,
+				logOperationalError(
+					'filesystem_snapshot_capture_failed',
+					{ operation: 'sandbox.teardown.capture_snapshot', notebook_id: notebookId },
 					err,
 				);
 			}
@@ -623,7 +633,11 @@ export class SandboxProvisioner {
 		try {
 			await sandbox.destroy();
 		} catch (err) {
-			console.error(`sandbox.destroy failed during teardown for notebook ${notebookId}:`, err);
+			logOperationalError(
+				'sandbox_destroy_failed',
+				{ operation: 'sandbox.teardown.destroy', notebook_id: notebookId },
+				err,
+			);
 		}
 	}
 }

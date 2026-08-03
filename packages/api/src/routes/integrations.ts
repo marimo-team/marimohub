@@ -38,6 +38,25 @@ import {
 	paginate,
 	PaginationQuery,
 } from '../pagination';
+import { bestEffort } from '../log';
+
+function appendAudit(
+	request: { requestId?: string; method: string; path: string; userId: string },
+	event: string,
+	action: () => Promise<void>,
+): Promise<void> {
+	return bestEffort(
+		'audit_append',
+		{
+			request_id: request.requestId ?? null,
+			method: request.method,
+			path: request.path,
+			user: request.userId,
+			audit_event: event,
+		},
+		action,
+	);
+}
 
 const IntegrationIdSchema = z.string().regex(IntegrationId.regex).refine(IntegrationId.is);
 const IntegrationNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
@@ -547,17 +566,20 @@ app.openapi(createIntegration, async (c) => {
 	const body = c.req.valid('json');
 	const detail = await integrations.create(pid, body, user.id);
 	// Audit trail (kind/name only — never config). Best-effort; never fail the write.
-	await deps.services.events
-		.append({
-			event: 'integration.create',
-			actor: user.id,
-			project_id: pid,
-			integration_scope: 'project',
-			integration_id: detail.id,
-			integration_kind: detail.kind,
-			integration_name: detail.name,
-		})
-		.catch(() => {});
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+		'integration.create',
+		() =>
+			deps.services.events.append({
+				event: 'integration.create',
+				actor: user.id,
+				project_id: pid,
+				integration_scope: 'project',
+				integration_id: detail.id,
+				integration_kind: detail.kind,
+				integration_name: detail.name,
+			}),
+	);
 	return c.json({ success: true, data: detailResponse(detail) }, 201);
 });
 
@@ -581,19 +603,22 @@ app.openapi(updateIntegration, async (c) => {
 	const body = c.req.valid('json');
 	const detail = await integrations.update(pid, iid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(detail.updated_at));
-	await deps.services.events
-		.append({
-			event: 'integration.update',
-			actor: user.id,
-			project_id: pid,
-			integration_scope: 'project',
-			integration_id: iid,
-			integration_kind: detail.kind,
-			integration_name: detail.name,
-			config_changed: body.config !== undefined,
-			current_version: detail.current_version,
-		})
-		.catch(() => {});
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+		'integration.update',
+		() =>
+			deps.services.events.append({
+				event: 'integration.update',
+				actor: user.id,
+				project_id: pid,
+				integration_scope: 'project',
+				integration_id: iid,
+				integration_kind: detail.kind,
+				integration_name: detail.name,
+				config_changed: body.config !== undefined,
+				current_version: detail.current_version,
+			}),
+	);
 	return c.json({ success: true, data: detailResponse(detail) }, 200);
 });
 
@@ -607,15 +632,18 @@ app.openapi(deleteIntegration, async (c) => {
 	// but must not fabricate an audit-trail deletion.
 	const deleted = await integrations.delete(pid, iid, ifMatchToken(c));
 	if (deleted) {
-		await deps.services.events
-			.append({
-				event: 'integration.delete',
-				actor: user.id,
-				project_id: pid,
-				integration_scope: 'project',
-				integration_id: iid,
-			})
-			.catch(() => {});
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			'integration.delete',
+			() =>
+				deps.services.events.append({
+					event: 'integration.delete',
+					actor: user.id,
+					project_id: pid,
+					integration_scope: 'project',
+					integration_id: iid,
+				}),
+		);
 	}
 	return c.json({ success: true }, 200);
 });
@@ -701,19 +729,22 @@ app.openapi(copyIntegration, async (c) => {
 		{ name: body.name },
 		user.id,
 	);
-	await deps.services.events
-		.append({
-			event: 'integration.copy',
-			actor: user.id,
-			project_id: pid,
-			integration_scope: 'project',
-			integration_id: detail.id,
-			integration_kind: detail.kind,
-			integration_name: detail.name,
-			source_project_id: body.source_project_id,
-			source_integration_id: body.source_integration_id,
-		})
-		.catch(() => {});
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+		'integration.copy',
+		() =>
+			deps.services.events.append({
+				event: 'integration.copy',
+				actor: user.id,
+				project_id: pid,
+				integration_scope: 'project',
+				integration_id: detail.id,
+				integration_kind: detail.kind,
+				integration_name: detail.name,
+				source_project_id: body.source_project_id,
+				source_integration_id: body.source_integration_id,
+			}),
+	);
 	return c.json({ success: true, data: detailResponse(detail) }, 201);
 });
 
@@ -747,16 +778,19 @@ app.openapi(createOrgIntegration, async (c) => {
 	assertSuperAdmin(user, deps.policy);
 	const body = c.req.valid('json');
 	const detail = await integrations.create(body, user.id);
-	await deps.services.events
-		.append({
-			event: 'integration.create',
-			actor: user.id,
-			integration_scope: 'org',
-			integration_id: detail.id,
-			integration_kind: detail.kind,
-			integration_name: detail.name,
-		})
-		.catch(() => {});
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+		'integration.create',
+		() =>
+			deps.services.events.append({
+				event: 'integration.create',
+				actor: user.id,
+				integration_scope: 'org',
+				integration_id: detail.id,
+				integration_kind: detail.kind,
+				integration_name: detail.name,
+			}),
+	);
 	return c.json({ success: true, data: detailResponse(detail) }, 201);
 });
 
@@ -779,18 +813,21 @@ app.openapi(updateOrgIntegration, async (c) => {
 	const body = c.req.valid('json');
 	const detail = await integrations.update(iid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(detail.updated_at));
-	await deps.services.events
-		.append({
-			event: 'integration.update',
-			actor: user.id,
-			integration_scope: 'org',
-			integration_id: iid,
-			integration_kind: detail.kind,
-			integration_name: detail.name,
-			config_changed: body.config !== undefined,
-			current_version: detail.current_version,
-		})
-		.catch(() => {});
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+		'integration.update',
+		() =>
+			deps.services.events.append({
+				event: 'integration.update',
+				actor: user.id,
+				integration_scope: 'org',
+				integration_id: iid,
+				integration_kind: detail.kind,
+				integration_name: detail.name,
+				config_changed: body.config !== undefined,
+				current_version: detail.current_version,
+			}),
+	);
 	return c.json({ success: true, data: detailResponse(detail) }, 200);
 });
 
@@ -802,14 +839,17 @@ app.openapi(deleteOrgIntegration, async (c) => {
 	assertSuperAdmin(user, deps.policy);
 	const deleted = await integrations.delete(iid, ifMatchToken(c));
 	if (deleted) {
-		await deps.services.events
-			.append({
-				event: 'integration.delete',
-				actor: user.id,
-				integration_scope: 'org',
-				integration_id: iid,
-			})
-			.catch(() => {});
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			'integration.delete',
+			() =>
+				deps.services.events.append({
+					event: 'integration.delete',
+					actor: user.id,
+					integration_scope: 'org',
+					integration_id: iid,
+				}),
+		);
 	}
 	return c.json({ success: true }, 200);
 });

@@ -5,7 +5,8 @@ import { foldCase, normalizeEmail } from '../../identityMatch';
 import type { UserId } from '../../ids';
 import type { AuthUser } from '../../ports/auth';
 import { paths } from '../../paths';
-import { IdentitySchema } from '../../schema';
+import { logOperationalError } from '../../operationalLog';
+import { IdentitySchema, readStored } from '../../schema';
 import type { Identity } from '../../schema';
 import { listAllKeys } from '../catalog/storage';
 
@@ -89,7 +90,7 @@ export class IdentityService {
 	async get(id: UserId): Promise<Identity | null> {
 		const obj = await this.bucket.get(paths.identity(id));
 		if (!obj) return null;
-		return IdentitySchema.parse(await obj.json());
+		return readStored(IdentitySchema, obj, paths.identity(id));
 	}
 
 	/**
@@ -116,7 +117,9 @@ export class IdentityService {
 			// Stale-while-revalidate: 30s staleness is already accepted, so don't
 			// make a keystroke-driven search pay the full rescan latency. A failed
 			// background refresh keeps serving the stale entries.
-			this.refreshing.catch(() => {});
+			this.refreshing.catch((err) => {
+				logOperationalError('identity_directory_refresh_failed', {}, err);
+			});
 			return this.directory.entries;
 		}
 		return this.refreshing;
@@ -129,8 +132,16 @@ export class IdentityService {
 			if (!obj) return null;
 			// Tolerate corrupt records (like getMany): one bad object must not take
 			// down search for the whole directory.
-			const parsed = IdentitySchema.safeParse(await obj.json());
-			return parsed.success ? parsed.data : null;
+			try {
+				return await readStored(IdentitySchema, obj, key);
+			} catch (err) {
+				logOperationalError(
+					'stored_object_skipped',
+					{ operation: 'identity.directory_scan', object: key },
+					err,
+				);
+				return null;
+			}
 		});
 		const entries = records.filter((r): r is Identity => r !== null);
 		this.directory = { at: Date.now(), entries };

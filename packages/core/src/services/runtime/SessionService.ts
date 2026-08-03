@@ -22,7 +22,14 @@ import type { SingletonClaimConfig } from '../catalog/cas';
 import { createSessionId } from '../../ids';
 import type { NotebookId, ProjectId, SandboxId, SessionId, UserId, VersionId } from '../../ids';
 import { paths } from '../../paths';
-import { AppClaimSchema, EditorClaimSchema, parseStored, SessionSchema } from '../../schema';
+import { logOperationalError } from '../../operationalLog';
+import {
+	AppClaimSchema,
+	EditorClaimSchema,
+	parseStored,
+	readStored,
+	SessionSchema,
+} from '../../schema';
 import type { EditorClaim, Session } from '../../schema';
 import {
 	ACTIVE_STATUSES,
@@ -106,7 +113,7 @@ export class SessionService {
 		return mutateObject(
 			this.bucket,
 			paths.session(projectId, id),
-			(raw) => SessionSchema.parse(raw),
+			(raw) => parseStored(SessionSchema, raw, paths.session(projectId, id)),
 			apply,
 			{
 				notFound: () => new NotFoundError(`Session ${id} not found`),
@@ -153,7 +160,7 @@ export class SessionService {
 			throw new NotFoundError(`Session ${id} not found`);
 		}
 
-		return parseStored(SessionSchema, await obj.json(), key);
+		return readStored(SessionSchema, obj, key);
 	}
 
 	/** Promote `starting` → `running` with the kernel URL. No-op if the session was
@@ -326,9 +333,13 @@ export class SessionService {
 			// (listing, reuse, reaper). Skip it (logged) so the good records survive.
 			let session: Session;
 			try {
-				session = SessionSchema.parse(await body.json());
+				session = await readStored(SessionSchema, body, obj.key);
 			} catch (err) {
-				console.warn(`scanPrefix: skipping unreadable session ${obj.key}: ${String(err)}`);
+				logOperationalError(
+					'stored_object_skipped',
+					{ operation: 'session.scan', object: obj.key },
+					err,
+				);
 				return SKIP;
 			}
 			return handle(session, obj, body.etag);
@@ -490,8 +501,17 @@ export class SessionService {
 		if (!obj) return undefined;
 		let holder: SessionId | null;
 		try {
-			holder = AppClaimSchema.parse(await obj.json()).session_id;
-		} catch {
+			holder = (await readStored(AppClaimSchema, obj, paths.appClaim(projectId, notebookId)))
+				.session_id;
+		} catch (err) {
+			logOperationalError(
+				'stored_object_skipped',
+				{
+					operation: 'session.app_claim.read',
+					object: paths.appClaim(projectId, notebookId),
+				},
+				err,
+			);
 			return undefined;
 		}
 		return holder ? candidates.find((s) => s.session_id === holder) : undefined;
@@ -579,14 +599,14 @@ export class SessionService {
 		const key = paths.editorClaim(projectId, notebookId);
 		const obj = await this.bucket.get(key);
 		if (!obj) return undefined;
-		const claim = parseStored(EditorClaimSchema, await obj.json(), key);
+		const claim = await readStored(EditorClaimSchema, obj, key);
 		if (
 			claim.transfer?.phase === 'requested' &&
 			Date.now() - Date.parse(claim.transfer.requested_at) >= TAKEOVER_REQUEST_TTL_MS
 		) {
 			await this.cancelRequestedTakeover(projectId, notebookId, claim.transfer.takeover_id);
 			const refreshed = await this.bucket.get(key);
-			return refreshed ? parseStored(EditorClaimSchema, await refreshed.json(), key) : undefined;
+			return refreshed ? readStored(EditorClaimSchema, refreshed, key) : undefined;
 		}
 		return claim;
 	}
@@ -644,7 +664,7 @@ export class SessionService {
 					await this.bucket.put(key, JSON.stringify(next), { onlyIfNotExists: true });
 					return { claimed: true, claim: next };
 				}
-				const current = parseStored(EditorClaimSchema, await obj.json(), key);
+				const current = await readStored(EditorClaimSchema, obj, key);
 				if (current.session_id === sessionId) return { claimed: true, claim: current };
 				if (current.transfer) {
 					if (current.transfer.phase !== 'ready' || current.transfer.requested_by !== requestedBy) {
@@ -725,7 +745,7 @@ export class SessionService {
 		try {
 			const obj = await this.bucket.get(key);
 			if (!obj) return;
-			const claim = EditorClaimSchema.parse(await obj.json());
+			const claim = await readStored(EditorClaimSchema, obj, key);
 			if (claim.session_id !== session.session_id || claim.transfer) return;
 			await this.bucket.put(
 				key,
@@ -752,7 +772,7 @@ export class SessionService {
 		return mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
-			(raw) => EditorClaimSchema.parse(raw),
+			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
 				if (claim.transfer?.takeover_id === input.takeoverId) {
 					if (
@@ -793,7 +813,7 @@ export class SessionService {
 		return mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
-			(raw) => EditorClaimSchema.parse(raw),
+			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
 				if (claim.transfer?.takeover_id !== takeoverId) throw new EditSessionChangedError();
 				return {
@@ -826,7 +846,7 @@ export class SessionService {
 		await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
-			(raw) => EditorClaimSchema.parse(raw),
+			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
 				acquired = false;
 				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
@@ -867,7 +887,7 @@ export class SessionService {
 		await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
-			(raw) => EditorClaimSchema.parse(raw),
+			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
 				renewed = false;
 				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
@@ -915,7 +935,7 @@ export class SessionService {
 		await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
-			(raw) => EditorClaimSchema.parse(raw),
+			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
 				advanced = false;
 				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
@@ -964,7 +984,7 @@ export class SessionService {
 		await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
-			(raw) => EditorClaimSchema.parse(raw),
+			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
 				if (
 					claim.transfer?.takeover_id !== takeoverId ||
@@ -998,7 +1018,7 @@ export class SessionService {
 			await mutateObject(
 				this.bucket,
 				paths.editorClaim(projectId, notebookId),
-				(raw) => EditorClaimSchema.parse(raw),
+				(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 				(claim) => {
 					if (
 						claim.transfer?.takeover_id !== takeoverId ||
@@ -1018,8 +1038,16 @@ export class SessionService {
 					};
 				},
 			);
-		} catch {
+		} catch (err) {
 			this.metrics.increment('sessions.editor_claim.drain_lease_release_error');
+			logOperationalError(
+				'editor_claim_release_failed',
+				{
+					operation: 'session.takeover_drain_lease.release',
+					object: paths.editorClaim(projectId, notebookId),
+				},
+				err,
+			);
 		}
 	}
 
@@ -1032,7 +1060,7 @@ export class SessionService {
 		return mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
-			(raw) => EditorClaimSchema.parse(raw),
+			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
 				if (
 					claim.transfer?.takeover_id !== takeoverId ||
@@ -1060,12 +1088,21 @@ export class SessionService {
 		await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
-			(raw) => EditorClaimSchema.parse(raw),
+			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) =>
 				claim.transfer?.takeover_id === takeoverId && claim.transfer.phase === 'requested'
 					? { ...claim, transfer: undefined }
 					: null,
-		).catch(() => {});
+		).catch((err) => {
+			logOperationalError(
+				'editor_claim_cancel_failed',
+				{
+					operation: 'session.takeover.cancel',
+					object: paths.editorClaim(projectId, notebookId),
+				},
+				err,
+			);
+		});
 	}
 
 	/** The app-singleton lease over `_system/apps/{pid}/{nid}.json` (see AppClaimSchema). */
@@ -1075,11 +1112,19 @@ export class SessionService {
 			key: paths.appClaim(projectId, notebookId),
 			serialize: (holder) =>
 				JSON.stringify({ session_id: holder, claimed_at: new Date().toISOString() }),
-			parseHolder: (raw) => AppClaimSchema.parse(raw).session_id,
+			parseHolder: (raw) =>
+				parseStored(AppClaimSchema, raw, paths.appClaim(projectId, notebookId)).session_id,
 			isHolderLive: (holder) => this.holdsLiveApp(projectId, notebookId, holder as SessionId),
 			onReleaseError: (err) => {
 				this.metrics.increment('sessions.app_claim.release_error');
-				console.warn(`releaseApp: app claim for notebook ${notebookId}: ${String(err)}`);
+				logOperationalError(
+					'app_claim_release_failed',
+					{
+						operation: 'session.app_claim.release',
+						object: paths.appClaim(projectId, notebookId),
+					},
+					err,
+				);
 			},
 			retry: {
 				onConflict: () => this.metrics.increment('sessions.app_claim.conflict'),

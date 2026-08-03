@@ -1,20 +1,23 @@
+import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
 import { PreconditionFailedError } from '../../errors';
 import { toHex } from '../../internal/hex';
+import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
+import { readStored } from '../../schema';
 import { listAllObjects } from './storage';
 
 const DEFAULT_RETENTION_MS = Millis.days(1);
 
-interface IdempotencyRecord {
-	schema_version: 1;
-	/** `${userId}:${routeId}` — stored so a hash collision across scopes can't replay. */
-	scope: string;
-	/** The recorded `data` payload of the original response envelope. */
-	data: unknown;
-	created_at: string;
-}
+const IdempotencyRecordSchema = z.object({
+	schema_version: z.literal(1),
+	scope: z.string(),
+	data: z.unknown(),
+	created_at: z.iso.datetime(),
+});
+
+type IdempotencyRecord = z.infer<typeof IdempotencyRecordSchema>;
 
 async function digestKey(scope: string, key: string): Promise<string> {
 	// Hash so an arbitrary client key never produces an unsafe/oversized object key,
@@ -35,9 +38,22 @@ export class IdempotencyService {
 
 	/** The recorded `data` for a prior `(scope, key)`, or null if this is a first use. */
 	async lookup(scope: string, key: string): Promise<{ data: unknown } | null> {
-		const obj = await this.bucket.get(paths.idempotencyKey(await digestKey(scope, key)));
+		const objectKey = paths.idempotencyKey(await digestKey(scope, key));
+		const obj = await this.bucket.get(objectKey);
 		if (!obj) return null;
-		const record = (await obj.json()) as IdempotencyRecord;
+		// A corrupt record must not brick this key for the whole retention window:
+		// fail open (treat as first use) rather than 500 every replay until it prunes.
+		let record: IdempotencyRecord;
+		try {
+			record = await readStored(IdempotencyRecordSchema, obj, objectKey);
+		} catch (err) {
+			logOperationalError(
+				'stored_object_skipped',
+				{ operation: 'idempotency.lookup', object: objectKey },
+				err,
+			);
+			return null;
+		}
 		if (record.scope !== scope) return null;
 		return { data: record.data };
 	}

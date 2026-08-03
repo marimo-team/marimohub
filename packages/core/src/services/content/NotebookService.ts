@@ -9,11 +9,13 @@ import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
+import { logOperationalError } from '../../operationalLog';
 import { compensableWrite, metricsObserver, saga } from '../../saga';
 import {
 	FsSnapshotSchema,
 	NotebookMetaSchema,
 	parseStored,
+	readStored,
 	SourceSchema,
 	toPublicNotebookEntry,
 	VersionSchema,
@@ -134,8 +136,8 @@ export class NotebookService {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}
 
-		const meta = parseStored(NotebookMetaSchema, await metaObj.json(), nb.meta);
-		const source = parseStored(SourceSchema, await sourceObj.json(), nb.source);
+		const meta = await readStored(NotebookMetaSchema, metaObj, nb.meta);
+		const source = await readStored(SourceSchema, sourceObj, nb.source);
 		const readme = readmeObj ? await readmeObj.text() : null;
 
 		return { meta, readme, source };
@@ -618,7 +620,7 @@ export class NotebookService {
 					await mutateObject(
 						this.bucket,
 						ver.meta,
-						(raw) => VersionSchema.parse(raw),
+						(raw) => parseStored(VersionSchema, raw, ver.meta),
 						(current): Version => ({
 							...current,
 							...(htmlDescriptor ? { html_snapshot: htmlDescriptor } : {}),
@@ -701,7 +703,7 @@ export class NotebookService {
 			async (pfx) => {
 				const obj = await this.bucket.get(`${pfx}version.json`);
 				if (!obj) return; // listed-then-deleted race; skip rather than fail.
-				return VersionSchema.parse(await obj.json());
+				return readStored(VersionSchema, obj, `${pfx}version.json`);
 			},
 		);
 		return fetched.filter((v): v is Version => v !== undefined);
@@ -733,7 +735,7 @@ export class NotebookService {
 			throw new NotFoundError(`Version ${versionId} not found`);
 		}
 
-		const version = VersionSchema.parse(await metaObj.json());
+		const version = await readStored(VersionSchema, metaObj, ver.meta);
 		const code = await codeObj.text();
 
 		return { version, code };
@@ -813,8 +815,13 @@ export class NotebookService {
 			}
 		} catch (err) {
 			// Non-fatal: the save already committed. Log and move on.
-			console.error(
-				`pruneVersions failed for notebook ${notebookId} in project ${projectId}:`,
+			logOperationalError(
+				'notebook_version_prune_failed',
+				{
+					operation: 'notebook.version_prune',
+					project_id: projectId,
+					notebook_id: notebookId,
+				},
 				err,
 			);
 		}
@@ -831,8 +838,13 @@ export class NotebookService {
 		const obj = await this.bucket.get(nb.fsSnapshot);
 		if (!obj) return null;
 		try {
-			return FsSnapshotSchema.parse(await obj.json());
-		} catch {
+			return await readStored(FsSnapshotSchema, obj, nb.fsSnapshot);
+		} catch (err) {
+			logOperationalError(
+				'stored_object_skipped',
+				{ operation: 'notebook.fs_snapshot.read', object: nb.fsSnapshot },
+				err,
+			);
 			return null;
 		}
 	}

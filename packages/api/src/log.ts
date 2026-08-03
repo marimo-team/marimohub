@@ -29,6 +29,24 @@ export function errorMetadata(err: unknown): Record<string, string | number> {
 	return out;
 }
 
+export async function bestEffort(
+	operation: string,
+	fields: Record<string, unknown>,
+	action: () => Promise<unknown>,
+): Promise<void> {
+	try {
+		await action();
+	} catch (err) {
+		logEvent({
+			level: 'error',
+			event: 'best_effort_operation_failed',
+			operation,
+			...fields,
+			error: errorMetadata(err),
+		});
+	}
+}
+
 /**
  * Extract a rich, JSON-serializable description of an error for SERVER logs:
  * name, message, stack, and any duck-typed vendor fields (gRPC `transportCode`,
@@ -46,17 +64,27 @@ export function describeError(err: unknown, depth = 3): Record<string, unknown> 
 		transportCode?: unknown;
 		operation?: unknown;
 		cause?: unknown;
-		issues?: { path?: unknown[]; message?: string }[];
+		reason?: unknown;
+		object?: unknown;
+		cause_name?: unknown;
+		issues?: { path?: unknown[] | string; message?: string; code?: string }[];
 	};
 	const out: Record<string, unknown> = { name: e.name, message: e.message };
 	if (e.stack) out.stack = e.stack;
 	if (e.code !== undefined) out.code = e.code;
 	if (e.transportCode !== undefined) out.transportCode = e.transportCode;
 	if (e.operation !== undefined) out.operation = e.operation;
+	if (e.reason !== undefined) out.reason = e.reason;
+	if (e.object !== undefined) out.object = e.object;
+	if (e.cause_name !== undefined) out.cause_name = e.cause_name;
 	// ZodError (duck-typed): surface the failing field paths so a corrupted stored
 	// object is identifiable from the log instead of a bare stack.
 	if (Array.isArray(e.issues)) {
-		out.issues = e.issues.map((i) => ({ path: i.path?.join('.'), message: i.message }));
+		out.issues = e.issues.map((i) => ({
+			path: Array.isArray(i.path) ? i.path.join('.') : i.path,
+			...(i.code ? { code: i.code } : {}),
+			...(i.message ? { message: i.message } : {}),
+		}));
 	}
 	if (e.cause !== undefined && e.cause !== null && depth > 0) {
 		out.cause = describeError(e.cause, depth - 1);

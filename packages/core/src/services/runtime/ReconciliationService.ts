@@ -1,8 +1,11 @@
+import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
 import type { NotebookId, SandboxId } from '../../ids';
+import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
+import { readStored } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SessionRetirer } from './SessionRetirer';
 import { RECLAIM_PROVISION_GRACE_MS } from './sessionLifecycle';
@@ -17,6 +20,8 @@ import type { SessionService } from './SessionService';
  * is a belt-and-suspenders guard against reaping an in-flight provision.
  */
 const DEFAULT_ORPHAN_GRACE_MS = Millis.minutes(15);
+
+const OrphanMarkerSchema = z.object({ first_seen: z.number() });
 
 export interface ReconcileResult {
 	/** True when the provider can't enumerate (no `listActive`) — nothing reconciled. */
@@ -199,15 +204,25 @@ export class ReconciliationService {
 		const existing = await this.bucket.get(key);
 		if (existing) {
 			try {
-				const { first_seen } = await existing.json<{ first_seen: number }>();
-				if (typeof first_seen === 'number' && Number.isFinite(first_seen) && first_seen <= now) {
-					return first_seen;
-				}
-			} catch {
-				// Corrupt marker — fall through and rewrite it below.
+				const { first_seen } = await readStored(OrphanMarkerSchema, existing, key);
+				// A future timestamp is clock skew across writers, not corruption —
+				// silently reset it to now (rewritten below) rather than logging an error.
+				if (first_seen <= now) return first_seen;
+			} catch (err) {
+				logOperationalError(
+					'corrupt_orphan_marker_replaced',
+					{ operation: 'reconciliation.orphan_marker.read', object: key },
+					err,
+				);
 			}
 		}
-		await this.bucket.put(key, JSON.stringify({ first_seen: now })).catch(() => {});
+		await this.bucket.put(key, JSON.stringify({ first_seen: now })).catch((err) => {
+			logOperationalError(
+				'orphan_marker_write_failed',
+				{ operation: 'reconciliation.orphan_marker.write', object: key },
+				err,
+			);
+		});
 		return now;
 	}
 

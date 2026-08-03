@@ -9,6 +9,7 @@
  */
 import { SYSTEM_ACTOR } from '../../ids';
 import type { Bucket } from '../../ports/bucket';
+import { logOperationalError } from '../../operationalLog';
 import { EventService } from './EventService';
 
 /** Per-object schema types that use the fan-out migration strategy. */
@@ -94,7 +95,11 @@ export class MigrationService {
 					}
 					data = parsed as Migratable;
 				} catch (err) {
-					console.warn(`runMigration: skipping unreadable object ${obj.key}: ${String(err)}`);
+					logOperationalError(
+						'stored_object_skipped',
+						{ operation: 'migration.scan', object: obj.key, target_type: targetType },
+						err,
+					);
 					result.skipped++;
 					continue;
 				}

@@ -3,6 +3,7 @@ import { ForbiddenError, TokenId } from '@marimo-hub/core';
 import type { PublicToken } from '@marimo-hub/core';
 import type { Context } from 'hono';
 import type { HonoEnv } from '../context';
+import { bestEffort } from '../log';
 import {
 	commonErrors,
 	createApp,
@@ -149,9 +150,23 @@ app.openapi(createToken, async (c) => {
 		{ name, expiresInDays: expires_in_days },
 		user.id,
 	);
-	await deps.services.events
-		.append({ event: 'token.create', actor: user.id, token_id: record.id, token_name: name })
-		.catch(() => {});
+	await bestEffort(
+		'audit_append',
+		{
+			request_id: c.get('requestId') ?? null,
+			method: c.req.method,
+			path: c.req.path,
+			user: user.id,
+			audit_event: 'token.create',
+		},
+		() =>
+			deps.services.events.append({
+				event: 'token.create',
+				actor: user.id,
+				token_id: record.id,
+				token_name: name,
+			}),
+	);
 	return c.json({ success: true, data: { ...toResponse(record), token } }, 201);
 });
 
@@ -170,9 +185,22 @@ app.openapi(revokeToken, async (c) => {
 	const { tokenId } = c.req.valid('param');
 
 	await deps.services.tokens.revoke(user.id, tokenId);
-	await deps.services.events
-		.append({ event: 'token.revoke', actor: user.id, token_id: tokenId })
-		.catch(() => {});
+	await bestEffort(
+		'audit_append',
+		{
+			request_id: c.get('requestId') ?? null,
+			method: c.req.method,
+			path: c.req.path,
+			user: user.id,
+			audit_event: 'token.revoke',
+		},
+		() =>
+			deps.services.events.append({
+				event: 'token.revoke',
+				actor: user.id,
+				token_id: tokenId,
+			}),
+	);
 	return c.json({ success: true }, 200);
 });
 

@@ -2,6 +2,7 @@ import type { Bucket } from '../../ports/bucket';
 import type { SandboxProvider } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 import { Millis } from '../../duration';
+import { logOperationalError } from '../../operationalLog';
 import { captureFilesystemSnapshot } from '../content/filesystemSnapshots';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
@@ -287,8 +288,14 @@ export class SessionRetirer {
 				{ persistEdits },
 			);
 		} catch (err) {
-			console.error(
-				`captureSession failed during teardown for notebook ${session.notebook_id}:`,
+			logOperationalError(
+				'session_capture_failed',
+				{
+					operation: 'session_retire.capture_session',
+					project_id: session.project_id,
+					notebook_id: session.notebook_id,
+					session_id: session.session_id,
+				},
 				err,
 			);
 		}
@@ -310,8 +317,14 @@ export class SessionRetirer {
 			await sandbox.destroy();
 			return true;
 		} catch (err) {
-			console.error(
-				`sandbox.destroy failed during teardown for notebook ${session.notebook_id}:`,
+			logOperationalError(
+				'sandbox_destroy_failed',
+				{
+					operation: 'session_retire.destroy',
+					project_id: session.project_id,
+					notebook_id: session.notebook_id,
+					session_id: session.session_id,
+				},
 				err,
 			);
 			return false;

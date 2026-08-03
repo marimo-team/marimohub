@@ -13,7 +13,7 @@ import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
 import { metricsObserver, saga } from '../../saga';
-import { parseStored, ProjectSchema, toPublicProjectEntry } from '../../schema';
+import { ProjectSchema, readStored, toPublicProjectEntry } from '../../schema';
 import type {
 	Project,
 	ProjectFederation,
@@ -98,7 +98,7 @@ export class ProjectService {
 		if (!obj) {
 			throw new NotFoundError(`Project ${id} not found`);
 		}
-		return parseStored(ProjectSchema, await obj.json(), paths.project(id).meta);
+		return readStored(ProjectSchema, obj, paths.project(id).meta);
 	}
 
 	async createProject(input: CreateProjectInput, actor: UserId): Promise<Project> {

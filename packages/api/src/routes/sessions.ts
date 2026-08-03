@@ -49,7 +49,7 @@ import {
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
-import { errorMetadata } from '../log';
+import { bestEffort, errorMetadata, logEvent } from '../log';
 import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
 	assertSessionAccess,
@@ -622,16 +622,25 @@ app.openapi(takeoverEditorSession, async (c) => {
 	});
 	let failed = false;
 	const audit = (event: string) =>
-		deps.services.events
-			.append({
-				event,
-				actor: user.id,
-				project_id: pid,
-				notebook_id: nid,
-				session_id: body.expected_holder_session_id,
-				takeover_id: body.takeover_id,
-			})
-			.catch(() => {});
+		bestEffort(
+			'audit_append',
+			{
+				request_id: c.get('requestId') ?? null,
+				method: c.req.method,
+				path: c.req.path,
+				user: user.id,
+				audit_event: event,
+			},
+			() =>
+				deps.services.events.append({
+					event,
+					actor: user.id,
+					project_id: pid,
+					notebook_id: nid,
+					session_id: body.expected_holder_session_id,
+					takeover_id: body.takeover_id,
+				}),
+		);
 	const assertAccess = async () => {
 		const project = await deps.services.projects.getProject(pid);
 		if (project.status === 'deleted') throw new NotFoundError(`Project ${pid} not found`);
@@ -797,15 +806,32 @@ app.openapi(createSession, async (c) => {
 	// The notebook's stored choice, resolved leniently: "default"/absent → first
 	// configured image; a choice that fell off the list falls back with a warning
 	// rather than blocking the session.
-	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], (msg) =>
-		console.warn(`[session] ${msg} (project=${pid} notebook=${nid})`),
+	const image = resolveBaseImage(notebook.meta.base_image, sandbox.images ?? [], () =>
+		logEvent({
+			level: 'error',
+			event: 'stored_config_fallback',
+			request_id: c.get('requestId') ?? null,
+			config: 'base_image',
+			project_id: pid,
+			notebook_id: nid,
+			reason: 'selection_unavailable',
+		}),
 	);
 	const retryWithDefault = mode === 'edit' && body?.compute_profile === 'default';
 	const requestedComputeProfile = resolveComputeProfile(
 		sandbox,
 		retryWithDefault ? undefined : notebook.meta.compute_profile,
 		sandbox.computeProfileOverride === 'editors' && profileOverrideEligible,
-		(msg) => console.warn(`[session] ${msg} (project=${pid} notebook=${nid})`),
+		() =>
+			logEvent({
+				level: 'error',
+				event: 'stored_config_fallback',
+				request_id: c.get('requestId') ?? null,
+				config: 'compute_profile',
+				project_id: pid,
+				notebook_id: nid,
+				reason: 'selection_unavailable',
+			}),
 	);
 	const provisioner = new SandboxProvisioner(compute);
 
@@ -1299,15 +1325,24 @@ app.openapi(createSession, async (c) => {
 	// whole admitted audience, so who started it belongs in the project's event log.
 	// Best-effort like every audit append.
 	if (MODE_POLICY[mode].singleton) {
-		await deps.services.events
-			.append({
-				event: 'app.start',
-				actor: user.id,
-				project_id: pid,
-				notebook_id: nid,
-				session_id: session!.session_id,
-			})
-			.catch(() => {});
+		await bestEffort(
+			'audit_append',
+			{
+				request_id: c.get('requestId') ?? null,
+				method: c.req.method,
+				path: c.req.path,
+				user: user.id,
+				audit_event: 'app.start',
+			},
+			() =>
+				deps.services.events.append({
+					event: 'app.start',
+					actor: user.id,
+					project_id: pid,
+					notebook_id: nid,
+					session_id: session!.session_id,
+				}),
+		);
 	}
 
 	return c.json(

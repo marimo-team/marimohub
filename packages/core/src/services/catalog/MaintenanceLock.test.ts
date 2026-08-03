@@ -17,6 +17,7 @@ describe('MaintenanceLock', () => {
 
 	afterEach(() => {
 		clock.restore();
+		vi.restoreAllMocks();
 	});
 
 	it('acquires a free lease', async () => {
@@ -59,11 +60,15 @@ describe('MaintenanceLock', () => {
 	});
 
 	it('steals a lock whose stored record is malformed', async () => {
-		await bucket.put(paths.maintenanceLock, 'not-json');
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		await bucket.put(paths.maintenanceLock, 'not-json-do-not-log');
 
 		expect(await lock.acquire('A', 1000)).toBe(true);
 		const stored = await bucket.get(paths.maintenanceLock);
 		expect((await stored!.json<{ holder: string }>()).holder).toBe('A');
+		const line = log.mock.calls[0]?.[0] as string;
+		expect(line).toContain('corrupt_maintenance_lock_ignored');
+		expect(line).not.toContain('not-json-do-not-log');
 	});
 
 	it('returns false when it loses the CAS on a contended steal', async () => {
