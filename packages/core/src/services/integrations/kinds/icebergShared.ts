@@ -6,7 +6,7 @@ import { INTEGRATIONS_DIR } from '../bundle';
 import { awsStaticCredentials, httpUrlField } from './common';
 
 export { HTTP_URL_REGEX } from './common';
-export const THRIFT_URL_REGEX = /^thrift:\/\/(?![^/?#]*@)\S+$/;
+export const THRIFT_URL_REGEX = /^thrift:\/\/[^@\s]+$/;
 
 /** Primary brand color from iceberg.apache.org (no simple-icons mark exists). */
 export const ICEBERG_BRAND_COLOR = '#0969DA';
@@ -14,9 +14,9 @@ export const ICEBERG_BRAND_COLOR = '#0969DA';
 const url = httpUrlField;
 
 export const awsCredentialsSchema = z.discriminatedUnion('method', [
-	z.object({ method: z.literal('ambient') }),
-	z.object({ method: z.literal('static'), ...awsStaticCredentials }),
-	z.object({
+	z.strictObject({ method: z.literal('ambient') }),
+	z.strictObject({ method: z.literal('static'), ...awsStaticCredentials }),
+	z.strictObject({
 		method: z.literal('profile'),
 		profile_name: z.string().min(1),
 	}),
@@ -24,18 +24,18 @@ export const awsCredentialsSchema = z.discriminatedUnion('method', [
 
 export const unifiedAwsCredentialsSchema = z
 	.discriminatedUnion('method', [
-		z.object({ method: z.literal('none') }),
-		z.object({
+		z.strictObject({ method: z.literal('none') }),
+		z.strictObject({
 			method: z.literal('static'),
 			region: z.string().min(1).optional(),
 			...awsStaticCredentials,
 		}),
-		z.object({
+		z.strictObject({
 			method: z.literal('profile'),
 			region: z.string().min(1).optional(),
 			profile_name: z.string().min(1),
 		}),
-		z.object({
+		z.strictObject({
 			method: z.literal('role'),
 			region: z.string().min(1).optional(),
 			role_arn: z.string().min(1),
@@ -45,7 +45,7 @@ export const unifiedAwsCredentialsSchema = z
 	.default({ method: 'none' });
 
 export const icebergRuntimeSchema = z
-	.object({
+	.strictObject({
 		max_workers: z.number().int().positive().optional(),
 		legacy_current_snapshot_id: z.boolean().optional(),
 		downcast_ns_timestamp_to_us_on_write: z.boolean().optional(),
@@ -53,11 +53,13 @@ export const icebergRuntimeSchema = z
 	})
 	.default({});
 
-const s3Storage = z.object({
+const s3Storage = z.strictObject({
 	scheme: z.literal('s3'),
 	region: z.string().min(1).optional(),
 	endpoint: url().optional(),
-	credentials: awsCredentialsSchema.default({ method: 'ambient' }),
+	credentials: awsCredentialsSchema
+		.default({ method: 'ambient' })
+		.describe('Credentials for S3 FileIO only; these override client credentials'),
 	role_arn: z.string().min(1).optional(),
 	role_session_name: z.string().min(1).optional(),
 	signer: z.string().min(1).optional(),
@@ -71,13 +73,13 @@ const s3Storage = z.object({
 	anonymous: z.boolean().default(false),
 });
 
-const gcsStorage = z.object({
+const gcsStorage = z.strictObject({
 	scheme: z.literal('gcs'),
 	project_id: z.string().min(1).optional(),
 	auth: z
 		.discriminatedUnion('method', [
-			z.object({ method: z.literal('ambient') }),
-			z.object({
+			z.strictObject({ method: z.literal('ambient') }),
+			z.strictObject({
 				method: z.literal('oauth_token'),
 				token: zSecret(),
 				token_expires_at_ms: z.number().int().positive().optional(),
@@ -94,23 +96,23 @@ const gcsStorage = z.object({
 	version_aware: z.boolean().default(false),
 });
 
-const adlsStorage = z.object({
+const adlsStorage = z.strictObject({
 	scheme: z.literal('adls'),
 	account_name: z.string().min(1).optional(),
 	auth: z
 		.discriminatedUnion('method', [
-			z.object({ method: z.literal('ambient') }),
-			z.object({ method: z.literal('connection_string'), connection_string: zSecret() }),
-			z.object({ method: z.literal('account_key'), account_key: zSecret() }),
-			z.object({ method: z.literal('sas_token'), sas_token: zSecret() }),
-			z.object({
+			z.strictObject({ method: z.literal('ambient') }),
+			z.strictObject({ method: z.literal('connection_string'), connection_string: zSecret() }),
+			z.strictObject({ method: z.literal('account_key'), account_key: zSecret() }),
+			z.strictObject({ method: z.literal('sas_token'), sas_token: zSecret() }),
+			z.strictObject({
 				method: z.literal('service_principal'),
 				tenant_id: z.string().min(1),
 				client_id: z.string().min(1),
 				client_secret: zSecret(),
 			}),
-			z.object({ method: z.literal('access_token'), token: zSecret() }),
-			z.object({ method: z.literal('credential'), credential: zSecret() }),
+			z.strictObject({ method: z.literal('access_token'), token: zSecret() }),
+			z.strictObject({ method: z.literal('credential'), credential: zSecret() }),
 		])
 		.default({ method: 'ambient' }),
 	account_host: z.string().min(1).optional(),
@@ -120,7 +122,7 @@ const adlsStorage = z.object({
 	dfs_storage_scheme: z.enum(['http', 'https']).default('https'),
 });
 
-const hdfsStorage = z.object({
+const hdfsStorage = z.strictObject({
 	scheme: z.literal('hdfs'),
 	host: z.string().min(1),
 	port: z.number().int().positive().max(65_535).default(8020),
@@ -128,7 +130,7 @@ const hdfsStorage = z.object({
 	kerberos_ticket: z.string().min(1).optional(),
 });
 
-const huggingFaceStorage = z.object({
+const huggingFaceStorage = z.strictObject({
 	scheme: z.literal('hugging_face'),
 	endpoint: url().default('https://huggingface.co'),
 	token: zSecret().optional(),
@@ -136,7 +138,7 @@ const huggingFaceStorage = z.object({
 
 export const icebergStorageSchema = z
 	.discriminatedUnion('scheme', [
-		z.object({ scheme: z.literal('catalog') }),
+		z.strictObject({ scheme: z.literal('catalog') }),
 		s3Storage,
 		gcsStorage,
 		adlsStorage,
@@ -448,3 +450,28 @@ export const unifiedAwsUiHints = {
 	'unified_credentials.secret_access_key': { widget: 'password' as const },
 	'unified_credentials.session_token': { widget: 'password' as const },
 };
+
+const STORAGE_EXTRAS: Record<z.infer<typeof icebergStorageSchema>['scheme'], string | undefined> = {
+	catalog: undefined,
+	s3: 's3fs',
+	gcs: 'gcsfs',
+	adls: 'adlfs',
+	hdfs: undefined,
+	hugging_face: 'hf',
+};
+
+export function icebergRequirements(
+	baseExtras: string[],
+	config: {
+		storage: z.infer<typeof icebergStorageSchema>;
+		auth?: { method: string };
+	},
+): string[] {
+	const extras = new Set(baseExtras);
+	const storageExtra = STORAGE_EXTRAS[config.storage.scheme];
+	if (storageExtra) extras.add(storageExtra);
+	if (config.auth?.method === 'sigv4') extras.add('rest-sigv4');
+	if (config.auth?.method === 'google') extras.add('gcp-auth');
+	if (config.auth?.method === 'entra') extras.add('entra-auth');
+	return [`pyiceberg[${[...extras].sort().join(',')}]>=0.11`];
+}

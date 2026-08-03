@@ -561,6 +561,9 @@ describe('kind renders (golden)', () => {
 				}),
 			),
 		).toThrow(/HTTPS/);
+		expect(() => parse({ client_tags: [{ value: 'batch' }, { value: 'batch' }] })).toThrow(
+			/Duplicate client tag/,
+		);
 		expect(() =>
 			trino.validate?.(
 				parse({
@@ -580,6 +583,28 @@ describe('kind renders (golden)', () => {
 		expect(() =>
 			trino.validate?.(parse({ encoding: [{ value: 'json' }, { value: 'json' }] })),
 		).toThrow(/Duplicate spooling encoding/);
+	});
+
+	it('trino publishes client-tag value uniqueness', () => {
+		const properties = defaultRegistry().describe('trino').json_schema.properties as Record<
+			string,
+			Record<string, unknown>
+		>;
+		expect(properties.client_tags['x-unique-by']).toBe('value');
+	});
+
+	it('trino rejects invalid header names and line breaks before rendering', () => {
+		expect(
+			trino.configSchema.safeParse({
+				...(FIXTURES.trino as object),
+				http_headers: [{ name: 'Bad Header', value: 'value' }],
+			}).success,
+		).toBe(false);
+		const config = trino.configSchema.parse({
+			...(FIXTURES.trino as object),
+			http_headers: [{ name: 'X-Trace', value: 'safe\r\nInjected: true' }],
+		});
+		expect(() => trino.render(input(config, trino))).toThrow(/line break/);
 	});
 
 	it('pyspark: renders a Spark Connect URL and SparkSession config', () => {
@@ -712,17 +737,19 @@ describe('kind renders (golden)', () => {
 	});
 
 	it('iceberg_rest rejects header injection and credential-shaped custom headers', () => {
-		for (const headers of [
-			{ 'X-Trace': 'safe\r\nAuthorization: Bearer injected' },
-			{ Authorization: 'Bearer plain-text-secret' },
-		]) {
-			const config = icebergRest.configSchema.parse({
-				uri: 'https://catalog.internal',
-				auth: { method: 'none' },
-				headers,
-			});
-			expect(() => icebergRest.validate?.(config)).toThrow(ValidationError);
-		}
+		const injected = icebergRest.configSchema.parse({
+			uri: 'https://catalog.internal',
+			auth: { method: 'none' },
+			headers: { 'X-Trace': 'safe\r\nAuthorization: Bearer injected' },
+		});
+		expect(() => icebergRest.render(input(injected, icebergRest))).toThrow(ValidationError);
+
+		const credential = icebergRest.configSchema.parse({
+			uri: 'https://catalog.internal',
+			auth: { method: 'none' },
+			headers: { Authorization: 'Bearer plain-text-secret' },
+		});
+		expect(() => icebergRest.validate?.(credential)).toThrow(ValidationError);
 	});
 
 	it('iceberg_rest rejects credentials and TLS material over cleartext http', () => {
@@ -932,6 +959,69 @@ describe('kind renders (golden)', () => {
 		},
 	);
 
+	it.each([
+		['iceberg_glue', icebergGlue, 'glue'],
+		['iceberg_dynamodb', icebergDynamoDb, 'dynamodb'],
+	] as const)(
+		'%s renders catalog-specific and shared AWS credentials independently',
+		(_kind, def, prefix) => {
+			const serviceCredentials = {
+				method: 'static',
+				access_key_id: 'SERVICE_KEY',
+				secret_access_key: 'service-secret',
+			};
+			const clientCredentials = {
+				method: 'static',
+				access_key_id: 'CLIENT_KEY',
+				secret_access_key: 'client-secret',
+			};
+			const cases = [
+				[{ method: 'ambient' }, { method: 'none' }, {}],
+				[
+					serviceCredentials,
+					{ method: 'none' },
+					{
+						[`${prefix}.access-key-id`]: 'SERVICE_KEY',
+						[`${prefix}.secret-access-key`]: 'service-secret',
+					},
+				],
+				[
+					{ method: 'ambient' },
+					clientCredentials,
+					{
+						'client.access-key-id': 'CLIENT_KEY',
+						'client.secret-access-key': 'client-secret',
+					},
+				],
+				[
+					serviceCredentials,
+					clientCredentials,
+					{
+						[`${prefix}.access-key-id`]: 'SERVICE_KEY',
+						[`${prefix}.secret-access-key`]: 'service-secret',
+						'client.access-key-id': 'CLIENT_KEY',
+						'client.secret-access-key': 'client-secret',
+					},
+				],
+			] as const;
+			for (const [credentials, unifiedCredentials, expected] of cases) {
+				const config = def.configSchema.parse({
+					credentials,
+					unified_credentials: unifiedCredentials,
+				});
+				const catalog = renderedCatalog(renderDefinition(def, config), 'prod');
+				for (const key of [
+					`${prefix}.access-key-id`,
+					`${prefix}.secret-access-key`,
+					'client.access-key-id',
+					'client.secret-access-key',
+				]) {
+					expect(catalog[key], key).toBe(expected[key as keyof typeof expected]);
+				}
+			}
+		},
+	);
+
 	it('renders catalog and process-wide PyIceberg runtime settings at the correct levels', () => {
 		const config = icebergRest.configSchema.parse({
 			uri: 'https://catalog.internal',
@@ -1059,15 +1149,14 @@ describe('kind renders (golden)', () => {
 			secrets: [{ name: 'SAME', value: 'b' }],
 		});
 		expect(() => customEnv.validate?.(duplicate)).toThrow(/defined twice/);
-		const duplicateBundles = customEnv.configSchema.parse({
-			secret_bundles: [
-				{ name: 'APP_CONFIG', value: '{}' },
-				{ name: 'APP_CONFIG', value: '{}' },
-			],
-		});
-		expect(() => customEnv.validate?.(duplicateBundles)).toThrow(
-			/bundle "APP_CONFIG" is defined twice/,
-		);
+		expect(() =>
+			customEnv.configSchema.parse({
+				secret_bundles: [
+					{ name: 'APP_CONFIG', value: '{}' },
+					{ name: 'APP_CONFIG', value: '{}' },
+				],
+			}),
+		).toThrow(/Duplicate JSON secret bundle name/);
 	});
 
 	it('custom_env: validates names and collisions after secret JSON bundles resolve', () => {
@@ -1126,6 +1215,46 @@ describe('kind renders (golden)', () => {
 		expect(byKind.pyspark.length).toBeGreaterThan(0);
 		expect(byKind.iceberg_rest.length).toBeGreaterThan(0);
 		expect(byKind.custom_env).toEqual([]);
+	});
+
+	it('resolves requirements from the selected driver, storage, and authentication branches', () => {
+		const odbc = sqlserver.configSchema.parse(FIXTURES.sqlserver);
+		const pymssql = sqlserver.configSchema.parse({
+			...(FIXTURES.sqlserver as object),
+			driver: { name: 'pymssql' },
+		});
+		expect(sqlserver.resolveRequirements?.(odbc)).toEqual(['sqlalchemy>=2', 'pyodbc>=5.1']);
+		expect(sqlserver.resolveRequirements?.(pymssql)).toEqual(['sqlalchemy>=2', 'pymssql>=2.3']);
+
+		const rest = icebergRest.configSchema.parse({
+			uri: 'https://catalog.internal',
+			auth: { method: 'sigv4', region: 'us-east-1' },
+			storage: { scheme: 's3' },
+		});
+		expect(icebergRest.resolveRequirements?.(rest)).toEqual([
+			'pyiceberg[pyarrow,rest-sigv4,s3fs]>=0.11',
+		]);
+
+		const sqlPostgres = icebergSql.configSchema.parse({
+			uri: 'postgresql+psycopg2://catalog:secret@db.internal/iceberg',
+		});
+		const sqlSqlite = icebergSql.configSchema.parse({ uri: 'sqlite:////tmp/iceberg.db' });
+		expect(icebergSql.resolveRequirements?.(sqlPostgres)).toEqual([
+			'pyiceberg[pyarrow,sql-postgres]>=0.11',
+		]);
+		expect(icebergSql.resolveRequirements?.(sqlSqlite)).toEqual([
+			'pyiceberg[pyarrow,sql-sqlite]>=0.11',
+		]);
+
+		const hive = icebergHive.configSchema.parse({ uri: 'thrift://hive.internal:9083' });
+		const hiveKerberos = icebergHive.configSchema.parse({
+			uri: 'thrift://hive.internal:9083',
+			kerberos: { enabled: true },
+		});
+		expect(icebergHive.resolveRequirements?.(hive)).toEqual(['pyiceberg[hive,pyarrow]>=0.11']);
+		expect(icebergHive.resolveRequirements?.(hiveKerberos)).toEqual([
+			'pyiceberg[hive,hive-kerberos,pyarrow]>=0.11',
+		]);
 	});
 
 	it('rejects hosts, URIs, and identifiers that could smuggle URL structure', () => {
@@ -1190,6 +1319,26 @@ describe('kind renders (golden)', () => {
 				},
 			}).success,
 		).toBe(false);
+	});
+
+	it('URL fields allow @ in paths but not in the authority', () => {
+		expect(
+			icebergRest.configSchema.safeParse({
+				...(FIXTURES.iceberg_rest as object),
+				uri: 'https://catalog.internal/users/alice@example.com',
+			}).success,
+		).toBe(true);
+		expect(
+			wandb.configSchema.safeParse({
+				...(FIXTURES.wandb as object),
+				base_url: 'https://api.example.com/users/alice@example.com',
+			}).success,
+		).toBe(true);
+		expect(
+			athena.configSchema.safeParse(
+				fixtureFor(athena, { s3_staging_dir: 's3://staging/users/alice@example.com' }),
+			).success,
+		).toBe(true);
 	});
 });
 
@@ -1825,10 +1974,14 @@ describe('schema dialect', () => {
 		if (node[SECRET_MARK] === true) {
 			expect(node.type, `${kind}:${path} secret must be a string`).toBe('string');
 			expect(node.minLength, `${kind}:${path} secret must be zSecret()`).toBe(1);
+			expect(node.writeOnly, `${kind}:${path} secret must be write-only`).toBe(true);
 			return;
 		}
 		const union = (node.oneOf ?? node.anyOf) as Node[] | undefined;
 		if (union) {
+			expect(node.discriminator, `${kind}:${path} union must declare its discriminator`).toEqual({
+				propertyName: expect.any(String),
+			});
 			for (const branch of union) {
 				expect(branch.type, `${kind}:${path} union branches must be objects`).toBe('object');
 				const props = branch.properties as Record<string, Node>;
@@ -1843,6 +1996,11 @@ describe('schema dialect', () => {
 		switch (node.type) {
 			case 'object': {
 				const props = (node.properties ?? {}) as Record<string, Node>;
+				if (node.properties !== undefined) {
+					expect(node.additionalProperties, `${kind}:${path} fixed object must be strict`).toBe(
+						false,
+					);
+				}
 				for (const [key, child] of Object.entries(props)) walk(child, `${path}.${key}`, kind);
 				const additional = node.additionalProperties as Node | undefined;
 				if (additional && typeof additional === 'object') {
@@ -1880,6 +2038,45 @@ describe('schema dialect', () => {
 	it('every registered kind stays inside the supported dialect', () => {
 		for (const descriptor of defaultRegistry().describeAll()) {
 			walk(descriptor.json_schema, '$', descriptor.kind);
+		}
+	});
+
+	it('rejects unknown fields in every root config', () => {
+		for (const def of defaultRegistry().list()) {
+			expect(
+				def.configSchema.safeParse({ ...(FIXTURES[def.kind] as object), unknown_field: true })
+					.success,
+				def.kind,
+			).toBe(false);
+		}
+	});
+
+	it('publishes only portable regular expressions', () => {
+		const unsupported = /\(\?[=!<]|\\[1-9]/;
+		const visit = (node: unknown, kind: string): void => {
+			if (typeof node !== 'object' || node === null) return;
+			const record = node as Record<string, unknown>;
+			if (typeof record.pattern === 'string') {
+				expect(unsupported.test(record.pattern), `${kind}: ${record.pattern}`).toBe(false);
+			}
+			for (const value of Object.values(record)) {
+				if (Array.isArray(value)) value.forEach((item) => visit(item, kind));
+				else visit(value, kind);
+			}
+		};
+		for (const descriptor of defaultRegistry().describeAll()) {
+			visit(descriptor.json_schema, descriptor.kind);
+		}
+	});
+
+	it('describes every migration step for versioned kinds', () => {
+		for (const def of defaultRegistry().list()) {
+			if (def.schemaVersion === 1) continue;
+			expect(def.migrate, `${def.kind} migration function`).toBeTypeOf('function');
+			const steps = new Set((def.migrations ?? []).map(({ from, to }) => `${from}:${to}`));
+			for (let from = 1; from < def.schemaVersion; from++) {
+				expect(steps.has(`${from}:${from + 1}`), `${def.kind} v${from} → v${from + 1}`).toBe(true);
+			}
 		}
 	});
 

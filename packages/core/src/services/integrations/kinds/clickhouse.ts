@@ -9,7 +9,7 @@ import {
 	SQL_CONNECTION_HINTS,
 } from './common';
 
-const clickhouseConfig = z.object({
+const clickhouseConfig = z.strictObject({
 	host: hostField('Server hostname, e.g. abc123.us-east-1.aws.clickhouse.cloud'),
 	port: portField(8443).describe('HTTP interface port'),
 	secure: z.boolean().default(true).describe('Use HTTPS for the HTTP interface'),

@@ -6,6 +6,7 @@ import { zSecret } from '../secretFields';
 import { discoveryEnvField } from './common';
 
 const METADATA_KEY_REGEX = /^[0-9a-z_.-]+$/;
+const SPARK_CONFIG_KEY_REGEX = /^[A-Za-z0-9._-]+$/;
 // Spark property names separate words with `.`, `-`, or `_` interchangeably
 // (`spark.foo.api_key`), so all three have to count as a separator here.
 const SENSITIVE_CONFIG_REGEX =
@@ -22,21 +23,21 @@ const RESERVED_PARAMETERS = new Set([
 	'grpc_keepalive_without_calls',
 ]);
 
-const pysparkConfig = z.object({
+const pysparkConfig = z.strictObject({
 	host: z.string().regex(HOSTNAME_REGEX, 'Hostname only — no scheme, port, path, or credentials'),
 	port: z.number().int().min(1).max(65535).default(15002),
 	use_ssl: z.boolean().default(true),
 	auth: z
 		.discriminatedUnion('method', [
-			z.object({ method: z.literal('none') }),
-			z.object({ method: z.literal('token'), token: zSecret() }),
+			z.strictObject({ method: z.literal('none') }),
+			z.strictObject({ method: z.literal('token'), token: zSecret() }),
 		])
 		.default({ method: 'none' }),
 	user_id: z.string().min(1).optional(),
 	user_agent: z.string().min(1).max(512).optional(),
 	app_name: z.string().min(1).optional(),
 	keepalive: z
-		.object({
+		.strictObject({
 			enabled: z.boolean().default(true),
 			time_ms: z.number().int().positive().default(60_000),
 			timeout_ms: z.number().int().positive().default(20_000),
@@ -48,9 +49,21 @@ const pysparkConfig = z.object({
 			timeout_ms: 20_000,
 			without_calls: true,
 		}),
-	metadata: z.array(z.object({ name: z.string().min(1), value: zSecret() })).default([]),
+	metadata: z
+		.array(z.strictObject({ name: z.string().regex(METADATA_KEY_REGEX), value: zSecret() }))
+		.refine((items) => new Set(items.map(({ name }) => name)).size === items.length, {
+			message: 'Metadata names must be unique',
+		})
+		.meta({ 'x-unique-by': 'name' })
+		.default([]),
 	spark_config: z.record(z.string(), z.string()).default({}),
-	secret_spark_config: z.array(z.object({ name: z.string().min(1), value: zSecret() })).default([]),
+	secret_spark_config: z
+		.array(z.strictObject({ name: z.string().regex(SPARK_CONFIG_KEY_REGEX), value: zSecret() }))
+		.refine((items) => new Set(items.map(({ name }) => name)).size === items.length, {
+			message: 'Secret Spark configuration names must be unique',
+		})
+		.meta({ 'x-unique-by': 'name' })
+		.default([]),
 	ambient_env: discoveryEnvField('SPARK_REMOTE'),
 });
 
@@ -62,6 +75,7 @@ export const pyspark = defineIntegration({
 	brand: { icon: 'apachespark', color: '#E25A1C' },
 	schemaVersion: 1,
 	configSchema: pysparkConfig,
+	environmentVariables: ['SPARK_REMOTE'],
 	requirements: ['pyspark[connect]>=4.2'],
 	uiHints: {
 		host: { group: 'Connection', order: 1 },
@@ -86,7 +100,6 @@ export const pyspark = defineIntegration({
 			throw new ValidationError('Spark Connect token authentication requires TLS.');
 		}
 		const metadataNames = config.metadata.map(({ name }) => name);
-		assertUnique(metadataNames, 'metadata key');
 		for (const name of metadataNames) {
 			if (!METADATA_KEY_REGEX.test(name) || name.endsWith('-bin')) {
 				throw new ValidationError(`Invalid Spark Connect metadata key "${name}".`);
@@ -96,7 +109,6 @@ export const pyspark = defineIntegration({
 			}
 		}
 		const secretNames = config.secret_spark_config.map(({ name }) => name);
-		assertUnique(secretNames, 'secret Spark configuration key');
 		for (const key of Object.keys(config.spark_config)) {
 			if (key.trim() === '') throw new ValidationError('Spark configuration keys cannot be empty.');
 			if (SENSITIVE_CONFIG_REGEX.test(key)) {
@@ -164,9 +176,3 @@ export const pyspark = defineIntegration({
 		};
 	},
 });
-
-function assertUnique(values: string[], label: string): void {
-	if (new Set(values).size !== values.length) {
-		throw new ValidationError(`Duplicate ${label}.`);
-	}
-}

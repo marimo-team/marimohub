@@ -4,16 +4,16 @@ import { zSecret } from '../secretFields';
 import { connectionUrl, renderConnection, renderFile } from './common';
 
 const authSchema = z.discriminatedUnion('method', [
-	z.object({ method: z.literal('password'), password: zSecret() }),
-	z.object({
+	z.strictObject({ method: z.literal('password'), password: zSecret() }),
+	z.strictObject({
 		method: z.literal('key_pair'),
 		private_key: zSecret().describe('PKCS#8 private key PEM, written into the session'),
 		private_key_passphrase: zSecret().optional(),
 	}),
-	z.object({ method: z.literal('oauth'), token: zSecret() }),
+	z.strictObject({ method: z.literal('oauth'), token: zSecret() }),
 ]);
 
-const snowflakeConfig = z.object({
+const snowflakeConfig = z.strictObject({
 	account: z
 		.string()
 		.regex(HOSTNAME_REGEX, 'Account identifier only — no scheme, path, or credentials')

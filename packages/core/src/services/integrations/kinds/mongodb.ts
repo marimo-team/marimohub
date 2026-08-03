@@ -11,7 +11,7 @@ import {
 	validateCaFields,
 } from './common';
 
-const mongoConfig = z.object({
+const mongoConfig = z.strictObject({
 	// `mongodb+srv` resolves the replica-set members from DNS, which is how Atlas
 	// and most managed deployments are addressed. A seed list of literal members
 	// is deliberately not modelled: one host keeps the rendered URI unambiguous.
@@ -21,19 +21,19 @@ const mongoConfig = z.object({
 	database: z.string().min(1).optional().describe('Default database for `client.get_database()`'),
 	auth: z
 		.discriminatedUnion('method', [
-			z.object({
+			z.strictObject({
 				method: z.literal('password'),
 				username: z.string().min(1),
 				password: zSecret(),
 				auth_source: z.string().min(1).default('admin'),
 			}),
-			z.object({ method: z.literal('none') }),
+			z.strictObject({ method: z.literal('none') }),
 		])
 		.default({ method: 'none' }),
 	tls: z
 		.discriminatedUnion('mode', [
-			z.object({ mode: z.literal('enabled'), ...caFields }),
-			z.object({ mode: z.literal('disabled') }),
+			z.strictObject({ mode: z.literal('enabled'), ...caFields }),
+			z.strictObject({ mode: z.literal('disabled') }),
 		])
 		.default({ mode: 'enabled' }),
 });

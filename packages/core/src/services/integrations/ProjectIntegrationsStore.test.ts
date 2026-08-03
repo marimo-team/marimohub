@@ -574,6 +574,33 @@ describe('ProjectIntegrationsStore', () => {
 		expect(render?.files.some((f) => f.path === `${INTEGRATIONS_DIR}/echo/bbb.txt`)).toBe(true);
 	});
 
+	it('resolveForSession records only the packages selected by the config', async () => {
+		const store = new ProjectIntegrationsStore({ bucket, registry: defaultRegistry(), codec });
+		await store.create(
+			pid,
+			{
+				kind: 'sqlserver',
+				name: 'warehouse',
+				config: {
+					host: 'mssql.internal',
+					database: 'analytics',
+					username: 'reader',
+					password: 'secret',
+					driver: { name: 'pymssql' },
+				},
+			},
+			ACTOR,
+		);
+
+		const render = await store.resolveForSession(pid, renderContext(createSessionId()));
+		const manifest = render?.files.find(
+			(file) => file.path === `${INTEGRATIONS_DIR}/manifest.json`,
+		);
+		expect(JSON.parse(manifest?.content ?? '')).toMatchObject({
+			integrations: [{ requirements: ['sqlalchemy>=2', 'pymssql>=2.3'] }],
+		});
+	});
+
 	it('without a codec, creating with a secret names the missing config', async () => {
 		const store = makeStore(bucket, false);
 		await expect(

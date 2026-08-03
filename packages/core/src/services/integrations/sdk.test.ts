@@ -36,7 +36,7 @@ describe('defineIntegration secret guard', () => {
 	});
 
 	it('redacts a JSON-escaped header secret quoted back by the transport', async () => {
-		const secret = 'he"llo\\wor\nld\tx';
+		const secret = 'he"llo\\wor\tld\tx';
 		const config = trino.configSchema.parse({
 			host: 'trino.internal',
 			auth: { method: 'none' },
@@ -48,6 +48,18 @@ describe('defineIntegration secret guard', () => {
 		expect(result?.ok).toBe(false);
 		expect(result?.details).not.toContain('llo');
 		expect(result?.details).toBe('request failed');
+	});
+
+	// A CR/LF in a header value is a header-injection vector, so the guard rejects
+	// it with a ValidationError (422) rather than letting it reach the transport.
+	it('rejects a header value carrying a line break', async () => {
+		const config = trino.configSchema.parse({
+			host: 'trino.internal',
+			auth: { method: 'none' },
+			http_headers: [{ name: 'X-Tenant', value: 'tenant\r\nX-Injected: 1' }],
+		});
+
+		await expect(trino.testConnection?.(config, unusedProbe())).rejects.toThrow(ValidationError);
 	});
 
 	// A JSON config can carry a lone surrogate, which encodeURIComponent rejects;
