@@ -13,15 +13,23 @@ import {
 	awsAuthSchema,
 	GCS_BUCKET_REGEX,
 	httpUrlField,
+	isValidGcsBucket,
+	isValidS3Bucket,
 	renderConnection,
 	renderFile,
 	S3_BUCKET_REGEX,
 } from './common';
 
-const s3Config = z.object({
+const s3Config = z.strictObject({
 	bucket: z
 		.string()
+		.min(3)
+		.max(63)
 		.regex(S3_BUCKET_REGEX, 'Not a valid bucket name')
+		.refine(isValidS3Bucket, 'Not a valid bucket name')
+		.meta({
+			'x-marimohub-refinement': 'No adjacent dots and not formatted as an IPv4 address',
+		})
 		.optional()
 		.describe('Default bucket for notebook code; the credentials are not restricted to it'),
 	region: z
@@ -49,6 +57,15 @@ export const s3 = defineIntegration({
 	brand: { color: '#569A31' },
 	schemaVersion: 1,
 	configSchema: s3Config,
+	environmentVariables: [
+		'AWS_ACCESS_KEY_ID',
+		'AWS_SECRET_ACCESS_KEY',
+		'AWS_SESSION_TOKEN',
+		'AWS_REGION',
+		'AWS_DEFAULT_REGION',
+		'AWS_ENDPOINT_URL_S3',
+		'AWS_CONFIG_FILE',
+	],
 	requirements: ['boto3>=1.35', 's3fs>=2024.6'],
 	uiHints: {
 		bucket: { group: 'Bucket', order: 1 },
@@ -64,7 +81,7 @@ export const s3 = defineIntegration({
 
 	render({ config, instanceName }) {
 		const files: { path: string; content: string }[] = [];
-		const isStatic = config.auth.method === 'static';
+		const staticAuth = config.auth.method === 'static' ? config.auth : undefined;
 		// Addressing style has no environment variable of its own — boto3 reads it
 		// from a config file — so claiming it means owning AWS_CONFIG_FILE too.
 		const configFile =
@@ -84,16 +101,16 @@ export const s3 = defineIntegration({
 				REGION: config.region,
 				ENDPOINT_URL: config.endpoint_url,
 				ADDRESSING_STYLE: config.path_style ? 'path' : 'virtual',
-				ACCESS_KEY_ID: isStatic ? config.auth.access_key_id : undefined,
-				SECRET_ACCESS_KEY: isStatic ? config.auth.secret_access_key : undefined,
-				SESSION_TOKEN: isStatic ? config.auth.session_token : undefined,
+				ACCESS_KEY_ID: staticAuth?.access_key_id,
+				SECRET_ACCESS_KEY: staticAuth?.secret_access_key,
+				SESSION_TOKEN: staticAuth?.session_token,
 			},
 			secretFields: ['ACCESS_KEY_ID', 'SECRET_ACCESS_KEY', 'SESSION_TOKEN'],
 			ambient: config.ambient_env
 				? {
-						AWS_ACCESS_KEY_ID: isStatic ? config.auth.access_key_id : undefined,
-						AWS_SECRET_ACCESS_KEY: isStatic ? config.auth.secret_access_key : undefined,
-						AWS_SESSION_TOKEN: isStatic ? config.auth.session_token : undefined,
+						AWS_ACCESS_KEY_ID: staticAuth?.access_key_id,
+						AWS_SECRET_ACCESS_KEY: staticAuth?.secret_access_key,
+						AWS_SESSION_TOKEN: staticAuth?.session_token,
 						AWS_REGION: config.region,
 						AWS_DEFAULT_REGION: config.region,
 						// S3-scoped: the unscoped AWS_ENDPOINT_URL would point STS and every
@@ -108,17 +125,24 @@ export const s3 = defineIntegration({
 	},
 });
 
-const gcsConfig = z.object({
+const gcsConfig = z.strictObject({
 	bucket: z
 		.string()
+		.min(3)
+		.max(222)
 		.regex(GCS_BUCKET_REGEX, 'Not a valid bucket name')
+		.refine(isValidGcsBucket, 'Not a valid bucket name')
+		.meta({
+			'x-marimohub-refinement':
+				'No adjacent dots, each dot-separated part is at most 63 characters, no goog/google reserved names, and not an IPv4 address',
+		})
 		.optional()
 		.describe('Default bucket for notebook code; the credentials are not restricted to it'),
 	project_id: z.string().min(1).optional().describe('Project billed for the requests'),
 	auth: z
 		.discriminatedUnion('method', [
-			z.object({ method: z.literal('ambient') }),
-			z.object({ method: z.literal('service_account'), credentials_json: zSecret() }),
+			z.strictObject({ method: z.literal('ambient') }),
+			z.strictObject({ method: z.literal('service_account'), credentials_json: zSecret() }),
 		])
 		.default({ method: 'ambient' }),
 	ambient_env: z.boolean().default(true).describe(AMBIENT_ENV_DESCRIPTION),
@@ -132,6 +156,7 @@ export const gcs = defineIntegration({
 	brand: { icon: 'googlecloudstorage', color: '#AECBFA' },
 	schemaVersion: 1,
 	configSchema: gcsConfig,
+	environmentVariables: ['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT'],
 	requirements: ['gcsfs>=2024.6', 'google-cloud-storage>=2.18'],
 	uiHints: {
 		bucket: { group: 'Bucket', order: 1 },
@@ -169,11 +194,11 @@ export const gcs = defineIntegration({
 });
 
 const azureAuthSchema = z.discriminatedUnion('method', [
-	z.object({ method: z.literal('ambient') }),
-	z.object({ method: z.literal('account_key'), account_key: zSecret() }),
-	z.object({ method: z.literal('sas_token'), sas_token: zSecret() }),
-	z.object({ method: z.literal('connection_string'), connection_string: zSecret() }),
-	z.object({
+	z.strictObject({ method: z.literal('ambient') }),
+	z.strictObject({ method: z.literal('account_key'), account_key: zSecret() }),
+	z.strictObject({ method: z.literal('sas_token'), sas_token: zSecret() }),
+	z.strictObject({ method: z.literal('connection_string'), connection_string: zSecret() }),
+	z.strictObject({
 		method: z.literal('service_principal'),
 		tenant_id: z.string().min(1),
 		client_id: z.string().min(1),
@@ -181,7 +206,7 @@ const azureAuthSchema = z.discriminatedUnion('method', [
 	}),
 ]);
 
-const azureBlobConfig = z.object({
+const azureBlobConfig = z.strictObject({
 	account_name: z
 		.string()
 		.regex(/^[a-z0-9]{3,24}$/, 'Storage account names are 3–24 lowercase letters and digits'),
@@ -207,6 +232,15 @@ export const azureBlob = defineIntegration({
 	brand: { color: '#0078D4' },
 	schemaVersion: 1,
 	configSchema: azureBlobConfig,
+	environmentVariables: [
+		'AZURE_STORAGE_ACCOUNT_NAME',
+		'AZURE_STORAGE_KEY',
+		'AZURE_STORAGE_SAS_TOKEN',
+		'AZURE_STORAGE_CONNECTION_STRING',
+		'AZURE_TENANT_ID',
+		'AZURE_CLIENT_ID',
+		'AZURE_CLIENT_SECRET',
+	],
 	requirements: ['adlfs>=2024.7', 'azure-storage-blob>=12.22', 'azure-identity>=1.17'],
 	uiHints: {
 		account_name: { group: 'Account', order: 1 },

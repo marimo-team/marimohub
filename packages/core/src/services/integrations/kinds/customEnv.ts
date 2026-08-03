@@ -8,23 +8,27 @@ import { zSecret } from '../secretFields';
 // `validate` applies the reserved-name policy.
 const ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
-const customEnvConfig = z.object({
+const customEnvConfig = z.strictObject({
 	vars: z
 		.record(z.string().regex(ENV_NAME_PATTERN), z.string())
 		.default({})
 		.describe('Plain environment variables, visible to project admins'),
 	secrets: z
 		.array(
-			z.object({
+			z.strictObject({
 				name: z.string().regex(ENV_NAME_PATTERN),
 				value: zSecret(),
 			}),
 		)
+		.refine((items) => new Set(items.map(({ name }) => name)).size === items.length, {
+			message: 'Duplicate secret environment variable name',
+		})
+		.meta({ 'x-unique-by': 'name' })
 		.default([])
 		.describe('Secret environment variables from encrypted values or an external manager'),
 	secret_bundles: z
 		.array(
-			z.object({
+			z.strictObject({
 				name: z
 					.string()
 					.regex(ENV_NAME_PATTERN)
@@ -33,6 +37,10 @@ const customEnvConfig = z.object({
 				prefix: z.string().regex(ENV_NAME_PATTERN).optional(),
 			}),
 		)
+		.refine((items) => new Set(items.map(({ name }) => name)).size === items.length, {
+			message: 'Duplicate JSON secret bundle name',
+		})
+		.meta({ 'x-unique-by': 'name' })
 		.default([])
 		.describe('JSON secret objects expanded into one environment variable per key'),
 });

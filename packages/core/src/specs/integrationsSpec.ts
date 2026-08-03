@@ -1,4 +1,5 @@
 import { defaultRegistry } from '../services/integrations/kinds';
+import { INTEGRATION_STORED_SECRET_SCHEMAS } from '../services/integrations/registry';
 
 /**
  * OpenAPI 3.1 description of every registered integration kind's config
@@ -14,29 +15,47 @@ export function buildIntegrationsSpec(): Record<string, unknown> {
 	const descriptors = [...registry.describeAll()].sort((a, b) => a.kind.localeCompare(b.kind));
 
 	const specPaths: Record<string, unknown> = {};
-	const schemas: Record<string, unknown> = {};
+	const schemas: Record<string, unknown> = structuredClone(INTEGRATION_STORED_SECRET_SCHEMAS);
 
 	for (const d of descriptors) {
 		const { $schema: _, ...schema } = d.json_schema;
+		const { $schema: _stored, ...storedSchema } = registry.storedJsonSchema(d.kind);
 		schemas[d.kind] = schema;
-		const ref = { $ref: `#/components/schemas/${d.kind}` };
+		schemas[`${d.kind}_stored`] = storedSchema;
+		const inputRef = { $ref: `#/components/schemas/${d.kind}` };
+		const storedRef = { $ref: `#/components/schemas/${d.kind}_stored` };
+		const def = registry.get(d.kind);
+		const envConflicts = def.environmentVariables
+			? registry
+					.list()
+					.filter(
+						(other) =>
+							other.kind !== def.kind &&
+							other.environmentVariables?.some((name) => def.environmentVariables?.includes(name)),
+					)
+					.map(({ kind }) => kind)
+					.sort()
+			: [];
 		specPaths[`/kinds/${d.kind}/config`] = {
 			summary: d.title,
 			description: d.description,
 			'x-kind-schema-version': d.schema_version,
+			...(def.migrations && { 'x-migrations': def.migrations }),
 			'x-category': d.category,
 			'x-brand-color': d.brand.color,
 			...(d.brand.icon !== undefined && { 'x-brand-icon': d.brand.icon }),
 			'x-secret-paths': registry.secretPathsOf(d.kind).map((p) => p.join('.')),
 			'x-supports-test': d.supports_test,
 			'x-requirements': d.requirements,
+			...(def.environmentVariables && { 'x-env': def.environmentVariables }),
+			...(envConflicts.length > 0 && { 'x-env-conflicts-with': envConflicts }),
 			get: {
 				operationId: `read_${d.kind}_config`,
 				summary: `Stored ${d.kind} config`,
 				responses: {
 					'200': {
 						description: 'A stored config every reader and migration must accept.',
-						content: { 'application/json': { schema: ref } },
+						content: { 'application/json': { schema: storedRef } },
 					},
 				},
 			},
@@ -45,12 +64,42 @@ export function buildIntegrationsSpec(): Record<string, unknown> {
 				summary: `Input ${d.kind} config`,
 				requestBody: {
 					required: true,
-					content: { 'application/json': { schema: ref } },
+					content: { 'application/json': { schema: inputRef } },
 				},
 				responses: { '204': { description: 'Accepted.' } },
 			},
 		};
 	}
+
+	const icebergKinds = [
+		'iceberg_bigquery',
+		'iceberg_dynamodb',
+		'iceberg_glue',
+		'iceberg_hive',
+		'iceberg_rest',
+		'iceberg_sql',
+	];
+	hoistSharedProperty(schemas, icebergKinds, 'storage', 'IcebergStorage');
+	hoistSharedProperty(schemas, icebergKinds, 'runtime', 'IcebergRuntime');
+	hoistSharedProperty(schemas, icebergKinds, 'extra_properties', 'IcebergExtraProperties');
+	hoistSharedProperty(
+		schemas,
+		icebergKinds.map((kind) => `${kind}_stored`),
+		'storage',
+		'IcebergStorageStored',
+	);
+	hoistSharedProperty(
+		schemas,
+		icebergKinds.map((kind) => `${kind}_stored`),
+		'runtime',
+		'IcebergRuntimeStored',
+	);
+	hoistSharedProperty(
+		schemas,
+		icebergKinds.map((kind) => `${kind}_stored`),
+		'extra_properties',
+		'IcebergExtraPropertiesStored',
+	);
 
 	return {
 		openapi: '3.1.0',
@@ -60,13 +109,37 @@ export function buildIntegrationsSpec(): Record<string, unknown> {
 			description: [
 				'Machine-checkable description of every integration kind registered in',
 				'`defaultRegistry()` (`packages/core/src/services/integrations/kinds/`),',
-				'generated from each kind’s zod config schema (input io, so defaulted',
-				'fields stay optional). This is not an HTTP API: each path stands for a',
-				'kind, and its component schema is the config contract stored in',
+				'generated from each kind’s zod config schema. Each kind has an authoring',
+				'schema (defaulted fields optional, plaintext secrets write-only) and a',
+				'stored schema (defaults materialized, secrets sealed). This is not an HTTP',
+				'API: each path represents the config contract persisted in',
 				'`versions/{n}.json` records and rendered into sandboxes.',
 			].join('\n'),
 		},
 		paths: specPaths,
 		components: { schemas },
 	};
+}
+
+function hoistSharedProperty(
+	schemas: Record<string, unknown>,
+	owners: string[],
+	property: string,
+	component: string,
+): void {
+	let shared: unknown;
+	for (const owner of owners) {
+		const schema = schemas[owner] as { properties?: Record<string, unknown> } | undefined;
+		const value = schema?.properties?.[property];
+		if (value === undefined) throw new Error(`${owner} has no ${property} schema`);
+		if (shared === undefined) shared = value;
+		else if (JSON.stringify(value) !== JSON.stringify(shared)) {
+			throw new Error(`${owner}.${property} drifted from the shared Iceberg schema`);
+		}
+	}
+	schemas[component] = shared;
+	for (const owner of owners) {
+		const schema = schemas[owner] as { properties: Record<string, unknown> };
+		schema.properties[property] = { $ref: `#/components/schemas/${component}` };
+	}
 }

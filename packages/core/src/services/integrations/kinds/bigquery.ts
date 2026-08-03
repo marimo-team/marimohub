@@ -3,7 +3,7 @@ import { defineIntegration, HOSTNAME_REGEX } from '../sdk';
 import { zSecret } from '../secretFields';
 import { AMBIENT_ENV_DESCRIPTION, connectionUrl, renderConnection, renderFile } from './common';
 
-const bigQueryConfig = z.object({
+const bigQueryConfig = z.strictObject({
 	// Sits in the authority position of the rendered URL, so it carries the same
 	// no-scheme/no-path/no-userinfo restriction as a hostname.
 	project_id: z
@@ -18,8 +18,8 @@ const bigQueryConfig = z.object({
 	location: z.string().min(1).optional().describe('Dataset location, e.g. US or europe-west4'),
 	auth: z
 		.discriminatedUnion('method', [
-			z.object({ method: z.literal('ambient') }),
-			z.object({ method: z.literal('service_account'), credentials_json: zSecret() }),
+			z.strictObject({ method: z.literal('ambient') }),
+			z.strictObject({ method: z.literal('service_account'), credentials_json: zSecret() }),
 		])
 		.default({ method: 'ambient' }),
 	// Off by default, unlike the storage kinds: this kind's URL already names its
@@ -37,6 +37,7 @@ export const bigquery = defineIntegration({
 	brand: { icon: 'googlebigquery', color: '#669DF6' },
 	schemaVersion: 1,
 	configSchema: bigQueryConfig,
+	environmentVariables: ['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT'],
 	requirements: ['google-cloud-bigquery>=3.25', 'sqlalchemy-bigquery>=1.11'],
 	uiHints: {
 		project_id: { group: 'Connection', order: 1 },

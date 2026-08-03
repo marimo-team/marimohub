@@ -19,7 +19,7 @@ import {
 // checks the hostname.
 const sslModeSchema = z.enum(['verify-ca', 'verify-full']).default('verify-ca');
 
-const redshiftConfig = z.object({
+const redshiftConfig = z.strictObject({
 	host: hostField(
 		'Cluster or workgroup endpoint, e.g. wg.123456789012.us-east-1.redshift-serverless.amazonaws.com',
 	),
@@ -64,14 +64,15 @@ export const redshift = defineIntegration({
 	},
 });
 
-const athenaConfig = z.object({
+const athenaConfig = z.strictObject({
 	region: z.string().regex(AWS_REGION_REGEX, 'Region name only, e.g. us-east-1'),
 	// The `@` exclusion is not cosmetic: this field is stored and displayed in
 	// plaintext (and kept in the version history), so a URI carrying userinfo
 	// would persist a credential where nothing decrypts it.
 	s3_staging_dir: z
 		.string()
-		.regex(/^s3:\/\/(?![^/]*@)[^\s?#]+$/, 'Must be an s3:// URI with no embedded credentials')
+		.regex(/^s3:\/\/[^@\s?#]+$/, 'Must be an s3:// URI with no embedded credentials')
+		.meta({ format: 'uri' })
 		.describe('Bucket prefix Athena writes query results to'),
 	database: z
 		.string()
@@ -110,7 +111,7 @@ export const athena = defineIntegration({
 	},
 
 	render({ config, instanceName }) {
-		const isStatic = config.auth.method === 'static';
+		const staticAuth = config.auth.method === 'static' ? config.auth : undefined;
 		// PyAthena's documented ambient form keeps the empty userinfo (`://:@`),
 		// which is what makes it fall through to boto3's provider chain.
 		// China is its own partition, with its own DNS suffix; GovCloud is not.
@@ -120,13 +121,13 @@ export const athena = defineIntegration({
 			host: `athena.${config.region}.${suffix}`,
 			port: 443,
 			segments: [config.database],
-			username: isStatic ? config.auth.access_key_id : '',
-			password: isStatic ? config.auth.secret_access_key : '',
+			username: staticAuth?.access_key_id ?? '',
+			password: staticAuth?.secret_access_key ?? '',
 			query: {
 				s3_staging_dir: config.s3_staging_dir,
 				work_group: config.workgroup,
 				catalog_name: config.catalog,
-				aws_session_token: isStatic ? config.auth.session_token : undefined,
+				aws_session_token: staticAuth?.session_token,
 			},
 		});
 		return renderConnection({
@@ -140,9 +141,9 @@ export const athena = defineIntegration({
 				DATABASE: config.database,
 				WORKGROUP: config.workgroup,
 				CATALOG: config.catalog,
-				ACCESS_KEY_ID: isStatic ? config.auth.access_key_id : undefined,
-				SECRET_ACCESS_KEY: isStatic ? config.auth.secret_access_key : undefined,
-				SESSION_TOKEN: isStatic ? config.auth.session_token : undefined,
+				ACCESS_KEY_ID: staticAuth?.access_key_id,
+				SECRET_ACCESS_KEY: staticAuth?.secret_access_key,
+				SESSION_TOKEN: staticAuth?.session_token,
 			},
 			secretFields: ['URL', 'ACCESS_KEY_ID', 'SECRET_ACCESS_KEY', 'SESSION_TOKEN'],
 			manifestExtra: { region: config.region, auth_method: config.auth.method },

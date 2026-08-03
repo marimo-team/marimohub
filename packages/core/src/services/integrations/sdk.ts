@@ -67,6 +67,10 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	 * Informational only: sandboxes do not preflight or install these packages.
 	 */
 	requirements?: string[];
+	/** Resolves the packages needed by the selected config branches. */
+	resolveRequirements?(config: z.infer<S>): string[];
+	/** Process-wide environment names this kind can claim outside its instance prefix. */
+	environmentVariables?: readonly string[];
 	/**
 	 * Pure and synchronous: same input → byte-identical output. No clock, RNG,
 	 * network, or storage — anything session-specific arrives via the input.
@@ -99,6 +103,8 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	 * migration helper — deliberately not built until a kind needs it.
 	 */
 	migrate?(stored: unknown, fromVersion: number): unknown;
+	/** Human-readable inventory of each migration step exposed in the generated contract. */
+	migrations?: readonly { from: number; to: number; description: string }[];
 }
 
 /**

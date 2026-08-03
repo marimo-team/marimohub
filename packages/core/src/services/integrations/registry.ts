@@ -10,6 +10,8 @@ const KIND_REGEX = /^[a-z][a-z0-9_]{1,31}$/;
 export class IntegrationRegistry {
 	private readonly defs = new Map<string, IntegrationDefinition>();
 	private readonly descriptors = new Map<string, KindDescriptor>();
+	private readonly inputSchemas = new Map<string, Record<string, unknown>>();
+	private readonly storedSchemas = new Map<string, Record<string, unknown>>();
 	private readonly paths = new Map<string, SecretPath[]>();
 
 	register(def: IntegrationDefinition): void {
@@ -58,11 +60,27 @@ export class IntegrationRegistry {
 		return this.list().map((def) => this.describe(def.kind));
 	}
 
-	/** Generates the input JSON Schema so defaulted fields remain optional. */
+	/** Generates the strict authoring schema; defaulted fields remain optional. */
 	jsonSchema(kind: string): Record<string, unknown> {
-		const cached = this.descriptors.get(kind);
-		if (cached) return cached.json_schema;
-		return z.toJSONSchema(this.get(kind).configSchema, { io: 'input' }) as Record<string, unknown>;
+		const cached = this.inputSchemas.get(kind);
+		if (cached) return cached;
+		const schema = decorateJsonSchema(
+			z.toJSONSchema(this.get(kind).configSchema, { io: 'input' }) as Record<string, unknown>,
+		);
+		this.inputSchemas.set(kind, schema);
+		return schema;
+	}
+
+	/** Generates the persisted shape: defaults materialized and secrets sealed. */
+	storedJsonSchema(kind: string): Record<string, unknown> {
+		const cached = this.storedSchemas.get(kind);
+		if (cached) return cached;
+		const schema = decorateJsonSchema(
+			z.toJSONSchema(this.get(kind).configSchema, { io: 'output' }) as Record<string, unknown>,
+			true,
+		);
+		this.storedSchemas.set(kind, schema);
+		return schema;
 	}
 
 	secretPathsOf(kind: string): SecretPath[] {
@@ -72,4 +90,109 @@ export class IntegrationRegistry {
 		this.paths.set(kind, paths);
 		return paths;
 	}
+}
+
+const MANAGED_STORED_SECRET = {
+	type: 'object',
+	properties: {
+		$secret: {
+			type: 'object',
+			properties: {
+				kind: { const: 'managed', type: 'string' },
+				envelope: {
+					type: 'object',
+					properties: {
+						kek_id: { type: 'string', minLength: 1 },
+						alg: { const: 'A256GCM', type: 'string' },
+						iv: { type: 'string', minLength: 1 },
+						ciphertext: { type: 'string', minLength: 1 },
+					},
+					required: ['kek_id', 'alg', 'iv', 'ciphertext'],
+					additionalProperties: false,
+				},
+			},
+			required: ['kind', 'envelope'],
+			additionalProperties: false,
+		},
+	},
+	required: ['$secret'],
+	additionalProperties: false,
+};
+
+const REFERENCE_STORED_SECRET = {
+	type: 'object',
+	properties: {
+		$secret: {
+			type: 'object',
+			properties: {
+				kind: { const: 'reference', type: 'string' },
+				backend: { type: 'string', minLength: 1 },
+				locator: { type: 'string', minLength: 1 },
+			},
+			required: ['kind', 'backend', 'locator'],
+			additionalProperties: false,
+		},
+	},
+	required: ['$secret'],
+	additionalProperties: false,
+};
+
+export const INTEGRATION_STORED_SECRET_SCHEMAS = {
+	ManagedStoredSecret: MANAGED_STORED_SECRET,
+	ReferenceStoredSecret: REFERENCE_STORED_SECRET,
+};
+
+function decorateJsonSchema(
+	schema: Record<string, unknown>,
+	stored = false,
+): Record<string, unknown> {
+	const visit = (node: unknown): void => {
+		if (typeof node !== 'object' || node === null) return;
+		const record = node as Record<string, unknown>;
+		if (record['x-marimohub-secret'] === true) {
+			if (stored) {
+				const description = record.description;
+				for (const key of Object.keys(record)) delete record[key];
+				Object.assign(record, {
+					oneOf: [
+						{ $ref: '#/components/schemas/ManagedStoredSecret' },
+						{ $ref: '#/components/schemas/ReferenceStoredSecret' },
+					],
+					'x-marimohub-secret': true,
+					...(description === undefined ? {} : { description }),
+				});
+			} else {
+				record.writeOnly = true;
+			}
+			return;
+		}
+
+		const union = (record.oneOf ?? record.anyOf) as Record<string, unknown>[] | undefined;
+		if (Array.isArray(union) && union.length > 0) {
+			const discriminator = discriminatorOf(union);
+			if (discriminator) record.discriminator = { propertyName: discriminator };
+		}
+		for (const value of Object.values(record)) {
+			if (Array.isArray(value)) value.forEach(visit);
+			else visit(value);
+		}
+	};
+	visit(schema);
+	return schema;
+}
+
+function discriminatorOf(branches: Record<string, unknown>[]): string | undefined {
+	let common: Set<string> | undefined;
+	for (const branch of branches) {
+		const properties = branch.properties as Record<string, Record<string, unknown>> | undefined;
+		if (!properties) return undefined;
+		const constants = new Set(
+			Object.entries(properties)
+				.filter(([, value]) => typeof value.const === 'string')
+				.map(([key]) => key),
+		);
+		common =
+			common === undefined ? constants : new Set([...common].filter((key) => constants.has(key)));
+	}
+	return common?.size === 1 ? [...common][0] : undefined;
 }

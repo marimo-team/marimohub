@@ -9,7 +9,7 @@ import { renderConnection, serviceUrl, serviceUrlField } from './common';
 
 const NAME_REGEX = /^[A-Za-z0-9._-]+$/;
 
-const wandbConfig = z.object({
+const wandbConfig = z.strictObject({
 	api_key: zSecret().describe('API key from wandb.ai/authorize'),
 	base_url: serviceUrlField()
 		.default('https://api.wandb.ai')
@@ -40,6 +40,14 @@ export const wandb = defineIntegration({
 	brand: { icon: 'weightsandbiases', color: '#FFBE00' },
 	schemaVersion: 1,
 	configSchema: wandbConfig,
+	environmentVariables: [
+		'WANDB_API_KEY',
+		'WANDB_BASE_URL',
+		'WANDB_ENTITY',
+		'WANDB_PROJECT',
+		'WANDB_MODE',
+		'WANDB_DIR',
+	],
 	requirements: ['wandb>=0.18'],
 	uiHints: {
 		api_key: { group: 'Authentication', order: 1, widget: 'password' },
@@ -99,7 +107,7 @@ export const wandb = defineIntegration({
 /** Same reasoning as WANDB_DIR: the model cache is large and must not be captured. */
 const HF_HOME = '/tmp/marimohub-huggingface';
 
-const huggingFaceConfig = z.object({
+const huggingFaceConfig = z.strictObject({
 	token: zSecret().describe('Access token from huggingface.co/settings/tokens'),
 	endpoint: serviceUrlField()
 		.default('https://huggingface.co')
@@ -118,6 +126,7 @@ export const huggingFace = defineIntegration({
 	brand: { icon: 'huggingface', color: '#FFD21E' },
 	schemaVersion: 1,
 	configSchema: huggingFaceConfig,
+	environmentVariables: ['HF_TOKEN', 'HF_ENDPOINT', 'HF_HOME', 'HF_HUB_ENABLE_HF_TRANSFER'],
 	requirements: ['huggingface-hub>=0.25'],
 	uiHints: {
 		token: { group: 'Authentication', order: 1, widget: 'password' },

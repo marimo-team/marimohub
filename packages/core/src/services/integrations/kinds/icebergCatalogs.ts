@@ -8,6 +8,7 @@ import {
 	extraPropertiesSchema,
 	ICEBERG_BRAND_COLOR,
 	icebergRuntimeSchema,
+	icebergRequirements,
 	icebergStorageSchema,
 	icebergStorageUiHints,
 	renderIcebergCatalog,
@@ -28,9 +29,9 @@ const commonUiHints = {
 	extra_properties: { group: 'Advanced', order: 90, advanced: true, widget: 'kv-pairs' as const },
 };
 
-const sqlConfig = z.object({
+const sqlConfig = z.strictObject({
 	uri: zSecret().describe('SQLAlchemy URI for PostgreSQL or SQLite'),
-	warehouse: z.string().min(1).optional(),
+	warehouse: z.string().min(1).optional().describe('Default Iceberg table storage location'),
 	init_catalog_tables: z.boolean().default(true),
 	echo: z.boolean().default(false),
 	pool_pre_ping: z.boolean().default(false),
@@ -57,6 +58,8 @@ export const icebergSql = defineIntegration({
 	schemaVersion: 1,
 	configSchema: sqlConfig,
 	requirements: ['pyiceberg[pyarrow,sql-postgres,sql-sqlite,s3fs,gcsfs,adlfs,hf]>=0.11'],
+	resolveRequirements: (config) =>
+		icebergRequirements(['pyarrow', 'sql-postgres', 'sql-sqlite'], config),
 	uiHints: {
 		uri: { group: 'Connection', order: 1, widget: 'password' },
 		...commonUiHints,
@@ -87,12 +90,12 @@ export const icebergSql = defineIntegration({
 	},
 });
 
-const hiveConfig = z.object({
+const hiveConfig = z.strictObject({
 	uri: z.string().regex(THRIFT_URL_REGEX, 'Must be a thrift:// URL without embedded credentials'),
-	warehouse: z.string().min(1).optional(),
+	warehouse: z.string().min(1).optional().describe('Default Iceberg table storage location'),
 	hive2_compatible: z.boolean().default(false),
 	kerberos: z
-		.object({
+		.strictObject({
 			enabled: z.boolean().default(false),
 			service_name: z.string().min(1).default('hive'),
 		})
@@ -122,6 +125,8 @@ export const icebergHive = defineIntegration({
 	schemaVersion: 1,
 	configSchema: hiveConfig,
 	requirements: ['pyiceberg[pyarrow,hive,hive-kerberos,s3fs,gcsfs,adlfs,hf]>=0.11'],
+	resolveRequirements: (config) =>
+		icebergRequirements(['pyarrow', 'hive', 'hive-kerberos'], config),
 	uiHints: {
 		uri: { group: 'Connection', order: 1 },
 		...commonUiHints,
@@ -153,16 +158,22 @@ export const icebergHive = defineIntegration({
 	},
 });
 
-const glueConfig = z.object({
-	warehouse: z.string().min(1).optional(),
+const glueConfig = z.strictObject({
+	warehouse: z.string().min(1).optional().describe('Default Iceberg table storage location'),
 	catalog_id: z
 		.string()
 		.regex(/^\d{12}$/, 'Must be a 12-digit AWS account ID')
 		.optional(),
 	region: z.string().min(1).optional(),
 	endpoint: httpUrlField().optional(),
-	credentials: awsCredentialsSchema.default({ method: 'ambient' }),
-	unified_credentials: unifiedAwsCredentialsSchema,
+	credentials: awsCredentialsSchema
+		.default({ method: 'ambient' })
+		.describe(
+			'Glue Catalog credentials only. When explicit, these override unified credentials for Glue calls.',
+		),
+	unified_credentials: unifiedAwsCredentialsSchema.describe(
+		'Client credentials shared by Glue and S3 FileIO. Glue-specific and storage-specific credentials override these.',
+	),
 	skip_archive: z.boolean().default(true),
 	max_retries: z.number().int().nonnegative().default(10),
 	retry_mode: z.enum(['legacy', 'standard', 'adaptive']).default('standard'),
@@ -204,6 +215,7 @@ export const icebergGlue = defineIntegration({
 	schemaVersion: 1,
 	configSchema: glueConfig,
 	requirements: ['pyiceberg[pyarrow,glue,s3fs,gcsfs,adlfs,hf]>=0.11'],
+	resolveRequirements: (config) => icebergRequirements(['pyarrow', 'glue'], config),
 	uiHints: {
 		...commonUiHints,
 		catalog_id: { group: 'Glue', order: 1 },
@@ -245,12 +257,18 @@ export const icebergGlue = defineIntegration({
 	},
 });
 
-const dynamodbConfig = z.object({
+const dynamodbConfig = z.strictObject({
 	table_name: z.string().min(1).default('iceberg'),
-	warehouse: z.string().min(1).optional(),
+	warehouse: z.string().min(1).optional().describe('Default Iceberg table storage location'),
 	region: z.string().min(1).optional(),
-	credentials: awsCredentialsSchema.default({ method: 'ambient' }),
-	unified_credentials: unifiedAwsCredentialsSchema,
+	credentials: awsCredentialsSchema
+		.default({ method: 'ambient' })
+		.describe(
+			'DynamoDB Catalog credentials only. When explicit, these override unified credentials for DynamoDB calls.',
+		),
+	unified_credentials: unifiedAwsCredentialsSchema.describe(
+		'Client credentials shared by DynamoDB and S3 FileIO. DynamoDB-specific and storage-specific credentials override these.',
+	),
 	storage: icebergStorageSchema,
 	runtime: icebergRuntimeSchema,
 	extra_properties: extraPropertiesSchema,
@@ -283,6 +301,7 @@ export const icebergDynamoDb = defineIntegration({
 	schemaVersion: 1,
 	configSchema: dynamodbConfig,
 	requirements: ['pyiceberg[pyarrow,dynamodb,s3fs,gcsfs,adlfs,hf]>=0.11'],
+	resolveRequirements: (config) => icebergRequirements(['pyarrow', 'dynamodb'], config),
 	uiHints: {
 		...commonUiHints,
 		table_name: { group: 'DynamoDB', order: 1 },
@@ -316,14 +335,14 @@ export const icebergDynamoDb = defineIntegration({
 	},
 });
 
-const bigQueryConfig = z.object({
+const bigQueryConfig = z.strictObject({
 	project_id: z.string().min(1),
 	location: z.string().min(1).optional(),
-	warehouse: z.string().min(1),
+	warehouse: z.string().min(1).describe('Default Iceberg table storage location'),
 	credentials: z
 		.discriminatedUnion('method', [
-			z.object({ method: z.literal('ambient') }),
-			z.object({ method: z.literal('service_account_json'), credentials_json: zSecret() }),
+			z.strictObject({ method: z.literal('ambient') }),
+			z.strictObject({ method: z.literal('service_account_json'), credentials_json: zSecret() }),
 		])
 		.default({ method: 'ambient' }),
 	storage: icebergStorageSchema,
@@ -348,6 +367,7 @@ export const icebergBigQuery = defineIntegration({
 	schemaVersion: 1,
 	configSchema: bigQueryConfig,
 	requirements: ['pyiceberg[pyarrow,bigquery,gcsfs,s3fs,adlfs,hf]>=0.11'],
+	resolveRequirements: (config) => icebergRequirements(['pyarrow', 'bigquery'], config),
 	uiHints: {
 		...commonUiHints,
 		project_id: { group: 'BigQuery', order: 1 },

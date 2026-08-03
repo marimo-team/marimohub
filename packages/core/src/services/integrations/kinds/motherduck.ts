@@ -3,7 +3,7 @@ import { defineIntegration } from '../sdk';
 import { zSecret } from '../secretFields';
 import { renderConnection } from './common';
 
-const motherduckConfig = z.object({
+const motherduckConfig = z.strictObject({
 	token: zSecret().describe('MotherDuck service token'),
 	database: z
 		.string()

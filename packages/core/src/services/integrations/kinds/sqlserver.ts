@@ -15,7 +15,7 @@ import {
 // discriminator keeps the TLS fields on the branch that actually honours them.
 const driverSchema = z
 	.discriminatedUnion('name', [
-		z.object({
+		z.strictObject({
 			name: z.literal('pyodbc'),
 			odbc_driver: z
 				.string()
@@ -28,7 +28,7 @@ const driverSchema = z
 				.default(false)
 				.describe('Accept any server certificate — encrypts without authenticating'),
 		}),
-		z.object({ name: z.literal('pymssql') }),
+		z.strictObject({ name: z.literal('pymssql') }),
 	])
 	// Spelled out rather than just the discriminator: the form builds its initial
 	// state from this default, and a bare `{ name: 'pyodbc' }` would show
@@ -40,7 +40,7 @@ const driverSchema = z
 		trust_server_certificate: false,
 	});
 
-const sqlServerConfig = z.object({
+const sqlServerConfig = z.strictObject({
 	host: hostField('Server hostname, e.g. mssql.internal'),
 	port: portField(1433),
 	database: z.string().min(1),
@@ -57,6 +57,10 @@ export const sqlserver = defineIntegration({
 	schemaVersion: 1,
 	configSchema: sqlServerConfig,
 	requirements: ['sqlalchemy>=2', 'pyodbc>=5.1', 'pymssql>=2.3'],
+	resolveRequirements: (config) => [
+		'sqlalchemy>=2',
+		config.driver.name === 'pyodbc' ? 'pyodbc>=5.1' : 'pymssql>=2.3',
+	],
 	uiHints: {
 		...SQL_CONNECTION_HINTS,
 		driver: { group: 'Driver', order: 20 },

@@ -37,13 +37,13 @@ export const SQL_CONNECTION_HINTS: UiHints = {
  * credentials (or whitespace, which splits a request line) into anything the
  * hub renders or probes.
  */
-export const HTTP_URL_REGEX = /^https?:\/\/(?![^/?#]*@)\S+$/;
+export const HTTP_URL_REGEX = /^https?:\/\/[^@\s]+$/;
 
 /**
  * The same, minus a query or fragment: for a base URL the runtime appends a
  * path to, where `?`/`#` would push that path into the query string.
  */
-export const SERVICE_URL_REGEX = /^https?:\/\/(?![^/?#]*@)[^\s?#]+$/;
+export const SERVICE_URL_REGEX = /^https?:\/\/[^@\s?#]+$/;
 
 /**
  * The shape above is what the form checks as you type; this is the one that
@@ -58,21 +58,36 @@ export const SERVICE_URL_REGEX = /^https?:\/\/(?![^/?#]*@)[^\s?#]+$/;
  * - Port 0 parses but cannot be connected to.
  */
 function isUsableUrl(value: string): boolean {
-	if (/^https?:\/\/\//.test(value) || !URL.canParse(value)) return false;
-	return new URL(value).port !== '0';
+	if (/^https?:\/\/\//.test(value)) return false;
+	let parsed: URL;
+	try {
+		parsed = new URL(value);
+	} catch {
+		return false;
+	}
+	return parsed.port !== '0' && parsed.username === '' && parsed.password === '';
 }
 
 export const httpUrlField = () =>
 	z
 		.string()
 		.regex(HTTP_URL_REGEX, 'Must be an http(s) URL without embedded credentials')
-		.refine(isUsableUrl, 'Not a reachable http(s) URL');
+		.refine(isUsableUrl, 'Not a reachable http(s) URL')
+		.meta({
+			format: 'uri',
+			'x-marimohub-refinement': 'A valid http(s) URL with an authority, no userinfo, and no port 0',
+		});
 
 export const serviceUrlField = () =>
 	z
 		.string()
 		.regex(SERVICE_URL_REGEX, 'Must be an http(s) URL with no credentials, query, or fragment')
-		.refine(isUsableUrl, 'Not a reachable http(s) URL');
+		.refine(isUsableUrl, 'Not a reachable http(s) URL')
+		.meta({
+			format: 'uri',
+			'x-marimohub-refinement':
+				'A valid http(s) base URL with an authority, no userinfo, query, fragment, or port 0',
+		});
 
 /** Appends a path to a configured base URL, tolerating a trailing slash. */
 export function serviceUrl(base: string, path: string): string {
@@ -94,16 +109,33 @@ export const AWS_REGION_REGEX = /^[a-z0-9-]+$/;
  * name: GCS allows an underscore, and a dotted GCS name may run to 222
  * characters as long as every dot-separated part stays within 63.
  */
-const BUCKET_SHARED = String.raw`(?!(?:\d{1,3}\.){3}\d{1,3}$)(?!.*\.\.)`;
-
-export const S3_BUCKET_REGEX = new RegExp(
-	String.raw`^(?=.{3,63}$)${BUCKET_SHARED}[a-z0-9][a-z0-9.-]*[a-z0-9]$`,
-);
+export const S3_BUCKET_REGEX = /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/;
 
 /** `goog` and `google` are reserved by Google, so such a bucket cannot exist. */
-export const GCS_BUCKET_REGEX = new RegExp(
-	String.raw`^(?=.{3,222}$)(?!.*[^.]{64})(?!goog)(?!.*google)${BUCKET_SHARED}[a-z0-9][a-z0-9._-]*[a-z0-9]$`,
-);
+export const GCS_BUCKET_REGEX = /^[a-z0-9][a-z0-9._-]*[a-z0-9]$/;
+
+export function isValidS3Bucket(value: string): boolean {
+	return (
+		value.length >= 3 &&
+		value.length <= 63 &&
+		S3_BUCKET_REGEX.test(value) &&
+		!value.includes('..') &&
+		!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)
+	);
+}
+
+export function isValidGcsBucket(value: string): boolean {
+	return (
+		value.length >= 3 &&
+		value.length <= 222 &&
+		GCS_BUCKET_REGEX.test(value) &&
+		!value.includes('..') &&
+		!value.startsWith('goog') &&
+		!value.includes('google') &&
+		value.split('.').every((part) => part.length <= 63) &&
+		!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)
+	);
+}
 
 /**
  * CA bundle shipped by the images built in this repo, which are Debian-based.
@@ -188,8 +220,8 @@ export const awsStaticCredentials = {
  */
 export const awsAuthSchema = z
 	.discriminatedUnion('method', [
-		z.object({ method: z.literal('ambient') }),
-		z.object({ method: z.literal('static'), ...awsStaticCredentials }),
+		z.strictObject({ method: z.literal('ambient') }),
+		z.strictObject({ method: z.literal('static'), ...awsStaticCredentials }),
 	])
 	.default({ method: 'ambient' });
 

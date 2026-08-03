@@ -44,3 +44,74 @@ describe.each(SPECS)('internal/schemas/$file', ({ file, doc }) => {
 		expect(JSON.stringify(doc)).not.toContain('#/$defs');
 	});
 });
+
+describe('integration schema contracts', () => {
+	const doc = buildIntegrationsSpec() as {
+		paths: Record<string, Record<string, unknown>>;
+		components: { schemas: Record<string, Record<string, unknown>> };
+	};
+
+	it('separates strict authoring schemas from materialized stored schemas', () => {
+		const glue = doc.components.schemas.iceberg_glue;
+		const stored = doc.components.schemas.iceberg_glue_stored;
+		expect(glue.additionalProperties).toBe(false);
+		expect(stored.additionalProperties).toBe(false);
+		expect((glue.required as string[] | undefined) ?? []).not.toContain('skip_archive');
+		expect(stored.required as string[]).toContain('skip_archive');
+		expect(
+			(
+				doc.paths['/kinds/iceberg_glue/config'].get as {
+					responses: { '200': { content: { 'application/json': { schema: { $ref: string } } } } };
+				}
+			).responses['200'].content['application/json'].schema.$ref,
+		).toBe('#/components/schemas/iceberg_glue_stored');
+	});
+
+	it('models sealed secrets once and references them from stored configs', () => {
+		const serialized = JSON.stringify(doc.components.schemas);
+		expect(doc.components.schemas.ManagedStoredSecret).toBeDefined();
+		expect(doc.components.schemas.ReferenceStoredSecret).toBeDefined();
+		expect(serialized).toContain('#/components/schemas/ManagedStoredSecret');
+		expect(serialized).toContain('#/components/schemas/ReferenceStoredSecret');
+	});
+
+	it('resolves every local component reference', () => {
+		const serialized = JSON.stringify(doc);
+		const refs = [...serialized.matchAll(/#\/components\/schemas\/([A-Za-z0-9_]+)/g)].map(
+			([, name]) => name,
+		);
+		for (const name of refs) expect(doc.components.schemas[name]).toBeDefined();
+	});
+
+	it('hoists shared Iceberg schema branches into named components', () => {
+		for (const kind of [
+			'iceberg_bigquery',
+			'iceberg_dynamodb',
+			'iceberg_glue',
+			'iceberg_hive',
+			'iceberg_rest',
+			'iceberg_sql',
+		]) {
+			const properties = doc.components.schemas[kind].properties as Record<
+				string,
+				{ $ref?: string }
+			>;
+			expect(properties.storage.$ref).toBe('#/components/schemas/IcebergStorage');
+			expect(properties.runtime.$ref).toBe('#/components/schemas/IcebergRuntime');
+			expect(properties.extra_properties.$ref).toBe('#/components/schemas/IcebergExtraProperties');
+		}
+	});
+
+	it('publishes environment conflicts and migration descriptions', () => {
+		const gcs = doc.paths['/kinds/gcs/config'];
+		expect(gcs['x-env']).toEqual(['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT']);
+		expect(gcs['x-env-conflicts-with']).toEqual(['bigquery']);
+		expect(doc.paths['/kinds/postgres/config']['x-migrations']).toEqual([
+			{
+				from: 1,
+				to: 2,
+				description: 'Replace the boolean ssl flag with an explicit libpq sslmode object.',
+			},
+		]);
+	});
+});

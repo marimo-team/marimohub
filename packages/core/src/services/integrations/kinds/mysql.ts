@@ -24,13 +24,13 @@ import {
 // Python's default SSL context, the hostname too.
 const sslSchema = z
 	.discriminatedUnion('mode', [
-		z.object({ mode: z.literal('verify_identity'), ...caFields }),
-		z.object({ mode: z.literal('disabled') }),
+		z.strictObject({ mode: z.literal('verify_identity'), ...caFields }),
+		z.strictObject({ mode: z.literal('disabled') }),
 	])
 	.default({ mode: 'verify_identity' })
 	.describe('`verify_identity` checks the CA chain and the hostname; `disabled` is plaintext');
 
-const mysqlConfig = z.object({
+const mysqlConfig = z.strictObject({
 	host: hostField('Server hostname, e.g. mysql.internal'),
 	port: portField(3306),
 	database: z.string().min(1),
@@ -49,6 +49,13 @@ export const mysql = defineIntegration({
 	brand: { icon: 'mysql', color: '#4479A1' },
 	schemaVersion: 1,
 	configSchema: mysqlConfig,
+	environmentVariables: [
+		'MYSQL_HOST',
+		'MYSQL_TCP_PORT',
+		'MYSQL_DATABASE',
+		'MYSQL_USER',
+		'MYSQL_PASSWORD',
+	],
 	requirements: ['sqlalchemy>=2', 'pymysql>=1.1'],
 	uiHints: {
 		...SQL_CONNECTION_HINTS,

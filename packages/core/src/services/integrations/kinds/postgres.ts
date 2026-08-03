@@ -74,16 +74,16 @@ function isPgHost(host: string): boolean {
 // connections default to full verification.
 const sslSchema = z
 	.discriminatedUnion('mode', [
-		z.object({ mode: z.literal('disable') }),
-		z.object({ mode: z.literal('prefer') }),
-		z.object({ mode: z.literal('require') }),
-		z.object({ mode: z.literal('verify-ca'), ...caFields }),
-		z.object({ mode: z.literal('verify-full'), ...caFields }),
+		z.strictObject({ mode: z.literal('disable') }),
+		z.strictObject({ mode: z.literal('prefer') }),
+		z.strictObject({ mode: z.literal('require') }),
+		z.strictObject({ mode: z.literal('verify-ca'), ...caFields }),
+		z.strictObject({ mode: z.literal('verify-full'), ...caFields }),
 	])
 	.default({ mode: 'verify-full' })
 	.describe('libpq sslmode; `verify-full` checks the CA chain and the hostname');
 
-const pgConfig = z.object({
+const pgConfig = z.strictObject({
 	host: z
 		.string()
 		.regex(PG_HOST_REGEX, {
@@ -106,7 +106,23 @@ export const postgres = defineIntegration({
 	category: 'database',
 	brand: { icon: 'postgresql', color: '#4169E1' },
 	schemaVersion: 2,
+	migrations: [
+		{
+			from: 1,
+			to: 2,
+			description: 'Replace the boolean ssl flag with an explicit libpq sslmode object.',
+		},
+	],
 	configSchema: pgConfig,
+	environmentVariables: [
+		'PGHOST',
+		'PGPORT',
+		'PGDATABASE',
+		'PGUSER',
+		'PGPASSWORD',
+		'PGSSLMODE',
+		'PGSSLROOTCERT',
+	],
 	// The rendered URL uses the plain `postgresql://` scheme, which SQLAlchemy
 	// resolves via psycopg2.
 	requirements: ['sqlalchemy>=2', 'psycopg2-binary>=2.9'],

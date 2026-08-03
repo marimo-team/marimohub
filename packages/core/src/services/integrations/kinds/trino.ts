@@ -12,25 +12,25 @@ import { zSecret } from '../secretFields';
 import { discoveryEnvField } from './common';
 
 const IDENTIFIER_REGEX = /^[A-Za-z0-9_.-]+$/;
-const HEADER_NAME_REGEX = /^[A-Za-z0-9-]+$/;
+const HEADER_NAME_REGEX = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const TIMEZONE_REGEX = /^[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)*$/;
 const mutualAuthenticationSchema = z.enum(['required', 'optional', 'disabled']);
 
 const authSchema = z.discriminatedUnion('method', [
-	z.object({ method: z.literal('none') }),
-	z.object({
+	z.strictObject({ method: z.literal('none') }),
+	z.strictObject({
 		method: z.literal('basic'),
 		username: z.string().min(1),
 		password: zSecret(),
 	}),
-	z.object({ method: z.literal('jwt'), token: zSecret() }),
-	z.object({ method: z.literal('oauth2') }),
-	z.object({
+	z.strictObject({ method: z.literal('jwt'), token: zSecret() }),
+	z.strictObject({ method: z.literal('oauth2') }),
+	z.strictObject({
 		method: z.literal('certificate'),
 		client_certificate: z.string().min(1),
 		client_key: zSecret(),
 	}),
-	z.object({
+	z.strictObject({
 		method: z.literal('kerberos'),
 		krb5_config: z.string().min(1).optional(),
 		service_name: z.string().min(1).optional(),
@@ -41,7 +41,7 @@ const authSchema = z.discriminatedUnion('method', [
 		principal: z.string().min(1).optional(),
 		delegate: z.boolean().default(false),
 	}),
-	z.object({
+	z.strictObject({
 		method: z.literal('gssapi'),
 		krb5_config: z.string().min(1).optional(),
 		service_name: z.string().min(1).optional(),
@@ -56,13 +56,13 @@ const authSchema = z.discriminatedUnion('method', [
 
 const tlsSchema = z
 	.discriminatedUnion('verification', [
-		z.object({ verification: z.literal('system') }),
-		z.object({ verification: z.literal('disabled') }),
-		z.object({ verification: z.literal('custom_ca'), ca_bundle: z.string().min(1) }),
+		z.strictObject({ verification: z.literal('system') }),
+		z.strictObject({ verification: z.literal('disabled') }),
+		z.strictObject({ verification: z.literal('custom_ca'), ca_bundle: z.string().min(1) }),
 	])
 	.default({ verification: 'system' });
 
-const trinoConfig = z.object({
+const trinoConfig = z.strictObject({
 	host: z
 		.string()
 		.regex(HOSTNAME_REGEX, 'Hostname only — no scheme, port, path, or credentials')
@@ -77,14 +77,24 @@ const trinoConfig = z.object({
 	source: z.string().min(1).optional(),
 	session_properties: z.record(z.string(), z.string()).default({}),
 	roles: z.record(z.string(), z.string()).default({}),
-	client_tags: z.array(z.object({ value: z.string().min(1) })).default([]),
-	http_headers: z.array(z.object({ name: z.string().min(1), value: zSecret() })).default([]),
+	client_tags: z.array(z.strictObject({ value: z.string().min(1) })).default([]),
+	http_headers: z
+		.array(z.strictObject({ name: z.string().regex(HEADER_NAME_REGEX), value: zSecret() }))
+		.refine((items) => new Set(items.map(({ name }) => name.toLowerCase())).size === items.length, {
+			message: 'Duplicate HTTP header name (case-insensitive)',
+		})
+		.meta({ 'x-unique-by': 'name', 'x-unique-case-insensitive': true })
+		.default([]),
 	extra_credentials: z
-		.array(z.object({ name: z.string().regex(IDENTIFIER_REGEX), value: zSecret() }))
+		.array(z.strictObject({ name: z.string().regex(IDENTIFIER_REGEX), value: zSecret() }))
+		.refine((items) => new Set(items.map(({ name }) => name)).size === items.length, {
+			message: 'Duplicate extra credential name',
+		})
+		.meta({ 'x-unique-by': 'name' })
 		.default([]),
 	timezone: z.string().regex(TIMEZONE_REGEX).optional(),
 	encoding: z
-		.array(z.object({ value: z.enum(['json', 'json+lz4', 'json+zstd']) }))
+		.array(z.strictObject({ value: z.enum(['json', 'json+lz4', 'json+zstd']) }))
 		.min(1)
 		.optional(),
 	max_attempts: z.number().int().positive().optional(),
@@ -106,8 +116,16 @@ export const trino = defineIntegration({
 	description: 'Trino DBAPI and SQLAlchemy connection with authentication and session options.',
 	category: 'engine',
 	brand: { icon: 'trino', color: '#DD00A1' },
-	schemaVersion: 2,
+	schemaVersion: 1,
 	configSchema: trinoConfig,
+	environmentVariables: [
+		'TRINO_HOST',
+		'TRINO_PORT',
+		'TRINO_USER',
+		'TRINO_CATALOG',
+		'TRINO_SCHEMA',
+		'TRINO_PASSWORD',
+	],
 	requirements: ['trino[sqlalchemy,kerberos,gssapi]>=0.330'],
 	uiHints: {
 		host: { group: 'Connection', order: 1 },
@@ -255,11 +273,8 @@ export const trino = defineIntegration({
 		}
 	},
 
-	migrate(stored) {
-		return stored;
-	},
-
 	render({ config, instanceName, principal }) {
+		assertSafeHttpHeaders(config.http_headers);
 		const seg = envSegment(instanceName);
 		const prefix = `MARIMOHUB_TRINO_${seg}`;
 		const user =
@@ -362,6 +377,7 @@ export const trino = defineIntegration({
 	},
 
 	testConnection(config, probe) {
+		assertSafeHttpHeaders(config.http_headers);
 		if (
 			config.auth.method === 'oauth2' ||
 			config.auth.method === 'certificate' ||
@@ -390,6 +406,17 @@ export const trino = defineIntegration({
 		});
 	},
 });
+
+function assertSafeHttpHeaders(headers: { name: string; value: string }[]): void {
+	for (const { name, value } of headers) {
+		if (!HEADER_NAME_REGEX.test(name)) {
+			throw new ValidationError(`Invalid HTTP header name "${name}".`);
+		}
+		if (/[\r\n]/.test(value)) {
+			throw new ValidationError(`HTTP header "${name}" contains a line break.`);
+		}
+	}
+}
 
 type Auth = z.infer<typeof authSchema>;
 type Tls = z.infer<typeof tlsSchema>;

@@ -721,7 +721,7 @@ class ScopedIntegrationsStore {
 			name: head.name,
 			kind: head.kind,
 			version: version.version,
-			requirements: def.requirements,
+			requirements: def.resolveRequirements?.(parsed.data) ?? def.requirements,
 			output,
 		};
 	}

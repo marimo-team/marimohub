@@ -6,15 +6,15 @@ import { connectionUrl, hostField, renderConnection } from './common';
 const HTTP_PATH_REGEX = /^\/[A-Za-z0-9._\-/]+$/;
 
 const authSchema = z.discriminatedUnion('method', [
-	z.object({ method: z.literal('personal_access_token'), token: zSecret() }),
-	z.object({
+	z.strictObject({ method: z.literal('personal_access_token'), token: zSecret() }),
+	z.strictObject({
 		method: z.literal('oauth_m2m'),
 		client_id: z.string().min(1),
 		client_secret: zSecret(),
 	}),
 ]);
 
-const databricksConfig = z.object({
+const databricksConfig = z.strictObject({
 	host: hostField('Workspace hostname, e.g. dbc-1234abcd-5678.cloud.databricks.com'),
 	http_path: z
 		.string()

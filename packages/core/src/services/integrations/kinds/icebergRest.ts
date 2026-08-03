@@ -8,6 +8,7 @@ import {
 	extraPropertiesSchema,
 	ICEBERG_BRAND_COLOR,
 	icebergRuntimeSchema,
+	icebergRequirements,
 	icebergStorageSchema,
 	icebergStorageUiHints,
 	renderIcebergCatalog,
@@ -21,14 +22,14 @@ import { httpUrlField } from './common';
 const httpUrl = httpUrlField;
 
 const authSchema = z.discriminatedUnion('method', [
-	z.object({ method: z.literal('none') }),
-	z.object({ method: z.literal('bearer_token'), token: zSecret() }),
-	z.object({
+	z.strictObject({ method: z.literal('none') }),
+	z.strictObject({ method: z.literal('bearer_token'), token: zSecret() }),
+	z.strictObject({
 		method: z.literal('basic'),
 		username: z.string().min(1),
 		password: zSecret(),
 	}),
-	z.object({
+	z.strictObject({
 		method: z.literal('oauth2_client_credentials'),
 		token_endpoint: httpUrl(),
 		client_id: z.string().min(1),
@@ -37,17 +38,17 @@ const authSchema = z.discriminatedUnion('method', [
 		refresh_margin_seconds: z.number().int().nonnegative().default(60),
 		expires_in_seconds: z.number().int().positive().optional(),
 	}),
-	z.object({
+	z.strictObject({
 		method: z.literal('sigv4'),
 		region: z.string().min(1),
 		signing_name: z.string().min(1).default('execute-api'),
 	}),
-	z.object({
+	z.strictObject({
 		method: z.literal('google'),
 		scopes: z.string().optional().describe('Comma-separated OAuth scopes; uses Google ADC'),
 		credentials_json: zSecret().optional().describe('Google service-account JSON'),
 	}),
-	z.object({
+	z.strictObject({
 		method: z.literal('entra'),
 		scopes: z.string().optional().describe('Comma-separated OAuth scopes; uses Azure credentials'),
 		managed_identity_client_id: z.string().min(1).optional(),
@@ -56,7 +57,7 @@ const authSchema = z.discriminatedUnion('method', [
 
 const isInsecureUrl = (url: string) => url.startsWith('http://');
 
-const icebergRestConfig = z.object({
+const icebergRestConfig = z.strictObject({
 	uri: httpUrl().describe('REST catalog base URI, e.g. https://catalog.internal/api/catalog'),
 	warehouse: z.string().optional().describe('Warehouse name/path if the server hosts several'),
 	allow_insecure_transport: z
@@ -70,14 +71,14 @@ const icebergRestConfig = z.object({
 		.enum(['none', 'vended_credentials', 'remote_signing', 'both'])
 		.default('vended_credentials'),
 	tls: z
-		.object({
+		.strictObject({
 			ca_bundle: z.string().min(1).optional(),
 			client_certificate: z.string().min(1).optional(),
 			client_key: zSecret().optional(),
 		})
 		.default({}),
 	rest: z
-		.object({
+		.strictObject({
 			snapshot_loading_mode: z.enum(['all', 'refs']).default('all'),
 			metrics_reporting_enabled: z.boolean().default(true),
 			page_size: z.number().int().positive().optional(),
@@ -129,8 +130,17 @@ export const icebergRest = defineIntegration({
 	category: 'catalog',
 	brand: { color: ICEBERG_BRAND_COLOR },
 	schemaVersion: 2,
+	migrations: [
+		{
+			from: 1,
+			to: 2,
+			description:
+				'Replace vended_credentials with access_delegation and remove obsolete S3 path-style configuration.',
+		},
+	],
 	configSchema: icebergRestConfig,
 	requirements: ['pyiceberg[pyarrow,s3fs,gcsfs,adlfs,hf,rest-sigv4,gcp-auth,entra-auth]>=0.11'],
+	resolveRequirements: (config) => icebergRequirements(['pyarrow'], config),
 	uiHints: {
 		uri: { group: 'Connection', order: 1 },
 		warehouse: { group: 'Connection', order: 2 },
