@@ -103,9 +103,9 @@ MARIMOHUB_SECRETS_AWS_ACCESS_KEY_ID=...
 MARIMOHUB_SECRETS_AWS_SECRET_ACCESS_KEY=...
 ```
 
-Set both credential variables or neither. A partial pair causes startup to
-fail. Static credentials do not enable the resolver. You must also set the
-region or enable the resolver flag.
+Static credentials do not enable the resolver. If the resolver is enabled, set
+both credential variables or neither. A partial pair then causes startup to
+fail. If the resolver is disabled, the credential variables are ignored.
 
 A locator uses `secret-id-or-arn[#json-key]`. The optional key selects one
 string from a JSON secret. Omit it to resolve the complete JSON object.
