@@ -45,13 +45,16 @@ jobs:
       - run: vp run audit:prod
 
       # Build resolves packages from source, not dist, so it's independent of the
-      # tests — run both concurrently. `pnpm test` uses the threads pool; the bare
-      # `vp run -r test` CI used before did not.
+      # tests — run both at once. `--configLoader=runner`/`--pool=threads` cut the
+      # per-worker cold starts the old bare `vp run -r test` paid.
       - name: Test and build
         run: |
-          pnpm exec concurrently -n test,build -c blue,magenta \
-            'pnpm test' \
-            'pnpm build'
+          vp run -r test --configLoader=runner --pool=threads & test_pid=$!
+          vp run -r build & build_pid=$!
+          rc=0
+          wait $test_pid || rc=1
+          wait $build_pid || rc=1
+          exit $rc
 
       - name: Save Vite Task cache
         if: success() && github.event_name == 'push'
