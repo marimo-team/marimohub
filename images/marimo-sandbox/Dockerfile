@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
-FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6
+# Held at 3.13: pyiceberg (in the acceptance image) has no cp314 wheel yet, so
+# 3.14 forces a source build that needs a compiler absent from -slim.
+FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
 
 ARG MARIMO_VERSION=0.23.16
 ENV MARIMO_VERSION=${MARIMO_VERSION}
