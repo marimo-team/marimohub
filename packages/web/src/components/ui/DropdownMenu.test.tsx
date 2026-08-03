@@ -43,6 +43,8 @@ describe('DropdownMenu', () => {
 
 		await user.click(screen.getByRole('button', { name: 'Notebook actions' }));
 
-		expect(screen.getByRole('separator')).toBeInTheDocument();
+		const separator = screen.getByRole('separator');
+		const deleteItem = screen.getByRole('menuitem', { name: 'Delete' });
+		expect(separator.nextElementSibling).toBe(deleteItem);
 	});
 });

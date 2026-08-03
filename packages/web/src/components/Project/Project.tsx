@@ -414,11 +414,11 @@ export function Project() {
 		// Session polling can leave these actions about five seconds stale. Starting
 		// an app is idempotent, while a raced stop is surfaced by the existing toast.
 		const runtimeActions: DropdownMenuOption[] = [
-			...(live?.edit
+			...(live?.edit?.can?.stop
 				? [
 						{
 							id: 'stop-kernel',
-							label: 'Stop Kernel',
+							label: 'Shut down kernel',
 							icon: <Power className="size-4" />,
 							danger: true,
 						},
@@ -623,6 +623,7 @@ export function Project() {
 					{filteredNotebooks.map((nb) => {
 						const badges = notebookBadges(nb);
 						const live = sessionByNotebook.get(nb.id);
+						const stoppableEdit = live?.edit?.can?.stop ? live.edit : undefined;
 						return (
 							<RowLink
 								key={nb.id}
@@ -649,12 +650,12 @@ export function Project() {
 									<>
 										{/* Primary shutdown stays edit-only: the inline Power button
 										    never targets the shared app (dropdown/popover do). */}
-										{live?.edit && (
+										{stoppableEdit && (
 											<IconButton
 												label="Shut down kernel"
 												tooltip="Shut down kernel"
 												tone="danger"
-												onPress={() => stopModal.open({ notebook: nb, session: live.edit! })}
+												onPress={() => stopModal.open({ notebook: nb, session: stoppableEdit })}
 											>
 												<Power className="size-4" />
 											</IconButton>
@@ -667,8 +668,8 @@ export function Project() {
 											onAction={(key) => {
 												if (key === 'rename') renameModal.open(nb);
 												else if (key === 'duplicate') handleDuplicate(nb);
-												else if (key === 'stop-kernel' && live?.edit)
-													stopModal.open({ notebook: nb, session: live.edit });
+												else if (key === 'stop-kernel' && stoppableEdit)
+													stopModal.open({ notebook: nb, session: stoppableEdit });
 												else if (key === 'run-app' || key === 'open-app')
 													void navigate(`/projects/${pid}/notebooks/${nb.id}/app`, {
 														state: { title: nb.title },
