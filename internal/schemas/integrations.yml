@@ -1,0 +1,3619 @@
+openapi: 3.1.0
+info:
+  title: marimohub integration kinds
+  version: 1.0.0
+  description: |-
+    Machine-checkable description of every integration kind registered in
+    `defaultRegistry()` (`packages/core/src/services/integrations/kinds/`),
+    generated from each kind’s zod config schema (input io, so defaulted
+    fields stay optional). This is not an HTTP API: each path stands for a
+    kind, and its component schema is the config contract stored in
+    `versions/{n}.json` records and rendered into sandboxes.
+paths:
+  /kinds/custom_env/config:
+    summary: Custom environment
+    description: Inject arbitrary environment variables — plain or secret — into
+      every session.
+    x-kind-schema-version: 1
+    x-category: other
+    x-secret-paths:
+      - secrets.*.value
+    x-supports-test: false
+    x-requirements: []
+    get:
+      operationId: read_custom_env_config
+      summary: Stored custom_env config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/custom_env'
+    put:
+      operationId: write_custom_env_config
+      summary: Input custom_env config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/custom_env'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/iceberg_bigquery/config:
+    summary: Iceberg BigQuery Metastore Catalog
+    description: Use Google BigQuery as the Iceberg metastore.
+    x-kind-schema-version: 1
+    x-category: catalog
+    x-secret-paths:
+      - credentials.credentials_json
+      - storage.credentials.access_key_id
+      - storage.credentials.secret_access_key
+      - storage.credentials.session_token
+      - storage.auth.token
+      - storage.auth.connection_string
+      - storage.auth.account_key
+      - storage.auth.sas_token
+      - storage.auth.client_secret
+      - storage.auth.credential
+      - storage.token
+    x-supports-test: false
+    x-requirements:
+      - pyiceberg[pyarrow,bigquery,gcsfs,s3fs,adlfs,hf]>=0.11
+    get:
+      operationId: read_iceberg_bigquery_config
+      summary: Stored iceberg_bigquery config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/iceberg_bigquery'
+    put:
+      operationId: write_iceberg_bigquery_config
+      summary: Input iceberg_bigquery config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/iceberg_bigquery'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/iceberg_dynamodb/config:
+    summary: Iceberg DynamoDB Catalog
+    description: Use an AWS DynamoDB table as the Iceberg catalog.
+    x-kind-schema-version: 1
+    x-category: catalog
+    x-secret-paths:
+      - credentials.access_key_id
+      - credentials.secret_access_key
+      - credentials.session_token
+      - unified_credentials.access_key_id
+      - unified_credentials.secret_access_key
+      - unified_credentials.session_token
+      - storage.credentials.access_key_id
+      - storage.credentials.secret_access_key
+      - storage.credentials.session_token
+      - storage.auth.token
+      - storage.auth.connection_string
+      - storage.auth.account_key
+      - storage.auth.sas_token
+      - storage.auth.client_secret
+      - storage.auth.credential
+      - storage.token
+    x-supports-test: false
+    x-requirements:
+      - pyiceberg[pyarrow,dynamodb,s3fs,gcsfs,adlfs,hf]>=0.11
+    get:
+      operationId: read_iceberg_dynamodb_config
+      summary: Stored iceberg_dynamodb config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/iceberg_dynamodb'
+    put:
+      operationId: write_iceberg_dynamodb_config
+      summary: Input iceberg_dynamodb config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/iceberg_dynamodb'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/iceberg_glue/config:
+    summary: Iceberg AWS Glue Catalog
+    description: Use AWS Glue as the Iceberg metastore with ambient, profile, or
+      static credentials.
+    x-kind-schema-version: 1
+    x-category: catalog
+    x-secret-paths:
+      - credentials.access_key_id
+      - credentials.secret_access_key
+      - credentials.session_token
+      - unified_credentials.access_key_id
+      - unified_credentials.secret_access_key
+      - unified_credentials.session_token
+      - storage.credentials.access_key_id
+      - storage.credentials.secret_access_key
+      - storage.credentials.session_token
+      - storage.auth.token
+      - storage.auth.connection_string
+      - storage.auth.account_key
+      - storage.auth.sas_token
+      - storage.auth.client_secret
+      - storage.auth.credential
+      - storage.token
+    x-supports-test: false
+    x-requirements:
+      - pyiceberg[pyarrow,glue,s3fs,gcsfs,adlfs,hf]>=0.11
+    get:
+      operationId: read_iceberg_glue_config
+      summary: Stored iceberg_glue config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/iceberg_glue'
+    put:
+      operationId: write_iceberg_glue_config
+      summary: Input iceberg_glue config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/iceberg_glue'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/iceberg_hive/config:
+    summary: Iceberg Hive Catalog
+    description: Connect PyIceberg to a Hive Metastore over Thrift.
+    x-kind-schema-version: 1
+    x-category: catalog
+    x-secret-paths:
+      - ugi
+      - storage.credentials.access_key_id
+      - storage.credentials.secret_access_key
+      - storage.credentials.session_token
+      - storage.auth.token
+      - storage.auth.connection_string
+      - storage.auth.account_key
+      - storage.auth.sas_token
+      - storage.auth.client_secret
+      - storage.auth.credential
+      - storage.token
+    x-supports-test: false
+    x-requirements:
+      - pyiceberg[pyarrow,hive,hive-kerberos,s3fs,gcsfs,adlfs,hf]>=0.11
+    get:
+      operationId: read_iceberg_hive_config
+      summary: Stored iceberg_hive config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/iceberg_hive'
+    put:
+      operationId: write_iceberg_hive_config
+      summary: Input iceberg_hive config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/iceberg_hive'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/iceberg_rest/config:
+    summary: Iceberg REST Catalog
+    description: Connect to an Iceberg REST catalog such as Polaris, Unity,
+      Gravitino, or Glue.
+    x-kind-schema-version: 2
+    x-category: catalog
+    x-secret-paths:
+      - auth.token
+      - auth.password
+      - auth.client_secret
+      - auth.credentials_json
+      - storage.credentials.access_key_id
+      - storage.credentials.secret_access_key
+      - storage.credentials.session_token
+      - storage.auth.token
+      - storage.auth.connection_string
+      - storage.auth.account_key
+      - storage.auth.sas_token
+      - storage.auth.client_secret
+      - storage.auth.credential
+      - storage.token
+      - tls.client_key
+    x-supports-test: true
+    x-requirements:
+      - pyiceberg[pyarrow,s3fs,gcsfs,adlfs,hf,rest-sigv4,gcp-auth,entra-auth]>=0.11
+    get:
+      operationId: read_iceberg_rest_config
+      summary: Stored iceberg_rest config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/iceberg_rest'
+    put:
+      operationId: write_iceberg_rest_config
+      summary: Input iceberg_rest config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/iceberg_rest'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/iceberg_sql/config:
+    summary: Iceberg SQL Catalog
+    description: Store Iceberg catalog metadata in PostgreSQL or SQLite through SQLAlchemy.
+    x-kind-schema-version: 1
+    x-category: catalog
+    x-secret-paths:
+      - uri
+      - storage.credentials.access_key_id
+      - storage.credentials.secret_access_key
+      - storage.credentials.session_token
+      - storage.auth.token
+      - storage.auth.connection_string
+      - storage.auth.account_key
+      - storage.auth.sas_token
+      - storage.auth.client_secret
+      - storage.auth.credential
+      - storage.token
+    x-supports-test: false
+    x-requirements:
+      - pyiceberg[pyarrow,sql-postgres,sql-sqlite,s3fs,gcsfs,adlfs,hf]>=0.11
+    get:
+      operationId: read_iceberg_sql_config
+      summary: Stored iceberg_sql config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/iceberg_sql'
+    put:
+      operationId: write_iceberg_sql_config
+      summary: Input iceberg_sql config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/iceberg_sql'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/postgres/config:
+    summary: PostgreSQL
+    description: Direct Postgres connection for SQL cells and SQLAlchemy.
+    x-kind-schema-version: 2
+    x-category: database
+    x-secret-paths:
+      - password
+    x-supports-test: false
+    x-requirements:
+      - sqlalchemy>=2
+      - psycopg2-binary>=2.9
+    get:
+      operationId: read_postgres_config
+      summary: Stored postgres config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/postgres'
+    put:
+      operationId: write_postgres_config
+      summary: Input postgres config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/postgres'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/pyspark/config:
+    summary: PySpark (Spark Connect)
+    description: Remote PySpark DataFrame sessions over Spark Connect.
+    x-kind-schema-version: 1
+    x-category: engine
+    x-secret-paths:
+      - auth.token
+      - metadata.*.value
+      - secret_spark_config.*.value
+    x-supports-test: false
+    x-requirements:
+      - pyspark[connect]>=4.2
+    get:
+      operationId: read_pyspark_config
+      summary: Stored pyspark config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/pyspark'
+    put:
+      operationId: write_pyspark_config
+      summary: Input pyspark config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/pyspark'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/trino/config:
+    summary: Trino
+    description: Trino DBAPI and SQLAlchemy connection with authentication and
+      session options.
+    x-kind-schema-version: 2
+    x-category: engine
+    x-secret-paths:
+      - auth.password
+      - auth.token
+      - auth.client_key
+      - http_headers.*.value
+      - extra_credentials.*.value
+    x-supports-test: true
+    x-requirements:
+      - trino[sqlalchemy,kerberos,gssapi]>=0.330
+    get:
+      operationId: read_trino_config
+      summary: Stored trino config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/trino'
+    put:
+      operationId: write_trino_config
+      summary: Input trino config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/trino'
+      responses:
+        '204':
+          description: Accepted.
+components:
+  schemas:
+    custom_env:
+      type: object
+      properties:
+        vars:
+          default: {}
+          description: Plain environment variables, visible to project admins
+          type: object
+          propertyNames:
+            type: string
+            pattern: ^[A-Z_][A-Z0-9_]*$
+          additionalProperties:
+            type: string
+        secrets:
+          default: []
+          description: Secret environment variables, write-only after save
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                pattern: ^[A-Z_][A-Z0-9_]*$
+              value:
+                type: string
+                minLength: 1
+                x-marimohub-secret: true
+            required:
+              - name
+              - value
+    iceberg_bigquery:
+      type: object
+      properties:
+        project_id:
+          type: string
+          minLength: 1
+        location:
+          type: string
+          minLength: 1
+        warehouse:
+          type: string
+          minLength: 1
+        credentials:
+          default:
+            method: ambient
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: ambient
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: service_account_json
+                credentials_json:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - credentials_json
+        storage:
+          default:
+            scheme: catalog
+          oneOf:
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: catalog
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: s3
+                region:
+                  type: string
+                  minLength: 1
+                endpoint:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                credentials:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: static
+                        access_key_id:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        secret_access_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        session_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - access_key_id
+                        - secret_access_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: profile
+                        profile_name:
+                          type: string
+                          minLength: 1
+                      required:
+                        - method
+                        - profile_name
+                role_arn:
+                  type: string
+                  minLength: 1
+                role_session_name:
+                  type: string
+                  minLength: 1
+                signer:
+                  type: string
+                  minLength: 1
+                signer_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                signer_endpoint:
+                  type: string
+                  minLength: 1
+                resolve_region:
+                  default: false
+                  type: boolean
+                proxy_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                connect_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                request_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                force_virtual_addressing:
+                  default: false
+                  type: boolean
+                anonymous:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: gcs
+                project_id:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: oauth_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        token_expires_at_ms:
+                          type: integer
+                          exclusiveMinimum: 0
+                          maximum: 9007199254740991
+                      required:
+                        - method
+                        - token
+                access:
+                  default: full_control
+                  type: string
+                  enum:
+                    - read_only
+                    - read_write
+                    - full_control
+                consistency:
+                  default: none
+                  type: string
+                  enum:
+                    - none
+                    - size
+                    - md5
+                cache_timeout:
+                  type: number
+                  minimum: 0
+                requester_pays:
+                  default: false
+                  type: boolean
+                session_kwargs:
+                  default: {}
+                  type: object
+                  propertyNames:
+                    type: string
+                  additionalProperties:
+                    type: string
+                service_host:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                default_location:
+                  type: string
+                  minLength: 1
+                version_aware:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: adls
+                account_name:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: connection_string
+                        connection_string:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - connection_string
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: account_key
+                        account_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - account_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: sas_token
+                        sas_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - sas_token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: service_principal
+                        tenant_id:
+                          type: string
+                          minLength: 1
+                        client_id:
+                          type: string
+                          minLength: 1
+                        client_secret:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - tenant_id
+                        - client_id
+                        - client_secret
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: access_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: credential
+                        credential:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - credential
+                account_host:
+                  type: string
+                  minLength: 1
+                blob_storage_authority:
+                  type: string
+                  minLength: 1
+                dfs_storage_authority:
+                  type: string
+                  minLength: 1
+                blob_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+                dfs_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hdfs
+                host:
+                  type: string
+                  minLength: 1
+                port:
+                  default: 8020
+                  type: integer
+                  exclusiveMinimum: 0
+                  maximum: 65535
+                user:
+                  type: string
+                  minLength: 1
+                kerberos_ticket:
+                  type: string
+                  minLength: 1
+              required:
+                - scheme
+                - host
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hugging_face
+                endpoint:
+                  default: https://huggingface.co
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - scheme
+        runtime:
+          default: {}
+          type: object
+          properties:
+            max_workers:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            legacy_current_snapshot_id:
+              type: boolean
+            downcast_ns_timestamp_to_us_on_write:
+              type: boolean
+            pyarrow_use_large_types_on_read:
+              type: boolean
+        extra_properties:
+          default: {}
+          description: Raw PyIceberg catalog properties not represented by typed fields
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+      required:
+        - project_id
+        - warehouse
+    iceberg_dynamodb:
+      type: object
+      properties:
+        table_name:
+          default: iceberg
+          type: string
+          minLength: 1
+        warehouse:
+          type: string
+          minLength: 1
+        region:
+          type: string
+          minLength: 1
+        credentials:
+          default:
+            method: ambient
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: ambient
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                access_key_id:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                secret_access_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                session_token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: profile
+                profile_name:
+                  type: string
+                  minLength: 1
+              required:
+                - method
+                - profile_name
+        unified_credentials:
+          default:
+            method: none
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                region:
+                  type: string
+                  minLength: 1
+                access_key_id:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                secret_access_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                session_token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: profile
+                region:
+                  type: string
+                  minLength: 1
+                profile_name:
+                  type: string
+                  minLength: 1
+              required:
+                - method
+                - profile_name
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: role
+                region:
+                  type: string
+                  minLength: 1
+                role_arn:
+                  type: string
+                  minLength: 1
+                role_session_name:
+                  type: string
+                  minLength: 1
+              required:
+                - method
+                - role_arn
+        storage:
+          default:
+            scheme: catalog
+          oneOf:
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: catalog
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: s3
+                region:
+                  type: string
+                  minLength: 1
+                endpoint:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                credentials:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: static
+                        access_key_id:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        secret_access_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        session_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - access_key_id
+                        - secret_access_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: profile
+                        profile_name:
+                          type: string
+                          minLength: 1
+                      required:
+                        - method
+                        - profile_name
+                role_arn:
+                  type: string
+                  minLength: 1
+                role_session_name:
+                  type: string
+                  minLength: 1
+                signer:
+                  type: string
+                  minLength: 1
+                signer_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                signer_endpoint:
+                  type: string
+                  minLength: 1
+                resolve_region:
+                  default: false
+                  type: boolean
+                proxy_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                connect_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                request_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                force_virtual_addressing:
+                  default: false
+                  type: boolean
+                anonymous:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: gcs
+                project_id:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: oauth_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        token_expires_at_ms:
+                          type: integer
+                          exclusiveMinimum: 0
+                          maximum: 9007199254740991
+                      required:
+                        - method
+                        - token
+                access:
+                  default: full_control
+                  type: string
+                  enum:
+                    - read_only
+                    - read_write
+                    - full_control
+                consistency:
+                  default: none
+                  type: string
+                  enum:
+                    - none
+                    - size
+                    - md5
+                cache_timeout:
+                  type: number
+                  minimum: 0
+                requester_pays:
+                  default: false
+                  type: boolean
+                session_kwargs:
+                  default: {}
+                  type: object
+                  propertyNames:
+                    type: string
+                  additionalProperties:
+                    type: string
+                service_host:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                default_location:
+                  type: string
+                  minLength: 1
+                version_aware:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: adls
+                account_name:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: connection_string
+                        connection_string:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - connection_string
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: account_key
+                        account_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - account_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: sas_token
+                        sas_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - sas_token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: service_principal
+                        tenant_id:
+                          type: string
+                          minLength: 1
+                        client_id:
+                          type: string
+                          minLength: 1
+                        client_secret:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - tenant_id
+                        - client_id
+                        - client_secret
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: access_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: credential
+                        credential:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - credential
+                account_host:
+                  type: string
+                  minLength: 1
+                blob_storage_authority:
+                  type: string
+                  minLength: 1
+                dfs_storage_authority:
+                  type: string
+                  minLength: 1
+                blob_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+                dfs_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hdfs
+                host:
+                  type: string
+                  minLength: 1
+                port:
+                  default: 8020
+                  type: integer
+                  exclusiveMinimum: 0
+                  maximum: 65535
+                user:
+                  type: string
+                  minLength: 1
+                kerberos_ticket:
+                  type: string
+                  minLength: 1
+              required:
+                - scheme
+                - host
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hugging_face
+                endpoint:
+                  default: https://huggingface.co
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - scheme
+        runtime:
+          default: {}
+          type: object
+          properties:
+            max_workers:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            legacy_current_snapshot_id:
+              type: boolean
+            downcast_ns_timestamp_to_us_on_write:
+              type: boolean
+            pyarrow_use_large_types_on_read:
+              type: boolean
+        extra_properties:
+          default: {}
+          description: Raw PyIceberg catalog properties not represented by typed fields
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+    iceberg_glue:
+      type: object
+      properties:
+        warehouse:
+          type: string
+          minLength: 1
+        catalog_id:
+          type: string
+          pattern: ^\d{12}$
+        region:
+          type: string
+          minLength: 1
+        endpoint:
+          type: string
+          pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+        credentials:
+          default:
+            method: ambient
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: ambient
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                access_key_id:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                secret_access_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                session_token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: profile
+                profile_name:
+                  type: string
+                  minLength: 1
+              required:
+                - method
+                - profile_name
+        unified_credentials:
+          default:
+            method: none
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                region:
+                  type: string
+                  minLength: 1
+                access_key_id:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                secret_access_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                session_token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: profile
+                region:
+                  type: string
+                  minLength: 1
+                profile_name:
+                  type: string
+                  minLength: 1
+              required:
+                - method
+                - profile_name
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: role
+                region:
+                  type: string
+                  minLength: 1
+                role_arn:
+                  type: string
+                  minLength: 1
+                role_session_name:
+                  type: string
+                  minLength: 1
+              required:
+                - method
+                - role_arn
+        skip_archive:
+          default: true
+          type: boolean
+        max_retries:
+          default: 10
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        retry_mode:
+          default: standard
+          type: string
+          enum:
+            - legacy
+            - standard
+            - adaptive
+        storage:
+          default:
+            scheme: catalog
+          oneOf:
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: catalog
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: s3
+                region:
+                  type: string
+                  minLength: 1
+                endpoint:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                credentials:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: static
+                        access_key_id:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        secret_access_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        session_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - access_key_id
+                        - secret_access_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: profile
+                        profile_name:
+                          type: string
+                          minLength: 1
+                      required:
+                        - method
+                        - profile_name
+                role_arn:
+                  type: string
+                  minLength: 1
+                role_session_name:
+                  type: string
+                  minLength: 1
+                signer:
+                  type: string
+                  minLength: 1
+                signer_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                signer_endpoint:
+                  type: string
+                  minLength: 1
+                resolve_region:
+                  default: false
+                  type: boolean
+                proxy_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                connect_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                request_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                force_virtual_addressing:
+                  default: false
+                  type: boolean
+                anonymous:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: gcs
+                project_id:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: oauth_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        token_expires_at_ms:
+                          type: integer
+                          exclusiveMinimum: 0
+                          maximum: 9007199254740991
+                      required:
+                        - method
+                        - token
+                access:
+                  default: full_control
+                  type: string
+                  enum:
+                    - read_only
+                    - read_write
+                    - full_control
+                consistency:
+                  default: none
+                  type: string
+                  enum:
+                    - none
+                    - size
+                    - md5
+                cache_timeout:
+                  type: number
+                  minimum: 0
+                requester_pays:
+                  default: false
+                  type: boolean
+                session_kwargs:
+                  default: {}
+                  type: object
+                  propertyNames:
+                    type: string
+                  additionalProperties:
+                    type: string
+                service_host:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                default_location:
+                  type: string
+                  minLength: 1
+                version_aware:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: adls
+                account_name:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: connection_string
+                        connection_string:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - connection_string
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: account_key
+                        account_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - account_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: sas_token
+                        sas_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - sas_token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: service_principal
+                        tenant_id:
+                          type: string
+                          minLength: 1
+                        client_id:
+                          type: string
+                          minLength: 1
+                        client_secret:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - tenant_id
+                        - client_id
+                        - client_secret
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: access_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: credential
+                        credential:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - credential
+                account_host:
+                  type: string
+                  minLength: 1
+                blob_storage_authority:
+                  type: string
+                  minLength: 1
+                dfs_storage_authority:
+                  type: string
+                  minLength: 1
+                blob_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+                dfs_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hdfs
+                host:
+                  type: string
+                  minLength: 1
+                port:
+                  default: 8020
+                  type: integer
+                  exclusiveMinimum: 0
+                  maximum: 65535
+                user:
+                  type: string
+                  minLength: 1
+                kerberos_ticket:
+                  type: string
+                  minLength: 1
+              required:
+                - scheme
+                - host
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hugging_face
+                endpoint:
+                  default: https://huggingface.co
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - scheme
+        runtime:
+          default: {}
+          type: object
+          properties:
+            max_workers:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            legacy_current_snapshot_id:
+              type: boolean
+            downcast_ns_timestamp_to_us_on_write:
+              type: boolean
+            pyarrow_use_large_types_on_read:
+              type: boolean
+        extra_properties:
+          default: {}
+          description: Raw PyIceberg catalog properties not represented by typed fields
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+    iceberg_hive:
+      type: object
+      properties:
+        uri:
+          type: string
+          pattern: ^thrift:\/\/(?![^/?#]*@)\S+$
+        warehouse:
+          type: string
+          minLength: 1
+        hive2_compatible:
+          default: false
+          type: boolean
+        kerberos:
+          default:
+            enabled: false
+            service_name: hive
+          type: object
+          properties:
+            enabled:
+              default: false
+              type: boolean
+            service_name:
+              default: hive
+              type: string
+              minLength: 1
+        ugi:
+          description: Hadoop user/group identity
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+        storage:
+          default:
+            scheme: catalog
+          oneOf:
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: catalog
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: s3
+                region:
+                  type: string
+                  minLength: 1
+                endpoint:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                credentials:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: static
+                        access_key_id:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        secret_access_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        session_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - access_key_id
+                        - secret_access_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: profile
+                        profile_name:
+                          type: string
+                          minLength: 1
+                      required:
+                        - method
+                        - profile_name
+                role_arn:
+                  type: string
+                  minLength: 1
+                role_session_name:
+                  type: string
+                  minLength: 1
+                signer:
+                  type: string
+                  minLength: 1
+                signer_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                signer_endpoint:
+                  type: string
+                  minLength: 1
+                resolve_region:
+                  default: false
+                  type: boolean
+                proxy_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                connect_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                request_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                force_virtual_addressing:
+                  default: false
+                  type: boolean
+                anonymous:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: gcs
+                project_id:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: oauth_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        token_expires_at_ms:
+                          type: integer
+                          exclusiveMinimum: 0
+                          maximum: 9007199254740991
+                      required:
+                        - method
+                        - token
+                access:
+                  default: full_control
+                  type: string
+                  enum:
+                    - read_only
+                    - read_write
+                    - full_control
+                consistency:
+                  default: none
+                  type: string
+                  enum:
+                    - none
+                    - size
+                    - md5
+                cache_timeout:
+                  type: number
+                  minimum: 0
+                requester_pays:
+                  default: false
+                  type: boolean
+                session_kwargs:
+                  default: {}
+                  type: object
+                  propertyNames:
+                    type: string
+                  additionalProperties:
+                    type: string
+                service_host:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                default_location:
+                  type: string
+                  minLength: 1
+                version_aware:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: adls
+                account_name:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: connection_string
+                        connection_string:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - connection_string
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: account_key
+                        account_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - account_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: sas_token
+                        sas_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - sas_token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: service_principal
+                        tenant_id:
+                          type: string
+                          minLength: 1
+                        client_id:
+                          type: string
+                          minLength: 1
+                        client_secret:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - tenant_id
+                        - client_id
+                        - client_secret
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: access_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: credential
+                        credential:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - credential
+                account_host:
+                  type: string
+                  minLength: 1
+                blob_storage_authority:
+                  type: string
+                  minLength: 1
+                dfs_storage_authority:
+                  type: string
+                  minLength: 1
+                blob_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+                dfs_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hdfs
+                host:
+                  type: string
+                  minLength: 1
+                port:
+                  default: 8020
+                  type: integer
+                  exclusiveMinimum: 0
+                  maximum: 65535
+                user:
+                  type: string
+                  minLength: 1
+                kerberos_ticket:
+                  type: string
+                  minLength: 1
+              required:
+                - scheme
+                - host
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hugging_face
+                endpoint:
+                  default: https://huggingface.co
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - scheme
+        runtime:
+          default: {}
+          type: object
+          properties:
+            max_workers:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            legacy_current_snapshot_id:
+              type: boolean
+            downcast_ns_timestamp_to_us_on_write:
+              type: boolean
+            pyarrow_use_large_types_on_read:
+              type: boolean
+        extra_properties:
+          default: {}
+          description: Raw PyIceberg catalog properties not represented by typed fields
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+      required:
+        - uri
+    iceberg_rest:
+      type: object
+      properties:
+        uri:
+          type: string
+          pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+          description: REST catalog base URI, e.g. https://catalog.internal/api/catalog
+        warehouse:
+          description: Warehouse name/path if the server hosts several
+          type: string
+        allow_insecure_transport:
+          default: false
+          description: Allow http:// endpoints to carry credentials — local development only
+          type: boolean
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: bearer_token
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - token
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: basic
+                username:
+                  type: string
+                  minLength: 1
+                password:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - username
+                - password
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: oauth2_client_credentials
+                token_endpoint:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                client_id:
+                  type: string
+                  minLength: 1
+                client_secret:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                scope:
+                  default: catalog
+                  type: string
+                refresh_margin_seconds:
+                  default: 60
+                  type: integer
+                  minimum: 0
+                  maximum: 9007199254740991
+                expires_in_seconds:
+                  type: integer
+                  exclusiveMinimum: 0
+                  maximum: 9007199254740991
+              required:
+                - method
+                - token_endpoint
+                - client_id
+                - client_secret
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: sigv4
+                region:
+                  type: string
+                  minLength: 1
+                signing_name:
+                  default: execute-api
+                  type: string
+                  minLength: 1
+              required:
+                - method
+                - region
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: google
+                scopes:
+                  description: Comma-separated OAuth scopes; uses Google ADC
+                  type: string
+                credentials_json:
+                  description: Google service-account JSON
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: entra
+                scopes:
+                  description: Comma-separated OAuth scopes; uses Azure credentials
+                  type: string
+                managed_identity_client_id:
+                  type: string
+                  minLength: 1
+              required:
+                - method
+        storage:
+          default:
+            scheme: catalog
+          oneOf:
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: catalog
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: s3
+                region:
+                  type: string
+                  minLength: 1
+                endpoint:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                credentials:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: static
+                        access_key_id:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        secret_access_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        session_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - access_key_id
+                        - secret_access_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: profile
+                        profile_name:
+                          type: string
+                          minLength: 1
+                      required:
+                        - method
+                        - profile_name
+                role_arn:
+                  type: string
+                  minLength: 1
+                role_session_name:
+                  type: string
+                  minLength: 1
+                signer:
+                  type: string
+                  minLength: 1
+                signer_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                signer_endpoint:
+                  type: string
+                  minLength: 1
+                resolve_region:
+                  default: false
+                  type: boolean
+                proxy_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                connect_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                request_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                force_virtual_addressing:
+                  default: false
+                  type: boolean
+                anonymous:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: gcs
+                project_id:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: oauth_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        token_expires_at_ms:
+                          type: integer
+                          exclusiveMinimum: 0
+                          maximum: 9007199254740991
+                      required:
+                        - method
+                        - token
+                access:
+                  default: full_control
+                  type: string
+                  enum:
+                    - read_only
+                    - read_write
+                    - full_control
+                consistency:
+                  default: none
+                  type: string
+                  enum:
+                    - none
+                    - size
+                    - md5
+                cache_timeout:
+                  type: number
+                  minimum: 0
+                requester_pays:
+                  default: false
+                  type: boolean
+                session_kwargs:
+                  default: {}
+                  type: object
+                  propertyNames:
+                    type: string
+                  additionalProperties:
+                    type: string
+                service_host:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                default_location:
+                  type: string
+                  minLength: 1
+                version_aware:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: adls
+                account_name:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: connection_string
+                        connection_string:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - connection_string
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: account_key
+                        account_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - account_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: sas_token
+                        sas_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - sas_token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: service_principal
+                        tenant_id:
+                          type: string
+                          minLength: 1
+                        client_id:
+                          type: string
+                          minLength: 1
+                        client_secret:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - tenant_id
+                        - client_id
+                        - client_secret
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: access_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: credential
+                        credential:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - credential
+                account_host:
+                  type: string
+                  minLength: 1
+                blob_storage_authority:
+                  type: string
+                  minLength: 1
+                dfs_storage_authority:
+                  type: string
+                  minLength: 1
+                blob_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+                dfs_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hdfs
+                host:
+                  type: string
+                  minLength: 1
+                port:
+                  default: 8020
+                  type: integer
+                  exclusiveMinimum: 0
+                  maximum: 65535
+                user:
+                  type: string
+                  minLength: 1
+                kerberos_ticket:
+                  type: string
+                  minLength: 1
+              required:
+                - scheme
+                - host
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hugging_face
+                endpoint:
+                  default: https://huggingface.co
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - scheme
+        runtime:
+          default: {}
+          type: object
+          properties:
+            max_workers:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            legacy_current_snapshot_id:
+              type: boolean
+            downcast_ns_timestamp_to_us_on_write:
+              type: boolean
+            pyarrow_use_large_types_on_read:
+              type: boolean
+        access_delegation:
+          default: vended_credentials
+          type: string
+          enum:
+            - none
+            - vended_credentials
+            - remote_signing
+            - both
+        tls:
+          default: {}
+          type: object
+          properties:
+            ca_bundle:
+              type: string
+              minLength: 1
+            client_certificate:
+              type: string
+              minLength: 1
+            client_key:
+              type: string
+              minLength: 1
+              x-marimohub-secret: true
+        rest:
+          default:
+            snapshot_loading_mode: all
+            metrics_reporting_enabled: true
+            view_endpoints_supported: false
+            scan_planning_mode: client
+            namespace_separator: '%1F'
+            table_cache_expire_after_write_ms: 300000
+            table_cache_max_entries: 100
+          type: object
+          properties:
+            snapshot_loading_mode:
+              default: all
+              type: string
+              enum:
+                - all
+                - refs
+            metrics_reporting_enabled:
+              default: true
+              type: boolean
+            page_size:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            view_endpoints_supported:
+              default: false
+              type: boolean
+            scan_planning_mode:
+              default: client
+              type: string
+              enum:
+                - client
+                - server
+            namespace_separator:
+              default: '%1F'
+              type: string
+              minLength: 1
+            table_cache_expire_after_write_ms:
+              default: 300000
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            table_cache_max_entries:
+              default: 100
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+        headers:
+          default: {}
+          description: Additional HTTP headers sent to the REST catalog
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+        extra_properties:
+          default: {}
+          description: Raw PyIceberg catalog properties not represented by typed fields
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+      required:
+        - uri
+        - auth
+    iceberg_sql:
+      type: object
+      properties:
+        uri:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          description: SQLAlchemy URI for PostgreSQL or SQLite
+        warehouse:
+          type: string
+          minLength: 1
+        init_catalog_tables:
+          default: true
+          type: boolean
+        echo:
+          default: false
+          type: boolean
+        pool_pre_ping:
+          default: false
+          type: boolean
+        storage:
+          default:
+            scheme: catalog
+          oneOf:
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: catalog
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: s3
+                region:
+                  type: string
+                  minLength: 1
+                endpoint:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                credentials:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: static
+                        access_key_id:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        secret_access_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        session_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - access_key_id
+                        - secret_access_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: profile
+                        profile_name:
+                          type: string
+                          minLength: 1
+                      required:
+                        - method
+                        - profile_name
+                role_arn:
+                  type: string
+                  minLength: 1
+                role_session_name:
+                  type: string
+                  minLength: 1
+                signer:
+                  type: string
+                  minLength: 1
+                signer_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                signer_endpoint:
+                  type: string
+                  minLength: 1
+                resolve_region:
+                  default: false
+                  type: boolean
+                proxy_uri:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                connect_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                request_timeout:
+                  type: number
+                  exclusiveMinimum: 0
+                force_virtual_addressing:
+                  default: false
+                  type: boolean
+                anonymous:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: gcs
+                project_id:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: oauth_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                        token_expires_at_ms:
+                          type: integer
+                          exclusiveMinimum: 0
+                          maximum: 9007199254740991
+                      required:
+                        - method
+                        - token
+                access:
+                  default: full_control
+                  type: string
+                  enum:
+                    - read_only
+                    - read_write
+                    - full_control
+                consistency:
+                  default: none
+                  type: string
+                  enum:
+                    - none
+                    - size
+                    - md5
+                cache_timeout:
+                  type: number
+                  minimum: 0
+                requester_pays:
+                  default: false
+                  type: boolean
+                session_kwargs:
+                  default: {}
+                  type: object
+                  propertyNames:
+                    type: string
+                  additionalProperties:
+                    type: string
+                service_host:
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                default_location:
+                  type: string
+                  minLength: 1
+                version_aware:
+                  default: false
+                  type: boolean
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: adls
+                account_name:
+                  type: string
+                  minLength: 1
+                auth:
+                  default:
+                    method: ambient
+                  oneOf:
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: ambient
+                      required:
+                        - method
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: connection_string
+                        connection_string:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - connection_string
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: account_key
+                        account_key:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - account_key
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: sas_token
+                        sas_token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - sas_token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: service_principal
+                        tenant_id:
+                          type: string
+                          minLength: 1
+                        client_id:
+                          type: string
+                          minLength: 1
+                        client_secret:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - tenant_id
+                        - client_id
+                        - client_secret
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: access_token
+                        token:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - token
+                    - type: object
+                      properties:
+                        method:
+                          type: string
+                          const: credential
+                        credential:
+                          type: string
+                          minLength: 1
+                          x-marimohub-secret: true
+                      required:
+                        - method
+                        - credential
+                account_host:
+                  type: string
+                  minLength: 1
+                blob_storage_authority:
+                  type: string
+                  minLength: 1
+                dfs_storage_authority:
+                  type: string
+                  minLength: 1
+                blob_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+                dfs_storage_scheme:
+                  default: https
+                  type: string
+                  enum:
+                    - http
+                    - https
+              required:
+                - scheme
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hdfs
+                host:
+                  type: string
+                  minLength: 1
+                port:
+                  default: 8020
+                  type: integer
+                  exclusiveMinimum: 0
+                  maximum: 65535
+                user:
+                  type: string
+                  minLength: 1
+                kerberos_ticket:
+                  type: string
+                  minLength: 1
+              required:
+                - scheme
+                - host
+            - type: object
+              properties:
+                scheme:
+                  type: string
+                  const: hugging_face
+                endpoint:
+                  default: https://huggingface.co
+                  type: string
+                  pattern: ^https?:\/\/(?![^/?#]*@)\S+$
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - scheme
+        runtime:
+          default: {}
+          type: object
+          properties:
+            max_workers:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            legacy_current_snapshot_id:
+              type: boolean
+            downcast_ns_timestamp_to_us_on_write:
+              type: boolean
+            pyarrow_use_large_types_on_read:
+              type: boolean
+        extra_properties:
+          default: {}
+          description: Raw PyIceberg catalog properties not represented by typed fields
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+      required:
+        - uri
+    postgres:
+      type: object
+      properties:
+        host:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$|^[0-9A-Fa-f.:]+$
+          description: Server hostname, e.g. db.internal
+        port:
+          default: 5432
+          type: integer
+          minimum: 1
+          maximum: 65535
+        database:
+          type: string
+          minLength: 1
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          description: Password for the database user
+        ssl:
+          default:
+            mode: verify-full
+          description: libpq sslmode; `verify-full` checks the CA chain and the hostname
+          oneOf:
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  const: disable
+              required:
+                - mode
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  const: prefer
+              required:
+                - mode
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  const: require
+              required:
+                - mode
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  const: verify-ca
+                ca_bundle:
+                  description: PEM CA bundle to trust, written into the session
+                  type: string
+                  minLength: 1
+                ca_path:
+                  description: Absolute path to a CA bundle the runtime already ships (default
+                    /etc/ssl/certs/ca-certificates.crt)
+                  type: string
+                  minLength: 1
+              required:
+                - mode
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  const: verify-full
+                ca_bundle:
+                  description: PEM CA bundle to trust, written into the session
+                  type: string
+                  minLength: 1
+                ca_path:
+                  description: Absolute path to a CA bundle the runtime already ships (default
+                    /etc/ssl/certs/ca-certificates.crt)
+                  type: string
+                  minLength: 1
+              required:
+                - mode
+      required:
+        - host
+        - database
+        - username
+        - password
+    pyspark:
+      type: object
+      properties:
+        host:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+        port:
+          default: 15002
+          type: integer
+          minimum: 1
+          maximum: 65535
+        use_ssl:
+          default: true
+          type: boolean
+        auth:
+          default:
+            method: none
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: token
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - token
+        user_id:
+          type: string
+          minLength: 1
+        user_agent:
+          type: string
+          minLength: 1
+          maxLength: 512
+        app_name:
+          type: string
+          minLength: 1
+        keepalive:
+          default:
+            enabled: true
+            time_ms: 60000
+            timeout_ms: 20000
+            without_calls: true
+          type: object
+          properties:
+            enabled:
+              default: true
+              type: boolean
+            time_ms:
+              default: 60000
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            timeout_ms:
+              default: 20000
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            without_calls:
+              default: true
+              type: boolean
+        metadata:
+          default: []
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                minLength: 1
+              value:
+                type: string
+                minLength: 1
+                x-marimohub-secret: true
+            required:
+              - name
+              - value
+        spark_config:
+          default: {}
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+        secret_spark_config:
+          default: []
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                minLength: 1
+              value:
+                type: string
+                minLength: 1
+                x-marimohub-secret: true
+            required:
+              - name
+              - value
+      required:
+        - host
+    trino:
+      type: object
+      properties:
+        host:
+          type: string
+          pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+          description: Coordinator hostname, e.g. trino.internal
+        port:
+          default: 443
+          type: integer
+          minimum: 1
+          maximum: 65535
+        http_scheme:
+          default: https
+          type: string
+          enum:
+            - https
+            - http
+        user:
+          description: Query user; defaults to the signed-in user
+          type: string
+          minLength: 1
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: basic
+                username:
+                  type: string
+                  minLength: 1
+                password:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - username
+                - password
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: jwt
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - token
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: oauth2
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: certificate
+                client_certificate:
+                  type: string
+                  minLength: 1
+                client_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+              required:
+                - method
+                - client_certificate
+                - client_key
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: kerberos
+                krb5_config:
+                  type: string
+                  minLength: 1
+                service_name:
+                  type: string
+                  minLength: 1
+                mutual_authentication:
+                  default: required
+                  type: string
+                  enum:
+                    - required
+                    - optional
+                    - disabled
+                force_preemptive:
+                  default: false
+                  type: boolean
+                hostname_override:
+                  type: string
+                  minLength: 1
+                sanitize_mutual_error_response:
+                  default: true
+                  type: boolean
+                principal:
+                  type: string
+                  minLength: 1
+                delegate:
+                  default: false
+                  type: boolean
+              required:
+                - method
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: gssapi
+                krb5_config:
+                  type: string
+                  minLength: 1
+                service_name:
+                  type: string
+                  minLength: 1
+                mutual_authentication:
+                  default: disabled
+                  type: string
+                  enum:
+                    - required
+                    - optional
+                    - disabled
+                force_preemptive:
+                  default: false
+                  type: boolean
+                hostname_override:
+                  type: string
+                  minLength: 1
+                sanitize_mutual_error_response:
+                  default: true
+                  type: boolean
+                principal:
+                  type: string
+                  minLength: 1
+                delegate:
+                  default: false
+                  type: boolean
+              required:
+                - method
+        tls:
+          default:
+            verification: system
+          oneOf:
+            - type: object
+              properties:
+                verification:
+                  type: string
+                  const: system
+              required:
+                - verification
+            - type: object
+              properties:
+                verification:
+                  type: string
+                  const: disabled
+              required:
+                - verification
+            - type: object
+              properties:
+                verification:
+                  type: string
+                  const: custom_ca
+                ca_bundle:
+                  type: string
+                  minLength: 1
+              required:
+                - verification
+                - ca_bundle
+        default_catalog:
+          type: string
+          pattern: ^[A-Za-z0-9_.-]+$
+        default_schema:
+          type: string
+          pattern: ^[A-Za-z0-9_.-]+$
+        source:
+          type: string
+          minLength: 1
+        session_properties:
+          default: {}
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+        roles:
+          default: {}
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+        client_tags:
+          default: []
+          type: array
+          items:
+            type: object
+            properties:
+              value:
+                type: string
+                minLength: 1
+            required:
+              - value
+        http_headers:
+          default: []
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                minLength: 1
+              value:
+                type: string
+                minLength: 1
+                x-marimohub-secret: true
+            required:
+              - name
+              - value
+        extra_credentials:
+          default: []
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                pattern: ^[A-Za-z0-9_.-]+$
+              value:
+                type: string
+                minLength: 1
+                x-marimohub-secret: true
+            required:
+              - name
+              - value
+        timezone:
+          type: string
+          pattern: ^[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)*$
+        encoding:
+          minItems: 1
+          type: array
+          items:
+            type: object
+            properties:
+              value:
+                type: string
+                enum:
+                  - json
+                  - json+lz4
+                  - json+zstd
+            required:
+              - value
+        max_attempts:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        request_timeout_seconds:
+          type: number
+          exclusiveMinimum: 0
+        heartbeat_interval_seconds:
+          type: number
+          exclusiveMinimum: 0
+        isolation_level:
+          default: AUTOCOMMIT
+          type: string
+          enum:
+            - AUTOCOMMIT
+            - READ_UNCOMMITTED
+            - READ_COMMITTED
+            - REPEATABLE_READ
+            - SERIALIZABLE
+        legacy_primitive_types:
+          default: false
+          type: boolean
+        legacy_prepared_statements:
+          type: boolean
+      required:
+        - host
+        - auth

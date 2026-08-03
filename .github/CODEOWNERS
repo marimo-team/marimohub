@@ -1,0 +1,3 @@
+# Breaking-change allowlists suppress the schemas CI gate, so changes to them
+# require a maintainer's review rather than riding along in the same PR.
+/internal/schemas/allowed-breaking/ @mscolnick

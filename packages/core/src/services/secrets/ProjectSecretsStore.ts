@@ -2,7 +2,6 @@ import type { Bucket } from '../../ports/bucket';
 import type {
 	ManagedSecretCodec,
 	SecretEntryMeta,
-	SecretEnvelope,
 	SecretInput,
 	SecretResolver,
 	SecretsProvider,
@@ -12,31 +11,9 @@ import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { ValidationError } from '../../errors';
 import type { ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
+import type { StoredSecret } from '../../schema';
 import { listAllObjects } from '../catalog/storage';
 import { assertValidSecretName } from './secretName';
-
-/** The stored object at `projects/{pid}/secrets/<name>.json`, discriminated by kind. */
-type StoredSecret =
-	| {
-			kind: 'reference';
-			backend: string;
-			locator: string;
-			/** `'json'` fans the resolved JSON object out into one env var per key. */
-			expand?: 'json';
-			prefix?: string;
-			name: string;
-			created_by: UserId;
-			created_at: string;
-			updated_at: string;
-	  }
-	| {
-			kind: 'managed';
-			envelope: SecretEnvelope;
-			name: string;
-			created_by: UserId;
-			created_at: string;
-			updated_at: string;
-	  };
 
 export interface ProjectSecretsStoreOptions {
 	bucket: Bucket;
