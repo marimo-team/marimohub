@@ -45,7 +45,7 @@ the control plane (XSS). Run this recipe for a team you trust. See
 [Security → Kernel exposure](../security.md#kernel-exposure).
 :::
 
-## Image — add the `docker` CLI
+## Add the `docker` CLI to the image
 
 The published image (`ghcr.io/marimo-team/marimohub`) does not ship the `docker`
 CLI the compute backend shells out to. Add the static CLI in a small derived
@@ -197,9 +197,10 @@ single replica means a few seconds of downtime; data on the volume is untouched.
 ## Validate
 
 1. Check `https://hub.example.com/api/health`.
-2. In the startup logs, expect a **non-fatal** preflight warning that `fs`
-   storage enforces conditional writes within one process — the single-replica
-   reminder.
+2. In the startup logs, confirm the `compute` `preflight_check` is not a failure
+   (a missing CLI or unmounted socket prints one with the fix), and expect a
+   **non-fatal** warning that `fs` storage enforces conditional writes within one
+   process — the single-replica reminder.
 3. Sign in through your OIDC provider.
 4. Create a project and notebook, then start a kernel — a sandbox container
    appears in `docker ps`, published on `127.0.0.1`.

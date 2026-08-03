@@ -343,6 +343,23 @@ export class ContainerCompute implements SandboxProvider {
 		return null;
 	}
 
+	async healthCheck(): Promise<void> {
+		const res = await this.runner.run(['info']);
+		if (res.exitCode === 0) return;
+
+		const detail = (res.stderr || res.stdout).trim();
+		// spawnContainerRunner collapses every spawn failure to exit 127, so key off the OS
+		// error in stderr instead: ENOENT is a missing binary, EACCES one that can't execute.
+		// "not reachable" stays engine-neutral (Podman is daemonless in the common setup).
+		if (/\bENOENT\b/.test(detail)) {
+			throw new Error(`${this.config.engine} CLI is not installed or is not on PATH`);
+		}
+		if (/\bEACCES\b/.test(detail)) {
+			throw new Error(`${this.config.engine} CLI is not executable (permission denied)`);
+		}
+		throw new Error(`${this.config.engine} is not reachable${detail ? `: ${detail}` : ''}`);
+	}
+
 	async listActive(): Promise<ActiveSandbox[]> {
 		const res = await this.runner.run([
 			'ps',

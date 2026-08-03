@@ -457,7 +457,7 @@ describe('SandboxProvisioner', () => {
 			expect(result.counters).toMatchObject({ files_objects: 2, files_bytes: 40 });
 		});
 
-		it('unreachable sandbox: exec("true") throws -> provision rejects with "not available"', async () => {
+		it('reports the compute backend as unavailable when the reachability probe fails', async () => {
 			const { instance, calls } = makeFakeSandbox({ failExec: 'true' });
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
@@ -469,7 +469,7 @@ describe('SandboxProvisioner', () => {
 					hostname: 'localhost',
 					bucket: bucketConfig,
 				}),
-			).rejects.toThrow(/not available/i);
+			).rejects.toThrow('Sandbox compute backend is not available');
 
 			// Never got past the reachability check.
 			expect(calls.mountBucket).toHaveLength(0);

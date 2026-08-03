@@ -362,7 +362,7 @@ export class SandboxProvisioner {
 			});
 		} catch (err) {
 			throw new UnavailableError(
-				`Sandbox container is not available. Is Docker running? ` +
+				`Sandbox compute backend is not available. ` +
 					`(${err instanceof Error ? err.message : String(err)})`,
 			);
 		}

@@ -190,6 +190,73 @@ describe('compute check', () => {
 		});
 		expect((await run({}, deps)).by('compute')?.status).toBe('fail');
 	});
+
+	const remediationCases: {
+		name: string;
+		backend: string;
+		error: string;
+		expected: RegExp;
+	}[] = [
+		{
+			name: 'docker missing CLI → install guidance',
+			backend: 'docker',
+			error: 'docker CLI is not installed or is not on PATH',
+			expected: /Install the Docker CLI/i,
+		},
+		{
+			name: 'docker unreachable daemon → check the daemon, not install',
+			backend: 'docker',
+			error: 'docker is not reachable: Cannot connect to the Docker daemon',
+			expected: /Ensure the Docker daemon is running/i,
+		},
+		{
+			name: 'podman missing CLI → install guidance',
+			backend: 'podman',
+			error: 'podman CLI is not installed or is not on PATH',
+			expected: /Install the Podman CLI/i,
+		},
+		{
+			name: 'podman unreachable engine → check the engine, not install',
+			backend: 'podman',
+			error: 'podman is not reachable: rootless storage not configured',
+			expected: /Ensure Podman is configured and reachable/i,
+		},
+		{
+			name: 'unknown backend → generic fallback',
+			backend: 'kubernetes',
+			error: 'unauthorized',
+			expected: /Check the compute backend credentials and endpoint/i,
+		},
+	];
+
+	it.each(remediationCases)('remediation: $name', async ({ backend, error, expected }) => {
+		const deps = makeDeps({
+			compute: {
+				healthCheck: async () => {
+					throw new Error(error);
+				},
+			} as never,
+		});
+		const { by } = await run({ MARIMOHUB_COMPUTE_BACKEND: backend } as Env, deps);
+
+		expect(by('compute')).toMatchObject({
+			status: 'fail',
+			message: `${backend} compute unreachable: ${error}`,
+			remediation: expect.stringMatching(expected),
+		});
+	});
+
+	it('unreachable Docker remediation does not lead with "install the CLI"', async () => {
+		const deps = makeDeps({
+			compute: {
+				healthCheck: async () => {
+					throw new Error('docker is not reachable: Cannot connect to the Docker daemon');
+				},
+			} as never,
+		});
+		const { by } = await run({ MARIMOHUB_COMPUTE_BACKEND: 'docker' }, deps);
+		expect(by('compute')?.remediation).not.toMatch(/Install the Docker CLI/i);
+	});
 });
 
 describe('wif check', () => {

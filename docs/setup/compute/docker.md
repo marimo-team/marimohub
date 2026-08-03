@@ -13,6 +13,10 @@ MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1    # keep tokenless kernel ports on
 # MARIMOHUB_COMPUTE_DOCKER_NETWORK=marimo         # optional network to attach kernels to
 ```
 
+At boot the server shells out `docker info` as a preflight: a missing CLI
+(`spawn docker ENOENT`) or an unreachable daemon is reported as a **non-fatal**
+`preflight_check` log line with the fix, before anyone opens a notebook.
+
 For browsers on another machine, keep the loopback binding and use
 [`MARIMOHUB_SANDBOX_EXPOSURE=proxy`](/security#proxy-forwarded-through-the-app)
 so kernel traffic goes through the hub's authentication and per-session

@@ -189,12 +189,34 @@ async function checkCompute(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
 		await probe.call(deps.compute);
 		return { status: 'ok', message: `${backend} compute reachable` };
 	} catch (err) {
+		const message = errMsg(err);
 		return {
 			status: 'fail',
-			message: `${backend} compute unreachable: ${errMsg(err)}`,
-			remediation: 'Check the compute backend credentials and endpoint.',
+			message: `${backend} compute unreachable: ${message}`,
+			remediation: computeRemediation(backend, message),
 		};
 	}
+}
+
+/**
+ * Tailor remediation to what `healthCheck()` actually reported: a missing/broken CLI
+ * needs an install, whereas a present CLI that can't reach its engine needs the
+ * daemon/socket checked. Leading with "install the CLI" for a reachability failure — when
+ * the operator already has the CLI — is the misleading guidance this preflight removed.
+ */
+function computeRemediation(backend: string, message: string): string {
+	const cliProblem = /not installed|not on PATH|not executable/i.test(message);
+	if (backend === 'docker') {
+		return cliProblem
+			? 'Install the Docker CLI in the server environment (then mount /var/run/docker.sock or set DOCKER_HOST so it can reach the daemon).'
+			: 'Ensure the Docker daemon is running and reachable: mount /var/run/docker.sock or set DOCKER_HOST.';
+	}
+	if (backend === 'podman') {
+		return cliProblem
+			? 'Install the Podman CLI in the server environment.'
+			: 'Ensure Podman is configured and reachable (rootless storage and cgroups, or the remote connection if using `podman system service`).';
+	}
+	return 'Check the compute backend credentials and endpoint.';
 }
 
 /**
