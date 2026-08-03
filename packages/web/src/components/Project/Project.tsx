@@ -745,6 +745,7 @@ export function Project() {
 				title="Create New Notebook"
 				submitLabel="Create"
 				pendingLabel="Creating..."
+				width="lg"
 			>
 				<createNotebookForm.AppField name="name">
 					{(f) => <f.TextField label="Notebook Name" placeholder="my_analysis" autoFocus />}

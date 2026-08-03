@@ -2,11 +2,67 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import { systemKeys } from '@/api/queryKeys';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
-import { DEFAULT_BASE_IMAGE, baseImageOptions, useSandboxImages } from './baseImage';
+import {
+	DEFAULT_BASE_IMAGE,
+	baseImageOptions,
+	imageLabel,
+	parseImageRef,
+	useSandboxImages,
+} from './baseImage';
 
 afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
+});
+
+describe('parseImageRef', () => {
+	it('splits a tagged reference', () => {
+		expect(parseImageRef('ghcr.io/marimo-team/marimo-sandbox:py3.13-marimo0.23.16')).toEqual({
+			repository: 'ghcr.io/marimo-team/marimo-sandbox',
+			tag: 'py3.13-marimo0.23.16',
+			digest: undefined,
+		});
+	});
+
+	it('splits a digest pin', () => {
+		expect(parseImageRef('ghcr.io/marimo-team/marimo-sandbox@sha256:abc123')).toEqual({
+			repository: 'ghcr.io/marimo-team/marimo-sandbox',
+			tag: undefined,
+			digest: 'sha256:abc123',
+		});
+	});
+
+	it('does not mistake a registry port for a tag', () => {
+		expect(parseImageRef('localhost:5000/img')).toEqual({
+			repository: 'localhost:5000/img',
+			tag: undefined,
+			digest: undefined,
+		});
+	});
+});
+
+describe('imageLabel', () => {
+	it('prettifies the published marimo tag convention', () => {
+		expect(imageLabel('ghcr.io/marimo-team/marimo-sandbox:py3.13-marimo0.23.16')).toBe(
+			'marimo 0.23.16 · Python 3.13',
+		);
+	});
+
+	it('falls back to the bare tag for any other convention', () => {
+		expect(imageLabel('ghcr.io/acme/kernel:cuda12')).toBe('cuda12');
+	});
+
+	it('names the image and abbreviates the hash for a digest pin', () => {
+		expect(
+			imageLabel(
+				'ghcr.io/marimo-team/marimo-sandbox@sha256:574845a49db05398e1ebfb06182affe0fcfd6d9e',
+			),
+		).toBe('marimo-sandbox@574845a49db0');
+	});
+
+	it('uses the bare name when there is no tag or digest', () => {
+		expect(imageLabel('ghcr.io/acme/kernel')).toBe('kernel');
+	});
 });
 
 describe('baseImageOptions', () => {
@@ -16,11 +72,25 @@ describe('baseImageOptions', () => {
 		]);
 	});
 
-	it('describes Default with the first image and lists every image in order', () => {
+	it('names the default image and shows the full reference under each option', () => {
+		const latest = 'ghcr.io/marimo-team/marimo-sandbox:py3.13-marimo0.23.16';
+		const previous = 'ghcr.io/marimo-team/marimo-sandbox:py3.13-marimo0.23.11';
+		expect(baseImageOptions([latest, previous])).toEqual([
+			{
+				value: DEFAULT_BASE_IMAGE,
+				label: 'Default (marimo 0.23.16 · Python 3.13)',
+				description: latest,
+			},
+			{ value: latest, label: 'marimo 0.23.16 · Python 3.13', description: latest },
+			{ value: previous, label: 'marimo 0.23.11 · Python 3.13', description: previous },
+		]);
+	});
+
+	it('omits a description that would merely repeat the label', () => {
 		expect(baseImageOptions(['a', 'b'])).toEqual([
-			{ value: DEFAULT_BASE_IMAGE, label: 'Default', description: 'a' },
-			{ value: 'a', label: 'a' },
-			{ value: 'b', label: 'b' },
+			{ value: DEFAULT_BASE_IMAGE, label: 'Default (a)', description: 'a' },
+			{ value: 'a', label: 'a', description: undefined },
+			{ value: 'b', label: 'b', description: undefined },
 		]);
 	});
 });
