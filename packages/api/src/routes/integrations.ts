@@ -86,6 +86,18 @@ const KindDescriptorSchema = z
 			}),
 		),
 		supports_test: z.boolean(),
+		secret_sources: z.object({
+			inline: z.boolean(),
+			references: z.array(
+				z.object({
+					backend: z.string().min(1).openapi({ example: 'aws-sm' }),
+					title: z.string().min(1).openapi({ example: 'AWS Secrets Manager' }),
+					locator_placeholder: z.string().min(1),
+					locator_help: z.string().min(1),
+					docs_url: z.url().optional(),
+				}),
+			),
+		}),
 		/** Informational package requirements for the rendered sandbox contract. */
 		requirements: z.array(z.string()),
 	})
@@ -107,8 +119,8 @@ const IntegrationEntrySchema = z
 	})
 	.openapi('IntegrationEntry');
 
-// `config` is ALWAYS the redacted shape: secret fields appear as
-// `{ "$secret": { "set": true } }`, never as values or ciphertext.
+// `config` never contains plaintext or ciphertext. Inline values are redacted;
+// external references retain their backend and locator metadata.
 const IntegrationDetailSchema = IntegrationEntrySchema.extend({
 	config: ConfigSchema,
 	change_note: z.string().optional(),
@@ -164,7 +176,12 @@ const UpdateIntegrationBody = z
 const TestIntegrationBody = z
 	.discriminatedUnion('source', [
 		z
-			.object({ source: z.literal('draft'), kind: z.string().min(1), config: ConfigSchema })
+			.object({
+				source: z.literal('draft'),
+				kind: z.string().min(1),
+				config: ConfigSchema,
+				id: IntegrationIdSchema.optional(),
+			})
 			.strict(),
 		z.object({ source: z.literal('stored'), id: IntegrationIdSchema }).strict(),
 	])
@@ -316,7 +333,7 @@ const copyIntegration = createRoute({
 	responses: {
 		201: jsonContent(
 			z.object({ success: z.literal(true), data: IntegrationDetailSchema }),
-			'Integration copied (config redacted; secrets re-encrypted for this project)',
+			'Integration copied (inline secrets re-encrypted; external references preserved)',
 		),
 		...commonErrors(),
 		...errorResponses(403, 404),

@@ -3050,355 +3050,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/secrets': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** List a project's secrets (metadata only — never a value) */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Secret entries (names, kinds, reference locators) */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['SecretEntry'][];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Insufficient role */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
-		put?: never;
-		post?: never;
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
-	'/api/v1/projects/{pid}/secrets/{name}': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		/** Create or overwrite a project secret (admin only) */
-		put: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					name: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': components['schemas']['SecretInput'];
-				};
-			};
-			responses: {
-				/** @description Secret created or overwritten */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['SecretEntry'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Insufficient role */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
-		post?: never;
-		/** Delete a project secret (admin only) */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					name: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Secret deleted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Insufficient role */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
-	'/api/v1/projects/{pid}/secrets/validate': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		put?: never;
-		/**
-		 * Test that a reference resolves, without saving it (admin only)
-		 * @description Dry-run: attempts to resolve the reference so a broken locator surfaces before it fails a session closed. Never returns the value — only ok/reason.
-		 */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': components['schemas']['SecretInput'];
-				};
-			};
-			responses: {
-				/** @description Whether the input resolves */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['SecretValidateResult'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Insufficient role */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 	'/api/v1/integrations/kinds': {
 		parameters: {
 			query?: never;
@@ -4061,7 +3712,7 @@ export interface paths {
 				};
 			};
 			responses: {
-				/** @description Integration copied (config redacted; secrets re-encrypted for this project) */
+				/** @description Integration copied (inline secrets re-encrypted; external references preserved) */
 				201: {
 					headers: {
 						[name: string]: unknown;
@@ -5668,44 +5319,6 @@ export interface components {
 			/** @enum {string} */
 			edit_intent?: 'temporary';
 		};
-		SecretEntry: {
-			name: string;
-			/** @enum {string} */
-			kind: 'managed' | 'reference';
-			ref?: {
-				/** @example aws-sm */
-				backend: string;
-				/** @example prod/ai#OPENAI_API_KEY */
-				locator: string;
-				/** @enum {string} */
-				expand?: 'json';
-				prefix?: string;
-			};
-			created_by: string;
-			created_at: string;
-			updated_at: string;
-		};
-		SecretInput:
-			| {
-					/** @enum {string} */
-					kind: 'managed';
-					value: string;
-			  }
-			| {
-					/** @enum {string} */
-					kind: 'reference';
-					/** @example aws-sm */
-					backend: string;
-					/** @example prod/ai#OPENAI_API_KEY */
-					locator: string;
-					/** @enum {string} */
-					expand?: 'json';
-					prefix?: string;
-			  };
-		SecretValidateResult: {
-			ok: boolean;
-			reason?: string;
-		};
 		IntegrationKind: {
 			/** @example postgres */
 			kind: string;
@@ -5735,6 +5348,19 @@ export interface components {
 				};
 			};
 			supports_test: boolean;
+			secret_sources: {
+				inline: boolean;
+				references: {
+					/** @example aws-sm */
+					backend: string;
+					/** @example AWS Secrets Manager */
+					title: string;
+					locator_placeholder: string;
+					locator_help: string;
+					/** Format: uri */
+					docs_url?: string;
+				}[];
+			};
 			requirements: string[];
 		};
 		IntegrationPage: {
@@ -5794,6 +5420,7 @@ export interface components {
 					config: {
 						[key: string]: unknown;
 					};
+					id?: string;
 			  }
 			| {
 					/** @enum {string} */

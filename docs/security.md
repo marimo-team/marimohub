@@ -106,7 +106,7 @@ activity. See
 Kernel access follows the same gates. [Notebook apps](/apps) are editor-only by
 default; `MARIMOHUB_VIEWER_MODE=applications` (or `ephemeral-sandbox`) opens
 them to viewers — a deliberate trade-off, because the app kernel runs notebook
-code with the project's secrets and federated credentials injected. See
+code with the project's integration secrets and federated credentials injected. See
 [Notebook apps → Who can do what](/apps#who-can-do-what).
 
 Persistent editor access also depends on the

@@ -19,7 +19,6 @@ import type {
 	Session as ClientSession,
 	DeploymentInfo as ClientDeploymentInfo,
 	User as ClientUser,
-	SecretEntry as ClientSecretEntry,
 	IntegrationKind as ClientIntegrationKind,
 	IntegrationEntry as ClientIntegrationEntry,
 	IntegrationDetail as ClientIntegrationDetail,
@@ -55,8 +54,6 @@ export type GitNotebookCreateResult = ClientGitNotebookCreateResult;
 export type SyncToken = ClientSyncToken;
 export type Session = ClientSession;
 export type EditorSessionState = components['schemas']['EditorSessionState'];
-/** A project secret entry (metadata only — never a managed value). */
-export type SecretEntry = ClientSecretEntry;
 /** An integration kind's catalog card + JSON Schema for its config form. */
 export type IntegrationKind = ClientIntegrationKind;
 /** A project integration list item (no config). */

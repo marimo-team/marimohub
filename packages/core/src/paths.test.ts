@@ -66,15 +66,6 @@ describe('paths', () => {
 		`);
 	});
 
-	it('secret() encodes a name so a "/" or ".." segment cannot escape the secrets prefix', () => {
-		const proj = paths.project(pid);
-		const key = proj.secret('../../etc/passwd');
-		expect(key.startsWith(proj.secretsPrefix)).toBe(true);
-		// The path separators are percent-encoded, so the name stays a single object
-		// under `secrets/` and cannot traverse into a parent directory.
-		expect(key.slice(proj.secretsPrefix.length)).not.toContain('/');
-	});
-
 	it('identity() encodes a user id so a "/" or ".." segment cannot escape the identities prefix', () => {
 		const key = paths.identity('../../evil' as UserId);
 		expect(key.startsWith(paths.identitiesPrefix)).toBe(true);

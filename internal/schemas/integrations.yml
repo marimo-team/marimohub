@@ -153,14 +153,14 @@ paths:
         '204':
           description: Accepted.
   /kinds/custom_env/config:
-    summary: Custom environment
-    description: Inject arbitrary environment variables — plain or secret — into
-      every session.
+    summary: Environment variables
+    description: Inject a versioned bundle of plain or secret environment variables.
     x-kind-schema-version: 1
     x-category: other
     x-brand-color: '#64748B'
     x-secret-paths:
       - secrets.*.value
+      - secret_bundles.*.value
     x-supports-test: false
     x-requirements: []
     get:
@@ -1202,7 +1202,8 @@ components:
             type: string
         secrets:
           default: []
-          description: Secret environment variables, write-only after save
+          description: Secret environment variables from encrypted values or an external
+            manager
           type: array
           items:
             type: object
@@ -1216,6 +1217,23 @@ components:
                 x-marimohub-secret: true
             required:
               - name
+              - value
+        secret_bundles:
+          default: []
+          description: JSON secret objects expanded into one environment variable per key
+          type: array
+          items:
+            type: object
+            properties:
+              value:
+                type: string
+                minLength: 1
+                x-marimohub-secret: true
+                description: A JSON object containing environment variable values
+              prefix:
+                type: string
+                pattern: ^[A-Z_][A-Z0-9_]*$
+            required:
               - value
     databricks:
       type: object

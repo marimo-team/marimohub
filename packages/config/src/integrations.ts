@@ -4,7 +4,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import { createGuardedProbe } from './integrationProbe';
-import { makeManagedCodec } from './secrets';
+import { makeSecretSources } from './secrets';
 
 /**
  * Wires the bucket-backed integration provider when explicitly enabled. Opt-in
@@ -29,10 +29,12 @@ export function makeIntegrations(
 			{ variable: 'MARIMOHUB_INTEGRATIONS', docs: 'docs/integrations.md' },
 		);
 	}
+	const secretSources = makeSecretSources(env);
 	const options = {
 		bucket,
 		registry: defaultRegistry(),
-		codec: makeManagedCodec(env),
+		codec: secretSources.codec,
+		resolvers: secretSources.resolvers,
 		probe: makeProbe(env),
 		metrics,
 	};

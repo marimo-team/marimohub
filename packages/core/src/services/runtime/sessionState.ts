@@ -87,8 +87,8 @@ export interface SessionModePolicy {
 	/**
 	 * What a viewer-admitted session of this mode is (`VIEWER_SESSION_MODES`
 	 * says whether one is admitted at all): `ephemeral` — their own throwaway,
-	 * no WIF/secrets, discarded at teardown; `shared` — the same session an
-	 * editor would get (a per-viewer throwaway app would be incoherent).
+	 * no WIF credentials or integration secrets, discarded at teardown; `shared` —
+	 * the same session an editor would get (a per-viewer app would be incoherent).
 	 */
 	viewerSession: 'ephemeral' | 'shared';
 }
@@ -113,7 +113,7 @@ export const MODE_POLICY: Record<SessionMode, SessionModePolicy> = {
 	// back. Copy-only because a mounted workspace would let app code write
 	// through to the mirror the edit session owns. Viewer admission is the
 	// deployment's call (MARIMOHUB_VIEWER_MODE=applications and up): a
-	// viewer-reachable app holding WIF credentials or project secrets can be
+	// viewer-reachable app holding WIF credentials or integration secrets can be
 	// prompted (via app inputs) to exfiltrate them, so it stays off by default.
 	app: {
 		reuseScope: 'per-notebook',

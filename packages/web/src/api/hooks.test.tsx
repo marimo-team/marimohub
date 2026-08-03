@@ -8,7 +8,6 @@ import {
 	useEditorSessionQuery,
 	useNotebookHtmlQuery,
 	useNotebookQuery,
-	useProjectSecretsQuery,
 	useRestartApp,
 	useRestartSession,
 	useStartSession,
@@ -188,42 +187,6 @@ describe('useNotebookQuery', () => {
 		// Long enough for several 20ms ticks to have fired if polling were armed.
 		await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
 		expect(fetchMock).toHaveBeenCalledTimes(1);
-	});
-});
-
-describe('useProjectSecretsQuery', () => {
-	it('resolves null (not an error) when the route 404s as NOT_FOUND', async () => {
-		const fetchMock = stubFetch(async () => jsonError('NOT_FOUND', 'secrets disabled', 404));
-
-		const { result } = renderHookWithClient(() => useProjectSecretsQuery(PID), {
-			toaster: false,
-		});
-
-		await waitFor(() => expect(result.current.isSuccess).toBe(true));
-		expect(result.current.data).toBeNull();
-		expect(result.current.error).toBeNull();
-		// A disabled feature is a settled answer — it must not be retried.
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-	});
-
-	it('surfaces any other error', async () => {
-		stubFetch(async () => jsonError('INTERNAL_ERROR', 'boom', 500));
-
-		const { result } = renderHookWithClient(() => useProjectSecretsQuery(PID), {
-			toaster: false,
-		});
-
-		await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5_000 });
-		expect(result.current.error?.message).toBe('boom');
-	}, 10_000);
-
-	it('does not fetch while disabled', async () => {
-		const fetchMock = stubFetch(async () => jsonOk([]));
-
-		renderHookWithClient(() => useProjectSecretsQuery(PID, false), { toaster: false });
-
-		await act(async () => {});
-		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
 

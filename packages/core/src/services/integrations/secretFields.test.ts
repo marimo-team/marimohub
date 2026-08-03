@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ValidationError } from '../../errors';
-import type { SecretEnvelope } from '../../ports/secrets';
+import type { SecretEnvelope, SecretRef } from '../../ports/secrets';
 import {
 	findStraySecretBoxes,
 	isKeepMarker,
@@ -40,12 +40,15 @@ function fakeSeal(calls: string[] = []) {
 				},
 			});
 		},
+		reference: (ref: SecretRef): Promise<StoredSecretValue> =>
+			Promise.resolve({ $secret: { kind: 'reference', ...ref } }),
 	};
 }
 
 const fakeOpen = {
 	decrypt: (envelope: SecretEnvelope): Promise<string> =>
 		Promise.resolve(atob(envelope.ciphertext)),
+	resolve: (ref: SecretRef): Promise<string> => Promise.resolve(`resolved:${ref.locator}`),
 };
 
 describe('secretPaths', () => {
@@ -109,7 +112,28 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		});
 	});
 
-	it('redacts every stored secret to { $secret: { set: true } }', async () => {
+	it('stores, exposes, and resolves external references without resolving on read', async () => {
+		const authoringWithReference = structuredClone(authoring);
+		authoringWithReference.auth.password = {
+			$secret: { kind: 'reference', backend: 'vault', locator: 'teams/data#password' },
+		} as never;
+		const stored = await sealConfig({
+			schema,
+			paths,
+			authoring: authoringWithReference,
+			seal: fakeSeal(),
+		});
+		expect((stored.auth as { password: unknown }).password).toEqual({
+			$secret: { kind: 'reference', backend: 'vault', locator: 'teams/data#password' },
+		});
+		expect((redactConfig(stored, paths).auth as { password: unknown }).password).toEqual({
+			$secret: { kind: 'reference', backend: 'vault', locator: 'teams/data#password' },
+		});
+		const opened = await openConfig({ stored, paths, open: fakeOpen });
+		expect((opened.auth as { password: unknown }).password).toBe('resolved:teams/data#password');
+	});
+
+	it('redacts every managed secret without exposing its envelope', async () => {
 		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
 		const redacted = redactConfig(stored, paths);
 		expect(redacted.auth).toEqual({ method: 'basic', user: 'admin', password: REDACTED_SECRET });
@@ -155,6 +179,37 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		).rejects.toThrow(ValidationError);
 	});
 
+	it('does not let a managed keep-marker preserve an external reference', async () => {
+		const previous = await sealConfig({
+			schema,
+			paths,
+			authoring: {
+				...authoring,
+				auth: {
+					method: 'basic',
+					user: 'admin',
+					password: {
+						$secret: { kind: 'reference', backend: 'vault', locator: 'apps/prod#token' },
+					},
+				},
+			},
+			seal: fakeSeal(),
+		});
+		await expect(
+			sealConfig({
+				schema,
+				paths,
+				authoring: {
+					...authoring,
+					auth: { method: 'basic', user: 'admin', password: REDACTED_SECRET },
+				},
+				previous,
+				seal: fakeSeal(),
+			}),
+		).rejects.toThrow(/no stored encrypted value to keep/);
+		expect(isKeepMarker({ $secret: { kind: 'reference', set: true } })).toBe(false);
+	});
+
 	it('rejects a forged stored envelope submitted as authoring input', async () => {
 		const forged = {
 			...authoring,
@@ -166,7 +221,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		};
 		await expect(
 			sealConfig({ schema, paths, authoring: forged, seal: fakeSeal() }),
-		).rejects.toThrow(/must be a string/);
+		).rejects.toThrow(/must be an encrypted value, an external reference, or a keep marker/);
 	});
 
 	it('surfaces schema violations without echoing secret values', async () => {
@@ -269,7 +324,7 @@ describe('keep-markers in nested arrays', () => {
 				previous,
 				seal: fakeSeal(),
 			}),
-		).rejects.toThrow(/no stored value to keep/);
+		).rejects.toThrow(/no stored encrypted value to keep/);
 	});
 });
 

@@ -353,7 +353,7 @@ class EditorClaimLostError extends Error {
  * classification: a viewer's admitted session is what
  * `MODE_POLICY[mode].viewerSession` says — their own ephemeral throwaway for
  * `edit`, the shared singleton for `app` (identical to an editor-started one,
- * WIF/secrets included).
+ * with WIF credentials and integration secrets).
  */
 function authorizeSessionStart(
 	project: Project,
@@ -1067,31 +1067,7 @@ app.openapi(createSession, async (c) => {
 						return marimoConfigToSessionEnv(contributors);
 					};
 
-					// Project secrets: unlike WIF/AI, this FAILS CLOSED — a key the author
-					// configured is load-bearing, so a resolve failure aborts session create
-					// rather than starting a kernel that silently lacks it. Viewer sandboxes
-					// are restricted; temporary editor sandboxes retain editor credentials.
-					const resolveSecretVars = async () => {
-						if (!(deps.secrets && !restrictedViewerCredentials)) return;
-						try {
-							const vars = await deps.secrets.resolve(pid);
-							observer.tag('secrets_injected_count', Object.keys(vars).length);
-							return vars;
-						} catch (err) {
-							observer.tag('secret_resolution_failed', true);
-							// The resolver's message can quote the value it failed on, so the
-							// error must not be carried anywhere — as `cause` it would reach the
-							// request log through `describeError`'s chain.
-							for (const [key, value] of Object.entries(errorMetadata(err))) {
-								observer.tag(`secrets_${key}`, value);
-							}
-							throw new UnavailableError(
-								'secret_resolution_failed: could not resolve this project’s secrets',
-							);
-						}
-					};
-
-					// Integrations: like secrets, FAILS CLOSED — a configured data source is
+					// Integrations FAIL CLOSED — a configured data source is
 					// load-bearing, so a render failure aborts provisioning rather than
 					// starting a sandbox with partial config. Viewer sandboxes are restricted;
 					// temporary editor sandboxes retain editor credentials.
@@ -1120,15 +1096,12 @@ app.openapi(createSession, async (c) => {
 						}
 					};
 
-					// The four sources are independent, so resolve them together. Precedence
-					// on an env-name collision, lowest to highest: project secrets <
-					// integrations < system/WIF/marimo-config — user-supplied values can
-					// never shadow the hub's own injected vars.
+					// Resolve independent sources together. Integrations have lower precedence
+					// than system, WIF, and marimo configuration.
 					const resolveSessionEnv = async (): Promise<SessionEnv | undefined> => {
-						const [wifVars, marimoEnv, secretVars, integrationEnv] = await Promise.all([
+						const [wifVars, marimoEnv, integrationEnv] = await Promise.all([
 							resolveWifVars(),
 							resolveMarimoConfigEnv(),
-							resolveSecretVars(),
 							resolveIntegrationEnv(),
 						]);
 						let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
@@ -1136,13 +1109,12 @@ app.openapi(createSession, async (c) => {
 						// The lower-precedence layers merge as the BASE, with everything
 						// resolved so far as the winning overlay.
 						if (integrationEnv) env = mergeSessionEnv(integrationEnv, env ?? {});
-						if (secretVars) env = mergeSessionEnv({ vars: secretVars }, env ?? {});
 						return env;
 					};
 
 					// Unawaited on purpose: provision awaits it at the inject phase, so this
 					// resolution overlaps the sandbox create (the dominant cost). The no-op
-					// catch only marks the rejection handled — a fail-closed secrets error
+					// catch only marks the rejection handled — a fail-closed integration error
 					// would otherwise land as an unhandledRejection during the create.
 					const sessionEnv = resolveSessionEnv();
 					void sessionEnv.catch(() => {});
@@ -1323,8 +1295,8 @@ app.openapi(createSession, async (c) => {
 		});
 	}
 
-	// An app start puts a (possibly secrets/WIF-bearing) kernel in front of the
-	// whole admitted audience — who did it belongs in the project's event log.
+	// An app start can put integration secrets and WIF credentials in front of the
+	// whole admitted audience, so who started it belongs in the project's event log.
 	// Best-effort like every audit append.
 	if (MODE_POLICY[mode].singleton) {
 		await deps.services.events

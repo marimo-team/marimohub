@@ -40,7 +40,7 @@ Know the blast radius before you create one:
 
 - **A token is full account power.** There are no scopes in v1 — a token can do
   everything its user can on every route except token management: create and
-  delete notebooks, read and write project secrets, start sessions, and so on.
+  delete notebooks, manage integrations, and start sessions.
   A leaked token is therefore equivalent to a compromised account. Treat it like
   a password. Scoped (read-only, per-project) tokens are a planned follow-up.
 - **Expiry is optional.** Omitting `expires_in_days` mints a token that never

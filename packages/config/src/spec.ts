@@ -910,7 +910,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'(static | applications | ephemeral-sandbox); each tier is a superset of the ' +
 							'previous. `static` serves the last captured HTML snapshot (no compute, no code ' +
 							'execution); `applications` also lets viewers use notebooks running as shared ' +
-							'apps (note: the app kernel runs with the project’s secrets/federated ' +
+							'apps (note: the app kernel runs with the project’s integration secrets/federated ' +
 							'credentials, so only enable it for audiences you trust with the app’s ' +
 							'outputs); `ephemeral-sandbox` additionally provisions a real edit kernel whose ' +
 							'edits are discarded on teardown (no version, snapshot, or workspace ' +
@@ -1123,29 +1123,20 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		],
 	},
 	{
-		name: 'Project secrets',
-		selector: 'MARIMOHUB_SECRETS_BACKEND',
-		selectorDefault: 'none',
+		name: 'Integration secret sources',
 		description:
-			'Optional: let project admins register third-party keys (e.g. `OPENAI_API_KEY`, a database password) that are injected into every notebook sandbox as environment variables. Prefer a `reference` — a pointer into an external secret manager (AWS Secrets Manager, …) whose value never touches the hub at rest (the secure default). A `managed` value, which the hub holds encrypted-in-bucket, is opt-in and higher-risk (the hub stores the ciphertext and its key) — it requires a separately-configured codec and is off unless enabled. A resolve failure fails the session closed. Off by default. See docs/secrets.md.',
+			'Configure how integration secret fields are supplied. Inline values are encrypted before storage. External references store only backend and locator metadata. Supported connection tests and new sessions resolve them. Saving does not fetch the value. Resolution fails closed. See docs/integration-secrets.md.',
 		backends: [
 			{
-				name: 'Off',
-				selectorValue: 'none',
-				description: 'No project secrets. The routes 404 and nothing is injected.',
-				vars: [],
-			},
-			{
-				name: 'Bucket-backed store',
-				selectorValue: 'bucket',
+				name: 'Inline encrypted values',
 				description:
-					'Persist secret entries in the deployment bucket (`projects/{pid}/secrets/`). Reference entries store only a pointer; enable an external-manager backend below to resolve them. Managed (encrypted-in-bucket) values require the KEK below.',
+					'Encrypt secret fields with an operator-held key before an integration version is written to the deployment bucket.',
 				vars: [
 					{
 						id: 'MARIMOHUB_SECRETS_KEK',
-						name: 'Managed-secret KEK',
+						name: 'Integration-secret KEK',
 						description:
-							'Operator-held key material — a generated 32-byte key in its canonical encoding, i.e. the 44-character output of `openssl rand -base64 32` (ending in `=`) or the 64 hex characters of `openssl rand -hex 32` — for `managed` values and integration secret fields: the hub derives a per-object AES-256-GCM key from it, so the bucket only ever sees ciphertext. A value that is not shaped like a generated key — a passphrase, a longer or shorter key, a non-canonical encoding — is rejected at startup: no password stretching is applied to the KEK, so only real key material is safe here. The check verifies the encoding’s shape; it cannot measure entropy. Unset disables managed values (references still work). Losing it makes existing managed values unrecoverable.',
+							'Generated 32-byte key material in canonical base64 or hex encoding. The hub derives a per-object AES-256-GCM key, so integration versions contain only ciphertext. Unset disables inline encrypted values. Losing the key makes existing inline values unrecoverable.',
 						secret: true,
 					},
 					{
@@ -1158,9 +1149,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				],
 			},
 			{
-				name: 'AWS Secrets Manager (reference)',
+				name: 'AWS Secrets Manager references',
 				description:
-					'Resolve `reference` entries with `backend: aws-sm` against AWS Secrets Manager. The hub needs only `secretsmanager:GetSecretValue`; it never writes your manager. A locator is `secret-id-or-arn[#json-key]`. Enabled when a region (or `MARIMOHUB_SECRETS_AWS=true`) is set; credentials default to the AWS provider chain (IRSA / role / ambient).',
+					'Resolve integration references with `backend: aws-sm`. The hub needs only `secretsmanager:GetSecretValue` and never writes to the manager. A locator is `secret-id-or-arn[#json-key]`. Enabled by a region or `MARIMOHUB_SECRETS_AWS=true`.',
 				vars: [
 					{
 						id: 'MARIMOHUB_SECRETS_AWS',
@@ -1195,13 +1186,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'In-memory cache TTL for resolved values, bounding GetSecretValue calls across back-to-back provisions. `0` (default) disables caching.',
 						default: '0',
 					},
-					{
-						id: 'MARIMOHUB_SECRETS_AWS_ROLE_ARN',
-						name: 'AWS role ARN (reserved)',
-						description:
-							'Reserved for the future `AssumeRoleWithWebIdentity` federation off the hub OIDC issuer (no long-lived hub credential). Not yet implemented.',
-						example: 'arn:aws:iam::123456789012:role/marimohub-secrets',
-					},
 				],
 			},
 		],
@@ -1211,7 +1195,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		selector: 'MARIMOHUB_INTEGRATIONS',
 		selectorDefault: 'off',
 		description: `Versioned data-source configuration supports databases and warehouses,
-query engines, PyIceberg catalogs, object storage, ML platforms, and custom
+query engines, PyIceberg catalogs, object storage, ML platforms, and
 environment variables — see the [integrations guide](./integrations.md) for the
 full list. Project admins configure one project. Super admins can configure
 organization-wide integrations that are available to all projects.
@@ -1226,10 +1210,12 @@ a rolling deployment. See the two-phase policy in
 \`development_docs/migrations.md\`. The feature requires only the deployment
 bucket.
 
-Secret fields use the managed-secret KEK (\`MARIMOHUB_SECRETS_KEK\`). Without a
-KEK, you can save only configurations without secrets. A rendering error blocks
-the session. Disable or override the failing integration to restore access. See
-\`docs/integrations.md\`.`,
+Secret fields accept inline encrypted values when \`MARIMOHUB_SECRETS_KEK\` is
+configured, or external references when a resolver is configured. References
+resolve during supported connection tests or session rendering. Saving a
+reference does not fetch its value. A rendering error blocks the session.
+Disable or override the failing integration to restore access. See
+\`docs/integration-secrets.md\`.`,
 		backends: [
 			{
 				name: 'On',

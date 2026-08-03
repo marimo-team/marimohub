@@ -64,9 +64,8 @@ Resource groups:
 - **Sessions** — list, create, inspect, heartbeat, and stop kernel sessions.
   The session routes also expose editor ownership and exclusive takeover.
 - **Integrations** — discover integration kinds and manage project or
-  organization integration instances. Version-history lists use pagination.
-- **Secrets** — list secret metadata, store or delete project secrets, and test
-  secret references without returning secret values.
+  organization integration instances. Each kind reports its available secret
+  sources. Version-history lists use pagination.
 - **Users and tokens** — resolve or search users, and create, list, or revoke
   personal access tokens.
 - **System** — `GET /api/v1/version` and `GET /api/v1/capabilities` report
@@ -94,8 +93,8 @@ get the next page. Items are ordered newest-first. A `next_cursor` value of
 `null` marks the final page. The cursor is opaque.
 
 Some small or naturally bounded collections still return arrays. These include
-project members, secrets, API tokens, integration kinds, audit events, and user
-search results. The OpenAPI response schema is authoritative for each route.
+project members, API tokens, integration kinds, audit events, and user search
+results. The OpenAPI response schema is authoritative for each route.
 `GET /api/v1/capabilities` reports the default and maximum page sizes and other
 server limits.
 
@@ -105,6 +104,16 @@ Every read (`GET`) carries a weak `ETag` and `Cache-Control: no-cache`. Send the
 ETag back as `If-None-Match` to revalidate; an unchanged resource answers `304
 Not Modified` with no body. Browsers do this automatically, which keeps the
 session-status poll loop cheap.
+
+### Integration updates
+
+An integration configuration is one versioned resource. The API does not
+provide per-secret update routes. Get the integration and keep its ETag before
+you change its configuration. Send that ETag as `If-Match` with the write.
+
+If another client saves first, the stale write fails. Read the current
+integration and apply the change again. Each successful configuration update
+appends an immutable version.
 
 ## Typed client
 

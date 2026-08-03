@@ -237,14 +237,10 @@ describe('Session routes (app mode) — deletion, provisioning and cap races', (
 			throw err;
 		}
 
-		function secretsDeps() {
+		function integrationDeps() {
 			return {
-				secrets: {
-					list: async () => [],
-					put: async () => ({}) as never,
-					delete: async () => {},
-					validate: async () => {},
-					resolve: async () => leakySecrets(),
+				integrations: {
+					resolveForSession: async () => leakySecrets(),
 				} as never,
 			};
 		}
@@ -266,12 +262,12 @@ describe('Session routes (app mode) — deletion, provisioning and cap races', (
 			}
 		}
 
-		it('a secret-resolution failure is not echoed to the caller or persisted', async () => {
+		it('an integration secret-resolution failure is not echoed or persisted', async () => {
 			const api = createTestApi({
 				bucket,
 				userId: ACTOR,
 				compute: makeFakeCompute(),
-				deps: secretsDeps(),
+				deps: integrationDeps(),
 			});
 
 			const res = await api.request('POST', sessionsPath(), { mode: 'app' });
@@ -282,12 +278,12 @@ describe('Session routes (app mode) — deletion, provisioning and cap races', (
 			await assertNoLeak(sessions[0].session_id);
 		});
 
-		it('a secret-resolution failure logs no provider message, stack, or secret value', async () => {
+		it('an integration secret-resolution failure logs no provider message or value', async () => {
 			const api = createTestApi({
 				bucket,
 				userId: ACTOR,
 				compute: makeFakeCompute(),
-				deps: secretsDeps(),
+				deps: integrationDeps(),
 			});
 
 			const [, logs] = await captureConsole(() =>
@@ -298,12 +294,12 @@ describe('Session routes (app mode) — deletion, provisioning and cap races', (
 			expect(logs).not.toContain('vault denied');
 		});
 
-		it('a secret-resolution failure logs sanitized provider metadata', async () => {
+		it('an integration secret-resolution failure logs sanitized provider metadata', async () => {
 			const api = createTestApi({
 				bucket,
 				userId: ACTOR,
 				compute: makeFakeCompute(),
-				deps: secretsDeps(),
+				deps: integrationDeps(),
 			});
 
 			const [, logs] = await captureConsole(() =>
@@ -311,7 +307,7 @@ describe('Session routes (app mode) — deletion, provisioning and cap races', (
 			);
 
 			// Enough to triage the failure without the resolver's own text.
-			expect(logs).toContain('secret_resolution_failed');
+			expect(logs).toContain('integration_render_failed');
 			expect(logs).toContain('VaultError');
 			expect(logs).toContain('AccessDenied');
 			expect(logs).toContain('GetSecretValue');

@@ -6,7 +6,6 @@ import { z } from 'zod';
 import {
 	AppWindow,
 	ArrowLeft,
-	Blocks,
 	ChevronDown,
 	Container,
 	Copy,
@@ -16,7 +15,6 @@ import {
 	FolderArchive,
 	GitBranch,
 	History,
-	KeyRound,
 	MoreHorizontal,
 	Pencil,
 	Play,
@@ -24,6 +22,7 @@ import {
 	Power,
 	RefreshCw,
 	SearchX,
+	Settings2,
 	Trash2,
 	Upload,
 	Users,
@@ -72,8 +71,7 @@ import {
 } from '@/api/hooks';
 import { AppSessionIndicator } from './AppSessionIndicator';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
-import { ProjectSecretsDialog } from './ProjectSecretsDialog';
-import { ProjectIntegrationsDialog } from './ProjectIntegrationsDialog';
+import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { ChangeBaseImageDialog } from '@/components/Notebook/ChangeBaseImageDialog';
 import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/baseImage';
@@ -153,8 +151,7 @@ export function Project() {
 	// Project-level edit/delete (this page's project, not the notebooks).
 	const editProjectModal = useDisclosure();
 	const deleteProjectModal = useDisclosure();
-	const secretsModal = useDisclosure();
-	const integrationsModal = useDisclosure();
+	const environmentModal = useDisclosure();
 	const membersModal = useDisclosure();
 
 	const { data: notebooks } = useNotebooksQuery(pid!);
@@ -259,19 +256,14 @@ export function Project() {
 		computeProfile: DEFAULT_COMPUTE_PROFILE,
 	});
 
-	const handleSaveSecrets = (enabled: boolean) => {
-		updateProject.mutate(
-			{ projectId: pid!, federation: { enabled } },
-			{
-				onSuccess: () => {
-					toast.success(
-						enabled ? 'Federated bucket access enabled' : 'Federated bucket access disabled',
-					);
-					secretsModal.close();
-				},
-				onError: toastError,
-			},
-		);
+	const handleSaveCloudAccess = async (enabled: boolean) => {
+		try {
+			await updateProject.mutateAsync({ projectId: pid!, federation: { enabled } });
+			toast.success(enabled ? 'Federated cloud access enabled' : 'Federated cloud access disabled');
+		} catch (error) {
+			toastError(error);
+			throw error;
+		}
 	};
 
 	// Map each notebook to its "most alive" session so a row shows the strongest state.
@@ -552,22 +544,12 @@ export function Project() {
 							<Users className="size-4" />
 						</IconButton>
 						<IconButton
-							label="Project secrets"
-							tooltip="Project secrets"
-							onPress={secretsModal.open}
+							label="Environment & access"
+							tooltip="Environment & access"
+							onPress={environmentModal.open}
 						>
-							<KeyRound className="size-4" />
+							<Settings2 className="size-4" />
 						</IconButton>
-						{/* Older servers omit the integrations capability entirely. */}
-						{capabilities?.integrations?.available && (
-							<IconButton
-								label="Project integrations"
-								tooltip="Project integrations"
-								onPress={integrationsModal.open}
-							>
-								<Blocks className="size-4" />
-							</IconButton>
-						)}
 						<IconButton label="Edit project" tooltip="Edit project" onPress={editProjectModal.open}>
 							<Pencil className="size-4" />
 						</IconButton>
@@ -940,18 +922,16 @@ export function Project() {
 				<ProjectMembersDialog isOpen onClose={membersModal.close} project={project} />
 			)}
 
-			<ProjectSecretsDialog
-				isOpen={secretsModal.isOpen}
-				onClose={secretsModal.close}
-				project={project}
-				available={capabilities?.federation.available ?? false}
-				isPending={updateProject.isPending}
-				onSave={handleSaveSecrets}
-			/>
-
-			{/* Mount on open so integration schemas and entries are fetched on demand. */}
-			{integrationsModal.isOpen && (
-				<ProjectIntegrationsDialog isOpen onClose={integrationsModal.close} project={project} />
+			{environmentModal.isOpen && (
+				<ProjectEnvironmentDialog
+					isOpen
+					onClose={environmentModal.close}
+					project={project}
+					integrationsAvailable={capabilities?.integrations?.available ?? false}
+					cloudAccessAvailable={capabilities?.federation.available ?? false}
+					isPending={updateProject.isPending}
+					onSaveCloudAccess={handleSaveCloudAccess}
+				/>
 			)}
 
 			<FormConfirmDialog

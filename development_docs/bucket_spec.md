@@ -112,8 +112,6 @@ s3-bucket/
 └── projects/
     └── {project-id}/
         ├── project.json                    ← project metadata
-        ├── secrets/
-        │   └── {NAME}.json                 ← project secret entry (mutable, last-writer-wins)
         ├── integrations/
         │   ├── _names/
         │   │   └── {name}.json             ← per-name singleton claim (CAS, app-claim pattern)
@@ -175,9 +173,8 @@ selected version and cannot write changes back.
 | `_system/_maintenance.lock`                                    | JSON     | Advisory lease for snapshot and event retention. `MaintenanceLock` owns this key.                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `_system/_session_lifecycle.lock`                              | JSON     | Advisory lease for the session lifecycle and reconciliation sweep. The lifecycle loop owns this key.                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `projects/{pid}/project.json`                                  | JSON     | Project metadata: name, description, owner, members, tags.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `projects/{pid}/secrets/{NAME}.json`                           | JSON     | Project secret entry, keyed by env-var name: a `reference` pointer into an external manager, or a `managed` ciphertext envelope. Mutable, last-writer-wins (no CAS). Never contains plaintext.                                                                                                                                                                                                                                                                                                         |
 | `projects/{pid}/integrations/{iid}/integration.json`           | JSON     | Integration head: kind, instance name, `enabled`, and the `current_version` pointer. CAS-managed via ETag `mutateObject` — written only by `ProjectIntegrationsStore` (a version bump must be atomic against a concurrent edit). See §4.12.                                                                                                                                                                                                                                                            |
-| `projects/{pid}/integrations/{iid}/versions/{n}.json`          | JSON     | Immutable integration config version, keyed by zero-padded number so key order == version order. Written create-if-absent; a losing writer takes n+1. Secret fields are `{ "$secret": … }` ciphertext envelopes, never plaintext. Sessions pin these version numbers (the audit trail), so history is never rewritten.                                                                                                                                                                                 |
+| `projects/{pid}/integrations/{iid}/versions/{n}.json`          | JSON     | Immutable integration config version, keyed by zero-padded number so key order matches version order. Written create-if-absent. Secret fields contain managed ciphertext envelopes or external reference markers, never resolved plaintext. Sessions pin these version numbers, so history is never rewritten.                                                                                                                                                                                         |
 | `projects/{pid}/integrations/_names/{name}.json`               | JSON     | Per-name singleton claim (`{ integration_id, claimed_at }`) anchoring integration-name uniqueness — the same claim class as the app claim, written only by `ProjectIntegrationsStore` via `acquireSingletonClaim`/`releaseSingletonClaim`. See §4.12.                                                                                                                                                                                                                                                  |
 | `_system/integrations/{iid}/integration.json`                  | JSON     | Organization-wide integration head. It has the same fields as a project integration head, except it has no `project_id`. `OrgIntegrationsStore` is its only writer. See §4.12.                                                                                                                                                                                                                                                                                                                         |
 | `_system/integrations/{iid}/versions/{n}.json`                 | JSON     | Immutable organization-wide configuration version. It follows the same create-if-absent and secret-handling rules as a project integration version.                                                                                                                                                                                                                                                                                                                                                    |
@@ -575,15 +572,30 @@ to the larger committed version number. Session records pin each rendered
 integration as `{ id, name, kind, version }`. This pin identifies the exact
 configuration while the integration exists.
 
+The head and its configuration form one concurrency unit. There is no separate
+mutable object for an individual secret field. API clients update the complete
+integration with the head ETag.
+
+Replacing an inline secret writes new ciphertext into a new immutable version.
+It does not overwrite ciphertext in an older version. Old ciphertext remains
+until deletion removes the entire integration history. This is an explicit
+retention tradeoff of versioned integration storage.
+
 Deletion removes the head first. A concurrent head update then fails its CAS
 and removes the version that it appended. The delete operation then removes the
 remaining integration objects. Session pins and `integration.*` events retain
 the audit identity, but they do not retain deleted secret configuration.
 
-Secret fields contain ciphertext envelopes. The encryption context includes
-the head path and field path. As a result, a copied envelope cannot decrypt at
-a different path. The store also rejects ciphertext outside registered secret
-fields.
+Secret fields contain managed ciphertext envelopes or external reference
+markers. A reference marker contains only its backend and locator. The resolver
+fetches its value during a supported connection test or session rendering. A
+save validates the reference shape and configured backend without fetching the
+value.
+
+The managed encryption context includes the head path and field path. As a
+result, a copied envelope cannot decrypt at a different path. A copy decrypts
+and encrypts each managed value for its destination. It keeps reference markers
+unchanged. The store rejects secret boxes outside registered secret fields.
 
 **The name claim** (`_names/{name}.json`, name URI-encoded) anchors "one instance per name" the same way the app claim anchors "one app per notebook": `{ integration_id, claimed_at }`, acquired via `acquireSingletonClaim` (create-if-absent, ETag-CAS replace when stale) and released by CAS-ing `integration_id` to the free marker `null`, never a bare delete. Writers put the **head first, then claim** — a holder is _live_ iff its head still exists under that name, so the claim self-heals after a crash between the two writes, and two concurrent creates are arbitrated by the claim key: the loser deletes its own just-written objects. A rename claims the new name (reverting the head on conflict, so a combined rename+config PATCH that loses commits nothing) and then frees the old; delete frees the name last. Sole writer: `ProjectIntegrationsStore`. `_names/` cannot collide with an instance directory (ids are always `intg-…`), and listings skip it.
 
@@ -593,7 +605,7 @@ the API limits its management routes to super admins. Organization heads do not
 contain `project_id`. Identity validation rejects a record loaded through the
 wrong tier.
 
-Organization secrets use an HKDF context derived from the `_system/` head path.
+Organization managed values use an HKDF context from the `_system/` head path.
 As a result, an envelope from one tier cannot be decrypted in the other tier.
 
 For a new non-ephemeral session, the project store combines both tiers. It uses
@@ -1011,7 +1023,6 @@ Routes are defined with `@hono/zod-openapi`: each declares typed request and res
   exclusive takeover
 - **Integrations** — kinds, project and organization instances, versions, copy,
   and connectivity tests
-- **Secrets** — project secret metadata, writes, deletion, and reference tests
 - **System** — deployment version and capability limits
 
 ### Error & response model

@@ -590,7 +590,7 @@ describe('kind renders (golden)', () => {
 			user_id: 'ada',
 			user_agent: 'marimohub',
 			app_name: 'analytics',
-			metadata: [{ name: 'x-project', value: 'project-secret' }],
+			metadata: [{ name: 'x-project', value: 'project-value' }],
 			spark_config: { 'spark.sql.session.timeZone': 'UTC' },
 			secret_spark_config: [{ name: 'spark.hadoop.fs.s3a.secret.key', value: 's3-secret' }],
 		});
@@ -599,7 +599,7 @@ describe('kind renders (golden)', () => {
 		expect(remote).toContain('sc://spark.internal:15003/;use_ssl=true');
 		expect(remote).toContain('token=spark-token');
 		expect(remote).toContain('user_id=ada');
-		expect(remote).toContain('x-project=project-secret');
+		expect(remote).toContain('x-project=project-value');
 		expect(out.env?.MARIMOHUB_PYSPARK_PROD_TOKEN).toBe('spark-token');
 		const descriptor = JSON.parse(out.files?.[0]?.content ?? '') as Record<string, unknown>;
 		expect(descriptor).toMatchObject({
@@ -1059,6 +1059,38 @@ describe('kind renders (golden)', () => {
 			secrets: [{ name: 'SAME', value: 'b' }],
 		});
 		expect(() => customEnv.validate?.(duplicate)).toThrow(/defined twice/);
+	});
+
+	it('custom_env: expands secret JSON bundles with prefixes and rejects collisions', () => {
+		const config = customEnv.configSchema.parse({
+			vars: { PLAIN: 'yes' },
+			secret_bundles: [{ prefix: 'APP_', value: '{"TOKEN":"secret","RETRIES":3,"ENABLED":true}' }],
+		});
+		expect(customEnv.render(input(config, customEnv)).env).toEqual({
+			PLAIN: 'yes',
+			APP_TOKEN: 'secret',
+			APP_RETRIES: '3',
+			APP_ENABLED: 'true',
+		});
+		expect(() =>
+			customEnv.render(
+				input(
+					customEnv.configSchema.parse({
+						vars: { APP_TOKEN: 'plain' },
+						secret_bundles: [{ prefix: 'APP_', value: '{"TOKEN":"secret"}' }],
+					}),
+					customEnv,
+				),
+			),
+		).toThrow(/defined more than once/);
+		expect(() =>
+			customEnv.render(
+				input(
+					customEnv.configSchema.parse({ secret_bundles: [{ value: '{"bad-name":"x"}' }] }),
+					customEnv,
+				),
+			),
+		).toThrow(ValidationError);
 	});
 
 	it('every kind renders deterministically (same input → identical output)', () => {

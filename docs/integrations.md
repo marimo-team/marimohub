@@ -1,5 +1,5 @@
 ---
-description: Configure project and organization data sources for notebook sessions, including PostgreSQL, MySQL, Snowflake, BigQuery, Databricks, PyIceberg, Trino, object storage, and ML platforms.
+description: Configure project and organization data sources for notebook sessions, including databases, warehouses, query engines, catalogs, object storage, ML platforms, and environment variables.
 ---
 
 # Integrations
@@ -10,7 +10,7 @@ source for the whole organization. Supported sources include the common SQL
 databases and warehouses (PostgreSQL, MySQL, SQL Server, MongoDB, ClickHouse,
 Snowflake, BigQuery, Redshift, MotherDuck), query engines (Trino, Spark Connect,
 Databricks SQL, Athena), PyIceberg catalogs, object storage (S3, GCS, Azure
-Blob), ML platforms (Weights & Biases, Hugging Face), and custom environment
+Blob), ML platforms (Weights & Biases, Hugging Face), and environment
 variables.
 
 Each new, non-ephemeral session receives the applicable connection
@@ -473,17 +473,17 @@ project can have one active Hugging Face integration.
 
 <!--@include: ./partials/integrations/huggingface.md-->
 
-## Custom environment
+## Environment variables
 
-Injects exactly the env vars you configure — plain or secret — into every
-session.
+Adds the exact environment variables that you configure. It supports plain
+variables, scalar secret variables, and secret JSON bundles with optional prefixes.
 
 <!--@include: ./partials/integrations/custom_env.md-->
 
 ## Managing integrations
 
-Open a project → the **integrations** icon in the header. Members (`viewer`+)
-can see the list and redacted configs; **`admin`** manages them — as does a
+Open a project and select **Environment & access**. Then select **Integrations**.
+Members (`viewer`+) can see the list and protected configuration. An **`admin`** manages it, as does a
 [super admin](./auth.md#super-admins-marimohub_super_admins), on every project.
 
 - **Add** — pick a kind from the catalog; the form is generated from the kind's
@@ -497,21 +497,40 @@ can see the list and redacted configs; **`admin`** manages them — as does a
   private network, or `off` to disable testing.
 - **Edit** — a new immutable config version is appended; the version history is
   listed under `GET …/integrations/{iid}/versions`. Stored secret values show as
-  `•••••••• (set)` and are kept unless you replace them — never re-entered,
-  never displayed.
+  an encrypted-value marker and are kept unless you replace them. External
+  references show their backend and locator metadata. **Test connection** uses
+  the current draft, including edited locators and unchanged encrypted values.
+  The button appears only for kinds that support a connection test.
 - **Enable / disable** — disabled integrations are skipped at session launch.
   This is also the escape hatch when a broken config is failing sessions.
 - **Delete** — removes the instance and its entire version history.
 - **Copy** — copy an integration from another project (**Add integration** →
   **Copy from another project**, or `POST …/integrations/copy`). You need
   the `admin` role on **both** projects; a super admin qualifies everywhere.
-  The copy takes the source's current config — secrets included, re-encrypted
-  for the destination — and starts its own version history at v1. The two are
+  The copy takes the source's current config and starts its own version history
+  at v1. Inline values are decrypted and encrypted for the destination.
+  External-reference metadata is preserved unchanged. The two copies are
   independent afterwards: editing or deleting one never affects the other. The
   audit trail records the copy with its source project and integration.
 
 New sessions pick up config changes; running sessions keep what they launched
 with (restart the session to apply).
+
+### Updates and concurrency
+
+The API treats an integration as one versioned resource. It does not expose
+separate create, update, or delete operations for its secret fields. An update
+submits the complete configuration and appends one immutable version.
+
+Read the integration ETag before an automated update. Send that ETag as
+`If-Match` with the write. If another client has updated the integration, the
+server rejects the write. Managed markers keep unchanged inline values, while
+external references include their complete backend and locator metadata.
+
+Replacing an inline value does not overwrite its older ciphertext. The old
+ciphertext remains in immutable versions until you delete the entire
+integration. See [Integration secret sources](./integration-secrets.md) for the
+retention and testing rules.
 
 ## Organization-wide integrations
 
@@ -541,29 +560,29 @@ existing configuration.
 
 ## Secret fields
 
-Secret config fields (passwords, tokens) are encrypted at rest with the
-deployment's managed-secret KEK and never returned by any API — responses show
-`{ "$secret": { "set": true } }`. Set `MARIMOHUB_SECRETS_KEK` to enable them — a
-generated 32-byte key, i.e. the exact output of `openssl rand -base64 32` (44
-characters, ending in `=`) or `openssl rand -hex 32` (64 hex characters). A
-passphrase,
-or any value not shaped like a generated key, is rejected at startup, because
-the hub applies no password stretching to it. Without a KEK, only secret-free
-configs can be saved and the error names the missing variable. The KEK is shared
-with [managed project secrets](./secrets.md).
+Each secret field can use an inline encrypted value or an external reference.
+Inline values require `MARIMOHUB_SECRETS_KEK`. The API and storage formats call
+inline encrypted values `managed`. API reads appear as
+`{ "$secret": { "kind": "managed", "set": true } }`.
+
+An external reference contains a configured backend and locator. The API shows
+this metadata but never returns the resolved value. See
+[Integration secret sources](./integration-secrets.md).
 
 ## Failure model
 
-Like [project secrets](./secrets.md), integration rendering **fails a session
-closed**: if a configured, enabled integration cannot render (secret undecryptable,
-config no longer valid for its kind), session create fails with a non-leaking
-error naming the instance — a notebook expecting `MARIMOHUB_PG_PROD_URL` must
-never silently start without it. Disable the integration to unblock the project
-while you fix it.
+Integration rendering **fails a session closed**. A missing secret backend,
+resolver error, invalid configuration, or decrypt error stops session creation.
+The error does not disclose a secret value or locator. Disable the integration
+to restore project access while you correct the configuration.
 
-Env-name precedence when sources collide: project secrets < integrations <
-hub-injected vars (WIF, AI, system) — user-supplied values can never shadow the
-hub's own.
+Saving an external reference does not fetch its value. **Test connection**
+resolves the current draft only for supported kinds. **Environment variables**
+has no pre-save connection test, so bundle and resolution errors can first
+appear during session creation.
+
+Environment-name precedence is integrations &lt; hub, WIF, AI, and marimo
+configuration. An integration cannot replace a hub-controlled value.
 
 A few PyIceberg settings (`legacy-current-snapshot-id`, `max-workers`) apply to
 the whole process, not to one catalog, so two Iceberg integrations in the same
@@ -580,7 +599,7 @@ of the two.
 | ------------------------------ | ----------------------------------------------------------------------- |
 | `MARIMOHUB_INTEGRATIONS`       | `off` (default) or `on` — see the rollout note above.                   |
 | `MARIMOHUB_INTEGRATIONS_PROBE` | "Test connection" egress policy: `guarded` (default), `private`, `off`. |
-| `MARIMOHUB_SECRETS_KEK`        | Enables secret config fields (shared with managed secrets).             |
+| `MARIMOHUB_SECRETS_KEK`        | Enables inline encrypted integration secret fields.                     |
 
 ## Developing integration kinds
 

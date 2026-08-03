@@ -98,7 +98,7 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|storage|compute|editor-sessions|sandbox-image|apps|ai|secrets|integrations|syncing|workload-identity-federation)',
+					'^/(auth|storage|compute|editor-sessions|sandbox-image|apps|ai|environment-and-access|integration-secrets|integrations|syncing|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
@@ -107,8 +107,9 @@ export default defineConfig({
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },
 					{ text: 'Managed AI', link: '/ai' },
-					{ text: 'Project secrets', link: '/secrets' },
-					{ text: 'Project integrations', link: '/integrations' },
+					{ text: 'Environment & access', link: '/environment-and-access' },
+					{ text: 'Integrations', link: '/integrations' },
+					{ text: 'Integration secret sources', link: '/integration-secrets' },
 					{ text: 'Syncing from external sources', link: '/syncing' },
 					{ text: 'Workload Identity Federation', link: '/workload-identity-federation' },
 				],
@@ -157,8 +158,9 @@ export default defineConfig({
 					{ text: 'Sandbox image', link: '/sandbox-image' },
 					{ text: 'Notebook apps', link: '/apps' },
 					{ text: 'Managed AI', link: '/ai' },
-					{ text: 'Project secrets', link: '/secrets' },
-					{ text: 'Project integrations', link: '/integrations' },
+					{ text: 'Environment & access', link: '/environment-and-access' },
+					{ text: 'Integrations', link: '/integrations' },
+					{ text: 'Integration secret sources', link: '/integration-secrets' },
 					{ text: 'Syncing from external sources', link: '/syncing' },
 					{ text: 'Workload Identity Federation', link: '/workload-identity-federation' },
 				],

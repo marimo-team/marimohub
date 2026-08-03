@@ -499,6 +499,24 @@ describe('Integrations routes', () => {
 		);
 	});
 
+	it('accepts a stored integration id when testing an edited draft', async () => {
+		const pid = await createProject();
+		const created = await createPg(pid);
+		await expectError(
+			await request('POST', `/projects/${pid}/integrations/test`, {
+				source: 'draft',
+				id: created.id,
+				kind: 'postgres',
+				config: {
+					...PG_CONFIG,
+					host: 'edited.internal',
+					password: { $secret: { kind: 'managed', set: true } },
+				},
+			}),
+			422,
+		);
+	});
+
 	it.each([
 		[
 			'both stored and draft fields',
@@ -517,7 +535,7 @@ describe('Integrations routes', () => {
 				source: 'draft',
 				kind: 'postgres',
 				config: PG_CONFIG,
-				id: 'intg-0000000000000000',
+				unexpected: true,
 			},
 		],
 		['an extra stored field', { source: 'stored', id: 'intg-0000000000000000', config: PG_CONFIG }],
@@ -837,7 +855,7 @@ describe('Integration copy route', () => {
 		...over,
 	});
 
-	it('admin of both projects copies the integration; secrets stay redacted', async () => {
+	it('admin of both projects copies the integration; secret fields stay redacted', async () => {
 		const detail = await expectOk<Record<string, unknown>>(
 			await asOwner('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
 			201,

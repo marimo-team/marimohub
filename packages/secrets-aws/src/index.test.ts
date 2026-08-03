@@ -36,21 +36,23 @@ describe('AwsSecretsManagerResolver', () => {
 		expect(await r.resolve(ref('db#port'))).toBe('5432');
 	});
 
-	it('throws (naming the id, not the value) when the JSON key is missing', async () => {
+	it('throws an opaque error when the JSON key is missing', async () => {
 		const r = resolver(async () => ({ SecretString: JSON.stringify({ other: SECRET }) }));
-		await expect(r.resolve(ref('db#missing'))).rejects.toThrow(/db.*missing/);
+		await expect(r.resolve(ref('db#missing'))).rejects.toThrow(/requested JSON key/);
+		await expect(r.resolve(ref('db#missing'))).rejects.not.toThrow(/db|missing/);
 		await expect(r.resolve(ref('db#missing'))).rejects.not.toThrow(new RegExp(SECRET));
 	});
 
 	it('throws when the secret is not JSON but a key was requested', async () => {
 		const r = resolver(async () => ({ SecretString: 'not json' }));
-		await expect(r.resolve(ref('db#k'))).rejects.toThrow(/not JSON/);
+		await expect(r.resolve(ref('db#k'))).rejects.toThrow(/not valid JSON/);
+		await expect(r.resolve(ref('db#k'))).rejects.not.toThrow(/db|#k/);
 	});
 
 	it('does not resolve an inherited prototype property as a JSON key', async () => {
 		const r = resolver(async () => ({ SecretString: JSON.stringify({ real: 'v' }) }));
-		await expect(r.resolve(ref('db#__proto__'))).rejects.toThrow(/no JSON key/);
-		await expect(r.resolve(ref('db#toString'))).rejects.toThrow(/no JSON key/);
+		await expect(r.resolve(ref('db#__proto__'))).rejects.toThrow(/requested JSON key/);
+		await expect(r.resolve(ref('db#toString'))).rejects.toThrow(/requested JSON key/);
 	});
 
 	it('throws "binary" for a binary-only secret', async () => {
@@ -66,6 +68,7 @@ describe('AwsSecretsManagerResolver', () => {
 			throw err;
 		});
 		await expect(r.resolve(ref('gone'))).rejects.toThrow(/ResourceNotFoundException/);
+		await expect(r.resolve(ref('gone'))).rejects.not.toThrow(/gone/);
 		await expect(r.resolve(ref('gone'))).rejects.not.toThrow(/should never surface/);
 	});
 
@@ -130,7 +133,7 @@ describe('AwsSecretsManagerResolver', () => {
 
 	it('rejects a locator with a trailing # (empty json key)', async () => {
 		const r = resolver(async () => ({ SecretString: JSON.stringify({ k: 'v' }) }));
-		await expect(r.resolve(ref('db#'))).rejects.toThrow(/no JSON key/);
+		await expect(r.resolve(ref('db#'))).rejects.toThrow(/requested JSON key/);
 	});
 
 	it('passes an empty-string locator through to the fetcher (no validation)', async () => {

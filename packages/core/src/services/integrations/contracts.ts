@@ -6,6 +6,7 @@ import type {
 	IntegrationEntry,
 	IntegrationVersionPage,
 	IntegrationVersionPageRequest,
+	IntegrationSecretSources,
 	KindDescriptor,
 	SessionRender,
 	SessionRenderContext,
@@ -17,6 +18,7 @@ import type {
 /** Application service for project integrations and inherited organization integrations. */
 export interface ProjectIntegrationsService {
 	listKinds(): KindDescriptor[];
+	secretSources(): IntegrationSecretSources;
 	list(projectId: ProjectId): Promise<IntegrationEntry[]>;
 	get(projectId: ProjectId, id: IntegrationId): Promise<IntegrationDetail>;
 	create(
@@ -56,6 +58,7 @@ export interface ProjectIntegrationsService {
 /** Application service for deployment-wide integrations. */
 export interface OrgIntegrationsService {
 	listKinds(): KindDescriptor[];
+	secretSources(): IntegrationSecretSources;
 	list(): Promise<IntegrationEntry[]>;
 	get(id: IntegrationId): Promise<IntegrationDetail>;
 	create(input: CreateIntegrationInput, actor: UserId): Promise<IntegrationDetail>;

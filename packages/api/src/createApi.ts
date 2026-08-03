@@ -17,7 +17,6 @@ import eventsApp from './routes/events';
 import gitSyncApp from './routes/gitSync';
 import notebooksApp from './routes/notebooks';
 import projectsApp from './routes/projects';
-import secretsApp from './routes/secrets';
 import integrationsApp from './routes/integrations';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
@@ -346,7 +345,6 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, eventsApp);
 	app.route(API_PREFIX, notebooksApp);
 	app.route(API_PREFIX, sessionsApp);
-	app.route(API_PREFIX, secretsApp);
 	app.route(API_PREFIX, integrationsApp);
 	app.route(API_PREFIX, usersApp);
 	app.route(API_PREFIX, tokensApp);

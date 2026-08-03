@@ -4,7 +4,7 @@ import { ValidationError } from '../../errors';
 import type { IntegrationId, SessionId } from '../../ids';
 import type { SessionRender } from '../../ports/integrations';
 import type { RenderOutput } from './sdk';
-import { CODE_EXECUTION_ENV, SHELL_BASICS_ENV } from '../secrets/secretName';
+import { CODE_EXECUTION_ENV, SHELL_BASICS_ENV } from './environmentName';
 import { stringify } from 'yaml';
 
 /** Sandbox directory containing rendered integration files. */
@@ -14,7 +14,7 @@ export const INTEGRATIONS_DIR_ENV = 'MARIMOHUB_INTEGRATIONS_DIR';
 
 /**
  * Env names a kind may not emit: process-start code-execution vectors and shell
- * basics. Narrower than the project-secret blocklist on purpose — kinds are hub
+ * basics. Narrower than the user-authored environment blocklist on purpose — kinds are hub
  * code and legitimately set tool vars (`PYICEBERG_HOME`) and `MARIMOHUB_*`.
  */
 const FORBIDDEN_ENV = new Set<string>([...SHELL_BASICS_ENV, ...CODE_EXECUTION_ENV]);

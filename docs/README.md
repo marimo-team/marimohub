@@ -24,11 +24,10 @@ Every deployment picks storage, compute, and auth.
 - [Sandbox image](./sandbox-image.md) - the container contract for notebook
   kernels.
 - [Managed AI](./ai.md) - server-managed AI keys for notebook assistants.
-- [Project secrets](./secrets.md) - operator-controlled credentials for notebook
-  sandboxes.
-- [Integrations](./integrations.md) - data sources (SQL databases and
-  warehouses, query engines, PyIceberg catalogs, object storage, ML platforms,
-  custom env) for new, non-ephemeral sessions.
+- [Environment & access](./environment-and-access.md) - choose integration configuration or federated cloud access.
+- [Integrations](./integrations.md) - databases, warehouses, query engines,
+  PyIceberg catalogs, object storage, ML platforms, and environment variables.
+- [Integration secret sources](./integration-secrets.md) - inline encrypted values and external references.
 - [Syncing](./syncing.md) - read-only notebooks pushed from external systems.
 - [Workload Identity Federation](./workload-identity-federation.md) - short-lived
   cloud credentials from notebooks (CoreWeave, AWS).

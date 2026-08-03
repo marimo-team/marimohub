@@ -360,9 +360,13 @@ Acknowledged gaps with a known direction, drawn from the design docs and the ass
 
 The hub configures the marimo AI assistant to use a managed provider with no user-supplied key: it injects config pointing at its own OpenAI-compatible proxy (`/api/ai/v1`) with a short-lived, session-scoped token, and holds the real provider key server-side — the key never enters a sandbox. See [`docs/ai.md`](../docs/ai.md).
 
-### 10.2 Secrets module
+### 10.2 Integration secret sources
 
-A vendor-neutral secrets **spine** in `core`: per-project named entries, injected into the sandbox as env vars before kernel start, resolved fail-closed. Two entry kinds sit behind it — **`reference`** (recommended): the value stays in an external manager (AWS Secrets Manager adapter today) and the hub stores only a pointer, read at session launch with read-only access; and opt-in **`managed`**: encrypted-in-bucket, which keeps the no-DB rule but concentrates ciphertext and key in the hub. This closes the §8 "secrets in notebooks" gap. See [`docs/secrets.md`](../docs/secrets.md).
+Secret fields are part of versioned integrations. A **managed** field stores an
+encrypted envelope in the integration version. A **reference** field stores an
+external backend and locator. The hub resolves references only for a connection
+test or new session. Resolution fails closed. See
+[`docs/integration-secrets.md`](../docs/integration-secrets.md).
 
 ### 10.3 Workload Identity Federation
 

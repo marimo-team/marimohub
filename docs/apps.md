@@ -73,9 +73,8 @@ Membership still applies: under `MARIMOHUB_DEFAULT_ROLE=none`, a non-member
 gets nothing from `applications` — only explicit members with at least the
 `viewer` role are admitted.
 
-> **Security note.** The app kernel runs the notebook's code with the project's
-> [secrets](./secrets.md) and
-> [federated credentials](./workload-identity-federation.md) injected,
+> **Security note.** The app kernel runs the notebook's code with resolved
+> [integration secrets](./integration-secrets.md) and federated credentials injected,
 > regardless of who opened the app. An app's inputs drive that code, so
 > enabling viewer access means trusting your viewer audience with everything
 > the app can compute or fetch. That is why apps are editor-only by default.

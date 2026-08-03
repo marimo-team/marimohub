@@ -1,6 +1,6 @@
 /**
  * AWS Secrets Manager resolver — adapter implementing the `SecretResolver` port
- * for `reference`-kind project secrets (`backend = 'aws-sm'`). The hub reads a
+ * for integration secret references (`backend = 'aws-sm'`). The hub reads a
  * secret with `GetSecretValue` only; it never writes the customer's manager.
  *
  * A locator is `<secret-id-or-arn>[#<json-key>]`: a bare id returns the secret's
@@ -35,6 +35,12 @@ interface CacheEntry {
 
 export class AwsSecretsManagerResolver implements SecretResolver {
 	readonly backend = 'aws-sm';
+	readonly title = 'AWS Secrets Manager';
+	readonly locatorPlaceholder = 'Secret ID or ARN, optionally followed by #json-key';
+	readonly locatorHelp =
+		'Use secret-id-or-arn[#json-key]. Omit #json-key when the field needs the complete value.';
+	readonly docsUrl =
+		'https://github.com/marimo-team/marimo-hub/blob/main/docs/integration-secrets.md#aws-secrets-manager';
 	private readonly fetch: SecretFetcher;
 	private readonly cacheTtlMs: number;
 	private readonly now: () => number;
@@ -52,14 +58,14 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 
 		if (result.SecretString === undefined) {
 			if (result.SecretBinary !== undefined) {
-				throw new Error(`AWS secret "${secretId}" is binary; only string secrets are supported.`);
+				throw new Error('AWS Secrets Manager returned a binary value; only strings are supported.');
 			}
-			throw new Error(`AWS secret "${secretId}" has no string value.`);
+			throw new Error('AWS Secrets Manager returned no string value.');
 		}
 
 		return jsonKey === undefined
 			? result.SecretString
-			: selectJsonKey(result.SecretString, jsonKey, secretId);
+			: selectJsonKey(result.SecretString, jsonKey);
 	}
 
 	/**
@@ -77,7 +83,7 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 			result = await this.fetch(secretId);
 		} catch (err) {
 			// SDK errors (ResourceNotFound / AccessDenied) carry no secret value.
-			throw new Error(`Failed to resolve AWS secret "${secretId}": ${describeAwsError(err)}`);
+			throw new Error(`AWS Secrets Manager resolution failed: ${describeAwsError(err)}`);
 		}
 		if (this.cacheTtlMs > 0) {
 			this.cache.set(secretId, { result, expires: this.now() + this.cacheTtlMs });
@@ -94,15 +100,15 @@ function parseLocator(locator: string): { secretId: string; jsonKey?: string } {
 }
 
 /** Parse a JSON secret and return one string field; never leaks the value. */
-function selectJsonKey(secretString: string, key: string, secretId: string): string {
+function selectJsonKey(secretString: string, key: string): string {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(secretString);
 	} catch {
-		throw new Error(`AWS secret "${secretId}" is not JSON, but locator requested key "${key}".`);
+		throw new Error('AWS Secrets Manager value is not valid JSON for the requested selection.');
 	}
 	if (typeof parsed !== 'object' || parsed === null || !Object.hasOwn(parsed, key)) {
-		throw new Error(`AWS secret "${secretId}" has no JSON key "${key}".`);
+		throw new Error('AWS Secrets Manager value does not contain the requested JSON key.');
 	}
 	const value = (parsed as Record<string, unknown>)[key];
 	return typeof value === 'string' ? value : JSON.stringify(value);

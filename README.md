@@ -17,8 +17,8 @@ operators can swap providers without changing the domain logic.
 - Bring your own **compute**: CoreWeave Sandboxes, Modal, Kubernetes, Docker,
   Podman, E2B, Cloudflare Containers, or local subprocesses.
 - Bring your own **identity**: OpenID Connect or Cloudflare Access.
-- Optional managed AI and project secrets, with server-side keys instead of
-  notebook-supplied credentials.
+- Optional managed AI, versioned integrations, encrypted values, external secret
+  references, and short-lived federated cloud access.
 
 Use marimohub when you want a self-hosted notebook hub with a small operational
 surface and explicit provider choices. If you want a hosted SaaS or do not want

@@ -499,10 +499,6 @@ export const IntegrationVersionRecordSchema = z.object({
 
 export type IntegrationVersionRecord = z.infer<typeof IntegrationVersionRecordSchema>;
 
-// --- Secret ---
-
-// The encrypted box for a `managed` secret value. Mirrors the `SecretEnvelope`
-// port interface (ports/secrets.ts); `AesGcmSecretCodec` is the producer.
 export const SecretEnvelopeSchema = z.object({
 	kek_id: z.string(),
 	alg: z.literal('A256GCM'),
@@ -513,34 +509,6 @@ export const SecretEnvelopeSchema = z.object({
 });
 
 export type SecretEnvelopeRecord = z.infer<typeof SecretEnvelopeSchema>;
-
-// The stored object at `projects/{pid}/secrets/<name>.json`, discriminated by
-// kind. Written last-writer-wins (no CAS) by `ProjectSecretsStore`, which
-// derives its record type from this schema.
-export const StoredSecretSchema = z.discriminatedUnion('kind', [
-	z.object({
-		kind: z.literal('reference'),
-		backend: z.string(),
-		locator: z.string(),
-		/** `'json'` fans the resolved JSON object out into one env var per key. */
-		expand: z.literal('json').optional(),
-		prefix: z.string().optional(),
-		name: z.string(),
-		created_by: UserIdSchema,
-		created_at: z.iso.datetime(),
-		updated_at: z.iso.datetime(),
-	}),
-	z.object({
-		kind: z.literal('managed'),
-		envelope: SecretEnvelopeSchema,
-		name: z.string(),
-		created_by: UserIdSchema,
-		created_at: z.iso.datetime(),
-		updated_at: z.iso.datetime(),
-	}),
-]);
-
-export type StoredSecret = z.infer<typeof StoredSecretSchema>;
 
 // --- Session ---
 

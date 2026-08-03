@@ -45,6 +45,19 @@ export interface KindBrand {
 	color: string;
 }
 
+export interface IntegrationSecretReferenceSource {
+	backend: string;
+	title: string;
+	locator_placeholder: string;
+	locator_help: string;
+	docs_url?: string;
+}
+
+export interface IntegrationSecretSources {
+	inline: boolean;
+	references: IntegrationSecretReferenceSource[];
+}
+
 /** Serializable kind description used to build integration forms. */
 export interface KindDescriptor {
 	kind: string;
@@ -58,6 +71,7 @@ export interface KindDescriptor {
 	ui_hints: UiHints;
 	/** Whether this deployment can run the kind's connectivity probe. */
 	supports_test: boolean;
+	secret_sources: IntegrationSecretSources;
 	/** Informational package requirements for notebook code. */
 	requirements: string[];
 }
@@ -165,7 +179,7 @@ export interface UpdateIntegrationInput {
 }
 
 export type TestIntegrationRequest =
-	| { source: 'draft'; kind: string; config: Record<string, unknown> }
+	| { source: 'draft'; kind: string; config: Record<string, unknown>; id?: IntegrationId }
 	| { source: 'stored'; id: IntegrationId };
 
 export interface CopyIntegrationOptions {

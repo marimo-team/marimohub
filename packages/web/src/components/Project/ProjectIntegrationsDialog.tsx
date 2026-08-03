@@ -130,23 +130,18 @@ type View =
 	| { mode: 'create'; kind: IntegrationKind }
 	| { mode: 'edit'; entry: IntegrationEntry };
 
-export interface ProjectIntegrationsDialogProps {
-	isOpen: boolean;
-	onClose: () => void;
-	project: ProjectDetail;
-}
-
-export function ProjectIntegrationsDialog({
-	isOpen,
-	onClose,
+export function ProjectIntegrationsPanel({
 	project,
-}: ProjectIntegrationsDialogProps) {
+	onBack,
+}: {
+	project: ProjectDetail;
+	onBack: () => void;
+}) {
 	return (
-		<IntegrationsDialog
-			isOpen={isOpen}
-			onClose={onClose}
+		<IntegrationsContent
 			scope={{ pid: project.id }}
 			canManage={project.your_role === 'admin'}
+			onBack={onBack}
 		/>
 	);
 }
@@ -159,109 +154,111 @@ export interface OrgIntegrationsDialogProps {
 // No client-side gating: only super admins can open this, and the server
 // rejects everyone else anyway.
 export function OrgIntegrationsDialog({ isOpen, onClose }: OrgIntegrationsDialogProps) {
-	return <IntegrationsDialog isOpen={isOpen} onClose={onClose} scope="org" canManage />;
+	return <IntegrationsDialog isOpen={isOpen} onClose={onClose} />;
 }
 
-function IntegrationsDialog({
-	isOpen,
-	onClose,
+function IntegrationsDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+	return (
+		<DialogModal isOpen={isOpen} onClose={onClose} title="Org integrations" width="xl">
+			<IntegrationsContent key={String(isOpen)} scope="org" canManage enabled={isOpen} />
+		</DialogModal>
+	);
+}
+
+function IntegrationsContent({
 	scope,
 	canManage,
+	onBack,
+	enabled = true,
 }: {
-	isOpen: boolean;
-	onClose: () => void;
 	scope: IntegrationsScope;
 	canManage: boolean;
+	onBack?: () => void;
+	enabled?: boolean;
 }) {
 	const [view, setView] = useState<View>({ mode: 'list' });
-	const close = () => {
-		onClose();
-		setView({ mode: 'list' });
-	};
-	const kindsQuery = useIntegrationKindsQuery(isOpen);
-	const entriesQuery = useIntegrationsQuery(scope, isOpen);
+	const kindsQuery = useIntegrationKindsQuery(enabled);
+	const entriesQuery = useIntegrationsQuery(scope, enabled);
 	const kinds = kindsQuery.data;
 	const entries = entriesQuery.data;
 
-	const title =
-		view.mode === 'catalog'
-			? 'Add integration'
-			: view.mode === 'copy'
-				? 'Copy integration'
-				: view.mode === 'create'
-					? `Add ${view.kind.title}`
-					: view.mode === 'edit'
-						? `Edit ${view.entry.name}`
-						: scope === 'org'
-							? 'Org integrations'
-							: 'Integrations';
-
 	return (
-		<DialogModal
-			isOpen={isOpen}
-			onClose={close}
-			title={title}
-			width={view.mode === 'list' || view.mode === 'catalog' ? 'xl' : 'lg'}
-		>
-			<div className="flex flex-col gap-4 text-sm">
-				{view.mode !== 'list' && (
+		<div className="flex flex-col gap-4 text-sm">
+			{(view.mode !== 'list' || onBack) && (
+				<div className="flex items-center gap-3">
 					<button
 						type="button"
 						className="flex w-fit items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-						onClick={() =>
-							setView(
-								view.mode === 'create' || view.mode === 'copy'
-									? { mode: 'catalog' }
-									: { mode: 'list' },
-							)
-						}
+						onClick={() => {
+							if (view.mode === 'list') onBack?.();
+							else {
+								setView(
+									view.mode === 'create' || view.mode === 'copy'
+										? { mode: 'catalog' }
+										: { mode: 'list' },
+								);
+							}
+						}}
 					>
 						<ArrowLeft className="size-3.5" aria-hidden />
 						Back
 					</button>
-				)}
+					<h3 className="font-semibold">
+						{view.mode === 'catalog'
+							? 'Add integration'
+							: view.mode === 'copy'
+								? 'Copy integration'
+								: view.mode === 'create'
+									? `Add ${view.kind.title}`
+									: view.mode === 'edit'
+										? `Edit ${view.entry.name}`
+										: scope === 'org'
+											? 'Org integrations'
+											: 'Integrations'}
+					</h3>
+				</div>
+			)}
 
-				{/* Query errors also have undefined data, so handle them before the loading branch. */}
-				{kindsQuery.isError || entriesQuery.isError ? (
-					<p className="text-destructive">
-						Could not load integrations. Close this dialog and try again.
-					</p>
-				) : kinds === undefined || entries === undefined ? (
-					<Skeleton className="h-24" />
-				) : kinds === null || entries === null ? (
-					<p className="text-muted-foreground">Integrations are not enabled on this deployment.</p>
-				) : view.mode === 'list' ? (
-					<ListView
-						scope={scope}
-						entries={entries}
-						kinds={kinds}
-						canManage={canManage}
-						onAdd={() => setView({ mode: 'catalog' })}
-						onEdit={(entry) => setView({ mode: 'edit', entry })}
-					/>
-				) : view.mode === 'catalog' ? (
-					<CatalogView
-						kinds={kinds}
-						onPick={(kind) => setView({ mode: 'create', kind })}
-						onCopy={scope === 'org' ? undefined : () => setView({ mode: 'copy' })}
-					/>
-				) : view.mode === 'copy' ? (
-					// Unreachable for the org scope: the catalog never offers Copy there.
-					scope !== 'org' ? (
-						<CopyView pid={scope.pid} kinds={kinds} onDone={() => setView({ mode: 'list' })} />
-					) : null
-				) : view.mode === 'create' ? (
-					<EditorView scope={scope} kind={view.kind} onDone={() => setView({ mode: 'list' })} />
-				) : (
-					<EditorView
-						scope={scope}
-						kind={kinds.find((k) => k.kind === view.entry.kind)}
-						entry={view.entry}
-						onDone={() => setView({ mode: 'list' })}
-					/>
-				)}
-			</div>
-		</DialogModal>
+			{/* Query errors also have undefined data, so handle them before the loading branch. */}
+			{kindsQuery.isError || entriesQuery.isError ? (
+				<p className="text-destructive">
+					Could not load integrations. Close this dialog and try again.
+				</p>
+			) : kinds === undefined || entries === undefined ? (
+				<Skeleton className="h-24" />
+			) : kinds === null || entries === null ? (
+				<p className="text-muted-foreground">Integrations are not enabled on this deployment.</p>
+			) : view.mode === 'list' ? (
+				<ListView
+					scope={scope}
+					entries={entries}
+					kinds={kinds}
+					canManage={canManage}
+					onAdd={() => setView({ mode: 'catalog' })}
+					onEdit={(entry) => setView({ mode: 'edit', entry })}
+				/>
+			) : view.mode === 'catalog' ? (
+				<CatalogView
+					kinds={kinds}
+					onPick={(kind) => setView({ mode: 'create', kind })}
+					onCopy={scope === 'org' ? undefined : () => setView({ mode: 'copy' })}
+				/>
+			) : view.mode === 'copy' ? (
+				// Unreachable for the org scope: the catalog never offers Copy there.
+				scope !== 'org' ? (
+					<CopyView pid={scope.pid} kinds={kinds} onDone={() => setView({ mode: 'list' })} />
+				) : null
+			) : view.mode === 'create' ? (
+				<EditorView scope={scope} kind={view.kind} onDone={() => setView({ mode: 'list' })} />
+			) : (
+				<EditorView
+					scope={scope}
+					kind={kinds.find((k) => k.kind === view.entry.kind)}
+					entry={view.entry}
+					onDone={() => setView({ mode: 'list' })}
+				/>
+			)}
+		</div>
 	);
 }
 
@@ -842,7 +839,7 @@ function EditorForm({
 	const isPending = createIntegration.isPending || updateIntegration.isPending;
 
 	const submit = async () => {
-		const nextErrors = validateValue(schema, config);
+		const nextErrors = validateValue(schema, config, '', true, kind.secret_sources);
 		if (!NAME_RE.test(name.trim())) {
 			nextErrors.__name = 'Lowercase letters, digits, and hyphens; starting with a letter.';
 		}
@@ -870,17 +867,12 @@ function EditorForm({
 
 	const handleTest = async () => {
 		try {
-			// Editing tests the SAVED config ({id}); unsaved edits aren't probed —
-			// a keep-marker has no value to test with until it is saved.
-			const result = await testIntegration.mutateAsync(
-				entryId !== undefined
-					? { source: 'stored', id: entryId }
-					: {
-							source: 'draft',
-							kind: kind.kind,
-							config: pruneForSubmit(schema, config) as Record<string, unknown>,
-						},
-			);
+			const result = await testIntegration.mutateAsync({
+				source: 'draft',
+				kind: kind.kind,
+				config: pruneForSubmit(schema, config) as Record<string, unknown>,
+				...(entryId ? { id: entryId } : {}),
+			});
 			if (result.ok) {
 				toast.success(
 					`Connection OK${result.latency_ms !== undefined ? ` (${result.latency_ms} ms)` : ''}${
@@ -917,6 +909,7 @@ function EditorForm({
 				onChange={setConfig}
 				errors={errors}
 				editing={editing}
+				secretSources={kind.secret_sources}
 			/>
 			<div className="flex justify-end gap-2 border-t pt-4">
 				{kind.supports_test && (
@@ -927,11 +920,7 @@ function EditorForm({
 						onPress={() => void handleTest()}
 					>
 						<FlaskConical className="size-4" aria-hidden />
-						{testIntegration.isPending
-							? 'Testing…'
-							: editing
-								? 'Test saved config'
-								: 'Test connection'}
+						{testIntegration.isPending ? 'Testing…' : 'Test connection'}
 					</Button>
 				)}
 				<Button type="submit" variant="primary" isDisabled={isPending}>

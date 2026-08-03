@@ -16,7 +16,6 @@ import type {
 	Role,
 	SandboxExposure,
 	SandboxProvider,
-	SecretsProvider,
 	Seconds,
 	ViewerMode,
 	WorkloadIdentityIssuer,
@@ -253,12 +252,6 @@ export interface ApiDeps {
 	 * AI (the proxy 404s, no AI config injected into sessions).
 	 */
 	ai?: AiProxyConfig;
-	/**
-	 * Project secrets: third-party keys injected into a sandbox as env vars, stored
-	 * either encrypted-in-bucket (managed) or as a pointer into an external manager
-	 * (reference). Absent disables the feature (the routes 404, nothing is injected).
-	 */
-	secrets?: SecretsProvider;
 	/** Optional project integration service; absence disables its routes and injection. */
 	integrations?: ProjectIntegrationsService;
 	/**

@@ -211,7 +211,7 @@ established socket lives until it closes) in `proxy` exposure, and — because i
 run `--no-token`; see docs/security.md) — the session read projections
 (list/get) withhold `sandbox_url` from callers the kernel gates would reject.
 The UI says so rather than dangling an unopenable indicator. The reason is
-credential exposure: app sandboxes keep WIF credentials and project
+credential exposure: app sandboxes keep WIF credentials and integration
 secrets injected (apps commonly exist to query project data), and `marimo run`
 exposes UI-driven inputs into arbitrary notebook code — acceptable inside the
 editor trust boundary (editors can already reach those credentials via an edit
@@ -297,7 +297,6 @@ from the implementation.
 | Notebooks    | `GET/POST …/{pid}/notebooks` · `GET/PATCH/DELETE …/{nid}` · code, Git sync, versions, restore, and duplicate routes     |
 | Sessions     | `GET …/{pid}/sessions` · create/get/heartbeat/delete a notebook session · inspect/take over editor ownership            |
 | Integrations | Discover kinds · manage project or organization instances · list versions · copy a project instance · test connectivity |
-| Secrets      | List, store, delete, and test project secret references                                                                 |
 | System       | `GET /api/v1/version` · `GET /api/v1/capabilities` · `GET /api/health`                                                  |
 
 Notebooks are addressed by `{project_id, notebook_id}`. Clients never receive

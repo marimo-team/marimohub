@@ -42,7 +42,6 @@ import {
 	unsupportedBackendNotice,
 } from './computeProfiles';
 import { makeIntegrations } from './integrations';
-import { makeSecrets } from './secrets';
 import { makeStorage, makeSandboxBucketConfig } from './storage';
 import { makeWif } from './wif';
 import { parseEnum, parseEnumOr, parseIntEnv, parseList } from './env';
@@ -358,8 +357,6 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 		...makeWif(env),
 		// Managed AI proxy (no-op unless MARIMOHUB_AI_BACKEND is configured).
 		...makeAi(env),
-		// Project secrets (no-op unless MARIMOHUB_SECRETS_BACKEND is configured).
-		...makeSecrets(env, bucket),
 		// Project integrations (no-op unless MARIMOHUB_INTEGRATIONS=on — opt-in per the
 		// two-phase rollout note on makeIntegrations).
 		...makeIntegrations(env, bucket, metrics),

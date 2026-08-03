@@ -62,8 +62,10 @@ example below; the full reference is
 ## Enable it for a project
 
 WIF is a deployment-wide _capability_; a project receives no credentials until a
-project **admin** opts it in. Set the project's `federation` via the project
-update API (`PUT /api/v1/projects/{pid}`):
+project **admin** opts it in. In the project, select **Environment & access**.
+Then select **Cloud access** and **Federated cloud access**.
+
+The project update API (`PUT /api/v1/projects/{pid}`) uses the same `federation` field:
 
 ```json
 { "federation": { "enabled": true, "target": "default" } }

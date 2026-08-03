@@ -146,6 +146,18 @@ async function chooseNotebookAction(user: ReturnType<typeof userEvent.setup>, la
 	await user.click(await screen.findByText(label));
 }
 
+describe('environment and access', () => {
+	it('is always visible and opens the unified overview', async () => {
+		makeFetch({ capabilities: { federation: { available: false } } });
+		await renderProject();
+		const user = userEvent.setup();
+		await user.click(screen.getByRole('button', { name: 'Environment & access' }));
+		expect(screen.getByRole('heading', { name: 'Environment & access' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /Integrations/ })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /Cloud access/ })).toBeInTheDocument();
+	});
+});
+
 function installDownloadMocks() {
 	const createObjectURL = vi.fn(() => 'blob:download');
 	const revokeObjectURL = vi.fn();
