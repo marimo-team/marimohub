@@ -23,8 +23,8 @@ export default defineConfig({
 			'/api': {
 				target: 'http://localhost:3000',
 				// Keep the browser's Host header (localhost:5175) instead of rewriting it
-				// to the target. The API's CSRF guard rejects requests whose Origin host
-				// differs from Host; with changeOrigin the proxied Host becomes
+				// to the target. The API's CSRF guard compares the full request origin;
+				// with changeOrigin the proxied Host becomes
 				// localhost:3000 while Origin stays localhost:5175, tripping the guard.
 				changeOrigin: false,
 			},

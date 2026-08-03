@@ -9,7 +9,7 @@ client generated from its OpenAPI document.
 
 ## Response envelope
 
-Every `/api/v1/*` response uses one envelope:
+JSON responses under `/api/v1/*` use one envelope:
 
 ```jsonc
 // success
@@ -17,6 +17,9 @@ Every `/api/v1/*` response uses one envelope:
 // failure
 { "success": false, "error": { "code": "FORBIDDEN", "message": "…" } }
 ```
+
+The HTML snapshot route returns raw `text/html` on success. Its errors still
+use the JSON envelope.
 
 Authentication is via the session cookie issued by your [auth](/auth) backend,
 or a [personal access token](/api-tokens) sent as `Authorization: Bearer …`
@@ -56,15 +59,23 @@ Resource groups:
   effective role). Admins can read the audit log one UTC day at a time
   (`GET /projects/{pid}/events?date=YYYY-MM-DD`, defaults to today) — every
   project/notebook mutation is recorded as an event.
-- **Notebooks** — CRUD notebooks, read code, list/get/restore versions, export
-  `workspace.zip`.
-- **Sessions** — start/stop kernel sessions.
-- **Users** — resolve member identities.
-- **Meta** — `GET /api/v1/version` (deploy info) and `GET /api/health` (probe).
+- **Notebooks** — create and manage local or Git-synced notebooks, read code,
+  manage versions, and rotate notebook sync tokens.
+- **Sessions** — list, create, inspect, heartbeat, and stop kernel sessions.
+  The session routes also expose editor ownership and exclusive takeover.
+- **Integrations** — discover integration kinds and manage project or
+  organization integration instances. Version-history lists use pagination.
+- **Secrets** — list secret metadata, store or delete project secrets, and test
+  secret references without returning secret values.
+- **Users and tokens** — resolve or search users, and create, list, or revoke
+  personal access tokens.
+- **System** — `GET /api/v1/version` and `GET /api/v1/capabilities` report
+  deployment information. `GET /api/health` is the unversioned health probe.
 
 ## Pagination
 
-List endpoints return a page rather than a bare array:
+The project, notebook, notebook-version, project-session, integration-instance,
+and integration-version list endpoints return this page shape:
 
 ```jsonc
 {
@@ -78,12 +89,15 @@ List endpoints return a page rather than a bare array:
 }
 ```
 
-Pass `?limit=` to bound the page size and `?cursor=` (echoing a prior
-`next_cursor`) to fetch the next page. Items are ordered newest-first. A
-`next_cursor` of `null` means there are no more pages. The cursor is opaque —
-treat it as a token, not a parsable value. Server-enforced limits (default/max
-page size, max request bytes, session cap, version retention) are reported by
-`GET /api/v1/capabilities`.
+Pass `?limit=` to set the page size. Pass a prior `next_cursor` as `?cursor=` to
+get the next page. Items are ordered newest-first. A `next_cursor` value of
+`null` marks the final page. The cursor is opaque.
+
+Some small or naturally bounded collections still return arrays. These include
+project members, secrets, API tokens, integration kinds, audit events, and user
+search results. The OpenAPI response schema is authoritative for each route.
+`GET /api/v1/capabilities` reports the default and maximum page sizes and other
+server limits.
 
 ## Caching
 

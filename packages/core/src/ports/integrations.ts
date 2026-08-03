@@ -1,4 +1,4 @@
-import type { IntegrationId, ProjectId, SessionId, UserId } from '../ids';
+import type { IntegrationId, SessionId, UserId } from '../ids';
 
 export const INTEGRATION_CATEGORIES = [
 	'database',
@@ -93,8 +93,8 @@ export interface IntegrationEntry {
 	created_by: UserId;
 	created_at: string;
 	updated_at: string;
-	/** Absent means project-owned; project listings mark inherited org instances `'org'`. */
-	scope?: IntegrationScopeKind;
+	/** The storage tier that owns this integration. */
+	scope: IntegrationScopeKind;
 	/** Org entries in a project listing only: a same-name project integration shadows this one. */
 	shadowed?: boolean;
 }
@@ -156,8 +156,8 @@ export interface UpdateIntegrationInput {
 }
 
 export type TestIntegrationRequest =
-	| { kind: string; config: Record<string, unknown> }
-	| { id: IntegrationId };
+	| { source: 'draft'; kind: string; config: Record<string, unknown> }
+	| { source: 'stored'; id: IntegrationId };
 
 export interface CopyIntegrationOptions {
 	/** Name for the copy; defaults to the source instance's name. */
@@ -175,95 +175,4 @@ export interface SessionRender {
 	vars: Record<string, string>;
 	/** Version pins persisted on the session record. */
 	attachments: { id: IntegrationId; name: string; kind: string; version: number }[];
-}
-
-export interface IntegrationsProvider {
-	/** Serializable kind catalog safe for authenticated users. */
-	listKinds(): KindDescriptor[];
-	list(projectId: ProjectId): Promise<IntegrationEntry[]>;
-	get(projectId: ProjectId, id: IntegrationId): Promise<IntegrationDetail>;
-	create(
-		projectId: ProjectId,
-		input: CreateIntegrationInput,
-		actor: UserId,
-	): Promise<IntegrationDetail>;
-	/**
-	 * `expectedVersion` is the optimistic-concurrency guard (the `updated_at`
-	 * echoed from a read via `If-Match`): 412 when the head changed underneath.
-	 */
-	update(
-		projectId: ProjectId,
-		id: IntegrationId,
-		input: UpdateIntegrationInput,
-		actor: UserId,
-		expectedVersion?: string,
-	): Promise<IntegrationDetail>;
-	/**
-	 * Idempotent; removes the head and all version history. `expectedVersion` is
-	 * the same optimistic-concurrency guard as `update` — 412 when the head
-	 * changed since the caller read it, so a stale delete cannot erase an edit the
-	 * caller never saw. The check is atomic with the commit: an update landing
-	 * while the delete is in flight also produces 412, and nothing is removed.
-	 * Ignored once the integration is already gone. Resolves `false` when there
-	 * was nothing to delete — still a success, but callers must not record it as
-	 * a deletion (e.g. in the audit trail).
-	 */
-	delete(projectId: ProjectId, id: IntegrationId, expectedVersion?: string): Promise<boolean>;
-	listVersions(
-		projectId: ProjectId,
-		id: IntegrationId,
-		page?: IntegrationVersionPageRequest,
-	): Promise<IntegrationVersionPage>;
-	test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult>;
-	/**
-	 * Copies the source integration's CURRENT config into `targetProjectId` as a
-	 * new integration (history starts at version 1). Secret fields are decrypted
-	 * and re-sealed for the destination — envelopes are bound to their head path,
-	 * so a byte copy could never decrypt — which is why this is a server-side
-	 * operation and not a client GET+POST (reads always redact). The API layer
-	 * must gate BOTH projects; the provider carries no authorization.
-	 */
-	copy(
-		sourceProjectId: ProjectId,
-		id: IntegrationId,
-		targetProjectId: ProjectId,
-		options: CopyIntegrationOptions,
-		actor: UserId,
-	): Promise<IntegrationDetail>;
-	/**
-	 * Server-only render path. Failures name the instance but no values and abort
-	 * provisioning rather than starting a sandbox with partial configuration.
-	 * Includes enabled, unshadowed org-scoped instances rendered into this
-	 * project's session.
-	 */
-	resolveForSession(
-		projectId: ProjectId,
-		context: SessionRenderContext,
-	): Promise<SessionRender | undefined>;
-}
-
-/**
- * CRUD over org-scoped (deployment-wide) integrations, stored under
- * `_system/integrations/`. Managed by super admins only — the API layer gates
- * every call; the provider itself carries no authorization. Rendering into
- * sessions goes through `IntegrationsProvider.resolveForSession`, which merges
- * the org scope in.
- */
-export interface OrgIntegrationsProvider {
-	listKinds(): KindDescriptor[];
-	list(): Promise<IntegrationEntry[]>;
-	get(id: IntegrationId): Promise<IntegrationDetail>;
-	create(input: CreateIntegrationInput, actor: UserId): Promise<IntegrationDetail>;
-	update(
-		id: IntegrationId,
-		input: UpdateIntegrationInput,
-		actor: UserId,
-		expectedVersion?: string,
-	): Promise<IntegrationDetail>;
-	delete(id: IntegrationId, expectedVersion?: string): Promise<boolean>;
-	listVersions(
-		id: IntegrationId,
-		page?: IntegrationVersionPageRequest,
-	): Promise<IntegrationVersionPage>;
-	test(request: TestIntegrationRequest): Promise<TestResult>;
 }

@@ -12,13 +12,18 @@ type Lookup = (
 ) => Promise<PinnedAddress[]>;
 
 /** Real resolution, optionally slowed down, so DNS cost is observable in tests. */
-const dns = vi.hoisted(() => ({ delayMs: 0 }));
+const dns = vi.hoisted(() => ({
+	delayMs: 0,
+	answers: new Map<string, PinnedAddress[]>(),
+}));
 vi.mock('node:dns/promises', async (importOriginal) => {
 	const actual = await importOriginal<typeof dnsPromises>();
 	return {
 		...actual,
 		lookup: async (hostname: string, options: { all: true; verbatim: true }) => {
 			if (dns.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, dns.delayMs));
+			const answer = dns.answers.get(hostname);
+			if (answer) return answer;
 			return (actual.lookup as unknown as Lookup)(hostname, options);
 		},
 	};
@@ -38,6 +43,7 @@ afterEach(() => {
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 	dns.delayMs = 0;
+	dns.answers.clear();
 });
 
 describe('createGuardedProbe policy', () => {
@@ -87,6 +93,45 @@ describe('createGuardedProbe policy', () => {
 		for (const target of ['http://[ff02::1]/', 'http://198.51.100.1/', 'http://203.0.113.1/']) {
 			await expect(probe.fetch(target), target).rejects.toThrow(/private or reserved/);
 		}
+		expect(transport).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		'http://[2001:db8::1]/',
+		'http://[3fff::1]/',
+		'http://[fec0::1]/',
+		'http://[2001::1]/',
+		'http://[2002:7f00:1::]/',
+		'http://[100::1]/',
+		'http://[5f00::1]/',
+	])(
+		'blocks non-global IPv6 documentation, site-local, and transition address %s',
+		async (target) => {
+			const { transport } = stubTransport();
+			const probe = createGuardedProbe({ transport });
+			await expect(probe.fetch(target)).rejects.toThrow(/private or reserved/);
+			expect(transport).not.toHaveBeenCalled();
+		},
+	);
+
+	it('allows an ordinary global-unicast IPv6 literal', async () => {
+		const { transport, calls } = stubTransport();
+		const probe = createGuardedProbe({ transport });
+		await expect(probe.fetch('https://[2606:4700:4700::1111]/')).resolves.toMatchObject({
+			ok: true,
+		});
+		expect(calls[0].pinned).toEqual([{ address: '2606:4700:4700::1111', family: 6 }]);
+	});
+
+	it('rejects a hostname when any DNS answer is private', async () => {
+		dns.answers.set('mixed.example.test', [
+			{ address: '93.184.216.34', family: 4 },
+			{ address: '10.0.0.8', family: 4 },
+		]);
+		const { transport } = stubTransport();
+		const probe = createGuardedProbe({ transport });
+
+		await expect(probe.fetch('https://mixed.example.test/')).rejects.toThrow(/private or reserved/);
 		expect(transport).not.toHaveBeenCalled();
 	});
 

@@ -26,4 +26,59 @@ describe('OpenAPI spec', () => {
 		const committed = parse(readFileSync(SPEC_PATH, 'utf8'));
 		expect(committed).toEqual(doc);
 	});
+
+	it('constrains integration identifiers, timestamps, and version numbers', () => {
+		const schemas = (
+			doc as {
+				components: {
+					schemas: Record<string, { properties: Record<string, Record<string, unknown>> }>;
+				};
+			}
+		).components.schemas;
+		const entry = schemas.IntegrationEntry.properties;
+		const version = schemas.IntegrationVersion.properties;
+
+		expect(entry.id.pattern).toBe('^intg-[0-9a-z]{16}$');
+		expect(entry.created_at.format).toBe('date-time');
+		expect(entry.updated_at.format).toBe('date-time');
+		expect(entry.current_version).toMatchObject({ type: 'integer', exclusiveMinimum: 0 });
+		expect(version.version).toMatchObject({ type: 'integer', exclusiveMinimum: 0 });
+		expect(version.kind_schema_version).toMatchObject({
+			type: 'integer',
+			exclusiveMinimum: 0,
+		});
+		expect(version.created_at.format).toBe('date-time');
+	});
+
+	it('publishes integration scope and a discriminated test request', () => {
+		const typed = doc as {
+			tags: { name: string }[];
+			components: {
+				schemas: Record<
+					string,
+					{
+						properties: Record<string, Record<string, unknown>>;
+						required: string[];
+						oneOf: Record<string, unknown>[];
+					}
+				>;
+			};
+		};
+		expect(typed.tags).toEqual(
+			expect.arrayContaining([expect.objectContaining({ name: 'Integrations' })]),
+		);
+		const entry = typed.components.schemas.IntegrationEntry;
+		expect(entry.properties.name.pattern).toBe('^[a-z][a-z0-9-]{0,31}$');
+		expect(entry.properties.scope.enum).toEqual(['project', 'org']);
+		expect(entry.required).toEqual(expect.arrayContaining(['id', 'scope']));
+		const request = typed.components.schemas.IntegrationTestRequest;
+		expect(request.oneOf[0]).toMatchObject({
+			required: ['source', 'kind', 'config'],
+			additionalProperties: false,
+		});
+		expect(request.oneOf[1]).toMatchObject({
+			required: ['source', 'id'],
+			additionalProperties: false,
+		});
+	});
 });

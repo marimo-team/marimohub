@@ -129,13 +129,13 @@ can see the list and redacted configs; **`admin`** manages them — as does a
 - **Enable / disable** — disabled integrations are skipped at session launch.
   This is also the escape hatch when a broken config is failing sessions.
 - **Delete** — removes the instance and its entire version history.
-- **Import** — copy an integration from another project (**Add integration** →
-  **Import from another project**, or `POST …/integrations/import`). You need
+- **Copy** — copy an integration from another project (**Add integration** →
+  **Copy from another project**, or `POST …/integrations/copy`). You need
   the `admin` role on **both** projects; a super admin qualifies everywhere.
   The copy takes the source's current config — secrets included, re-encrypted
   for the destination — and starts its own version history at v1. The two are
   independent afterwards: editing or deleting one never affects the other. The
-  audit trail records the import with its source project and integration.
+  audit trail records the copy with its source project and integration.
 
 New sessions pick up config changes; running sessions keep what they launched
 with (restart the session to apply).

@@ -114,7 +114,8 @@ activity, snapshot timing. Ship stdout to your log pipeline and alert on
 Compute backends differ in cost model — pick per [Compute](/compute):
 
 - `modal` / `e2b` / `coreweave`: pay per running kernel. Set
-  `MARIMOHUB_COMPUTE_IDLE_TIMEOUT` and per-backend max-lifetime caps so idle or
-  orphaned sandboxes stop.
+  `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` so the hub saves and stops idle sessions.
+  Modal automatically sets its provider idle limit to 1.5 times this value. Use
+  each backend's max-lifetime setting as an orphan backstop.
 - `kubernetes` / `docker`: you own the nodes; cap per-kernel CPU/memory/GPU.
 - `MARIMOHUB_MAX_SESSIONS_PER_USER` bounds concurrent kernels per user.

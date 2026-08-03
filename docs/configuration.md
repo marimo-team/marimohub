@@ -58,7 +58,7 @@ Native Azure Blob Storage using ETags for atomic conditional writes. Uses Defaul
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_STORAGE_AZURE_CONTAINER` | Name of the Blob Storage container that backs the hub. | Yes | — | `orgname-marimohub` |
 | `MARIMOHUB_STORAGE_AZURE_ACCOUNT_URL` | Blob service account URL used with DefaultAzureCredential. Required unless a connection string is set. | — | — | `https://account.blob.core.windows.net` |
-| `MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING` 🔒 | Optional connection string for local or legacy deployments. When set, it takes precedence over the account URL. | — | — | — |
+| `MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING` 🔒 | Connection string for local or legacy deployments. Do not set it with the account URL. | — | — | — |
 
 ### Filesystem
 
@@ -103,7 +103,6 @@ Read regardless of the selected compute backend.
 | `MARIMOHUB_COMPUTE_IMAGE` | Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
 | `MARIMOHUB_COMPUTE_PROFILES` | Ordered named CPU/memory profiles (`name:cpu=<cores>;mem=<Mi\|Gi\|Ti>`). The first is the default; supported backends apply the notebook choice when overrides are enabled. | — | — | `small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi` |
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
-| `MARIMOHUB_COMPUTE_IDLE_TIMEOUT` | Idle duration before a kernel auto-stops (modal). | — | — | `20m` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |
 | `MARIMOHUB_COMPUTE_ASSET_URL` | Base URL for marimo frontend assets (e.g. a CDN). Omit to use the bundled assets. | — | — | `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist` |
@@ -316,7 +315,7 @@ Server-wide settings; no backend selector.
 | `MARIMOHUB_MAX_SESSIONS_PER_USER` | Per-user concurrent session cap (`0` = unlimited). Counts `edit` sessions, and separately bounds the apps a single user may have started — the cost ceiling a user cannot escape by fanning apps out across projects (apps are also capped per project via `MARIMOHUB_MAX_APPS_PER_PROJECT`). | — | `10` | — |
 | `MARIMOHUB_MAX_APPS_PER_PROJECT` | Concurrent app (`mode: app`) sessions per project (`0` = unlimited). Apps are shared per-notebook singletons, so this caps how many notebooks in a project can be served as apps at once. | — | `5` | — |
 | `MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS` | marimohub-owned hard session lifetime: the lifecycle sweep gracefully saves + tears the session down at this deadline (extending while editors are still connected). Provider-side caps (CoreWeave/E2B) default to 2x this as an orphan backstop. | — | `14400` | — |
-| `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` | Reap a session (with a save) when it has no active editor connections AND its heartbeat has been stale this long. | — | `1800` | — |
+| `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS` | Reap a session (with a save) when it has no active editor connections AND its heartbeat has been stale this long. Modal receives a provider-side fallback at 1.5x this value. | — | `1800` | — |
 | `MARIMOHUB_SESSION_SNAPSHOT_INTERVAL_SECONDS` | Periodic save cadence for live sessions — the durability floor bounding what a hard kill (backstop, node loss, OOM) can lose. Unchanged notebooks are deduped (no spurious versions). `0` disables periodic snapshots. | — | `120` | — |
 | `MARIMOHUB_SESSION_LIFETIME_EXTENSION_SECONDS` | How far the session deadline slides each time the lifecycle sweep finds editors still connected at it. | — | `1800` | — |
 | `MARIMOHUB_SESSION_CONNECTION_AWARE` | Ask the kernel for its active connection count before a lifetime/idle teardown, extending instead of reaping while editors are connected. Set `false` to reap strictly on schedule. | — | `true` | — |

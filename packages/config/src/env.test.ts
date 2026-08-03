@@ -50,12 +50,16 @@ describe('parseList', () => {
 });
 
 describe('parseBool', () => {
-	it('is true only for the literal "true"', () => {
-		expect(parseBool({ F: 'true' }, 'F')).toBe(true);
+	it.each(['true', 'True', ' TRUE '])('reads %o as true', (value) => {
+		expect(parseBool({ F: value }, 'F')).toBe(true);
 	});
 
-	it.each(['True', 'TRUE', '1', 'yes', '', undefined])('is false for %o', (value) => {
+	it.each(['false', 'False', ' FALSE ', '', '  ', undefined])('reads %o as false', (value) => {
 		expect(parseBool({ F: value }, 'F')).toBe(false);
+	});
+
+	it.each(['1', '0', 'yes', 'no', 'truthy'])('rejects %o', (value) => {
+		expect(() => parseBool({ F: value }, 'F')).toThrow(ConfigError);
 	});
 });
 

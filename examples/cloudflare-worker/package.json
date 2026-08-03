@@ -21,7 +21,7 @@
 		"@marimo-hub/config": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
 		"@marimo-hub/storage-r2": "workspace:*",
-		"e2b": "2.30.6"
+		"e2b": "2.35.0"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "catalog:",

@@ -150,7 +150,7 @@ app.openapi(createToken, async (c) => {
 		user.id,
 	);
 	await deps.services.events
-		.append({ event: 'token.created', actor: user.id, token_id: record.id, token_name: name })
+		.append({ event: 'token.create', actor: user.id, token_id: record.id, token_name: name })
 		.catch(() => {});
 	return c.json({ success: true, data: { ...toResponse(record), token } }, 201);
 });
@@ -171,7 +171,7 @@ app.openapi(revokeToken, async (c) => {
 
 	await deps.services.tokens.revoke(user.id, tokenId);
 	await deps.services.events
-		.append({ event: 'token.revoked', actor: user.id, token_id: tokenId })
+		.append({ event: 'token.revoke', actor: user.id, token_id: tokenId })
 		.catch(() => {});
 	return c.json({ success: true }, 200);
 });

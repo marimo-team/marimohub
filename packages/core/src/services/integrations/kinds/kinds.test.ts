@@ -1103,6 +1103,9 @@ describe('cross-kind bundle', () => {
 		'a/./file.json',
 		'a//file.json',
 		'a\\file.json',
+		'a/secret\0.json',
+		'a/secret\n.json',
+		'a/secret\u007f.json',
 	])('rejects an unsafe rendered path: %s', (path) => {
 		expect(() =>
 			bundleIntegrations(
@@ -1151,6 +1154,53 @@ describe('cross-kind bundle', () => {
 			).toThrow(/forbidden or malformed env name/);
 		},
 	);
+
+	it.each(['secret\0value', 'secret\nvalue', 'secret\tvalue', 'secret\u007fvalue'])(
+		'rejects a rendered environment value containing a control character',
+		(value) => {
+			expect(() =>
+				bundleIntegrations([synthetic('unsafe', { env: { SAFE_NAME: value } })], createSessionId()),
+			).toThrow(/control character/);
+		},
+	);
+
+	it('does not echo rendered environment or YAML values in validation errors', () => {
+		const secret = 'do-not-log-this-secret';
+		const messages = [
+			[synthetic('unsafe', { env: { SAFE_NAME: `${secret}\n` } })],
+			[
+				synthetic('first', { env: { SHARED: secret } }),
+				synthetic('second', { env: { SHARED: 'other' } }),
+			],
+		];
+		for (const rendered of messages) {
+			try {
+				bundleIntegrations(rendered, createSessionId());
+				throw new Error('Expected bundleIntegrations to reject');
+			} catch (error) {
+				expect(String(error)).not.toContain(secret);
+			}
+		}
+
+		try {
+			bundleIntegrations(
+				[
+					{
+						...synthetic('first', {}),
+						output: { yamlFiles: [{ path: 'shared.yaml', value: { option: secret } }] },
+					},
+					{
+						...synthetic('second', {}),
+						output: { yamlFiles: [{ path: 'shared.yaml', value: { option: 'other' } }] },
+					},
+				],
+				createSessionId(),
+			);
+			throw new Error('Expected bundleIntegrations to reject');
+		} catch (error) {
+			expect(String(error)).not.toContain(secret);
+		}
+	});
 
 	it('rejects conflicting environment values but permits an identical shared value', () => {
 		expect(() =>

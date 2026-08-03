@@ -4,17 +4,22 @@ import {
 	BadRequestError,
 	NotFoundError,
 	PreconditionFailedError,
+	ResourceExhaustedError,
 	ValidationError,
 } from '../../errors';
-import { createProjectId, createSessionId } from '../../ids';
+import { createIntegrationId, createProjectId, createSessionId } from '../../ids';
 import type { ProjectId, SessionId } from '../../ids';
 import { paths } from '../../paths';
-import type { Bucket } from '../../ports/bucket';
+import type { Bucket, BucketListOptions } from '../../ports/bucket';
 import { ACTOR, MemoryBucket } from '../../testing';
 import { AesGcmSecretCodec } from '../secrets/AesGcmSecretCodec';
 import { INTEGRATIONS_DIR, INTEGRATIONS_DIR_ENV } from './bundle';
 import { defaultRegistry } from './kinds';
-import { OrgIntegrationsStore, ProjectIntegrationsStore } from './ProjectIntegrationsStore';
+import {
+	MAX_INTEGRATIONS_PER_SCOPE,
+	OrgIntegrationsStore,
+	ProjectIntegrationsStore,
+} from './ProjectIntegrationsStore';
 import { IntegrationRegistry } from './registry';
 import { defineIntegration, envSegment } from './sdk';
 import { zSecret } from './secretFields';
@@ -56,6 +61,30 @@ function makeStore(bucket: MemoryBucket, withCodec = true) {
 		codec: withCodec ? codec : undefined,
 		probe: stubProbe,
 	});
+}
+
+function pagedDelimiterBucket(inner: Bucket, pageSize: number): Bucket {
+	return {
+		get: (key) => inner.get(key),
+		head: (key) => inner.head(key),
+		put: (key, value, options) => inner.put(key, value, options),
+		delete: (key) => inner.delete(key),
+		async list(options: BucketListOptions = {}) {
+			if (!options.delimiter) return inner.list(options);
+			const { cursor, ...firstPage } = options;
+			const complete = await inner.list(firstPage);
+			const offset = cursor === undefined ? 0 : Number(cursor.slice('test-page:'.length));
+			const delimitedPrefixes = complete.delimitedPrefixes.slice(offset, offset + pageSize);
+			const next = offset + delimitedPrefixes.length;
+			const truncated = next < complete.delimitedPrefixes.length;
+			return {
+				objects: [],
+				delimitedPrefixes,
+				truncated,
+				...(truncated ? { cursor: `test-page:${next}` } : {}),
+			};
+		},
+	};
 }
 
 /** A strictly ticking clock, so consecutive writes never share an `updated_at`. */
@@ -111,6 +140,128 @@ describe('ProjectIntegrationsStore', () => {
 		await expect(
 			store.create(pid, { kind: 'echo', name: 'prod', config: { token: 't' } }, ACTOR),
 		).rejects.toThrow(/already exists/);
+	});
+
+	it('follows every delimiter page and enforces the per-scope bound', async () => {
+		const createdAt = new Date(1_700_000_000_000).toISOString();
+		for (let index = 0; index <= MAX_INTEGRATIONS_PER_SCOPE; index++) {
+			const id = createIntegrationId();
+			await bucket.put(
+				paths.project(pid).integration(id).head,
+				JSON.stringify({
+					id,
+					project_id: pid,
+					kind: 'echo',
+					name: `item-${index}`,
+					enabled: true,
+					current_version: 1,
+					created_by: ACTOR,
+					created_at: createdAt,
+					updated_at: createdAt,
+				}),
+			);
+		}
+		const paged = new ProjectIntegrationsStore({
+			bucket: pagedDelimiterBucket(bucket, 37),
+			registry: defaultRegistry(),
+			codec,
+		});
+
+		await expect(paged.list(pid)).rejects.toThrow(ResourceExhaustedError);
+		await bucket.delete(
+			(await bucket.list({ prefix: paths.project(pid).integrationsPrefix })).objects[0].key,
+		);
+		expect(await paged.list(pid)).toHaveLength(MAX_INTEGRATIONS_PER_SCOPE);
+	});
+
+	it('skips heads deleted after listing and committed tombstones', async () => {
+		const store = makeStore(bucket);
+		const deleted = await store.create(
+			pid,
+			{ kind: 'echo', name: 'deleted', config: { token: 't' } },
+			ACTOR,
+		);
+		const tombstoned = await store.create(
+			pid,
+			{ kind: 'echo', name: 'tombstoned', config: { token: 't' } },
+			ACTOR,
+		);
+		const kept = await store.create(
+			pid,
+			{ kind: 'echo', name: 'kept', config: { token: 't' } },
+			ACTOR,
+		);
+		const deletedKey = paths.project(pid).integration(deleted.id).head;
+		const tombstoneKey = paths.project(pid).integration(tombstoned.id).head;
+		const tombstone = await (await bucket.get(tombstoneKey))!.json<Record<string, unknown>>();
+		await bucket.put(
+			tombstoneKey,
+			JSON.stringify({ ...tombstone, deleted_at: new Date().toISOString() }),
+		);
+		let raced = false;
+		const racing: Bucket = {
+			get: async (key) => {
+				if (key === deletedKey && !raced) {
+					raced = true;
+					await bucket.delete(key);
+					return null;
+				}
+				return bucket.get(key);
+			},
+			head: (key) => bucket.head(key),
+			put: (key, value, options) => bucket.put(key, value, options),
+			delete: (key) => bucket.delete(key),
+			list: (options) => bucket.list(options),
+		};
+
+		const listed = await new ProjectIntegrationsStore({
+			bucket: racing,
+			registry: defaultRegistry(),
+			codec,
+		}).list(pid);
+		expect(listed.map((entry) => entry.id)).toEqual([kept.id]);
+	});
+
+	it('fails closed when a listed head is corrupt', async () => {
+		const created = await makeStore(bucket).create(
+			pid,
+			{ kind: 'echo', name: 'prod', config: { token: 't' } },
+			ACTOR,
+		);
+		const key = paths.project(pid).integration(created.id).head;
+		const head = await (await bucket.get(key))!.json<Record<string, unknown>>();
+		await bucket.put(key, JSON.stringify({ ...head, current_version: 0 }));
+
+		await expect(makeStore(bucket).list(pid)).rejects.toThrow(/Corrupted stored object/);
+	});
+
+	it('does not expose secret values thrown by an integration renderer', async () => {
+		const leaked = 'renderer-secret';
+		const registry = new IntegrationRegistry();
+		registry.register(
+			defineIntegration({
+				kind: 'leaky',
+				title: 'Leaky',
+				description: 'test kind',
+				category: 'other',
+				schemaVersion: 1,
+				configSchema: z.object({ token: zSecret() }),
+				render({ config }) {
+					throw new Error(`provider failed with ${config.token}`);
+				},
+			}),
+		);
+		const store = new ProjectIntegrationsStore({ bucket, registry, codec });
+		await store.create(pid, { kind: 'leaky', name: 'prod', config: { token: leaked } }, ACTOR);
+
+		let error: unknown;
+		try {
+			await store.resolveForSession(pid, renderContext(createSessionId()));
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(ValidationError);
+		expect(String(error)).not.toContain(leaked);
 	});
 
 	it('update with config appends an immutable version and bumps the pointer', async () => {
@@ -325,6 +476,7 @@ describe('ProjectIntegrationsStore', () => {
 	it('test() runs the probe on unsaved config without persisting anything', async () => {
 		const store = makeStore(bucket);
 		const result = await store.test(pid, {
+			source: 'draft',
 			kind: 'echo',
 			config: { greeting: 'yo', token: 'valid' },
 		});
@@ -332,7 +484,15 @@ describe('ProjectIntegrationsStore', () => {
 		expect(await store.list(pid)).toEqual([]);
 		// Unsaved probes use the transient sealer and do not require a deployment codec.
 		const codecless = makeStore(bucket, false);
-		expect((await codecless.test(pid, { kind: 'echo', config: { token: 'nope' } })).ok).toBe(false);
+		expect(
+			(
+				await codecless.test(pid, {
+					source: 'draft',
+					kind: 'echo',
+					config: { token: 'nope' },
+				})
+			).ok,
+		).toBe(false);
 	});
 
 	it('test({ id }) probes the stored config', async () => {
@@ -342,7 +502,7 @@ describe('ProjectIntegrationsStore', () => {
 			{ kind: 'echo', name: 'prod', config: { token: 'valid' } },
 			ACTOR,
 		);
-		expect((await store.test(pid, { id: created.id })).ok).toBe(true);
+		expect((await store.test(pid, { source: 'stored', id: created.id })).ok).toBe(true);
 	});
 
 	it('without a probe, testing is disabled and kinds report supports_test: false', async () => {
@@ -350,9 +510,9 @@ describe('ProjectIntegrationsStore', () => {
 		registry.register(echoKind);
 		const store = new ProjectIntegrationsStore({ bucket, registry, codec });
 		expect(store.listKinds().map((k) => k.supports_test)).toEqual([false]);
-		await expect(store.test(pid, { kind: 'echo', config: { token: 'valid' } })).rejects.toThrow(
-			/testing is not enabled/i,
-		);
+		await expect(
+			store.test(pid, { source: 'draft', kind: 'echo', config: { token: 'valid' } }),
+		).rejects.toThrow(/testing is not enabled/i);
 	});
 
 	describe('schema migration in every read path', () => {
@@ -1467,7 +1627,7 @@ describe('OrgIntegrationsStore + project inheritance', () => {
 		const entries = await project.list(pid);
 		expect(entries.map((e) => ({ name: e.name, scope: e.scope, shadowed: e.shadowed }))).toEqual([
 			{ name: 'aaa', scope: 'org', shadowed: undefined },
-			{ name: 'shared', scope: undefined, shadowed: undefined },
+			{ name: 'shared', scope: 'project', shadowed: undefined },
 			{ name: 'shared', scope: 'org', shadowed: true },
 		]);
 	});
@@ -1485,7 +1645,7 @@ describe('OrgIntegrationsStore + project inheritance', () => {
 		expect(
 			entries.map((e) => ({ scope: e.scope, enabled: e.enabled, shadowed: e.shadowed })),
 		).toEqual([
-			{ scope: undefined, enabled: false, shadowed: undefined },
+			{ scope: 'project', enabled: false, shadowed: undefined },
 			{ scope: 'org', enabled: true, shadowed: true },
 		]);
 	});

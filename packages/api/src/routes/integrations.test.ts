@@ -28,6 +28,11 @@ const PG_CONFIG = {
 	password: 'sup3r-secret',
 };
 
+interface Page<T> {
+	items: T[];
+	next_cursor: string | null;
+}
+
 describe('Integrations routes', () => {
 	let bucket: MemoryBucket;
 	let request: ReturnType<typeof createTestApi>['request'];
@@ -278,9 +283,31 @@ describe('Integrations routes', () => {
 		await expectOk(await request('DELETE', `/projects/${pid}/integrations/${created.id}`));
 		await expectOk(await request('DELETE', `/projects/${pid}/integrations/${created.id}`));
 		expect(
-			await expectOk<unknown[]>(await request('GET', `/projects/${pid}/integrations`)),
-		).toEqual([]);
+			await expectOk<Page<unknown>>(await request('GET', `/projects/${pid}/integrations`)),
+		).toEqual({ items: [], next_cursor: null });
 		await expectError(await request('GET', `/projects/${pid}/integrations/${created.id}`), 404);
+	});
+
+	it('paginates project integration instances without duplicates', async () => {
+		const pid = await createProject();
+		for (const name of ['alpha', 'bravo', 'charlie']) await createPg(pid, name);
+
+		const first = await expectOk<Page<{ id: string; scope: string }>>(
+			await request('GET', `/projects/${pid}/integrations?limit=2`),
+		);
+		expect(first.items).toHaveLength(2);
+		expect(first.items.every((entry) => entry.scope === 'project')).toBe(true);
+		expect(first.next_cursor).not.toBeNull();
+
+		const second = await expectOk<Page<{ id: string }>>(
+			await request(
+				'GET',
+				`/projects/${pid}/integrations?limit=2&cursor=${encodeURIComponent(first.next_cursor ?? '')}`,
+			),
+		);
+		expect(second.items).toHaveLength(1);
+		expect(second.next_cursor).toBeNull();
+		expect(new Set([...first.items, ...second.items].map((entry) => entry.id)).size).toBe(3);
 	});
 
 	it('list requires membership; create/update/delete/test require admin', async () => {
@@ -329,7 +356,10 @@ describe('Integrations routes', () => {
 			403,
 		);
 		await expectError(
-			await editorReq('POST', `/projects/${pid}/integrations/test`, { id: created.id }),
+			await editorReq('POST', `/projects/${pid}/integrations/test`, {
+				source: 'stored',
+				id: created.id,
+			}),
 			403,
 		);
 	});
@@ -394,7 +424,10 @@ describe('Integrations routes', () => {
 			);
 			await expectError(await req('DELETE', `/projects/${pid}/integrations/${created.id}`), 404);
 			await expectError(
-				await req('POST', `/projects/${pid}/integrations/test`, { id: created.id }),
+				await req('POST', `/projects/${pid}/integrations/test`, {
+					source: 'stored',
+					id: created.id,
+				}),
 				404,
 			);
 		}
@@ -407,12 +440,15 @@ describe('Integrations routes', () => {
 
 		await expectError(await request('GET', `/projects/${second}/integrations/${created.id}`), 404);
 		await expectError(
-			await request('POST', `/projects/${second}/integrations/test`, { id: created.id }),
+			await request('POST', `/projects/${second}/integrations/test`, {
+				source: 'stored',
+				id: created.id,
+			}),
 			404,
 		);
 		expect(
-			await expectOk<unknown[]>(await request('GET', `/projects/${second}/integrations`)),
-		).toEqual([]);
+			await expectOk<Page<unknown>>(await request('GET', `/projects/${second}/integrations`)),
+		).toEqual({ items: [], next_cursor: null });
 	});
 
 	it('404s everywhere when the deployment has integrations disabled', async () => {
@@ -438,6 +474,7 @@ describe('Integrations routes', () => {
 		await expectError(await bare('GET', `/projects/${pid}/integrations/${iid}/versions`), 404);
 		await expectError(
 			await bare('POST', `/projects/${pid}/integrations/test`, {
+				source: 'draft',
 				kind: 'postgres',
 				config: PG_CONFIG,
 			}),
@@ -461,11 +498,39 @@ describe('Integrations routes', () => {
 		const pid = await createProject();
 		await expectError(
 			await request('POST', `/projects/${pid}/integrations/test`, {
+				source: 'draft',
 				kind: 'postgres',
 				config: PG_CONFIG,
 			}),
 			422,
 		);
+	});
+
+	it.each([
+		[
+			'both stored and draft fields',
+			{
+				source: 'stored',
+				id: 'intg-0000000000000000',
+				kind: 'postgres',
+				config: PG_CONFIG,
+			},
+		],
+		['neither stored nor draft fields', {}],
+		['an unknown discriminator', { source: 'unknown', kind: 'postgres', config: PG_CONFIG }],
+		[
+			'an extra draft field',
+			{
+				source: 'draft',
+				kind: 'postgres',
+				config: PG_CONFIG,
+				id: 'intg-0000000000000000',
+			},
+		],
+		['an extra stored field', { source: 'stored', id: 'intg-0000000000000000', config: PG_CONFIG }],
+	])('rejects integration test requests with %s', async (_label, body) => {
+		const pid = await createProject();
+		await expectError(await request('POST', `/projects/${pid}/integrations/test`, body), 422);
 	});
 
 	it('rate-limits connection tests per USER (429 after the budget)', async () => {
@@ -485,6 +550,7 @@ describe('Integrations routes', () => {
 
 		const probeOnce = () =>
 			rateReq('POST', `/projects/${pid}/integrations/test`, {
+				source: 'draft',
 				kind: 'postgres',
 				config: PG_CONFIG,
 			});
@@ -515,7 +581,7 @@ describe('Integrations routes', () => {
 			userId: second,
 			deps: integrationsDeps(bucket),
 		}).request;
-		const body = { kind: 'postgres', config: PG_CONFIG };
+		const body = { source: 'draft', kind: 'postgres', config: PG_CONFIG };
 
 		for (let i = 0; i < 10; i++) {
 			await expectError(await firstReq('POST', `/projects/${pid}/integrations/test`, body), 422);
@@ -538,7 +604,7 @@ describe('Integrations routes', () => {
 			createTestApi({ bucket, userId, deps: integrationsDeps(bucket) }).request(
 				'POST',
 				`/projects/${pid}/integrations/test`,
-				{ kind: 'postgres', config: PG_CONFIG },
+				{ source: 'draft', kind: 'postgres', config: PG_CONFIG },
 			);
 
 		// Only `Date` is faked: the request path still needs real timers.
@@ -597,7 +663,11 @@ describe('Org integrations routes', () => {
 		await expectError(await asUser('DELETE', `/org/integrations/${iid}`), 403);
 		await expectError(await asUser('GET', `/org/integrations/${iid}/versions`), 403);
 		await expectError(
-			await asUser('POST', '/org/integrations/test', { kind: 'postgres', config: PG_CONFIG }),
+			await asUser('POST', '/org/integrations/test', {
+				source: 'draft',
+				kind: 'postgres',
+				config: PG_CONFIG,
+			}),
 			403,
 		);
 	});
@@ -605,10 +675,10 @@ describe('Org integrations routes', () => {
 	it('super admin CRUD round-trip: redaction, versions, ETag/If-Match, audit events', async () => {
 		const created = await createOrgPg();
 
-		const entries = await expectOk<Record<string, unknown>[]>(
+		const entries = await expectOk<Page<Record<string, unknown>>>(
 			await asRoot('GET', '/org/integrations'),
 		);
-		expect(entries).toEqual([
+		expect(entries.items).toEqual([
 			expect.objectContaining({ id: created.id, name: 'warehouse', scope: 'org' }),
 		]);
 
@@ -659,9 +729,12 @@ describe('Org integrations routes', () => {
 
 		const events = await services.events.getEvents(new Date().toISOString().slice(0, 10));
 		const names = events.map((e) => e.event);
-		expect(names).toContain('org_integration.create');
-		expect(names).toContain('org_integration.update');
-		expect(names.filter((n) => n === 'org_integration.delete')).toHaveLength(1);
+		expect(names).toContain('integration.create');
+		expect(names).toContain('integration.update');
+		expect(names.filter((n) => n === 'integration.delete')).toHaveLength(1);
+		expect(events.filter((event) => event.event.startsWith('integration.'))).toEqual(
+			expect.arrayContaining([expect.objectContaining({ integration_scope: 'org' })]),
+		);
 		expect(JSON.stringify(events)).not.toContain('sup3r-secret');
 	});
 
@@ -674,9 +747,10 @@ describe('Org integrations routes', () => {
 			)
 		).id;
 
-		let entries = await expectOk<Record<string, unknown>[]>(
+		let page = await expectOk<Page<Record<string, unknown>>>(
 			await asUser('GET', `/projects/${pid}/integrations`),
 		);
+		let entries = page.items;
 		expect(entries).toEqual([expect.objectContaining({ name: 'warehouse', scope: 'org' })]);
 		expect(entries[0]?.shadowed).toBeUndefined();
 
@@ -688,11 +762,12 @@ describe('Org integrations routes', () => {
 			}),
 			201,
 		);
-		entries = await expectOk<Record<string, unknown>[]>(
+		page = await expectOk<Page<Record<string, unknown>>>(
 			await asUser('GET', `/projects/${pid}/integrations`),
 		);
+		entries = page.items;
 		expect(entries.map((e) => ({ scope: e.scope, shadowed: e.shadowed }))).toEqual([
-			{ scope: undefined, shadowed: undefined },
+			{ scope: 'project', shadowed: undefined },
 			{ scope: 'org', shadowed: true },
 		]);
 		// The inherited entry is read-only through project routes.
@@ -728,7 +803,7 @@ describe('Org integrations routes', () => {
 	});
 });
 
-describe('Integration import route', () => {
+describe('Integration copy route', () => {
 	const ROOT = uid('user_import_root');
 	const OUTSIDER = uid('user_import_outsider');
 	let bucket: MemoryBucket;
@@ -763,7 +838,7 @@ describe('Integration import route', () => {
 		).id;
 	});
 
-	const importBody = (over: Record<string, unknown> = {}) => ({
+	const copyBody = (over: Record<string, unknown> = {}) => ({
 		source_project_id: sourcePid,
 		source_integration_id: sourceIid,
 		...over,
@@ -771,7 +846,7 @@ describe('Integration import route', () => {
 
 	it('admin of both projects copies the integration; secrets stay redacted', async () => {
 		const detail = await expectOk<Record<string, unknown>>(
-			await asOwner('POST', `/projects/${targetPid}/integrations/import`, importBody()),
+			await asOwner('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
 			201,
 		);
 		expect(detail).toMatchObject({
@@ -786,8 +861,8 @@ describe('Integration import route', () => {
 		const events = await expectOk<Record<string, unknown>[]>(
 			await asOwner('GET', `/projects/${targetPid}/events`),
 		);
-		const imported = events.find((e) => e.event === 'integration.import');
-		expect(imported).toMatchObject({
+		const copied = events.find((e) => e.event === 'integration.copy');
+		expect(copied).toMatchObject({
 			source_project_id: sourcePid,
 			source_integration_id: sourceIid,
 		});
@@ -806,7 +881,7 @@ describe('Integration import route', () => {
 			)
 		).id;
 		await expectError(
-			await asOutsider('POST', `/projects/${foreign}/integrations/import`, importBody()),
+			await asOutsider('POST', `/projects/${foreign}/integrations/copy`, copyBody()),
 			404,
 		);
 
@@ -819,14 +894,14 @@ describe('Integration import route', () => {
 			201,
 		);
 		await expectError(
-			await asOutsider('POST', `/projects/${foreign}/integrations/import`, importBody()),
+			await asOutsider('POST', `/projects/${foreign}/integrations/copy`, copyBody()),
 			403,
 		);
 
 		// A super admin who is a member of neither project passes both gates.
 		const asRoot = createTestApi({ bucket, userId: ROOT, deps }).request;
 		await expectOk(
-			await asRoot('POST', `/projects/${targetPid}/integrations/import`, importBody()),
+			await asRoot('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
 			201,
 		);
 	});
@@ -835,33 +910,33 @@ describe('Integration import route', () => {
 		await expectError(
 			await asOwner(
 				'POST',
-				`/projects/${targetPid}/integrations/import`,
-				importBody({ source_project_id: 'proj-0000000000000000' }),
+				`/projects/${targetPid}/integrations/copy`,
+				copyBody({ source_project_id: 'proj-0000000000000000' }),
 			),
 			404,
 		);
 		await expectError(
 			await asOwner(
 				'POST',
-				`/projects/${targetPid}/integrations/import`,
-				importBody({ source_integration_id: 'intg-0000000000000000' }),
+				`/projects/${targetPid}/integrations/copy`,
+				copyBody({ source_integration_id: 'intg-0000000000000000' }),
 			),
 			404,
 		);
 
 		await expectOk(
-			await asOwner('POST', `/projects/${targetPid}/integrations/import`, importBody()),
+			await asOwner('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
 			201,
 		);
 		await expectError(
-			await asOwner('POST', `/projects/${targetPid}/integrations/import`, importBody()),
+			await asOwner('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
 			422,
 		);
 		const renamed = await expectOk<Record<string, unknown>>(
 			await asOwner(
 				'POST',
-				`/projects/${targetPid}/integrations/import`,
-				importBody({ name: 'prod-copy' }),
+				`/projects/${targetPid}/integrations/copy`,
+				copyBody({ name: 'prod-copy' }),
 			),
 			201,
 		);

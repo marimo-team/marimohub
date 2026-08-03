@@ -112,7 +112,8 @@ for real users** (logs a warning on startup). Used by `pnpm dev`. Optional:
 
 On top of the `SameSite=Lax` cookie and no permissive CORS, `createApi` rejects
 state-changing requests when the browser's `Sec-Fetch-Site` is
-`cross-site`/`same-site` or the `Origin` host ≠ `Host`. Requests with neither
+`cross-site`/`same-site` or the full `Origin` differs from the request origin.
+The comparison includes the scheme, host, and port. Requests with neither
 header (CLI, server-to-server, generated client) pass. If the SPA and API live
 on **different origins**, allowlist the SPA origin (comma-separated); a
 single-origin deployment needs nothing:

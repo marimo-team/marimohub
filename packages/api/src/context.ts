@@ -8,10 +8,10 @@ import type {
 	createServices,
 	EditorSandboxSharing,
 	FederationTarget,
-	IntegrationsProvider,
+	ProjectIntegrationsService,
 	KernelProbe,
 	Millis,
-	OrgIntegrationsProvider,
+	OrgIntegrationsService,
 	PreflightReport,
 	Role,
 	SandboxExposure,
@@ -259,14 +259,14 @@ export interface ApiDeps {
 	 * (reference). Absent disables the feature (the routes 404, nothing is injected).
 	 */
 	secrets?: SecretsProvider;
-	/** Optional project integration provider; absence disables its routes and injection. */
-	integrations?: IntegrationsProvider;
+	/** Optional project integration service; absence disables its routes and injection. */
+	integrations?: ProjectIntegrationsService;
 	/**
 	 * Org-scoped (deployment-wide) integrations, inherited by every project and
 	 * managed by super admins only. Wired alongside `integrations` — present iff
 	 * it is.
 	 */
-	orgIntegrations?: OrgIntegrationsProvider;
+	orgIntegrations?: OrgIntegrationsService;
 	/**
 	 * Build/deploy identity surfaced read-only by `GET /api/v1/version` (the UI's
 	 * footer info popover). Baked into the image at build time and read from env

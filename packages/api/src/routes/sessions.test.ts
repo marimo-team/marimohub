@@ -394,6 +394,90 @@ describe('Session routes', () => {
 		expect((await services.sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
 	});
 
+	it.each(['notebook', 'project'] as const)(
+		'rejects takeover after the %s is deleted',
+		async (target) => {
+			const exclusiveOwner = exclusiveApi(ACTOR);
+			const exclusiveOther = exclusiveApi(STRANGER);
+			const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+			const services = createServices(bucket);
+			if (target === 'notebook') await services.notebooks.deleteNotebook(pid, nid, ACTOR);
+			else await services.projects.deleteProject(pid, ACTOR);
+
+			await expectError(
+				await exclusiveOther('POST', editorSessionPath('/takeover'), {
+					takeover_id: `takeover-deleted-${target}`,
+					expected_holder_session_id: persistent.session_id,
+					expected_activity: 'unknown',
+					acknowledge_disruption: true,
+				}),
+				404,
+				'NOT_FOUND',
+			);
+		},
+	);
+
+	it('cancels takeover when membership is revoked during the activity check', async () => {
+		const services = createServices(bucket);
+		await services.projects.addMember(pid, { user_id: STRANGER }, 'editor', ACTOR);
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const activity = makeFakeSandbox();
+		activity.instance.exec = async () => {
+			await services.projects.removeMember(pid, STRANGER, ACTOR);
+			return { success: false, stdout: '', stderr: '' };
+		};
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(activity.instance), {
+			policy: { defaultRole: undefined },
+		});
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+
+		await expectError(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-revoked-member',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: 'unknown',
+				acknowledge_disruption: true,
+			}),
+			403,
+			'FORBIDDEN',
+		);
+
+		expect(activity.calls.destroy).toBe(0);
+		expect((await services.sessions.getSession(pid, persistent.session_id)).status).toBe('running');
+		expect((await services.sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
+	});
+
+	it('does not drain again when another replica reconciles the sandbox first', async () => {
+		const services = createServices(bucket);
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const activity = makeFakeSandbox();
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		activity.instance.exec = async () => {
+			await services.sessions.markSandboxReclaimed(
+				pid,
+				persistent.session_id,
+				new Date().toISOString(),
+			);
+			await services.sessions.markTerminated(pid, persistent.session_id);
+			return { success: false, stdout: '', stderr: '' };
+		};
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(activity.instance));
+
+		await expectError(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-reconciled',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: 'unknown',
+				acknowledge_disruption: true,
+			}),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+
+		expect(activity.calls.destroy).toBe(0);
+		expect((await services.sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
+	});
+
 	it('injects notebook defaults into an edit session without managed AI', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const request = createTestApi({

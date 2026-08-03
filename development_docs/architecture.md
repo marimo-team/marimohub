@@ -120,23 +120,22 @@ questions, and they are independent:
   `Bucket` adapter. This is the **storage adapter** axis (S3-compatible, R2,
   GCS, memory).
 - _Where do a notebook's source bytes live?_ — Declared per-notebook in
-  `source.json` as a **source type**, resolved by the domain layer:
+  `source.json` as a **source type**:
   - `local` — bytes stored in the object store (`workspace/notebook.py`).
-  - `github` — bytes fetched from a Git repository on demand; the object store
-    holds only metadata and a cached commit SHA.
+  - `git` — an external pusher sends a Git revision to the sync API. The object
+    store holds the pushed workspace and Git coordinates. The hub does not pull
+    from the repository host.
 
-Each notebook keeps an immutable per-version folder (`notebook.py` +
-`pyproject.toml` + `version.json`), retained most-recent-N — and a version may
-additionally hold an optional rendered `notebook.html` and a marimo
-`session.json` snapshot, captured on session teardown (see
-[`bucket_spec.md`](./bucket_spec.md) §8).
+Each local version stores `notebook.py`, `pyproject.toml`, and `version.json`.
+Each Git version stores the pushed tree under `workspace/` and a
+`version.json`. A local version can also contain optional HTML and marimo
+session snapshots. See [`bucket_spec.md`](./bucket_spec.md) §8.
 
 A source type is **not** a storage adapter. The catalog always lives in the
 `Bucket`; an individual notebook's code may come from the bucket (`local`) or a
-repo (`github`). GitHub is therefore a _source type_ — a notebook-source
-resolver in the domain core — not a swappable storage backend. Adding another
-source type (a Gist, a remote URL) is purely additive: a new `type` value and a
-new resolver, touching neither the storage adapter nor the API.
+Git push (`git`). `github` is the current `provider` value inside the `git`
+source record. It is not a `source.type` value. See the public
+[sync guide](../docs/syncing.md) for the push protocol and token lifecycle.
 
 **Notebook Storage holds authorization data too** — see [§3.4](#34-authorization-authz).
 
@@ -284,22 +283,27 @@ published OpenAPI 3.1 document are one and the same** — the spec can never dri
 from the implementation.
 
 - **Served at** `/api/v1/doc` (machine-readable spec); routes under `/api/v1/*`.
-- **Envelope** — every response is `{ success: true, data }` or
-  `{ success: false, error: { code, message } }`.
+- **Envelope** — JSON responses use `{ success: true, data }` or
+  `{ success: false, error: { code, message } }`. The HTML snapshot route
+  returns raw HTML on success.
 - **Middleware chain** — `AuthN` (reject unauthenticated) → auto-initialize
   catalog → route handler. Handlers resolve services per-request from the
   configured adapters (no global singletons).
 
-| Group     | Representative routes                                                                                                                                             |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth      | `GET /api/v1/me`                                                                                                                                                  |
-| Projects  | `GET/POST /api/v1/projects` · `GET/PUT/DELETE /api/v1/projects/{pid}` · `GET/POST …/{pid}/members` · `PUT/DELETE …/members/{uid}`                                 |
-| Notebooks | `GET/POST /api/v1/projects/{pid}/notebooks` · `GET/PUT/DELETE …/{nid}` · `GET …/{nid}/content` · `GET …/{nid}/versions[/{vid}]` · `POST …/versions/{vid}/restore` |
-| Sessions  | `POST …/{nid}/sessions` (provision a sandbox) · `POST …/{sid}/heartbeat` · `DELETE …/{sid}`                                                                       |
+| Group        | Representative routes                                                                                                   |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Auth         | `GET /api/v1/me` · `POST/GET /api/v1/me/tokens` · `DELETE /api/v1/me/tokens/{tokenId}`                                  |
+| Projects     | `GET/POST /api/v1/projects` · `GET/PATCH/DELETE /api/v1/projects/{pid}` · project members and events                    |
+| Notebooks    | `GET/POST …/{pid}/notebooks` · `GET/PATCH/DELETE …/{nid}` · code, Git sync, versions, restore, and duplicate routes     |
+| Sessions     | `GET …/{pid}/sessions` · create/get/heartbeat/delete a notebook session · inspect/take over editor ownership            |
+| Integrations | Discover kinds · manage project or organization instances · list versions · copy a project instance · test connectivity |
+| Secrets      | List, store, delete, and test project secret references                                                                 |
+| System       | `GET /api/v1/version` · `GET /api/v1/capabilities` · `GET /api/health`                                                  |
 
-Notebooks are addressed by `{project_id, notebook_id}` — opaque IDs, never raw
-storage paths. The API owns ID generation (ULIDs), source resolution, snapshot
-management, and event logging; storage credentials are never exposed to clients.
+Notebooks are addressed by `{project_id, notebook_id}`. Clients never receive
+raw storage paths. The API owns ID generation, source handling, snapshot
+management, and event logging. Storage credentials are never exposed to
+clients.
 
 ### 3.6 Frontend Assets
 
@@ -371,11 +375,14 @@ adapter-specific settings.
 | `MARIMOHUB_COMPUTE_BACKEND`                     | `cloudflare` \| `modal` \| `coreweave` \| `kubernetes` \| `docker` \| `e2b` \| `local` \| `none` |
 | `MARIMOHUB_COMPUTE_IMAGE`                       | Sandbox image reference                                                                          |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`            | Public hostname used when exposing kernel ports                                                  |
-| `MARIMOHUB_COMPUTE_IDLE_TIMEOUT`                | Auto-sleep after inactivity (e.g. `20m`)                                                         |
 | `MARIMOHUB_COMPUTE_MODAL_TOKEN_ID` / `_SECRET`  | Modal credentials (secret)                                                                       |
 | `MARIMOHUB_COMPUTE_COREWEAVE_API_KEY`           | `coreweave` backend: CoreWeave Sandbox API key (secret)                                          |
 | `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | `coreweave` backend: public kernel URL scheme (`{sandboxId}`/`{port}`/`{host}`)                  |
 | `MARIMOHUB_COMPUTE_LOCAL_HOST`                  | `local` backend: host for the kernel URL (default `localhost`)                                   |
+
+Modal derives its provider-side idle limit as 1.5 times
+`MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`. The record-driven lifecycle sweep
+saves and stops the session at the earlier deadline; Modal is only the fallback.
 
 > The `coreweave` backend has no `listActive`, so the reconciler skips
 > provider-truth reconciliation for it (the SDK list API does not echo tags, so a
@@ -530,13 +537,10 @@ entrypoints depend on `core`, `api`, and whichever adapters they load. `core` an
 `api` depend on no adapter. This is what lets a single change of entrypoint
 re-target the whole platform.
 
-**Planned (designed, not yet built):** a **GitHub notebook-source resolver** (the
-`github` `source.type`). Its schema already exists in `packages/core/src/schema.ts`
-(`GithubSourceSchema`), but resolution is deferred — `NotebookService` currently
-throws "GitHub source resolution not yet implemented". When built it will be a
-notebook-source resolver in the domain core (or a small package), **not** a
-swappable storage backend (see [§3.1](#31-notebook-storage)). It is listed here so
-no reader mistakes it for an existing package.
+Git-synced notebooks use the existing `git` source type. An external workflow
+pushes content to `/api/sync/git/v1`. The hub does not fetch repository content.
+The sync token has notebook scope. See [§3.1](#31-notebook-storage) and the
+[sync guide](../docs/syncing.md).
 
 ---
 
@@ -549,7 +553,7 @@ Tracing one user action through every component:
 2. API · AuthN   verify OIDC/Access token → AuthUser
 3. API · AuthZ   read project.json from Storage → check caller's role
 4. Service       NotebookService reads meta.json + source.json from Storage
-                 (local → bytes from store; github → fetch repo, cache SHA)
+                 (local → workspace bytes; git → the last workspace pushed to the store)
 5. SPA           POST …/{nid}/sessions      (user clicks "Run")
 6. Service       SessionService writes a session record to Storage
 7. Compute       SandboxProvisioner.create → mount bucket / copy files

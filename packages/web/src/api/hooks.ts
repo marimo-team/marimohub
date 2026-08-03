@@ -11,7 +11,13 @@ import {
 	systemKeys,
 	integrationKeys,
 } from './queryKeys';
-import type { NotebookDetail, ResolvedUser, ProjectFederation, ProjectRole } from '../types';
+import type {
+	IntegrationEntry,
+	NotebookDetail,
+	ResolvedUser,
+	ProjectFederation,
+	ProjectRole,
+} from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
 const SESSIONS_POLL_INTERVAL_MS = 5_000;
@@ -364,6 +370,31 @@ function integrationsListKey(scope: IntegrationsScope) {
 	return scope === 'org' ? integrationKeys.org() : projectKeys.integrations(scope.pid);
 }
 
+async function listAllIntegrations(scope: IntegrationsScope): Promise<IntegrationEntry[]> {
+	const items: IntegrationEntry[] = [];
+	const followed = new Set<string>();
+	let cursor: string | undefined;
+	do {
+		const query = { limit: 500, ...(cursor ? { cursor } : {}) };
+		const page = await apiData(
+			scope === 'org'
+				? apiClient.GET('/api/v1/org/integrations', { params: { query } })
+				: apiClient.GET('/api/v1/projects/{pid}/integrations', {
+						params: { path: { pid: scope.pid }, query },
+					}),
+		);
+		items.push(...page.items);
+		cursor = page.next_cursor ?? undefined;
+		if (cursor !== undefined) {
+			if (followed.has(cursor)) {
+				throw new Error('Integration listing did not advance; refusing a partial result.');
+			}
+			followed.add(cursor);
+		}
+	} while (cursor !== undefined);
+	return items;
+}
+
 /**
  * Keys stale after any mutation in the scope. Org changes also invalidate every
  * project's list — inherited entries are embedded there.
@@ -390,13 +421,7 @@ export function useIntegrationsQuery(scope: IntegrationsScope, enabled = true) {
 		retry: (count, err) => !isIntegrationsDisabledError(err) && count < 2,
 		queryFn: async () => {
 			try {
-				return await apiData(
-					scope === 'org'
-						? apiClient.GET('/api/v1/org/integrations')
-						: apiClient.GET('/api/v1/projects/{pid}/integrations', {
-								params: { path: { pid: scope.pid } },
-							}),
-				);
+				return await listAllIntegrations(scope);
 			} catch (err) {
 				if (isIntegrationsDisabledError(err)) return null;
 				throw err;
@@ -492,11 +517,11 @@ export function useDeleteIntegration(scope: IntegrationsScope) {
 }
 
 /** Copies an integration from another project; the server re-encrypts secrets. */
-export function useImportIntegration(projectId: string) {
+export function useCopyIntegration(projectId: string) {
 	return useApiMutation(
 		(body: { source_project_id: string; source_integration_id: string; name?: string }) =>
 			apiData(
-				apiClient.POST('/api/v1/projects/{pid}/integrations/import', {
+				apiClient.POST('/api/v1/projects/{pid}/integrations/copy', {
 					params: { path: { pid: projectId } },
 					body,
 				}),
@@ -540,7 +565,7 @@ export function useProjectPickerQuery(enabled: boolean) {
 	});
 }
 
-/** Non-suspense project detail, used to check the caller's role before importing. */
+/** Non-suspense project detail, used to check the caller's role before copying. */
 export function useProjectRoleQuery(projectId: string | undefined) {
 	return useQuery({
 		queryKey: projectKeys.detail(projectId ?? ''),
@@ -555,7 +580,11 @@ export function useProjectRoleQuery(projectId: string | undefined) {
 /** Tests either an unsaved config or a stored integration by id. */
 export function useTestIntegration(scope: IntegrationsScope) {
 	return useMutation({
-		mutationFn: (body: { kind: string; config: Record<string, unknown> } | { id: string }) =>
+		mutationFn: (
+			body:
+				| { source: 'draft'; kind: string; config: Record<string, unknown> }
+				| { source: 'stored'; id: string },
+		) =>
 			apiData(
 				scope === 'org'
 					? apiClient.POST('/api/v1/org/integrations/test', { body })

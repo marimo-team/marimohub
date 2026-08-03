@@ -1,4 +1,4 @@
-# marimo Notebooks — S3-compatible Backend
+# marimo Notebooks — Object-Storage Backend
 
 **Schema Design, Storage Architecture & CRUD API**
 
@@ -9,8 +9,8 @@
 ## 1. Overview & Design Principles
 
 This document defines the bucket schema for marimo notebook create, read,
-update, and delete operations. It uses S3-compatible storage without an
-external database. The content model follows the Apache Iceberg metadata
+update, and delete operations. It uses the `Bucket` port without an external
+database. The content model follows the Apache Iceberg metadata
 indirection pattern. `catalog.json` is the only mutable content pointer, and
 immutable snapshots and versions retain history. `_system/` also stores mutable
 coordination records outside the content snapshot chain.
@@ -24,13 +24,13 @@ coordination records outside the content snapshot chain.
 
 ### Design Goals
 
-- No database — S3-compatible storage is the only persistence layer
+- No database — the configured `Bucket` adapter is the persistence layer
 - O(1) reads for listing projects and notebooks — no object scanning
 - Immutable snapshots give audit history for free
 - Self-describing notebooks — each notebook folder is a complete, portable unit
-- `workspace/` mirrors the sandbox working dir — the latest code, deps, and (optionally) runtime files in one place, while control metadata sits outside it
-- Typed source pointer — v1 ships `local` storage only; the `source.json` envelope is designed so other backends can be added later without touching the rest of the system
-- Append-only system logs — never mutate, only write new objects
+- A local notebook has a latest-only `workspace/`. A Git-synced notebook stores each pushed workspace inside its immutable version.
+- Typed source pointer — `local` notebooks store source in the workspace. `git` notebooks receive pushed revisions from an external workflow.
+- Append-only audit events — one immutable object per event
 - Scales comfortably to 10 projects × 100 notebooks per project (1,000 total)
 
 ### Storage Requirements
@@ -62,7 +62,9 @@ A single GET on the current snapshot returns the complete project and notebook l
 
 ### Snapshot schema versioning
 
-Every snapshot carries a `schema_version` field. When the snapshot structure changes, the Worker reads the version and applies a migration before writing the next snapshot. Old snapshots are never rewritten — they remain as a faithful record of the index at that point in time.
+Every snapshot carries a `schema_version` field. When the snapshot structure
+changes, the service upgrades the current snapshot in memory before it writes
+the next snapshot. It does not rewrite old snapshots.
 
 ---
 
@@ -77,7 +79,17 @@ s3-bucket/
 │   ├── snapshots/
 │   │   └── {snapshot-id}.json              ← immutable, one per write
 │   ├── sessions/
-│   │   └── {session-id}.json               ← active kernel sessions
+│   │   └── {project-id}/
+│   │       └── {session-id}.json            ← kernel session record
+│   ├── apps/
+│   │   └── {project-id}/
+│   │       └── {notebook-id}.json           ← app-session singleton claim (CAS)
+│   ├── editors/
+│   │   └── {project-id}/
+│   │       └── {notebook-id}.json           ← persistent-editor claim (CAS)
+│   ├── reconcile/
+│   │   └── orphans/
+│   │       └── {sandbox-id}.json            ← first-seen marker for an undated orphan
 │   ├── identities/
 │   │   └── {user-id}.json                  ← user display identity (mutable, last-writer-wins)
 │   ├── tokens/
@@ -89,11 +101,13 @@ s3-bucket/
 │   │       ├── integration.json            ← CAS-managed head
 │   │       └── versions/
 │   │           └── {000001}.json           ← immutable configuration version
-│   ├── logs/
-│   │   └── {YYYY-MM-DD}.log                ← append-only, rolled daily
-│   └── events/
-│       └── {YYYY-MM-DD}/
-│           └── {event-id}.json             ← one immutable object per event
+│   ├── idempotency/
+│   │   └── {digest}.json                   ← replay record with a 24h TTL
+│   ├── events/
+│   │   └── {YYYY-MM-DD}/
+│   │       └── {event-id}.json             ← one immutable object per event
+│   ├── _maintenance.lock                   ← advisory maintenance lease
+│   └── _session_lifecycle.lock             ← advisory session-lifecycle lease
 │
 └── projects/
     └── {project-id}/
@@ -111,27 +125,38 @@ s3-bucket/
             └── {notebook-id}/
                 ├── meta.json               ← notebook metadata (title, author, tags…)
                 ├── README.md               ← human description
-                ├── source.json             ← typed source pointer (v1: local) + current_version_id
-                ├── workspace/              ← latest-only mirror of the sandbox working dir (NON-versioned)
-                │   ├── notebook.py          ← latest code  (always present)
-                │   ├── pyproject.toml      ← latest deps  (always present)
-                │   └── data/cars.csv       ← runtime files (present only when PERSIST_WORKSPACE=workspace)
+                ├── source.json             ← `local` or push-synced `git` source metadata
+                ├── integration_sync_token.json ← Git-sync token hash (Git sources only)
+                ├── fs_snapshot.json        ← optional provider filesystem-snapshot pointer
+                ├── workspace/              ← local sources only: latest sandbox workspace
+                │   ├── notebook.py          ← latest local code
+                │   ├── pyproject.toml      ← latest local dependencies
+                │   └── data/cars.csv       ← optional persisted runtime file
                 └── versions/
                     └── {version-id}/
-                        ├── notebook.py
-                        ├── pyproject.toml
                         ├── version.json
+                        ├── notebook.py         ← local source snapshot
+                        ├── pyproject.toml      ← local dependency snapshot
+                        ├── workspace/          ← Git sources only: complete pushed tree
                         ├── notebook.html       ← optional snapshot (see below)
                         └── session.json        ← optional snapshot (see below)
 ```
 
-### 3.1.1 The `workspace/` folder
+### 3.1.1 Local and Git workspaces
 
-`workspace/` is the latest-only mirror of the sandbox working directory. It always holds the two source files — `notebook.py` and `pyproject.toml` — and, when `MARIMOHUB_PERSIST_WORKSPACE=workspace`, any runtime files the notebook produced (e.g. `data/cars.csv`, a parquet file, a `.db`). Key properties:
+For a `local` source, the notebook-level `workspace/` folder is the latest
+mirror of the sandbox working directory. It contains `notebook.py` and
+`pyproject.toml`. It can also contain runtime files when
+`MARIMOHUB_PERSIST_WORKSPACE=workspace`.
 
 - **Latest-only and non-versioned.** `workspace/` is overwritten in place on each save/teardown and is **never** touched by version pruning. The immutable per-version record lives under `versions/{vid}/` (§4.7).
 - **Runtime files are opt-in.** Under the default `MARIMOHUB_PERSIST_WORKSPACE=source`, `workspace/` contains only `notebook.py` + `pyproject.toml`. Under `workspace`, the sandbox's non-source files are captured here on teardown and restored on the next session (§8).
 - **The mount is rooted at `workspace/`.** When a sandbox mounts the bucket, the working dir maps to `workspace/`. Because `meta.json` / `README.md` / `source.json` / `versions/` sit **outside** `workspace/`, control metadata is never exposed to user code in the sandbox.
+
+For a `git` source, each push writes a complete tree under
+`versions/{vid}/workspace/`. The source pointer selects one immutable version.
+The notebook has no mutable workspace mirror. A session receives a copy of the
+selected version and cannot write changes back.
 
 ### 3.2 Complete Path Reference
 
@@ -144,9 +169,11 @@ s3-bucket/
 | `_system/editors/{pid}/{nid}.json`                             | JSON     | Per-notebook persistent-editor claim. Records the shared/exclusive mode, names the only session allowed to save, and records idempotent takeover phases. All writes go through `SessionService`. See §4.8.2.                                                                                                                                                                                                                                                                                           |
 | `_system/identities/{user-id}.json`                            | JSON     | User display identity (`{ id, email, name }`). Upserted on each authenticated request; mutable, last-writer-wins. Resolves opaque `author`/`user_id` ids to a person.                                                                                                                                                                                                                                                                                                                                  |
 | `_system/tokens/{token-id}.json`                               | JSON     | Personal access token record (`{ id, user_id, name, hash, … }`) keyed by the ULID embedded in the presented `mhub_pat_` bearer, so verification is a single GET. Stores only the SHA-256 of the secret. Mutable, last-writer-wins (coarse `last_used_at` refresh); revocation deletes the object. See §4.11.                                                                                                                                                                                           |
-| `_system/logs/{YYYY-MM-DD}.log`                                | Text     | Human-readable application log. One file per day. For ops debugging only.                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                  | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
 | `_system/idempotency/{digest}.json`                            | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
+| `_system/reconcile/orphans/{sandbox-id}.json`                  | JSON     | First-seen Unix timestamp for an active sandbox that has no session record and no provider creation time. The reconciler creates and deletes these markers.                                                                                                                                                                                                                                                                                                                                            |
+| `_system/_maintenance.lock`                                    | JSON     | Advisory lease for snapshot and event retention. `MaintenanceLock` owns this key.                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `_system/_session_lifecycle.lock`                              | JSON     | Advisory lease for the session lifecycle and reconciliation sweep. The lifecycle loop owns this key.                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `projects/{pid}/project.json`                                  | JSON     | Project metadata: name, description, owner, members, tags.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `projects/{pid}/secrets/{NAME}.json`                           | JSON     | Project secret entry, keyed by env-var name: a `reference` pointer into an external manager, or a `managed` ciphertext envelope. Mutable, last-writer-wins (no CAS). Never contains plaintext.                                                                                                                                                                                                                                                                                                         |
 | `projects/{pid}/integrations/{iid}/integration.json`           | JSON     | Integration head: kind, instance name, `enabled`, and the `current_version` pointer. CAS-managed via ETag `mutateObject` — written only by `ProjectIntegrationsStore` (a version bump must be atomic against a concurrent edit). See §4.12.                                                                                                                                                                                                                                                            |
@@ -157,14 +184,16 @@ s3-bucket/
 | `_system/integrations/_names/{name}.json`                      | JSON     | Organization-wide name claim. Claims are unique within this tier, so a project integration can use the same name.                                                                                                                                                                                                                                                                                                                                                                                      |
 | `projects/{pid}/notebooks/{nid}/meta.json`                     | JSON     | Notebook metadata: title, description, status, author, tags, last_run_at. Never contains code or paths.                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/README.md`                     | Markdown | Human-readable description and usage notes.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `projects/{pid}/notebooks/{nid}/source.json`                   | JSON     | Typed source pointer. Declares where code lives + `current_version_id`. v1 supports `local`.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `projects/{pid}/notebooks/{nid}/source.json`                   | JSON     | Typed source record. `local` stores the current version pointer. `git` stores Git coordinates, sync state, and the current pushed version.                                                                                                                                                                                                                                                                                                                                                             |
+| `projects/{pid}/notebooks/{nid}/integration_sync_token.json`   | JSON     | Git-sync credential for one notebook. The record stores a token hash, not the plaintext token. Present only for Git-synced notebooks.                                                                                                                                                                                                                                                                                                                                                                  |
 | `projects/{pid}/notebooks/{nid}/fs_snapshot.json`              | JSON     | **Optional.** Pointer to the notebook's current CoreWeave-native filesystem snapshot (`{ snapshot_id, captured_at, owner_user_id }`). Mutable, last-writer-wins, written only by the teardown snapshot path. Exclusive editors restore snapshots only for the same owner; shared editors may restore across starters. Present only under `MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT=true`. **Not recommended alongside `MARIMOHUB_PERSIST_WORKSPACE=workspace`** — the two double-persist state. |
-| `projects/{pid}/notebooks/{nid}/workspace/notebook.py`         | Python   | Latest notebook code. Always present in `workspace/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `projects/{pid}/notebooks/{nid}/workspace/pyproject.toml`      | TOML     | Latest Python dependency manifest. Always present in `workspace/`.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `projects/{pid}/notebooks/{nid}/workspace/{path}`              | any      | Runtime files mirrored from the sandbox working dir (e.g. `data/cars.csv`). Present only under `MARIMOHUB_PERSIST_WORKSPACE=workspace`. Latest-only, non-versioned.                                                                                                                                                                                                                                                                                                                                    |
+| `projects/{pid}/notebooks/{nid}/workspace/notebook.py`         | Python   | Latest local notebook code. Present only for a `local` source.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `projects/{pid}/notebooks/{nid}/workspace/pyproject.toml`      | TOML     | Latest local Python dependency manifest. Present only for a `local` source.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `projects/{pid}/notebooks/{nid}/workspace/{path}`              | any      | Runtime files mirrored from a local notebook sandbox. Present only under `MARIMOHUB_PERSIST_WORKSPACE=workspace`. Latest-only and non-versioned.                                                                                                                                                                                                                                                                                                                                                       |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.py`    | Python   | Immutable version snapshot of the code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/pyproject.toml` | TOML     | Dependency snapshot at time of version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/version.json`   | JSON     | Version metadata: saved_at, author, message, parent_id, optional snapshot descriptors.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace/`     | any      | Complete immutable tree from one Git push. Present only for a `git` source version.                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.html`  | HTML     | **Optional.** Rendered HTML snapshot, copied from `__marimo__/notebook.html` on session teardown. Immutable once written.                                                                                                                                                                                                                                                                                                                                                                              |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/session.json`   | JSON     | **Optional.** marimo session state (cell outputs), copied from `__marimo__/session/{notebook}.py.json` on teardown. Immutable.                                                                                                                                                                                                                                                                                                                                                                         |
 
@@ -180,26 +209,27 @@ The single mutable entry point. Overwritten atomically using conditional PUT wit
 {
 	"version": 1,
 	"updated_at": "2025-03-05T14:22:00Z",
-	"current_snapshot_id": "snap_01HXYZ9ABC",
-	"current_snapshot_key": "_system/snapshots/snap_01HXYZ9ABC.json",
-	"previous_snapshot_id": "snap_01HXYZ8DEF"
+	"current_snapshot_id": "snap-7h2k9qm4xz7rp3w8",
+	"current_snapshot_key": "_system/snapshots/snap-7h2k9qm4xz7rp3w8.json",
+	"previous_snapshot_id": "snap-5g43rv2s9pfw8w4d"
 }
 ```
 
 ### 4.2 `_system/snapshots/{id}.json`
 
-Written once per mutating operation. Never modified. The `schema_version` field governs how the Worker interprets the structure — bumped on any breaking change to the snapshot shape.
+Written once per mutating operation and never modified. The `schema_version`
+field controls how the service reads the structure.
 
 ```json
 {
-	"snapshot_id": "snap_01HXYZ9ABC",
+	"snapshot_id": "snap-7h2k9qm4xz7rp3w8",
 	"schema_version": 1,
 	"created_at": "2025-03-05T14:22:00Z",
 	"operation": "notebook.create",
 	"actor": "user_abc123",
 	"projects": [
 		{
-			"id": "proj_01HXY11111",
+			"id": "proj-7h2k9qm4xz7rp3w8",
 			"name": "Data Science",
 			"description": "Exploratory analysis notebooks",
 			"owner": "user_abc123",
@@ -208,7 +238,7 @@ Written once per mutating operation. Never modified. The `schema_version` field 
 			"notebook_count": 3,
 			"notebooks": [
 				{
-					"id": "nb_01HXYZ22222",
+					"id": "nb-5g43rv2s9pfw8w4d",
 					"title": "Revenue Analysis",
 					"description": "Monthly revenue breakdown",
 					"status": "active",
@@ -218,7 +248,7 @@ Written once per mutating operation. Never modified. The `schema_version` field 
 					"updated_at": "2025-03-05T14:22:00Z",
 					"tags": ["finance", "monthly"],
 					"last_run_at": "2025-03-04T08:30:00Z",
-					"key_prefix": "projects/proj_01HXY11111/notebooks/nb_01HXYZ22222"
+					"key_prefix": "projects/proj-7h2k9qm4xz7rp3w8/notebooks/nb-5g43rv2s9pfw8w4d"
 				}
 			]
 		}
@@ -226,13 +256,14 @@ Written once per mutating operation. Never modified. The `schema_version` field 
 }
 ```
 
-> `key_prefix` is an **internal** physical locator the Worker uses to address objects. It is stored in the snapshot but stripped from every API response (§13) — clients address notebooks by `{project_id, notebook_id}` and never see storage paths.
+> `key_prefix` is an internal physical locator. The service removes it from API
+> responses. Clients address notebooks by `{project_id, notebook_id}`.
 
 ### 4.3 `projects/{pid}/project.json`
 
 ```json
 {
-	"id": "proj_01HXY11111",
+	"id": "proj-7h2k9qm4xz7rp3w8",
 	"name": "Data Science",
 	"description": "Exploratory analysis notebooks",
 	"owner": "user_abc123",
@@ -246,7 +277,7 @@ Written once per mutating operation. Never modified. The `schema_version` field 
 }
 ```
 
-> **Member roles:** `admin` (full control including delete and member management), `editor` (create and edit notebooks), `viewer` (read-only). See §12 for the authorization model — including which of these roles v1 actually enforces.
+> **Member roles:** `admin` has full control, including member management. `editor` can change notebooks. `viewer` has read-only access. See §12.
 
 ### 4.4 `projects/{pid}/notebooks/{nid}/meta.json`
 
@@ -254,8 +285,8 @@ Contains only notebook-level concerns. No code, no paths, no source details — 
 
 ```json
 {
-	"id": "nb_01HXYZ22222",
-	"project_id": "proj_01HXY11111",
+	"id": "nb-5g43rv2s9pfw8w4d",
+	"project_id": "proj-7h2k9qm4xz7rp3w8",
 	"title": "Revenue Analysis",
 	"description": "Monthly revenue breakdown by region",
 	"status": "active",
@@ -275,35 +306,52 @@ Contains only notebook-level concerns. No code, no paths, no source details — 
 
 ### 4.5 `source.json`
 
-The typed source pointer. v1 ships a single `local` source type — code lives in the bucket and `workspace/notebook.py` is always the latest version.
+The source record selects a local workspace or an immutable Git-synced
+workspace. A local source uses this shape:
 
 ```json
 {
+	"schema_version": 1,
 	"type": "local",
-	"current_version_id": "ver_01HXYZ33333"
+	"current_version_id": "ver_01ARZ3NDEKTSV4RRFFQ69G5FAV"
 }
 ```
 
-### 4.6 Source extensibility
+A Git source stores `type: "git"`, `provider: "github"`, `sync_mode: "push"`,
+Git coordinates, and sync timestamps. `current_version_id` is `null` before the
+first push.
 
-`source.json` is a discriminated union on `type` precisely so additional backends can be added without touching the snapshot index, `meta.json`, versioning, or sessions — a new backend is a new `type` value plus a resolver in the Worker. **Out of scope for v1.** External-source backends (e.g. a Git-backed source whose code is fetched on demand rather than stored in the bucket) introduce their own read/write, sync, caching, and credential concerns and will be specified separately when prioritized.
+### 4.6 Source types
+
+`source.json` is a discriminated union on `type`. The current schema supports
+`local` and `git` records. A `local` record points to the current version in the
+bucket. A `git` record stores Git coordinates and the state of the last push.
+
+The hub does not fetch a `git` source from GitHub. An external workflow sends
+the workspace to `/api/sync/git/v1` with a notebook-scoped sync token. The hub
+stores the pushed files under `versions/{vid}/workspace/` and creates an
+immutable version.
+See the [sync guide](../docs/syncing.md) for the API and token lifecycle.
 
 ### 4.7 `versions/{vid}/version.json`
 
 ```json
 {
-	"version_id": "ver_01HXYZ33333",
-	"notebook_id": "nb_01HXYZ22222",
+	"version_id": "ver_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+	"notebook_id": "nb-5g43rv2s9pfw8w4d",
 	"saved_at": "2025-03-05T14:22:00Z",
 	"author": "user_abc123",
 	"message": "Add regional breakdown by Q",
-	"parent_id": "ver_01HXYZ22222",
+	"parent_id": "ver_01ARZ3NDEKTSV4RRFFQ69G5FA0",
 	"html_snapshot": { "captured_at": "2025-03-05T14:40:00Z", "size_bytes": 524288 },
 	"session_snapshot": { "captured_at": "2025-03-05T14:40:00Z", "size_bytes": 81920 }
 }
 ```
 
-Versions are immutable once written. `workspace/notebook.py` always reflects the latest. On each save, the Worker writes a new version folder, updates `source.json.current_version_id`, and updates `workspace/notebook.py` in place.
+Versions are immutable once written. A local save writes a new version, updates
+`source.current_version_id`, and updates the notebook-level workspace. A Git
+push writes the complete workspace inside the new version, then advances the
+source pointer with CAS.
 
 **Optional snapshot descriptors.** `html_snapshot` and `session_snapshot` record the _presence and metadata_ of a rendered HTML snapshot (`notebook.html`) and a marimo session state file (`session.json`) sitting alongside the code in the version folder. They carry `captured_at` and `size_bytes` — **never a storage path** (clients address notebooks by ID, §13). Each field is **absent** when that artifact wasn't captured; both are written only on session teardown (§8) and only if marimo actually produced the source file, so most versions have neither. Adding these optional fields is forward-tolerant — a reader that doesn't know them ignores them — so it requires no breaking migration of existing `version.json` objects.
 
@@ -315,9 +363,9 @@ Records are partitioned by project (`_system/sessions/{pid}/{sid}.json`) so the 
 
 ```json
 {
-	"session_id": "sess_01HXYZ44444",
-	"notebook_id": "nb_01HXYZ22222",
-	"project_id": "proj_01HXY11111",
+	"session_id": "sess-4m8v6k2q9r5t7w3x",
+	"notebook_id": "nb-5g43rv2s9pfw8w4d",
+	"project_id": "proj-7h2k9qm4xz7rp3w8",
 	"user_id": "user_abc123",
 	"status": "running",
 	"started_at": "2025-03-05T14:30:00Z",
@@ -326,8 +374,8 @@ Records are partitioned by project (`_system/sessions/{pid}/{sid}.json`) so the 
 		"python_version": "3.11",
 		"marimo_version": "0.9.0"
 	},
-	"sandbox_id": "sbx_01HXYZ55555",
-	"sandbox_url": "https://sandbox.example.com/sess_01HXYZ44444",
+	"sandbox_id": "sb-3f6h9k2m5p8r4t7v",
+	"sandbox_url": "https://sandbox.example.com/sess-4m8v6k2q9r5t7w3x",
 	"compute_profile": "small",
 	"used_fallback": false
 }
@@ -339,17 +387,17 @@ When a session goes `failed`, `markFailed` may persist an optional sanitized `er
 { "status": "failed", "error": { "code": "SERVICE_UNAVAILABLE", "message": "Sandbox unreachable" } }
 ```
 
-**Valid `status` values:** `starting` · `running` · `idle` · `terminated` · `expired`
+**Valid `status` values:** `starting` · `running` · `terminating` · `terminated` · `failed` · `expired`
 
 `sandbox_id` / `sandbox_url` link the record to the live kernel runtime (a separate container/compute service); `compute_profile` records the configured profile name used at launch and is absent when profiles are unset; `used_fallback` records whether a fallback runtime was used. The optional field is forward-compatible with existing records and requires no migration.
 
 **Session lifecycle:**
 
-1. `POST /sessions` → Worker creates session record, status `starting`; once the kernel runtime is provisioned, status `running` (records `sandbox_url`)
-2. Kernel sends heartbeat every 30s → Worker updates `last_heartbeat` (see §8 on bounding this write volume)
-3. User closes tab → `DELETE /sessions/{id}` → status `terminated`
-4. No heartbeat for 5 minutes → scheduled job sets status `expired`
-5. `terminated`/`expired` records older than the retention window (24h) are deleted by the scheduled reaper (see §8)
+1. `POST /sessions` creates a `starting` record. Successful provisioning changes it to `running` and records the sandbox location.
+2. A heartbeat updates `last_heartbeat`. The service coalesces bucket writes to one write per minute.
+3. `DELETE /sessions/{id}` changes the record to `terminating`. Teardown changes it to `terminated` after the sandbox is gone.
+4. The lifecycle sweep changes an overdue live session to `expired`.
+5. The reaper deletes old `terminated`, `failed`, and `expired` records after the retention period.
 
 > **On object storage vs. a live state store for sessions:** the object store is appropriate for session _records_ — created on open, updated periodically, read for display — and the record carries `sandbox_id` / `sandbox_url` pointing at the live kernel runtime (a separate container/compute service). It is not appropriate for sub-second kernel state (output streaming, variable inspection); that lives in the kernel runtime itself, backed by a low-latency state store (in-memory cache / stateful coordinator) if cross-request coordination is needed. For MVP — tracking who has what open, TTL cleanup — the object store is sufficient.
 
@@ -360,7 +408,7 @@ When a session goes `failed`, `markFailed` may persist an optional sanitized `er
 The app-singleton claim anchors "one app sandbox per notebook" against concurrent `Run as app` requests. Beside `catalog.json` and the session records, it is the third CAS-managed mutable object in the store.
 
 ```json
-{ "session_id": "sess_01HXYZ44444", "claimed_at": "2025-03-05T14:30:00Z" }
+{ "session_id": "sess-4m8v6k2q9r5t7w3x", "claimed_at": "2025-03-05T14:30:00Z" }
 ```
 
 `session_id: null` is the **free marker** a release writes in place of the value — see rule 3.
@@ -433,9 +481,9 @@ Every event carries a `schema_version` field so the log stays parseable as the e
 	"ts": "2025-03-05T14:22:00Z",
 	"event": "notebook.create",
 	"actor": "user_abc123",
-	"project_id": "proj_01HXY11111",
-	"notebook_id": "nb_01HXYZ22222",
-	"snapshot_id": "snap_01HXYZ9ABC"
+	"project_id": "proj-7h2k9qm4xz7rp3w8",
+	"notebook_id": "nb-5g43rv2s9pfw8w4d",
+	"snapshot_id": "snap-7h2k9qm4xz7rp3w8"
 }
 ```
 
@@ -517,7 +565,25 @@ A project integration instance — a named, versioned configuration of a code-re
 }
 ```
 
-**Mutability & write semantics.** Version records are **immutable** — written create-if-absent under a zero-padded number key (key order == version order); a losing concurrent writer retries with n+1. The **head** is the third CAS-managed mutable object class in the store (after `catalog.json`/sessions and the app claim): every rewrite goes through an ETag `mutateObject` so a `current_version` bump is atomic against a concurrent edit, and it is written **only** by `ProjectIntegrationsStore`. Two concurrent config edits both land in history; the higher version number wins the pointer regardless of head-commit order. Session records pin `{ id, name, kind, version }` per rendered integration, so a session's exact config is reproducible from the immutable versions **while the integration exists**. Deleting an integration (or hard-deleting its project) removes the head **first** — so a concurrent update's head CAS fails fast and removes its own just-appended version — then the remaining objects; like a project secret, it is gone immediately. The pins on session records (themselves reaped ~24h after termination) and the `integration.*` entries in `_system/events/` remain the durable audit trail of what was configured and when. Secret config fields hold ciphertext envelopes bound (via HKDF context) to the head path + field path — an envelope copied elsewhere fails to decrypt, and a box found outside the kind's registered secret paths (e.g. a bad migration) fails the whole config closed rather than leaking through redaction.
+**Mutability and write semantics.** Version records are immutable and use
+create-if-absent writes. A concurrent writer that loses a version number uses
+the next number. Every head update uses ETag CAS through `mutateObject`.
+`ProjectIntegrationsStore` is the only writer for a project head.
+
+Two concurrent configuration edits both create history records. The head points
+to the larger committed version number. Session records pin each rendered
+integration as `{ id, name, kind, version }`. This pin identifies the exact
+configuration while the integration exists.
+
+Deletion removes the head first. A concurrent head update then fails its CAS
+and removes the version that it appended. The delete operation then removes the
+remaining integration objects. Session pins and `integration.*` events retain
+the audit identity, but they do not retain deleted secret configuration.
+
+Secret fields contain ciphertext envelopes. The encryption context includes
+the head path and field path. As a result, a copied envelope cannot decrypt at
+a different path. The store also rejects ciphertext outside registered secret
+fields.
 
 **The name claim** (`_names/{name}.json`, name URI-encoded) anchors "one instance per name" the same way the app claim anchors "one app per notebook": `{ integration_id, claimed_at }`, acquired via `acquireSingletonClaim` (create-if-absent, ETag-CAS replace when stale) and released by CAS-ing `integration_id` to the free marker `null`, never a bare delete. Writers put the **head first, then claim** — a holder is _live_ iff its head still exists under that name, so the claim self-heals after a crash between the two writes, and two concurrent creates are arbitrated by the claim key: the loser deletes its own just-written objects. A rename claims the new name (reverting the head on conflict, so a combined rename+config PATCH that loses commits nothing) and then frees the old; delete frees the name last. Sole writer: `ProjectIntegrationsStore`. `_names/` cannot collide with an instance directory (ids are always `intg-…`), and listings skip it.
 
@@ -547,26 +613,34 @@ Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`) are a short prefix plus a 16-cha
 
 > **The current snapshot is always the one named by `catalog.json`.** An interrupted write can momentarily create a snapshot it never commits (the writer deletes it on conflict — see §7.3 / §11). `catalog.json` is the single source of truth for "current."
 
-| ID Format     | Usage                                                       |
-| ------------- | ----------------------------------------------------------- |
-| `proj-{rand}` | Project — random 16-char body, e.g. `proj-7h2k9qm4xz7rp3w8` |
-| `nb-{rand}`   | Notebook — e.g. `nb-5g43rv2s9pfw8w4d`                       |
-| `snap-{rand}` | Snapshot — random, **not** time-sortable, e.g. `snap-…`     |
-| `ver_{ulid}`  | Notebook version — uppercase ULID, time-sortable on purpose |
-| `sess-{rand}` | Session — e.g. `sess-…`                                     |
-| `user_{…}`    | User/actor — passed in from auth layer                      |
+| ID Format     | Usage                                                              |
+| ------------- | ------------------------------------------------------------------ |
+| `proj-{rand}` | Project — random 16-char body, for example `proj-7h2k9qm4xz7rp3w8` |
+| `nb-{rand}`   | Notebook — for example `nb-5g43rv2s9pfw8w4d`                       |
+| `snap-{rand}` | Snapshot — random, **not** time-sortable, for example `snap-…`     |
+| `ver_{ulid}`  | Notebook version — uppercase ULID, time-sortable on purpose        |
+| `sess-{rand}` | Session — for example `sess-…`                                     |
+| opaque string | User/actor — the authentication provider supplies this value       |
+| `intg-{rand}` | Integration — random 16-character body                             |
+| `sb-{rand}`   | Sandbox — random 16-character body                                 |
 
 ---
 
 ## 6. Source Types
 
-A notebook's `source.json` declares where its code lives. The Worker reads `source.type` and routes to the appropriate resolver. Everything else in the system — the snapshot index, `meta.json`, versioning, sessions — is identical regardless of source type.
+A notebook's `source.json` declares where its code lives. The service reads
+`source.type` and selects the correct load path. The snapshot index,
+`meta.json`, versioning, and session model do not depend on the source type.
 
-| `source.type` | Code location                  | `notebook.py` in the bucket? | Write path               |
-| ------------- | ------------------------------ | ---------------------------- | ------------------------ |
-| `local`       | bucket `workspace/notebook.py` | Yes — always current         | Written directly on save |
+| `source.type` | Code location               | Write path                                      |
+| ------------- | --------------------------- | ----------------------------------------------- |
+| `local`       | Notebook-level `workspace/` | The API and session teardown save the workspace |
+| `git`         | `versions/{vid}/workspace/` | An external workflow pushes a complete revision |
 
-v1 ships `local` only. The `source.type` discriminator exists so additional backends can be added later (see §4.6) — a new `type` value plus a resolver in the Worker, with nothing else in the system changing.
+Both source types keep files in the bucket. A `git` source has
+`provider: "github"` and `sync_mode: "push"`. Its `current_version_id` selects
+the active immutable workspace. The hub does not pull from the repository host.
+See §4.6 and the [sync guide](../docs/syncing.md).
 
 ---
 
@@ -574,13 +648,13 @@ v1 ships `local` only. The `source.type` discriminator exists so additional back
 
 ### 7.1 Read: List All Projects & Notebooks
 
-Exactly **2 S3-compatible storage GETs** regardless of scale.
+Exactly **2 bucket GETs** regardless of scale.
 
 ```
 GET _system/catalog.json
-  → { current_snapshot_key: '_system/snapshots/snap_01HXYZ9ABC.json' }
+  → { current_snapshot_key: '_system/snapshots/snap-7h2k9qm4xz7rp3w8.json' }
 
-GET _system/snapshots/snap_01HXYZ9ABC.json
+GET _system/snapshots/snap-7h2k9qm4xz7rp3w8.json
   → Full project + notebook index (metadata only, no code)
 ```
 
@@ -595,9 +669,11 @@ GET projects/{pid}/notebooks/{nid}/source.json
 // Step 2: Resolve code based on source.type
 if source.type === "local":
   GET projects/{pid}/notebooks/{nid}/workspace/notebook.py
+if source.type === "git":
+  GET projects/{pid}/notebooks/{nid}/versions/{current_version_id}/workspace/{entry_notebook}
 ```
 
-### 7.3 Write: Create or Update a Notebook
+### 7.3 Write: Create or Update a Local Notebook
 
 Every write follows the same atomic sequence. Steps 1–2 are safe to retry independently. Step 5 is the commit.
 
@@ -632,6 +708,10 @@ PUT _system/catalog.json  If-Match: {current_etag}
 PUT _system/events/{today}/{event-id}.json
 ```
 
+A Git sync uses a different content write. It writes the uploaded tree under a
+new `versions/{vid}/workspace/` prefix. It then advances
+`source.current_version_id` with ETag CAS. See §4.6.
+
 > **Conflict Safety:** If two writers race on Step 5, one receives `412 Precondition Failed` and retries from Step 3. Steps 1–2 are idempotent — re-running them on retry is safe; the content files are already written before the conflict window opens. The loser also deletes the snapshot it wrote in Step 4 before retrying, so a failed attempt never leaves an orphan. Note that the content files in Step 1 are written _before and outside_ the conditional swap: two concurrent saves to the **same** notebook are last-writer-wins on the live `workspace/notebook.py`, while the immutable `versions/{vid}/` objects remain the authoritative per-version record.
 
 ### 7.4 Delete: Remove a Notebook
@@ -658,21 +738,26 @@ Sessions are managed independently of the snapshot chain. A session write never 
 
 ### API routes
 
-| Route                             | Description                                                                              |
-| --------------------------------- | ---------------------------------------------------------------------------------------- |
-| `POST /sessions`                  | Create session, write `_system/sessions/{pid}/{sid}.json`, emit `session.create` event   |
-| `PUT /sessions/{id}/heartbeat`    | Update `last_heartbeat` timestamp                                                        |
-| `GET /sessions?notebook_id={nid}` | List active sessions for a notebook (reads the `_system/sessions/{pid}/` project prefix) |
-| `DELETE /sessions/{id}`           | Terminate session, set status `terminated`                                               |
+| Route                                                           | Description                                      |
+| --------------------------------------------------------------- | ------------------------------------------------ |
+| `GET /projects/{pid}/sessions`                                  | List active project sessions with pagination     |
+| `POST /projects/{pid}/notebooks/{nid}/sessions`                 | Create or reuse a notebook session               |
+| `GET /projects/{pid}/notebooks/{nid}/sessions/{sid}`            | Get one session                                  |
+| `POST /projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat` | Update the session heartbeat                     |
+| `DELETE /projects/{pid}/notebooks/{nid}/sessions/{sid}`         | Save if permitted, destroy, and retire a session |
+| `GET /projects/{pid}/notebooks/{nid}/editor-session`            | Inspect persistent editor ownership              |
+| `POST /projects/{pid}/notebooks/{nid}/editor-session/takeover`  | Take over an exclusive persistent editor         |
 
 ### TTL cleanup & reaping
 
 A scheduled job (cron, every 5 minutes) performs two passes over `_system/sessions/`:
 
 1. **Expire** — any session whose `last_heartbeat` is older than 5 minutes is flipped to `expired`.
-2. **Reap** — any `terminated`/`expired` record whose `last_heartbeat` is older than a retention window (24h) is **deleted**.
+2. **Reap** — any `terminated`, `failed`, or `expired` record whose `last_heartbeat` is older than 24 hours is deleted.
 
-The reap pass matters because session records are only ever status-flipped, never removed on their own. Without it `_system/sessions/` grows unbounded and every list scan (heartbeat-free liveness checks, `GET /sessions`) gets steadily slower. This is the only background job required for MVP.
+The reap pass prevents unbounded growth under `_system/sessions/`. The same
+maintenance cycle also reconciles provider sandboxes and applies retention to
+snapshots, events, idempotency records, and soft-deleted content.
 
 ### Heartbeat write volume
 
@@ -683,13 +768,21 @@ Persisting every heartbeat is the dominant session write cost: at 50 concurrent 
 
 v1 takes the second lever: heartbeat persistence is **coalesced to at most once per 60s** per session (`SessionService.heartbeat` skips the write when the session is already `running` and its stored heartbeat is younger than the interval). This bounds writes to ~1/min/session regardless of client cadence — roughly halving the figure above at a 30s cadence — and stays well within the 5-minute expiry TTL. Moving liveness off the bucket entirely (the first lever) remains a future option.
 
-### Versioning & snapshots on teardown
+### Versioning and snapshots on teardown
 
-The interactive editing path does **not** go through the §7.3 API write. A user edits in the live kernel, and edits land directly on the live `workspace/notebook.py` — either through the bucket mounted at `workspace/`, or copied back by `commitSession` in the mount-fallback case. Neither route cuts a version or advances `source.current_version_id`, so without the step below an interactive editing session would leave **no version record at all** and the live `workspace/notebook.py` would simply be overwritten in place.
+This write-back path applies to persistent sessions on local notebooks. A user
+edits the live workspace. The sandbox can mount that workspace or copy it back
+during teardown. Neither path creates an immutable version during the session.
 
-To close that gap, **session teardown cuts a new version** — the same write as an API code-save (§7.3 Step 2) — and attaches any HTML/session artifacts marimo produced to that same new version. marimo writes those artifacts into its `__marimo__/` workspace while the notebook runs: a rendered `__marimo__/notebook.html` and a session-state file `__marimo__/session/{notebook}.py.json` (cell outputs, keyed by the notebook filename). Both are **optional** — marimo may not have produced either.
+Teardown creates a version from the final local workspace. It can attach the
+optional `__marimo__/notebook.html` and
+`__marimo__/session/{notebook}.py.json` artifacts to that version.
 
-On teardown, **before destroying the sandbox**, the Worker:
+Git-synced sessions are ephemeral. They load a copy of the selected immutable
+workspace and discard all session changes. They do not create teardown
+versions or snapshots.
+
+On teardown, **before destroying the sandbox**, the service:
 
 ```
 // During SandboxProvisioner.teardown, before sandbox.destroy():
@@ -757,20 +850,21 @@ The version cut (steps 1–2) is the **durable record of the session's edits**, 
 
 Schema migrations are a first-class concern because there is no database to run `ALTER TABLE` against. All migration targets — `catalog.json`, snapshot structure, `meta.json`, `project.json`, `source.json`, and the event log — have different migration strategies.
 
-> **Prerequisite (satisfied):** every independently-migrated object carries a `schema_version` field so the Worker can tell which version it is reading. `catalog.json` (`version`) and snapshots/events were already versioned; `meta.json`, `project.json`, `source.json`, and `version.json` now each carry `schema_version: 1`, so the fan-out migration below can key off it.
+> **Prerequisite (satisfied):** every independently migrated object carries a
+> `schema_version` field. `catalog.json` uses its `version` field.
 
 ### Migration types
 
 | Target                                       | Strategy                                                                                                                                                                                                                                                                          |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Snapshot structure                           | Lazy — Worker reads `schema_version` on every snapshot read and upgrades in memory before writing the next snapshot. Old snapshots remain as-is.                                                                                                                                  |
+| Snapshot structure                           | Lazy — the service upgrades the current snapshot in memory before it writes the next snapshot. Old snapshots remain as-is.                                                                                                                                                        |
 | `meta.json` / `project.json` / `source.json` | Fan-out migration job — reads all affected objects, rewrites with the new schema, emits `migration.run`. Iterate with pagination and process in chunks so the job stays within the runtime's per-invocation request/time limits (resume via list cursor; idempotent — see below). |
 | `_system/events/**`                          | Never migrated — event records are immutable history. New event shapes get a bumped `schema_version` field. Consumers must handle multiple versions.                                                                                                                              |
-| `catalog.json`                               | Migrated in-place as part of the first write after a Worker deploy that bumps catalog schema version. Uses a strict `version` literal, so — unlike the objects above — it is **not** forward-tolerant.                                                                            |
+| `catalog.json`                               | Migrated in place during the first write after a deployment that changes the catalog version. Its strict `version` value is not forward-tolerant.                                                                                                                                 |
 
 > **No `schema_version` by design:** the mutable, last-writer-wins records — sessions (`_system/sessions/**`), identities (`_system/identities/**`), tokens (`_system/tokens/**`), and `fs_snapshot.json` — carry no `schema_version`. They are rewritten on every write or reaped shortly after creation, so they never need a migration; a shape change is absorbed with optional fields + defaults on read. API response bodies are likewise unversioned per-object — the contract is versioned at the route level (`/api/v1`).
 
-### Migration Worker pseudocode
+### Migration job pseudocode
 
 ```javascript
 async function runMigration(s3, fromVersion, toVersion, migrateFn) {
@@ -798,19 +892,22 @@ async function runMigration(s3, fromVersion, toVersion, migrateFn) {
 }
 ```
 
-> **Fan-out safety:** Steps in `meta.json` migrations are idempotent — checking `schema_version` before writing means the Worker can be safely re-run if interrupted. Run migrations during a low-traffic window and verify completion via the event log.
+> **Fan-out safety:** Each migration checks `schema_version` before it writes.
+> You can safely run an interrupted migration again. Run migrations during a
+> low-traffic period and verify completion in the event log.
 
 ---
 
-## 10. System Logs
+## 10. Audit Events and Application Logs
 
-`_system/logs/` and `_system/events/` are separate by design. Logs are human-readable for ops; events are machine-readable for audit and analytics.
+The bucket contains structured audit events. Application logs go to the
+configured process or platform log destination. The bucket has no
+`_system/logs/` tree.
 
-| Path                                          | Purpose                                                                                                                      |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `_system/logs/{YYYY-MM-DD}.log`               | Human-readable app log. Rolled daily. Not queried by the application.                                                        |
-| `_system/events/{YYYY-MM-DD}/{event-id}.json` | Structured event log. One immutable object per event. Every mutation, sync, run, and session event writes a new object here. |
-| `_system/snapshots/`                          | Immutable index history. Point-in-time recovery. Prune snapshots older than 90 days via a scheduled job.                     |
+| Path                                          | Purpose                                                                                          |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `_system/events/{YYYY-MM-DD}/{event-id}.json` | Structured audit event. Each event is an immutable object under a UTC-day prefix.                |
+| `_system/snapshots/`                          | Immutable catalog history. The maintenance job applies the configured snapshot-retention policy. |
 
 > **Append strategy:** S3-compatible storage has no native append, and read-modify-write on a shared file loses concurrent events. So each event is a separate immutable object keyed by a monotonic ULID (see §4.9) — naturally concurrency-safe, no locking. Reading a day lists that day's prefix. For high event volume, a buffer (in-memory queue / streaming pipeline) can batch writes upstream, but per-event objects are correct and sufficient at this scale.
 
@@ -833,7 +930,8 @@ async function runMigration(s3, fromVersion, toVersion, migrateFn) {
 
 ## 12. Authentication & Authorization
 
-Authentication (_who is the caller?_) and authorization (_what may they do?_) are separate concerns. The Worker resolves identity before any handler runs — storage is never reached anonymously — and then applies the authorization model below.
+Authentication identifies the caller. Authorization controls their actions.
+The API resolves identity before it reaches storage.
 
 ### Authentication (AuthN)
 
@@ -853,7 +951,9 @@ A request that fails authentication receives `401 UNAUTHORIZED`. The verified us
 - With it **set** (`editor`/`viewer`/`admin` — the default is `editor`), every authenticated user is at least a viewer, so reads stay open and "list everything" stays 2 GETs (§7.1) — there is no per-caller filtering to do.
 - With it **`none`**, non-members have no role: reads are membership-gated. A non-member cannot see a project at all — `GET` returns **`404`** (existence is not leaked) and the project is omitted from the list.
 
-**Writes** are always enforced against the target project: the Worker loads `project.json`, resolves the caller's effective role, and rejects insufficient roles with `403 FORBIDDEN`. A `viewer` or non-member cannot mutate a project's notebooks.
+**Writes** are always checked against the target project. The service loads
+`project.json`, resolves the caller's effective role, and rejects an
+insufficient role with `403 FORBIDDEN`.
 
 **Super admins.** `MARIMOHUB_SUPER_ADMINS` lists operators who resolve to `admin` on **every** project, overriding both membership and `MARIMOHUB_DEFAULT_ROLE`. It is the single deployment-wide exception to the per-project model: a super admin sees and lists all projects (even under `none`), reads/writes every notebook and secret, controls any session, and reads the audit trail. An entry containing `@` matches the login email (case-insensitive); any other entry matches the user id (`sub`) exactly — the id and email namespaces do not overlap (`isSuperAdmin`, `packages/core/src/authz.ts`). The elevation flows through the same `effectiveRole` the role matrix uses, so no enforcement path is special-cased; the two invariants that still bind everyone hold for super admins too — a project `owner` cannot be demoted/removed, and a soft-deleted project stays `404`. A PAT minted by a super admin inherits the power.
 
@@ -870,7 +970,11 @@ The read row is open to any authenticated user when a default role is set; under
 | Create/update/delete notebooks; save versions; create sessions (run)                       |          |    ✓     |    ✓    |
 | Update/delete projects; manage members                                                     |          |          |    ✓    |
 
-Enforced today (`403 FORBIDDEN` on write failure, `404` on hidden read): notebook create/update/delete and session creation require **editor+** on the project; project update/delete require **admin**; reads require **viewer** (a no-op unless `MARIMOHUB_DEFAULT_ROLE=none`). Creating a _new_ project is open to any authenticated user (no project context yet — the creator becomes its `owner`/`admin`). A project's `owner` is implicitly `admin`. Enforcement lives in the Worker (per-route `assertProjectRole` / `assertProjectVisible`), never in the client.
+Notebook changes and session creation require **editor** or **admin**. Project
+changes require **admin**. Reads require **viewer** unless the deployment gives
+authenticated users a default role. Any authenticated user can create a
+project. Its creator becomes the owner and has the admin role. The API enforces
+these rules. The client does not enforce them.
 
 > Session `heartbeat`/`terminate` also require **editor+** (they keep a kernel alive / tear it down). Hard-delete (the deferred GC pass, §7.4) remains the outstanding authorization work; per-notebook ACLs and per-user index objects are out of scope (they would break the 2-GET read model — see `rfc.md` §8).
 
@@ -878,24 +982,34 @@ Enforced today (`403 FORBIDDEN` on write failure, `404` on hidden read): noteboo
 
 ---
 
-## 13. Worker API Layer
+## 13. API Layer
 
-The Worker is an authenticated proxy between the marimo frontend and the object store. It owns auth (§12), ID generation, source resolution, snapshot management, session tracking, and event logging. Storage credentials and raw bucket access are never exposed to the client — every object is read and written through the Worker, and clients address notebooks by `{project_id, notebook_id}` only. The physical `key_prefix` is internal to the stored snapshot and is **stripped from all API responses**; clients never receive storage paths.
+The API is an authenticated boundary between the frontend and the `Bucket`
+port. It runs in the Node and Cloudflare Worker entrypoints. It owns auth,
+resource IDs, source handling, snapshots, sessions, and audit events.
+
+Clients address notebooks by `{project_id, notebook_id}`. They never receive
+storage credentials, raw bucket access, or the stored `key_prefix`.
 
 ### The OpenAPI document is the contract
 
 Routes are defined with `@hono/zod-openapi`: each declares typed request and response schemas, and the live spec is served at **`GET /api/v1/doc`** (OpenAPI 3.1). That generated document — not a hand-maintained table — is the source of truth for paths, parameters, request bodies, and response shapes. All routes are mounted under `/api/v1`, in these groups:
 
-- **Auth** — `GET /api/v1/me`
-- **Users** — `GET /api/v1/users?ids=…` (batch-resolve user ids → `{ id, email, name }` from the identity directory, §4.10)
-- **Projects** — list / get / create / update / delete
-- **Notebooks** — list / get / create / update / soft-delete, plus `…/content`, `…/versions`, `…/versions/{vid}`
-- **Sessions** — create / heartbeat / terminate (nested under a notebook)
-- **Sandbox** — kernel-runtime provisioning & exec
+- **Auth** — current user and personal access token management
+- **Users** — identity resolution and directory search
+- **Projects** — project, member, and audit-event management
+- **Notebooks** — local and Git-synced notebooks, content, versions, restore,
+  duplicate, HTML snapshots, and sync-token rotation
+- **Sessions** — list, create, inspect, heartbeat, stop, editor ownership, and
+  exclusive takeover
+- **Integrations** — kinds, project and organization instances, versions, copy,
+  and connectivity tests
+- **Secrets** — project secret metadata, writes, deletion, and reference tests
+- **System** — deployment version and capability limits
 
 ### Error & response model
 
-Every response uses one envelope. Success:
+JSON responses use one envelope. Success:
 
 ```json
 {
@@ -909,8 +1023,11 @@ Every response uses one envelope. Success:
 Errors (no `data`; a typed `code` plus a human-readable `message`):
 
 ```json
-{ "success": false, "error": { "code": "NOT_FOUND", "message": "Notebook nb_… not found" } }
+{ "success": false, "error": { "code": "NOT_FOUND", "message": "Notebook nb-… not found" } }
 ```
+
+The HTML snapshot route returns raw `text/html` on success. Its errors use the
+JSON envelope.
 
 | HTTP | `code`                | When                                                                       |
 | ---- | --------------------- | -------------------------------------------------------------------------- |
@@ -924,60 +1041,17 @@ Errors (no `data`; a typed `code` plus a human-readable `message`):
 
 ### API versioning, pagination, idempotency
 
-- **Versioning** — the `/api` base plus the OpenAPI `info.version` (currently `1.0.0`) pin the contract. Treat `/api` as v1; ship breaking changes under `/api/v2` rather than mutating existing shapes.
-- **Pagination** — none in v1, by design. At 10×100 the catalog fits in one ~200KB snapshot, so listings return in full. Event-log reads page the storage list cursor internally. When the snapshot is split into per-project manifests (§11 compaction), introduce cursor-based pagination on `GET /projects` and the notebook listing.
+- **Versioning** — `/api/v1` and the OpenAPI `info.version` identify the current contract. Put a breaking contract under a new route version.
+- **Pagination** — project, notebook, notebook-version, project-session, integration-instance, and integration-version lists use opaque keyset cursors. Bounded lists, such as project members and API tokens, return arrays. The OpenAPI response schema is authoritative for each route.
 - **Idempotency** — reads, `PUT`/`PATCH`, and soft-`DELETE` are naturally idempotent. `POST` creates are **not** by default: a retry after a network failure or a `409 CONFLICT` can create a duplicate. Clients that care send an `Idempotency-Key` header on `POST /projects` and `POST …/notebooks` — the server stores `key → result` under `_system/idempotency/` and replays it on retry (24h TTL). `POST …/sessions` is already idempotent on `(user, notebook)` via its reuse path. See [`idempotency.md`](./idempotency.md).
 
-### Core function: `writeSnapshot()`
+### Catalog mutation
 
-```javascript
-async function writeSnapshot(s3, mutation, actor) {
-	let retries = 0;
-	while (retries < 5) {
-		// 1. Read catalog with ETag
-		const { data: catalog, etag } = await s3.getWithETag('_system/catalog.json');
-
-		// 2. Read current snapshot
-		const current = await s3.get(catalog.current_snapshot_key);
-
-		// 3. Upgrade snapshot schema if needed (lazy migration)
-		const upgraded = upgradeSnapshot(current);
-
-		// 4. Apply mutation
-		const next = applyMutation(upgraded, mutation);
-		const snapId = 'snap_' + ulid();
-		const snapKey = `_system/snapshots/${snapId}.json`;
-
-		// 5. Write new snapshot (new key — never conflicts)
-		await s3.put(snapKey, JSON.stringify(next));
-
-		// 6. Conditional catalog swap (If-Match on the catalog's ETag)
-		const ok = await s3.putIfMatch(
-			'_system/catalog.json',
-			{
-				version: 1,
-				current_snapshot_id: snapId,
-				current_snapshot_key: snapKey,
-				previous_snapshot_id: catalog.current_snapshot_id,
-				updated_at: new Date().toISOString(),
-			},
-			etag,
-		);
-
-		if (ok) {
-			await appendEvent(s3, { actor, ...mutation, snapshot_id: snapId });
-			return snapId;
-		}
-
-		// Lost the race: delete the snapshot we just wrote so it never lingers as
-		// an orphan, then retry against the updated catalog state.
-		await s3.delete(snapKey);
-		retries++;
-		await sleep(50 * retries); // exponential backoff
-	}
-	throw new Error('Write conflict: max retries exceeded');
-}
-```
+All catalog changes use `CatalogService.mutateSnapshot`. It reads the catalog
+and current snapshot, applies one mutation, and writes a new immutable snapshot.
+It then updates `catalog.json` with an ETag conditional write. If another writer
+wins, it removes its uncommitted snapshot and retries against the new catalog.
+Only the successful writer appends the mutation event.
 
 ---
 
@@ -1018,14 +1092,14 @@ async function writeSnapshot(s3, mutation, actor) {
 
 ## 15. Open Questions
 
-| Topic                             | Detail                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Object-store versioning           | **Position taken** ([`operations.md`](./operations.md) §1): enable native object versioning + lifecycle expiry as the bucket-level backup/DR safety net beneath the snapshot layer. It is the recommended belt to the snapshot suspenders, and the cheap way to recover from an overwrite of in-place `notebook.py`.                                                                                                            |
-| Notebook ordering                 | Notebooks currently sort by ULID (creation time). If users want manual ordering, add an `order` field to each notebook entry in the snapshot.                                                                                                                                                                                                                                                                                   |
-| Additional source types           | v1 is `local`-only (§4.6). External-source backends (e.g. Git-backed notebooks) bring their own sync, caching, and credential concerns — to be specified separately when prioritized.                                                                                                                                                                                                                                           |
-| Read-side tenant isolation        | **Project-granularity isolation resolved** (§12): opt-in via `MARIMOHUB_DEFAULT_ROLE=none`, filtering the list in-memory over the denormalized `member_ids` so reads stay 2 GETs. Still open: finer grains (per-notebook ACLs, per-user indexes — both break the single-CAS / 2-GET model) and true untrusted multi-tenancy (storage-enforced credential vending) — scope before opening the bucket to untrusted users.         |
-| Execution logs locality           | Run logs currently go to `_system/events/`. Alternative: `projects/{pid}/notebooks/{nid}/runs/{run-id}.log` for per-notebook locality. Tradeoff is discoverability vs. centralization.                                                                                                                                                                                                                                          |
-| Live state for real-time sessions | If kernel output streaming or sub-second variable inspection is needed, live session state belongs in a low-latency store (in-memory cache / stateful coordinator) co-located with the kernel runtime. Object storage retains the durable audit record.                                                                                                                                                                         |
-| Version pruning                   | **Resolved.** `NotebookService.pruneVersions` keeps the most recent `MAX_VERSIONS` (50) per notebook, pruning on each save (`packages/core/src/services/content/NotebookService.ts`). Snapshot and event growth are handled separately by `MaintenanceService` ([`operations.md`](./operations.md) §5).                                                                                                                         |
-| Configurable version count        | `MAX_VERSIONS` should become a config knob (e.g. `MARIMOHUB_NOTEBOOK_MAX_VERSIONS`) so operators can trade history depth for storage. The same count bounds the optional HTML/session snapshots (§8) — they live inside the version folder, so one ceiling covers all three artifacts (no separate snapshot-retention setting needed).                                                                                          |
-| HTML / session snapshots          | Captured on session teardown by copying marimo's `__marimo__/notebook.html` and `__marimo__/session/{notebook}.py.json` into the version teardown cuts for the session's edits (§8); sparse and optional. Open follow-ups: read/download API routes to surface them, and whether to also persist the HTML on a non-session API save (no live kernel then, so it would require an export step — deliberately out of scope here). |
+| Topic                             | Detail                                                                                                                                                                                                                                                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Object-store versioning           | Enable native object versioning and lifecycle expiry as a backup below the snapshot layer. This can recover overwritten latest-only files and out-of-band deletions. See [`operations.md`](./operations.md) §1.                                                                                         |
+| Notebook ordering                 | Notebook lists use `created_at` and the random notebook ID as a stable tiebreaker. Manual ordering needs a new explicit field.                                                                                                                                                                          |
+| Additional source types           | `local` and push-synced `git` are implemented (§4.6). A future source type must define its write, sync, cache, and credential rules.                                                                                                                                                                    |
+| Read-side tenant isolation        | Project-level isolation is implemented (§12). `MARIMOHUB_DEFAULT_ROLE=none` filters snapshot entries by `member_ids`, so the read still uses two GETs. Per-notebook ACLs and storage-enforced isolation for untrusted tenants remain open.                                                              |
+| Execution logs locality           | Run logs currently go to `_system/events/`. Alternative: `projects/{pid}/notebooks/{nid}/runs/{run-id}.log` for per-notebook locality. Tradeoff is discoverability vs. centralization.                                                                                                                  |
+| Live state for real-time sessions | If kernel output streaming or sub-second variable inspection is needed, live session state belongs in a low-latency store (in-memory cache / stateful coordinator) co-located with the kernel runtime. Object storage retains the durable audit record.                                                 |
+| Version pruning                   | **Resolved.** `NotebookService.pruneVersions` keeps the most recent `MAX_VERSIONS` (50) per notebook, pruning on each save (`packages/core/src/services/content/NotebookService.ts`). Snapshot and event growth are handled separately by `MaintenanceService` ([`operations.md`](./operations.md) §5). |
+| Configurable version count        | A variable such as `MARIMOHUB_NOTEBOOK_MAX_VERSIONS` can let operators trade history depth for storage. The same count can bound the optional HTML and session snapshots (§8).                                                                                                                          |
+| HTML / session snapshots          | Session teardown can capture both files (§8). `GET …/notebooks/{nid}/html` serves the newest HTML snapshot. The session-state JSON has no read route. API saves do not generate HTML because they have no live kernel.                                                                                  |

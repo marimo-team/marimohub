@@ -21,6 +21,14 @@ const FORBIDDEN_ENV = new Set<string>([...SHELL_BASICS_ENV, ...CODE_EXECUTION_EN
 
 const ENV_NAME_REGEX = /^[A-Z_][A-Z0-9_]*$/;
 
+function hasControlCharacter(value: string): boolean {
+	for (let index = 0; index < value.length; index++) {
+		const code = value.charCodeAt(index);
+		if (code <= 31 || code === 127) return true;
+	}
+	return false;
+}
+
 /** Owner label for the env vars and files the bundler itself contributes. */
 const BUNDLER = 'marimohub';
 
@@ -81,12 +89,17 @@ export function bundleIntegrations(
 		}
 		for (const [key, value] of Object.entries(item.output.env ?? {})) {
 			assertValidEnvName(key, item.name);
+			if (hasControlCharacter(value)) {
+				throw new ValidationError(
+					`Integration "${item.name}" emitted an environment value containing a control character.`,
+				);
+			}
 			const owner = varOwner.get(key);
 			// An identical value from two instances is tolerated (e.g. a shared
 			// tool var like PYICEBERG_HOME); a differing one is ambiguous.
 			if (owner && vars[key] !== value) {
 				throw new ValidationError(
-					`Integrations "${owner}" and "${item.name}" set env "${key}" to different values.`,
+					`Integrations "${owner}" and "${item.name}" set the same environment variable to different values.`,
 				);
 			}
 			varOwner.set(key, item.name);
@@ -171,9 +184,7 @@ function nestedPathError(
 /**
  * A merged YAML file plus, per leaf key path, the integrations that put the
  * current value there. Blame is tracked per key rather than per file so a
- * conflict names only the integrations that set the disputed key — an
- * integration that contributed unrelated keys to the same file has nothing to
- * reconcile.
+ * conflict names only the integrations that set the disputed key.
  */
 interface MergedYaml {
 	value: Record<string, unknown>;
@@ -244,9 +255,8 @@ function mergeYaml(
 			const disputed = ownersOf(owners, childPath);
 			throw new ValidationError(
 				`Integrations "${disputed.join('", "')}" and "${rightOwner}" disagree on ` +
-					`"${key}" in ${path}: ${JSON.stringify(previous)} vs ${JSON.stringify(value)}. ` +
-					'This setting applies to the whole session, so the two cannot run together — ' +
-					'align the value or disable one of them.',
+					`"${key}" in ${path}. This setting applies to the whole session, so the two ` +
+					'cannot run together — align the value or disable one of them.',
 			);
 		}
 	}
@@ -272,11 +282,12 @@ function normalizeRelativePath(path: string, instance: string): string {
 	if (
 		path.startsWith('/') ||
 		path.includes('\\') ||
+		hasControlCharacter(path) ||
 		segments.some((s) => s === '' || s === '.' || s === '..')
 	) {
 		throw new ValidationError(
-			`Integration "${instance}" rendered an invalid file path "${path}": ` +
-				'paths must be relative, POSIX, and free of "." / ".." segments.',
+			`Integration "${instance}" rendered an invalid file path "${path}": paths must be ` +
+				'relative, POSIX, free of control characters, and free of "." / ".." segments.',
 		);
 	}
 	if (segments[0] === 'manifest.json') {

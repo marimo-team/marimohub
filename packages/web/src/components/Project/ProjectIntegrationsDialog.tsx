@@ -38,7 +38,7 @@ import type { JsonSchemaNode, UiHints } from '@/components/form/schema-form';
 import {
 	useCreateIntegration,
 	useDeleteIntegration,
-	useImportIntegration,
+	useCopyIntegration,
 	useIntegrationDetailQuery,
 	useIntegrationKindsQuery,
 	useIntegrationsQuery,
@@ -125,7 +125,7 @@ function getKindPresentation(kind: IntegrationKind | undefined) {
 type View =
 	| { mode: 'list' }
 	| { mode: 'catalog' }
-	| { mode: 'import' }
+	| { mode: 'copy' }
 	| { mode: 'create'; kind: IntegrationKind }
 	| { mode: 'edit'; entry: IntegrationEntry };
 
@@ -185,8 +185,8 @@ function IntegrationsDialog({
 	const title =
 		view.mode === 'catalog'
 			? 'Add integration'
-			: view.mode === 'import'
-				? 'Import integration'
+			: view.mode === 'copy'
+				? 'Copy integration'
 				: view.mode === 'create'
 					? `Add ${view.kind.title}`
 					: view.mode === 'edit'
@@ -209,7 +209,7 @@ function IntegrationsDialog({
 						className="flex w-fit items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						onClick={() =>
 							setView(
-								view.mode === 'create' || view.mode === 'import'
+								view.mode === 'create' || view.mode === 'copy'
 									? { mode: 'catalog' }
 									: { mode: 'list' },
 							)
@@ -242,12 +242,12 @@ function IntegrationsDialog({
 					<CatalogView
 						kinds={kinds}
 						onPick={(kind) => setView({ mode: 'create', kind })}
-						onImport={scope === 'org' ? undefined : () => setView({ mode: 'import' })}
+						onCopy={scope === 'org' ? undefined : () => setView({ mode: 'copy' })}
 					/>
-				) : view.mode === 'import' ? (
-					// Unreachable for the org scope: the catalog never offers Import there.
+				) : view.mode === 'copy' ? (
+					// Unreachable for the org scope: the catalog never offers Copy there.
 					scope !== 'org' ? (
-						<ImportView pid={scope.pid} kinds={kinds} onDone={() => setView({ mode: 'list' })} />
+						<CopyView pid={scope.pid} kinds={kinds} onDone={() => setView({ mode: 'list' })} />
 					) : null
 				) : view.mode === 'create' ? (
 					<EditorView scope={scope} kind={view.kind} onDone={() => setView({ mode: 'list' })} />
@@ -470,11 +470,11 @@ function ListView({
 function CatalogView({
 	kinds,
 	onPick,
-	onImport,
+	onCopy,
 }: {
 	kinds: IntegrationKind[];
 	onPick: (kind: IntegrationKind) => void;
-	onImport?: () => void;
+	onCopy?: () => void;
 }) {
 	const [query, setQuery] = useState('');
 	const [category, setCategory] = useState<'all' | IntegrationCategory>('all');
@@ -503,10 +503,10 @@ function CatalogView({
 						onChange={setQuery}
 						className="w-full sm:max-w-md"
 					/>
-					{onImport && (
-						<Button variant="ghost" onPress={onImport} className="shrink-0">
+					{onCopy && (
+						<Button variant="ghost" onPress={onCopy} className="shrink-0">
 							<FolderInput className="size-4" aria-hidden />
-							Import from another project
+							Copy from another project
 						</Button>
 					)}
 				</div>
@@ -605,7 +605,7 @@ function CatalogView({
 	);
 }
 
-function ImportView({
+function CopyView({
 	pid,
 	kinds,
 	onDone,
@@ -626,7 +626,7 @@ function ImportView({
 	// role — otherwise a viewer could select and submit before the role check
 	// lands and get a failed POST instead of the explanation below.
 	const entriesQuery = useIntegrationsQuery({ pid: sourcePid ?? '' }, isSourceAdmin);
-	const importIntegration = useImportIntegration(pid);
+	const copyIntegration = useCopyIntegration(pid);
 	const kindsByName = new Map(kinds.map((kind) => [kind.kind, kind]));
 
 	const projectOptions = (projectsQuery.data ?? [])
@@ -653,12 +653,12 @@ function ImportView({
 		}
 		setNameError(undefined);
 		try {
-			await importIntegration.mutateAsync({
+			await copyIntegration.mutateAsync({
 				source_project_id: sourcePid,
 				source_integration_id: sourceEntry.id,
 				name: trimmed,
 			});
-			toast.success(`Imported ${trimmed}`);
+			toast.success(`Copied ${trimmed}`);
 			onDone();
 		} catch (err) {
 			toastError(err);
@@ -695,7 +695,7 @@ function ImportView({
 
 			{sourcePid && sourceProject.data && !isSourceAdmin ? (
 				<p className="text-muted-foreground">
-					You need the <code>admin</code> role on both projects to import an integration.
+					You need the <code>admin</code> role on both projects to copy an integration.
 				</p>
 			) : sourcePid && (entriesQuery.isError || sourceProject.isError) ? (
 				<p className="text-destructive">Could not load that project's integrations.</p>
@@ -717,7 +717,7 @@ function ImportView({
 									<li key={entry.id}>
 										<button
 											type="button"
-											data-testid="import-source-row"
+											data-testid="copy-source-row"
 											aria-pressed={selected}
 											onClick={() => {
 												setSourceEntry(entry);
@@ -763,8 +763,8 @@ function ImportView({
 						error={nameError}
 					/>
 					<div className="flex justify-end">
-						<Button type="submit" variant="primary" isDisabled={importIntegration.isPending}>
-							{importIntegration.isPending ? 'Importing…' : 'Import integration'}
+						<Button type="submit" variant="primary" isDisabled={copyIntegration.isPending}>
+							{copyIntegration.isPending ? 'Copying…' : 'Copy integration'}
 						</Button>
 					</div>
 				</form>
@@ -873,8 +873,12 @@ function EditorForm({
 			// a keep-marker has no value to test with until it is saved.
 			const result = await testIntegration.mutateAsync(
 				entryId !== undefined
-					? { id: entryId }
-					: { kind: kind.kind, config: pruneForSubmit(schema, config) as Record<string, unknown> },
+					? { source: 'stored', id: entryId }
+					: {
+							source: 'draft',
+							kind: kind.kind,
+							config: pruneForSubmit(schema, config) as Record<string, unknown>,
+						},
 			);
 			if (result.ok) {
 				toast.success(

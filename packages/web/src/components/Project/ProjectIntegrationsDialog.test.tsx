@@ -66,6 +66,7 @@ const entry = (over: Partial<IntegrationEntry> = {}): IntegrationEntry => ({
 	created_at: '',
 	updated_at: '',
 	...over,
+	scope: over.scope ?? 'project',
 });
 
 function ok(data: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -95,7 +96,7 @@ interface FetchOpts {
 	details?: Record<string, IntegrationDetail>;
 	patchError?: boolean;
 	orgEntries?: IntegrationEntry[];
-	/** A second project offered by the import picker. */
+	/** A second project offered by the copy picker. */
 	sourceProject?: { id: string; name: string; your_role: string; entries: IntegrationEntry[] };
 	/** Serve the source project on a SECOND /projects page. */
 	pagedProjects?: boolean;
@@ -137,7 +138,7 @@ function makeFetch({
 			return kinds === null ? notFound() : ok(kinds);
 		}
 		if (url.includes('/api/v1/org/integrations')) {
-			if (method === 'GET') return ok(orgEntries);
+			if (method === 'GET') return ok({ items: orgEntries, next_cursor: null });
 			if (method === 'POST' && !url.includes('/test')) {
 				return ok(
 					{
@@ -189,12 +190,12 @@ function makeFetch({
 			});
 		}
 		if (sourceProject && url.includes(`/projects/${sourceProject.id}/integrations`)) {
-			return ok(sourceProject.entries);
+			return ok({ items: sourceProject.entries, next_cursor: null });
 		}
-		if (url.includes(`/projects/${PID}/integrations/import`) && method === 'POST') {
+		if (url.includes(`/projects/${PID}/integrations/copy`) && method === 'POST') {
 			return ok(
 				{
-					id: 'imported_1',
+					id: 'copied_1',
 					kind: 'postgres',
 					name: body?.name,
 					enabled: true,
@@ -219,7 +220,7 @@ function makeFetch({
 		if (url.includes(`/projects/${PID}/integrations`)) {
 			if (method === 'GET') {
 				if (entries === 'error') return serverError();
-				return entries === null ? notFound() : ok(entries);
+				return entries === null ? notFound() : ok({ items: entries, next_cursor: null });
 			}
 			if (method === 'POST') {
 				return ok(
@@ -639,7 +640,7 @@ describe('OrgIntegrationsDialog', () => {
 	});
 });
 
-describe('ProjectIntegrationsDialog — import from another project', () => {
+describe('ProjectIntegrationsDialog — copy from another project', () => {
 	const SOURCE = {
 		id: 'p_2',
 		name: 'Analytics',
@@ -647,28 +648,28 @@ describe('ProjectIntegrationsDialog — import from another project', () => {
 		entries: [entry({ id: 'i_src', name: 'prod-db' })],
 	};
 
-	async function openImport(user: ReturnType<typeof userEvent.setup>) {
+	async function openCopy(user: ReturnType<typeof userEvent.setup>) {
 		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
-		await user.click(await screen.findByRole('button', { name: /Import from another project/ }));
+		await user.click(await screen.findByRole('button', { name: /Copy from another project/ }));
 		await user.type(screen.getByRole('combobox', { name: 'Source project' }), 'Analytics');
 		await user.click(await screen.findByRole('option', { name: 'Analytics' }));
 	}
 
-	it('POSTs to …/integrations/import with the picked source and name', async () => {
+	it('POSTs to …/integrations/copy with the picked source and name', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE });
-		await openImport(user);
+		await openCopy(user);
 
-		await user.click(await screen.findByTestId('import-source-row'));
+		await user.click(await screen.findByTestId('copy-source-row'));
 		const nameField = screen.getByLabelText('Name in this project');
 		await user.clear(nameField);
 		await user.type(nameField, 'analytics-db');
-		await user.click(screen.getByRole('button', { name: 'Import integration' }));
+		await user.click(screen.getByRole('button', { name: 'Copy integration' }));
 
 		await waitFor(() => {
-			const post = calls.find((c) => c.method === 'POST' && c.url.includes('/import'));
+			const post = calls.find((c) => c.method === 'POST' && c.url.includes('/copy'));
 			expect(post).toBeTruthy();
-			expect(post!.url).toContain(`/projects/${PID}/integrations/import`);
+			expect(post!.url).toContain(`/projects/${PID}/integrations/copy`);
 			expect(post!.body).toEqual({
 				source_project_id: 'p_2',
 				source_integration_id: 'i_src',
@@ -680,15 +681,15 @@ describe('ProjectIntegrationsDialog — import from another project', () => {
 	it('offers projects from every /projects page, not just the first', async () => {
 		const user = userEvent.setup();
 		setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE, pagedProjects: true });
-		await openImport(user);
-		expect(await screen.findByTestId('import-source-row')).toBeInTheDocument();
+		await openCopy(user);
+		expect(await screen.findByTestId('copy-source-row')).toBeInTheDocument();
 	});
 
 	it('a cursor that never advances fails the picker loudly, not with a partial roster', async () => {
 		const user = userEvent.setup();
 		setup({}, { kinds: [postgresKind], entries: [], sourceProject: SOURCE, loopingProjects: true });
 		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
-		await user.click(await screen.findByRole('button', { name: /Import from another project/ }));
+		await user.click(await screen.findByRole('button', { name: /Copy from another project/ }));
 		expect(await screen.findByText(/Could not load the project list/)).toBeInTheDocument();
 		expect(screen.queryByRole('combobox', { name: 'Source project' })).not.toBeInTheDocument();
 	});
@@ -704,12 +705,12 @@ describe('ProjectIntegrationsDialog — import from another project', () => {
 				slowRole: true,
 			},
 		);
-		await openImport(user);
+		await openCopy(user);
 		// While the role check is in flight, nothing selectable renders…
-		expect(screen.queryByTestId('import-source-row')).not.toBeInTheDocument();
+		expect(screen.queryByTestId('copy-source-row')).not.toBeInTheDocument();
 		// …and a viewer lands on the explanation, never a submittable form.
 		expect(await screen.findByText(/on both projects/)).toBeInTheDocument();
-		expect(screen.queryByTestId('import-source-row')).not.toBeInTheDocument();
+		expect(screen.queryByTestId('copy-source-row')).not.toBeInTheDocument();
 	});
 
 	it('explains that admin is required on the source project', async () => {
@@ -722,12 +723,12 @@ describe('ProjectIntegrationsDialog — import from another project', () => {
 				sourceProject: { ...SOURCE, your_role: 'viewer' },
 			},
 		);
-		await openImport(user);
+		await openCopy(user);
 		expect(await screen.findByText(/on both projects/)).toBeInTheDocument();
-		expect(screen.queryByTestId('import-source-row')).not.toBeInTheDocument();
+		expect(screen.queryByTestId('copy-source-row')).not.toBeInTheDocument();
 	});
 
-	it('does not offer the import entry point in the org dialog', async () => {
+	it('does not offer the copy entry point in the org dialog', async () => {
 		const user = userEvent.setup();
 		makeFetch({ kinds: [postgresKind], entries: [], orgEntries: [] });
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -739,7 +740,7 @@ describe('ProjectIntegrationsDialog — import from another project', () => {
 		await user.click(await screen.findByRole('button', { name: /Add integration/ }));
 		expect(await screen.findAllByTestId('kind-card')).not.toHaveLength(0);
 		expect(
-			screen.queryByRole('button', { name: /Import from another project/ }),
+			screen.queryByRole('button', { name: /Copy from another project/ }),
 		).not.toBeInTheDocument();
 	});
 });

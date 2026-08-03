@@ -37,9 +37,12 @@ export function parseList(raw: string | undefined): string[] | undefined {
 	return items.length > 0 ? items : undefined;
 }
 
-/** A boolean flag: true only for the literal `"true"` (the project-wide convention). */
+/** Read a case-insensitive `true` or `false`; reject other non-empty values. */
 export function parseBool(env: Env, key: string): boolean {
-	return env[key] === 'true';
+	const value = readFolded(env, key);
+	if (value === undefined || value === 'false') return false;
+	if (value === 'true') return true;
+	throw new ConfigError(`Invalid ${key}: ${env[key]} (expected true or false)`, { variable: key });
 }
 
 /** An integer env value; undefined if unset/empty. Throws on a non-integer. */

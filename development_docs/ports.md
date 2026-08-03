@@ -15,16 +15,16 @@ adapter.
 
 ## Storage (`Bucket`)
 
-| Status | Provider                            | Adapter        | Notes                                                |
-| ------ | ----------------------------------- | -------------- | ---------------------------------------------------- |
-| ✅     | CoreWeave AI Object Storage (CAIOS) | `storage-s3`   | S3-compatible                                        |
-| ✅     | AWS S3                              | `storage-s3`   |                                                      |
-| ✅     | Cloudflare R2 (binding)             | `storage-r2`   | Workers-only; wired by hand in the worker entrypoint |
-| 🟡     | MinIO / Tigris / Ceph / R2-via-S3   | `storage-s3`   | Same adapter, config only (endpoint/region)          |
-| 🟡     | Memory                              | `core/testing` | Dev/tests only (the contract-test double)            |
-| 🟡     | Google Cloud Storage                | `storage-gcs`  | Native JSON API, generation-based CAS                |
-| ⬜     | Azure Blob Storage                  | —              | ETag `If-Match` → clean CAS                          |
-| ⬜     | Filesystem / local disk             | —              | CAS via atomic-rename + lockfile                     |
+| Status | Provider                            | Adapter         | Notes                                                  |
+| ------ | ----------------------------------- | --------------- | ------------------------------------------------------ |
+| ✅     | CoreWeave AI Object Storage (CAIOS) | `storage-s3`    | S3-compatible                                          |
+| ✅     | AWS S3                              | `storage-s3`    |                                                        |
+| ✅     | Cloudflare R2 (binding)             | `storage-r2`    | Workers-only. Wired in the Worker entrypoint           |
+| 🟡     | MinIO / Tigris / Ceph / R2-via-S3   | `storage-s3`    | Same adapter, config only (endpoint/region)            |
+| 🟡     | Memory                              | `core/testing`  | Dev/tests only (the contract-test double)              |
+| 🟡     | Google Cloud Storage                | `storage-gcs`   | Native JSON API, generation-based CAS                  |
+| 🟡     | Azure Blob Storage                  | `storage-azure` | Native SDK, ETag-based CAS                             |
+| 🟡     | Filesystem / local disk             | `storage-fs`    | Single-process adapter for local deployments and tests |
 
 ## Compute (`SandboxProvider`)
 
@@ -45,14 +45,14 @@ adapter.
 
 ## Auth (`Authenticator`)
 
-| Status | Provider                                         | Adapter                  | Notes                                            |
-| ------ | ------------------------------------------------ | ------------------------ | ------------------------------------------------ |
-| ✅     | OIDC (Google / Auth0 / Okta / Keycloak / WorkOS) | `auth-oidc`              | Verified end-to-end with Google OIDC             |
-| ✅     | Cloudflare Access                                | `auth-cloudflare-access` | Verifies `CF-Access-JWT-Assertion`; Workers-only |
-| ✅     | Dev bypass                                       | `auth-dev`               | Dev only (fixed local user)                      |
-| ⬜     | Reverse-proxy header trust                       | —                        | oauth2-proxy / Pomerium (`X-Forwarded-Email`)    |
-| ⬜     | Google IAP                                       | —                        | Verify signed `X-Goog-IAP-JWT-Assertion`         |
-| ⬜     | Static API tokens / PAT                          | —                        | Bearer-token → user, for CLI/programmatic access |
-| ⬜     | GitHub OAuth (native)                            | —                        | Partly covered by `auth-oidc` today              |
-| ⬜     | Tailscale identity                               | —                        | `Tailscale-User-Login` via tsnet/serve           |
-| ⬜     | Native SAML                                      | —                        | Usually better bridged via WorkOS/Auth0 → OIDC   |
+| Status | Provider                                         | Adapter                  | Notes                                                   |
+| ------ | ------------------------------------------------ | ------------------------ | ------------------------------------------------------- |
+| ✅     | OIDC (Google / Auth0 / Okta / Keycloak / WorkOS) | `auth-oidc`              | Verified end-to-end with Google OIDC                    |
+| ✅     | Cloudflare Access                                | `auth-cloudflare-access` | Workers-only. Verifies `CF-Access-JWT-Assertion`        |
+| ✅     | Dev bypass                                       | `auth-dev`               | Dev only (fixed local user)                             |
+| ⬜     | Reverse-proxy header trust                       | —                        | oauth2-proxy / Pomerium (`X-Forwarded-Email`)           |
+| ⬜     | Google IAP                                       | —                        | Verify signed `X-Goog-IAP-JWT-Assertion`                |
+| ✅     | Personal access tokens                           | built into `core`        | `mhub_pat_…` bearer → user, for CLI/programmatic access |
+| ⬜     | GitHub OAuth (native)                            | —                        | Partly covered by `auth-oidc` today                     |
+| ⬜     | Tailscale identity                               | —                        | `Tailscale-User-Login` via tsnet/serve                  |
+| ⬜     | Native SAML                                      | —                        | Usually better bridged via WorkOS/Auth0 → OIDC          |

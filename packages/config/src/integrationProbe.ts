@@ -7,7 +7,7 @@ import { lookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import type { RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import type { LookupFunction } from 'node:net';
 import type { IntegrationProbe, ProbeRequestInit, ProbeResponse } from '@marimo-hub/core';
 
@@ -49,6 +49,15 @@ export type ProbeTransport = (
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 256 * 1024;
 const DEFAULT_MAX_PROBES_PER_MINUTE = 30;
+
+const GLOBAL_UNICAST_V6 = new BlockList();
+GLOBAL_UNICAST_V6.addSubnet('2000::', 3, 'ipv6');
+
+const SPECIAL_GLOBAL_UNICAST_V6 = new BlockList();
+SPECIAL_GLOBAL_UNICAST_V6.addSubnet('2001::', 23, 'ipv6');
+SPECIAL_GLOBAL_UNICAST_V6.addSubnet('2001:db8::', 32, 'ipv6');
+SPECIAL_GLOBAL_UNICAST_V6.addSubnet('2002::', 16, 'ipv6');
+SPECIAL_GLOBAL_UNICAST_V6.addSubnet('3fff::', 20, 'ipv6');
 
 export function createGuardedProbe(options: GuardedProbeOptions = {}): IntegrationProbe {
 	const {
@@ -244,18 +253,7 @@ function isForbiddenAddress(address: string): boolean {
 		const lo = Number.parseInt(hex[2], 16);
 		return isForbiddenV4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
 	}
-	return (
-		lower === '::' ||
-		lower === '::1' ||
-		lower.startsWith('fe8') || // link-local fe80::/10 (fe80–febf)
-		lower.startsWith('fe9') ||
-		lower.startsWith('fea') ||
-		lower.startsWith('feb') ||
-		lower.startsWith('fc') || // unique-local fc00::/7
-		lower.startsWith('fd') ||
-		lower.startsWith('64:ff9b') || // NAT64 — may front private IPv4 space
-		lower.startsWith('ff') // multicast ff00::/8
-	);
+	return !GLOBAL_UNICAST_V6.check(lower, 'ipv6') || SPECIAL_GLOBAL_UNICAST_V6.check(lower, 'ipv6');
 }
 
 function isForbiddenV4(address: string): boolean {

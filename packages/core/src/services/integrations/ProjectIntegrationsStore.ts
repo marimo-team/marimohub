@@ -6,6 +6,7 @@ import {
 	BadRequestError,
 	NotFoundError,
 	PreconditionFailedError,
+	ResourceExhaustedError,
 	ValidationError,
 } from '../../errors';
 import type { IntegrationId, ProjectId, UserId } from '../../ids';
@@ -21,12 +22,10 @@ import type {
 	IntegrationDetail,
 	IntegrationEntry,
 	IntegrationProbe,
-	IntegrationsProvider,
 	IntegrationVersionMeta,
 	IntegrationVersionPage,
 	IntegrationVersionPageRequest,
 	KindDescriptor,
-	OrgIntegrationsProvider,
 	SessionRender,
 	SessionRenderContext,
 	TestIntegrationRequest,
@@ -61,9 +60,13 @@ import {
 } from './secretFields';
 import type { StoredSecretValue } from './secretFields';
 import type { IntegrationDefinition } from './sdk';
+import type { OrgIntegrationsService, ProjectIntegrationsService } from './contracts';
 
 /** Page size when a caller states none; the API passes its own page policy. */
 const DEFAULT_VERSION_PAGE_SIZE = 100;
+
+/** Bounds list scans and session rendering for one integration tier. */
+export const MAX_INTEGRATIONS_PER_SCOPE = 500;
 
 /**
  * Version numbers a page may probe beyond its `limit` before it stops short and
@@ -222,6 +225,11 @@ class ScopedIntegrationsStore {
 		const def = this.registry.get(input.kind);
 		assertValidIntegrationName(input.name);
 		await this.assertNameFree(scope, input.name);
+		if ((await this.listHeads(scope)).length >= MAX_INTEGRATIONS_PER_SCOPE) {
+			throw new ResourceExhaustedError(
+				`Integration limit reached ${scope.where} (${MAX_INTEGRATIONS_PER_SCOPE}).`,
+			);
+		}
 
 		const id = createIntegrationId();
 		const config = await this.seal(scope, id, def, input.config);
@@ -581,7 +589,7 @@ class ScopedIntegrationsStore {
 				kind: head.kind,
 				name: options.name ?? head.name,
 				config: resolved,
-				change_note: `Imported "${head.name}" from project ${source.projectId ?? 'org'}`,
+				change_note: `Copied "${head.name}" from project ${source.projectId ?? 'org'}`,
 			},
 			actor,
 		);
@@ -590,7 +598,7 @@ class ScopedIntegrationsStore {
 	async test(scope: IntegrationScope, request: TestIntegrationRequest): Promise<TestResult> {
 		let def: IntegrationDefinition;
 		let resolved: Record<string, unknown>;
-		if ('id' in request) {
+		if (request.source === 'stored') {
 			const head = await this.getHead(scope, request.id);
 			const current = await this.loadCurrent(scope, head);
 			def = current.def;
@@ -644,19 +652,25 @@ class ScopedIntegrationsStore {
 					`kind "${head.kind}" — edit and re-save it.`,
 			);
 		}
+		let output: ReturnType<typeof def.render>;
+		try {
+			output = def.render({
+				config: parsed.data,
+				instanceName: head.name,
+				projectId: renderProjectId,
+				principal: context.principal,
+				session: { sessionId: context.sessionId },
+			});
+		} catch {
+			throw new ValidationError(`Integration "${head.name}" could not be rendered.`);
+		}
 		return {
 			id: head.id,
 			name: head.name,
 			kind: head.kind,
 			version: version.version,
 			requirements: def.requirements,
-			output: def.render({
-				config: parsed.data,
-				instanceName: head.name,
-				projectId: renderProjectId,
-				principal: context.principal,
-				session: { sessionId: context.sessionId },
-			}),
+			output,
 		};
 	}
 
@@ -665,8 +679,19 @@ class ScopedIntegrationsStore {
 		const dirs: string[] = [];
 		let cursor: string | undefined;
 		do {
-			const page = await this.bucket.list({ prefix, delimiter: '/', cursor });
+			const page = await this.bucket.list({
+				prefix,
+				delimiter: '/',
+				cursor,
+				limit: MAX_INTEGRATIONS_PER_SCOPE + 2,
+			});
 			dirs.push(...page.delimitedPrefixes);
+			const count = dirs.filter((dir) => !dir.endsWith('/_names/')).length;
+			if (count > MAX_INTEGRATIONS_PER_SCOPE) {
+				throw new ResourceExhaustedError(
+					`Integration limit exceeded ${scope.where} (${MAX_INTEGRATIONS_PER_SCOPE}).`,
+				);
+			}
 			cursor = page.truncated ? page.cursor : undefined;
 		} while (cursor);
 
@@ -979,7 +1004,7 @@ class ScopedIntegrationsStore {
  * project instance — enabled or not — shadows the org one, making it both the
  * per-project override and the opt-out.
  */
-export class ProjectIntegrationsStore implements IntegrationsProvider {
+export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 	private readonly store: ScopedIntegrationsStore;
 
 	constructor(options: IntegrationsStoreOptions) {
@@ -1096,7 +1121,7 @@ export class ProjectIntegrationsStore implements IntegrationsProvider {
  * CRUD only — session rendering goes through `ProjectIntegrationsStore`, which
  * merges this tier into every project.
  */
-export class OrgIntegrationsStore implements OrgIntegrationsProvider {
+export class OrgIntegrationsStore implements OrgIntegrationsService {
 	private readonly store: ScopedIntegrationsStore;
 
 	constructor(options: IntegrationsStoreOptions) {
@@ -1154,7 +1179,7 @@ function toEntry(scope: IntegrationScope, head: IntegrationRecord): IntegrationE
 		created_by: head.created_by,
 		created_at: head.created_at,
 		updated_at: head.updated_at,
-		...(scope.projectId === undefined ? { scope: 'org' as const } : {}),
+		scope: scope.projectId === undefined ? 'org' : 'project',
 	};
 }
 

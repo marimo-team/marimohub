@@ -117,7 +117,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private readonly image: string;
 	private readonly hostname: string;
 	private readonly kernelPort: number;
-	private ready = false;
+	private resolved = false;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
 
@@ -157,7 +157,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 * comes from deploy-time config (`hostname`), so it is known on first use.
 	 */
 	private async ensure(): Promise<void> {
-		if (this.ready) return;
+		if (this.resolved) return;
 		await this.client.ensure({
 			name: this.name,
 			sandboxId: this.id,
@@ -172,7 +172,11 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			resources: this.config.resources,
 		});
 		await this.waitForRunning();
-		this.ready = true;
+		this.resolved = true;
+	}
+
+	async ready(): Promise<void> {
+		await this.ensure();
 	}
 
 	private async waitForRunning(): Promise<void> {
@@ -346,7 +350,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 
 	async destroy(): Promise<void> {
 		await this.client.delete(this.name);
-		this.ready = false;
+		this.resolved = false;
 	}
 }
 

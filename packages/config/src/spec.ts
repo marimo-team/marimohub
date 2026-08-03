@@ -169,7 +169,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_STORAGE_AZURE_CONNECTION_STRING',
 						name: 'Azure Storage connection string',
 						description:
-							'Optional connection string for local or legacy deployments. When set, it takes precedence over the account URL.',
+							'Connection string for local or legacy deployments. Do not set it with the account URL.',
 						secret: true,
 					},
 				],
@@ -248,12 +248,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'editors',
 						default: 'none',
 						optIn: true,
-					},
-					{
-						id: 'MARIMOHUB_COMPUTE_IDLE_TIMEOUT',
-						name: 'Idle timeout',
-						description: 'Idle duration before a kernel auto-stops (modal).',
-						example: '20m',
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME',
@@ -851,7 +845,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS',
 						name: 'Session idle timeout (seconds)',
 						description:
-							'Reap a session (with a save) when it has no active editor connections AND its heartbeat has been stale this long.',
+							'Reap a session (with a save) when it has no active editor connections AND its heartbeat has been stale this long. Modal receives a provider-side fallback at 1.5x this value.',
 						default: '1800',
 					},
 					{

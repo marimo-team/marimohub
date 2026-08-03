@@ -32,6 +32,31 @@ describe('CSRF / Origin guard', () => {
 		expect(res.status).not.toBe(403);
 	});
 
+	it('rejects the same host on a different scheme', async () => {
+		const res = await post({
+			headers: {
+				'Content-Type': 'application/json',
+				Origin: 'https://localhost',
+				Host: 'localhost',
+			},
+			body: JSON.stringify({ name: 'P', description: 'd' }),
+		});
+		expect(res.status).toBe(403);
+	});
+
+	it('uses the forwarded protocol when checking the request origin', async () => {
+		const res = await post({
+			headers: {
+				'Content-Type': 'application/json',
+				Origin: 'https://localhost',
+				Host: 'localhost',
+				'X-Forwarded-Proto': 'https',
+			},
+			body: JSON.stringify({ name: 'P', description: 'd' }),
+		});
+		expect(res.status).not.toBe(403);
+	});
+
 	it('allows a request with no Origin (non-browser client)', async () => {
 		const res = await post({
 			headers: { 'Content-Type': 'application/json' },
@@ -82,7 +107,7 @@ describe('CSRF / Origin guard', () => {
 			headers: {
 				'Content-Type': 'application/json',
 				Origin: 'https://trusted.example.com',
-				// Both the Sec-Fetch-Site cross-site branch and the Origin/Host branch
+				// Both the Sec-Fetch-Site branch and the exact-origin branch
 				// must clear via the allowlist.
 				'Sec-Fetch-Site': 'cross-site',
 				Host: 'hub.example.com',

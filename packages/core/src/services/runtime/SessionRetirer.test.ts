@@ -238,6 +238,64 @@ describe('SessionRetirer', () => {
 		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
 	});
 
+	it('repeats capture safely when the capture-complete marker write is interrupted', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		await reserveTakeover(session, 'capture-marker-retry');
+		await sessions.setTakeoverPhase(projectId, notebookId, 'capture-marker-retry', 'draining');
+		await sessions.beginTerminating(projectId, session.session_id, {
+			reason: 'takeover',
+			by: uid('user_01HXY00000000000000000001'),
+		});
+		const capture = vi
+			.spyOn(SandboxProvisioner.prototype, 'captureSession')
+			.mockResolvedValue(true);
+		vi.spyOn(sessions, 'markTakeoverCaptureCompleted').mockRejectedValueOnce(
+			new Error('capture marker unavailable'),
+		);
+		const service = retirer({ create: () => instance, proxy: async () => null });
+
+		await expect(
+			service.completeTakeoverDrain(session, 'capture-marker-retry', 'lease-first'),
+		).rejects.toThrow('capture marker unavailable');
+		expect(calls.destroy).toBe(0);
+		await expect(
+			service.completeTakeoverDrain(session, 'capture-marker-retry', 'lease-second'),
+		).resolves.toBe(true);
+
+		expect(capture).toHaveBeenCalledTimes(2);
+		expect(calls.destroy).toBe(1);
+	});
+
+	it('repeats destroy safely when the reclaimed marker write is interrupted', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		await reserveTakeover(session, 'destroy-marker-retry');
+		await sessions.setTakeoverPhase(projectId, notebookId, 'destroy-marker-retry', 'draining');
+		await sessions.beginTerminating(projectId, session.session_id, {
+			reason: 'takeover',
+			by: uid('user_01HXY00000000000000000001'),
+		});
+		const capture = vi
+			.spyOn(SandboxProvisioner.prototype, 'captureSession')
+			.mockResolvedValue(true);
+		vi.spyOn(sessions, 'markSandboxReclaimed').mockRejectedValueOnce(
+			new Error('reclaimed marker unavailable'),
+		);
+		const service = retirer({ create: () => instance, proxy: async () => null });
+
+		await expect(
+			service.completeTakeoverDrain(session, 'destroy-marker-retry', 'lease-first'),
+		).rejects.toThrow('reclaimed marker unavailable');
+		expect(calls.destroy).toBe(1);
+		await expect(
+			service.completeTakeoverDrain(session, 'destroy-marker-retry', 'lease-second'),
+		).resolves.toBe(true);
+
+		expect(capture).toHaveBeenCalledTimes(1);
+		expect(calls.destroy).toBe(2);
+	});
+
 	it('serializes concurrent retries of a draining takeover', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession();

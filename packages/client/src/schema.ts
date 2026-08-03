@@ -3478,7 +3478,10 @@ export interface paths {
 		/** List a project's integrations */
 		get: {
 			parameters: {
-				query?: never;
+				query?: {
+					limit?: number;
+					cursor?: string;
+				};
 				header?: never;
 				path: {
 					pid: string;
@@ -3496,8 +3499,17 @@ export interface paths {
 						'application/json': {
 							/** @enum {boolean} */
 							success: true;
-							data: components['schemas']['IntegrationEntry'][];
+							data: components['schemas']['IntegrationPage'];
 						};
+					};
+				};
+				/** @description Bad request */
+				400: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
 				/** @description Authentication required */
@@ -3585,6 +3597,15 @@ export interface paths {
 							success: true;
 							data: components['schemas']['IntegrationDetail'];
 						};
+					};
+				};
+				/** @description Bad request */
+				400: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
 				/** @description Authentication required */
@@ -4015,7 +4036,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/integrations/import': {
+	'/api/v1/projects/{pid}/integrations/copy': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -4036,7 +4057,7 @@ export interface paths {
 			};
 			requestBody: {
 				content: {
-					'application/json': components['schemas']['IntegrationImportRequest'];
+					'application/json': components['schemas']['IntegrationCopyRequest'];
 				};
 			};
 			responses: {
@@ -4222,7 +4243,10 @@ export interface paths {
 		/** List org-wide integrations (super admin only) */
 		get: {
 			parameters: {
-				query?: never;
+				query?: {
+					limit?: number;
+					cursor?: string;
+				};
 				header?: never;
 				path?: never;
 				cookie?: never;
@@ -4238,8 +4262,17 @@ export interface paths {
 						'application/json': {
 							/** @enum {boolean} */
 							success: true;
-							data: components['schemas']['IntegrationEntry'][];
+							data: components['schemas']['IntegrationPage'];
 						};
+					};
+				};
+				/** @description Bad request */
+				400: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
 				/** @description Authentication required */
@@ -5698,6 +5731,10 @@ export interface components {
 			supports_test: boolean;
 			requirements: string[];
 		};
+		IntegrationPage: {
+			items: components['schemas']['IntegrationEntry'][];
+			next_cursor: string | null;
+		};
 		IntegrationEntry: {
 			id: string;
 			kind: string;
@@ -5705,10 +5742,12 @@ export interface components {
 			enabled: boolean;
 			current_version: number;
 			created_by: string;
+			/** Format: date-time */
 			created_at: string;
+			/** Format: date-time */
 			updated_at: string;
 			/** @enum {string} */
-			scope?: 'project' | 'org';
+			scope: 'project' | 'org';
 			shadowed?: boolean;
 		};
 		IntegrationDetail: components['schemas']['IntegrationEntry'] & {
@@ -5725,10 +5764,11 @@ export interface components {
 			version: number;
 			kind_schema_version: number;
 			created_by: string;
+			/** Format: date-time */
 			created_at: string;
 			change_note?: string;
 		};
-		IntegrationImportRequest: {
+		IntegrationCopyRequest: {
 			/** @example proj-7h2k9qm4xz7rp3w8 */
 			source_project_id: string;
 			/** @example intg-7h2k9qm4xz7rp3w8 */
@@ -5742,12 +5782,16 @@ export interface components {
 		};
 		IntegrationTestRequest:
 			| {
+					/** @enum {string} */
+					source: 'draft';
 					kind: string;
 					config: {
 						[key: string]: unknown;
 					};
 			  }
 			| {
+					/** @enum {string} */
+					source: 'stored';
 					id: string;
 			  };
 		User: {
