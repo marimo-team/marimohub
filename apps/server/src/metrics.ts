@@ -1,4 +1,6 @@
-import type { Metrics } from '@marimo-hub/core';
+import type { Counter, Gauge, MeterProvider } from '@opentelemetry/api';
+import { metrics as metricsApi } from '@opentelemetry/api';
+import type { Metrics, MetricTags } from '@marimo-hub/core';
 
 /**
  * A `Metrics` implementation that accumulates counters and latest gauge values
@@ -30,4 +32,50 @@ export class WideEventMetrics implements Metrics {
 		for (const [k, v] of this.gauges) out[`gauge.${k}`] = v;
 		return out;
 	}
+}
+
+/**
+ * Bridges the `Metrics` port to OpenTelemetry instruments, so the domain
+ * signals export alongside the HTTP RED metrics. Construct only after
+ * `startOtel()`: unlike traces, the metrics API has no late-registration proxy,
+ * so a meter resolved before the provider registers stays a no-op forever.
+ */
+export class OtelMetrics implements Metrics {
+	private readonly meter;
+	private readonly counters = new Map<string, Counter>();
+	private readonly gauges = new Map<string, Gauge>();
+
+	constructor(provider: MeterProvider = metricsApi.getMeterProvider()) {
+		this.meter = provider.getMeter('@marimo-hub/server');
+	}
+
+	increment(name: string, value = 1, tags?: MetricTags): void {
+		let counter = this.counters.get(name);
+		if (!counter) {
+			counter = this.meter.createCounter(name);
+			this.counters.set(name, counter);
+		}
+		counter.add(value, tags);
+	}
+
+	gauge(name: string, value: number, tags?: MetricTags): void {
+		let gauge = this.gauges.get(name);
+		if (!gauge) {
+			gauge = this.meter.createGauge(name);
+			this.gauges.set(name, gauge);
+		}
+		gauge.record(value, tags);
+	}
+}
+
+/** Emit every signal to all targets (e.g. wide-event flush + OTEL export). */
+export function fanoutMetrics(...targets: Metrics[]): Metrics {
+	return {
+		increment(name, value, tags) {
+			for (const t of targets) t.increment(name, value, tags);
+		},
+		gauge(name, value, tags) {
+			for (const t of targets) t.gauge(name, value, tags);
+		},
+	};
 }

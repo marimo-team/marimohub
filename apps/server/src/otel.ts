@@ -27,6 +27,8 @@ import { logEvent } from './log';
 export interface OtelHandle {
 	/** True when the request middleware should create SERVER spans. */
 	tracing: boolean;
+	/** True when a global MeterProvider is registered and exporting. */
+	metrics: boolean;
 	/** Flush buffered telemetry and stop exporting. */
 	shutdown(): Promise<void>;
 }
@@ -127,6 +129,7 @@ export function startOtel(): OtelHandle | null {
 	});
 	return {
 		tracing,
+		metrics: metricsKind !== null,
 		shutdown: async () => {
 			await Promise.allSettled(shutdowns.map((fn) => fn()));
 		},

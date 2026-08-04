@@ -134,11 +134,19 @@ Spans and metrics share one resource: `service.name` and
 and a random `service.instance.id` (override it per pod via
 `OTEL_RESOURCE_ATTRIBUTES`, e.g. from the Kubernetes Downward API).
 
+While tracing is enabled, every log line emitted inside a traced request also
+carries `trace_id` / `span_id`, so your log pipeline can pivot from a line
+straight to its trace.
+
 ### Metrics (OpenTelemetry)
 
-The server records RED metrics per request: the `http.server.request.duration`
+The server records RED metrics per request — the `http.server.request.duration`
 histogram (labelled by route, method, and status code) and the
-`http.server.active_requests` gauge. `OTEL_METRICS_EXPORTER` selects the mode:
+`http.server.active_requests` gauge — plus domain signals: catalog CAS
+contention (`catalog.cas.*`), session and reaper activity (`sessions.*`), and
+snapshot growth (`snapshots.*`, `maintenance.*`), which also still flush as one
+wide-event log line per maintenance cycle. `OTEL_METRICS_EXPORTER` selects the
+mode:
 
 - **`otlp`** (default): push over OTLP/HTTP whenever
   `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`) is

@@ -1,4 +1,5 @@
-import { trace } from '@opentelemetry/api';
+import { context, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import {
 	BasicTracerProvider,
 	InMemorySpanExporter,
@@ -8,16 +9,21 @@ import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { UserId } from './ids';
 import { createServices } from './services';
 import { MemoryBucket } from './testing/MemoryBucket';
-import { traced } from './tracing';
+import { traceContext, traced } from './tracing';
 
 const exporter = new InMemorySpanExporter();
 const provider = new BasicTracerProvider({
 	spanProcessors: [new SimpleSpanProcessor(exporter)],
 });
 trace.setGlobalTracerProvider(provider);
+// traceContext() reads the ACTIVE span, which needs real context propagation.
+context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
 
 afterEach(() => exporter.reset());
-afterAll(() => trace.disable());
+afterAll(() => {
+	trace.disable();
+	context.disable();
+});
 
 class Fake {
 	calls = 0;
@@ -113,5 +119,21 @@ describe('createServices tracing option', () => {
 		const services = createServices(new MemoryBucket());
 		await services.identities.get('user-1' as UserId);
 		expect(exporter.getFinishedSpans()).toHaveLength(0);
+	});
+});
+
+describe('traceContext', () => {
+	it('is undefined outside any span', () => {
+		expect(traceContext()).toBeUndefined();
+	});
+
+	it('returns the active span ids', () => {
+		provider.getTracer('test').startActiveSpan('op', (span) => {
+			expect(traceContext()).toEqual({
+				trace_id: span.spanContext().traceId,
+				span_id: span.spanContext().spanId,
+			});
+			span.end();
+		});
 	});
 });

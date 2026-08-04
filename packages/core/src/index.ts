@@ -26,6 +26,9 @@ export type {
 	WorkspaceSourcePolicy,
 } from './integrations/remoteWorkspace';
 
+// Trace↔log correlation (the `traced` span wrapper stays internal to createServices)
+export { traceContext } from './tracing';
+
 // Saga orchestrator (multi-step compensating operations)
 export * from './saga';
 
