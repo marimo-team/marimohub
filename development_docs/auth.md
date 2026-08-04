@@ -34,33 +34,58 @@ property.
 
 ## OIDC (`MARIMOHUB_AUTH_BACKEND=oidc`)
 
-The adapter discovers the provider at `<issuer>/.well-known/openid-configuration`,
-runs Authorization Code + PKCE, verifies the ID token (JWKS signature + `iss` /
-`aud` / `nonce` / expiry), and mints the `mh_session` cookie. Protocol mechanics
-use [`oauth4webapi`](https://github.com/panva/oauth4webapi); cookie signing uses
+The adapter discovers the provider at `<issuer>/.well-known/openid-configuration`.
+It runs Authorization Code + PKCE and verifies the ID token signature, `iss`,
+`aud`, `nonce`, and expiry. UserInfo must have the same `sub` as the ID token.
+The adapter then mints the `mh_session` cookie. Protocol code uses
+[`oauth4webapi`](https://github.com/panva/oauth4webapi). Cookie signing uses
 [`jose`](https://github.com/panva/jose).
 
-| Variable                            | Req | Description                                                  |
-| ----------------------------------- | --- | ------------------------------------------------------------ |
-| `MARIMOHUB_AUTH_OIDC_ISSUER`        | ✓   | e.g. `https://accounts.google.com`.                          |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`     | ✓   | OAuth client ID.                                             |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET` | ✓   | OAuth client secret (sent via `client_secret_post`).         |
-| `MARIMOHUB_AUTH_OIDC_REDIRECT_URI`  | ✓   | **Must be** `<your-origin>/api/auth/callback`.               |
-| `MARIMOHUB_AUTH_SESSION_SECRET`     | ✓   | HS256 cookie-signing key; use ≥32 random bytes.              |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE`      |     | Unused — `aud` must contain the client ID (enforced anyway). |
+| Variable                                 | Req | Description                                                    |
+| ---------------------------------------- | --- | -------------------------------------------------------------- |
+| `MARIMOHUB_AUTH_OIDC_ISSUER`             | ✓   | For example, `https://accounts.google.com`.                    |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`          | ✓   | OAuth client ID.                                               |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`      | ✓   | OAuth client secret (sent via `client_secret_post`).           |
+| `MARIMOHUB_AUTH_OIDC_REDIRECT_URI`       | ✓   | **Must be** `<your-origin>/api/auth/callback`.                 |
+| `MARIMOHUB_AUTH_SESSION_SECRET`          | ✓   | HS256 cookie-signing key with ≥32 random bytes.                |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE`           |     | Deprecated and ignored; `aud` must contain the client ID.      |
+| `MARIMOHUB_AUTH_OIDC_SCOPES`             |     | Defaults to `openid email profile`. Keep `openid` and `email`. |
+| `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` |     | `required` (default) or explicit `trusted-issuer`.             |
+| `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM`       |     | JSON Pointer for opt-in group policy and entitlement mapping.  |
 
-**Routes** (public, mounted before the authN guard): `GET /api/auth/login`
-starts the flow; `/api/auth/callback` exchanges the code and sets `mh_session`;
-`/api/auth/logout` clears it and redirects to the provider end-session endpoint.
+**Routes** are public and mount before the authentication guard.
+`GET /api/auth/login` starts the flow. `/api/auth/callback` exchanges the code
+and sets `mh_session`. `/api/auth/logout` clears the cookie and redirects to the
+provider logout endpoint.
 
 **Redirect URI** is always `<origin>/api/auth/callback` and must match what you
-register byte-for-byte. Providers require HTTPS (except `localhost`), as does
-`oauth4webapi`.
+register byte-for-byte. The issuer, redirect URI, and discovered authorization
+and logout endpoints must use HTTPS and cannot contain credentials.
 
-**Cookies**: `mh_session` (HS256 JWT — `sub`=id, `email` claim; httpOnly,
-Secure, SameSite=Lax; 8h default) and the short-lived `mh_oidc_txn` (PKCE
-verifier + state + nonce during the round-trip). Rotating
-`MARIMOHUB_AUTH_SESSION_SECRET` invalidates all sessions.
+`trusted-issuer` applies only when all email domains are allowed. A domain
+allowlist always requires `email_verified: true`.
+
+**Cookies**: `mh_session` is an issuer-, audience-, and type-bound HS256 JWT.
+It is HttpOnly, Secure, and SameSite=Lax. Its default lifetime is 8 hours, or
+at most 1 hour with group policy. The short-lived `mh_oidc_txn` stores the PKCE
+verifier, state, and nonce. Rotating `MARIMOHUB_AUTH_SESSION_SECRET` invalidates
+all sessions.
+
+The session JWT cannot exceed 3,800 bytes. If necessary, the signer omits
+`picture_url` first and `name` second. It never omits required identity or
+authorization claims. Login fails if those claims exceed the limit.
+
+Each deployment supports one issuer. Stored user IDs use that issuer's `sub`.
+An issuer change is an identity migration. Reconcile stored owners and members
+before the change.
+
+The session stores mapped entitlements, not raw groups. Group-derived roles do
+not transfer to personal access tokens. Group-authorized kernels use the session
+JWT expiry as a fixed authorization deadline. Active editors cannot extend it.
+Session reuse keeps the earliest credential deadline presented by any caller.
+At expiry, the lifecycle destroys the kernel and the proxy closes WebSockets.
+This teardown skips the final capture so that the kernel stops promptly.
+Periodic snapshots limit potential data loss.
 
 > The session cookie is `Secure` (HTTPS only). For local `http://localhost`
 > work, use the [`dev`](#dev-marimohub_auth_backenddev) backend, not `oidc`.

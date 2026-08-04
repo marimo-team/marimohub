@@ -7,8 +7,8 @@
  * kernel's origin. The kernel runs under `--base-url=/proxy/<token>`, so the full
  * path is forwarded unchanged. `authorizeProxyRequest` is shared with the
  * WebSocket path (the Node entrypoint) so the two transports authorize
- * identically — but a WebSocket is authorized at the UPGRADE only: an
- * established kernel socket outlives a later revocation until it closes.
+ * identically. Entitlement-backed sessions also return a fixed deadline that
+ * the Node relay uses to close an established socket.
  */
 import type { MiddlewareHandler } from 'hono';
 import { ForbiddenError, ProxyExposure, verifyProxyToken } from '@marimo-hub/core';
@@ -19,7 +19,12 @@ import { assertSessionAccess, fail } from './shared';
 export type ProxyDecision =
 	| { kind: 'pass' } // Not a proxy path — let the normal app handle it.
 	| { kind: 'reject'; status: 401 | 403 | 404 | 410 | 503; code: string; message: string }
-	| { kind: 'forward'; targetUrl: string; sessionId: string };
+	| {
+			kind: 'forward';
+			targetUrl: string;
+			sessionId: string;
+			authorizationDeadline?: number;
+	  };
 
 const PROXY_PREFIX = /^\/proxy\/([^/]+)/;
 
@@ -80,6 +85,17 @@ export async function authorizeProxyRequest(
 	if (session.status !== 'running') {
 		return { kind: 'reject', status: 410, code: 'GONE', message: 'Session is no longer running' };
 	}
+	const authorizationDeadline = session.authorization_expires_at
+		? Date.parse(session.authorization_expires_at)
+		: undefined;
+	if (authorizationDeadline !== undefined && Date.now() >= authorizationDeadline) {
+		return {
+			kind: 'reject',
+			status: 410,
+			code: 'GONE',
+			message: 'Session authorization has expired',
+		};
+	}
 
 	const originUrl = session.sandbox_origin_url;
 	if (!originUrl) {
@@ -118,7 +134,12 @@ export async function authorizeProxyRequest(
 
 	// Forward the FULL path unchanged (marimo runs under --base-url=/proxy/<token>).
 	const targetUrl = `${trimTrailingSlash(originUrl)}${url.pathname}${url.search}`;
-	return { kind: 'forward', targetUrl, sessionId };
+	return {
+		kind: 'forward',
+		targetUrl,
+		sessionId,
+		...(authorizationDeadline !== undefined ? { authorizationDeadline } : {}),
+	};
 }
 
 /** Hop-by-hop headers that must not be copied across a proxy (RFC 7230 §6.1). */

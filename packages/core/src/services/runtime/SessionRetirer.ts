@@ -58,10 +58,12 @@ export class SessionRetirer {
 	 */
 	async retire(
 		session: Session,
-		opts: { teardown?: boolean; markTerminated?: boolean } = {},
+		opts: { teardown?: boolean; markTerminated?: boolean; captureBeforeDestroy?: boolean } = {},
 	): Promise<void> {
 		const sandboxDestroyed =
-			opts.teardown === false ? !session.sandbox_id : await this.teardownSandbox(session);
+			opts.teardown === false
+				? !session.sandbox_id
+				: await this.teardownSandbox(session, opts.captureBeforeDestroy ?? true);
 		if (opts.markTerminated !== false) {
 			await this.deps.sessions
 				.markTerminated(session.project_id, session.session_id)
@@ -268,36 +270,38 @@ export class SessionRetirer {
 	 * Best-effort persistence followed by a destruction attempt. The return value
 	 * fences editor-claim release until the provider confirms destruction.
 	 */
-	private async teardownSandbox(session: Session): Promise<boolean> {
+	private async teardownSandbox(session: Session, captureBeforeDestroy = true): Promise<boolean> {
 		if (!session.sandbox_id) return true;
 		const sandbox = this.deps.compute.create(session.sandbox_id);
 		let persisted = false;
-		try {
-			const persistEdits =
-				sessionPersistsEdits(session) && (await this.deps.sessions.ownsEditorClaim(session));
-			persisted = persistEdits;
-			persisted = await this.provisioner.captureSession(
-				sandbox,
-				this.deps.notebooks,
-				this.deps.bucket,
-				session.project_id,
-				session.notebook_id,
-				session.user_id,
-				this.deps.persistWorkspace,
-				this.deps.workdir,
-				{ persistEdits },
-			);
-		} catch (err) {
-			logOperationalError(
-				'session_capture_failed',
-				{
-					operation: 'session_retire.capture_session',
-					project_id: session.project_id,
-					notebook_id: session.notebook_id,
-					session_id: session.session_id,
-				},
-				err,
-			);
+		if (captureBeforeDestroy) {
+			try {
+				const persistEdits =
+					sessionPersistsEdits(session) && (await this.deps.sessions.ownsEditorClaim(session));
+				persisted = persistEdits;
+				persisted = await this.provisioner.captureSession(
+					sandbox,
+					this.deps.notebooks,
+					this.deps.bucket,
+					session.project_id,
+					session.notebook_id,
+					session.user_id,
+					this.deps.persistWorkspace,
+					this.deps.workdir,
+					{ persistEdits },
+				);
+			} catch (err) {
+				logOperationalError(
+					'session_capture_failed',
+					{
+						operation: 'session_retire.capture_session',
+						project_id: session.project_id,
+						notebook_id: session.notebook_id,
+						session_id: session.session_id,
+					},
+					err,
+				);
+			}
 		}
 		if (persisted) {
 			await captureFilesystemSnapshot(

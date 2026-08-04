@@ -109,7 +109,12 @@ describe('SessionLifecycleService', () => {
 
 		it('extends the deadline instead of reaping while editors are connected', async () => {
 			probe.mockResolvedValue(2);
-			const s = await putSession({ expires_at: iso(-1000), last_snapshot_at: iso(0) });
+			const authorizationExpiresAt = iso(60 * 60 * 1000);
+			const s = await putSession({
+				expires_at: iso(-1000),
+				authorization_expires_at: authorizationExpiresAt,
+				last_snapshot_at: iso(0),
+			});
 
 			const result = await makeService().sweep(now);
 
@@ -119,6 +124,26 @@ describe('SessionLifecycleService', () => {
 			const stored = await getStored(s);
 			expect(stored.status).toBe('running');
 			expect(stored.expires_at).toBe(iso(EXTENSION_MS));
+			expect(stored.authorization_expires_at).toBe(authorizationExpiresAt);
+		});
+
+		it('destroys an entitlement-authorized kernel at its deadline despite active connections', async () => {
+			probe.mockResolvedValue(2);
+			const s = await putSession({
+				sandbox_url: 'https://kernel.example.com/',
+				expires_at: iso(60 * 60 * 1000),
+				authorization_expires_at: iso(-1000),
+				last_snapshot_at: iso(0),
+			});
+
+			const result = await makeService().sweep(now);
+
+			expect(probe).toHaveBeenCalled();
+			expect(result.extended).toBe(0);
+			expect(result.reapedExpired).toBe(1);
+			expect(sandboxCalls.destroy).toBe(1);
+			expect(notebooks.commitSession).not.toHaveBeenCalled();
+			expect((await getStored(s)).status).toBe('terminated');
 		});
 
 		it('extends (not reaps) on a null probe while the heartbeat is fresh', async () => {
@@ -358,6 +383,23 @@ describe('SessionLifecycleService', () => {
 			expect(result.reclaimed).toBe(0);
 			expect(sandboxCalls.destroy).toBe(0);
 			expect((await getStored(s)).sandbox_reclaimed_at).toBeUndefined();
+		});
+
+		it('authorization expiry overrides active editors and the provision-reclaim grace', async () => {
+			probe.mockResolvedValue(3);
+			const s = await putSession({
+				status: 'expired',
+				started_at: iso(-6 * 60 * 1000),
+				last_heartbeat: iso(-6 * 60 * 1000),
+				authorization_expires_at: iso(-1000),
+			});
+
+			const result = await makeService().sweep(now);
+
+			expect(result.reclaimed).toBe(1);
+			expect(sandboxCalls.destroy).toBe(1);
+			expect(notebooks.commitSession).not.toHaveBeenCalled();
+			expect((await getStored(s)).sandbox_reclaimed_at).toBeDefined();
 		});
 
 		it('destroys WITHOUT saving when a newer live session owns the notebook', async () => {

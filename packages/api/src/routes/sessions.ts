@@ -42,6 +42,7 @@ import {
 	UnavailableError,
 	EditSessionOwnedError,
 	EditSessionChangedError,
+	ForbiddenError,
 	TakeoverInProgressError,
 	TakeoverRetirementError,
 	kernelActiveConnections,
@@ -384,6 +385,20 @@ function authorizeSessionStart(
 		profileOverrideEligible: !ephemeral,
 		restrictedViewerCredentials: ephemeral,
 	};
+}
+
+function entitlementAuthorizationDeadline(user: AuthUser): string | undefined {
+	if (!user.entitlementsExpiresAt) {
+		if (user.entitlements?.length) {
+			throw new ForbiddenError('Group authorization has no credential expiry; sign in again');
+		}
+		return undefined;
+	}
+	const deadline = Date.parse(user.entitlementsExpiresAt);
+	if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+		throw new ForbiddenError('Group authorization has expired; sign in again');
+	}
+	return new Date(deadline).toISOString();
 }
 
 function resolveComputeProfile(
@@ -745,6 +760,7 @@ app.openapi(createSession, async (c) => {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
 	const authorization = authorizeSessionStart(project, user, mode, deps.policy);
+	const authorizationExpiresAt = entitlementAuthorizationDeadline(user);
 	const existingEditorClaim = mode === 'edit' ? await sessions.getEditorClaim(pid, nid) : undefined;
 	const sharing = effectiveEditorSharing(existingEditorClaim, deps.policy.editorSandboxSharing);
 	const replacingAfterTakeover =
@@ -770,6 +786,10 @@ app.openapi(createSession, async (c) => {
 	const profileOverrideEligible = authorization.profileOverrideEligible;
 	const restrictedViewerCredentials = authorization.restrictedViewerCredentials;
 	const grants = (s: Session) => sessionGrantsFor(project, user, s, deps.policy);
+	const tightenAuthorizationDeadline = (session: Session) =>
+		authorizationExpiresAt
+			? sessions.tightenAuthorizationDeadline(pid, session.session_id, authorizationExpiresAt)
+			: Promise.resolve(session);
 
 	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
 	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook id.
@@ -842,9 +862,13 @@ app.openapi(createSession, async (c) => {
 			`Editing is currently owned by ${editorReuse.ownedByOther.user_id}`,
 		);
 	}
-	const reusable =
+	const reusableCandidate =
 		mode === 'edit' ? editorReuse?.session : await sessions.findReusable(pid, nid, user.id, mode);
-	if (reusable) {
+	if (reusableCandidate) {
+		const reusable = await tightenAuthorizationDeadline(reusableCandidate);
+		const authorizationExpired =
+			reusable.authorization_expires_at !== undefined &&
+			Date.now() >= Date.parse(reusable.authorization_expires_at);
 		// A role change flips the session class the caller is entitled to (a demoted
 		// editor must not keep a persisting, WIF-holding kernel; a promoted viewer's
 		// edits must stop being discarded). A stale-class session is retired below
@@ -863,7 +887,7 @@ app.openapi(createSession, async (c) => {
 				: undefined;
 		const dead =
 			!!kernelUrl && !!deps.kernelProbe && (await deps.kernelProbe(kernelUrl)) === 'dead';
-		if (!mayRetire || (!dead && !classMismatch)) {
+		if (!authorizationExpired && (!mayRetire || (!dead && !classMismatch))) {
 			return c.json(
 				{
 					success: true,
@@ -966,6 +990,7 @@ app.openapi(createSession, async (c) => {
 					mode,
 					source_version_id: sourceVersionId,
 					editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
+					authorization_expires_at: authorizationExpiresAt,
 				});
 			})
 			// The pre-flight cap check alone is raceable; re-rank now that this
@@ -1186,6 +1211,12 @@ app.openapi(createSession, async (c) => {
 				compensate: () => compute.create(sandboxId).destroy(),
 			})
 			.step('mark_running', async () => {
+				if (
+					session!.authorization_expires_at &&
+					Date.now() >= Date.parse(session!.authorization_expires_at)
+				) {
+					throw new ForbiddenError('Group authorization expired while starting the session');
+				}
 				// The lifetime clock starts here — when the kernel is live, not at record
 				// creation — so provisioning time never eats into the session TTL.
 				const ttlMs = sandbox.sessionLifetime?.maxLifetimeMs;
@@ -1255,8 +1286,15 @@ app.openapi(createSession, async (c) => {
 		if (err instanceof EditorClaimLostError) {
 			observer.tag('editor_claim_lost', true);
 			if (session) await sessions.markTerminated(pid, session.session_id).catch(() => {});
-			const winner = await sessions.getSession(pid, err.holder).catch(() => null);
-			if (winner?.notebook_id === nid && sessionMode(winner) === 'edit') {
+			const winnerCandidate = await sessions.getSession(pid, err.holder).catch(() => null);
+			if (winnerCandidate?.notebook_id === nid && sessionMode(winnerCandidate) === 'edit') {
+				const winner = await tightenAuthorizationDeadline(winnerCandidate);
+				if (
+					winner.authorization_expires_at &&
+					Date.now() >= Date.parse(winner.authorization_expires_at)
+				) {
+					throw new ConflictError('The editor session authorization expired. Retry shortly.');
+				}
 				if (sharing === 'exclusive' && winner.user_id !== user.id) {
 					throw new EditSessionOwnedError(`Editing is currently owned by ${winner.user_id}`);
 				}
@@ -1286,8 +1324,15 @@ app.openapi(createSession, async (c) => {
 			if (session) {
 				await sessions.markTerminated(pid, session.session_id).catch(() => {});
 			}
-			const winner = await sessions.getSession(pid, err.holder).catch(() => {});
-			if (winner && winner.notebook_id === nid && sessionModePolicy(winner).singleton) {
+			const winnerCandidate = await sessions.getSession(pid, err.holder).catch(() => null);
+			if (winnerCandidate?.notebook_id === nid && sessionModePolicy(winnerCandidate).singleton) {
+				const winner = await tightenAuthorizationDeadline(winnerCandidate);
+				if (
+					winner.authorization_expires_at &&
+					Date.now() >= Date.parse(winner.authorization_expires_at)
+				) {
+					throw new ConflictError('The app session authorization expired. Retry shortly.');
+				}
 				return c.json(
 					{ success: true, data: { ...toSessionResponse(winner, grants(winner)), reused: true } },
 					200,

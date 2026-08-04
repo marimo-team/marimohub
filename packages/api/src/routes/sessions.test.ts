@@ -5,6 +5,7 @@ import {
 	createProjectId,
 	createServices,
 	Millis,
+	paths,
 } from '@marimo-hub/core';
 import type { NotebookId, ProjectId, Session, SessionId } from '@marimo-hub/core';
 import {
@@ -12,6 +13,7 @@ import {
 	fakeComputeFrom,
 	makeFakeCompute,
 	makeFakeSandbox,
+	makeSession,
 	uid,
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -934,6 +936,141 @@ describe('Session routes', () => {
 		expect(stored.expires_at).toBeUndefined();
 	});
 
+	it('persists the entitlement JWT expiry as a separate non-extendable authorization deadline', async () => {
+		const authorizationExpiresAt = new Date(Date.now() + Millis.minutes(30)).toISOString();
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: authorizationExpiresAt,
+					}),
+				},
+				sandbox: sandboxConfig({
+					sessionLifetime: {
+						maxLifetimeMs: Millis.hours(4),
+						idleTimeoutMs: Millis.minutes(30),
+						snapshotIntervalMs: Millis.minutes(2),
+						extensionMs: Millis.minutes(30),
+						connectionAware: true,
+						sweepIntervalMs: Millis.seconds(60),
+					},
+				}),
+			},
+		}).request;
+
+		const data = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+		const stored = await createServices(bucket).sessions.getSession(pid, data.session_id);
+
+		expect(stored.authorization_expires_at).toBe(authorizationExpiresAt);
+		expect(Date.parse(stored.expires_at!)).toBeGreaterThan(Date.parse(authorizationExpiresAt));
+	});
+
+	it('fails closed when an entitlement-bearing authenticator omits its credential expiry', async () => {
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+					}),
+				},
+			},
+		}).request;
+
+		await expectError(await groupEditor('POST', sessionsPath()), 403, 'FORBIDDEN');
+		expect(
+			(await createServices(bucket).sessions.listSessions()).filter(
+				(session) => session.user_id === STRANGER,
+			),
+		).toHaveLength(0);
+	});
+
+	it.each([
+		['malformed', 'not-a-timestamp'],
+		['expired', new Date(Date.now() - Millis.minutes(1)).toISOString()],
+	])('fails closed when an entitlement credential expiry is %s', async (_label, expiry) => {
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: expiry,
+					}),
+				},
+			},
+		}).request;
+
+		const error = await expectError(await groupEditor('POST', sessionsPath()), 403, 'FORBIDDEN');
+		expect(error.message).toBe('Group authorization has expired; sign in again');
+		expect(
+			(await createServices(bucket).sessions.listSessions()).filter(
+				(session) => session.user_id === STRANGER,
+			),
+		).toHaveLength(0);
+	});
+
+	it('destroys the sandbox when group authorization expires during provisioning', async () => {
+		const now = Date.parse('2026-08-04T12:00:00.000Z');
+		const deadline = now + Millis.minutes(1);
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+		const { instance, calls } = makeFakeSandbox();
+		const exposePort = instance.exposePort.bind(instance);
+		instance.exposePort = async (...args) => {
+			const exposed = await exposePort(...args);
+			nowSpy.mockReturnValue(deadline);
+			return exposed;
+		};
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: fakeComputeFrom(instance),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: new Date(deadline).toISOString(),
+					}),
+				},
+			},
+		}).request;
+
+		try {
+			const error = await expectError(await groupEditor('POST', sessionsPath()), 403, 'FORBIDDEN');
+			expect(error.message).toBe('Group authorization expired while starting the session');
+			expect(calls.destroy).toBe(1);
+			const [failed] = (await createServices(bucket).sessions.listSessions()).filter(
+				(session) => session.user_id === STRANGER,
+			);
+			expect(failed).toMatchObject({
+				status: 'failed',
+				authorization_expires_at: new Date(deadline).toISOString(),
+				error: {
+					code: 'FORBIDDEN',
+					message: 'Group authorization expired while starting the session',
+				},
+			});
+		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
 	it('POST /sessions as a non-member returns 403', async () => {
 		await expectError(await stranger('POST', sessionsPath()), 403, 'FORBIDDEN');
 	});
@@ -1173,6 +1310,132 @@ describe('Session routes', () => {
 
 		const all = await createServices(bucket).sessions.listSessions(nid);
 		expect(all).toHaveLength(1);
+	});
+
+	it('replaces a reusable session whose earlier group authorization has expired', async () => {
+		const now = Date.now();
+		let credentialDeadline = now + Millis.minutes(1);
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+		const { instance, calls } = makeFakeSandbox();
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: fakeComputeFrom(instance),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: new Date(credentialDeadline).toISOString(),
+					}),
+				},
+			},
+		}).request;
+
+		try {
+			const first = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+			credentialDeadline = now + Millis.hours(2);
+			nowSpy.mockReturnValue(now + Millis.minutes(1));
+
+			const second = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+
+			expect(second.reused).toBe(false);
+			expect(second.session_id).not.toBe(first.session_id);
+			expect(calls.destroy).toBe(1);
+			const sessions = await createServices(bucket).sessions.listSessions(nid);
+			expect(sessions.find((session) => session.session_id === first.session_id)?.status).toBe(
+				'terminated',
+			);
+			expect(
+				sessions.find((session) => session.session_id === second.session_id)
+					?.authorization_expires_at,
+			).toBe(new Date(credentialDeadline).toISOString());
+		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
+	it('reused sessions keep the earliest credential deadline', async () => {
+		let credentialDeadline = new Date(Date.now() + Millis.hours(2)).toISOString();
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: credentialDeadline,
+					}),
+				},
+			},
+		}).request;
+
+		const first = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+		const shorter = new Date(Date.now() + Millis.minutes(30)).toISOString();
+		credentialDeadline = shorter;
+		const second = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+
+		expect(second.session_id).toBe(first.session_id);
+		expect(second.reused).toBe(true);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, first.session_id))
+				.authorization_expires_at,
+		).toBe(shorter);
+
+		credentialDeadline = new Date(Date.now() + Millis.hours(3)).toISOString();
+		await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, first.session_id))
+				.authorization_expires_at,
+		).toBe(shorter);
+	});
+
+	it('an editor-claim race applies the attaching credential deadline to the winner', async () => {
+		const winner = makeSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: ACTOR,
+			status: 'running',
+			sandbox_url: undefined,
+		});
+		await bucket.put(paths.session(pid, winner.session_id), JSON.stringify(winner));
+		await bucket.put(
+			paths.editorClaim(pid, nid),
+			JSON.stringify({
+				session_id: winner.session_id,
+				sharing: 'shared',
+				claimed_at: winner.started_at,
+			}),
+		);
+		const deadline = new Date(Date.now() + Millis.minutes(15)).toISOString();
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: deadline,
+					}),
+				},
+			},
+		}).request;
+
+		const attached = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+
+		expect(attached.session_id).toBe(winner.session_id);
+		expect(attached.reused).toBe(true);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, winner.session_id))
+				.authorization_expires_at,
+		).toBe(deadline);
 	});
 
 	it('POST /sessions hammered for one notebook reuses one record and never trips the cap', async () => {

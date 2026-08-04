@@ -1,5 +1,5 @@
 import type { Bucket } from '../../ports/bucket';
-import { canAct, canSeeProjectEntry, isSuperAdmin } from '../../authz';
+import { canAct, canSeeProjectEntry, isSuperAdmin, subjectDefaultRole } from '../../authz';
 import type { AuthSubject, AuthzPolicy } from '../../authz';
 import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
@@ -73,7 +73,7 @@ export class ProjectService {
 		const live = snapshot.projects.filter((p) => p.status !== 'deleted');
 		if (
 			!filter ||
-			filter.policy?.defaultRole != null ||
+			subjectDefaultRole(filter.subject, filter.policy) != null ||
 			isSuperAdmin(filter.subject, filter.policy?.superAdmins)
 		) {
 			return live.map(toPublicProjectEntry);

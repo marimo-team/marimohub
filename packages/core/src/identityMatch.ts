@@ -6,11 +6,13 @@
  */
 
 import type { UserId } from './ids';
+import type { AuthEntitlement } from './ports/auth';
 
 /** The authenticated caller reduced to what identity matching needs. */
 export interface IdentitySubject {
 	id: UserId;
 	email: string;
+	entitlements?: readonly AuthEntitlement[];
 }
 
 /** A member reference: exactly one of a user id or an email. */

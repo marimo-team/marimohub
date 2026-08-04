@@ -397,14 +397,14 @@ saves and stops the session at the earlier deadline; Modal is only the fallback.
 
 ### Authentication — `MARIMOHUB_AUTH_*`
 
-| Variable                                | Purpose                                          |
-| --------------------------------------- | ------------------------------------------------ |
-| `MARIMOHUB_AUTH_BACKEND`                | `oidc` \| `cloudflare-access` \| `dev`           |
-| `MARIMOHUB_AUTH_OIDC_ISSUER`            | OIDC issuer URL                                  |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`         | OAuth client ID                                  |
-| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`     | OAuth client secret (secret)                     |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE`          | Expected token audience                          |
-| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL` | Fixed identity for the `dev` bypass (local only) |
+| Variable                                | Purpose                                              |
+| --------------------------------------- | ---------------------------------------------------- |
+| `MARIMOHUB_AUTH_BACKEND`                | `oidc` \| `cloudflare-access` \| `dev`               |
+| `MARIMOHUB_AUTH_OIDC_ISSUER`            | OIDC issuer URL                                      |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_ID`         | OAuth client ID                                      |
+| `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`     | OAuth client secret (secret)                         |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE`          | Deprecated and ignored; `aud` must contain client ID |
+| `MARIMOHUB_AUTH_DEV_USER_ID` / `_EMAIL` | Fixed identity for the `dev` bypass (local only)     |
 
 > Authorization needs no env vars: roles are data in the notebook storage
 > ([§3.4](#34-authorization-authz)).

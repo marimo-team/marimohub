@@ -59,6 +59,8 @@ export interface CreateSessionInput {
 	/** `app` only: the notebook's head version at provision, for staleness detection. */
 	source_version_id?: VersionId;
 	editor_sandbox_sharing?: EditorSandboxSharing;
+	/** Non-extendable expiry of the entitlement credential that authorized the session. */
+	authorization_expires_at?: string;
 	session_id?: SessionId;
 }
 
@@ -141,6 +143,9 @@ export class SessionService {
 			...(input.editor_sandbox_sharing
 				? { editor_sandbox_sharing: input.editor_sandbox_sharing }
 				: {}),
+			...(input.authorization_expires_at
+				? { authorization_expires_at: input.authorization_expires_at }
+				: {}),
 			runtime: input.runtime,
 			sandbox_id: input.sandbox_id,
 			sandbox_url: input.sandbox_url,
@@ -199,6 +204,23 @@ export class SessionService {
 		return this.mutate(projectId, id, (session) => {
 			if (isTerminal(session.status) || session.status === 'terminating') return null;
 			return { ...session, expires_at: newExpiresAt };
+		});
+	}
+
+	/** Apply a credential deadline without ever extending an existing bound. */
+	async tightenAuthorizationDeadline(
+		projectId: ProjectId,
+		id: SessionId,
+		deadline: string,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => {
+			if (
+				session.authorization_expires_at !== undefined &&
+				Date.parse(session.authorization_expires_at) <= Date.parse(deadline)
+			) {
+				return null;
+			}
+			return { ...session, authorization_expires_at: deadline };
 		});
 	}
 

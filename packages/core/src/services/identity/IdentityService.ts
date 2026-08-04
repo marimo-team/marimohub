@@ -12,9 +12,9 @@ import { listAllKeys } from '../catalog/storage';
 
 /**
  * User-identity directory: maps a stable user id (the auth `sub`) to its current
- * `{ email, name }`. Records are upserted on each authenticated request so they
- * stay fresh, and resolved at read time to render opaque `author`/`user_id`
- * foreign keys as a person.
+ * `{ email, name, picture_url? }`. Records are upserted on each authenticated
+ * request so they stay fresh, and resolved at read time to render opaque
+ * `author`/`user_id` foreign keys as a person.
  *
  * Unlike the rest of the store (immutable / append-only content + the
  * CAS-guarded catalog pointer), an identity object is mutable and last-writer-
@@ -45,8 +45,8 @@ export class IdentityService {
 
 	constructor(private bucket: Bucket) {}
 
-	private static signature(email: string, name: string): string {
-		return `${email}\0${name}`;
+	private static signature(email: string, name: string, pictureUrl?: string): string {
+		return `${email}\0${name}\0${pictureUrl ?? ''}`;
 	}
 
 	/** Display name for a user, falling back to the email local-part. */
@@ -64,13 +64,14 @@ export class IdentityService {
 	 */
 	async upsert(user: AuthUser): Promise<void> {
 		const name = IdentityService.displayName(user);
-		const sig = IdentityService.signature(user.email, name);
+		const sig = IdentityService.signature(user.email, name, user.pictureUrl);
 		if (this.written.get(user.id) === sig) return;
 
 		const record: Identity = {
 			id: user.id,
 			email: user.email,
 			name,
+			...(user.pictureUrl ? { picture_url: user.pictureUrl } : {}),
 			updated_at: new Date().toISOString(),
 		};
 		await this.bucket.put(paths.identity(user.id), JSON.stringify(record));

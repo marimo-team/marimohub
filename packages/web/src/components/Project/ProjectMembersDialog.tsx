@@ -9,6 +9,7 @@ import {
 	displayName,
 	IconButton,
 	Tooltip,
+	UserAvatar,
 	UserLabel,
 } from '@/components/ui';
 import {
@@ -354,12 +355,11 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 						>
 							<div className="flex flex-wrap items-center justify-between gap-3">
 								<div className="flex min-w-0 items-center gap-3">
-									<span
-										aria-hidden="true"
-										className="flex size-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-teal-500/15 to-teal-600/25 text-xs font-semibold text-primary ring-1 ring-primary/20"
-									>
-										{currentDisplayName.charAt(0).toUpperCase()}
-									</span>
+									<UserAvatar
+										pictureUrl={currentIdentity?.picture_url ?? user?.picture_url}
+										label={currentDisplayName}
+										className="size-9 text-xs"
+									/>
 									<div className="min-w-0">
 										<h3
 											id="your-access-heading"

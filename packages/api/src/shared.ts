@@ -19,6 +19,7 @@ import {
 	sessionCan,
 	sessionGrants,
 	sessionPersistsEdits,
+	subjectDefaultRole,
 	SessionRetirer,
 	SOURCE_TYPES,
 	EDITOR_SANDBOX_SHARING_VALUES,
@@ -99,6 +100,8 @@ export function assertSessionAuthenticated(c: Context<HonoEnv>, action: string):
 		throw new ForbiddenError(`Personal access tokens cannot ${action} — sign in to do this`);
 	}
 }
+
+export { subjectDefaultRole };
 
 /** The slice of PolicyConfig the session gates need. */
 export type SessionPolicy = AuthzPolicy & {
@@ -795,6 +798,7 @@ export const UserResponseSchema = z
 		id: z.string(),
 		email: z.string(),
 		name: z.string(),
+		picture_url: z.url().nullable().optional(),
 	})
 	.openapi('User');
 
@@ -804,8 +808,10 @@ export const MeResponseSchema = z
 	.object({
 		id: z.string(),
 		email: z.string(),
+		name: z.string().nullable().optional(),
+		picture_url: z.url().nullable().optional(),
 		logout_url: z.string().nullable(),
-		/** Deployment super admin (MARIMOHUB_SUPER_ADMINS): implicit admin everywhere. */
+		/** Static or OIDC group-derived super admin: implicit admin everywhere. */
 		is_super_admin: z.boolean(),
 	})
 	.openapi('Me');

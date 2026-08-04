@@ -130,13 +130,20 @@ export class ReconciliationService {
 				// `expireStale()` runs immediately before this sweep, so a provision
 				// slower than the heartbeat TTL arrives here `expired` while it is still
 				// restoring files; tearing it down mid-restore mirror-deletes bucket keys.
+				const authorizationExpired =
+					session.authorization_expires_at !== undefined &&
+					now >= Date.parse(session.authorization_expires_at);
 				if (
 					session.status === 'expired' &&
+					!authorizationExpired &&
 					now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
 				) {
 					continue;
 				}
-				const save = !liveNotebooks.has(session.notebook_id) && sessionPersistsEdits(session);
+				const save =
+					!authorizationExpired &&
+					!liveNotebooks.has(session.notebook_id) &&
+					sessionPersistsEdits(session);
 				if (await this.retirer.reclaim(session, save)) reclaimed++;
 			} else if (isLive && !activeIds.has(sandboxId)) {
 				// Rule 2 — live record, sandbox gone (crashed / idle-timed-out). The

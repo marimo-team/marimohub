@@ -4,7 +4,7 @@ import { ChevronDown, Copy, KeyRound, Moon, Puzzle, Shield, Sun } from 'lucide-r
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
-import { Brand } from '@/components/ui';
+import { Brand, UserAvatar } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
@@ -37,15 +37,17 @@ export function Header() {
 					{theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
 				</Button>
 
-				{user && (
+				{user ? (
 					<MenuTrigger>
 						<Button
 							aria-label="User menu"
 							className="flex items-center gap-1.5 rounded-full border border-input bg-card p-1 pr-2.5 shadow-xs transition-all hover:border-ring hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background max-md:min-h-11"
 						>
-							<span className="flex size-6 items-center justify-center rounded-full bg-gradient-to-br from-teal-500/15 to-teal-600/25 text-[11px] font-semibold text-primary ring-1 ring-primary/20">
-								{user.email.charAt(0).toUpperCase()}
-							</span>
+							<UserAvatar
+								pictureUrl={user.picture_url}
+								label={user.name ?? user.email}
+								className="size-6 text-[11px]"
+							/>
 							<ChevronDown className="size-3 text-muted-foreground" />
 						</Button>
 						<Popover
@@ -116,7 +118,7 @@ export function Header() {
 							</Menu>
 						</Popover>
 					</MenuTrigger>
-				)}
+				) : null}
 			</div>
 
 			<ApiTokensDialog isOpen={tokensDialog.isOpen} onClose={tokensDialog.close} />

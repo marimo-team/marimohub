@@ -277,10 +277,20 @@ App-native OpenID Connect (the production backend).
 | `MARIMOHUB_AUTH_OIDC_CLIENT_ID` | OAuth2 client id. | Yes | — | — |
 | `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET` 🔒 | OAuth2 client secret. | Yes | — | — |
 | `MARIMOHUB_AUTH_OIDC_REDIRECT_URI` | Absolute callback URL. | Yes | — | `https://hub.example.com/api/auth/callback` |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE` | Expected ID-token audience (optional; oauth4webapi enforces the client id automatically). | — | — | — |
-| `MARIMOHUB_AUTH_OIDC_PROMPT` | OAuth `prompt` parameter. Defaults to `select_account`, so a returning user always gets the account chooser instead of being silently logged in with their last account. Override with `consent` to re-show the consent screen, or space-separated combinations. | — | `select_account` | `consent` |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE` | Deprecated and ignored. The ID-token `aud` claim must contain the configured client ID. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_PROMPT` | OAuth `prompt` value. `select_account` displays the account chooser. Use `consent` to display consent again. Space-separated combinations are valid. | — | `select_account` | `consent` |
+| `MARIMOHUB_AUTH_OIDC_SCOPES` | Space-separated scopes. Must include `openid` and `email`. Add only scopes that the provider requires for group claims. `offline_access` is invalid because marimohub stores no refresh tokens. | — | `openid email profile` | — |
+| `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` | Requires boolean `email_verified=true` by default. If a trusted issuer omits the claim, use `trusted-issuer`. Other present values are invalid. | — | `required` | `trusted-issuer` |
 | `MARIMOHUB_AUTH_SESSION_SECRET` 🔒 | Secret that signs the session cookie (HS256; ≥32 bytes). | Yes | — | — |
-| `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist (requires a verified email). Required so a deployment cannot silently admit every account the IdP authenticates; set `*` to explicitly allow all domains. A single domain is also sent to Google as the `hd` hint. | Yes | — | `example.com,example.org` |
+| `MARIMOHUB_AUTH_SESSION_TTL_SECONDS` | Signed browser-session lifetime, from 300 to 86400 seconds. | — | `28800` | — |
+| `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. A single domain is also the Google `hd` hint. | Yes | — | `example.com,example.org` |
+| `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM` | RFC 6901 JSON Pointer to an array of exact provider group IDs. Required for group policy. | — | — | `/groups` |
+| `MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS` | Exact comma-separated group IDs. A user must belong to at least one. Missing or malformed group data fails closed. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS` | Exact comma-separated group IDs mapped to marimohub super-admin. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS` | Groups granted a deployment-wide default viewer role. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS` | Groups granted a deployment-wide default editor role. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_DEFAULT_ADMIN_GROUPS` | Groups granted a deployment-wide default project-admin role. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS` | Maximum group-session age, from 300 to 3600 seconds. This value limits the deprovisioning delay. | — | `3600` | — |
 
 ### Dev bypass (local only)
 

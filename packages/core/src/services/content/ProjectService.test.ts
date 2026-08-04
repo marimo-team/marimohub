@@ -120,6 +120,14 @@ describe('ProjectService', () => {
 			expect(list.map((p) => p.name)).toEqual(['A']);
 		});
 
+		it('returns all projects when the caller has a default-role entitlement', async () => {
+			await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			const list = await projects.listProjects({
+				subject: { ...STRANGER, entitlements: ['default-role:viewer'] },
+			});
+			expect(list.map((p) => p.name)).toEqual(['A']);
+		});
+
 		it('hides projects a caller does not own or belong to when defaultRole is null', async () => {
 			await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
 			// Owner sees it; a stranger does not.

@@ -84,9 +84,17 @@ the `kubernetes`/`coreweave` backends) in front.
 
 - `MARIMOHUB_AUTH_BACKEND` has **no default** — an unset backend refuses to
   start rather than silently falling back to the `dev` bypass.
-- OIDC requires `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` (verified email):
-  marimohub will not silently admit every account the IdP can authenticate;
-  set explicit domains, or `*` to consciously allow all.
+- OIDC requires `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`. Set explicit domains or
+  `*` to allow all. This prevents accidental access for every IdP account.
+- OIDC requires boolean `email_verified=true` by default. `trusted-issuer`
+  permits omission only. Other present values are invalid. UserInfo must have
+  the same `sub` as the ID token.
+- Group policy accepts at most 200 group IDs and stores only mapped entitlements.
+  Group sessions and kernels expire with the entitlement credential. Active
+  connections cannot extend this deadline.
+- The OIDC issuer, callback, authorization endpoint, and logout endpoint must
+  use HTTPS and cannot contain credentials. Stored user IDs are issuer-local
+  `sub` values, so an issuer change requires an identity migration.
 - The session cookie is signed with `MARIMOHUB_AUTH_SESSION_SECRET` (HS256, ≥32
   bytes). Generate it with `openssl rand -base64 32` and treat it as a secret.
 

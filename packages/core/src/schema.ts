@@ -581,6 +581,8 @@ export const SessionSchema = z.looseObject({
 	 * (connection-aware extension). Absent on records that predate the sweep.
 	 */
 	expires_at: z.iso.datetime().optional(),
+	/** Non-extendable expiry of the entitlement credential that authorized this kernel. */
+	authorization_expires_at: z.iso.datetime().optional(),
 	/**
 	 * Last time the periodic snapshotter saved the notebook back to the bucket.
 	 * Cadence bookkeeping only — `commitSession` dedupes unchanged content, so this
@@ -723,6 +725,7 @@ export const IdentitySchema = z.object({
 	id: UserIdSchema,
 	email: z.string(),
 	name: z.string(),
+	picture_url: z.url({ protocol: /^https$/ }).optional(),
 	updated_at: z.iso.datetime(),
 });
 

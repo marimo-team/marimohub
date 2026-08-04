@@ -69,6 +69,21 @@ describe('GET /api/v1/capabilities', () => {
 		});
 	});
 
+	it('reports the role derived from the current OIDC session', async () => {
+		const authenticator: Authenticator = {
+			authenticate: async () => ({
+				id: uid('group-user'),
+				email: 'group-user@example.com',
+				entitlements: ['default-role:editor'],
+			}),
+		};
+		const deps = makeTestDeps(new MemoryBucket(), { authenticator });
+
+		expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
+			default_role: 'editor',
+		});
+	});
+
 	it('reports the editor sandbox sharing, defaulting to shared', async () => {
 		const defaulted = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		expect(

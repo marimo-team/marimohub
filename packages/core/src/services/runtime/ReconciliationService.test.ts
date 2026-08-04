@@ -164,6 +164,46 @@ describe('ReconciliationService', () => {
 		expect(stored.sandbox_reclaimed_at).toBeUndefined();
 	});
 
+	it('Rule 1: expireStale cannot make reconciliation commit after authorization expiry', async () => {
+		const session = await putSession({
+			status: 'running',
+			sandbox_id: terminalId,
+			started_at: iso(-60 * 60_000),
+			last_heartbeat: iso(-10 * 60_000),
+			authorization_expires_at: iso(-1),
+		});
+		compute.active = [{ id: terminalId }];
+
+		expect(await sessions.expireStale()).toBe(1);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('expired');
+		const result = await reconciler.reconcile();
+
+		expect(result.reclaimed).toBe(1);
+		expect(compute.destroyed).toEqual([terminalId]);
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+	});
+
+	it('Rule 1: authorization expiry at the boundary overrides provision grace', async () => {
+		const now = Date.parse('2026-08-04T12:00:00.000Z');
+		vi.spyOn(Date, 'now').mockReturnValue(now);
+		const session = await putSession({
+			status: 'expired',
+			sandbox_id: terminalId,
+			started_at: new Date(now - 60_000).toISOString(),
+			authorization_expires_at: new Date(now).toISOString(),
+		});
+		compute.active = [{ id: terminalId }];
+
+		const result = await reconciler.reconcile();
+
+		expect(result.reclaimed).toBe(1);
+		expect(compute.destroyed).toEqual([terminalId]);
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeDefined();
+	});
+
 	it('Rule 1: counts reclaimed only once the destroy is confirmed', async () => {
 		const session = await createSession(terminalId);
 		await sessions.terminate(projectId, session.session_id);

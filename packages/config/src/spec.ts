@@ -738,17 +738,34 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					},
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_AUDIENCE',
-						name: 'OIDC audience',
+						name: 'OIDC audience (deprecated)',
 						description:
-							'Expected ID-token audience (optional; oauth4webapi enforces the client id automatically).',
+							'Deprecated and ignored. The ID-token `aud` claim must contain the configured client ID.',
 					},
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_PROMPT',
 						name: 'OIDC prompt',
 						description:
-							'OAuth `prompt` parameter. Defaults to `select_account`, so a returning user always gets the account chooser instead of being silently logged in with their last account. Override with `consent` to re-show the consent screen, or space-separated combinations.',
+							'OAuth `prompt` value. `select_account` displays the account chooser. Use `consent` to display consent again. Space-separated combinations are valid.',
 						default: 'select_account',
 						example: 'consent',
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_SCOPES',
+						name: 'OIDC scopes',
+						description:
+							'Space-separated scopes. Must include `openid` and `email`. Add only scopes that the provider requires for group claims. `offline_access` is invalid because marimohub stores no refresh tokens.',
+						default: 'openid email profile',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION',
+						name: 'Email verification policy',
+						description:
+							'Requires boolean `email_verified=true` by default. If a trusted issuer omits the claim, use `trusted-issuer`. Other present values are invalid.',
+						default: 'required',
+						example: 'trusted-issuer',
+						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_AUTH_SESSION_SECRET',
@@ -758,12 +775,66 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						secret: true,
 					},
 					{
+						id: 'MARIMOHUB_AUTH_SESSION_TTL_SECONDS',
+						name: 'Auth session lifetime',
+						description: 'Signed browser-session lifetime, from 300 to 86400 seconds.',
+						default: '28800',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS',
 						name: 'Allowed email domains',
 						description:
-							'Comma-separated email-domain allowlist (requires a verified email). Required so a deployment cannot silently admit every account the IdP authenticates; set `*` to explicitly allow all domains. A single domain is also sent to Google as the `hd` hint.',
+							'Comma-separated email-domain allowlist. Set `*` to allow all domains. A single domain is also the Google `hd` hint.',
 						example: 'example.com,example.org',
 						required: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM',
+						name: 'Groups claim pointer',
+						description:
+							'RFC 6901 JSON Pointer to an array of exact provider group IDs. Required for group policy.',
+						example: '/groups',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS',
+						name: 'Allowed login groups',
+						description:
+							'Exact comma-separated group IDs. A user must belong to at least one. Missing or malformed group data fails closed.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS',
+						name: 'Super-admin groups',
+						description: 'Exact comma-separated group IDs mapped to marimohub super-admin.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS',
+						name: 'Default viewer groups',
+						description: 'Groups granted a deployment-wide default viewer role.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS',
+						name: 'Default editor groups',
+						description: 'Groups granted a deployment-wide default editor role.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_DEFAULT_ADMIN_GROUPS',
+						name: 'Default admin groups',
+						description: 'Groups granted a deployment-wide default project-admin role.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS',
+						name: 'Group authorization lifetime',
+						description:
+							'Maximum group-session age, from 300 to 3600 seconds. This value limits the deprovisioning delay.',
+						default: '3600',
+						optIn: true,
 					},
 				],
 			},

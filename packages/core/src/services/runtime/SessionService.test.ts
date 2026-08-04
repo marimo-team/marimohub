@@ -307,6 +307,35 @@ describe('SessionService', () => {
 			expect(result.status).toBe('running');
 			expect(result.expires_at).toBe(deadline);
 		});
+
+		it('preserves the authorization deadline independently of the extendable lifetime', async () => {
+			const authorizationDeadline = new Date(Date.now() + 30_000).toISOString();
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+				authorization_expires_at: authorizationDeadline,
+			});
+			const lifetimeDeadline = new Date(Date.now() + 60_000).toISOString();
+
+			const running = await sessions.setRunning(
+				projectId,
+				created.session_id,
+				'http://kernel',
+				false,
+				undefined,
+				lifetimeDeadline,
+			);
+			const extended = await sessions.extendExpiry(
+				projectId,
+				created.session_id,
+				new Date(Date.now() + 120_000).toISOString(),
+			);
+
+			expect(running.authorization_expires_at).toBe(authorizationDeadline);
+			expect(extended.authorization_expires_at).toBe(authorizationDeadline);
+			expect(extended.expires_at).not.toBe(lifetimeDeadline);
+		});
 	});
 
 	describe('lifecycle mutators', () => {
@@ -337,6 +366,57 @@ describe('SessionService', () => {
 			);
 			expect(result.status).toBe('terminated');
 			expect(result.expires_at).toBeUndefined();
+		});
+
+		it('tightens authorization to the earliest credential deadline', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			const later = new Date(Date.now() + 120_000).toISOString();
+			const earlier = new Date(Date.now() + 60_000).toISOString();
+
+			const first = await sessions.tightenAuthorizationDeadline(
+				projectId,
+				created.session_id,
+				later,
+			);
+			const tightened = await sessions.tightenAuthorizationDeadline(
+				projectId,
+				created.session_id,
+				earlier,
+			);
+			const unchanged = await sessions.tightenAuthorizationDeadline(
+				projectId,
+				created.session_id,
+				later,
+			);
+
+			expect(first.authorization_expires_at).toBe(later);
+			expect(tightened.authorization_expires_at).toBe(earlier);
+			expect(unchanged.authorization_expires_at).toBe(earlier);
+		});
+
+		it('keeps the earliest deadline across concurrent reuse requests', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			const deadlines = [30_000, 90_000, 60_000].map((offset) =>
+				new Date(Date.now() + offset).toISOString(),
+			);
+
+			await Promise.all(
+				deadlines.map((deadline) =>
+					sessions.tightenAuthorizationDeadline(projectId, created.session_id, deadline),
+				),
+			);
+
+			expect(
+				(await sessions.getSession(projectId, created.session_id)).authorization_expires_at,
+			).toBe(deadlines[0]);
 		});
 
 		it('markSnapshotted records the save time, including on an expired record', async () => {

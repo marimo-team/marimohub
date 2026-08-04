@@ -58,6 +58,9 @@ export { SessionStatusDot } from './SessionStatusDot';
 export { UserLabel, displayName } from './UserLabel';
 export type { UserLabelProps } from './UserLabel';
 
+export { UserAvatar } from './UserAvatar';
+export type { UserAvatarProps } from './UserAvatar';
+
 export { CopyField } from './CopyField';
 export type { CopyFieldProps } from './CopyField';
 

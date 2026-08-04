@@ -112,6 +112,24 @@ describe('SessionRetirer', () => {
 		});
 	});
 
+	it('can destroy immediately without capturing after an authorization deadline', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		await sessions.beginTerminating(projectId, session.session_id);
+
+		await retirer({ create: () => instance, proxy: async () => null }).retire(session, {
+			captureBeforeDestroy: false,
+		});
+
+		expect(calls.destroy).toBe(1);
+		expect(notebooks.getNotebook).not.toHaveBeenCalled();
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+		expect(await sessions.getEditorClaim(projectId, notebookId)).toMatchObject({
+			session_id: null,
+		});
+	});
+
 	it('captures an owner-scoped filesystem snapshot during takeover', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const compute = snapshotProvider(instance);

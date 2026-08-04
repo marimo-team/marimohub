@@ -138,6 +138,43 @@ describe('Event routes', () => {
 		expect(page.items.some((event) => event.event === 'token.create')).toBe(true);
 	});
 
+	it('does not copy session-only group super-admin entitlement into a PAT', async () => {
+		const deps = makeTestDeps(bucket, {
+			authenticator: {
+				authenticate: async () => ({
+					id: ACTOR,
+					email: `${ACTOR}@example.com`,
+					entitlements: ['super-admin'],
+					entitlementsExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+				}),
+			},
+		});
+		const sessionApp = createApi(deps);
+		expect((await sessionApp.request('/api/v1/events')).status).toBe(200);
+		const { token } = await expectOk<{ token: string }>(
+			await sessionApp.request('/api/v1/me/tokens', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ name: 'must-not-escalate' }),
+			}),
+			201,
+		);
+		const patApp = createApi({
+			...deps,
+			authenticator: composeAuthenticators(deps.services.tokens, {
+				authenticate: async () => null,
+			}),
+		});
+
+		await expectError(
+			await patApp.request('/api/v1/events', {
+				headers: { authorization: `Bearer ${token}` },
+			}),
+			403,
+			'FORBIDDEN',
+		);
+	});
+
 	it('validates the global date range and cursor', async () => {
 		const { request: adminRequest } = superAdminApi();
 		await expectError(await adminRequest('GET', '/events?from=2026-01-01'), 422);
