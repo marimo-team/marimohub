@@ -27,6 +27,7 @@ import {
 	NotFoundError,
 	paths,
 	requireRole,
+	roleAtLeast,
 	resolveBaseImage,
 	resolveRestoreSnapshot,
 	ResourceExhaustedError,
@@ -378,7 +379,7 @@ function authorizeSessionStart(
 	return {
 		role,
 		ephemeral,
-		// The notebook's configured profile applies to every editor/admin session and
+		// The notebook's configured profile applies to every editor-or-higher session and
 		// to any shared (non-ephemeral) session: a shared app is the notebook's app and
 		// must provision identically no matter who starts it. Only a viewer's own
 		// ephemeral throwaway is forced onto the deployment default.
@@ -769,7 +770,7 @@ app.openapi(createSession, async (c) => {
 	const editorTemporary =
 		mode === 'edit' &&
 		body?.edit_intent === 'temporary' &&
-		(authorization.role === 'editor' || authorization.role === 'admin');
+		roleAtLeast(authorization.role, 'editor');
 	if (body?.edit_intent && mode !== 'edit') {
 		throw new BadRequestError('edit_intent is only valid for edit sessions');
 	}
@@ -778,9 +779,7 @@ app.openapi(createSession, async (c) => {
 	}
 	const ephemeral = authorization.ephemeral || editorTemporary;
 	const userHome =
-		mode === 'edit' &&
-		sharing === 'exclusive' &&
-		(authorization.role === 'editor' || authorization.role === 'admin')
+		mode === 'edit' && sharing === 'exclusive' && roleAtLeast(authorization.role, 'editor')
 			? deps.sandbox.userHome?.resolve(user)
 			: undefined;
 	const profileOverrideEligible = authorization.profileOverrideEligible;

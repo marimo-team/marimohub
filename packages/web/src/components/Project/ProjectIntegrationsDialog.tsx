@@ -49,6 +49,7 @@ import type { IntegrationsScope } from '@/api/hooks';
 import { BRAND_ICONS } from './brandIcons';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { toastError } from '@/lib/errors';
+import { canManageProject } from '@/lib/roles';
 import { filterBySearch } from '@/lib/search';
 import type { IntegrationEntry, IntegrationKind, ProjectDetail } from '@/types';
 
@@ -140,7 +141,7 @@ export function ProjectIntegrationsPanel({
 	return (
 		<IntegrationsContent
 			scope={{ pid: project.id }}
-			canManage={project.your_role === 'admin'}
+			canManage={canManageProject(project.your_role)}
 			onBack={onBack}
 		/>
 	);
@@ -619,11 +620,11 @@ function CopyView({
 	const [nameError, setNameError] = useState<string>();
 	const projectsQuery = useProjectPickerQuery(true);
 	const sourceProject = useProjectRoleQuery(sourcePid);
-	const isSourceAdmin = sourceProject.data?.your_role === 'admin';
-	// Entries (and with them the pick/submit form) wait for a RESOLVED admin
+	const canManageSource = canManageProject(sourceProject.data?.your_role ?? null);
+	// Entries (and with them the pick/submit form) wait for a resolved manager
 	// role — otherwise a viewer could select and submit before the role check
 	// lands and get a failed POST instead of the explanation below.
-	const entriesQuery = useIntegrationsQuery({ pid: sourcePid ?? '' }, isSourceAdmin);
+	const entriesQuery = useIntegrationsQuery({ pid: sourcePid ?? '' }, canManageSource);
 	const copyIntegration = useCopyIntegration(pid);
 	const kindsByName = new Map(kinds.map((kind) => [kind.kind, kind]));
 
@@ -666,8 +667,8 @@ function CopyView({
 	return (
 		<div className="flex flex-col gap-4">
 			<p className="max-w-3xl text-muted-foreground">
-				Copy an integration's current config from a project you administer. Secrets are re-encrypted
-				for this project; the copy starts its own version history.
+				Copy an integration's current config from a project you manage. Secrets are re-encrypted for
+				this project; the copy starts its own version history.
 			</p>
 			{/* An errored roster must not masquerade as "no matching projects". */}
 			{projectsQuery.isError ? (
@@ -691,13 +692,13 @@ function CopyView({
 				/>
 			)}
 
-			{sourcePid && sourceProject.data && !isSourceAdmin ? (
+			{sourcePid && sourceProject.data && !canManageSource ? (
 				<p className="text-muted-foreground">
-					You need the <code>admin</code> role on both projects to copy an integration.
+					You need the <code>manager</code> role on both projects to copy an integration.
 				</p>
 			) : sourcePid && (entriesQuery.isError || sourceProject.isError) ? (
 				<p className="text-destructive">Could not load that project's integrations.</p>
-			) : sourcePid && isSourceAdmin && entriesQuery.data !== undefined ? (
+			) : sourcePid && canManageSource && entriesQuery.data !== undefined ? (
 				entries.length === 0 ? (
 					<p className="text-muted-foreground">That project has no integrations of its own.</p>
 				) : (

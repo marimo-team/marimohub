@@ -120,7 +120,7 @@ async function renderDialog(yourRole: ProjectDetail['your_role']) {
 		wrapper,
 	});
 	// Wait for the member list and the user directory to resolve.
-	await waitFor(() => expect(screen.getByText('Eddie Editor')).toBeInTheDocument());
+	await waitFor(() => expect(screen.getAllByText('Eddie Editor').length).toBeGreaterThan(0));
 	return onClose;
 }
 
@@ -155,11 +155,11 @@ describe('ProjectMembersDialog — admin', () => {
 
 		expect(screen.getAllByText('Olive Owner')).toHaveLength(2);
 		expect(screen.getByText('Project owner')).toBeInTheDocument();
-		expect(screen.getByLabelText('Your role: Admin')).toBeInTheDocument();
+		expect(screen.getByLabelText('Your role: Owner')).toBeInTheDocument();
 		expect(screen.getByText('You')).toBeInTheDocument();
 		// The owner's membership is fixed: no role select, no remove button.
-		expect(screen.getByText('Owner')).toBeInTheDocument();
-		expect(screen.getByLabelText(`Role for ${OWNER}: Admin`)).toBeInTheDocument();
+		expect(screen.getAllByText('Owner')).toHaveLength(2);
+		expect(screen.getByLabelText(`Role for ${OWNER}: Owner`)).toBeInTheDocument();
 		expect(screen.queryByRole('combobox', { name: `Role for ${OWNER}` })).not.toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: `Remove ${OWNER}` })).not.toBeInTheDocument();
 
@@ -278,13 +278,65 @@ describe('ProjectMembersDialog — admin', () => {
 		const calls = makeFetch();
 		await renderDialog('admin');
 
-		await user.selectOptions(screen.getByRole('combobox', { name: `Role for ${EDITOR}` }), 'admin');
+		await user.selectOptions(
+			screen.getByRole('combobox', { name: `Role for ${EDITOR}` }),
+			'manager',
+		);
 
 		await waitFor(() => {
 			const put = calls.find((c) => c.method === 'PUT');
 			expect(put?.url).toContain(`/projects/${PID}/members/${EDITOR}`);
-			expect(put?.body).toEqual({ role: 'admin' });
+			expect(put?.body).toEqual({ role: 'manager' });
 		});
+	});
+
+	it('shows a legacy admin as a one-way role that can be demoted', async () => {
+		const user = userEvent.setup();
+		const legacy = 'u-legacy';
+		const calls = makeFetch({
+			members: [...MEMBERS, { user_id: legacy, role: 'admin' }],
+			directory: {
+				...DIRECTORY,
+				[legacy]: { id: legacy, email: 'legacy@x.io', name: 'Legacy Admin' },
+			},
+		});
+		await renderDialog('admin');
+
+		const select = screen.getByRole('combobox', { name: `Role for ${legacy}` });
+		expect(select).toHaveValue('admin');
+		expect(screen.getByRole('option', { name: 'Admin (legacy)' })).toBeDisabled();
+		await user.selectOptions(select, 'manager');
+
+		await waitFor(() => {
+			const put = calls.find((call) => call.method === 'PUT');
+			expect(put?.body).toEqual({ role: 'manager' });
+		});
+	});
+
+	it('gives a manager the membership controls without offering Admin', async () => {
+		makeFetch({
+			currentUser: {
+				id: EDITOR,
+				email: DIRECTORY[EDITOR].email,
+				logout_url: null,
+				is_super_admin: false,
+			},
+			members: MEMBERS.map((member) =>
+				member.user_id === EDITOR ? { ...member, role: 'manager' } : member,
+			),
+		});
+		await renderDialog('manager');
+
+		expect(screen.getByRole('combobox', { name: `Role for ${INVITED}` })).toBeInTheDocument();
+		const newRole = screen.getByRole('combobox', {
+			name: 'New member role',
+		}) as HTMLSelectElement;
+		expect([...newRole.options].map((option) => option.value)).toEqual([
+			'manager',
+			'editor',
+			'viewer',
+		]);
+		expect(screen.queryByRole('option', { name: /^Admin$/ })).not.toBeInTheDocument();
 	});
 
 	it('removes a member only after the confirm dialog', async () => {
@@ -360,6 +412,26 @@ describe('ProjectMembersDialog — non-admin', () => {
 		expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
 	});
+
+	it('labels a grandfathered admin row as legacy in the read-only list', async () => {
+		const legacy = 'u-legacy';
+		makeFetch({
+			currentUser: {
+				id: EDITOR,
+				email: DIRECTORY[EDITOR].email,
+				logout_url: null,
+				is_super_admin: false,
+			},
+			members: [...MEMBERS, { user_id: legacy, role: 'admin' }],
+			directory: {
+				...DIRECTORY,
+				[legacy]: { id: legacy, email: 'legacy@x.io', name: 'Legacy Admin' },
+			},
+		});
+		await renderDialog('editor');
+
+		expect(screen.getByLabelText(`Role for ${legacy}: Admin (legacy)`)).toBeInTheDocument();
+	});
 });
 
 describe('ProjectMembersDialog — current access', () => {
@@ -411,7 +483,7 @@ describe('ProjectMembersDialog — current access', () => {
 		await renderDialog('admin');
 
 		expect(screen.getByText('Project owner')).toBeInTheDocument();
-		expect(screen.getByLabelText('Your role: Admin')).toBeInTheDocument();
+		expect(screen.getByLabelText('Your role: Owner')).toBeInTheDocument();
 		expect(screen.queryByText('You')).not.toBeInTheDocument();
 		expect(screen.getAllByTestId('member-row')).toHaveLength(members.length);
 	});

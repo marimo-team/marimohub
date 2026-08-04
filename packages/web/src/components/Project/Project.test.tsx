@@ -52,7 +52,7 @@ function makeFetch(
 		notebooks?: NotebookEntry[];
 		sessions?: Session[];
 		capabilities?: unknown;
-		role?: 'admin' | 'editor' | 'viewer';
+		role?: ProjectDetail['your_role'];
 		sessionDeleteError?: boolean;
 	} = {},
 ) {

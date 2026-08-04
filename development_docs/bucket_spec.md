@@ -274,7 +274,7 @@ field controls how the service reads the structure.
 }
 ```
 
-> **Member roles:** `admin` has full control, including member management. `editor` can change notebooks. `viewer` has read-only access. See §12.
+> **Member roles:** `manager` has full project control, including member management. `editor` can change notebooks. `viewer` has read-only access. `admin` is reserved for the project owner, deployment super admins, and grandfathered member rows. See §12.
 
 ### 4.4 `projects/{pid}/notebooks/{nid}/meta.json`
 
@@ -487,7 +487,7 @@ Every event carries a `schema_version` field so the log stays parseable as the e
 }
 ```
 
-**Event types (emitted today):** every catalog mutation is appended by `CatalogService` after its winning CAS commit (best-effort: a failed append never fails the mutation, it bumps the `events.append_failed` metric). The `event` field is the operation name: `project.create` · `project.update` · `project.members` · `project.delete` · `project.gc` · `notebook.create` · `notebook.update` · `notebook.delete` · `notebook.gc` · `notebook.synced.create` · `notebook.synced.sync`. Context fields (`project_id`, `notebook_id`, …) ride along per operation. Project admins read one day with `GET /api/v1/projects/{pid}/events?date=`. Super admins read a paginated deployment stream with `GET /api/v1/events`. Each deployment query covers at most 30 UTC days.
+**Event types (emitted today):** every catalog mutation is appended by `CatalogService` after its winning CAS commit (best-effort: a failed append never fails the mutation, it bumps the `events.append_failed` metric). The `event` field is the operation name: `project.create` · `project.update` · `project.members` · `project.delete` · `project.gc` · `notebook.create` · `notebook.update` · `notebook.delete` · `notebook.gc` · `notebook.synced.create` · `notebook.synced.sync`. Context fields (`project_id`, `notebook_id`, …) ride along per operation. Project managers read one day with `GET /api/v1/projects/{pid}/events?date=`. Super admins read a paginated deployment stream with `GET /api/v1/events`. Each deployment query covers at most 30 UTC days.
 
 **Planned, not yet emitted:** session lifecycle (`session.create` · `session.terminate` · `session.expired`), `notebook.run`, `notebook.snapshot` (snapshot capture on teardown, §8), and `migration.run`.
 
@@ -971,7 +971,7 @@ A request that fails authentication receives `401 UNAUTHORIZED`. The verified us
 
 **Reads are gated at `viewer`; writes are gated by the role matrix.** The deployment-wide `MARIMOHUB_DEFAULT_ROLE` is the fallback role for a logged-in caller who is neither the `owner` (implicitly `admin`) nor an explicit member:
 
-- With it **set** (`editor`/`viewer`/`admin` — the default is `editor`), every authenticated user is at least a viewer, so reads stay open and "list everything" stays 2 GETs (§7.1) — there is no per-caller filtering to do.
+- With it **set** (`manager`/`editor`/`viewer` — the default is `editor`), every authenticated user is at least a viewer, so reads stay open and "list everything" stays 2 GETs (§7.1) — there is no per-caller filtering to do.
 - With it **`none`**, non-members have no role: reads are membership-gated. A non-member cannot see a project at all — `GET` returns **`404`** (existence is not leaked) and the project is omitted from the list.
 
 **Writes** are always checked against the target project. The service loads
@@ -990,18 +990,24 @@ Read-side isolation under `none` keeps the read model intact (§7.1). Filtering 
 
 The read row is open to any authenticated user when a default role is set; under `MARIMOHUB_DEFAULT_ROLE=none` it is restricted to the owner and explicit members (non-members get `404`) — plus any super admin, who is `admin` on every project regardless.
 
-| Capability                                                                                 | `viewer` | `editor` | `admin` |
-| ------------------------------------------------------------------------------------------ | :------: | :------: | :-----: |
-| See & read projects & notebooks; read versions; open & read notebook code                  |    ✓     |    ✓     |    ✓    |
-| View a notebook's outputs (HTML snapshot / ephemeral session, per `MARIMOHUB_VIEWER_MODE`) |    ✓     |    ✓     |    ✓    |
-| Create/update/delete notebooks; save versions; create sessions (run)                       |          |    ✓     |    ✓    |
-| Update/delete projects; manage members                                                     |          |          |    ✓    |
+| Capability                                                                                 | `viewer` | `editor` | `manager` | `admin` |
+| ------------------------------------------------------------------------------------------ | :------: | :------: | :-------: | :-----: |
+| See & read projects & notebooks; read versions; open & read notebook code                  |    ✓     |    ✓     |     ✓     |    ✓    |
+| View a notebook's outputs (HTML snapshot / ephemeral session, per `MARIMOHUB_VIEWER_MODE`) |    ✓     |    ✓     |     ✓     |    ✓    |
+| Create/update/delete notebooks; save versions; create sessions (run)                       |          |    ✓     |     ✓     |    ✓    |
+| Update/delete projects; manage members                                                     |          |          |     ✓     |    ✓    |
 
-Notebook changes and session creation require **editor** or **admin**. Project
-changes require **admin**. Reads require **viewer** unless the deployment gives
+Notebook changes and session creation require **editor** or higher. Project
+changes require **manager** or higher. Reads require **viewer** unless the deployment gives
 authenticated users a default role. Any authenticated user can create a
-project. Its creator becomes the owner and has the admin role. The API enforces
+project. Its creator becomes the owner and has the reserved admin role. The API enforces
 these rules. The client does not enforce them.
+
+`manager`, `editor`, and `viewer` are assignable through the membership API.
+Existing non-owner `admin` rows remain valid but new ones cannot be created.
+Because old replicas cannot parse `manager`, deployments must stop all old
+replicas before allowing the new role to be assigned. Rolling back afterward
+requires converting every manager row to a role understood by the old version.
 
 > Session `heartbeat`/`terminate` also require **editor+** (they keep a kernel alive / tear it down). Hard-delete (the deferred GC pass, §7.4) remains the outstanding authorization work; per-notebook ACLs and per-user index objects are out of scope (they would break the 2-GET read model — see `rfc.md` §8).
 

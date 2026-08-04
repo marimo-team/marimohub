@@ -922,6 +922,7 @@ components:
                 type: string
                 enum:
                   - admin
+                  - manager
                   - editor
                   - viewer
             required:

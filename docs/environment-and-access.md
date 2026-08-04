@@ -9,7 +9,7 @@ Open a project and select **Environment & cloud access**. The dialog has two are
 - **Integrations** stores versioned configuration for data sources and environment variables.
 - **Cloud access** supplies short-lived credentials through Workload Identity Federation (WIF).
 
-Project admins can make changes. Other project members can view the cloud-access status.
+Project managers can make changes. Other project members can view the cloud-access status.
 Cloud access supplies credentials to notebook sessions. It does not control project roles or permissions.
 
 ## Choose a method

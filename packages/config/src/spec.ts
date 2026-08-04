@@ -315,7 +315,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE',
 						name: 'CoreWeave user-home profile names',
 						description:
-							'Comma-separated CoreWeave profile name(s) used only for editor/admin edit sandboxes. These names must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`. The profile must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes continue to use the normal profile.',
+							'Comma-separated CoreWeave profile name(s) used only for editor-or-higher edit sandboxes. These names must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`. The profile must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes continue to use the normal profile.',
 						example: 'marimohub-user-home',
 						optIn: true,
 					},
@@ -823,9 +823,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
-						id: 'MARIMOHUB_AUTH_OIDC_DEFAULT_ADMIN_GROUPS',
-						name: 'Default admin groups',
-						description: 'Groups granted a deployment-wide default project-admin role.',
+						id: 'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS',
+						name: 'Default manager groups',
+						description: 'Groups granted a deployment-wide default project-manager role.',
 						optIn: true,
 					},
 					{
@@ -965,7 +965,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_DEFAULT_ROLE',
 						name: 'Default role',
 						description:
-							'Fallback role for any logged-in user who is not an explicit project member (viewer | editor | admin | none). `editor`/`viewer` let everyone edit/view every project; `none` hides projects a user does not own or belong to (they can still create their own). Project edit/delete always requires admin.',
+							'Fallback role for any logged-in user who is not an explicit project member (viewer | editor | manager | none). `manager`/`editor`/`viewer` let everyone manage/edit/view every project; `none` hides projects a user does not own or belong to (they can still create their own). Project edit/delete requires manager.',
 						example: 'editor',
 						default: 'editor',
 					},
@@ -1274,7 +1274,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		selectorDefault: 'off',
 		description: `Integrations provide versioned configuration for data sources and environment
 variables. See the [integrations guide](./integrations.md) for supported kinds.
-Project admins manage project integrations. Super admins manage organization
+Project managers manage project integrations. Super admins manage organization
 integrations.
 
 New, non-ephemeral sessions receive the applicable configuration as environment
@@ -1302,7 +1302,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_INTEGRATIONS_PROBE',
 						name: 'Connection-test egress policy',
 						description:
-							'Policy for the "Test connection" probe, which makes server-side HTTP requests to admin-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`).',
+							'Policy for the "Test connection" probe, which makes server-side HTTP requests to manager-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`).',
 						default: 'guarded',
 					},
 				],

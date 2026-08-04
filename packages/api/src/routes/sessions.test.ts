@@ -27,6 +27,7 @@ import {
 } from '../testing';
 
 const STRANGER = uid('user_stranger');
+const MANAGER = uid('user_manager');
 type ApiSession = Session & {
 	can: { attach: boolean; stop: boolean };
 	reused?: boolean;
@@ -1088,6 +1089,19 @@ describe('Session routes', () => {
 		expect(session.can).toEqual({ attach: true, stop: true });
 		await expectOk(await god('POST', sessionsPath(`/${sid}/heartbeat`)));
 		await expectOk(await god('DELETE', sessionsPath(`/${sid}`)));
+	});
+
+	it("a manager can stop another user's exclusive session without attaching", async () => {
+		await createServices(bucket).projects.addMember(pid, { user_id: MANAGER }, 'manager', ACTOR);
+		const ownerExclusive = exclusiveApi(ACTOR);
+		const manager = exclusiveApi(MANAGER);
+		const session = await expectOk<ApiSession>(await ownerExclusive('POST', sessionsPath()));
+
+		const visible = await expectOk<ApiSession>(
+			await manager('GET', sessionsPath(`/${session.session_id}`)),
+		);
+		expect(visible.can).toEqual({ attach: false, stop: true });
+		await expectOk(await manager('DELETE', sessionsPath(`/${session.session_id}`)));
 	});
 
 	it('super admins do not bypass the per-user session cap', async () => {

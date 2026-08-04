@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createProjectId } from '@marimo-hub/core';
+import { createProjectId, createServices, paths, ProjectId } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
@@ -154,7 +154,35 @@ describe('Project member routes', () => {
 		expect(members).toEqual([{ user_id: ACTOR, role: 'admin' }]);
 	});
 
-	it('admin adds, lists, promotes, and removes a member', async () => {
+	it('a group-derived default manager can manage a project without membership', async () => {
+		const groupManager = uid('user_group_manager');
+		const managerRequest = createTestApi({
+			bucket,
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: groupManager,
+						email: 'group-manager@example.com',
+						entitlements: ['default-role:manager'],
+					}),
+				},
+			},
+		}).request;
+
+		const updated = await expectOk<any>(
+			await managerRequest('PATCH', `/projects/${pid}`, { name: 'Group managed' }),
+		);
+		expect(updated.name).toBe('Group managed');
+		await expectOk(
+			await managerRequest('POST', `/projects/${pid}/members`, {
+				user_id: bob,
+				role: 'viewer',
+			}),
+			201,
+		);
+	});
+
+	it('manager updates and deletes projects and manages the member lifecycle', async () => {
 		const added = await expectOk<any>(
 			await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'editor' }),
 			201,
@@ -166,9 +194,33 @@ describe('Project member routes', () => {
 		expect((await expectOk<any>(await bobReq('GET', `/projects/${pid}`))).your_role).toBe('editor');
 
 		const promoted = await expectOk<any>(
-			await owner('PUT', `/projects/${pid}/members/${bob}`, { role: 'admin' }),
+			await owner('PUT', `/projects/${pid}/members/${bob}`, { role: 'manager' }),
 		);
-		expect(promoted.members).toEqual(expect.arrayContaining([{ user_id: bob, role: 'admin' }]));
+		expect(promoted.members).toEqual(expect.arrayContaining([{ user_id: bob, role: 'manager' }]));
+		expect((await expectOk<any>(await bobReq('GET', `/projects/${pid}`))).your_role).toBe(
+			'manager',
+		);
+		expect(
+			(await expectOk<any>(await bobReq('PATCH', `/projects/${pid}`, { name: 'Managed' }))).name,
+		).toBe('Managed');
+		const charlie = uid('user_charlie');
+		await expectOk(
+			await bobReq('POST', `/projects/${pid}/members`, { user_id: charlie, role: 'viewer' }),
+			201,
+		);
+		await expectOk(await bobReq('PUT', `/projects/${pid}/members/${charlie}`, { role: 'editor' }));
+		await expectOk(await bobReq('DELETE', `/projects/${pid}/members/${charlie}`));
+
+		const doomed = await expectOk<{ id: string }>(
+			await owner('POST', '/projects', { name: 'Manager deletes me', description: 'd' }),
+			201,
+		);
+		await expectOk(
+			await owner('POST', `/projects/${doomed.id}/members`, { user_id: bob, role: 'manager' }),
+			201,
+		);
+		await expectOk(await bobReq('DELETE', `/projects/${doomed.id}`));
+		await expectError(await owner('GET', `/projects/${doomed.id}`), 404);
 
 		await expectOk(await owner('DELETE', `/projects/${pid}/members/${bob}`));
 		const members = await expectOk<any[]>(await owner('GET', `/projects/${pid}/members`));
@@ -188,7 +240,7 @@ describe('Project member routes', () => {
 
 	it('404 when updating/removing a non-member', async () => {
 		await expectError(
-			await owner('PUT', `/projects/${pid}/members/${bob}`, { role: 'admin' }),
+			await owner('PUT', `/projects/${pid}/members/${bob}`, { role: 'manager' }),
 			404,
 		);
 		await expectError(await owner('DELETE', `/projects/${pid}/members/${bob}`), 404);
@@ -202,12 +254,32 @@ describe('Project member routes', () => {
 		await expectError(await owner('DELETE', `/projects/${pid}/members/${ACTOR}`), 409);
 	});
 
-	it('non-admin cannot manage members (403)', async () => {
-		const stranger = createTestApi({ bucket, userId: uid('user_x') }).request;
+	it('editor cannot update or delete the project or manage members', async () => {
+		const charlie = uid('user_charlie');
+		await expectOk(
+			await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'editor' }),
+			201,
+		);
+		await expectOk(
+			await owner('POST', `/projects/${pid}/members`, { user_id: charlie, role: 'viewer' }),
+			201,
+		);
+		const editor = createTestApi({ bucket, userId: bob }).request;
+
+		await expectError(await editor('PATCH', `/projects/${pid}`, { name: 'Hijacked' }), 403);
+		await expectError(await editor('DELETE', `/projects/${pid}`), 403);
 		await expectError(
-			await stranger('POST', `/projects/${pid}/members`, { user_id: bob, role: 'editor' }),
+			await editor('POST', `/projects/${pid}/members`, {
+				user_id: uid('user_dave'),
+				role: 'viewer',
+			}),
 			403,
 		);
+		await expectError(
+			await editor('PUT', `/projects/${pid}/members/${charlie}`, { role: 'editor' }),
+			403,
+		);
+		await expectError(await editor('DELETE', `/projects/${pid}/members/${charlie}`), 403);
 	});
 
 	it('a non-member cannot see the project under the members-only default (404)', async () => {
@@ -219,9 +291,73 @@ describe('Project member routes', () => {
 
 	it('validates the member role enum (422)', async () => {
 		await expectError(
+			await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'admin' }),
+			422,
+		);
+		await expectError(
 			await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'superuser' }),
 			422,
 		);
+	});
+
+	it('rejects promoting an existing member to reserved admin (422)', async () => {
+		await expectOk(
+			await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'editor' }),
+			201,
+		);
+		await expectError(
+			await owner('PUT', `/projects/${pid}/members/${bob}`, { role: 'admin' }),
+			422,
+		);
+	});
+
+	it('preserves a legacy admin until a manager demotes and removes them', async () => {
+		const legacy = uid('user_legacy_admin');
+		const manager = uid('user_manager');
+		const project = await createServices(bucket).projects.getProject(ProjectId.parse(pid));
+		await bucket.put(
+			paths.project(project.id).meta,
+			JSON.stringify({
+				...project,
+				members: [
+					...project.members,
+					{ user_id: legacy, role: 'admin' },
+					{ user_id: manager, role: 'manager' },
+				],
+			}),
+		);
+
+		const legacyRequest = createTestApi({ bucket, userId: legacy }).request;
+		expect((await expectOk<any>(await legacyRequest('GET', `/projects/${pid}`))).your_role).toBe(
+			'admin',
+		);
+		expect(
+			(await expectOk<any>(await legacyRequest('PATCH', `/projects/${pid}`, { name: 'Legacy' })))
+				.name,
+		).toBe('Legacy');
+
+		const managerRequest = createTestApi({ bucket, userId: manager }).request;
+		await expectOk(
+			await managerRequest('POST', `/projects/${pid}/members`, {
+				user_id: uid('user_new_member'),
+				role: 'viewer',
+			}),
+			201,
+		);
+		let members = await expectOk<any[]>(await managerRequest('GET', `/projects/${pid}/members`));
+		expect(members).toContainEqual({ user_id: legacy, role: 'admin' });
+
+		const demoted = await expectOk<any>(
+			await managerRequest('PUT', `/projects/${pid}/members/${legacy}`, { role: 'viewer' }),
+		);
+		expect(demoted.members).toContainEqual({ user_id: legacy, role: 'viewer' });
+		await expectError(
+			await managerRequest('PUT', `/projects/${pid}/members/${legacy}`, { role: 'admin' }),
+			422,
+		);
+		await expectOk(await managerRequest('DELETE', `/projects/${pid}/members/${legacy}`));
+		members = await expectOk<any[]>(await owner('GET', `/projects/${pid}/members`));
+		expect(members.some((member) => member.user_id === legacy)).toBe(false);
 	});
 
 	it('requires exactly one of user_id and email (422)', async () => {
@@ -338,7 +474,7 @@ describe('Project member routes', () => {
 		);
 	});
 
-	it('hides pending-invite emails from non-admin members, except the invitee themself', async () => {
+	it('shows pending invites to managers and hides them from lower roles except the invitee', async () => {
 		await expectOk(
 			await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'editor' }),
 			201,
@@ -351,16 +487,24 @@ describe('Project member routes', () => {
 			201,
 		);
 
-		// Admin (owner) sees the invite row.
-		const adminView = await expectOk<any[]>(await owner('GET', `/projects/${pid}/members`));
-		expect(adminView.some((m) => m.email === 'secret-invitee@example.com')).toBe(true);
+		const ownerView = await expectOk<any[]>(await owner('GET', `/projects/${pid}/members`));
+		expect(ownerView.some((m) => m.email === 'secret-invitee@example.com')).toBe(true);
 
-		// A non-admin member sees only id rows — on the members list AND the detail.
+		// A non-manager member sees only id rows — on the members list AND the detail.
 		const bobReq = createTestApi({ bucket, userId: bob }).request;
 		const bobView = await expectOk<any[]>(await bobReq('GET', `/projects/${pid}/members`));
 		expect(bobView.some((m) => m.email !== undefined)).toBe(false);
 		const detail = await expectOk<any>(await bobReq('GET', `/projects/${pid}`));
 		expect(detail.members.some((m: any) => m.email !== undefined)).toBe(false);
+
+		const manager = uid('user_manager');
+		await expectOk(
+			await owner('POST', `/projects/${pid}/members`, { user_id: manager, role: 'manager' }),
+			201,
+		);
+		const managerReq = createTestApi({ bucket, userId: manager }).request;
+		const managerView = await expectOk<any[]>(await managerReq('GET', `/projects/${pid}/members`));
+		expect(managerView.some((m) => m.email === 'secret-invitee@example.com')).toBe(true);
 
 		// The invitee finds their own row (stub auth email matches the invite).
 		const invitee = createTestApi({ bucket, userId: uid('secret-invitee') }).request;

@@ -104,9 +104,9 @@ See [Auth](/auth) for provider setup.
 
 Project reads require an effective `viewer` role, obtained through ownership,
 membership, or `MARIMOHUB_DEFAULT_ROLE`. Non-members cannot see a project when
-the default role is `none`. Writes require `editor` or `admin` against the target
-project and are enforced server-side on every route. Project edit/delete always
-requires `admin`, as does reading a project's audit log
+the default role is `none`. Notebook writes require `editor` or higher against
+the target project and are enforced server-side on every route. Project
+edit/delete always requires `manager` or higher, as does reading a project's audit log
 (`GET /projects/{pid}/events`) — events record member management and deletion
 activity. See
 [Auth → Authorization](/auth#authorization-roles).

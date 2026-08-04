@@ -48,22 +48,30 @@ export type SourceType = (typeof SOURCE_TYPES)[number];
 
 /**
  * Project membership roles, ordered low→high privilege by `RANK` in authz.ts
- * (`viewer` < `editor` < `admin`). Each role subsumes the ones below it.
+ * (`viewer` < `editor` < `manager` < `admin`). Each role subsumes the ones
+ * below it.
  *
  * - `viewer`  — read-only: list/open projects & notebooks, read notebook code
  *   and versions. Cannot mutate anything.
  * - `editor`  — everything a viewer can, plus create/update/delete notebooks,
  *   save versions, and start/stop kernel sessions. Cannot change the project
  *   itself or its membership.
- * - `admin`   — full control: everything an editor can, plus update/delete the
- *   project and manage its members. A project's `owner` is implicitly `admin`.
+ * - `manager` — everything an editor can, plus update/delete the project and
+ *   manage its members.
+ * - `admin`   — reserved for project owners, deployment super admins, and
+ *   grandfathered member rows. It currently has the same project capabilities
+ *   as manager. A project's `owner` is implicitly `admin`.
  *
  * The deployment-wide fallback for a logged-in non-member is set by
  * `MARIMOHUB_DEFAULT_ROLE` (see authz.ts `effectiveRole`); `none` there means
  * non-members get no role and cannot even see the project.
  */
-export const ROLES = ['admin', 'editor', 'viewer'] as const;
+export const ROLES = ['admin', 'manager', 'editor', 'viewer'] as const;
 export type Role = (typeof ROLES)[number];
+
+/** Roles that project managers may grant to members and deployment defaults. */
+export const ASSIGNABLE_ROLES = ['manager', 'editor', 'viewer'] as const;
+export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
 
 /**
  * What an effective `viewer` gets (config: MARIMOHUB_VIEWER_MODE), ordered

@@ -120,7 +120,7 @@ CoreWeave Sandboxes via the vendored `@coreweave/cwsandbox` SDK.
 | `MARIMOHUB_COMPUTE_COREWEAVE_OWNER_TAG` | Tag applied to owned sandboxes for discovery and cleanup. | — | `marimohub` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | Template for the public kernel URL. Substitutes `{sandboxId}`, `{port}`, `{host}`, `{token}`. | — | `https://{sandboxId}-{port}.{host}` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE` | Comma-separated CoreWeave sandbox profile name(s) applied at create (the `profile_name` of a runner binding). Omit to use the runner's default profile. | — | — | `marimohub` |
-| `MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE` | Comma-separated CoreWeave profile name(s) used only for editor/admin edit sandboxes. These names must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`. The profile must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes continue to use the normal profile. | — | — | `marimohub-user-home` |
+| `MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE` | Comma-separated CoreWeave profile name(s) used only for editor-or-higher edit sandboxes. These names must not overlap `MARIMOHUB_COMPUTE_COREWEAVE_PROFILE`. The profile must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes continue to use the normal profile. | — | — | `marimohub-user-home` |
 | `MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE` | Network ingress mode (backend/profile specific). | — | `public` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE` | Network egress mode (backend/profile specific). | — | `internet` | — |
 | `MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS` | Hard provider-side sandbox lifetime cap (SIGKILL, no save) — an orphan backstop behind the graceful session lifetime (`MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS`). Must be >= the session lifetime; leave unset to default to 2x it. | — | `2x MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS` | `28800` |
@@ -289,7 +289,7 @@ App-native OpenID Connect (the production backend).
 | `MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS` | Exact comma-separated group IDs mapped to marimohub super-admin. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS` | Groups granted a deployment-wide default viewer role. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS` | Groups granted a deployment-wide default editor role. | — | — | — |
-| `MARIMOHUB_AUTH_OIDC_DEFAULT_ADMIN_GROUPS` | Groups granted a deployment-wide default project-admin role. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS` | Groups granted a deployment-wide default project-manager role. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS` | Maximum group-session age, from 300 to 3600 seconds. This value limits the deprovisioning delay. | — | `3600` | — |
 
 ### Dev bypass (local only)
@@ -332,7 +332,7 @@ Server-wide settings; no backend selector.
 | `MARIMOHUB_SESSION_CONNECTION_AWARE` | Ask the kernel for its active connection count before a lifetime/idle teardown, extending instead of reaping while editors are connected. Set `false` to reap strictly on schedule. | — | `true` | — |
 | `MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` | How often the session-lifecycle sweep runs (on the maintenance replica). | — | `60` | — |
 | `MARIMOHUB_ALLOWED_ORIGINS` | Comma-separated extra Origins allowed for state-changing requests (CSRF; same-origin is always allowed). | — | — | `https://app.example.com` |
-| `MARIMOHUB_DEFAULT_ROLE` | Fallback role for any logged-in user who is not an explicit project member (viewer \| editor \| admin \| none). `editor`/`viewer` let everyone edit/view every project; `none` hides projects a user does not own or belong to (they can still create their own). Project edit/delete always requires admin. | — | `editor` | `editor` |
+| `MARIMOHUB_DEFAULT_ROLE` | Fallback role for any logged-in user who is not an explicit project member (viewer \| editor \| manager \| none). `manager`/`editor`/`viewer` let everyone manage/edit/view every project; `none` hides projects a user does not own or belong to (they can still create their own). Project edit/delete requires manager. | — | `editor` | `editor` |
 | `MARIMOHUB_SUPER_ADMINS` | Comma-separated user ids and/or emails granted implicit `admin` on every project, plus visibility of all projects in listings. An entry containing `@` matches only the login email, case-insensitively (trusting the email the auth provider asserts); any other entry matches only the user id, exactly. A personal access token minted by a super admin carries the same power. Unset: no super admins. | — | — | `admin@example.com,user_01HXY00000000000000000000` |
 | `MARIMOHUB_VIEWER_MODE` | What a user whose effective role is `viewer` gets (static \| applications \| ephemeral-sandbox); each tier is a superset of the previous. `static` serves the last captured HTML snapshot (no compute, no code execution); `applications` also lets viewers use notebooks running as shared apps (note: the app kernel runs with the project’s integration secrets/federated credentials, so only enable it for audiences you trust with the app’s outputs); `ephemeral-sandbox` additionally provisions a real edit kernel whose edits are discarded on teardown (no version, snapshot, or workspace write-back). Applies to any effective viewer — via `MARIMOHUB_DEFAULT_ROLE=viewer` or an explicit viewer membership. Editors and above are unaffected. See [Auth -> What viewers see](./auth.md#what-viewers-see-marimohub_viewer_mode). | — | `static` | `applications` |
 | `MARIMOHUB_EDITOR_SANDBOX_SHARING` | Controls whether editors share one persistent sandbox per notebook (`shared`) or one editor owns it (`exclusive`). In `exclusive` mode, other editors can start temporary sandboxes or confirm a takeover. This setting does not affect apps or viewer sessions. See [Editor sessions](./editor-sessions.md). | — | `shared` | `exclusive` |
@@ -426,7 +426,7 @@ Selected by `MARIMOHUB_INTEGRATIONS` (default `off`); one of `on`, `off`.
 
 Integrations provide versioned configuration for data sources and environment
 variables. See the [integrations guide](./integrations.md) for supported kinds.
-Project admins manage project integrations. Super admins manage organization
+Project managers manage project integrations. Super admins manage organization
 integrations.
 
 New, non-ephemeral sessions receive the applicable configuration as environment
@@ -453,7 +453,7 @@ Integration management and session injection are enabled. Project entries use
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_INTEGRATIONS_PROBE` | Policy for the "Test connection" probe, which makes server-side HTTP requests to admin-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`). | — | `guarded` | — |
+| `MARIMOHUB_INTEGRATIONS_PROBE` | Policy for the "Test connection" probe, which makes server-side HTTP requests to manager-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`). | — | `guarded` | — |
 
 ### Off
 

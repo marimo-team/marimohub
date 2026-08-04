@@ -258,11 +258,11 @@ Establishes _what_ an authenticated user may do. **Authorization data lives in
 the notebook storage**, not in a separate service: each `project.json` carries a
 `members` list mapping `user_id` → `role`.
 
-|                     |                                                                                                                      |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **Port**            | `Authorizer` — `can(user, action, resource) → boolean`, resolved by reading project membership from the Storage port |
-| **Roles**           | `admin` (full control, incl. delete + membership) · `editor` (create/edit notebooks) · `viewer` (read-only)          |
-| **Source of truth** | `projects/{pid}/project.json` → `members[]`, read through the same `Bucket` adapter as everything else               |
+|                     |                                                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Port**            | `Authorizer` — `can(user, action, resource) → boolean`, resolved by reading project membership from the Storage port                                       |
+| **Roles**           | `admin` (reserved owner/deployment authority) · `manager` (project settings, delete, membership) · `editor` (create/edit notebooks) · `viewer` (read-only) |
+| **Source of truth** | `projects/{pid}/project.json` → `members[]`, read through the same `Bucket` adapter as everything else                                                     |
 
 Because membership is just more metadata in the store, authorization needs no
 extra infrastructure: the authorizer loads the relevant `project.json`, finds
@@ -329,7 +329,7 @@ business logic and depend only on interfaces:
 - **EventService** — append-only audit log (one immutable object per event).
   `CatalogService` appends one event per successful snapshot commit
   (best-effort: a failed append never fails the mutation); read via the
-  admin-only `GET /projects/{pid}/events`.
+  manager-only `GET /projects/{pid}/events`.
 - **SandboxProvisioner** — orchestrates the Compute port (see [§3.2](#32-compute-sandbox)).
 
 `createServices(bucket)` composes them; nothing here imports a vendor SDK.

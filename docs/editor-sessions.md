@@ -5,7 +5,7 @@ description: Choose shared or exclusive ownership for persistent editor sandboxe
 # Editor sessions
 
 `MARIMOHUB_EDITOR_SANDBOX_SHARING` controls who can use a notebook's persistent
-editor sandbox. It applies to project editors and administrators. It does not
+editor sandbox. It applies to project editors, managers, and admins. It does not
 affect viewer sessions or [notebook apps](./apps.md).
 
 ```bash
@@ -14,10 +14,10 @@ MARIMOHUB_EDITOR_SANDBOX_SHARING=shared    # default
 MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive
 ```
 
-| Mode        | Persistent sandbox access              | Other editors can                       | Best for                                       |
-| ----------- | -------------------------------------- | --------------------------------------- | ---------------------------------------------- |
-| `shared`    | All project editors and administrators | Attach to, stop, or restart the sandbox | Trusted teams, pair editing, and classrooms    |
-| `exclusive` | One editor owns the persistent sandbox | Start a temporary sandbox or take over  | Workflows with user-specific state or settings |
+| Mode        | Persistent sandbox access                         | Other editors can                       | Best for                                       |
+| ----------- | ------------------------------------------------- | --------------------------------------- | ---------------------------------------------- |
+| `shared`    | All project editors, managers, and administrators | Attach to, stop, or restart the sandbox | Trusted teams, pair editing, and classrooms    |
+| `exclusive` | One editor owns the persistent sandbox            | Start a temporary sandbox or take over  | Workflows with user-specific state or settings |
 
 ## Shared mode
 

@@ -12,7 +12,7 @@ const customEnvConfig = z.strictObject({
 	vars: z
 		.record(z.string().regex(ENV_NAME_PATTERN), z.string())
 		.default({})
-		.describe('Plain environment variables, visible to project admins'),
+		.describe('Plain environment variables, visible to project managers'),
 	secrets: z
 		.array(
 			z.strictObject({

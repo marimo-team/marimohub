@@ -1623,7 +1623,7 @@ components:
       properties:
         vars:
           default: {}
-          description: Plain environment variables, visible to project admins
+          description: Plain environment variables, visible to project managers
           type: object
           propertyNames:
             type: string
@@ -1682,7 +1682,7 @@ components:
       properties:
         vars:
           default: {}
-          description: Plain environment variables, visible to project admins
+          description: Plain environment variables, visible to project managers
           type: object
           propertyNames:
             type: string

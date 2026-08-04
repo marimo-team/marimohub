@@ -1,5 +1,5 @@
 /**
- * Probe targets are project-admin input, so requests resolve once and pin the
+ * Probe targets are project-manager input, so requests resolve once and pin the
  * socket to the validated addresses. Using `node:http(s)` with a custom lookup
  * prevents DNS rebinding between validation and connection.
  */

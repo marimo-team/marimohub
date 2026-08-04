@@ -4,6 +4,7 @@ import { ArrowLeft, Blocks, Cloud, ExternalLink, KeyRound } from 'lucide-react';
 import { Button, DialogModal } from '@/components/ui';
 import { useAppForm, useSeedOnOpen } from '@/components/form';
 import { DOCS_FEDERATION_URL } from '@/lib/links';
+import { canManageProject } from '@/lib/roles';
 import type { ProjectDetail } from '@/types';
 import { ProjectIntegrationsPanel } from './ProjectIntegrationsDialog';
 
@@ -118,7 +119,7 @@ function CloudAccessPanel({
 	isPending: boolean;
 }) {
 	const current = project.federation?.enabled ?? false;
-	const canManage = project.your_role === 'admin';
+	const canManage = canManageProject(project.your_role);
 	const form = useAppForm({
 		defaultValues: { enabled: current },
 		onSubmit: async ({ value }) => {

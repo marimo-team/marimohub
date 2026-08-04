@@ -112,8 +112,8 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 	const superAdmin = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS');
 	const viewer = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS');
 	const editor = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS');
-	const admin = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_ADMIN_GROUPS');
-	const configured = Boolean(claim || allowed || superAdmin || viewer || editor || admin);
+	const manager = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS');
+	const configured = Boolean(claim || allowed || superAdmin || viewer || editor || manager);
 	if (!configured) return undefined;
 	if (
 		!claim ||
@@ -131,7 +131,7 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 			},
 		);
 	}
-	if (!allowed && !superAdmin && !viewer && !editor && !admin) {
+	if (!allowed && !superAdmin && !viewer && !editor && !manager) {
 		throw new ConfigError('An OIDC groups claim requires at least one group policy.', {
 			variable: 'MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM',
 		});
@@ -140,12 +140,12 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 		claim,
 		...(allowed ? { allowed } : {}),
 		...(superAdmin ? { superAdmin } : {}),
-		...(viewer || editor || admin
+		...(viewer || editor || manager
 			? {
 					defaultRoles: {
 						...(viewer ? { viewer } : {}),
 						...(editor ? { editor } : {}),
-						...(admin ? { admin } : {}),
+						...(manager ? { manager } : {}),
 					},
 				}
 			: {}),

@@ -151,7 +151,7 @@ components:
             - string
             - 'null'
           enum:
-            - admin
+            - manager
             - editor
             - viewer
             - null
@@ -308,6 +308,7 @@ components:
             - 'null'
           enum:
             - admin
+            - manager
             - editor
             - viewer
             - null
@@ -333,6 +334,7 @@ components:
           type: string
           enum:
             - admin
+            - manager
             - editor
             - viewer
       required:
@@ -366,6 +368,13 @@ components:
             - true
       required:
         - success
+    AssignableRole:
+      type: string
+      enum:
+        - manager
+        - editor
+        - viewer
+      example: editor
     AuditLogPage:
       type: object
       properties:
@@ -569,7 +578,7 @@ components:
             - string
             - 'null'
           enum:
-            - admin
+            - manager
             - editor
             - viewer
             - null
@@ -1962,8 +1971,8 @@ paths:
       tags:
         - Projects
       summary: List project members
-      description: Pending email invites are visible only to project admins (plus the
-        invitee themself); other callers see the id-keyed rows only.
+      description: Pending email invites are visible only to project managers (plus
+        the invitee themself); other callers see the id-keyed rows only.
       parameters:
         - schema:
             type: string
@@ -2054,12 +2063,7 @@ paths:
                   format: email
                   example: teammate@example.com
                 role:
-                  type: string
-                  enum:
-                    - admin
-                    - editor
-                    - viewer
-                  example: editor
+                  $ref: '#/components/schemas/AssignableRole'
               required:
                 - role
       responses:
@@ -2152,12 +2156,9 @@ paths:
               type: object
               properties:
                 role:
-                  type: string
-                  enum:
-                    - admin
-                    - editor
-                    - viewer
-                  example: admin
+                  allOf:
+                    - $ref: '#/components/schemas/AssignableRole'
+                    - example: manager
               required:
                 - role
       responses:
@@ -2410,7 +2411,7 @@ paths:
         - Projects
       summary: List a project's audit events for one day
       description: 'Catalog mutation audit trail (project/notebook lifecycle,
-        membership changes), one UTC day at a time. Admin-only: events may
+        membership changes), one UTC day at a time. Manager-only: events may
         record member management and deletions.'
       parameters:
         - schema:
@@ -4750,7 +4751,7 @@ paths:
     post:
       tags:
         - Integrations
-      summary: Create an integration (admin only)
+      summary: Create an integration (manager only)
       parameters:
         - schema:
             type: string
@@ -4933,7 +4934,7 @@ paths:
     patch:
       tags:
         - Integrations
-      summary: Update an integration (admin only); a config change appends a version
+      summary: Update an integration (manager only); a config change appends a version
       parameters:
         - schema:
             type: string
@@ -5048,7 +5049,7 @@ paths:
     delete:
       tags:
         - Integrations
-      summary: Delete an integration and its version history (admin only)
+      summary: Delete an integration and its version history (manager only)
       parameters:
         - schema:
             type: string
@@ -5219,7 +5220,7 @@ paths:
     post:
       tags:
         - Integrations
-      summary: Copy an integration from another project (admin of both projects)
+      summary: Copy an integration from another project (manager of both projects)
       parameters:
         - schema:
             type: string
@@ -5294,7 +5295,7 @@ paths:
     post:
       tags:
         - Integrations
-      summary: Probe connectivity for an unsaved config or a stored instance (admin
+      summary: Probe connectivity for an unsaved config or a stored instance (manager
         only)
       parameters:
         - schema:

@@ -9,6 +9,7 @@ import { createApi } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
 import {
 	AesGcmSecretCodec,
+	ASSIGNABLE_ROLES,
 	composeAuthenticators,
 	createServices,
 	defaultRegistry,
@@ -19,7 +20,7 @@ import {
 	ProjectIntegrationsStore,
 	ReconciliationService,
 } from '@marimo-hub/core';
-import type { EditorSandboxSharing } from '@marimo-hub/core';
+import type { AssignableRole, EditorSandboxSharing } from '@marimo-hub/core';
 import { CloudflareAccessAuthenticator } from '@marimo-hub/auth-cloudflare-access';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
 import { CloudflareSandboxProvider, ContainerProxy, Sandbox } from '@marimo-hub/compute-cloudflare';
@@ -62,6 +63,14 @@ function parseEditorSandboxSharing(raw: string | undefined): EditorSandboxSharin
 		`Invalid MARIMOHUB_EDITOR_SANDBOX_SHARING: ${raw} ` +
 			`(expected ${EDITOR_SANDBOX_SHARING_VALUES.join(', ')})`,
 	);
+}
+
+function parseDefaultRole(raw: string | undefined): AssignableRole | undefined {
+	const role = foldCase(raw ?? '') || 'editor';
+	if (role === 'none') return undefined;
+	const parsed = ASSIGNABLE_ROLES.find((candidate) => candidate === role);
+	if (parsed) return parsed;
+	throw new Error(`Invalid DEFAULT_ROLE: ${raw} (expected ${ASSIGNABLE_ROLES.join(', ')}, none)`);
 }
 
 export function buildDeps(request: Request, env: Env): ApiDeps {
@@ -177,8 +186,8 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 			editorSandboxSharing: parseEditorSandboxSharing(env.MARIMOHUB_EDITOR_SANDBOX_SHARING),
 			// Fallback role for logged-in non-members; defaults to `editor` so any
 			// logged-in user can edit notebooks. Set DEFAULT_ROLE=none to keep writes
-			// members-only. Project edit/delete always requires admin.
-			defaultRole: env.DEFAULT_ROLE === 'none' ? undefined : (env.DEFAULT_ROLE ?? 'editor'),
+			// members-only. Project edit/delete always requires manager.
+			defaultRole: parseDefaultRole(env.DEFAULT_ROLE),
 			// Comma-separated user ids/emails granted implicit admin on every project.
 			// Read under the documented, config-package name so the reference deployment
 			// honors what docs/configuration.md advertises.

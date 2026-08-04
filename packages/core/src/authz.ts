@@ -17,22 +17,29 @@
  * stays strict id equality (see api/shared.ts assertSessionControl).
  */
 
-import type { Role } from './constants';
+import type { AssignableRole, Role } from './constants';
 import { ForbiddenError } from './errors';
 import type { UserId } from './ids';
 import { anyRefMatchesSubject, emailsEqual, memberRefMatchesSubject } from './identityMatch';
 import type { IdentitySubject } from './identityMatch';
 import type { Project } from './schema';
 
-const RANK: Record<Role, number> = { viewer: 1, editor: 2, admin: 3 };
-const ENTITLEMENT_ROLE: Partial<Record<string, Role>> = {
+const RANK: Record<Role, number> = { viewer: 1, editor: 2, manager: 3, admin: 4 };
+const ENTITLEMENT_ROLE: Partial<Record<string, AssignableRole>> = {
 	'default-role:viewer': 'viewer',
 	'default-role:editor': 'editor',
-	'default-role:admin': 'admin',
+	'default-role:manager': 'manager',
 };
 
-export function subjectDefaultRole(subject: AuthSubject, policy?: AuthzPolicy): Role | null {
-	let role = policy?.defaultRole ?? null;
+export function roleAtLeast(role: Role | null, minimum: Role): boolean {
+	return role !== null && RANK[role] >= RANK[minimum];
+}
+
+export function subjectDefaultRole(
+	subject: AuthSubject,
+	policy?: AuthzPolicy,
+): AssignableRole | null {
+	let role: AssignableRole | null = policy?.defaultRole ?? null;
 	for (const entitlement of subject.entitlements ?? []) {
 		const candidate = ENTITLEMENT_ROLE[entitlement];
 		if (candidate && (role === null || RANK[candidate] > RANK[role])) role = candidate;
@@ -53,7 +60,7 @@ export type AuthSubject = IdentitySubject;
  * wholesale.
  */
 export interface AuthzPolicy {
-	defaultRole?: Role | null;
+	defaultRole?: AssignableRole | null;
 	/** MARIMOHUB_SUPER_ADMINS entries: emails (contain `@`) or user ids. */
 	superAdmins?: readonly string[];
 }
@@ -109,8 +116,7 @@ export function canAct(
 	min: Role,
 	policy?: AuthzPolicy,
 ): boolean {
-	const role = effectiveRole(project, subject, policy);
-	return role != null && RANK[role] >= RANK[min];
+	return roleAtLeast(effectiveRole(project, subject, policy), min);
 }
 
 /** Throw {@link ForbiddenError} unless the caller has at least `min` on the project. */

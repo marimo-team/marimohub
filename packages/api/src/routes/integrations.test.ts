@@ -354,11 +354,16 @@ describe('Integrations routes', () => {
 		expect(new Set([...first.items, ...second.items].map((entry) => entry.id)).size).toBe(3);
 	});
 
-	it('list requires membership; create/update/delete/test require admin', async () => {
+	it('list requires membership; create/update/delete/test require manager', async () => {
 		const pid = await createProject();
 		const editor = uid('user_editor');
+		const manager = uid('user_manager');
 		await expectOk(
 			await request('POST', `/projects/${pid}/members`, { user_id: editor, role: 'editor' }),
+			201,
+		);
+		await expectOk(
+			await request('POST', `/projects/${pid}/members`, { user_id: manager, role: 'manager' }),
 			201,
 		);
 		const created = await createPg(pid);
@@ -371,6 +376,11 @@ describe('Integrations routes', () => {
 		const strangerReq = createTestApi({
 			bucket,
 			userId: uid('user_stranger'),
+			deps: integrationsDeps(bucket),
+		}).request;
+		const managerReq = createTestApi({
+			bucket,
+			userId: manager,
 			deps: integrationsDeps(bucket),
 		}).request;
 
@@ -406,6 +416,28 @@ describe('Integrations routes', () => {
 			}),
 			403,
 		);
+
+		const managed = await expectOk<{ id: string }>(
+			await managerReq('POST', `/projects/${pid}/integrations`, {
+				kind: 'postgres',
+				name: 'managed',
+				config: PG_CONFIG,
+			}),
+			201,
+		);
+		await expectOk(
+			await managerReq('PATCH', `/projects/${pid}/integrations/${managed.id}`, {
+				enabled: false,
+			}),
+		);
+		await expectError(
+			await managerReq('POST', `/projects/${pid}/integrations/test`, {
+				source: 'stored',
+				id: managed.id,
+			}),
+			422,
+		);
+		await expectOk(await managerReq('DELETE', `/projects/${pid}/integrations/${managed.id}`));
 	});
 
 	it('a super admin holds admin on a project they are not a member of', async () => {
@@ -601,7 +633,7 @@ describe('Integrations routes', () => {
 		// limiter is per-user within the process).
 		const rateUser = uid('user_rate');
 		await expectOk(
-			await request('POST', `/projects/${pid}/members`, { user_id: rateUser, role: 'admin' }),
+			await request('POST', `/projects/${pid}/members`, { user_id: rateUser, role: 'manager' }),
 			201,
 		);
 		const rateReq = createTestApi({
@@ -629,7 +661,7 @@ describe('Integrations routes', () => {
 		const second = uid('user_rate_isolated_second');
 		for (const user_id of [first, second]) {
 			await expectOk(
-				await request('POST', `/projects/${pid}/members`, { user_id, role: 'admin' }),
+				await request('POST', `/projects/${pid}/members`, { user_id, role: 'manager' }),
 				201,
 			);
 		}
@@ -658,7 +690,7 @@ describe('Integrations routes', () => {
 		const active = uid('user_rate_active');
 		for (const user_id of [stale, active]) {
 			await expectOk(
-				await request('POST', `/projects/${pid}/members`, { user_id, role: 'admin' }),
+				await request('POST', `/projects/${pid}/members`, { user_id, role: 'manager' }),
 				201,
 			);
 		}
@@ -868,6 +900,8 @@ describe('Org integrations routes', () => {
 describe('Integration copy route', () => {
 	const ROOT = uid('user_import_root');
 	const OUTSIDER = uid('user_import_outsider');
+	const SOURCE_MANAGER = uid('user_import_source_manager');
+	const MANAGER = uid('user_import_manager');
 	let bucket: MemoryBucket;
 	let deps: ReturnType<typeof integrationsDeps> & { policy: { superAdmins: string[] } };
 	let asOwner: ReturnType<typeof createTestApi>['request'];
@@ -906,9 +940,19 @@ describe('Integration copy route', () => {
 		...over,
 	});
 
-	it('admin of both projects copies the integration; secret fields stay redacted', async () => {
+	it('manager of both projects copies the integration; secret fields stay redacted', async () => {
+		for (const pid of [sourcePid, targetPid]) {
+			await expectOk(
+				await asOwner('POST', `/projects/${pid}/members`, {
+					user_id: MANAGER,
+					role: 'manager',
+				}),
+				201,
+			);
+		}
+		const asManager = createTestApi({ bucket, userId: MANAGER, deps }).request;
 		const detail = await expectOk<Record<string, unknown>>(
-			await asOwner('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
+			await asManager('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
 			201,
 		);
 		expect(detail).toMatchObject({
@@ -921,7 +965,7 @@ describe('Integration copy route', () => {
 		expect(JSON.stringify(detail)).not.toContain('sup3r-secret');
 
 		const events = await expectOk<Record<string, unknown>[]>(
-			await asOwner('GET', `/projects/${targetPid}/events`),
+			await asManager('GET', `/projects/${targetPid}/events`),
 		);
 		const copied = events.find((e) => e.event === 'integration.copy');
 		expect(copied).toMatchObject({
@@ -931,19 +975,20 @@ describe('Integration copy route', () => {
 		expect(JSON.stringify(events)).not.toContain('sup3r-secret');
 	});
 
-	it('requires admin on BOTH projects — dest-only admins are refused', async () => {
-		// An outsider who owns only the destination cannot even LEARN that the
+	it('requires manager on BOTH projects — destination-only managers are refused', async () => {
+		await expectOk(
+			await asOwner('POST', `/projects/${targetPid}/members`, {
+				user_id: OUTSIDER,
+				role: 'manager',
+			}),
+			201,
+		);
+		// A manager of only the destination cannot even LEARN that the
 		// source exists: an invisible source answers the same 404 as a missing one,
 		// so the import route is not a project-id existence oracle.
 		const asOutsider = createTestApi({ bucket, userId: OUTSIDER, deps }).request;
-		const foreign = (
-			await expectOk<{ id: string }>(
-				await asOutsider('POST', '/projects', { name: 'mine', description: 'd' }),
-				201,
-			)
-		).id;
 		await expectError(
-			await asOutsider('POST', `/projects/${foreign}/integrations/copy`, copyBody()),
+			await asOutsider('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
 			404,
 		);
 
@@ -956,7 +1001,20 @@ describe('Integration copy route', () => {
 			201,
 		);
 		await expectError(
-			await asOutsider('POST', `/projects/${foreign}/integrations/copy`, copyBody()),
+			await asOutsider('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
+			403,
+		);
+
+		await expectOk(
+			await asOwner('POST', `/projects/${sourcePid}/members`, {
+				user_id: SOURCE_MANAGER,
+				role: 'manager',
+			}),
+			201,
+		);
+		const asSourceManager = createTestApi({ bucket, userId: SOURCE_MANAGER, deps }).request;
+		await expectError(
+			await asSourceManager('POST', `/projects/${targetPid}/integrations/copy`, copyBody()),
 			403,
 		);
 

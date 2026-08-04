@@ -314,7 +314,7 @@ export type ProjectMember = z.infer<typeof ProjectMemberSchema>;
  * receive federated storage credentials ("when"), and which deployment-registered
  * federation target to use ("for what"). Absent/`enabled: false` = no federated
  * credentials, even when the deployment has WIF configured. The deployment owns
- * the capability (issuer + targets); a project admin opts in here.
+ * the capability (issuer + targets); a project manager opts in here.
  */
 export const ProjectFederationSchema = z.object({
 	enabled: z.boolean(),

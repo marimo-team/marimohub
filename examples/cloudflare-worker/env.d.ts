@@ -22,7 +22,7 @@ declare global {
 		// Opt-in E2B compute (see src/e2b.ts). E2B_API_KEY is a wrangler secret.
 		E2B_API_KEY?: string;
 		E2B_TEMPLATE?: string;
-		DEFAULT_ROLE?: 'viewer' | 'editor' | 'admin' | 'none';
+		DEFAULT_ROLE?: 'viewer' | 'editor' | 'manager' | 'none';
 		MARIMOHUB_SUPER_ADMINS?: string;
 		PERSIST_WORKSPACE?: 'source' | 'workspace';
 		AI_UPSTREAM_BASE_URL?: string;

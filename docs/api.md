@@ -26,7 +26,7 @@ or a [personal access token](/api-tokens) sent as `Authorization: Bearer …`
 (for CI, scripts, and the CLI).
 Project reads require effective `viewer` access through ownership, membership,
 or `MARIMOHUB_DEFAULT_ROLE`; `none` hides non-member projects. Writes are
-role-gated. A project audit log requires project `admin`. The deployment audit
+role-gated. A project audit log requires project `manager`. The deployment audit
 log requires a super admin (see [Security → Authorization](/security#authorization-roles)).
 Editor ownership, temporary session creation, and takeover are documented in
 [Editor sessions](/editor-sessions).
@@ -56,7 +56,7 @@ Resource groups:
 
 - **Projects** — list/create/update/delete projects; add/update/remove members
   (`/projects/{pid}/members`). Project responses carry `your_role` (the caller's
-  effective role). Admins can read the audit log one UTC day at a time
+  effective role). Managers can read the audit log one UTC day at a time
   (`GET /projects/{pid}/events?date=YYYY-MM-DD`, defaults to today) — every
   project/notebook mutation is recorded as an event.
 - **Audit** — super admins can read deployment events with `GET /events`. The

@@ -243,7 +243,7 @@ const createIntegration = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations',
 	tags: ['Integrations'],
-	summary: 'Create an integration (admin only)',
+	summary: 'Create an integration (manager only)',
 	request: { params: ProjectIdParam, body: jsonBody(CreateIntegrationBody) },
 	responses: {
 		201: jsonContent(
@@ -276,7 +276,7 @@ const updateIntegration = createRoute({
 	method: 'patch',
 	path: '/projects/{pid}/integrations/{iid}',
 	tags: ['Integrations'],
-	summary: 'Update an integration (admin only); a config change appends a version',
+	summary: 'Update an integration (manager only); a config change appends a version',
 	request: {
 		params: IntegrationIdParam,
 		headers: IfMatchHeader,
@@ -297,7 +297,7 @@ const deleteIntegration = createRoute({
 	method: 'delete',
 	path: '/projects/{pid}/integrations/{iid}',
 	tags: ['Integrations'],
-	summary: 'Delete an integration and its version history (admin only)',
+	summary: 'Delete an integration and its version history (manager only)',
 	request: { params: IntegrationIdParam, headers: IfMatchHeader },
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'Integration deleted'),
@@ -329,7 +329,7 @@ const copyIntegration = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/copy',
 	tags: ['Integrations'],
-	summary: 'Copy an integration from another project (admin of both projects)',
+	summary: 'Copy an integration from another project (manager of both projects)',
 	request: { params: ProjectIdParam, body: jsonBody(CopyIntegrationBody) },
 	responses: {
 		201: jsonContent(
@@ -345,7 +345,7 @@ const testIntegration = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/test',
 	tags: ['Integrations'],
-	summary: 'Probe connectivity for an unsaved config or a stored instance (admin only)',
+	summary: 'Probe connectivity for an unsaved config or a stored instance (manager only)',
 	request: { params: ProjectIdParam, body: jsonBody(TestIntegrationBody) },
 	responses: {
 		200: jsonContent(
@@ -544,7 +544,7 @@ app.openapi(createIntegration, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
 	const body = c.req.valid('json');
 	const detail = await integrations.create(pid, body, user.id);
 	// Audit trail (kind/name only — never config). Best-effort; never fail the write.
@@ -581,7 +581,7 @@ app.openapi(updateIntegration, async (c) => {
 	const user = c.get('user');
 	const { pid, iid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
 	const body = c.req.valid('json');
 	const detail = await integrations.update(pid, iid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(detail.updated_at));
@@ -609,7 +609,7 @@ app.openapi(deleteIntegration, async (c) => {
 	const user = c.get('user');
 	const { pid, iid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
 	// A no-op delete (already gone, or an id from the org tier) still succeeds
 	// but must not fabricate an audit-trail deletion.
 	const deleted = await integrations.delete(pid, iid, ifMatchToken(c));
@@ -647,7 +647,7 @@ app.openapi(listIntegrationVersions, async (c) => {
 });
 
 // The probe is a server-side request forger by construction, so beside the
-// probe's own global cap, each USER gets a sliding-window budget — one admin
+// probe's own global cap, each USER gets a sliding-window budget — one manager
 // cannot starve every other tenant on the replica.
 const TESTS_PER_USER_PER_MINUTE = 10;
 const TEST_WINDOW_MS = 60_000;
@@ -691,10 +691,10 @@ app.openapi(copyIntegration, async (c) => {
 	const integrations = requireIntegrations(deps);
 	const body = c.req.valid('json');
 	// The copy moves decrypted secret material across the project boundary, so
-	// the caller must hold admin on BOTH sides (a super admin is admin
+	// the caller must hold manager on BOTH sides (a super admin is admin
 	// everywhere). Destination first: its 404/403 must not confirm the source.
-	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
-	// Visibility before role for the SOURCE: any destination admin can probe an
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	// Visibility before role for the SOURCE: any destination manager can probe an
 	// arbitrary id here, so a project the caller cannot see answers the same 404
 	// as one that does not exist; 403 is reserved for projects they can see.
 	const source = await loadVisibleProject(
@@ -703,7 +703,7 @@ app.openapi(copyIntegration, async (c) => {
 		user,
 		deps.policy,
 	);
-	requireRole(source, user, 'admin', deps.policy);
+	requireRole(source, user, 'manager', deps.policy);
 	const detail = await integrations.copy(
 		body.source_project_id,
 		body.source_integration_id,
@@ -735,7 +735,7 @@ app.openapi(testIntegration, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
 	assertTestBudget(user.id);
 	const body = c.req.valid('json') as TestIntegrationRequest;
 	return c.json({ success: true, data: await integrations.test(pid, body) }, 200);

@@ -20,8 +20,8 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { jwtVerify, SignJWT } from 'jose';
 import * as oauth from 'oauth4webapi';
-import { AUTH_ENTITLEMENTS, UserId } from '@marimo-hub/core';
-import type { AuthEntitlement, Authenticator, AuthUser, Role } from '@marimo-hub/core';
+import { ASSIGNABLE_ROLES, AUTH_ENTITLEMENTS, UserId } from '@marimo-hub/core';
+import type { AssignableRole, AuthEntitlement, Authenticator, AuthUser } from '@marimo-hub/core';
 
 export type EmailVerificationPolicy = 'required' | 'trusted-issuer';
 
@@ -33,7 +33,7 @@ export interface OidcGroupPolicy {
 	/** Groups mapped to deployment super-admin. */
 	superAdmin?: string[];
 	/** Groups mapped to a per-user deployment-wide default project role. */
-	defaultRoles?: Partial<Record<Role, string[]>>;
+	defaultRoles?: Partial<Record<AssignableRole, string[]>>;
 	/** Maximum accepted group count (default 200, maximum 200). */
 	maxGroups?: number;
 }
@@ -202,9 +202,7 @@ function validateGroupPolicy(policy: OidcGroupPolicy): void {
 	const lists = [
 		policy.allowed,
 		policy.superAdmin,
-		policy.defaultRoles?.viewer,
-		policy.defaultRoles?.editor,
-		policy.defaultRoles?.admin,
+		...ASSIGNABLE_ROLES.map((role) => policy.defaultRoles?.[role]),
 	].filter((list): list is string[] => list !== undefined);
 	if (lists.length === 0) throw new Error('OIDC groups claim requires at least one group policy');
 	for (const list of lists) {
@@ -248,7 +246,7 @@ function mappedEntitlements(groups: readonly string[], policy: OidcGroupPolicy):
 	if (policy.superAdmin?.some((group) => memberships.has(group))) {
 		entitlements.add('super-admin');
 	}
-	for (const role of ['viewer', 'editor', 'admin'] as const) {
+	for (const role of ASSIGNABLE_ROLES) {
 		if (policy.defaultRoles?.[role]?.some((group) => memberships.has(group))) {
 			entitlements.add(`default-role:${role}`);
 		}
