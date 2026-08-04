@@ -838,6 +838,9 @@ export function useNotebookHtmlQuery(projectId: string, notebookId: string, vers
 		queryKey: notebookKeys.html(projectId, notebookId, versionId),
 		queryFn: () => fetchHtmlSnapshot(projectId, notebookId, versionId),
 		// A pinned version's snapshot is immutable; only the latest alias can change.
+		// It can be pruned server-side, but keeping the cached copy then is deliberate:
+		// a refetch would yank rendered outputs into the empty state mid-view, and the
+		// in-memory cache expires with the session anyway.
 		staleTime: versionId ? Infinity : 5 * 60 * 1000,
 	});
 }
