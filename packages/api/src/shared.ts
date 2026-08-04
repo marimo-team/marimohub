@@ -80,6 +80,26 @@ export function assertSuperAdmin(subject: AuthSubject, policy?: AuthzPolicy): vo
 	}
 }
 
+/**
+ * OpenAPI security override for session-only routes: the generated spec
+ * advertises ONLY cookieAuth, so a client must not pick a bearer token it
+ * can't use there. Pair with `assertSessionAuthenticated`, which enforces it.
+ */
+export const SESSION_ONLY_SECURITY = [{ cookieAuth: [] }];
+
+/**
+ * Reject PAT-authenticated requests on routes that must be session-only (token
+ * management, admin surfaces): a leaked PAT must not reach them. Gates on the
+ * `authMethod` flag the authN middleware set — not a re-parse of the
+ * Authorization header, which would risk disagreeing with the authenticator
+ * over scheme casing/whitespace.
+ */
+export function assertSessionAuthenticated(c: Context<HonoEnv>, action: string): void {
+	if (c.get('authMethod') === 'pat') {
+		throw new ForbiddenError(`Personal access tokens cannot ${action} — sign in to do this`);
+	}
+}
+
 /** The slice of PolicyConfig the session gates need. */
 export type SessionPolicy = AuthzPolicy & {
 	viewerMode?: ViewerMode;
@@ -790,8 +810,50 @@ export const MeResponseSchema = z
 	})
 	.openapi('Me');
 
-/** Read-only deployment identity/metadata surfaced by `GET /api/v1/version`. */
-export const DeploymentInfoResponseSchema = z
+// --- Admin (/api/v1/admin/*) ---
+
+/** A directory entry on the super-admin users page. */
+export const AdminUserResponseSchema = z
+	.object({
+		id: z.string(),
+		email: z.string(),
+		name: z.string(),
+		/**
+		 * When the identity record was last written — a coarse activity signal
+		 * (refreshed on sign-in, identity changes, and server restarts), not a
+		 * precise last-seen timestamp.
+		 */
+		updated_at: z.string().openapi({ format: 'date-time' }),
+		/** Whether this user matches an entry in MARIMOHUB_SUPER_ADMINS. */
+		is_super_admin: z.boolean(),
+	})
+	.openapi('AdminUser');
+
+export const ConfigSettingSchema = z
+	.object({
+		/** Env var id, e.g. `MARIMOHUB_AUTH_OIDC_ISSUER`. */
+		key: z.string(),
+		name: z.string(),
+		/** Configured (or default) value; always null when `secret`. */
+		value: z.string().nullable(),
+		secret: z.boolean(),
+		/** Whether the env var is explicitly set in this deployment. */
+		set: z.boolean(),
+	})
+	.openapi('ConfigSetting');
+
+export const ConfigGroupSchema = z
+	.object({
+		/** Spec group name, e.g. `Auth`, `Storage`. */
+		name: z.string(),
+		/** The group's resolved backend selector; null for selector-less groups. */
+		backend: z.string().nullable(),
+		settings: z.array(ConfigSettingSchema),
+	})
+	.openapi('ConfigGroup');
+
+/** Build/runtime identity of the serving replica, super-admin only. */
+export const AdminDeploymentSchema = z
 	.object({
 		version: z.string(),
 		image: z.string().nullable(),
@@ -799,11 +861,47 @@ export const DeploymentInfoResponseSchema = z
 		started_at: z.string().nullable(),
 		replica: z.string().nullable(),
 		node: z.string().nullable(),
-		backends: z.object({
-			storage: z.string(),
-			compute: z.string(),
-			auth: z.string(),
-		}),
+		backends: z
+			.object({
+				storage: z.string(),
+				compute: z.string(),
+				auth: z.string(),
+			})
+			.nullable(),
+	})
+	.openapi('AdminDeployment');
+
+/**
+ * The effective (parsed) authorization policy, as the server enforces it —
+ * unlike the raw env values in `groups`, which may be unset or carry defaults.
+ */
+export const AdminPolicySchema = z
+	.object({
+		default_role: z.enum(ROLES).nullable(),
+		/** Raw MARIMOHUB_SUPER_ADMINS entries (emails or user ids). */
+		super_admins: z.array(z.string()),
+	})
+	.openapi('AdminPolicy');
+
+/** Read-only deployment configuration surfaced by `GET /api/v1/admin/config`. */
+export const DeploymentConfigResponseSchema = z
+	.object({
+		/** Null when the wiring provides no version metadata (library/Workers, tests). */
+		deployment: AdminDeploymentSchema.nullable(),
+		/** Empty when the wiring provides no summary (library/Workers). */
+		groups: z.array(ConfigGroupSchema),
+		policy: AdminPolicySchema,
+	})
+	.openapi('DeploymentConfig');
+
+/**
+ * The deployment version surfaced by `GET /api/v1/version`. Just the version:
+ * the rest of the build/runtime identity (image, replica, backends, …) is
+ * super-admin material, served by `GET /api/v1/admin/config`.
+ */
+export const DeploymentInfoResponseSchema = z
+	.object({
+		version: z.string(),
 	})
 	.openapi('DeploymentInfo');
 

@@ -104,7 +104,11 @@ export class IdentityService {
 		return results.filter((r): r is Identity => r !== null);
 	}
 
-	private async listAll(): Promise<Identity[]> {
+	/**
+	 * The full directory, served from the SWR cache. Records exist only for users
+	 * who have signed in at least once.
+	 */
+	async list(): Promise<Identity[]> {
 		if (this.directory && Date.now() - this.directory.at < IdentityService.DIRECTORY_TTL_MS) {
 			return this.directory.entries;
 		}
@@ -159,7 +163,7 @@ export class IdentityService {
 	async search(query: string, limit = 10): Promise<Identity[]> {
 		const q = foldCase(query);
 		if (!q) return [];
-		const all = await this.listAll();
+		const all = await this.list();
 		return all
 			.filter(
 				(u) =>
@@ -180,7 +184,7 @@ export class IdentityService {
 	async getByEmail(email: string): Promise<Identity | null> {
 		const target = normalizeEmail(email);
 		if (!target) return null;
-		const all = await this.listAll();
+		const all = await this.list();
 		const matches = all.filter((u) => normalizeEmail(u.email) === target);
 		if (matches.length === 0) return null;
 		return matches.reduce((a, b) => (a.updated_at >= b.updated_at ? a : b));

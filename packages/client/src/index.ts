@@ -43,6 +43,10 @@ export type ApiToken = components['schemas']['ApiToken'];
 export type ApiTokenCreated = components['schemas']['ApiTokenCreated'];
 export type AuditLogEntry = components['schemas']['AuditLogEntry'];
 export type AuditLogPage = components['schemas']['AuditLogPage'];
+/** A directory entry from the super-admin `GET /api/v1/admin/users`. */
+export type AdminUser = components['schemas']['AdminUser'];
+/** Redacted deployment configuration from the super-admin `GET /api/v1/admin/config`. */
+export type DeploymentConfig = components['schemas']['DeploymentConfig'];
 
 export interface ApiError {
 	code: string;

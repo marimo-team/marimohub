@@ -60,6 +60,12 @@ export const auditKeys = {
 	list: (filters: AuditLogFilters) => [...auditKeys.all, 'list', filters] as const,
 };
 
+export const adminKeys = {
+	all: ['admin'] as const,
+	users: () => [...adminKeys.all, 'users'] as const,
+	config: () => [...adminKeys.all, 'config'] as const,
+};
+
 export const sessionKeys = {
 	all: ['sessions'] as const,
 	detail: (sid: string) => [...sessionKeys.all, 'detail', sid] as const,

@@ -137,14 +137,14 @@ describe('Header', () => {
 		const { user } = setup();
 		await openUserMenu(user);
 		expect(screen.queryByRole('menuitem', { name: /Org integrations/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole('menuitem', { name: /Audit logs/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole('menuitem', { name: /Admin/ })).not.toBeInTheDocument();
 	});
 
-	it('navigates super admins to the audit log page', async () => {
+	it('navigates super admins to the admin section', async () => {
 		const { user } = setup(undefined, { ...USER, is_super_admin: true });
 		await openUserMenu(user);
-		await user.click(screen.getByRole('menuitem', { name: /Audit logs/ }));
-		expect(screen.getByTestId('location')).toHaveTextContent('/admin/audit-logs');
+		await user.click(screen.getByRole('menuitem', { name: /Admin/ }));
+		expect(screen.getByTestId('location')).toHaveTextContent('/admin/users');
 	});
 
 	it('opens the org integrations dialog for a super admin and lists the org entries', async () => {

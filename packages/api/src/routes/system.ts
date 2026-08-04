@@ -54,7 +54,10 @@ const versionRoute = createRoute({
 	method: 'get',
 	path: '/version',
 	tags: ['System'],
-	summary: 'Get deployment version info',
+	summary: 'Get the deployment version',
+	description:
+		'Just the version string. The rest of the build/runtime identity (image, replica, ' +
+		'backends, …) is super-admin material on `GET /api/v1/admin/config`.',
 	responses: {
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: DeploymentInfoResponseSchema }),
@@ -66,15 +69,7 @@ const versionRoute = createRoute({
 
 app.openapi(versionRoute, (c) => {
 	const v = c.get('deps').version;
-	return ok(c, {
-		version: v?.version ?? 'dev',
-		image: v?.image ?? null,
-		sandbox_image: v?.sandboxImage ?? null,
-		started_at: v?.startedAt ?? null,
-		replica: v?.replica ?? null,
-		node: v?.node ?? null,
-		backends: v?.backends ?? { storage: 'unknown', compute: 'unknown', auth: 'unknown' },
-	});
+	return ok(c, { version: v?.version ?? 'dev' });
 });
 
 const capabilitiesRoute = createRoute({

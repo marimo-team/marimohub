@@ -9,7 +9,9 @@ const authed: Authenticator = {
 };
 
 describe('GET /api/v1/version', () => {
-	it('returns the full deployment metadata when configured', async () => {
+	// The rest of the build/runtime identity (image, replica, backends, …) is
+	// super-admin material on GET /api/v1/admin/config, not served here.
+	it('returns only the version string when configured', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), {
 			authenticator: authed,
 			version: {
@@ -23,29 +25,13 @@ describe('GET /api/v1/version', () => {
 			},
 		});
 		const res = await createApi(deps).request('/api/v1/version');
-		expect(await expectOk(res)).toEqual({
-			version: 'a1b2c3d',
-			image: 'ghcr.io/marimo-team/marimohub:a1b2c3d',
-			sandbox_image: 'ghcr.io/marimo-team/marimo-sandbox:latest',
-			started_at: '2026-06-24T12:05:00Z',
-			replica: 'marimohub-abc123',
-			node: 'v24.3.0',
-			backends: { storage: 's3', compute: 'coreweave', auth: 'oidc' },
-		});
+		expect(await expectOk(res)).toEqual({ version: 'a1b2c3d' });
 	});
 
-	it('falls back to dev / null / unknown when no version is wired', async () => {
+	it('falls back to dev when no version is wired', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		const res = await createApi(deps).request('/api/v1/version');
-		expect(await expectOk(res)).toEqual({
-			version: 'dev',
-			image: null,
-			sandbox_image: null,
-			started_at: null,
-			replica: null,
-			node: null,
-			backends: { storage: 'unknown', compute: 'unknown', auth: 'unknown' },
-		});
+		expect(await expectOk(res)).toEqual({ version: 'dev' });
 	});
 
 	it('requires authentication (not a public endpoint)', async () => {

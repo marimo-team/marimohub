@@ -17,6 +17,7 @@ import {
 	systemKeys,
 	integrationKeys,
 	auditKeys,
+	adminKeys,
 } from './queryKeys';
 import type { AuditLogFilters } from './queryKeys';
 import type {
@@ -163,6 +164,24 @@ export function useUserSearchQuery(query: string) {
 		enabled: q.length >= 2,
 		staleTime: 30 * 1000,
 		placeholderData: keepPreviousData,
+	});
+}
+
+// Admin (super-admin pages)
+
+/** The full user directory (everyone who has signed in at least once), name-sorted. */
+export function useAdminUsersQuery() {
+	return useSuspenseQuery({
+		queryKey: adminKeys.users(),
+		queryFn: async () => (await apiData(apiClient.GET('/api/v1/admin/users'))).items,
+	});
+}
+
+/** The deployment's configuration, grouped per the config spec, secrets redacted server-side. */
+export function useDeploymentConfigQuery() {
+	return useSuspenseQuery({
+		queryKey: adminKeys.config(),
+		queryFn: () => apiData(apiClient.GET('/api/v1/admin/config')),
 	});
 }
 

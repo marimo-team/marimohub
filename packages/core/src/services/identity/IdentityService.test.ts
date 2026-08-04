@@ -83,6 +83,54 @@ describe('IdentityService', () => {
 		});
 	});
 
+	describe('list', () => {
+		it('returns every directory record', async () => {
+			await identities.upsert({ id: uid('a'), email: 'a@x.io', name: 'Aye' });
+			await identities.upsert({ id: uid('b'), email: 'b@x.io', name: 'Bee' });
+
+			const all = await identities.list();
+			expect(all.map((u) => u.id).sort()).toEqual([uid('a'), uid('b')]);
+		});
+
+		it('returns an empty list for an empty directory', async () => {
+			expect(await identities.list()).toEqual([]);
+		});
+
+		it('serves repeat calls within the TTL from the cached directory', async () => {
+			const list = vi.spyOn(bucket, 'list');
+			await identities.list();
+			await identities.list();
+			expect(list).toHaveBeenCalledTimes(1);
+		});
+
+		it('skips corrupt directory records instead of failing the scan', async () => {
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				await identities.upsert({ id: uid('a'), email: 'a@x.io', name: 'Aye' });
+				await bucket.put(`${paths.identitiesPrefix}corrupt.json`, '{"not": "an identity"}');
+
+				expect((await identities.list()).map((u) => u.id)).toEqual([uid('a')]);
+			} finally {
+				log.mockRestore();
+			}
+		});
+
+		it('propagates a cold-scan failure instead of serving an empty directory', async () => {
+			vi.spyOn(bucket, 'list').mockRejectedValue(new Error('bucket unavailable'));
+			await expect(identities.list()).rejects.toThrow('bucket unavailable');
+		});
+
+		it('recovers after a failed cold scan on the next call', async () => {
+			await identities.upsert({ id: uid('a'), email: 'a@x.io', name: 'Aye' });
+			const list = vi.spyOn(bucket, 'list').mockRejectedValueOnce(new Error('transient'));
+
+			await expect(identities.list()).rejects.toThrow('transient');
+			// The failed single-flight must not be cached as the directory.
+			expect((await identities.list()).map((u) => u.id)).toEqual([uid('a')]);
+			expect(list).toHaveBeenCalledTimes(2);
+		});
+	});
+
 	describe('search', () => {
 		beforeEach(async () => {
 			await identities.upsert({ id: uid('usr_ada'), email: 'ada@x.io', name: 'Ada Lovelace' });

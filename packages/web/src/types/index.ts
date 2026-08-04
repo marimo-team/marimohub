@@ -28,6 +28,8 @@ import type {
 	ApiTokenCreated as ClientApiTokenCreated,
 	AuditLogEntry as ClientAuditLogEntry,
 	AuditLogPage as ClientAuditLogPage,
+	AdminUser as ClientAdminUser,
+	DeploymentConfig as ClientDeploymentConfig,
 	ApiResponse as ClientApiResponse,
 	ApiError as ClientApiError,
 } from '@marimo-hub/client';
@@ -72,6 +74,10 @@ export type ApiToken = ClientApiToken;
 export type ApiTokenCreated = ClientApiTokenCreated;
 export type AuditLogEntry = ClientAuditLogEntry;
 export type AuditLogPage = ClientAuditLogPage;
+/** A directory entry on the super-admin users page. */
+export type AdminUser = ClientAdminUser;
+/** Redacted deployment configuration for the super-admin settings page. */
+export type DeploymentConfig = ClientDeploymentConfig;
 export type ApiResponse<T> = ClientApiResponse<T>;
 export type ApiError = ClientApiError;
 export type User = ClientUser;
