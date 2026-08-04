@@ -52,8 +52,8 @@ process.on('uncaughtException', (err) => {
 // surfaces at the next flush).
 const metrics = new WideEventMetrics();
 
-// Tracing (standard OTEL_* env vars); the global provider must register before
-// requests are served.
+// Tracing + metrics (standard OTEL_* env vars); the global providers must
+// register before requests are served.
 const otel = startOtel();
 
 // Config errors are deterministic — a restart can't fix them — so print a readable
@@ -61,7 +61,7 @@ const otel = startOtel();
 // non-fatal preflight below instead, so they never crashloop a replica.)
 let deps: ApiDeps;
 try {
-	deps = createFromEnv(process.env, metrics, { tracing: otel !== null });
+	deps = createFromEnv(process.env, metrics, { tracing: otel?.tracing ?? false });
 } catch (err) {
 	if (isConfigError(err)) {
 		console.error(`\n${err.format()}\n`);
@@ -69,7 +69,8 @@ try {
 	}
 	throw err;
 }
-if (otel) deps.tracingMiddleware = httpInstrumentationMiddleware();
+// Installed for metrics-only mode too: RED metrics still record, spans don't.
+if (otel) deps.tracingMiddleware = httpInstrumentationMiddleware({ disableTracing: !otel.tracing });
 const app = createApi(deps);
 
 // Boot preflight: probe downstream deps (storage conditional-writes, OIDC
@@ -131,10 +132,10 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
 // kernel (the HTTP side is handled inside `app.fetch`). A no-op otherwise.
 attachSandboxProxyUpgrade(server, deps);
 
-// Drain on shutdown: let in-flight requests finish and flush buffered spans,
-// bounded so long-lived sockets (WS kernel proxies) can't hold the pod past
-// its termination grace window. Registered only when tracing is enabled so the
-// default signal semantics are unchanged otherwise.
+// Drain on shutdown: let in-flight requests finish and flush buffered spans and
+// metrics, bounded so long-lived sockets (WS kernel proxies) can't hold the pod
+// past its termination grace window. Registered only when telemetry is enabled
+// so the default signal semantics are unchanged otherwise.
 if (otel) {
 	const drain = () => {
 		const closed = new Promise<void>((resolve) => {

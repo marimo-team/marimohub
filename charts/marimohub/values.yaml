@@ -73,6 +73,19 @@ service:
   type: ClusterIP
   port: 80
 
+# Prometheus scraping of the server's OpenTelemetry metrics: injects
+# OTEL_METRICS_EXPORTER=prometheus into the API pods and exposes the port on
+# the Service (not the ingress). For OTLP push instead, leave this off and set
+# OTEL_* vars via config/extraEnv.
+metrics:
+  enabled: false
+  port: 9464
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    # Labels for the operator's serviceMonitorSelector (e.g. release: kube-prometheus-stack).
+    labels: {}
+
 ingress:
   enabled: true
   className: ''

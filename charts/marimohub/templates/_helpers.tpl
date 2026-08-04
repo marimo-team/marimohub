@@ -114,6 +114,10 @@ spec:
       ports:
         - name: http
           containerPort: {{ $v.containerPort }}
+        {{- if $v.metrics.enabled }}
+        - name: metrics
+          containerPort: {{ $v.metrics.port }}
+        {{- end }}
       {{- end }}
       envFrom:
         {{- if or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") }}
@@ -130,6 +134,15 @@ spec:
         # explicit env overrides any value coming from the ConfigMap/Secret.
         - name: MARIMOHUB_RUN_MAINTENANCE
           value: {{ if .maintenance }}"true"{{ else }}"false"{{ end }}
+        {{- /* API pods only: the Service/ServiceMonitor never scrape the
+        maintenance pod, so a listener there would just be an unscraped open
+        port. */}}
+        {{- if and $v.metrics.enabled (not .maintenance) }}
+        - name: OTEL_METRICS_EXPORTER
+          value: prometheus
+        - name: OTEL_EXPORTER_PROMETHEUS_PORT
+          value: {{ $v.metrics.port | quote }}
+        {{- end }}
         {{- with $v.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
