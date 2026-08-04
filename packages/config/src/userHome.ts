@@ -1,3 +1,4 @@
+import { BadRequestError } from '@marimo-hub/core';
 import type { EditorSandboxSharing } from '@marimo-hub/core';
 import type { SandboxUserHomeResolver } from '@marimo-hub/api';
 import { parseList } from './env';
@@ -14,7 +15,9 @@ function canonicalEmail(email: string): string {
 		if (value[i] === '/' || codepoint < 32 || codepoint === 127) unsafe = true;
 	}
 	if (!value || value === '.' || value === '..' || value.length > 240 || unsafe) {
-		throw new Error('Authenticated email cannot be used as a sandbox home directory');
+		throw new BadRequestError(
+			'Your authenticated email cannot be used for personal storage; contact an administrator to correct the identity-provider email claim',
+		);
 	}
 	return value;
 }
@@ -43,6 +46,18 @@ export function makeSandboxUserHome(
 				variable: 'MARIMOHUB_EDITOR_SANDBOX_SHARING',
 				remediation: 'Set MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive.',
 				docs: 'docs/editor-sessions.md',
+			},
+		);
+	}
+	const normalProfiles = parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_PROFILE) ?? [];
+	const overlap = profiles.filter((profile) => normalProfiles.includes(profile));
+	if (overlap.length > 0) {
+		throw new ConfigError(
+			`${COREWEAVE_USER_HOME_PROFILE} must not overlap MARIMOHUB_COMPUTE_COREWEAVE_PROFILE: ${overlap.join(', ')}`,
+			{
+				variable: COREWEAVE_USER_HOME_PROFILE,
+				remediation: 'Use a separate, non-default profile for editor personal storage.',
+				docs: 'docs/deploying/cks.md',
 			},
 		);
 	}

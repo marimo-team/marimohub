@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { BadRequestError } from '@marimo-hub/core';
 import type { ProxyExposure } from '@marimo-hub/core';
 import { createFromEnv } from './index';
 
@@ -418,6 +419,19 @@ describe('createFromEnv default role', () => {
 		).toThrow(/requires the coreweave backend/);
 	});
 
+	it('requires normal and user-home CoreWeave profiles to be disjoint', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+				MARIMOHUB_COMPUTE_COREWEAVE_PROFILE: 'network, personal-storage',
+				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'personal-storage, personal-storage-egress',
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+			}),
+		).toThrow(/must not overlap.*personal-storage/);
+	});
+
 	it('resolves exclusive CoreWeave user homes from canonical email', () => {
 		const deps = createFromEnv({
 			...baseEnv,
@@ -439,9 +453,10 @@ describe('createFromEnv default role', () => {
 			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
 			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
 		});
-		expect(() =>
-			deps.sandbox.userHome?.resolve({ id: 'user-1' as never, email: '../escape@example.com' }),
-		).toThrow(/cannot be used as a sandbox home directory/);
+		const resolve = () =>
+			deps.sandbox.userHome?.resolve({ id: 'user-1' as never, email: '../escape@example.com' });
+		expect(resolve).toThrow(BadRequestError);
+		expect(resolve).toThrow(/contact an administrator.*identity-provider email claim/);
 	});
 
 	it('defaults persistWorkspace to "source" when MARIMOHUB_PERSIST_WORKSPACE is unset', () => {

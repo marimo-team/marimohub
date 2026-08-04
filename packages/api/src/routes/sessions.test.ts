@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createNotebookId, createProjectId, createServices, Millis } from '@marimo-hub/core';
+import {
+	BadRequestError,
+	createNotebookId,
+	createProjectId,
+	createServices,
+	Millis,
+} from '@marimo-hub/core';
 import type { NotebookId, ProjectId, Session, SessionId } from '@marimo-hub/core';
 import {
 	ACTOR,
@@ -231,6 +237,25 @@ describe('Session routes', () => {
 		await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode: 'app' }));
 		expect(compute.lastCreateOptions?.userHome).toBeUndefined();
 		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it('returns an actionable client error when personal storage cannot resolve the email', async () => {
+		const compute = makeFakeCompute();
+		const request = exclusiveApi(ACTOR, compute, {
+			sandbox: sandboxConfig({
+				userHome: {
+					resolve() {
+						throw new BadRequestError(
+							'Your authenticated email cannot be used for personal storage',
+						);
+					},
+				},
+			}),
+		});
+
+		const error = await expectError(await request('POST', sessionsPath()), 400, 'BAD_REQUEST');
+		expect(error.message).toContain('authenticated email cannot be used for personal storage');
+		expect(compute.lastCreateOptions).toBeUndefined();
 	});
 
 	it('does not restore a filesystem snapshot into a temporary editor sandbox', async () => {

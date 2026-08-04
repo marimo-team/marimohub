@@ -132,9 +132,8 @@ export function portWaitCommand(port: number, seconds: number): string {
 /**
  * CAIOS rejects path-style requests, and boto3 defaults to path style for a
  * custom endpoint with no env var to change it — only the AWS config file works.
- * Runs once per fresh create and leaves an image-supplied config alone. Trailing
- * `;`, never `&&`: best-effort, so a failure must not short-circuit the command
- * this gets spliced ahead of.
+ * Runs once per fresh create and leaves an image-supplied config alone. This
+ * snippet is best-effort and must not short-circuit the command it precedes.
  */
 const AWS_CONFIG_BOOTSTRAP =
 	'if [ -n "${AWS_ENDPOINT_URL_S3:-}" ] && [ ! -e "$HOME/.aws/config" ]; then' +
@@ -352,6 +351,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				find_ms: t1 - t0,
 				create_ms: t2 - t1,
 				boot_ms: t3 - t2,
+				...(this.config.profileNames?.length ? { profile_names: this.config.profileNames } : {}),
+				...(this.userHome ? { user_home_key: this.userHome.key } : {}),
 			}),
 		);
 		return this.sandbox;
@@ -442,11 +443,16 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		if (this.needsAwsConfigBootstrap()) snippets.push(AWS_CONFIG_BOOTSTRAP);
 		if (this.userHome) {
 			const parent = this.userHome.path.slice(0, this.userHome.path.lastIndexOf('/')) || '/';
+			const mountMissing = `marimohub: user-home profile mount missing at ${USER_HOME_MOUNT_PATH}`;
+			const linkFailed = `marimohub: cannot prepare user home at ${this.userHome.path}`;
 			snippets.push(
-				`test -d ${shellQuote(USER_HOME_MOUNT_PATH)} && ` +
-					`mkdir -p ${shellQuote(parent)} && ` +
-					`{ test -e ${shellQuote(this.userHome.path)} || ` +
-					`ln -s ${shellQuote(USER_HOME_MOUNT_PATH)} ${shellQuote(this.userHome.path)}; } || exit $?;`,
+				`if [ ! -d ${shellQuote(USER_HOME_MOUNT_PATH)} ]; then ` +
+					`echo ${shellQuote(mountMissing)} >&2; exit 1; fi; ` +
+					`if ! mkdir -p ${shellQuote(parent)}; then ` +
+					`echo ${shellQuote(linkFailed)} >&2; exit 1; fi; ` +
+					`if [ ! -e ${shellQuote(this.userHome.path)} ] && ` +
+					`! ln -s ${shellQuote(USER_HOME_MOUNT_PATH)} ${shellQuote(this.userHome.path)}; then ` +
+					`echo ${shellQuote(linkFailed)} >&2; exit 1; fi;`,
 			);
 		}
 		return snippets.length > 0 ? snippets.join(' ') : undefined;
@@ -454,7 +460,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 
 	/**
 	 * Claim the armed bootstrap (at most once) and splice it ahead of `cmd`. It
-	 * needs a shell — it resolves `$HOME` and tests for an existing config — so it
+	 * needs a shell to resolve `$HOME` or prepare the personal-storage link, so it
 	 * rides a command instead of being written as a file, costing no round-trip.
 	 */
 	private takeBootstrap(cmd: string): string {
