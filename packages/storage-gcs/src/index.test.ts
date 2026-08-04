@@ -87,7 +87,7 @@ function makeFakeGcsFetch(): typeof fetch {
 		const q = url.searchParams;
 		const isUpload = url.pathname.startsWith('/upload/');
 		const oIndex = url.pathname.indexOf('/o/');
-		const key = oIndex >= 0 ? decodeURIComponent(url.pathname.slice(oIndex + 3)) : undefined;
+		const key = oIndex !== -1 ? decodeURIComponent(url.pathname.slice(oIndex + 3)) : undefined;
 		const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
 			new Response(JSON.stringify(body), {
 				status,
@@ -135,7 +135,7 @@ function makeFakeGcsFetch(): typeof fetch {
 		}
 
 		// List: GET /storage/v1/b/BUCKET/o?prefix=&delimiter=
-		if (method === 'GET' && oIndex < 0 && url.pathname.endsWith('/o')) {
+		if (method === 'GET' && oIndex === -1 && url.pathname.endsWith('/o')) {
 			const prefix = q.get('prefix') ?? '';
 			const items = [...store.entries()]
 				.filter(([k]) => k.startsWith(prefix))

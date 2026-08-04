@@ -80,7 +80,7 @@ describe('restoreWorkspace', () => {
 
 		await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT);
 
-		expect(Array.from(fs.get('data/x.parquet')!)).toEqual(Array.from(blob));
+		expect([...fs.get('data/x.parquet')!]).toEqual([...blob]);
 	});
 
 	it('sends payloads over the file channel, never inlining them into an exec argv (ARG_MAX-safe)', async () => {
@@ -94,7 +94,7 @@ describe('restoreWorkspace', () => {
 
 		await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT);
 
-		expect(Array.from(fs.get('data/big.bin')!)).toEqual(Array.from(blob));
+		expect([...fs.get('data/big.bin')!]).toEqual([...blob]);
 		// The only exec is the mkdir: no command carries the payload, and nothing is
 		// base64-armored through a shell (nor left behind as a temp file).
 		expect(calls.exec.every((c) => c.startsWith('mkdir -p ') && c.length < 4096)).toBe(true);
@@ -247,7 +247,7 @@ describe('captureWorkspace', () => {
 		await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
 
 		const stored = await (await bucket.get(nb.workspaceFile('data/x.parquet')))!.bytes();
-		expect(Array.from(stored)).toEqual(Array.from(blob));
+		expect([...stored]).toEqual([...blob]);
 	});
 
 	it('mirror-deletes stale workspace keys not present in the sandbox (never the source files)', async () => {

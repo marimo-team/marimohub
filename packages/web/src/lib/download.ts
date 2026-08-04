@@ -7,7 +7,7 @@ export function triggerDownload(filename: string, blob: Blob): void {
 	const anchor = document.createElement('a');
 	anchor.href = url;
 	anchor.download = filename;
-	document.body.appendChild(anchor);
+	document.body.append(anchor);
 	anchor.click();
 	anchor.remove();
 	URL.revokeObjectURL(url);

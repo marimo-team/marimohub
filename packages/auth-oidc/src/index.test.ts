@@ -638,7 +638,7 @@ describe('OIDC authenticate (cookie session)', () => {
 		// 'A'/'B' can decode to identical bytes and leave the signature valid — a
 		// flaky check. The first char carries all 6 bits, so this is deterministic.)
 		const [header, payload, sig] = token.split('.');
-		const mangledSig = (sig[0] === 'A' ? 'B' : 'A') + sig.slice(1);
+		const mangledSig = (sig.startsWith('A') ? 'B' : 'A') + sig.slice(1);
 		const mangled = `${header}.${payload}.${mangledSig}`;
 		expect(await auth.authenticate(requestWithCookie(mangled))).toBeNull();
 	});
