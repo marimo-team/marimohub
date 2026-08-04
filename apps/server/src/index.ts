@@ -131,12 +131,22 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
 // kernel (the HTTP side is handled inside `app.fetch`). A no-op otherwise.
 attachSandboxProxyUpgrade(server, deps);
 
-// Flush buffered spans on shutdown. Registered only when tracing is enabled so
-// the default signal semantics are unchanged otherwise.
+// Drain on shutdown: let in-flight requests finish and flush buffered spans,
+// bounded so long-lived sockets (WS kernel proxies) can't hold the pod past
+// its termination grace window. Registered only when tracing is enabled so the
+// default signal semantics are unchanged otherwise.
 if (otel) {
 	const drain = () => {
-		server.close();
-		void otel.shutdown().finally(() => process.exit(0));
+		const closed = new Promise<void>((resolve) => {
+			server.close(() => resolve());
+		});
+		if ('closeIdleConnections' in server) server.closeIdleConnections();
+		void Promise.race([
+			Promise.allSettled([closed, otel.shutdown()]),
+			new Promise((resolve) => {
+				setTimeout(resolve, 10_000);
+			}),
+		]).then(() => process.exit(0));
 	};
 	process.once('SIGTERM', drain);
 	process.once('SIGINT', drain);

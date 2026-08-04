@@ -4,8 +4,10 @@ import {
 	InMemorySpanExporter,
 	SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { Hono } from 'hono';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isOtelEnabled, startOtel } from './otel';
 
 describe('isOtelEnabled', () => {
@@ -40,11 +42,49 @@ describe('isOtelEnabled', () => {
 			}),
 		).toBe(false);
 	});
+
+	it('disables tracing for unimplemented exporters instead of exporting over OTLP', () => {
+		expect(
+			isOtelEnabled({
+				OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
+				OTEL_TRACES_EXPORTER: 'console',
+			}),
+		).toBe(false);
+	});
 });
 
 describe('startOtel', () => {
-	it('returns null (and registers nothing) when disabled', () => {
-		expect(startOtel({})).toBeNull();
+	afterEach(() => {
+		vi.unstubAllEnvs();
+		vi.restoreAllMocks();
+	});
+
+	it('returns null and registers nothing when disabled', () => {
+		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', '');
+		vi.stubEnv('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', '');
+		const register = vi.spyOn(NodeTracerProvider.prototype, 'register');
+		expect(startOtel()).toBeNull();
+		expect(register).not.toHaveBeenCalled();
+	});
+
+	it('registers a provider with the env-configured service name when enabled', async () => {
+		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
+		vi.stubEnv('OTEL_SERVICE_NAME', 'marimohub-test');
+		// Stubbed so the test never mutates the process-wide tracer provider.
+		const register = vi
+			.spyOn(NodeTracerProvider.prototype, 'register')
+			.mockImplementation(() => {});
+		const handle = startOtel();
+		expect(handle).not.toBeNull();
+		expect(register).toHaveBeenCalledOnce();
+		const provider = register.mock.instances[0] as NodeTracerProvider;
+		// Never ended — an ended span would enter the batch exporter and make
+		// shutdown() block on flushing to the (nonexistent) endpoint.
+		const span = provider.getTracer('test').startSpan('probe');
+		expect((span as unknown as ReadableSpan).resource.attributes['service.name']).toBe(
+			'marimohub-test',
+		);
+		await handle?.shutdown();
 	});
 });
 

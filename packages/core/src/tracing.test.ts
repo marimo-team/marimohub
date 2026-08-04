@@ -4,7 +4,7 @@ import {
 	InMemorySpanExporter,
 	SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { UserId } from './ids';
 import { createServices } from './services';
 import { MemoryBucket } from './testing/MemoryBucket';
@@ -17,6 +17,7 @@ const provider = new BasicTracerProvider({
 trace.setGlobalTracerProvider(provider);
 
 afterEach(() => exporter.reset());
+afterAll(() => trace.disable());
 
 class Fake {
 	calls = 0;
@@ -62,6 +63,19 @@ describe('traced', () => {
 		const svc = traced('Fake', new Fake());
 		expect(svc.syncDouble(21)).toBe(42);
 		expect(exporter.getFinishedSpans()).toHaveLength(1);
+	});
+
+	it('still calls the method (and emits the span) when an extractor throws', async () => {
+		const svc = traced('Fake', new Fake(), {
+			fetch: () => {
+				throw new Error('extractor bug');
+			},
+		});
+		await expect(svc.fetch('abc')).resolves.toBe('got:abc');
+
+		const spans = exporter.getFinishedSpans();
+		expect(spans).toHaveLength(1);
+		expect(spans[0]?.attributes).toEqual({});
 	});
 
 	it('records no attributes for methods without an extractor', async () => {

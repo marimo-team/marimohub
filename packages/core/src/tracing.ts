@@ -39,35 +39,38 @@ export function traced<T extends object>(
 			}
 			let fn = wrapped.get(prop);
 			if (!fn) {
-				fn = (...args) =>
-					tracer.startActiveSpan(
-						`${name}.${prop}`,
-						{ attributes: extractors[prop]?.(...args) },
-						(span) => {
-							const fail = (err: unknown) => {
-								span.recordException(err instanceof Error ? err : String(err));
-								span.setStatus({ code: SpanStatusCode.ERROR });
-							};
-							try {
-								// `obj` (not the proxy) as `this` so private-field access is unaffected.
-								const result: unknown = value.apply(obj, args);
-								if (result instanceof Promise) {
-									return result
-										.catch((err: unknown) => {
-											fail(err);
-											throw err;
-										})
-										.finally(() => span.end());
-								}
-								span.end();
-								return result;
-							} catch (err) {
-								fail(err);
-								span.end();
-								throw err;
+				fn = (...args) => {
+					// A broken extractor must not block the call — the span just
+					// loses its attributes.
+					let attributes: Attributes | undefined;
+					try {
+						attributes = extractors[prop]?.(...args);
+					} catch {}
+					return tracer.startActiveSpan(`${name}.${prop}`, { attributes }, (span) => {
+						const fail = (err: unknown) => {
+							span.recordException(err instanceof Error ? err : String(err));
+							span.setStatus({ code: SpanStatusCode.ERROR });
+						};
+						try {
+							// `obj` (not the proxy) as `this` so private-field access is unaffected.
+							const result: unknown = value.apply(obj, args);
+							if (result instanceof Promise) {
+								return result
+									.catch((err: unknown) => {
+										fail(err);
+										throw err;
+									})
+									.finally(() => span.end());
 							}
-						},
-					);
+							span.end();
+							return result;
+						} catch (err) {
+							fail(err);
+							span.end();
+							throw err;
+						}
+					});
+				};
 				wrapped.set(prop, fn);
 			}
 			return fn;

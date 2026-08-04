@@ -119,7 +119,9 @@ are limited to resource identifiers and bucket keys — request payloads,
 tokens, and emails are never recorded. `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER` /
 `OTEL_TRACES_SAMPLER_ARG`, `OTEL_EXPORTER_OTLP_HEADERS`, and
 `OTEL_SDK_DISABLED` behave per the [OTEL spec](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/).
-Unset, tracing is fully disabled with no overhead. These are standard `OTEL_*`
+Only the OTLP exporter (the spec default) is implemented; any other
+`OTEL_TRACES_EXPORTER` value disables tracing. Unset, tracing is fully
+disabled with no overhead. These are standard `OTEL_*`
 variables, so they are intentionally absent from the
 [Configuration reference](/configuration).
 
