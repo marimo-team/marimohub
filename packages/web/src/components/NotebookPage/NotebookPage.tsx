@@ -12,6 +12,7 @@ import {
 import { cn } from '@/lib/utils';
 import {
 	Button,
+	Chip,
 	ConfirmDialog,
 	IconButton,
 	IconLink,
@@ -341,10 +342,10 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 				<div className="h-5 w-px bg-border" />
 				<span className="truncate text-[13px] font-medium">{title}</span>
 				{isApp && (
-					<span className="flex shrink-0 items-center gap-1 rounded-full border border-primary/20 bg-primary/5 px-2 py-0.5 text-[11px] font-medium text-primary">
+					<Chip>
 						<AppWindow className="size-3" />
 						App
-					</span>
+					</Chip>
 				)}
 				{!isApp && !isViewer && (
 					<IconButton

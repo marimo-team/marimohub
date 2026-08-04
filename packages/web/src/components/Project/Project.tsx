@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
 	AppWindow,
 	ArrowLeft,
+	Camera,
 	ChevronDown,
 	Container,
 	Copy,
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react';
 import {
 	Button,
+	Chip,
 	DropdownMenu,
 	IconButton,
 	IconLink,
@@ -471,6 +473,7 @@ export function Project() {
 							},
 						]
 					: []),
+				{ id: 'view-snapshot', label: 'View static outputs', icon: <Camera className="size-4" /> },
 				{ id: 'history', label: 'Version history', icon: <History className="size-4" /> },
 			],
 			[
@@ -659,7 +662,11 @@ export function Project() {
 												else if (key === 'stop-app') {
 													const app = sessionByNotebook.get(nb.id)?.app;
 													if (app) appModal.open({ action: 'stop', notebook: nb, session: app });
-												} else if (key === 'change-image') baseImageModal.open(nb);
+												} else if (key === 'view-snapshot')
+													void navigate(`/projects/${pid}/notebooks/${nb.id}/snapshot`, {
+														state: { title: nb.title },
+													});
+												else if (key === 'change-image') baseImageModal.open(nb);
 												else if (key === 'change-compute') computeProfileModal.open(nb);
 												else if (key === 'history') historyModal.open(nb);
 												else if (key === 'sync-settings')
@@ -680,12 +687,9 @@ export function Project() {
 									)}
 									<span className="truncate text-sm font-medium">{nb.title}</span>
 									{badges.map((badge) => (
-										<span
-											key={badge}
-											className="shrink-0 rounded-full border border-primary/20 bg-primary/5 px-2 py-0.5 text-[11px] font-medium text-primary max-md:hidden"
-										>
+										<Chip key={badge} className="max-md:hidden">
 											{badge}
-										</span>
+										</Chip>
 									))}
 								</div>
 								<div className="flex shrink-0 items-center gap-3">

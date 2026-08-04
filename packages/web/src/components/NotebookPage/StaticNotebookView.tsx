@@ -7,17 +7,25 @@ interface StaticNotebookViewProps {
 	projectId: string;
 	notebookId: string;
 	title: string;
+	/** Banner copy: the role-gated viewer fallback vs the standalone SnapshotPage. */
+	variant?: 'viewer' | 'standalone';
 }
 
 /**
- * What a viewer sees opening a notebook when their viewer mode grants no edit
- * kernel (MARIMOHUB_VIEWER_MODE=static or applications): the notebook's last
- * captured HTML snapshot (from a past editor session's teardown), or an empty
- * state when none exists yet. The snapshot is user-generated HTML, so it renders
- * in an iframe WITHOUT `allow-same-origin` — an opaque origin, unlike the
- * live-kernel iframe (the server's CSP `sandbox` header is the second layer).
+ * The notebook's last captured HTML snapshot (from a past editor session's
+ * teardown), or an empty state when none exists yet. Shown to viewers whose
+ * mode grants no edit kernel (MARIMOHUB_VIEWER_MODE=static or applications)
+ * and on the standalone SnapshotPage. The snapshot is user-generated HTML, so
+ * it renders in an iframe WITHOUT `allow-same-origin` — an opaque origin,
+ * unlike the live-kernel iframe (the server's CSP `sandbox` header is the
+ * second layer).
  */
-export function StaticNotebookView({ projectId, notebookId, title }: StaticNotebookViewProps) {
+export function StaticNotebookView({
+	projectId,
+	notebookId,
+	title,
+	variant = 'viewer',
+}: StaticNotebookViewProps) {
 	const { data, isPending, isError } = useNotebookHtmlQuery(projectId, notebookId);
 
 	if (isPending) {
@@ -42,16 +50,23 @@ export function StaticNotebookView({ projectId, notebookId, title }: StaticNoteb
 		);
 	}
 
+	const capturedFrom = data?.capturedAt ? ` from ${formatRelative(data.capturedAt)}` : '';
+	const banner = data
+		? variant === 'viewer'
+			? `Static snapshot of outputs${capturedFrom} — sessions are disabled for viewers.`
+			: `Static snapshot of outputs${capturedFrom} — captured when the last editing session ended.`
+		: variant === 'viewer'
+			? "You're a viewer on this project — sessions are disabled."
+			: null;
+
 	return (
 		<>
-			<div className="flex items-center gap-1.5 border-b bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
-				<Camera className="size-3.5 shrink-0" />
-				<span>
-					{data
-						? `Static snapshot of outputs${data.capturedAt ? ` from ${formatRelative(data.capturedAt)}` : ''} — sessions are disabled for viewers.`
-						: "You're a viewer on this project — sessions are disabled."}
-				</span>
-			</div>
+			{banner && (
+				<div className="flex items-center gap-1.5 border-b bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+					<Camera className="size-3.5 shrink-0" />
+					<span>{banner}</span>
+				</div>
+			)}
 			{data ? (
 				<div className="flex-1 overflow-hidden">
 					<iframe

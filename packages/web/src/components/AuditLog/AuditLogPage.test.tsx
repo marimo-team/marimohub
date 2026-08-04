@@ -39,7 +39,7 @@ function setup(fetchImpl: (url: string) => Promise<Response>) {
 		}),
 	);
 	const user = userEvent.setup();
-	const clipboard = vi.fn(() => Promise.resolve());
+	const clipboard = vi.fn((_text: string) => Promise.resolve());
 	Object.defineProperty(navigator, 'clipboard', {
 		value: { writeText: clipboard },
 		configurable: true,
