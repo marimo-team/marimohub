@@ -10,3 +10,10 @@ required fields — allowlist one only with a migration or upgrade seam in place
 
 GET /projects/{pid}/secrets/{name}.json `api path removed without deprecation`
 PUT /projects/{pid}/secrets/{name}.json `api path removed without deprecation`
+
+Event objects written by `EventService` already contain `id`; making it required
+records the existing write contract and needs no stored-data migration.
+
+```text
+PUT /_system/events/{date}/{id}.json `added the new required request property `id``
+```

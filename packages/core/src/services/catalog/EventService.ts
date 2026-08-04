@@ -1,6 +1,7 @@
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { Millis } from '../../duration';
 import { BadRequestError } from '../../errors';
 import { createEventId } from '../../ids';
 import type { UserId } from '../../ids';
@@ -8,15 +9,10 @@ import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import { EventSchema, readStored } from '../../schema';
 import type { Event } from '../../schema';
+import { parseUtcDate } from '../../utcDate';
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function isUtcDate(value: string): boolean {
-	if (!DATE_RE.test(value)) return false;
-	const parsed = Date.parse(`${value}T00:00:00.000Z`);
-	return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
-}
+export const MAX_EVENT_RANGE_DAYS = 30;
+const DAY_MS = Millis.days(1);
 
 export interface EventListOptions {
 	from: string;
@@ -54,7 +50,7 @@ function decodeCursor(value: string | undefined): EventCursor | null {
 		!Array.isArray(parsed) ||
 		parsed.length !== 2 ||
 		typeof parsed[0] !== 'string' ||
-		!isUtcDate(parsed[0]) ||
+		parseUtcDate(parsed[0]) === null ||
 		typeof parsed[1] !== 'string' ||
 		parsed[1].length === 0
 	) {
@@ -65,6 +61,17 @@ function decodeCursor(value: string | undefined): EventCursor | null {
 
 function previousDate(date: string): string {
 	return new Date(Date.parse(`${date}T00:00:00.000Z`) - DAY_MS).toISOString().slice(0, 10);
+}
+
+function assertValidEventRange(from: string, to: string): void {
+	const fromTime = parseUtcDate(from);
+	if (fromTime === null) throw new BadRequestError(`Invalid UTC date: ${from}`);
+	const toTime = parseUtcDate(to);
+	if (toTime === null) throw new BadRequestError(`Invalid UTC date: ${to}`);
+	if (fromTime > toTime) throw new BadRequestError('Event range start must not be after its end');
+	if ((toTime - fromTime) / DAY_MS + 1 > MAX_EVENT_RANGE_DAYS) {
+		throw new BadRequestError(`Event ranges cannot exceed ${MAX_EVENT_RANGE_DAYS} days`);
+	}
 }
 
 function matches(event: Event, options: EventListOptions): boolean {
@@ -140,6 +147,7 @@ export class EventService {
 		if (!Number.isInteger(options.limit) || options.limit <= 0) {
 			throw new BadRequestError('Event page limit must be a positive integer');
 		}
+		assertValidEventRange(options.from, options.to);
 		const cursor = decodeCursor(options.cursor);
 		if (cursor && (cursor.date < options.from || cursor.date > options.to)) {
 			throw new BadRequestError('Event pagination cursor is outside the requested date range');

@@ -211,6 +211,7 @@ describe('Event routes', () => {
 		const pid = await createProject();
 
 		await expectError(await request('GET', `/projects/${pid}/events?date=yesterday`), 422);
+		await expectError(await request('GET', `/projects/${pid}/events?date=2025-02-30`), 422);
 		expect(await expectOk(await request('GET', `/projects/${pid}/events?date=2001-01-01`))).toEqual(
 			[],
 		);

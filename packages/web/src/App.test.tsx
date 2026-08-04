@@ -34,7 +34,7 @@ describe('App routes', () => {
 		);
 		window.history.replaceState({}, '', '/admin/audit-logs');
 
-		renderWithClient(<App />);
+		renderWithClient(<App />, { toaster: false });
 
 		expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
 		expect(window.location.pathname).toBe('/');

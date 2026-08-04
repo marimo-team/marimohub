@@ -47,7 +47,7 @@ export const systemKeys = {
 	capabilities: () => [...systemKeys.all, 'capabilities'] as const,
 };
 
-export interface AuditLogKeyFilters {
+export interface AuditLogFilters {
 	from: string;
 	to: string;
 	event: string;
@@ -57,7 +57,7 @@ export interface AuditLogKeyFilters {
 
 export const auditKeys = {
 	all: ['audit-events'] as const,
-	list: (filters: AuditLogKeyFilters) => [...auditKeys.all, 'list', filters] as const,
+	list: (filters: AuditLogFilters) => [...auditKeys.all, 'list', filters] as const,
 };
 
 export const sessionKeys = {

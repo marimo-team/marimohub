@@ -68,23 +68,21 @@ function PrimitiveValue({ value }: { value: string | number | boolean | null }) 
 
 function MetadataValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
 	if (Array.isArray(value)) {
-		const items = value.map((item, index) => ({
-			item,
-			index,
-			key: `${index}:${JSON.stringify(item)}`,
-		}));
 		return (
 			<details open={depth === 0} className="group">
 				<summary className="cursor-pointer select-none text-muted-foreground">
 					Array({value.length})
 				</summary>
 				<div className="mt-1 border-l pl-3">
-					{items.map(({ item, index, key }) => (
-						<div key={key} className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 py-0.5">
-							<span className="text-muted-foreground">{index}</span>
-							<MetadataValue value={item} depth={depth + 1} />
-						</div>
-					))}
+					{value.map((item, index) => {
+						return (
+							// oxlint-disable-next-line react/no-array-index-key -- Stored event metadata is immutable.
+							<div key={index} className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 py-0.5">
+								<span className="text-muted-foreground">{index}</span>
+								<MetadataValue value={item} depth={depth + 1} />
+							</div>
+						);
+					})}
 				</div>
 			</details>
 		);

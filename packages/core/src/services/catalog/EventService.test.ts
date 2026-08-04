@@ -219,6 +219,19 @@ describe('EventService', () => {
 				}),
 			).rejects.toThrow('outside the requested date range');
 		});
+
+		it.each([
+			[{ from: 'invalid', to: '2025-03-05' }, 'Invalid UTC date: invalid'],
+			[{ from: '2025-03-05', to: '2025-02-30' }, 'Invalid UTC date: 2025-02-30'],
+			[{ from: '2025-03-06', to: '2025-03-05' }, 'Event range start must not be after its end'],
+			[{ from: '2025-02-01', to: '2025-03-03' }, 'Event ranges cannot exceed 30 days'],
+		])('rejects an invalid event range with a bad request: %o', async (range, message) => {
+			await expect(events.listEvents({ ...range, limit: 10 })).rejects.toMatchObject({
+				code: 'BAD_REQUEST',
+				status: 400,
+				message,
+			});
+		});
 	});
 
 	describe('daily rollover', () => {

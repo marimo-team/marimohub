@@ -1,5 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { ValidationError } from '@marimo-hub/core';
+import {
+	MAX_EVENT_RANGE_DAYS,
+	Millis,
+	parseUtcDate,
+	UTC_DATE_PATTERN,
+	ValidationError,
+} from '@marimo-hub/core';
 import type { Event } from '@marimo-hub/core';
 import {
 	assertProjectRole,
@@ -14,11 +20,11 @@ import {
 } from '../shared';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, pageSchema, PaginationQuery } from '../pagination';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const MAX_EVENT_RANGE_DAYS = 30;
+const DAY_MS = Millis.days(1);
 const DateQuery = z
 	.string()
-	.regex(/^\d{4}-\d{2}-\d{2}$/)
+	.regex(UTC_DATE_PATTERN)
+	.refine((value) => parseUtcDate(value) !== null, { message: 'Invalid UTC date' })
 	.openapi({ example: '2026-07-01', description: 'UTC calendar date' });
 
 const GlobalEventQuery = PaginationQuery.extend({
@@ -28,14 +34,6 @@ const GlobalEventQuery = PaginationQuery.extend({
 	actor: z.string().min(1).optional(),
 	project_id: z.string().min(1).optional(),
 });
-
-function parseDate(value: string): number {
-	const parsed = Date.parse(`${value}T00:00:00.000Z`);
-	if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== value) {
-		throw new ValidationError(`Invalid UTC date: ${value}`);
-	}
-	return parsed;
-}
 
 function eventRange(
 	from: string | undefined,
@@ -48,14 +46,16 @@ function eventRange(
 		const end = new Date();
 		const endDate = end.toISOString().slice(0, 10);
 		return {
-			from: new Date(Date.parse(`${endDate}T00:00:00.000Z`) - 29 * DAY_MS)
+			from: new Date(Date.parse(`${endDate}T00:00:00.000Z`) - (MAX_EVENT_RANGE_DAYS - 1) * DAY_MS)
 				.toISOString()
 				.slice(0, 10),
 			to: endDate,
 		};
 	}
-	const fromTime = parseDate(from);
-	const toTime = parseDate(to);
+	const fromTime = parseUtcDate(from);
+	const toTime = parseUtcDate(to);
+	if (fromTime === null) throw new ValidationError(`Invalid UTC date: ${from}`);
+	if (toTime === null) throw new ValidationError(`Invalid UTC date: ${to}`);
 	if (fromTime > toTime) throw new ValidationError('from must not be after to');
 	if ((toTime - fromTime) / DAY_MS + 1 > MAX_EVENT_RANGE_DAYS) {
 		throw new ValidationError(`Audit event ranges cannot exceed ${MAX_EVENT_RANGE_DAYS} days`);
@@ -101,11 +101,10 @@ const listEvents = createRoute({
 	request: {
 		params: ProjectIdParam,
 		query: z.object({
-			date: z
-				.string()
-				.regex(/^\d{4}-\d{2}-\d{2}$/)
-				.optional()
-				.openapi({ example: '2026-07-01', description: 'UTC day (defaults to today)' }),
+			date: DateQuery.optional().openapi({
+				example: '2026-07-01',
+				description: 'UTC day (defaults to today)',
+			}),
 		}),
 	},
 	responses: {

@@ -18,6 +18,7 @@ import {
 	integrationKeys,
 	auditKeys,
 } from './queryKeys';
+import type { AuditLogFilters } from './queryKeys';
 import type {
 	IntegrationEntry,
 	NotebookDetail,
@@ -36,13 +37,7 @@ const SESSIONS_POLL_INTERVAL_MS = 5_000;
  */
 const IMMUTABLE_QUERY = { staleTime: Number.POSITIVE_INFINITY, retry: false } as const;
 
-export interface AuditLogFilters {
-	from: string;
-	to: string;
-	event: string;
-	actor: string;
-	projectId: string;
-}
+export type { AuditLogFilters } from './queryKeys';
 
 export function useAuditLogsQuery(filters: AuditLogFilters) {
 	return useInfiniteQuery({
