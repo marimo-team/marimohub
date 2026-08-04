@@ -54,6 +54,8 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `secrets.data` | `{}` | Or let the chart create the Secret (dev) |
 | `ingress.enabled` / `.className` / `.host` | `true` / `""` / `hub.example.com` | |
 | `ingress.tls.*` | enabled, `marimohub-tls` | |
+| `metrics.enabled` / `.port` | `false` / `9464` | Prometheus scrape mode; port exposed on the Service, never the ingress |
+| `metrics.serviceMonitor.*` | disabled, `30s`, `{}` labels | Prometheus Operator ServiceMonitor |
 | `resources` | 100m/256Mi → 500m/512Mi | API container |
 | `nodeSelector` / `tolerations` / `affinity` | empty | Set per cluster |
 

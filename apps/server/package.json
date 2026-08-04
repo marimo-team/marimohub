@@ -16,14 +16,18 @@
 		"@marimo-hub/config": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
 		"@opentelemetry/api": "catalog:",
+		"@opentelemetry/exporter-metrics-otlp-http": "catalog:",
+		"@opentelemetry/exporter-prometheus": "catalog:",
 		"@opentelemetry/exporter-trace-otlp-http": "catalog:",
 		"@opentelemetry/resources": "catalog:",
+		"@opentelemetry/sdk-metrics": "catalog:",
 		"@opentelemetry/sdk-trace-base": "catalog:",
 		"@opentelemetry/sdk-trace-node": "catalog:",
 		"hono": "catalog:"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
+		"@opentelemetry/core": "catalog:",
 		"@types/node": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",

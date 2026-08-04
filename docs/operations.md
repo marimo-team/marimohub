@@ -129,6 +129,33 @@ The middleware traces every request, including static assets; use
 `OTEL_TRACES_SAMPLER=parentbased_traceidratio` with a ratio in
 `OTEL_TRACES_SAMPLER_ARG` to reduce span volume.
 
+Spans and metrics share one resource: `service.name` and
+`OTEL_RESOURCE_ATTRIBUTES` from env, plus detected host and process attributes
+and a random `service.instance.id` (override it per pod via
+`OTEL_RESOURCE_ATTRIBUTES`, e.g. from the Kubernetes Downward API).
+
+### Metrics (OpenTelemetry)
+
+The server records RED metrics per request: the `http.server.request.duration`
+histogram (labelled by route, method, and status code) and the
+`http.server.active_requests` gauge. `OTEL_METRICS_EXPORTER` selects the mode:
+
+- **`otlp`** (default): push over OTLP/HTTP whenever
+  `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`) is
+  set, so pointing the server at a collector exports traces _and_ metrics.
+  `OTEL_METRIC_EXPORT_INTERVAL` / `OTEL_METRIC_EXPORT_TIMEOUT` (milliseconds,
+  default 60000/30000) set the cadence; `OTEL_METRICS_EXPORTER=none` keeps
+  traces without metrics.
+- **`prometheus`**: serve a scrape endpoint on `:9464/metrics`
+  (`OTEL_EXPORTER_PROMETHEUS_HOST` / `OTEL_EXPORTER_PROMETHEUS_PORT`), no OTLP
+  endpoint needed. Keep the port off the public ingress. The Helm chart wires
+  this up: `metrics.enabled=true` exposes it on the Service,
+  `metrics.serviceMonitor.enabled=true` adds a Prometheus Operator
+  ServiceMonitor.
+
+Any other `OTEL_METRICS_EXPORTER` value disables metrics;
+`OTEL_SDK_DISABLED=true` turns everything off.
+
 ## Cost control
 
 Compute backends differ in cost model — pick per [Compute](/compute):
