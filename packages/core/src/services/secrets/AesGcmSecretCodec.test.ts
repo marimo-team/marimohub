@@ -46,7 +46,8 @@ describe('AesGcmSecretCodec', () => {
 	it('fails on a tampered ciphertext', async () => {
 		const codec = new AesGcmSecretCodec({ kek: KEK });
 		const envelope = await codec.encrypt('value', { path: PATH });
-		const tampered = { ...envelope, ciphertext: `A${envelope.ciphertext.slice(1)}` };
+		const replacement = envelope.ciphertext.startsWith('A') ? 'B' : 'A';
+		const tampered = { ...envelope, ciphertext: `${replacement}${envelope.ciphertext.slice(1)}` };
 		await expect(codec.decrypt(tampered, { path: PATH })).rejects.toThrow(ValidationError);
 	});
 

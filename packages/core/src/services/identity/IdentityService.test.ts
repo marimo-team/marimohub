@@ -26,6 +26,17 @@ describe('IdentityService', () => {
 			expect((await identities.get(uid('sub-2')))?.name).toBe('grace');
 		});
 
+		it('persists a validated profile-picture URL when supplied', async () => {
+			await identities.upsert({
+				id: uid('sub-picture'),
+				email: 'ada@x.io',
+				pictureUrl: 'https://images.example.com/ada.png',
+			});
+			expect(await identities.get(uid('sub-picture'))).toMatchObject({
+				picture_url: 'https://images.example.com/ada.png',
+			});
+		});
+
 		it('skips re-writing when the identity is unchanged since last write', async () => {
 			const put = vi.spyOn(bucket, 'put');
 			const user = { id: uid('sub-3'), email: 'ada@x.io', name: 'Ada' };
@@ -37,14 +48,20 @@ describe('IdentityService', () => {
 			expect(put).toHaveBeenCalledTimes(1);
 		});
 
-		it('re-writes when the email or name changes', async () => {
+		it('re-writes when the email, name, or profile picture changes', async () => {
 			const put = vi.spyOn(bucket, 'put');
 
 			await identities.upsert({ id: uid('sub-4'), email: 'ada@x.io', name: 'Ada' });
 			await identities.upsert({ id: uid('sub-4'), email: 'ada@x.io', name: 'Ada L.' });
 			await identities.upsert({ id: uid('sub-4'), email: 'ada2@x.io', name: 'Ada L.' });
+			await identities.upsert({
+				id: uid('sub-4'),
+				email: 'ada2@x.io',
+				name: 'Ada L.',
+				pictureUrl: 'https://images.example.com/ada.png',
+			});
 
-			expect(put).toHaveBeenCalledTimes(3);
+			expect(put).toHaveBeenCalledTimes(4);
 			expect(await identities.get(uid('sub-4'))).toMatchObject({
 				email: 'ada2@x.io',
 				name: 'Ada L.',

@@ -307,6 +307,35 @@ describe('SessionService', () => {
 			expect(result.status).toBe('running');
 			expect(result.expires_at).toBe(deadline);
 		});
+
+		it('preserves the authorization deadline independently of the extendable lifetime', async () => {
+			const authorizationDeadline = new Date(Date.now() + 30_000).toISOString();
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+				authorization_expires_at: authorizationDeadline,
+			});
+			const lifetimeDeadline = new Date(Date.now() + 60_000).toISOString();
+
+			const running = await sessions.setRunning(
+				projectId,
+				created.session_id,
+				'http://kernel',
+				false,
+				undefined,
+				lifetimeDeadline,
+			);
+			const extended = await sessions.extendExpiry(
+				projectId,
+				created.session_id,
+				new Date(Date.now() + 120_000).toISOString(),
+			);
+
+			expect(running.authorization_expires_at).toBe(authorizationDeadline);
+			expect(extended.authorization_expires_at).toBe(authorizationDeadline);
+			expect(extended.expires_at).not.toBe(lifetimeDeadline);
+		});
 	});
 
 	describe('lifecycle mutators', () => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import type { Authenticator } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createApi } from '../createApi';
@@ -22,15 +23,32 @@ describe('User routes', () => {
 		await request('GET', '/me');
 	});
 
-	it('GET /users resolves a known id to { id, email, name }', async () => {
-		const data = await expectOk<Record<string, { id: string; email: string; name: string }>>(
-			await request('GET', `/users?ids=${ACTOR}`),
-		);
+	it('GET /users resolves a known id to its display identity', async () => {
+		const data = await expectOk<
+			Record<string, { id: string; email: string; name: string; picture_url: string | null }>
+		>(await request('GET', `/users?ids=${ACTOR}`));
 		expect(data[ACTOR]).toEqual({
 			id: ACTOR,
 			email: `${ACTOR}@example.com`,
 			name: ACTOR, // email local-part fallback (stub auth supplies no name)
+			picture_url: null,
 		});
+	});
+
+	it('GET /users returns a persisted profile picture', async () => {
+		const authenticator = {
+			authenticate: async () => ({
+				id: ACTOR,
+				email: `${ACTOR}@example.com`,
+				pictureUrl: 'https://images.example.com/ada.png',
+			}),
+		};
+		const pictured = createTestApi({ bucket, deps: { authenticator } }).request;
+		await pictured('GET', '/me');
+		const data = await expectOk<Record<string, { picture_url: string | null }>>(
+			await pictured('GET', `/users?ids=${ACTOR}`),
+		);
+		expect(data[ACTOR]?.picture_url).toBe('https://images.example.com/ada.png');
 	});
 
 	it('GET /users omits ids with no recorded identity', async () => {
@@ -116,12 +134,38 @@ describe('User routes', () => {
 			expect(await expectOk(await anyone('GET', '/users/search?q=adam'))).toHaveLength(1);
 		});
 
+		it('a group-derived default role opens directory search under members-only', async () => {
+			const authenticator: Authenticator = {
+				authenticate: async () => ({
+					id: uid('ada'),
+					email: 'ada@example.com',
+					entitlements: ['default-role:viewer'],
+				}),
+			};
+			const entitled = createTestApi({ bucket, deps: { authenticator } }).request;
+
+			expect(await expectOk(await entitled('GET', '/users/search?q=adam'))).toHaveLength(1);
+		});
+
 		it('a super admin with no project involvement may search under members-only', async () => {
 			const god = createTestApi({
 				bucket,
 				userId: uid('ada'),
 				deps: { policy: { superAdmins: [uid('ada')] } },
 			}).request;
+			expect(await expectOk(await god('GET', '/users/search?q=adam'))).toHaveLength(1);
+		});
+
+		it('a group-derived super admin may search under members-only', async () => {
+			const authenticator: Authenticator = {
+				authenticate: async () => ({
+					id: uid('ada'),
+					email: 'ada@example.com',
+					entitlements: ['super-admin'],
+				}),
+			};
+			const god = createTestApi({ bucket, deps: { authenticator } }).request;
+
 			expect(await expectOk(await god('GET', '/users/search?q=adam'))).toHaveLength(1);
 		});
 	});

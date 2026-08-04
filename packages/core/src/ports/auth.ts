@@ -9,6 +9,15 @@
  */
 import type { UserId } from '../ids';
 
+export const AUTH_ENTITLEMENTS = [
+	'super-admin',
+	'default-role:viewer',
+	'default-role:editor',
+	'default-role:admin',
+] as const;
+
+export type AuthEntitlement = (typeof AUTH_ENTITLEMENTS)[number];
+
 export interface AuthUser {
 	id: UserId;
 	email: string;
@@ -19,6 +28,12 @@ export interface AuthUser {
 	 * directory so opaque user ids (`sub`) can be rendered as a person.
 	 */
 	name?: string;
+	/** Validated HTTPS profile-picture URL, used only for presentation. */
+	pictureUrl?: string;
+	/** Provider groups mapped to marimohub-owned authorization capabilities. */
+	entitlements?: AuthEntitlement[];
+	/** Expiry of the credential that supplied group authorization. */
+	entitlementsExpiresAt?: string;
 }
 
 export interface Authenticator {

@@ -103,10 +103,9 @@ an invite row and an id row — adding a member is rejected (409) when any of
 their known identifiers is already on the roster, so removing a member always
 revokes their access.
 
-Because the login email is an authorization credential here, the OIDC adapter
-refuses to mint a session when the provider declares the email unverified
-(`email_verified: false`) — otherwise an attacker self-registering the
-invitee's address at a lax IdP could inherit the invite.
+The login email grants access, so OIDC requires `email_verified: true` by
+default. `trusted-issuer` permits an enterprise issuer to omit the claim. Any
+present value other than boolean `true` is rejected.
 
 Invite emails are PII of people who never signed in: the members list and
 project detail show them only to project admins (and to the invitee themself).

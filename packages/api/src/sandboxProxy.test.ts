@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServices, ProxyExposure, signProxyToken, SubdomainExposure } from '@marimo-hub/core';
 import type { Authenticator, ProjectId, UserId } from '@marimo-hub/core';
 import { ACTOR, makeFakeCompute, uid } from '@marimo-hub/core/testing';
@@ -198,6 +198,70 @@ describe('authorizeProxyRequest', () => {
 		await createServices(bucket).sessions.terminate(pid, sessionId as never);
 		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(ACTOR));
 		expect(d).toMatchObject({ kind: 'reject', status: 410 });
+	});
+
+	it('rejects a running kernel after its non-extendable authorization deadline', async () => {
+		const services = createServices(bucket);
+		const notebooks = await services.notebooks.listNotebooks(pid);
+		const expired = await services.sessions.createSession({
+			notebook_id: notebooks[0].id,
+			project_id: pid,
+			user_id: ACTOR,
+			authorization_expires_at: new Date(Date.now() - 1000).toISOString(),
+		});
+		await services.sessions.setRunning(pid, expired.session_id, '/proxy/x/', false, ORIGIN);
+		const expiredToken = await signProxyToken(pid, expired.session_id, SECRET);
+
+		const d = await authorizeProxyRequest(req(`/proxy/${expiredToken}/`), deps(ACTOR));
+
+		expect(d).toMatchObject({
+			kind: 'reject',
+			status: 410,
+			code: 'GONE',
+			message: 'Session authorization has expired',
+		});
+	});
+
+	it('allows requests before the authorization deadline and rejects the same session after it', async () => {
+		const now = Date.now();
+		const deadline = now + 60_000;
+		const services = createServices(bucket);
+		const notebooks = await services.notebooks.listNotebooks(pid);
+		const expiring = await services.sessions.createSession({
+			notebook_id: notebooks[0].id,
+			project_id: pid,
+			user_id: ACTOR,
+			authorization_expires_at: new Date(deadline).toISOString(),
+		});
+		await services.sessions.setRunning(pid, expiring.session_id, '/proxy/x/', false, ORIGIN);
+		const expiringToken = await signProxyToken(pid, expiring.session_id, SECRET);
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+
+		try {
+			const before = await authorizeProxyRequest(
+				req(`/proxy/${expiringToken}/notebook`),
+				deps(ACTOR),
+			);
+			expect(before).toMatchObject({
+				kind: 'forward',
+				sessionId: expiring.session_id,
+				authorizationDeadline: deadline,
+			});
+
+			nowSpy.mockReturnValue(deadline);
+			const after = await authorizeProxyRequest(
+				req(`/proxy/${expiringToken}/notebook`),
+				deps(ACTOR),
+			);
+			expect(after).toMatchObject({
+				kind: 'reject',
+				status: 410,
+				code: 'GONE',
+				message: 'Session authorization has expired',
+			});
+		} finally {
+			nowSpy.mockRestore();
+		}
 	});
 
 	it('rejects a session whose project was soft-deleted', async () => {

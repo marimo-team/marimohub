@@ -70,6 +70,31 @@ describe('authz', () => {
 			expect(effectiveRole(project, STRANGER, { defaultRole: 'viewer' })).toBe('viewer');
 		});
 
+		it('maps a group-derived entitlement to the highest per-user default role', () => {
+			const entitled = {
+				...STRANGER,
+				entitlements: ['default-role:viewer', 'default-role:editor'] as const,
+			};
+			expect(effectiveRole(project, entitled)).toBe('editor');
+			expect(effectiveRole(project, entitled, { defaultRole: 'viewer' })).toBe('editor');
+		});
+
+		it('keeps a higher deployment default when group entitlements are lower', () => {
+			const entitled = {
+				...STRANGER,
+				entitlements: ['default-role:editor', 'default-role:viewer'] as const,
+			};
+			expect(effectiveRole(project, entitled, { defaultRole: 'admin' })).toBe('admin');
+		});
+
+		it('does not let a default-role entitlement override explicit membership', () => {
+			const entitledViewer = {
+				...VIEWER,
+				entitlements: ['default-role:admin'] as const,
+			};
+			expect(effectiveRole(project, entitledViewer)).toBe('viewer');
+		});
+
 		it('does not let the default role override an explicit membership', () => {
 			expect(effectiveRole(project, VIEWER, { defaultRole: 'admin' })).toBe('viewer');
 			expect(effectiveRole(project, OWNER, { defaultRole: 'viewer' })).toBe('admin');
@@ -82,6 +107,7 @@ describe('authz', () => {
 
 		it('super admin outranks an explicit lower membership', () => {
 			expect(effectiveRole(project, VIEWER, { superAdmins: [VIEWER.id] })).toBe('admin');
+			expect(effectiveRole(project, { ...VIEWER, entitlements: ['super-admin'] })).toBe('admin');
 		});
 	});
 
@@ -120,6 +146,16 @@ describe('authz', () => {
 			// gains nothing.
 			const bystander = subject('other_id', 'user_god@example.com');
 			expect(isSuperAdmin(bystander, ['user_god'])).toBe(false);
+		});
+
+		it('accepts only the normalized super-admin entitlement', () => {
+			expect(isSuperAdmin({ ...STRANGER, entitlements: ['super-admin'] })).toBe(true);
+			expect(
+				isSuperAdmin({
+					...STRANGER,
+					entitlements: ['default-role:admin'],
+				}),
+			).toBe(false);
 		});
 	});
 
@@ -180,6 +216,15 @@ describe('authz', () => {
 		it('makes every project visible when a default role is set', () => {
 			expect(canSeeProjectEntry(entry, STRANGER, { defaultRole: 'viewer' })).toBe(true);
 			expect(canSeeProjectEntry(entry, STRANGER, { defaultRole: 'editor' })).toBe(true);
+		});
+
+		it('makes every project visible for a group-derived default role', () => {
+			expect(
+				canSeeProjectEntry(entry, {
+					...STRANGER,
+					entitlements: ['default-role:viewer'],
+				}),
+			).toBe(true);
 		});
 
 		it('restricts visibility to owner and members under none (null default)', () => {

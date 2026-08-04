@@ -10,8 +10,28 @@ describe('GET /api/v1/me', () => {
 		expect(await expectOk(res)).toEqual({
 			id: ACTOR,
 			email: `${ACTOR}@example.com`,
+			name: null,
+			picture_url: null,
 			logout_url: null,
 			is_super_admin: false,
+		});
+	});
+
+	it('returns optional profile fields and group-derived super-admin status', async () => {
+		const authenticator: Authenticator = {
+			authenticate: async () => ({
+				id: ACTOR,
+				email: `${ACTOR}@example.com`,
+				name: 'Ada',
+				pictureUrl: 'https://images.example.com/ada.png',
+				entitlements: ['super-admin'],
+			}),
+		};
+		const { request } = createTestApi({ deps: { authenticator } });
+		expect(await expectOk(await request('GET', '/me'))).toMatchObject({
+			name: 'Ada',
+			picture_url: 'https://images.example.com/ada.png',
+			is_super_admin: true,
 		});
 	});
 

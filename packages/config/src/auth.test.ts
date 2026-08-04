@@ -17,6 +17,54 @@ const oidcEnv = {
 	MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
 };
 
+function getConfigError(run: () => unknown): ConfigError {
+	try {
+		run();
+	} catch (error) {
+		expect(error).toBeInstanceOf(ConfigError);
+		return error as ConfigError;
+	}
+	throw new Error('Expected configuration to fail');
+}
+
+describe('makeAuth selector errors', () => {
+	it('fails closed when the backend is unset and provides actionable metadata', () => {
+		const error = getConfigError(() => makeAuth({}));
+
+		expect(error.opts).toEqual({
+			variable: 'MARIMOHUB_AUTH_BACKEND',
+			remediation: 'Set it to oidc (production), cloudflare-access (Workers), or dev (local only).',
+			docs: 'docs/configuration.md#auth',
+		});
+		expect(error.format()).toContain('Refusing to start');
+		expect(error.format()).toContain('MARIMOHUB_AUTH_BACKEND');
+	});
+
+	it('rejects an unknown backend and lists the supported values', () => {
+		const error = getConfigError(() => makeAuth({ MARIMOHUB_AUTH_BACKEND: 'oauth' }));
+
+		expect(error.message).toBe('Unknown MARIMOHUB_AUTH_BACKEND: oauth');
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_BACKEND');
+		expect(error.opts.remediation).toContain('oidc, cloudflare-access, dev');
+	});
+
+	it('still supports the explicit local-development backend', async () => {
+		const { authenticator, authRoutes } = makeAuth({
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_AUTH_DEV_USER_ID: 'local-user',
+			MARIMOHUB_AUTH_DEV_EMAIL: 'local@example.com',
+			MARIMOHUB_AUTH_DEV_NAME: 'Local User',
+		});
+
+		expect(authRoutes).toBeUndefined();
+		await expect(authenticator.authenticate(new Request('http://localhost'))).resolves.toEqual({
+			id: 'local-user',
+			email: 'local@example.com',
+			name: 'Local User',
+		});
+	});
+});
+
 describe('makeAuth oidc required vars', () => {
 	it('throws when MARIMOHUB_AUTH_SESSION_SECRET is missing', () => {
 		const { MARIMOHUB_AUTH_SESSION_SECRET: _omit, ...env } = oidcEnv;
@@ -32,6 +80,209 @@ describe('makeAuth oidc required vars', () => {
 		const env: Record<string, string | undefined> = { ...oidcEnv };
 		delete env[key];
 		expect(() => makeAuth(env)).toThrow(new RegExp(key));
+	});
+
+	it.each([undefined, '', '   ', ',,,'])('requires a deliberate email allowlist (%j)', (value) => {
+		const error = getConfigError(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: value }),
+		);
+
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS');
+		expect(error.opts.remediation).toContain('"*" to allow all');
+		expect(error.opts.docs).toBe('docs/configuration.md#auth');
+	});
+
+	it('accepts only an explicit wildcard as the allow-all choice', () => {
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '  *  ' }),
+		).not.toThrow();
+	});
+
+	it('requires openid and email scopes and rejects unused offline access', () => {
+		expect(() => makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_SCOPES: 'openid profile' })).toThrow(
+			/MARIMOHUB_AUTH_OIDC_SCOPES must include openid and email/,
+		);
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_SCOPES: 'openid email offline_access',
+			}),
+		).toThrow(/must not request offline_access/);
+	});
+
+	it.each([
+		[
+			'too many values',
+			['openid', 'email', ...Array.from({ length: 19 }, (_, i) => `s${i}`)].join(' '),
+		],
+		['oversized value', `openid email ${'s'.repeat(201)}`],
+		['NUL in value', 'openid email bad\0scope'],
+		['DEL in value', 'openid email bad\u007fscope'],
+	])('rejects invalid scope configuration: %s', (_name, scopes) => {
+		expect(() => makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_SCOPES: scopes })).toThrow(
+			/MARIMOHUB_AUTH_OIDC_SCOPES contains an invalid scope value/,
+		);
+	});
+
+	it('deduplicates scopes and accepts the supported boundary count', () => {
+		const twentyScopes = [
+			'openid',
+			'email',
+			...Array.from({ length: 18 }, (_, i) => `scope-${i}`),
+		].join(' ');
+
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_SCOPES: 'openid email email profile' }),
+		).not.toThrow();
+		expect(() => makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_SCOPES: twentyScopes })).not.toThrow();
+	});
+
+	it('requires a claim pointer and policy for group authorization', () => {
+		expect(() => makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: 'hub-users' })).toThrow(
+			/GROUPS_CLAIM/,
+		);
+		expect(() => makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups' })).toThrow(
+			/requires at least one group policy/,
+		);
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: 'hub-users',
+			}),
+		).not.toThrow();
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/realm~2access/roles',
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: 'hub-users',
+			}),
+		).toThrow(/RFC 6901 JSON Pointer/);
+	});
+
+	it.each([
+		['missing leading slash', 'groups'],
+		['invalid tilde escape', '/realm~2access/roles'],
+		['oversized pointer', `/${'a'.repeat(512)}`],
+	])('rejects an invalid group claim pointer: %s', (_name, claim) => {
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: claim,
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: 'hub-users',
+			}),
+		).toThrow(/RFC 6901 JSON Pointer/);
+	});
+
+	it.each([
+		'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_DEFAULT_ADMIN_GROUPS',
+	])('accepts %s as an independent group policy', (key) => {
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/realm~1access/~0roles',
+				[key]: 'group-1, group-2',
+			}),
+		).not.toThrow();
+	});
+
+	it.each([
+		['too many groups', Array.from({ length: 201 }, (_, i) => `group-${i}`).join(',')],
+		['oversized group id', 'g'.repeat(257)],
+		['control character', 'hub-users,admin\u007fgroup'],
+	])('rejects invalid group lists: %s', (_name, groups) => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: groups,
+			}),
+		);
+
+		expect(error.message).toContain('expected at most 200 group ids');
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS');
+	});
+
+	it('requires HTTPS issuer and redirect URLs', () => {
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_ISSUER: 'http://accounts.example.com' }),
+		).toThrow(/OIDC issuer must be an HTTPS URL/);
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'http://hub.example.com/api/auth/callback',
+			}),
+		).toThrow(/OIDC redirect URI must be an HTTPS URL/);
+	});
+
+	it('bounds both ordinary and group-derived session lifetimes', () => {
+		expect(() => makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_SESSION_TTL_SECONDS: '299' })).toThrow(
+			/AUTH_SESSION_TTL_SECONDS/,
+		);
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: 'hub-users',
+				MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '3601',
+			}),
+		).toThrow(/GROUP_SESSION_TTL_SECONDS/);
+	});
+
+	it.each(['300.5', 'abc', 'NaN', '299', '86401'])('rejects invalid session TTL %s', (ttl) => {
+		expect(() => makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_SESSION_TTL_SECONDS: ttl })).toThrow(
+			/expected an integer from 300 to 86400/,
+		);
+	});
+
+	it.each(['299', '3601', '1.5', 'forever'])('rejects invalid group session TTL %s', (ttl) => {
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: 'hub-users',
+				MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: ttl,
+			}),
+		).toThrow(/expected an integer from 300 to 3600/);
+	});
+
+	it('accepts inclusive TTL boundaries and ignores group TTL without a group policy', () => {
+		expect(() => makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_SESSION_TTL_SECONDS: '300' })).not.toThrow();
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_SESSION_TTL_SECONDS: '86400' }),
+		).not.toThrow();
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: 'hub-users',
+				MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '300',
+			}),
+		).not.toThrow();
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: 'hub-users',
+				MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '3600',
+			}),
+		).not.toThrow();
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: 'not-used' }),
+		).not.toThrow();
+	});
+
+	it('accepts only the explicit email-verification policies', () => {
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION: 'optional' }),
+		).toThrow(/AUTH_OIDC_EMAIL_VERIFICATION/);
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION: 'trusted-issuer' }),
+		).not.toThrow();
 	});
 });
 

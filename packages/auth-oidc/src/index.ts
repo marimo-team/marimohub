@@ -20,8 +20,23 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { jwtVerify, SignJWT } from 'jose';
 import * as oauth from 'oauth4webapi';
-import { UserId } from '@marimo-hub/core';
-import type { Authenticator, AuthUser } from '@marimo-hub/core';
+import { AUTH_ENTITLEMENTS, UserId } from '@marimo-hub/core';
+import type { AuthEntitlement, Authenticator, AuthUser, Role } from '@marimo-hub/core';
+
+export type EmailVerificationPolicy = 'required' | 'trusted-issuer';
+
+export interface OidcGroupPolicy {
+	/** JSON Pointer locating the provider's group array, e.g. `/groups`. */
+	claim: string;
+	/** At least one exact group match is required to sign in. */
+	allowed?: string[];
+	/** Groups mapped to deployment super-admin. */
+	superAdmin?: string[];
+	/** Groups mapped to a per-user deployment-wide default project role. */
+	defaultRoles?: Partial<Record<Role, string[]>>;
+	/** Maximum accepted group count (default 200, maximum 200). */
+	maxGroups?: number;
+}
 
 export interface OidcConfig {
 	/** OIDC issuer URL (its `/.well-known/openid-configuration` is discovered). */
@@ -38,6 +53,10 @@ export interface OidcConfig {
 	audience?: string;
 	/** OAuth scopes (default `openid email profile`). */
 	scopes?: string;
+	/** Handling for an absent `email_verified` claim (default `required`). */
+	emailVerification?: EmailVerificationPolicy;
+	/** Optional provider-group extraction and entitlement mapping. */
+	groups?: OidcGroupPolicy;
 	/** OAuth `prompt` parameter (default `select_account`). */
 	prompt?: string;
 	/** Secret used to sign the session + transaction cookies (HS256). */
@@ -64,6 +83,178 @@ const TXN_COOKIE = 'mh_oidc_txn';
 
 /** Generous bound for an in-app deep link; anything longer is dropped, not truncated. */
 const MAX_RETURN_TO_LENGTH = 512;
+const MAX_SUBJECT_LENGTH = 512;
+const MAX_EMAIL_LENGTH = 320;
+const MAX_NAME_LENGTH = 200;
+const MAX_PICTURE_URL_INPUT_LENGTH = 2048;
+const MAX_PICTURE_URL_BYTES = 2048;
+// Leaves room for the cookie name and attributes under common 4096-byte limits.
+const MAX_SESSION_JWT_BYTES = 3800;
+const MAX_GROUPS = 200;
+const MAX_GROUP_LENGTH = 256;
+const AUTH_ENTITLEMENT_SET: ReadonlySet<string> = new Set(AUTH_ENTITLEMENTS);
+
+function utf8ByteLength(value: string): number {
+	return new TextEncoder().encode(value).byteLength;
+}
+
+function hasControlCharacters(value: string): boolean {
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index);
+		if (code <= 0x1f || code === 0x7f) return true;
+	}
+	return false;
+}
+
+function validSubject(value: unknown): value is string {
+	return (
+		typeof value === 'string' &&
+		value.length > 0 &&
+		value.length <= MAX_SUBJECT_LENGTH &&
+		!hasControlCharacters(value)
+	);
+}
+
+function validEmail(value: unknown): value is string {
+	if (
+		typeof value !== 'string' ||
+		value.length === 0 ||
+		value.length > MAX_EMAIL_LENGTH ||
+		hasControlCharacters(value) ||
+		/\s/.test(value)
+	) {
+		return false;
+	}
+	const at = value.lastIndexOf('@');
+	return at > 0 && at < value.length - 1;
+}
+
+function displayNameClaim(value: unknown): string | undefined {
+	if (typeof value !== 'string' || hasControlCharacters(value)) return undefined;
+	const name = value.trim();
+	return name.length > 0 && name.length <= MAX_NAME_LENGTH ? name : undefined;
+}
+
+export function pictureUrlClaim(value: unknown): string | undefined {
+	if (typeof value !== 'string' || value.length > MAX_PICTURE_URL_INPUT_LENGTH) return undefined;
+	try {
+		const url = new URL(value);
+		if (url.protocol !== 'https:' || url.username || url.password) return undefined;
+		const normalized = url.toString();
+		return utf8ByteLength(normalized) <= MAX_PICTURE_URL_BYTES ? normalized : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Resolve an RFC 6901 JSON Pointer without evaluating provider-controlled code. */
+export function claimAtPointer(claims: unknown, pointer: string): unknown {
+	if (!pointer.startsWith('/')) return undefined;
+	let value: unknown = claims;
+	for (const rawSegment of pointer.slice(1).split('/')) {
+		if (!/^(?:[^~]|~[01])*$/.test(rawSegment)) return undefined;
+		const segment = rawSegment.replaceAll('~1', '/').replaceAll('~0', '~');
+		if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+		if (!Object.hasOwn(value, segment)) return undefined;
+		value = (value as Record<string, unknown>)[segment];
+	}
+	return value;
+}
+
+function validJsonPointer(pointer: string): boolean {
+	return (
+		pointer.startsWith('/') &&
+		pointer
+			.slice(1)
+			.split('/')
+			.every((segment) => /^(?:[^~]|~[01])*$/.test(segment))
+	);
+}
+
+function parseUrl(value: string, label: string): URL {
+	try {
+		return new URL(value);
+	} catch {
+		throw new Error(`${label} must be a valid HTTPS URL`);
+	}
+}
+
+function discoveredEndpoint(
+	as: oauth.AuthorizationServer,
+	endpoint: 'authorization_endpoint' | 'end_session_endpoint',
+): URL | undefined {
+	const value = as[endpoint];
+	if (value === undefined) return undefined;
+	let url: URL;
+	try {
+		url = new URL(value);
+		oauth.checkProtocol(url, true);
+	} catch {
+		throw new Error(`OIDC ${endpoint} must be a valid HTTPS URL`);
+	}
+	if (url.username || url.password) {
+		throw new Error(`OIDC ${endpoint} must not contain credentials`);
+	}
+	return url;
+}
+
+function validateGroupPolicy(policy: OidcGroupPolicy): void {
+	const lists = [
+		policy.allowed,
+		policy.superAdmin,
+		policy.defaultRoles?.viewer,
+		policy.defaultRoles?.editor,
+		policy.defaultRoles?.admin,
+	].filter((list): list is string[] => list !== undefined);
+	if (lists.length === 0) throw new Error('OIDC groups claim requires at least one group policy');
+	for (const list of lists) {
+		if (
+			list.length === 0 ||
+			list.length > MAX_GROUPS ||
+			list.some(
+				(group) =>
+					typeof group !== 'string' ||
+					group.length === 0 ||
+					group.length > MAX_GROUP_LENGTH ||
+					hasControlCharacters(group),
+			)
+		) {
+			throw new Error('OIDC group policies must contain 1 to 200 valid group ids');
+		}
+	}
+}
+
+function parseGroups(value: unknown, maxGroups: number): string[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || value.length > maxGroups) throw new Error('invalid groups claim');
+	const groups: string[] = [];
+	for (const group of value) {
+		if (
+			typeof group !== 'string' ||
+			group.length === 0 ||
+			group.length > MAX_GROUP_LENGTH ||
+			hasControlCharacters(group)
+		) {
+			throw new Error('invalid groups claim');
+		}
+		groups.push(group);
+	}
+	return groups;
+}
+
+function mappedEntitlements(groups: readonly string[], policy: OidcGroupPolicy): AuthEntitlement[] {
+	const memberships = new Set(groups);
+	const entitlements = new Set<AuthEntitlement>();
+	if (policy.superAdmin?.some((group) => memberships.has(group))) {
+		entitlements.add('super-admin');
+	}
+	for (const role of ['viewer', 'editor', 'admin'] as const) {
+		if (policy.defaultRoles?.[role]?.some((group) => memberships.has(group))) {
+			entitlements.add(`default-role:${role}`);
+		}
+	}
+	return [...entitlements];
+}
 
 /**
  * Validate a client-supplied post-login destination (`?redirect_url=` on the
@@ -129,13 +320,71 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	}
 	const secret = secretBytes;
 	const scopes = config.scopes ?? 'openid email profile';
-	const postLoginRedirect = config.postLoginRedirect ?? '/';
-	const sessionTtl = config.sessionTtlSeconds ?? 8 * 60 * 60;
+	const configuredPostLoginRedirect = config.postLoginRedirect ?? '/';
+	const sanitizedPostLoginRedirect = sanitizeReturnTo(configuredPostLoginRedirect);
+	if (!sanitizedPostLoginRedirect) {
+		throw new Error('OIDC post-login redirect must be a same-origin application path');
+	}
+	const postLoginRedirect = sanitizedPostLoginRedirect;
+	const sessionTtl = config.sessionTtlSeconds ?? (config.groups ? 60 * 60 : 8 * 60 * 60);
+	const emailVerification = config.emailVerification ?? 'required';
+	const maxGroups = config.groups?.maxGroups ?? MAX_GROUPS;
+	const scopeValues = new Set(scopes.split(/\s+/).filter(Boolean));
+	if (!Number.isInteger(sessionTtl) || sessionTtl < 300 || sessionTtl > 86_400) {
+		throw new Error('OIDC session TTL must be an integer between 300 and 86400 seconds');
+	}
+	if (config.groups && sessionTtl > 3600) {
+		throw new Error('OIDC sessions containing group-derived access must not exceed 3600 seconds');
+	}
+	if (emailVerification !== 'required' && emailVerification !== 'trusted-issuer') {
+		throw new Error('Invalid OIDC email verification policy');
+	}
+	if (!scopeValues.has('openid')) {
+		throw new Error('OIDC scopes must include openid');
+	}
+	if (!scopeValues.has('email')) {
+		throw new Error('OIDC scopes must include email');
+	}
+	if (scopeValues.has('offline_access')) {
+		throw new Error('OIDC scopes must not include offline_access');
+	}
+	if (
+		scopeValues.size > 20 ||
+		[...scopeValues].some((scope) => scope.length > 200 || hasControlCharacters(scope))
+	) {
+		throw new Error('OIDC scopes contain an invalid scope value');
+	}
+	if (!Number.isInteger(maxGroups) || maxGroups < 1 || maxGroups > MAX_GROUPS) {
+		throw new Error(`OIDC maxGroups must be between 1 and ${MAX_GROUPS}`);
+	}
+	if (config.groups && !validJsonPointer(config.groups.claim)) {
+		throw new Error('OIDC groups claim must be an RFC 6901 JSON Pointer');
+	}
+	if (config.groups) validateGroupPolicy(config.groups);
 	// Normalize the email-domain allowlist once. Empty means "no restriction".
 	const allowedDomains = normalizeEmailDomains(config.allowedEmailDomains);
 	const restrictDomains = allowedDomains.length > 0;
 
-	const issuerUrl = new URL(config.issuer);
+	const issuerUrl = parseUrl(config.issuer, 'OIDC issuer');
+	if (
+		issuerUrl.protocol !== 'https:' ||
+		issuerUrl.username ||
+		issuerUrl.password ||
+		issuerUrl.search ||
+		issuerUrl.hash
+	) {
+		throw new Error('OIDC issuer must be an HTTPS URL without credentials, query, or fragment');
+	}
+	const redirectUrl = parseUrl(config.redirectUri, 'OIDC redirect URI');
+	if (
+		redirectUrl.protocol !== 'https:' ||
+		redirectUrl.username ||
+		redirectUrl.password ||
+		redirectUrl.hash
+	) {
+		throw new Error('OIDC redirect URI must be an HTTPS URL without credentials or a fragment');
+	}
+	const sessionIssuer = issuerUrl.href;
 	const client: oauth.Client = { client_id: config.clientId };
 	const clientAuth = oauth.ClientSecretPost(config.clientSecret);
 
@@ -150,16 +399,45 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		return asPromise;
 	}
 
-	async function signSession(user: AuthUser): Promise<string> {
-		// `name` is carried in the session cookie (sourced from the OIDC `name`
-		// claim, which the default `profile` scope provides) so the identity
-		// directory can render this user without a second round-trip to the IdP.
-		return new SignJWT({ email: user.email, name: user.name })
-			.setProtectedHeader({ alg: 'HS256' })
+	async function mintSession(
+		user: AuthUser,
+		name: string | undefined,
+		pictureUrl: string | undefined,
+		issuedAt: number,
+		expiresAt: number,
+	): Promise<string> {
+		return new SignJWT({
+			email: user.email,
+			...(name !== undefined ? { name } : {}),
+			...(pictureUrl !== undefined ? { picture_url: pictureUrl } : {}),
+			...(user.entitlements !== undefined ? { entitlements: user.entitlements } : {}),
+		})
+			.setProtectedHeader({ alg: 'HS256', typ: 'mh-session+jwt' })
+			.setIssuer(sessionIssuer)
+			.setAudience(config.clientId)
 			.setSubject(user.id)
-			.setIssuedAt()
-			.setExpirationTime(`${sessionTtl}s`)
+			.setIssuedAt(issuedAt)
+			.setExpirationTime(expiresAt)
 			.sign(secret);
+	}
+
+	async function signSession(user: AuthUser): Promise<string> {
+		const issuedAt = Math.floor(Date.now() / 1000);
+		const expiresAt = issuedAt + sessionTtl;
+		let token = await mintSession(user, user.name, user.pictureUrl, issuedAt, expiresAt);
+		if (utf8ByteLength(token) <= MAX_SESSION_JWT_BYTES) return token;
+
+		if (user.pictureUrl !== undefined) {
+			token = await mintSession(user, user.name, undefined, issuedAt, expiresAt);
+			if (utf8ByteLength(token) <= MAX_SESSION_JWT_BYTES) return token;
+		}
+
+		if (user.name !== undefined) {
+			token = await mintSession(user, undefined, undefined, issuedAt, expiresAt);
+			if (utf8ByteLength(token) <= MAX_SESSION_JWT_BYTES) return token;
+		}
+
+		throw new Error(`OIDC session JWT exceeds ${MAX_SESSION_JWT_BYTES} bytes`);
 	}
 
 	const authenticator: Authenticator = {
@@ -168,10 +446,34 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			const match = cookie.match(new RegExp(`(?:^|; )${SESSION_COOKIE}=([^;]+)`));
 			if (!match) return null;
 			try {
-				const { payload } = await jwtVerify(decodeURIComponent(match[1]), secret);
-				if (!payload.sub || typeof payload.email !== 'string') return null;
-				const name = typeof payload.name === 'string' ? payload.name : undefined;
-				return { id: UserId.parse(payload.sub), email: payload.email, name };
+				const { payload } = await jwtVerify(decodeURIComponent(match[1]), secret, {
+					algorithms: ['HS256'],
+					typ: 'mh-session+jwt',
+					issuer: sessionIssuer,
+					audience: config.clientId,
+				});
+				if (!validSubject(payload.sub) || !validEmail(payload.email)) return null;
+				const name = displayNameClaim(payload.name);
+				const pictureUrl = pictureUrlClaim(payload.picture_url);
+				const hasGroupAuthorization = Array.isArray(payload.entitlements);
+				const entitlements = hasGroupAuthorization
+					? payload.entitlements.filter(
+							(value): value is AuthEntitlement =>
+								typeof value === 'string' && AUTH_ENTITLEMENT_SET.has(value),
+						)
+					: undefined;
+				const entitlementsExpiresAt =
+					hasGroupAuthorization && typeof payload.exp === 'number'
+						? new Date(payload.exp * 1000).toISOString()
+						: undefined;
+				return {
+					id: UserId.parse(payload.sub),
+					email: payload.email,
+					...(name ? { name } : {}),
+					...(pictureUrl ? { pictureUrl } : {}),
+					...(entitlements?.length ? { entitlements } : {}),
+					...(entitlementsExpiresAt ? { entitlementsExpiresAt } : {}),
+				};
 			} catch {
 				return null;
 			}
@@ -224,7 +526,9 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 
 		// Stash the PKCE/transaction values in a short-lived signed cookie.
 		const txn = await new SignJWT({ verifier: codeVerifier, state, nonce, returnTo })
-			.setProtectedHeader({ alg: 'HS256' })
+			.setProtectedHeader({ alg: 'HS256', typ: 'mh-oidc-txn+jwt' })
+			.setIssuer(sessionIssuer)
+			.setAudience(config.clientId)
 			.setIssuedAt()
 			.setExpirationTime('10m')
 			.sign(secret);
@@ -236,13 +540,24 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			maxAge: 600,
 		});
 
-		if (!as.authorization_endpoint) {
+		let url: URL | undefined;
+		try {
+			url = discoveredEndpoint(as, 'authorization_endpoint');
+		} catch {
+			return c.json(
+				{
+					success: false,
+					error: { code: 'OIDC_ERROR', message: 'Invalid authorization endpoint' },
+				},
+				500,
+			);
+		}
+		if (!url) {
 			return c.json(
 				{ success: false, error: { code: 'OIDC_ERROR', message: 'No authorization endpoint' } },
 				500,
 			);
 		}
-		const url = new URL(as.authorization_endpoint);
 		url.searchParams.set('response_type', 'code');
 		url.searchParams.set('client_id', config.clientId);
 		url.searchParams.set('redirect_uri', config.redirectUri);
@@ -272,7 +587,12 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		let expectedNonce: string | undefined;
 		let returnTo: string | null = null;
 		try {
-			const { payload } = await jwtVerify(txnCookie, secret);
+			const { payload } = await jwtVerify(txnCookie, secret, {
+				algorithms: ['HS256'],
+				typ: 'mh-oidc-txn+jwt',
+				issuer: sessionIssuer,
+				audience: config.clientId,
+			});
 			if (typeof payload.verifier !== 'string') throw new Error('missing verifier');
 			verifier = payload.verifier;
 			expectedState = typeof payload.state === 'string' ? payload.state : undefined;
@@ -286,6 +606,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 
 		const as = await authServer();
 		let claims: oauth.IDToken | undefined;
+		let userInfo: oauth.UserInfoResponse | undefined;
 		try {
 			// validateAuthResponse checks `state` and surfaces error responses; the
 			// grant request + processing run the token exchange and verify the
@@ -304,39 +625,70 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				requireIdToken: true,
 			});
 			claims = oauth.getValidatedIdTokenClaims(result);
+			if (!claims || !validSubject(claims.sub)) throw new Error('invalid subject');
+			if (as.userinfo_endpoint) {
+				const userInfoResponse = await oauth.userInfoRequest(as, client, result.access_token);
+				userInfo = await oauth.processUserInfoResponse(as, client, claims.sub, userInfoResponse);
+				if (userInfo.sub !== claims.sub) throw new Error('userinfo subject mismatch');
+			}
 		} catch {
 			return callbackError(c, 'auth_failed', returnTo);
 		}
 
-		if (!claims?.sub || typeof claims.email !== 'string') {
+		if (!claims || !validSubject(claims.sub)) {
 			return callbackError(c, 'auth_failed', returnTo);
 		}
+		const identityClaims = userInfo?.email !== undefined ? userInfo : claims;
+		if (!validEmail(identityClaims.email)) return callbackError(c, 'auth_failed', returnTo);
+		const email = identityClaims.email;
+		const emailVerified = identityClaims.email_verified;
 
-		// The email is an authorization credential (project email-invites match on
-		// it), so a provider-declared UNVERIFIED address must never mint a session:
-		// on IdPs with open self-registration (e.g. default Keycloak) it is
-		// attacker-chosen. Providers that omit the claim entirely are tolerated
-		// here — rejecting absence would break IdPs that never send it — but the
-		// domain-allowlist branch below stays strict and demands `true`.
-		if (claims.email_verified === false) {
+		// Email participates in project authorization, so a present verification
+		// claim must be exactly true. Only omission is covered by trusted-issuer.
+		if (emailVerified !== undefined && emailVerified !== true) {
+			return callbackError(c, 'email_not_verified', returnTo);
+		}
+		if (emailVerification === 'required' && emailVerified !== true) {
 			return callbackError(c, 'email_not_verified', returnTo);
 		}
 
-		if (restrictDomains) {
-			// Require a provider-verified address before trusting its domain — an
-			// unverified email could carry an attacker-chosen `@marimo.io` value.
-			if (claims.email_verified !== true) {
-				return callbackError(c, 'email_not_verified', returnTo);
-			}
-			if (!emailDomainAllowed(claims.email, allowedDomains)) {
-				return callbackError(c, 'domain_not_allowed', returnTo);
-			}
+		if (restrictDomains && !emailDomainAllowed(email, allowedDomains)) {
+			return callbackError(c, 'domain_not_allowed', returnTo);
 		}
 
-		// The `name` claim rides along with the default `profile` scope. When the
-		// provider omits it, the identity directory falls back to the email.
-		const name = typeof claims.name === 'string' ? claims.name : undefined;
-		const session = await signSession({ id: UserId.parse(claims.sub), email: claims.email, name });
+		let entitlements: AuthEntitlement[] | undefined;
+		if (config.groups) {
+			let rawGroups = userInfo ? claimAtPointer(userInfo, config.groups.claim) : undefined;
+			if (rawGroups === undefined) rawGroups = claimAtPointer(claims, config.groups.claim);
+			let groups: string[];
+			try {
+				groups = parseGroups(rawGroups, maxGroups) ?? [];
+			} catch {
+				return callbackError(c, 'auth_failed', returnTo);
+			}
+			if (
+				config.groups.allowed?.length &&
+				!config.groups.allowed.some((group) => groups.includes(group))
+			) {
+				return callbackError(c, 'group_not_allowed', returnTo);
+			}
+			entitlements = mappedEntitlements(groups, config.groups);
+		}
+
+		const name = displayNameClaim(userInfo?.name) ?? displayNameClaim(claims.name);
+		const pictureUrl = pictureUrlClaim(userInfo?.picture) ?? pictureUrlClaim(claims.picture);
+		let session: string;
+		try {
+			session = await signSession({
+				id: UserId.parse(claims.sub),
+				email,
+				...(name ? { name } : {}),
+				...(pictureUrl ? { pictureUrl } : {}),
+				...(config.groups ? { entitlements: entitlements ?? [] } : {}),
+			});
+		} catch {
+			return callbackError(c, 'auth_failed', returnTo);
+		}
 		setCookie(c, SESSION_COOKIE, session, {
 			httpOnly: true,
 			secure: true,
@@ -351,8 +703,13 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	routes.get('/api/auth/logout', async (c) => {
 		deleteCookie(c, SESSION_COOKIE, { path: '/' });
 		const as = await authServer();
-		if (as.end_session_endpoint) {
-			const url = new URL(as.end_session_endpoint);
+		let url: URL | undefined;
+		try {
+			url = discoveredEndpoint(as, 'end_session_endpoint');
+		} catch {
+			return c.redirect(postLoginRedirect);
+		}
+		if (url) {
 			url.searchParams.set('client_id', config.clientId);
 			return c.redirect(url.toString());
 		}

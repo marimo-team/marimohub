@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
@@ -56,7 +56,7 @@ function setup(
 		value: { writeText: clipboard },
 		configurable: true,
 	});
-	renderWithClient(
+	const rendered = renderWithClient(
 		<ThemeProvider>
 			<AuthProvider>
 				<>
@@ -67,7 +67,7 @@ function setup(
 		</ThemeProvider>,
 		{ route: '/' },
 	);
-	return { user, clipboard };
+	return { user, clipboard, ...rendered };
 }
 
 async function openUserMenu(user: ReturnType<typeof userEvent.setup>) {
@@ -94,6 +94,32 @@ describe('Header', () => {
 
 		expect(screen.getByText(USER.email)).toBeInTheDocument();
 		expect(screen.getByText(USER.id)).toBeInTheDocument();
+	});
+
+	it('renders the validated profile picture without sending a referrer', async () => {
+		const picture = 'https://images.example.com/ada.png';
+		const { container } = setup(undefined, { ...USER, name: 'Ada', picture_url: picture });
+		await waitFor(() => expect(container.querySelector('img')).toBeInTheDocument());
+		const image = container.querySelector('img');
+		expect(image).toHaveAttribute('src', picture);
+		expect(image).toHaveAttribute('referrerpolicy', 'no-referrer');
+	});
+
+	it('falls back to the user initial when the profile picture fails', async () => {
+		const { container } = setup(undefined, {
+			...USER,
+			name: 'Ada',
+			picture_url: 'https://images.example.com/missing.png',
+		});
+		const image = await waitFor(() => {
+			const element = container.querySelector('img');
+			if (!element) throw new Error('Expected profile image to render');
+			return element;
+		});
+		fireEvent.error(image);
+
+		expect(container.querySelector('img')).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'User menu' })).toHaveTextContent('A');
 	});
 
 	it('copies the user id — invites are addressed by id, not email', async () => {

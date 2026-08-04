@@ -4965,7 +4965,7 @@ export interface paths {
 		};
 		/**
 		 * Resolve user ids to display identities
-		 * @description Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` or session `user_id`) into `{ id, email, name }`. Ids with no recorded identity are omitted from the result map.
+		 * @description Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` or session `user_id`) into `{ id, email, name, picture_url }`. Ids with no recorded identity are omitted from the result map.
 		 */
 		get: {
 			parameters: {
@@ -5277,6 +5277,9 @@ export interface components {
 		Me: {
 			id: string;
 			email: string;
+			name?: string | null;
+			/** Format: uri */
+			picture_url?: string | null;
 			logout_url: string | null;
 			is_super_admin: boolean;
 		};
@@ -5833,6 +5836,8 @@ export interface components {
 			id: string;
 			email: string;
 			name: string;
+			/** Format: uri */
+			picture_url?: string | null;
 		};
 		ApiTokenCreated: components['schemas']['ApiToken'] & {
 			token: string;

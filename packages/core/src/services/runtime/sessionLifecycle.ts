@@ -181,6 +181,8 @@ export class SessionLifecycleService {
 
 			const heartbeatStale = now - Date.parse(s.last_heartbeat) > this.cfg.idleTimeoutMs;
 			const pastDeadline = !!s.expires_at && now >= Date.parse(s.expires_at);
+			const pastAuthorizationDeadline =
+				!!s.authorization_expires_at && now >= Date.parse(s.authorization_expires_at);
 
 			// Only probe when a reap decision hinges on it (cost control: one exec per
 			// near-deadline/stale session per sweep, nothing for healthy ones). Only an
@@ -189,7 +191,8 @@ export class SessionLifecycleService {
 			// connection count feeds the "~N connected" stop-confirm hint.
 			let active: number | null = null;
 			const reapCandidate =
-				s.status === 'expired' || (s.status === 'running' && (pastDeadline || heartbeatStale));
+				s.status === 'expired' ||
+				(s.status === 'running' && (pastDeadline || pastAuthorizationDeadline || heartbeatStale));
 			const connectionCountCheck =
 				s.status === 'running' &&
 				(sessionModePolicy(s).singleton ||
@@ -209,7 +212,7 @@ export class SessionLifecycleService {
 
 			if (isTerminal(s.status)) {
 				const superseded = liveNotebooks.has(s.notebook_id);
-				if (s.status === 'expired' && hasEditors) {
+				if (s.status === 'expired' && hasEditors && !pastAuthorizationDeadline) {
 					// Editors can still be connected to an `expired` record's kernel —
 					// heartbeats travel browser→API while the websocket goes browser→kernel
 					// directly, so an API-path outage or a throttled background tab stalls
@@ -223,11 +226,16 @@ export class SessionLifecycleService {
 					// provision window (a teardown mid-restore mirror-deletes bucket keys).
 					if (
 						s.status === 'expired' &&
+						!pastAuthorizationDeadline &&
 						now - Date.parse(s.started_at) < RECLAIM_PROVISION_GRACE_MS
 					) {
 						return;
 					}
-					const save = s.status === 'expired' && !superseded && sessionPersistsEdits(s);
+					const save =
+						s.status === 'expired' &&
+						!pastAuthorizationDeadline &&
+						!superseded &&
+						sessionPersistsEdits(s);
 					// Only `expired` reclaims are counted: for terminated/failed records the
 					// confirm-destroy is a routine no-op, not a recovered leak.
 					if ((await this.retirer.reclaim(s, save)) && s.status === 'expired') {
@@ -242,6 +250,11 @@ export class SessionLifecycleService {
 				// corroboration that the kernel is really gone.
 				const mayHaveEditors =
 					hasEditors || (this.cfg.connectionAware && active === null && !heartbeatStale);
+
+				if (pastAuthorizationDeadline) {
+					if (await this.gracefulTeardown(s, false)) result.reapedExpired++;
+					return;
+				}
 
 				if (heartbeatStale && !hasEditors) {
 					if (await this.gracefulTeardown(s)) result.reapedIdle++;
@@ -311,12 +324,12 @@ export class SessionLifecycleService {
 	 * inside teardown silently failed, the terminal record re-enters the sweep
 	 * as a reclaim candidate, so nothing is leaked.
 	 */
-	private async gracefulTeardown(s: Session): Promise<boolean> {
+	private async gracefulTeardown(s: Session, captureBeforeDestroy = true): Promise<boolean> {
 		const claimed = await this.sessions
 			.beginTerminating(s.project_id, s.session_id)
 			.catch(() => null);
 		if (!claimed?.transitioned) return false;
-		await this.retirer.retire(s);
+		await this.retirer.retire(s, { captureBeforeDestroy });
 		return true;
 	}
 }

@@ -42,6 +42,7 @@ import {
 	UnavailableError,
 	EditSessionOwnedError,
 	EditSessionChangedError,
+	ForbiddenError,
 	TakeoverInProgressError,
 	TakeoverRetirementError,
 	kernelActiveConnections,
@@ -384,6 +385,20 @@ function authorizeSessionStart(
 		profileOverrideEligible: !ephemeral,
 		restrictedViewerCredentials: ephemeral,
 	};
+}
+
+function entitlementAuthorizationDeadline(user: AuthUser): string | undefined {
+	if (!user.entitlementsExpiresAt) {
+		if (user.entitlements?.length) {
+			throw new ForbiddenError('Group authorization has no credential expiry; sign in again');
+		}
+		return undefined;
+	}
+	const deadline = Date.parse(user.entitlementsExpiresAt);
+	if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+		throw new ForbiddenError('Group authorization has expired; sign in again');
+	}
+	return new Date(deadline).toISOString();
 }
 
 function resolveComputeProfile(
@@ -745,6 +760,7 @@ app.openapi(createSession, async (c) => {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
 	const authorization = authorizeSessionStart(project, user, mode, deps.policy);
+	const authorizationExpiresAt = entitlementAuthorizationDeadline(user);
 	const existingEditorClaim = mode === 'edit' ? await sessions.getEditorClaim(pid, nid) : undefined;
 	const sharing = effectiveEditorSharing(existingEditorClaim, deps.policy.editorSandboxSharing);
 	const replacingAfterTakeover =
@@ -845,6 +861,9 @@ app.openapi(createSession, async (c) => {
 	const reusable =
 		mode === 'edit' ? editorReuse?.session : await sessions.findReusable(pid, nid, user.id, mode);
 	if (reusable) {
+		const authorizationExpired =
+			reusable.authorization_expires_at !== undefined &&
+			Date.now() >= Date.parse(reusable.authorization_expires_at);
 		// A role change flips the session class the caller is entitled to (a demoted
 		// editor must not keep a persisting, WIF-holding kernel; a promoted viewer's
 		// edits must stop being discarded). A stale-class session is retired below
@@ -863,7 +882,7 @@ app.openapi(createSession, async (c) => {
 				: undefined;
 		const dead =
 			!!kernelUrl && !!deps.kernelProbe && (await deps.kernelProbe(kernelUrl)) === 'dead';
-		if (!mayRetire || (!dead && !classMismatch)) {
+		if (!authorizationExpired && (!mayRetire || (!dead && !classMismatch))) {
 			return c.json(
 				{
 					success: true,
@@ -966,6 +985,7 @@ app.openapi(createSession, async (c) => {
 					mode,
 					source_version_id: sourceVersionId,
 					editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
+					authorization_expires_at: authorizationExpiresAt,
 				});
 			})
 			// The pre-flight cap check alone is raceable; re-rank now that this
@@ -1186,6 +1206,12 @@ app.openapi(createSession, async (c) => {
 				compensate: () => compute.create(sandboxId).destroy(),
 			})
 			.step('mark_running', async () => {
+				if (
+					session!.authorization_expires_at &&
+					Date.now() >= Date.parse(session!.authorization_expires_at)
+				) {
+					throw new ForbiddenError('Group authorization expired while starting the session');
+				}
 				// The lifetime clock starts here — when the kernel is live, not at record
 				// creation — so provisioning time never eats into the session TTL.
 				const ttlMs = sandbox.sessionLifetime?.maxLifetimeMs;

@@ -208,8 +208,8 @@ export interface PolicyConfig {
 	 * implicit `admin` on every project and visibility of all projects. An
 	 * entry containing `@` matches only the login email (case-insensitive);
 	 * any other entry matches only the user id (exact) — see
-	 * `isSuperAdmin` in core. A PAT minted by a super admin carries the same
-	 * power. Unset = no super admins.
+	 * `isSuperAdmin` in core. Static super-admin status also applies to PATs;
+	 * session-only OIDC group entitlements do not. Unset = no super admins.
 	 */
 	superAdmins?: string[];
 }

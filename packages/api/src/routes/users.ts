@@ -1,6 +1,12 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { ForbiddenError, isSuperAdmin, UserId } from '@marimo-hub/core';
-import { createApp, errorResponses, jsonContent, UserResponseSchema } from '../shared';
+import {
+	createApp,
+	errorResponses,
+	jsonContent,
+	subjectDefaultRole,
+	UserResponseSchema,
+} from '../shared';
 
 // --- Route definitions ---
 
@@ -11,7 +17,7 @@ const resolveUsers = createRoute({
 	summary: 'Resolve user ids to display identities',
 	description:
 		'Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` ' +
-		'or session `user_id`) into `{ id, email, name }`. Ids with no recorded ' +
+		'or session `user_id`) into `{ id, email, name, picture_url }`. Ids with no recorded ' +
 		'identity are omitted from the result map.',
 	request: {
 		query: z.object({
@@ -79,7 +85,10 @@ app.openapi(searchUsers, async (c) => {
 	// every project; under members-only, require at least one project involvement
 	// (decided from the catalog snapshot — no per-project loads) so a drive-by
 	// account cannot harvest the directory by substring.
-	if (deps.policy.defaultRole == null && !isSuperAdmin(user, deps.policy.superAdmins)) {
+	if (
+		subjectDefaultRole(user, deps.policy) == null &&
+		!isSuperAdmin(user, deps.policy.superAdmins)
+	) {
 		const snapshot = await catalog.getCurrentSnapshot();
 		const email = user.email.toLowerCase();
 		const involved = snapshot.projects.some(
@@ -95,7 +104,12 @@ app.openapi(searchUsers, async (c) => {
 	}
 
 	const matches = await identities.search(q, limit);
-	const data = matches.map(({ id, email, name }) => ({ id, email, name }));
+	const data = matches.map(({ id, email, name, picture_url }) => ({
+		id,
+		email,
+		name,
+		picture_url: picture_url ?? null,
+	}));
 	return c.json({ success: true, data }, 200);
 });
 
@@ -111,9 +125,17 @@ app.openapi(resolveUsers, async (c) => {
 
 	const resolved = requested.length > 0 ? await identities.getMany(requested) : [];
 
-	const data: Record<string, { id: string; email: string; name: string }> = {};
+	const data: Record<
+		string,
+		{ id: string; email: string; name: string; picture_url: string | null }
+	> = {};
 	for (const u of resolved) {
-		data[u.id] = { id: u.id, email: u.email, name: u.name };
+		data[u.id] = {
+			id: u.id,
+			email: u.email,
+			name: u.name,
+			picture_url: u.picture_url ?? null,
+		};
 	}
 
 	return c.json({ success: true, data }, 200);

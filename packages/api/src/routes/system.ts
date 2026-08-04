@@ -14,6 +14,7 @@ import {
 	MeResponseSchema,
 	ok,
 	toComputeResourcesResponse,
+	subjectDefaultRole,
 } from '../shared';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../pagination';
 
@@ -45,6 +46,8 @@ app.openapi(meRoute, (c) => {
 	return ok(c, {
 		id: user.id,
 		email: user.email,
+		name: user.name ?? null,
+		picture_url: user.pictureUrl ?? null,
 		logout_url: logoutUrl,
 		is_super_admin: isSuperAdmin(user, deps.policy.superAdmins),
 	});
@@ -96,7 +99,7 @@ app.openapi(capabilitiesRoute, (c) => {
 		viewer_mode: deps.policy.viewerMode ?? 'static',
 		viewer_session_modes: [...viewerSessionModes(deps.policy.viewerMode)],
 		editor_sandbox_sharing: deps.policy.editorSandboxSharing ?? 'shared',
-		default_role: deps.policy.defaultRole ?? null,
+		default_role: subjectDefaultRole(c.get('user'), deps.policy),
 		limits: {
 			max_concurrent_sessions_per_user: deps.policy.maxConcurrentSessionsPerUser ?? null,
 			max_apps_per_project: deps.policy.maxAppsPerProject ?? null,

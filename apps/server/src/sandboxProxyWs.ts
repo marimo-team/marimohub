@@ -57,6 +57,14 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 					rejectUpgrade(clientSocket, decision.status, decision.code);
 					return;
 				}
+				const remainingAuthorizationMs =
+					decision.authorizationDeadline === undefined
+						? undefined
+						: decision.authorizationDeadline - Date.now();
+				if (remainingAuthorizationMs !== undefined && remainingAuthorizationMs <= 0) {
+					rejectUpgrade(clientSocket, 410, 'GONE');
+					return;
+				}
 
 				const target = new URL(decision.targetUrl);
 				const lib = target.protocol === 'https:' ? https : http;
@@ -80,14 +88,34 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 					method: 'GET',
 					headers,
 				});
+				let kernelSocket: Duplex | undefined;
+				let authorizationExpired = false;
+				let authorizationTimer: ReturnType<typeof setTimeout> | undefined;
+				const clearAuthorizationTimer = () => {
+					if (authorizationTimer) clearTimeout(authorizationTimer);
+					authorizationTimer = undefined;
+				};
+				if (remainingAuthorizationMs !== undefined) {
+					authorizationTimer = setTimeout(() => {
+						authorizationExpired = true;
+						authorizationTimer = undefined;
+						proxyReq.destroy();
+						kernelSocket?.destroy();
+						clientSocket.destroy();
+					}, remainingAuthorizationMs);
+					authorizationTimer.unref();
+					clientSocket.on('close', clearAuthorizationTimer);
+				}
 
 				// Kernel answered without upgrading (e.g. 4xx) — relay the status, close.
 				proxyReq.on('response', (proxyRes) => {
+					clearAuthorizationTimer();
 					rejectUpgrade(clientSocket, proxyRes.statusCode ?? 502, proxyRes.statusMessage ?? '');
 					proxyRes.destroy();
 				});
 
-				proxyReq.on('upgrade', (proxyRes, kernelSocket, kernelHead) => {
+				proxyReq.on('upgrade', (proxyRes, connectedKernelSocket, kernelHead) => {
+					kernelSocket = connectedKernelSocket;
 					const statusLine = `HTTP/1.1 ${proxyRes.statusCode} ${proxyRes.statusMessage}`;
 					const headerLines: string[] = [statusLine];
 					for (const [key, value] of Object.entries(proxyRes.headers)) {
@@ -98,20 +126,23 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 					}
 					clientSocket.write(`${headerLines.join('\r\n')}\r\n\r\n`);
 					if (kernelHead?.length) clientSocket.write(kernelHead);
-					if (head?.length) kernelSocket.write(head);
+					if (head?.length) connectedKernelSocket.write(head);
 
 					const teardown = () => {
-						kernelSocket.destroy();
+						clearAuthorizationTimer();
+						connectedKernelSocket.destroy();
 						clientSocket.destroy();
 					};
-					kernelSocket.on('error', teardown);
-					kernelSocket.on('close', teardown);
+					connectedKernelSocket.on('error', teardown);
+					connectedKernelSocket.on('close', teardown);
 					clientSocket.on('close', teardown);
-					kernelSocket.pipe(clientSocket);
-					clientSocket.pipe(kernelSocket);
+					connectedKernelSocket.pipe(clientSocket);
+					clientSocket.pipe(connectedKernelSocket);
 				});
 
 				proxyReq.on('error', (err) => {
+					clearAuthorizationTimer();
+					if (authorizationExpired) return;
 					logEvent({
 						level: 'warn',
 						event: 'sandbox_proxy_ws_upstream_error',

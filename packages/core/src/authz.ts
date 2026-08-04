@@ -5,11 +5,10 @@
  * answers *what* an authenticated caller may do on a given project.
  *
  * Writes are gated by the role matrix (see development_docs/bucket_spec.md §12)
- * against the target project. Reads are gated at `viewer`: with a
- * `defaultRole` set (the usual editor/viewer deployment) every authenticated
- * user is at least a viewer, so reads stay open; with `MARIMOHUB_DEFAULT_ROLE`
- * unset (`none`), reads are membership-gated — a non-member cannot see the
- * project at all. A project's `owner` is implicitly admin.
+ * against the target project. Reads are gated at `viewer`: with a default role
+ * set by deployment policy or a mapped OIDC entitlement, the user is at least
+ * a viewer, so reads stay open. Otherwise reads are membership-gated and a
+ * non-member cannot see the project. A project's `owner` is implicitly admin.
  *
  * A member row carries either a `user_id` or an `email` (a pending invite for
  * someone who hasn't logged in yet). The caller is therefore matched as a
@@ -26,6 +25,20 @@ import type { IdentitySubject } from './identityMatch';
 import type { Project } from './schema';
 
 const RANK: Record<Role, number> = { viewer: 1, editor: 2, admin: 3 };
+const ENTITLEMENT_ROLE: Partial<Record<string, Role>> = {
+	'default-role:viewer': 'viewer',
+	'default-role:editor': 'editor',
+	'default-role:admin': 'admin',
+};
+
+export function subjectDefaultRole(subject: AuthSubject, policy?: AuthzPolicy): Role | null {
+	let role = policy?.defaultRole ?? null;
+	for (const entitlement of subject.entitlements ?? []) {
+		const candidate = ENTITLEMENT_ROLE[entitlement];
+		if (candidate && (role === null || RANK[candidate] > RANK[role])) role = candidate;
+	}
+	return role;
+}
 
 /**
  * The authenticated caller as authorization sees them. Structurally a subset
@@ -46,13 +59,16 @@ export interface AuthzPolicy {
 }
 
 /**
- * Whether the caller is a deployment super admin (config:
- * MARIMOHUB_SUPER_ADMINS). Super admins hold implicit `admin` on every project
- * and see all projects in listings. Entries match by id or email per the
- * namespace rule in {@link refMatchesSubject}.
+ * Whether the caller is a deployment super admin, either from static config or
+ * a mapped OIDC session entitlement. Super admins hold implicit `admin` on
+ * every project and see all projects in listings. Static entries match by id or
+ * email per the namespace rule in {@link refMatchesSubject}.
  */
 export function isSuperAdmin(subject: AuthSubject, superAdmins?: readonly string[]): boolean {
-	return anyRefMatchesSubject(superAdmins, subject);
+	return (
+		subject.entitlements?.includes('super-admin') === true ||
+		anyRefMatchesSubject(superAdmins, subject)
+	);
 }
 
 /**
@@ -63,7 +79,7 @@ export function isSuperAdmin(subject: AuthSubject, superAdmins?: readonly string
  * the owner nor an explicit member. Left undefined it preserves the
  * members-only behavior; passed `editor` it lets every logged-in user edit
  * notebooks. The default never overrides an explicit membership — it only
- * fills the gap when there is none. A super admin (`policy.superAdmins`) is
+ * fills the gap when there is none. A static or group-derived super admin is
  * `admin` everywhere, regardless of membership.
  *
  * When both an id row and an email row match the same caller (added by id and
@@ -83,7 +99,7 @@ export function effectiveRole(
 		if (best === null || RANK[member.role] > RANK[best]) best = member.role;
 		if (best === 'admin') break;
 	}
-	return best ?? policy?.defaultRole ?? null;
+	return best ?? subjectDefaultRole(subject, policy);
 }
 
 /** True if the caller's role on the project is at least `min`. */
@@ -135,7 +151,7 @@ export function canSeeProjectEntry(
 	policy?: AuthzPolicy,
 ): boolean | null {
 	if (isSuperAdmin(subject, policy?.superAdmins)) return true;
-	if (policy?.defaultRole != null) return true;
+	if (subjectDefaultRole(subject, policy) != null) return true;
 	if (entry.owner === subject.id) return true;
 	if (entry.member_ids === undefined) return null;
 	if (entry.member_ids.includes(subject.id)) return true;

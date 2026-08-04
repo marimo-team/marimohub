@@ -59,6 +59,8 @@ export interface CreateSessionInput {
 	/** `app` only: the notebook's head version at provision, for staleness detection. */
 	source_version_id?: VersionId;
 	editor_sandbox_sharing?: EditorSandboxSharing;
+	/** Non-extendable expiry of the entitlement credential that authorized the session. */
+	authorization_expires_at?: string;
 	session_id?: SessionId;
 }
 
@@ -140,6 +142,9 @@ export class SessionService {
 			...(input.source_version_id ? { source_version_id: input.source_version_id } : {}),
 			...(input.editor_sandbox_sharing
 				? { editor_sandbox_sharing: input.editor_sandbox_sharing }
+				: {}),
+			...(input.authorization_expires_at
+				? { authorization_expires_at: input.authorization_expires_at }
 				: {}),
 			runtime: input.runtime,
 			sandbox_id: input.sandbox_id,

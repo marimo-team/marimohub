@@ -165,7 +165,7 @@ selected version and cannot write changes back.
 | `_system/sessions/{pid}/{sid}.json`                            | JSON     | Live session record, partitioned by project so a project-scoped read lists only `_system/sessions/{pid}/`. Created on notebook open, updated by heartbeat, and retired by an explicit stop or lifecycle deadline. Closing a browser tab does not immediately delete it.                                                                                                                                                                                                                                |
 | `_system/apps/{pid}/{nid}.json`                                | JSON     | Per-notebook app-singleton claim: names the app session that owns the notebook's shared app sandbox. Written create-if-absent by the create saga, replaced via ETag CAS when stale, CAS'd to a free marker (`session_id: null`) on teardown. All writes go through `SessionService.claimApp`/`releaseApp`. See §4.8.1.                                                                                                                                                                                 |
 | `_system/editors/{pid}/{nid}.json`                             | JSON     | Per-notebook persistent-editor claim. Records the shared/exclusive mode, names the only session allowed to save, and records idempotent takeover phases. All writes go through `SessionService`. See §4.8.2.                                                                                                                                                                                                                                                                                           |
-| `_system/identities/{user-id}.json`                            | JSON     | User display identity (`{ id, email, name }`). Upserted on each authenticated request; mutable, last-writer-wins. Resolves opaque `author`/`user_id` ids to a person.                                                                                                                                                                                                                                                                                                                                  |
+| `_system/identities/{user-id}.json`                            | JSON     | User display identity (`{ id, email, name, picture_url? }`). Updated on each authenticated request with last-writer-wins. Resolves opaque `author`/`user_id` IDs to a person.                                                                                                                                                                                                                                                                                                                          |
 | `_system/tokens/{token-id}.json`                               | JSON     | Personal access token record (`{ id, user_id, name, hash, … }`) keyed by the ULID embedded in the presented `mhub_pat_` bearer, so verification is a single GET. Stores only the SHA-256 of the secret. Mutable, last-writer-wins (coarse `last_used_at` refresh); revocation deletes the object. See §4.11.                                                                                                                                                                                           |
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                  | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
 | `_system/idempotency/{digest}.json`                            | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
@@ -367,6 +367,7 @@ Records are partitioned by project (`_system/sessions/{pid}/{sid}.json`) so the 
 	"status": "running",
 	"started_at": "2025-03-05T14:30:00Z",
 	"last_heartbeat": "2025-03-05T14:35:00Z",
+	"authorization_expires_at": "2025-03-05T15:30:00Z",
 	"runtime": {
 		"python_version": "3.11",
 		"marimo_version": "0.9.0"
@@ -387,6 +388,8 @@ When a session goes `failed`, `markFailed` may persist an optional sanitized `er
 **Valid `status` values:** `starting` · `running` · `terminating` · `terminated` · `failed` · `expired`
 
 `sandbox_id` / `sandbox_url` link the record to the live kernel runtime (a separate container/compute service); `compute_profile` records the configured profile name used at launch and is absent when profiles are unset; `used_fallback` records whether a fallback runtime was used. The optional field is forward-compatible with existing records and requires no migration.
+
+`authorization_expires_at` exists only for sessions authorized by an OIDC group policy. It copies the signed browser session's JWT `exp` value. The lifecycle never extends this deadline. At expiry, it destroys direct subdomain kernels. HTTP proxy requests fail closed, and the Node proxy closes established WebSockets. This teardown skips the final capture so that the kernel stops promptly. Periodic snapshots limit potential data loss. The session API does not return this internal field.
 
 **Session lifecycle:**
 
@@ -498,11 +501,12 @@ The identity directory maps a stable user id — the auth `sub`, which is what e
 	"id": "user_abc123",
 	"email": "ada@example.com",
 	"name": "Ada Lovelace",
+	"picture_url": "https://idp.example.com/avatar/ada",
 	"updated_at": "2025-03-05T14:30:00Z"
 }
 ```
 
-`name` falls back to the email local-part when the identity provider supplies no display name (`AuthUser.name` is optional — the OIDC `name` claim from the `profile` scope, or the Access `name` claim, when present).
+If the identity provider supplies no display name, `name` uses the email local-part. `AuthUser.name` is optional. OIDC reads the `name` claim from the `profile` scope. Access reads its `name` claim. The optional `picture_url` must be an HTTPS URL from the identity provider.
 
 **Why this shape — store the id, refresh the directory.** The foreign keys throughout the store (`author`, `session.user_id`, `snapshot.actor`, `project.owner`/`members`) keep storing the **stable id only**, never a name/email copy. A copy denormalized at write time would go stale when a user later changes their display name or email; instead the directory is **refreshed on every authenticated request**, so resolution always reflects the latest known identity. Reads resolve ids → identities in one batch lookup (`GET /api/v1/users?ids=…`, §13) rather than touching the snapshot.
 
@@ -974,7 +978,11 @@ A request that fails authentication receives `401 UNAUTHORIZED`. The verified us
 `project.json`, resolves the caller's effective role, and rejects an
 insufficient role with `403 FORBIDDEN`.
 
-**Super admins.** `MARIMOHUB_SUPER_ADMINS` lists operators who resolve to `admin` on **every** project, overriding both membership and `MARIMOHUB_DEFAULT_ROLE`. It is the single deployment-wide exception to the per-project model: a super admin sees and lists all projects (even under `none`), reads/writes every notebook and secret, controls any session, and reads the audit trail. An entry containing `@` matches the login email (case-insensitive); any other entry matches the user id (`sub`) exactly — the id and email namespaces do not overlap (`isSuperAdmin`, `packages/core/src/authz.ts`). The elevation flows through the same `effectiveRole` the role matrix uses, so no enforcement path is special-cased; the two invariants that still bind everyone hold for super admins too — a project `owner` cannot be demoted/removed, and a soft-deleted project stays `404`. A PAT minted by a super admin inherits the power.
+**Super admins.** `MARIMOHUB_SUPER_ADMINS` grants `admin` on every project. This status overrides membership and `MARIMOHUB_DEFAULT_ROLE`. A super admin can list all projects, including deployments configured with `none`. The operator can also manage notebooks, secrets, sessions, and the audit trail.
+
+An entry that contains `@` matches the login email without case sensitivity. Other entries match the user ID (`sub`) exactly. The ID and email namespaces do not overlap. See `isSuperAdmin` in `packages/core/src/authz.ts`.
+
+All routes use the same `effectiveRole` calculation. Project owners still cannot be demoted or removed. Soft-deleted projects still return `404`. Static super-admin status applies to PATs. OIDC group-derived status applies only to the browser session and does not transfer to PATs.
 
 Read-side isolation under `none` keeps the read model intact (§7.1). Filtering `GET /projects` would otherwise cost a membership check per project, so each catalog snapshot project entry carries a denormalized **`member_ids`** array (owner + members), refreshed in the same CAS as every membership edit. The list filters in-memory over data already fetched — still 2 GETs. Single-project reads (`GET /projects/{id}`, notebook & session reads) load `project.json` and check `viewer` only when `defaultRole` is `none`; with a default role set they short-circuit with no extra load.
 
