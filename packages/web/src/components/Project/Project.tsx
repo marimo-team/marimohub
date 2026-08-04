@@ -12,6 +12,7 @@ import {
 	Copy,
 	Cpu,
 	Download,
+	FileDown,
 	FileText,
 	FolderArchive,
 	GitBranch,
@@ -60,6 +61,7 @@ import {
 	useDuplicateNotebook,
 	useDeleteNotebook,
 	useDownloadNotebookFile,
+	useDownloadOutputsHtml,
 	useDownloadWorkspace,
 	useProjectQuery,
 	useUpdateProject,
@@ -163,6 +165,7 @@ export function Project() {
 	const duplicateNotebook = useDuplicateNotebook(pid!);
 	const deleteNotebook = useDeleteNotebook(pid!);
 	const downloadNotebookFile = useDownloadNotebookFile(pid!);
+	const downloadOutputsHtml = useDownloadOutputsHtml(pid!);
 	const downloadWorkspace = useDownloadWorkspace(pid!);
 	const updateProject = useUpdateProject();
 	const deleteProject = useDeleteProject();
@@ -336,6 +339,10 @@ export function Project() {
 		downloadNotebookFile.mutate({ notebookId: nb.id, title: nb.title }, { onError: toastError });
 	};
 
+	const handleDownloadOutputs = (nb: NotebookEntry) => {
+		downloadOutputsHtml.mutate({ notebookId: nb.id, title: nb.title }, { onError: toastError });
+	};
+
 	const handleDownloadWorkspace = (nb: NotebookEntry) => {
 		toast.promise(downloadWorkspace.mutateAsync({ notebookId: nb.id, title: nb.title }), {
 			loading: `Preparing workspace for "${nb.title}"...`,
@@ -481,6 +488,11 @@ export function Project() {
 					id: 'download-file',
 					label: 'Download notebook file',
 					icon: <Download className="size-4" />,
+				},
+				{
+					id: 'download-outputs',
+					label: 'Download outputs (HTML)',
+					icon: <FileDown className="size-4" />,
 				},
 				{
 					id: 'download-workspace',
@@ -672,6 +684,7 @@ export function Project() {
 												else if (key === 'sync-settings')
 													syncSettings.open({ notebookId: nb.id, title: nb.title });
 												else if (key === 'download-file') handleDownloadFile(nb);
+												else if (key === 'download-outputs') handleDownloadOutputs(nb);
 												else if (key === 'download-workspace') handleDownloadWorkspace(nb);
 												else if (key === 'delete') deleteModal.open(nb);
 											}}

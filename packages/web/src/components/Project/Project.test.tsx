@@ -116,6 +116,11 @@ function makeFetch(
 			return jsonOk({ code: 'print("download")' });
 		if (method === 'GET' && url.endsWith(`/projects/${PID}/notebooks/nb-1/workspace.zip`))
 			return new Response(new Blob(['zip']), { status: 200 });
+		if (method === 'GET' && url.endsWith(`/projects/${PID}/notebooks/nb-1/html`))
+			return new Response('<html>outputs</html>', {
+				status: 200,
+				headers: { 'content-type': 'text/html' },
+			});
 
 		if (url.includes(`/projects/${PID}/notebooks`))
 			return jsonOk({ items: notebooks, next_cursor: null });
@@ -359,6 +364,7 @@ describe('Project — Notebook Actions', () => {
 			'View static outputs',
 			'Version history',
 			'Download notebook file',
+			'Download outputs (HTML)',
 			'Download workspace',
 			'Delete',
 		]);
@@ -625,6 +631,22 @@ describe('Project — Notebook Actions', () => {
 		);
 		expect(createObjectURL).toHaveBeenCalledOnce();
 		expect(revokeObjectURL).toHaveBeenCalledWith('blob:download');
+	});
+
+	it('downloads the outputs snapshot as HTML', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch();
+		const { createObjectURL } = installDownloadMocks();
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Download outputs (HTML)');
+
+		await waitFor(() =>
+			expect(calls.some((c) => c.method === 'GET' && c.url.endsWith('/notebooks/nb-1/html'))).toBe(
+				true,
+			),
+		);
+		expect(createObjectURL).toHaveBeenCalledOnce();
 	});
 
 	it('downloads the notebook workspace archive', async () => {

@@ -392,6 +392,25 @@ const getNotebookHtml = createRoute({
 	},
 });
 
+const getVersionHtml = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebooks/{nid}/versions/{vid}/html',
+	tags: ['Notebooks'],
+	summary: "One version's HTML snapshot of the notebook's outputs",
+	description:
+		'Serves the HTML snapshot captured for this specific version, raw. ' +
+		'404 with code `NO_HTML_SNAPSHOT` when the version captured none.',
+	request: { params: VersionIdParam },
+	responses: {
+		200: {
+			content: { 'text/html': { schema: z.string() } },
+			description: 'The HTML snapshot, served sandboxed (CSP forces an opaque origin)',
+		},
+		...commonErrors(),
+		...errorResponses(404),
+	},
+});
+
 const restoreVersion = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebooks/{nid}/versions/{vid}/restore',
@@ -604,6 +623,29 @@ app.openapi(getVersion, async (c) => {
 	return c.json({ success: true, data: { version: toPublicVersion(version), code } }, 200);
 });
 
+/**
+ * Serve an HTML snapshot. The snapshot is user-generated HTML (marimo's export
+ * embeds scripts) and must never execute same-origin with the app. CSP
+ * `sandbox` forces an opaque origin even when the URL is opened directly,
+ * independent of the client's own <iframe sandbox> — two independent
+ * containment layers. Authenticated content is never disk-cached (a shared
+ * machine must not serve a private notebook's outputs after logout).
+ */
+function serveHtmlSnapshot(
+	c: Context<HonoEnv>,
+	snapshot: { versionId: string; capturedAt: string; html: string } | null,
+) {
+	if (!snapshot) {
+		return fail(c, 'NO_HTML_SNAPSHOT', 'No HTML snapshot has been captured yet', 404);
+	}
+	c.header('Content-Security-Policy', 'sandbox allow-scripts');
+	c.header('X-Content-Type-Options', 'nosniff');
+	c.header('Cache-Control', 'private, no-store');
+	c.header('X-Marimohub-Version-Id', snapshot.versionId);
+	c.header('X-Marimohub-Captured-At', snapshot.capturedAt);
+	return c.html(snapshot.html, 200);
+}
+
 app.openapi(getNotebookHtml, async (c) => {
 	const deps = c.get('deps');
 	const { notebooks, projects } = deps.services;
@@ -617,21 +659,17 @@ app.openapi(getNotebookHtml, async (c) => {
 		notebooks.getNotebook(pid, nid),
 		notebooks.getLatestHtmlSnapshot(pid, nid),
 	]);
-	if (!snapshot) {
-		return fail(c, 'NO_HTML_SNAPSHOT', 'No HTML snapshot has been captured yet', 404);
-	}
-	// The snapshot is user-generated HTML (marimo's export embeds scripts) and must
-	// never execute same-origin with the app. CSP `sandbox` forces an opaque origin
-	// even when the URL is opened directly, independent of the client's own
-	// <iframe sandbox> — two independent containment layers.
-	c.header('Content-Security-Policy', 'sandbox allow-scripts');
-	c.header('X-Content-Type-Options', 'nosniff');
-	// Authenticated, user-generated content: never disk-cached (a shared machine
-	// must not serve a private notebook's outputs after logout).
-	c.header('Cache-Control', 'private, no-store');
-	c.header('X-Marimohub-Version-Id', snapshot.versionId);
-	c.header('X-Marimohub-Captured-At', snapshot.capturedAt);
-	return c.html(snapshot.html, 200);
+	return serveHtmlSnapshot(c, snapshot);
+});
+
+app.openapi(getVersionHtml, async (c) => {
+	const deps = c.get('deps');
+	const { notebooks, projects } = deps.services;
+	const user = c.get('user');
+	const { pid, nid, vid } = c.req.valid('param');
+	await assertProjectVisible(projects, pid, user, deps.policy);
+	const snapshot = await notebooks.getVersionHtmlSnapshot(pid, nid, vid);
+	return serveHtmlSnapshot(c, snapshot);
 });
 
 app.openapi(restoreVersion, async (c) => {
