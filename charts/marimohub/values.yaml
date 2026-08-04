@@ -74,8 +74,8 @@ service:
   port: 80
 
 # Prometheus scraping of the server's OpenTelemetry metrics: injects
-# OTEL_METRICS_EXPORTER=prometheus into the pods and exposes the port on the
-# Service (not the ingress). For OTLP push instead, leave this off and set
+# OTEL_METRICS_EXPORTER=prometheus into the API pods and exposes the port on
+# the Service (not the ingress). For OTLP push instead, leave this off and set
 # OTEL_* vars via config/extraEnv.
 metrics:
   enabled: false

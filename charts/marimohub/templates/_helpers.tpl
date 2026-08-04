@@ -110,12 +110,10 @@ spec:
       imagePullPolicy: {{ $v.image.pullPolicy }}
       securityContext:
         {{- toYaml $v.containerSecurityContext | nindent 8 }}
-      {{- if or (not .maintenance) $v.metrics.enabled }}
+      {{- if not .maintenance }}
       ports:
-        {{- if not .maintenance }}
         - name: http
           containerPort: {{ $v.containerPort }}
-        {{- end }}
         {{- if $v.metrics.enabled }}
         - name: metrics
           containerPort: {{ $v.metrics.port }}
@@ -136,7 +134,10 @@ spec:
         # explicit env overrides any value coming from the ConfigMap/Secret.
         - name: MARIMOHUB_RUN_MAINTENANCE
           value: {{ if .maintenance }}"true"{{ else }}"false"{{ end }}
-        {{- if $v.metrics.enabled }}
+        {{- /* API pods only: the Service/ServiceMonitor never scrape the
+        maintenance pod, so a listener there would just be an unscraped open
+        port. */}}
+        {{- if and $v.metrics.enabled (not .maintenance) }}
         - name: OTEL_METRICS_EXPORTER
           value: prometheus
         - name: OTEL_EXPORTER_PROMETHEUS_PORT
