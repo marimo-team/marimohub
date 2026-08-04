@@ -134,6 +134,7 @@ async function renderProject() {
 	renderWithClient(
 		<Routes>
 			<Route path="/projects/:pid" element={<Project />} />
+			<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<div>snapshot page</div>} />
 			<Route path="/" element={<div>home</div>} />
 		</Routes>,
 		{ route: `/projects/${PID}`, suspenseFallback: <div>loading</div> },
@@ -355,11 +356,23 @@ describe('Project — Notebook Actions', () => {
 			'Rename',
 			'Duplicate',
 			'Run as app',
+			'View static outputs',
 			'Version history',
 			'Download notebook file',
 			'Download workspace',
 			'Delete',
 		]);
+	});
+
+	it('"View static outputs" opens the sandbox-free snapshot page', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch();
+		await renderProject();
+
+		await chooseNotebookAction(user, 'View static outputs');
+		expect(await screen.findByText('snapshot page')).toBeInTheDocument();
+		// A navigation, not compute: no session create fired.
+		expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/sessions'))).toBe(false);
 	});
 
 	it('deletes a notebook only after confirmation', async () => {

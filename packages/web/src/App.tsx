@@ -7,6 +7,7 @@ import { Footer } from '@/components/Footer/Footer';
 import { ProjectList } from '@/components/ProjectList/ProjectList';
 import { Project } from '@/components/Project/Project';
 import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
+import { SnapshotPage } from '@/components/NotebookPage/SnapshotPage';
 import { SignIn } from '@/components/SignIn/SignIn';
 import { ErrorBoundary, Button } from '@/components/ui';
 import { Toaster } from '@/components/ui/sonner';
@@ -115,6 +116,8 @@ function AppContent() {
 							path="/projects/:pid/notebooks/:nid/app"
 							element={<NotebookPage variant="app" />}
 						/>
+						{/* The last HTML snapshot, sandbox-free (no session is ever started). */}
+						<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<SnapshotPage />} />
 						<Route path="*" element={<StandardLayout />} />
 					</Routes>
 				</Suspense>

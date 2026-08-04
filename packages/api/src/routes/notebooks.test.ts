@@ -870,6 +870,8 @@ describe('Notebook routes', () => {
 		// User-generated HTML: must be forced into an opaque origin, never sniffed.
 		expect(res.headers.get('Content-Security-Policy')).toBe('sandbox allow-scripts');
 		expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
+		// Never disk-cached: a shared machine must not replay private outputs after logout.
+		expect(res.headers.get('Cache-Control')).toBe('private, no-store');
 		expect(res.headers.get('X-Marimohub-Version-Id')).toBe(committed!.versionId);
 		expect(res.headers.get('X-Marimohub-Captured-At')).toBeTruthy();
 		expect(await res.text()).toBe('<html><body>outputs</body></html>');
