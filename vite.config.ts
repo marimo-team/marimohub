@@ -106,7 +106,6 @@ export default defineConfig({
 			'unicorn/prefer-number-properties': 'error',
 			'unicorn/no-lonely-if': 'error',
 			'unicorn/prefer-array-some': 'error',
-			'unicorn/prefer-includes': 'error',
 			'unicorn/prefer-string-slice': 'error',
 			'unicorn/prefer-date-now': 'error',
 			'unicorn/explicit-length-check': 'error',
@@ -125,7 +124,6 @@ export default defineConfig({
 			// breaks calls to params typed `T | undefined` (not optional) and erases
 			// deliberate test intent (`fn(undefined)`), so only clean returns/defaults.
 			'unicorn/no-useless-undefined': ['error', { checkArguments: false }],
-			'unicorn/prefer-string-starts-ends-with': 'error',
 			'unicorn/prefer-regexp-test': 'error',
 			'unicorn/prefer-array-flat': 'error',
 			'unicorn/prefer-logical-operator-over-ternary': 'error',
@@ -200,7 +198,6 @@ export default defineConfig({
 			'unicorn/no-useless-spread': 'error',
 			'unicorn/prefer-set-size': 'error',
 			'unicorn/prefer-array-index-of': 'error',
-			'unicorn/prefer-array-find': 'error',
 			'unicorn/prefer-blob-reading-methods': 'error',
 			'unicorn/prefer-modern-dom-apis': 'error',
 			'unicorn/prefer-dom-node-append': 'error',
@@ -208,6 +205,13 @@ export default defineConfig({
 			'unicorn/prefer-keyboard-event-key': 'error',
 
 			// --- type-aware ---
+			// These three supersede the AST-only unicorn `prefer-includes` /
+			// `prefer-string-starts-ends-with` / `prefer-array-find`: they catch the
+			// same patterns plus `s[0] === x`, `charAt`, `slice`, `indexOf === 0`.
+			// `prefer-includes`/`prefer-array-find` are off by omission; the
+			// starts/ends one is on via the default correctness category, so disable
+			// it explicitly to avoid duplicate diagnostics on the same code.
+			'unicorn/prefer-string-starts-ends-with': 'off',
 			'typescript/prefer-includes': 'error',
 			'typescript/prefer-string-starts-ends-with': 'error',
 			'typescript/prefer-find': 'error',
