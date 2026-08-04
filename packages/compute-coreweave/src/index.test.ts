@@ -118,14 +118,15 @@ describe('CoreWeaveCompute', () => {
 				);
 				expect(command).toContain("ln -s '/var/run/marimohub/user-home' '/mnt/ada@example.com'");
 				expect(command).toMatch(/; true$/);
-				expect(
-					warn.mock.calls
-						.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
-						.find((event) => event.event === 'coreweave_ensure'),
-				).toMatchObject({
+				const ensureEvent = warn.mock.calls
+					.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
+					.find((event) => event.event === 'coreweave_ensure');
+				expect(ensureEvent).toMatchObject({
 					profile_names: ['marimohub-user-home'],
-					user_home_key: 'ada@example.com',
+					user_home_attached: true,
 				});
+				expect(ensureEvent).not.toHaveProperty('user_home_key');
+				expect(JSON.stringify(ensureEvent)).not.toContain('ada@example.com');
 			} finally {
 				warn.mockRestore();
 			}

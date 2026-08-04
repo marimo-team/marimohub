@@ -352,7 +352,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				create_ms: t2 - t1,
 				boot_ms: t3 - t2,
 				...(this.config.profileNames?.length ? { profile_names: this.config.profileNames } : {}),
-				...(this.userHome ? { user_home_key: this.userHome.key } : {}),
+				...(this.userHome ? { user_home_attached: true } : {}),
 			}),
 		);
 		return this.sandbox;
