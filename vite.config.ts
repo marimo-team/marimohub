@@ -218,21 +218,23 @@ export default defineConfig({
 			'typescript/prefer-as-const': 'error',
 			'typescript/no-unnecessary-type-constraint': 'error',
 
-			// Rejected: `react-perf/jsx-no-new-*` (inline handlers/objects/JSX as
-			// props are idiomatic and only cost when the child is memoized — 100+
-			// noisy, non-autofixable hits); `unicorn/no-negated-condition` (stylistic
-			// if/else swaps); `unicorn/consistent-function-scoping` (debatable, and
-			// noisy in tests); `typescript/no-unnecessary-type-arguments` (churn for
-			// no current benefit); `eslint/no-template-curly-in-string` (our `${…}`
-			// literals are deliberate bash param-expansions in shell bootstrap
-			// scripts); `unicorn/no-array-for-each` (its autofix isn't type-aware and
-			// would break `Headers`/`Map`/`Set` `.forEach`). `unicorn/prefer-at`
-			// (`.at()` returns `T | undefined`, breaking typed-array bitwise code that
-			// index access types as `T`); `typescript/non-nullable-type-assertion-style`
-			// (would push `as` casts toward `!`, at odds with the deferred
-			// `no-non-null-assertion`); `unicorn/prefer-string-raw` (rewrites one
-			// segment of a `+`-built shell string to a tagged template, tripping
-			// `prefer-template`).
+			// Rejected — don't re-add:
+			// - `react-perf/jsx-no-new-*`: inline handlers/objects/JSX as props are
+			//   idiomatic and only cost when the child is memoized (100+ noisy,
+			//   non-autofixable hits).
+			// - `unicorn/prefer-at`: `.at()` returns `T | undefined`, breaking
+			//   typed-array bitwise code that index access types as `T`.
+			// - `typescript/non-nullable-type-assertion-style`: pushes `as` casts
+			//   toward `!`, at odds with the deferred `no-non-null-assertion`.
+			// - `unicorn/prefer-string-raw`: rewrites one segment of a `+`-built shell
+			//   string to a tagged template, tripping `prefer-template`.
+			// - `unicorn/no-array-for-each`: autofix isn't type-aware, would break
+			//   `Headers`/`Map`/`Set` `.forEach`.
+			// - `eslint/no-template-curly-in-string`: our `${…}` literals are
+			//   deliberate bash param-expansions in shell bootstrap scripts.
+			// - `unicorn/no-negated-condition`: stylistic if/else swaps.
+			// - `unicorn/consistent-function-scoping`: debatable, and noisy in tests.
+			// - `typescript/no-unnecessary-type-arguments`: churn for no current benefit.
 
 			// --- react hooks correctness (packages/web) ---
 			'react-hooks/rules-of-hooks': 'error',
