@@ -91,6 +91,9 @@ export function createApi(rawDeps: ApiDeps) {
 		return next();
 	});
 
+	// Tracing wraps everything below it, including the proxy short-circuits.
+	if (deps.tracingMiddleware) app.use('*', deps.tracingMiddleware);
+
 	// In `proxy` mode, authenticate + authorize + forward `…/proxy/<token>/…` kernel
 	// traffic through the app. A no-op in `subdomain` mode. Mounted ahead of `/api`,
 	// the CSRF/body-limit guards, and the SPA fallback.

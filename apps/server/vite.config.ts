@@ -34,6 +34,9 @@ export default defineConfig({
 			// fflate (pure-JS zip, used by the workspace-download route) must be
 			// bundled — the runtime image ships no node_modules.
 			/^fflate$/,
+			// OpenTelemetry (pure-JS + node built-ins) must be bundled — the runtime
+			// image ships no node_modules.
+			/^@opentelemetry\//,
 			/^@aws-sdk\//,
 			/^@azure\//,
 			// The vendored CoreWeave Sandbox SDK and its (pure-JS) gRPC/protobuf
