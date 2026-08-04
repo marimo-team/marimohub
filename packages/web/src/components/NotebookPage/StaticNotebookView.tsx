@@ -87,9 +87,13 @@ export function StaticNotebookView({
 				</div>
 			) : (
 				<div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-					<p className="text-sm font-medium">No outputs yet</p>
+					<p className="text-sm font-medium">
+						{versionId ? 'No outputs for this version' : 'No outputs yet'}
+					</p>
 					<p className="max-w-md text-sm text-muted-foreground">
-						An editor needs to run this notebook before its outputs can be viewed.
+						{versionId
+							? 'This version captured no outputs, or they have since been cleaned up.'
+							: 'An editor needs to run this notebook before its outputs can be viewed.'}
 					</p>
 				</div>
 			)}

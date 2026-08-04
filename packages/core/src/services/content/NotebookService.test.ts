@@ -1093,6 +1093,80 @@ describe('NotebookService', () => {
 		});
 	});
 
+	describe('getVersionHtmlSnapshot', () => {
+		it('returns the pinned version’s snapshot, not the latest', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const first = await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'v2', html: '<html>first</html>' },
+				ACTOR,
+			);
+			await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'v3', html: '<html>second</html>' },
+				ACTOR,
+			);
+
+			const snapshot = await notebooks.getVersionHtmlSnapshot(
+				projectId,
+				created.id,
+				first!.versionId,
+			);
+			expect(snapshot).toEqual({
+				versionId: first!.versionId,
+				capturedAt: expect.any(String),
+				html: '<html>first</html>',
+			});
+		});
+
+		it('returns null for a version without a snapshot, and when the html object was pruned', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			// The initial save captured no HTML.
+			const { source } = await notebooks.getNotebook(projectId, created.id);
+			expect(
+				await notebooks.getVersionHtmlSnapshot(projectId, created.id, source.current_version_id!),
+			).toBeNull();
+
+			// Descriptor present but the html object itself is gone (pruned).
+			const committed = await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'v2', html: '<html>x</html>' },
+				ACTOR,
+			);
+			const ver = paths.project(projectId).notebook(created.id).version(committed!.versionId);
+			await bucket.delete(ver.html);
+			expect(
+				await notebooks.getVersionHtmlSnapshot(projectId, created.id, committed!.versionId),
+			).toBeNull();
+		});
+
+		it('rejects with NotFoundError for unknown and malformed version ids', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+
+			await expect(
+				notebooks.getVersionHtmlSnapshot(projectId, created.id, createVersionId()),
+			).rejects.toThrow(NotFoundError);
+			await expect(
+				notebooks.getVersionHtmlSnapshot(projectId, created.id, 'not-a-version-id'),
+			).rejects.toThrow(NotFoundError);
+		});
+	});
+
 	describe('commitSession', () => {
 		it('cuts a new version from changed code and updates the live notebook + source', async () => {
 			const created = await notebooks.createNotebook(

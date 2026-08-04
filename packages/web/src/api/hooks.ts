@@ -819,7 +819,7 @@ async function fetchHtmlSnapshot(
 			error?: { code?: string };
 		} | null;
 		if (body?.error?.code === 'NO_HTML_SNAPSHOT') return null;
-		throw new Error('Notebook not found');
+		throw new Error(versionId ? 'Version not found' : 'Notebook not found');
 	}
 	if (!res.ok) throw new Error(`Failed to load notebook outputs (HTTP ${res.status})`);
 	return {
@@ -837,7 +837,11 @@ export function useNotebookHtmlQuery(projectId: string, notebookId: string, vers
 	return useQuery({
 		queryKey: notebookKeys.html(projectId, notebookId, versionId),
 		queryFn: () => fetchHtmlSnapshot(projectId, notebookId, versionId),
-		staleTime: 5 * 60 * 1000,
+		// A pinned version's snapshot is immutable; only the latest alias can change.
+		// It can be pruned server-side, but keeping the cached copy then is deliberate:
+		// a refetch would yank rendered outputs into the empty state mid-view, and the
+		// in-memory cache expires with the session anyway.
+		staleTime: versionId ? Infinity : 5 * 60 * 1000,
 	});
 }
 
