@@ -192,8 +192,6 @@ export default defineConfig({
 			'unicorn/no-array-method-this-argument': 'error',
 			'unicorn/require-array-join-separator': 'error',
 			'unicorn/consistent-existence-index-check': 'error',
-			// Passing one item / an already-awaited value to `Promise.all`/`race`/etc.
-			// is almost always a mistake — the concurrency wrapper does nothing.
 			'unicorn/no-single-promise-in-promise-methods': 'error',
 			'unicorn/no-await-in-promise-methods': 'error',
 
@@ -295,9 +293,8 @@ export default defineConfig({
 					// Inline `new Promise((r) => setTimeout(r, ms))` sleeps are fine in
 					// tests; the swallowed-rejection footgun the rule guards doesn't apply.
 					'eslint/no-promise-executor-return': 'off',
-					// Tests concatenate distinct fixture fragments (one literal per file's
-					// content) for readability, and spread a `Buffer` into a plain array to
-					// compare bytes — both trip these rules for no real gain.
+					// Tests concatenate fixture fragments and spread a `Buffer` into an
+					// array to compare bytes — both are deliberate.
 					'eslint/no-useless-concat': 'off',
 					'unicorn/no-useless-spread': 'off',
 				},
