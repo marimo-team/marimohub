@@ -134,6 +134,7 @@ describe('startOtel', () => {
 		const handle = startOtel();
 		expect(handle).not.toBeNull();
 		expect(handle?.tracing).toBe(true);
+		expect(handle?.metrics).toBe(false);
 		expect(register).toHaveBeenCalledOnce();
 		const provider = register.mock.instances[0] as NodeTracerProvider;
 		// Never ended — an ended span would enter the batch exporter and make
@@ -190,6 +191,7 @@ describe('startOtel', () => {
 		const handle = startOtel();
 		expect(handle).not.toBeNull();
 		expect(handle?.tracing).toBe(false);
+		expect(handle?.metrics).toBe(true);
 		expect(register).not.toHaveBeenCalled();
 		expect(startServer).toHaveBeenCalledOnce();
 		expect(setGlobal).toHaveBeenCalledOnce();

@@ -8,7 +8,17 @@
  * notebook content). Extractors must emit identifiers and storage keys only.
  */
 import type { Attributes } from '@opentelemetry/api';
-import { SpanStatusCode, trace } from '@opentelemetry/api';
+import { isSpanContextValid, SpanStatusCode, trace } from '@opentelemetry/api';
+
+/**
+ * The active span's ids as log fields, or undefined when no span is recording
+ * (Workers, tracing off) — lets a log line join its trace in the aggregator.
+ */
+export function traceContext(): { trace_id: string; span_id: string } | undefined {
+	const ctx = trace.getActiveSpan()?.spanContext();
+	if (!ctx || !isSpanContextValid(ctx)) return undefined;
+	return { trace_id: ctx.traceId, span_id: ctx.spanId };
+}
 
 export type AttrExtractors<T> = {
 	[K in keyof T]?: T[K] extends (...args: infer A) => unknown ? (...args: A) => Attributes : never;

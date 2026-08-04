@@ -14,7 +14,7 @@ import { createApi } from '@marimo-hub/api';
 import { createFromEnv, isConfigError } from '@marimo-hub/config';
 import { startMaintenance, startSessionLifecycle } from './cron';
 import { logEvent } from './log';
-import { WideEventMetrics } from './metrics';
+import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
 import { startOtel } from './otel';
 import { serveSpaFallback, serveStaticWithCache } from './staticCache';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
@@ -50,11 +50,15 @@ process.on('uncaughtException', (err) => {
 // Telemetry sink: services emit CAS/reaper/snapshot signals here; the maintenance
 // loop flushes them as one wide event per cycle (and request-path CAS contention
 // surfaces at the next flush).
-const metrics = new WideEventMetrics();
+const wideEvents = new WideEventMetrics();
 
 // Tracing + metrics (standard OTEL_* env vars); the global providers must
 // register before requests are served.
 const otel = startOtel();
+
+// Fan domain metrics out to OTEL when its metrics pillar is on; the maintenance
+// loop below still flushes `wideEvents` directly.
+const metrics = otel?.metrics ? fanoutMetrics(wideEvents, new OtelMetrics()) : wideEvents;
 
 // Config errors are deterministic — a restart can't fix them — so print a readable
 // remediation block to stderr and exit. (Transient backend problems go through the
@@ -119,7 +123,7 @@ app.get('*', serveSpaFallback(staticRoot));
 // marimohub-maintenance Deployment). The bucket-CAS leases inside are
 // defense-in-depth guards.
 if (process.env.MARIMOHUB_RUN_MAINTENANCE === 'true') {
-	startMaintenance(deps, metrics);
+	startMaintenance(deps, wideEvents);
 	startSessionLifecycle(deps);
 }
 
