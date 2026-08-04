@@ -69,7 +69,7 @@ function openIn(base: string): void {
 }
 
 function menuItems(): HTMLButtonElement[] {
-	return [...menu.value?.querySelectorAll('button') ?? []];
+	return [...(menu.value?.querySelectorAll('button') ?? [])];
 }
 
 async function toggleMenu(): Promise<void> {

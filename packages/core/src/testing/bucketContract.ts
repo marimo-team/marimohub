@@ -50,7 +50,7 @@ export function bucketContract(name: string, makeBucket: () => Bucket | Promise<
 			const got = await bucket.get('bin/text');
 			expect(await got!.text()).toBe('héllo');
 			// bytes() yields the UTF-8 encoding of the same string.
-			expect([...await got!.bytes()]).toEqual([...new TextEncoder().encode('héllo')]);
+			expect([...(await got!.bytes())]).toEqual([...new TextEncoder().encode('héllo')]);
 		});
 
 		it('get and head of a missing key return null', async () => {
