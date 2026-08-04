@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
 import { Header } from './Header';
 
 const USER = { id: 'usr-123', email: 'ada@example.com' };
+
+function LocationProbe() {
+	return <output data-testid="location">{useLocation().pathname}</output>;
+}
 
 /**
  * `userEvent.setup()` installs its own `navigator.clipboard`, so the app's must
@@ -54,7 +59,10 @@ function setup(
 	renderWithClient(
 		<ThemeProvider>
 			<AuthProvider>
-				<Header />
+				<>
+					<Header />
+					<LocationProbe />
+				</>
 			</AuthProvider>
 		</ThemeProvider>,
 		{ route: '/' },
@@ -129,6 +137,14 @@ describe('Header', () => {
 		const { user } = setup();
 		await openUserMenu(user);
 		expect(screen.queryByRole('menuitem', { name: /Org integrations/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole('menuitem', { name: /Audit logs/ })).not.toBeInTheDocument();
+	});
+
+	it('navigates super admins to the audit log page', async () => {
+		const { user } = setup(undefined, { ...USER, is_super_admin: true });
+		await openUserMenu(user);
+		await user.click(screen.getByRole('menuitem', { name: /Audit logs/ }));
+		expect(screen.getByTestId('location')).toHaveTextContent('/admin/audit-logs');
 	});
 
 	it('opens the org integrations dialog for a super admin and lists the org entries', async () => {

@@ -26,8 +26,8 @@ or a [personal access token](/api-tokens) sent as `Authorization: Bearer …`
 (for CI, scripts, and the CLI).
 Project reads require effective `viewer` access through ownership, membership,
 or `MARIMOHUB_DEFAULT_ROLE`; `none` hides non-member projects. Writes are
-role-gated, and the audit log requires project `admin` (see
-[Security → Authorization](/security#authorization-roles)).
+role-gated. A project audit log requires project `admin`. The deployment audit
+log requires a super admin (see [Security → Authorization](/security#authorization-roles)).
 Editor ownership, temporary session creation, and takeover are documented in
 [Editor sessions](/editor-sessions).
 
@@ -59,6 +59,10 @@ Resource groups:
   effective role). Admins can read the audit log one UTC day at a time
   (`GET /projects/{pid}/events?date=YYYY-MM-DD`, defaults to today) — every
   project/notebook mutation is recorded as an event.
+- **Audit** — super admins can read deployment events with `GET /events`. The
+  endpoint returns newest events first. It supports exact filters for event type,
+  actor ID, and project ID. The default range is the last 30 UTC days. A custom
+  inclusive range cannot contain more than 30 days.
 - **Notebooks** — create and manage local or Git-synced notebooks, read code,
   manage versions, and rotate notebook sync tokens.
 - **Sessions** — list, create, inspect, heartbeat, and stop kernel sessions.
@@ -74,7 +78,7 @@ Resource groups:
 ## Pagination
 
 The project, notebook, notebook-version, project-session, integration-instance,
-and integration-version list endpoints return this page shape:
+integration-version, and deployment-audit list endpoints return this page shape:
 
 ```jsonc
 {
@@ -93,8 +97,8 @@ get the next page. Items are ordered newest-first. A `next_cursor` value of
 `null` marks the final page. The cursor is opaque.
 
 Some small or naturally bounded collections still return arrays. These include
-project members, API tokens, integration kinds, audit events, and user search
-results. The OpenAPI response schema is authoritative for each route.
+project members, API tokens, integration kinds, project daily audit events, and
+user search results. The OpenAPI response schema is authoritative for each route.
 `GET /api/v1/capabilities` reports the default and maximum page sizes and other
 server limits.
 

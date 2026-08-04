@@ -524,6 +524,17 @@ export const AuditEventResponseSchema = z
 	})
 	.openapi('AuditEvent');
 
+export const AuditLogEntryResponseSchema = z
+	.object({
+		id: z.string(),
+		schema_version: z.number().int().positive(),
+		ts: dt(),
+		event: z.string().openapi({ example: 'project.update' }),
+		actor: z.string(),
+		metadata: z.record(z.string(), z.unknown()),
+	})
+	.openapi('AuditLogEntry');
+
 export const ProjectFederationResponseSchema = z
 	.object({
 		enabled: z.boolean(),

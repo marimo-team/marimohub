@@ -6,6 +6,7 @@ export * from './errors';
 export * from './paths';
 export * from './authz';
 export * from './identityMatch';
+export * from './utcDate';
 
 // Port interfaces (also available at the '@marimo-hub/core/ports' subpath)
 export * from './ports';

@@ -18,6 +18,8 @@ tags:
     description: Project secret management
   - name: Users
     description: User identity resolution
+  - name: Audit
+    description: Deployment and project audit events
   - name: System
     description: Deployment metadata
 security:
@@ -394,6 +396,47 @@ components:
             - true
       required:
         - success
+    AuditLogPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLogEntry'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        schema_version:
+          type: integer
+          exclusiveMinimum: 0
+        ts:
+          type: string
+          format: date-time
+          example: 2025-03-05T14:00:00Z
+        event:
+          type: string
+          example: project.update
+        actor:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: {}
+      required:
+        - id
+        - schema_version
+        - ts
+        - event
+        - actor
+        - metadata
     AuditEvent:
       type: object
       properties:
@@ -2091,6 +2134,118 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/events:
+    get:
+      tags:
+        - Audit
+      summary: List deployment audit events
+      description: Deployment-wide audit trail, newest first. Super-admin only. Date
+        ranges are inclusive and limited to 30 UTC days.
+      parameters:
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+            example: 2026-07-01
+            description: UTC calendar date
+          required: false
+          description: UTC calendar date
+          name: from
+          in: query
+        - schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+            example: 2026-07-01
+            description: UTC calendar date
+          required: false
+          description: UTC calendar date
+          name: to
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+          required: false
+          name: event
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+          required: false
+          name: actor
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+          required: false
+          name: project_id
+          in: query
+      responses:
+        '200':
+          description: Deployment audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/AuditLogPage'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
           content:
             application/json:
               schema:

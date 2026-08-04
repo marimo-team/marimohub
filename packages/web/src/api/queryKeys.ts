@@ -47,6 +47,19 @@ export const systemKeys = {
 	capabilities: () => [...systemKeys.all, 'capabilities'] as const,
 };
 
+export interface AuditLogFilters {
+	from: string;
+	to: string;
+	event: string;
+	actor: string;
+	projectId: string;
+}
+
+export const auditKeys = {
+	all: ['audit-events'] as const,
+	list: (filters: AuditLogFilters) => [...auditKeys.all, 'list', filters] as const,
+};
+
 export const sessionKeys = {
 	all: ['sessions'] as const,
 	detail: (sid: string) => [...sessionKeys.all, 'detail', sid] as const,

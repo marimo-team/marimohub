@@ -14,7 +14,7 @@ import { SessionService } from './runtime/SessionService';
 import { TokenService } from './tokens/TokenService';
 
 export { CatalogService } from './catalog/CatalogService';
-export { EventService } from './catalog/EventService';
+export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
 export { IdempotencyService } from './catalog/IdempotencyService';
 export { SyncedNotebookService } from './content/SyncedNotebookService';
 export { IdentityService } from './identity/IdentityService';

@@ -484,7 +484,7 @@ Every event carries a `schema_version` field so the log stays parseable as the e
 }
 ```
 
-**Event types (emitted today):** every catalog mutation is appended by `CatalogService` after its winning CAS commit (best-effort: a failed append never fails the mutation, it bumps the `events.append_failed` metric). The `event` field is the operation name: `project.create` · `project.update` · `project.members` · `project.delete` · `project.gc` · `notebook.create` · `notebook.update` · `notebook.delete` · `notebook.gc` · `notebook.synced.create` · `notebook.synced.sync`. Context fields (`project_id`, `notebook_id`, …) ride along per operation. Read one day via the admin-only `GET /api/v1/projects/{pid}/events?date=`.
+**Event types (emitted today):** every catalog mutation is appended by `CatalogService` after its winning CAS commit (best-effort: a failed append never fails the mutation, it bumps the `events.append_failed` metric). The `event` field is the operation name: `project.create` · `project.update` · `project.members` · `project.delete` · `project.gc` · `notebook.create` · `notebook.update` · `notebook.delete` · `notebook.gc` · `notebook.synced.create` · `notebook.synced.sync`. Context fields (`project_id`, `notebook_id`, …) ride along per operation. Project admins read one day with `GET /api/v1/projects/{pid}/events?date=`. Super admins read a paginated deployment stream with `GET /api/v1/events`. Each deployment query covers at most 30 UTC days.
 
 **Planned, not yet emitted:** session lifecycle (`session.create` · `session.terminate` · `session.expired`), `notebook.run`, `notebook.snapshot` (snapshot capture on teardown, §8), and `migration.run`.
 
@@ -1017,6 +1017,7 @@ Routes are defined with `@hono/zod-openapi`: each declares typed request and res
 - **Auth** — current user and personal access token management
 - **Users** — identity resolution and directory search
 - **Projects** — project, member, and audit-event management
+- **Audit** — the super-admin deployment audit stream
 - **Notebooks** — local and Git-synced notebooks, content, versions, restore,
   duplicate, HTML snapshots, and sync-token rotation
 - **Sessions** — list, create, inspect, heartbeat, stop, editor ownership, and

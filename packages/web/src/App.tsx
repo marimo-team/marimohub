@@ -1,4 +1,4 @@
-import { Suspense } from 'react';
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
@@ -11,6 +11,8 @@ import { SignIn } from '@/components/SignIn/SignIn';
 import { ErrorBoundary, Button } from '@/components/ui';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiRequestError } from '@/api/client';
+
+const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
 
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { isPending, error, user, signIn, refetchUser } = useAuth();
@@ -75,6 +77,11 @@ function PageFallback() {
 	);
 }
 
+function SuperAdminAuditLogs() {
+	const { user } = useAuth();
+	return user?.is_super_admin ? <AuditLogPage /> : <Navigate to="/" replace />;
+}
+
 function StandardLayout() {
 	return (
 		<div className="flex min-h-dvh flex-col">
@@ -85,6 +92,7 @@ function StandardLayout() {
 						<Routes>
 							<Route path="/" element={<ProjectList />} />
 							<Route path="/projects/:pid" element={<Project />} />
+							<Route path="/admin/audit-logs" element={<SuperAdminAuditLogs />} />
 							<Route path="*" element={<Navigate to="/" replace />} />
 						</Routes>
 					</Suspense>

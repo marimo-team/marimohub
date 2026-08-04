@@ -775,6 +775,7 @@ export function toPublicToken(token: Token): PublicToken {
 // --- Event ---
 
 export const EventSchema = z.looseObject({
+	id: z.string().min(1),
 	schema_version: SchemaVersionSchema,
 	ts: z.iso.datetime(),
 	event: z.string(),

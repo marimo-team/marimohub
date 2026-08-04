@@ -169,6 +169,10 @@ It is the one grant that overrides the per-project role model. Only super admins
 can manage [organization-wide integrations](./integrations.md#organization-wide-integrations).
 Project roles never grant this access.
 
+The web application gives super admins a deployment audit-log page. The page
+uses `GET /api/v1/events`. This endpoint returns at most 30 UTC days per query.
+Project admins retain access to each project's daily audit log.
+
 An entry containing `@` matches the caller's login email, case-insensitively;
 any other entry matches the user id (the IdP `sub`) exactly. The two namespaces
 do not overlap — an email entry never elevates a caller whose _id_ happens to
