@@ -56,7 +56,7 @@ Resource groups:
 
 - **Projects** — list/create/update/delete projects; add/update/remove members
   (`/projects/{pid}/members`). Project responses carry `your_role` (the caller's
-  effective role). Admins can read the audit log one UTC day at a time
+  effective role). Managers can read the audit log one UTC day at a time
   (`GET /projects/{pid}/events?date=YYYY-MM-DD`, defaults to today) — every
   project/notebook mutation is recorded as an event.
 - **Audit** — super admins can read deployment events with `GET /events`. The
