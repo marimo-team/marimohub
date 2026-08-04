@@ -1,7 +1,7 @@
 import { toast } from 'sonner';
 import { FormDialog, useAppForm, useSeedOnOpen } from '@/components/form';
 import { useNotebookQuery, useUpdateNotebook } from '@/api/hooks';
-import { baseImageOptions, DEFAULT_BASE_IMAGE, useSandboxImages } from './baseImage';
+import { baseImageOptions, DEFAULT_BASE_IMAGE, imageLabel, useSandboxImages } from './baseImage';
 
 interface ChangeBaseImageDialogProps {
 	isOpen: boolean;
@@ -36,7 +36,7 @@ export function ChangeBaseImageDialog({
 				toast.success(
 					choice === DEFAULT_BASE_IMAGE
 						? 'Base image reset to default'
-						: `Base image set to "${choice}"`,
+						: `Base image set to "${imageLabel(choice)}"`,
 				);
 				onClose();
 			} catch (err) {
@@ -59,6 +59,7 @@ export function ChangeBaseImageDialog({
 			title="Change Base Image"
 			submitLabel="Save"
 			pendingLabel="Saving..."
+			width="lg"
 		>
 			<p className="text-xs text-muted-foreground">
 				The image "{notebook.title}" runs on. Takes effect the next time a session starts.
