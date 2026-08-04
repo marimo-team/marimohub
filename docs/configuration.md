@@ -277,7 +277,7 @@ App-native OpenID Connect (the production backend).
 | `MARIMOHUB_AUTH_OIDC_CLIENT_ID` | OAuth2 client id. | Yes | — | — |
 | `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET` 🔒 | OAuth2 client secret. | Yes | — | — |
 | `MARIMOHUB_AUTH_OIDC_REDIRECT_URI` | Absolute callback URL. | Yes | — | `https://hub.example.com/api/auth/callback` |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE` | Optional ID-token audience. oauth4webapi always enforces the client ID. | — | — | — |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE` | Deprecated and ignored. The ID-token `aud` claim must contain the configured client ID. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_PROMPT` | OAuth `prompt` value. `select_account` displays the account chooser. Use `consent` to display consent again. Space-separated combinations are valid. | — | `select_account` | `consent` |
 | `MARIMOHUB_AUTH_OIDC_SCOPES` | Space-separated scopes. Must include `openid` and `email`. Add only scopes that the provider requires for group claims. `offline_access` is invalid because marimohub stores no refresh tokens. | — | `openid email profile` | — |
 | `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` | Requires boolean `email_verified=true` by default. If a trusted issuer omits the claim, use `trusted-issuer`. Other present values are invalid. | — | `required` | `trusted-issuer` |

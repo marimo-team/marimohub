@@ -12,7 +12,7 @@ MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=…
 MARIMOHUB_AUTH_OIDC_REDIRECT_URI=https://hub.example.com/api/auth/callback
 MARIMOHUB_AUTH_SESSION_SECRET=…            # signs the session cookie (HS256, ≥32 bytes)
 MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS=example.com  # REQUIRED allowlist (verified email); `*` allows all
-# MARIMOHUB_AUTH_OIDC_AUDIENCE=…           # optional: expected ID-token audience (the client id is enforced anyway)
+# MARIMOHUB_AUTH_OIDC_AUDIENCE=…           # deprecated and ignored; aud must contain the client ID
 # MARIMOHUB_AUTH_OIDC_PROMPT=consent       # optional: override the default (select_account) OAuth prompt
 # MARIMOHUB_AUTH_OIDC_SCOPES="openid email profile groups" # add only provider-required scopes
 ```
@@ -26,7 +26,8 @@ If the provider publishes UserInfo, marimohub uses it for profile claims.
 UserInfo must have the same `sub` as the validated ID token. Email verification
 is required by default. If a trusted issuer omits `email_verified`, use
 `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer`. Any present value other
-than boolean `true` is invalid.
+than boolean `true` is invalid. A domain allowlist always requires boolean
+`true`, even under `trusted-issuer`.
 
 The signed session JWT has a 3,800-byte limit. If necessary, marimohub omits the
 profile picture first and the display name second. Required identity and
@@ -55,10 +56,11 @@ entitlements. The session cookie stores mapped entitlements, not raw groups.
 
 Group sessions last at most one hour by default. This limit bounds the delay
 after an IdP removes a user from a group. Kernels inherit the session JWT expiry
-as a fixed authorization deadline. Active editors cannot extend it. At expiry,
-the lifecycle destroys the kernel and the proxy closes WebSockets. This teardown
-skips the final capture so that the kernel stops promptly. Periodic snapshots
-limit potential data loss.
+as a fixed authorization deadline. Active editors cannot extend it. Session
+reuse keeps the earliest caller credential deadline. At expiry, the lifecycle
+destroys the kernel and the proxy closes WebSockets. This teardown skips the
+final capture so that the kernel stops promptly. Periodic snapshots limit
+potential data loss.
 
 Missing, malformed, or oversized group data cannot satisfy the login policy.
 marimohub accepts at most 200 group IDs. It does not resolve group-overage

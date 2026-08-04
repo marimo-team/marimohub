@@ -738,8 +738,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					},
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_AUDIENCE',
-						name: 'OIDC audience',
-						description: 'Optional ID-token audience. oauth4webapi always enforces the client ID.',
+						name: 'OIDC audience (deprecated)',
+						description:
+							'Deprecated and ignored. The ID-token `aud` claim must contain the configured client ID.',
 					},
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_PROMPT',

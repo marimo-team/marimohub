@@ -7,10 +7,28 @@ export interface UserAvatarProps {
 	className?: string;
 }
 
-export function UserAvatar({ pictureUrl, label, className }: UserAvatarProps) {
-	const [failedUrl, setFailedUrl] = useState<string | null>(null);
-	const showPicture = Boolean(pictureUrl && pictureUrl !== failedUrl);
+function AvatarContent({ pictureUrl, label }: Pick<UserAvatarProps, 'pictureUrl' | 'label'>) {
+	const [pictureFailed, setPictureFailed] = useState(false);
+	const initialCodePoint = label.trim().codePointAt(0);
+	const initial =
+		initialCodePoint === undefined ? '' : String.fromCodePoint(initialCodePoint).toUpperCase();
 
+	if (!pictureUrl || pictureFailed) {
+		return initial;
+	}
+
+	return (
+		<img
+			src={pictureUrl}
+			alt=""
+			referrerPolicy="no-referrer"
+			className="size-full object-cover"
+			onError={() => setPictureFailed(true)}
+		/>
+	);
+}
+
+export function UserAvatar({ pictureUrl, label, className }: UserAvatarProps) {
 	return (
 		<span
 			aria-hidden="true"
@@ -19,17 +37,7 @@ export function UserAvatar({ pictureUrl, label, className }: UserAvatarProps) {
 				className,
 			)}
 		>
-			{showPicture ? (
-				<img
-					src={pictureUrl ?? undefined}
-					alt=""
-					referrerPolicy="no-referrer"
-					className="size-full object-cover"
-					onError={() => setFailedUrl(pictureUrl ?? null)}
-				/>
-			) : (
-				label.charAt(0).toUpperCase()
-			)}
+			<AvatarContent key={pictureUrl ?? ''} pictureUrl={pictureUrl} label={label} />
 		</span>
 	);
 }

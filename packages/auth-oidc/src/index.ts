@@ -648,7 +648,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		if (emailVerified !== undefined && emailVerified !== true) {
 			return callbackError(c, 'email_not_verified', returnTo);
 		}
-		if (emailVerification === 'required' && emailVerified !== true) {
+		if ((emailVerification === 'required' || restrictDomains) && emailVerified !== true) {
 			return callbackError(c, 'email_not_verified', returnTo);
 		}
 

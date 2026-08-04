@@ -725,7 +725,7 @@ export const IdentitySchema = z.object({
 	id: UserIdSchema,
 	email: z.string(),
 	name: z.string(),
-	picture_url: z.url().optional(),
+	picture_url: z.url({ protocol: /^https$/ }).optional(),
 	updated_at: z.iso.datetime(),
 });
 

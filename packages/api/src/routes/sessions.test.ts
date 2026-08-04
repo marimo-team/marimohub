@@ -5,6 +5,7 @@ import {
 	createProjectId,
 	createServices,
 	Millis,
+	paths,
 } from '@marimo-hub/core';
 import type { NotebookId, ProjectId, Session, SessionId } from '@marimo-hub/core';
 import {
@@ -12,6 +13,7 @@ import {
 	fakeComputeFrom,
 	makeFakeCompute,
 	makeFakeSandbox,
+	makeSession,
 	uid,
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -1352,6 +1354,88 @@ describe('Session routes', () => {
 		} finally {
 			nowSpy.mockRestore();
 		}
+	});
+
+	it('reused sessions keep the earliest credential deadline', async () => {
+		let credentialDeadline = new Date(Date.now() + Millis.hours(2)).toISOString();
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: credentialDeadline,
+					}),
+				},
+			},
+		}).request;
+
+		const first = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+		const shorter = new Date(Date.now() + Millis.minutes(30)).toISOString();
+		credentialDeadline = shorter;
+		const second = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+
+		expect(second.session_id).toBe(first.session_id);
+		expect(second.reused).toBe(true);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, first.session_id))
+				.authorization_expires_at,
+		).toBe(shorter);
+
+		credentialDeadline = new Date(Date.now() + Millis.hours(3)).toISOString();
+		await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, first.session_id))
+				.authorization_expires_at,
+		).toBe(shorter);
+	});
+
+	it('an editor-claim race applies the attaching credential deadline to the winner', async () => {
+		const winner = makeSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: ACTOR,
+			status: 'running',
+			sandbox_url: undefined,
+		});
+		await bucket.put(paths.session(pid, winner.session_id), JSON.stringify(winner));
+		await bucket.put(
+			paths.editorClaim(pid, nid),
+			JSON.stringify({
+				session_id: winner.session_id,
+				sharing: 'shared',
+				claimed_at: winner.started_at,
+			}),
+		);
+		const deadline = new Date(Date.now() + Millis.minutes(15)).toISOString();
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: deadline,
+					}),
+				},
+			},
+		}).request;
+
+		const attached = await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+
+		expect(attached.session_id).toBe(winner.session_id);
+		expect(attached.reused).toBe(true);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, winner.session_id))
+				.authorization_expires_at,
+		).toBe(deadline);
 	});
 
 	it('POST /sessions hammered for one notebook reuses one record and never trips the cap', async () => {

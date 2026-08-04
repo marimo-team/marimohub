@@ -207,6 +207,23 @@ export class SessionService {
 		});
 	}
 
+	/** Apply a credential deadline without ever extending an existing bound. */
+	async tightenAuthorizationDeadline(
+		projectId: ProjectId,
+		id: SessionId,
+		deadline: string,
+	): Promise<Session> {
+		return this.mutate(projectId, id, (session) => {
+			if (
+				session.authorization_expires_at !== undefined &&
+				Date.parse(session.authorization_expires_at) <= Date.parse(deadline)
+			) {
+				return null;
+			}
+			return { ...session, authorization_expires_at: deadline };
+		});
+	}
+
 	/** Record when the periodic snapshotter last saved this session. Pure cadence
 	 * bookkeeping — never touches status, so it also applies to an `expired` record
 	 * whose sandbox is still being snapshotted while editors remain connected. */

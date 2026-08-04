@@ -786,6 +786,10 @@ app.openapi(createSession, async (c) => {
 	const profileOverrideEligible = authorization.profileOverrideEligible;
 	const restrictedViewerCredentials = authorization.restrictedViewerCredentials;
 	const grants = (s: Session) => sessionGrantsFor(project, user, s, deps.policy);
+	const tightenAuthorizationDeadline = (session: Session) =>
+		authorizationExpiresAt
+			? sessions.tightenAuthorizationDeadline(pid, session.session_id, authorizationExpiresAt)
+			: Promise.resolve(session);
 
 	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
 	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook id.
@@ -858,9 +862,10 @@ app.openapi(createSession, async (c) => {
 			`Editing is currently owned by ${editorReuse.ownedByOther.user_id}`,
 		);
 	}
-	const reusable =
+	const reusableCandidate =
 		mode === 'edit' ? editorReuse?.session : await sessions.findReusable(pid, nid, user.id, mode);
-	if (reusable) {
+	if (reusableCandidate) {
+		const reusable = await tightenAuthorizationDeadline(reusableCandidate);
 		const authorizationExpired =
 			reusable.authorization_expires_at !== undefined &&
 			Date.now() >= Date.parse(reusable.authorization_expires_at);
@@ -1281,8 +1286,15 @@ app.openapi(createSession, async (c) => {
 		if (err instanceof EditorClaimLostError) {
 			observer.tag('editor_claim_lost', true);
 			if (session) await sessions.markTerminated(pid, session.session_id).catch(() => {});
-			const winner = await sessions.getSession(pid, err.holder).catch(() => null);
-			if (winner?.notebook_id === nid && sessionMode(winner) === 'edit') {
+			const winnerCandidate = await sessions.getSession(pid, err.holder).catch(() => null);
+			if (winnerCandidate?.notebook_id === nid && sessionMode(winnerCandidate) === 'edit') {
+				const winner = await tightenAuthorizationDeadline(winnerCandidate);
+				if (
+					winner.authorization_expires_at &&
+					Date.now() >= Date.parse(winner.authorization_expires_at)
+				) {
+					throw new ConflictError('The editor session authorization expired. Retry shortly.');
+				}
 				if (sharing === 'exclusive' && winner.user_id !== user.id) {
 					throw new EditSessionOwnedError(`Editing is currently owned by ${winner.user_id}`);
 				}
@@ -1312,8 +1324,15 @@ app.openapi(createSession, async (c) => {
 			if (session) {
 				await sessions.markTerminated(pid, session.session_id).catch(() => {});
 			}
-			const winner = await sessions.getSession(pid, err.holder).catch(() => {});
-			if (winner && winner.notebook_id === nid && sessionModePolicy(winner).singleton) {
+			const winnerCandidate = await sessions.getSession(pid, err.holder).catch(() => null);
+			if (winnerCandidate?.notebook_id === nid && sessionModePolicy(winnerCandidate).singleton) {
+				const winner = await tightenAuthorizationDeadline(winnerCandidate);
+				if (
+					winner.authorization_expires_at &&
+					Date.now() >= Date.parse(winner.authorization_expires_at)
+				) {
+					throw new ConflictError('The app session authorization expired. Retry shortly.');
+				}
 				return c.json(
 					{ success: true, data: { ...toSessionResponse(winner, grants(winner)), reused: true } },
 					200,

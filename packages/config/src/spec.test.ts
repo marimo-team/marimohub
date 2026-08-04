@@ -58,6 +58,16 @@ describe('config registry sanity', () => {
 		}
 	});
 
+	it('marks the ignored OIDC audience setting as deprecated', () => {
+		const audience = CONFIG_SPEC.flatMap((group) => group.backends)
+			.flatMap((backend) => backend.vars)
+			.find((variable) => variable.id === 'MARIMOHUB_AUTH_OIDC_AUDIENCE');
+
+		expect(audience?.name).toContain('deprecated');
+		expect(audience?.description).toContain('ignored');
+		expect(audience?.description).toContain('client ID');
+	});
+
 	it('selector values are unique within a group, and only appear where a group has a selector', () => {
 		for (const g of CONFIG_SPEC) {
 			const selectorValues = g.backends

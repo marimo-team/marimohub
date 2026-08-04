@@ -48,7 +48,7 @@ The adapter then mints the `mh_session` cookie. Protocol code uses
 | `MARIMOHUB_AUTH_OIDC_CLIENT_SECRET`      | ✓   | OAuth client secret (sent via `client_secret_post`).           |
 | `MARIMOHUB_AUTH_OIDC_REDIRECT_URI`       | ✓   | **Must be** `<your-origin>/api/auth/callback`.                 |
 | `MARIMOHUB_AUTH_SESSION_SECRET`          | ✓   | HS256 cookie-signing key with ≥32 random bytes.                |
-| `MARIMOHUB_AUTH_OIDC_AUDIENCE`           |     | Unused — `aud` must contain the client ID (enforced anyway).   |
+| `MARIMOHUB_AUTH_OIDC_AUDIENCE`           |     | Deprecated and ignored; `aud` must contain the client ID.      |
 | `MARIMOHUB_AUTH_OIDC_SCOPES`             |     | Defaults to `openid email profile`. Keep `openid` and `email`. |
 | `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` |     | `required` (default) or explicit `trusted-issuer`.             |
 | `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM`       |     | JSON Pointer for opt-in group policy and entitlement mapping.  |
@@ -61,6 +61,9 @@ provider logout endpoint.
 **Redirect URI** is always `<origin>/api/auth/callback` and must match what you
 register byte-for-byte. The issuer, redirect URI, and discovered authorization
 and logout endpoints must use HTTPS and cannot contain credentials.
+
+`trusted-issuer` applies only when all email domains are allowed. A domain
+allowlist always requires `email_verified: true`.
 
 **Cookies**: `mh_session` is an issuer-, audience-, and type-bound HS256 JWT.
 It is HttpOnly, Secure, and SameSite=Lax. Its default lifetime is 8 hours, or
@@ -79,6 +82,7 @@ before the change.
 The session stores mapped entitlements, not raw groups. Group-derived roles do
 not transfer to personal access tokens. Group-authorized kernels use the session
 JWT expiry as a fixed authorization deadline. Active editors cannot extend it.
+Session reuse keeps the earliest credential deadline presented by any caller.
 At expiry, the lifecycle destroys the kernel and the proxy closes WebSockets.
 This teardown skips the final capture so that the kernel stops promptly.
 Periodic snapshots limit potential data loss.

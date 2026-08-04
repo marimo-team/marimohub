@@ -31,7 +31,7 @@ export interface AuthUser {
 	/** Validated HTTPS profile-picture URL, used only for presentation. */
 	pictureUrl?: string;
 	/** Provider groups mapped to marimohub-owned authorization capabilities. */
-	entitlements?: AuthEntitlement[];
+	entitlements?: readonly AuthEntitlement[];
 	/** Expiry of the credential that supplied group authorization. */
 	entitlementsExpiresAt?: string;
 }

@@ -99,6 +99,55 @@ describe('Session routes (app mode)', () => {
 		expect(attached.user_id).toBe(ACTOR);
 	});
 
+	it('shared app reuse is bounded by the earliest caller credential', async () => {
+		const starter = uid('user_group_starter');
+		const starterDeadline = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+		const starterApi = createTestApi({
+			bucket,
+			userId: starter,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: starter,
+						email: `${starter}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: starterDeadline,
+					}),
+				},
+			},
+		}).request;
+		const app = await expectOk<any>(await starterApi('POST', sessionsPath(), { mode: 'app' }));
+
+		const attachingDeadline = new Date(Date.now() + 15 * 60_000).toISOString();
+		const attachingApi = createTestApi({
+			bucket,
+			userId: OTHER_EDITOR,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: OTHER_EDITOR,
+						email: `${OTHER_EDITOR}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: attachingDeadline,
+					}),
+				},
+			},
+		}).request;
+
+		const attached = await expectOk<any>(
+			await attachingApi('POST', sessionsPath(), { mode: 'app' }),
+		);
+
+		expect(attached.session_id).toBe(app.session_id);
+		expect(attached.reused).toBe(true);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, app.session_id))
+				.authorization_expires_at,
+		).toBe(attachingDeadline);
+	});
+
 	it('a create that loses the app claim attaches to the claim holder', async () => {
 		// The holder is live for claim purposes (running) but invisible to reuse
 		// (no sandbox_url) — the shape a true concurrent-start race produces.
@@ -123,6 +172,49 @@ describe('Session routes (app mode)', () => {
 		// The loser's own record was retired, and no second app is left active.
 		const services = createServices(bucket);
 		expect(await services.sessions.countActiveAppsForProject(pid)).toBe(1);
+	});
+
+	it('an app-claim race applies the attaching credential deadline to the winner', async () => {
+		const winner = makeSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: ACTOR,
+			status: 'running',
+			mode: 'app',
+			sandbox_url: undefined,
+		});
+		await bucket.put(paths.session(pid, winner.session_id), JSON.stringify(winner));
+		await bucket.put(
+			paths.appClaim(pid, nid),
+			JSON.stringify({ session_id: winner.session_id, claimed_at: winner.started_at }),
+		);
+		const deadline = new Date(Date.now() + 15 * 60_000).toISOString();
+		const groupEditor = createTestApi({
+			bucket,
+			userId: OTHER_EDITOR,
+			compute: makeFakeCompute(),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: OTHER_EDITOR,
+						email: `${OTHER_EDITOR}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: deadline,
+					}),
+				},
+			},
+		}).request;
+
+		const attached = await expectOk<any>(
+			await groupEditor('POST', sessionsPath(), { mode: 'app' }),
+		);
+
+		expect(attached.session_id).toBe(winner.session_id);
+		expect(attached.reused).toBe(true);
+		expect(
+			(await createServices(bucket).sessions.getSession(pid, winner.session_id))
+				.authorization_expires_at,
+		).toBe(deadline);
 	});
 
 	it('a claim stolen mid-provision destroys the loser sandbox and attaches to the thief', async () => {

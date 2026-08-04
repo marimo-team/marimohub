@@ -10,6 +10,7 @@ import { z } from 'zod';
 import {
 	CatalogSchema,
 	EventSchema,
+	IdentitySchema,
 	NotebookIdSchema,
 	parseStored,
 	readStored,
@@ -33,6 +34,32 @@ import {
 	ACTOR,
 	NOW,
 } from './testing';
+
+describe('IdentitySchema', () => {
+	const identity = {
+		id: 'user-1',
+		email: 'user@example.com',
+		name: 'User',
+		updated_at: NOW,
+	};
+
+	it('accepts an HTTPS profile-picture URL', () => {
+		expect(
+			IdentitySchema.safeParse({
+				...identity,
+				picture_url: 'https://images.example.com/avatar.png',
+			}).success,
+		).toBe(true);
+	});
+
+	it.each([
+		['HTTP', 'http://images.example.com/avatar.png'],
+		['non-HTTP', 'ftp://images.example.com/avatar.png'],
+		['invalid', 'not-a-url'],
+	])('rejects a %s profile-picture URL', (_label, pictureUrl) => {
+		expect(IdentitySchema.safeParse({ ...identity, picture_url: pictureUrl }).success).toBe(false);
+	});
+});
 
 describe('parseStored', () => {
 	const schema = z.object({ a: z.number() });

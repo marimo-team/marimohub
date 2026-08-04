@@ -368,6 +368,57 @@ describe('SessionService', () => {
 			expect(result.expires_at).toBeUndefined();
 		});
 
+		it('tightens authorization to the earliest credential deadline', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			const later = new Date(Date.now() + 120_000).toISOString();
+			const earlier = new Date(Date.now() + 60_000).toISOString();
+
+			const first = await sessions.tightenAuthorizationDeadline(
+				projectId,
+				created.session_id,
+				later,
+			);
+			const tightened = await sessions.tightenAuthorizationDeadline(
+				projectId,
+				created.session_id,
+				earlier,
+			);
+			const unchanged = await sessions.tightenAuthorizationDeadline(
+				projectId,
+				created.session_id,
+				later,
+			);
+
+			expect(first.authorization_expires_at).toBe(later);
+			expect(tightened.authorization_expires_at).toBe(earlier);
+			expect(unchanged.authorization_expires_at).toBe(earlier);
+		});
+
+		it('keeps the earliest deadline across concurrent reuse requests', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			const deadlines = [30_000, 90_000, 60_000].map((offset) =>
+				new Date(Date.now() + offset).toISOString(),
+			);
+
+			await Promise.all(
+				deadlines.map((deadline) =>
+					sessions.tightenAuthorizationDeadline(projectId, created.session_id, deadline),
+				),
+			);
+
+			expect(
+				(await sessions.getSession(projectId, created.session_id)).authorization_expires_at,
+			).toBe(deadlines[0]);
+		});
+
 		it('markSnapshotted records the save time, including on an expired record', async () => {
 			const created = await sessions.createSession({
 				notebook_id: notebookId,

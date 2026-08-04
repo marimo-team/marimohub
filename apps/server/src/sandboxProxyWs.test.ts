@@ -335,6 +335,39 @@ describe('attachSandboxProxyUpgrade', () => {
 			}
 		});
 
+		it('destroys a stalled upstream request when the client disconnects', async () => {
+			let upstreamRequestStarted = false;
+			let upstreamRequestClosed = false;
+			const stalled = createServer((req) => {
+				upstreamRequestStarted = true;
+				req.on('close', () => {
+					upstreamRequestClosed = true;
+				});
+			});
+			await new Promise<void>((resolve) => stalled.listen(0, '127.0.0.1', resolve));
+			const stalledOrigin = `http://127.0.0.1:${(stalled.address() as AddressInfo).port}`;
+
+			try {
+				const { deps, token } = await runningProxySession(
+					stalledOrigin,
+					new Date(Date.now() + 60_000).toISOString(),
+				);
+				const server = fakeUpgradeServer();
+				attachSandboxProxyUpgrade(server, deps);
+				const socket = new PassThrough();
+
+				server.listeners[0](fakeIncomingMessage(`/proxy/${token}/`), socket, Buffer.alloc(0));
+				await vi.waitFor(() => expect(upstreamRequestStarted).toBe(true));
+
+				socket.destroy();
+
+				await vi.waitFor(() => expect(upstreamRequestClosed).toBe(true));
+			} finally {
+				stalled.closeAllConnections();
+				await new Promise<void>((resolve) => stalled.close(() => resolve()));
+			}
+		});
+
 		it('closes an established kernel WebSocket at the authorization deadline', async () => {
 			const upgrader = createServer();
 			let upstreamSocket: Duplex | undefined;

@@ -90,11 +90,19 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 				});
 				let kernelSocket: Duplex | undefined;
 				let authorizationExpired = false;
+				let clientClosed = false;
 				let authorizationTimer: ReturnType<typeof setTimeout> | undefined;
 				const clearAuthorizationTimer = () => {
 					if (authorizationTimer) clearTimeout(authorizationTimer);
 					authorizationTimer = undefined;
 				};
+				const handleClientClose = () => {
+					clientClosed = true;
+					clearAuthorizationTimer();
+					if (!kernelSocket) proxyReq.destroy();
+				};
+				clientSocket.on('close', handleClientClose);
+				if (clientSocket.destroyed) handleClientClose();
 				if (remainingAuthorizationMs !== undefined) {
 					authorizationTimer = setTimeout(() => {
 						authorizationExpired = true;
@@ -104,7 +112,6 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 						clientSocket.destroy();
 					}, remainingAuthorizationMs);
 					authorizationTimer.unref();
-					clientSocket.on('close', clearAuthorizationTimer);
 				}
 
 				// Kernel answered without upgrading (e.g. 4xx) — relay the status, close.
@@ -142,7 +149,7 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 
 				proxyReq.on('error', (err) => {
 					clearAuthorizationTimer();
-					if (authorizationExpired) return;
+					if (authorizationExpired || clientClosed) return;
 					logEvent({
 						level: 'warn',
 						event: 'sandbox_proxy_ws_upstream_error',
