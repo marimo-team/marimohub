@@ -33,6 +33,7 @@ import type {
 import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
 import { makeAi } from './ai';
 import { makeAuth } from './auth';
+import { buildConfigSummary } from './configSummary';
 import { makeCompute, resolveSandboxImages } from './compute';
 import {
 	parseComputeProfileOverride,
@@ -366,6 +367,9 @@ export function createFromEnv(
 				DEFAULT_MAX_APPS_PER_PROJECT,
 			),
 		},
+		// Read-only configuration for the super-admin settings page (secrets
+		// redacted at assembly).
+		configSummary: buildConfigSummary(env),
 		// Workload Identity Federation (no-op unless the WIF env vars are configured).
 		...makeWif(env),
 		// Managed AI proxy (no-op unless MARIMOHUB_AI_BACKEND is configured).

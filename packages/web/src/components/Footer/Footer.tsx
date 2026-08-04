@@ -1,75 +1,40 @@
 import type { ReactNode } from 'react';
-import { Info, ExternalLink } from 'lucide-react';
-import { useCapabilitiesQuery, useVersionQuery } from '@/api/hooks';
+import { useNavigate } from 'react-router-dom';
+import { Bug, Code2, ExternalLink, Info, Settings2 } from 'lucide-react';
+import { useVersionQuery } from '@/api/hooks';
 import { Popover } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
-import { formatRelative } from '@/lib/time';
+import { SOURCE_URL, versionHref } from '@/lib/deployment';
 
-/** Source repository — the UI derives release/commit + issue links from it. */
-const SOURCE_URL = 'https://github.com/marimo-team/marimohub';
+const ROW_CLASS =
+	'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5 [&_svg]:shrink-0';
 
-/**
- * MARIMOHUB_VERSION is either a release tag (`0.2.0`) or a git SHA (`a1b2c3d`);
- * only one of those has a release page, so pick the GitHub URL per shape. Any
- * other value (`dev`, git-describe suffixes like `0.2.0-5-gdeadbeef`) has no
- * page at all.
- */
-function versionHref(version: string): string | null {
-	if (/^v?\d+\.\d+\.\d+$/.test(version)) {
-		return `${SOURCE_URL}/releases/tag/${version.startsWith('v') ? version : `v${version}`}`;
-	}
-	if (/^[0-9a-f]{7,40}$/i.test(version)) {
-		return `${SOURCE_URL}/commit/${version}`;
-	}
-	return null;
-}
-
-function InfoRow({ label, value }: { label: string; value: ReactNode }) {
+function LinkRow({ href, icon, children }: { href: string; icon: ReactNode; children: ReactNode }) {
 	return (
-		<>
-			<dt className="text-muted-foreground">{label}</dt>
-			<dd className="min-w-0 break-all text-foreground">{value}</dd>
-		</>
-	);
-}
-
-/** A timestamp shown as a relative phrase, with the exact value on hover. */
-function Timestamp({ iso }: { iso: string }) {
-	return (
-		<time dateTime={iso} title={iso} className="tabular-nums">
-			{formatRelative(iso) || iso}
-		</time>
+		<a href={href} target="_blank" rel="noreferrer" className={ROW_CLASS}>
+			{icon}
+			<span className="flex-1">{children}</span>
+			<ExternalLink className="text-muted-foreground/50" />
+		</a>
 	);
 }
 
 /**
- * Slim bottom bar with a single info affordance: clicking it opens a popover with
- * the deployment's version, image, start time, replica, runtime, and active
- * backends (from `GET /api/v1/version`). Super admins additionally see the
- * deployment policy (from `GET /api/v1/capabilities`). The bar renders even while
- * the queries are in flight or have failed — the popover just shows what's known —
- * so it never blocks or shifts the layout.
+ * Slim bottom bar with a single info affordance: a compact popover with the
+ * deployment version (linked to its release/commit when the shape allows) and
+ * source/issue links. Super admins get a shortcut to the admin settings page,
+ * where the full deployment/config detail lives. The bar renders even while
+ * the version query is in flight or has failed — the popover just shows what's
+ * known — so it never blocks or shifts the layout.
  */
 export function Footer() {
 	const { data: v } = useVersionQuery();
 	const { user } = useAuth();
+	const navigate = useNavigate();
 	const isSuperAdmin = user?.is_super_admin ?? false;
-	const { data: caps } = useCapabilitiesQuery(isSuperAdmin);
 
-	const href = v ? versionHref(v.version) : null;
-	const versionValue = href ? (
-		<a
-			href={href}
-			target="_blank"
-			rel="noreferrer"
-			className="inline-flex items-center gap-1 text-foreground underline-offset-4 hover:underline"
-		>
-			<span className="tabular-nums">{v!.version}</span>
-			<ExternalLink className="size-3 shrink-0 text-muted-foreground" />
-		</a>
-	) : (
-		<span className="tabular-nums">{v?.version ?? 'unknown'}</span>
-	);
+	const version = v?.version ?? 'unknown';
+	const href = versionHref(version);
 
 	return (
 		<footer className="flex shrink-0 items-center justify-between border-t bg-background px-4 py-2 max-md:px-3">
@@ -77,97 +42,54 @@ export function Footer() {
 				MARIMOHUB
 			</span>
 			<Popover
-				label="Version info"
+				label="About marimohub"
 				placement="top end"
 				trigger={<Info className="size-3.5" />}
 				triggerClassName="rounded-full text-muted-foreground transition-colors hover:text-foreground"
 			>
-				<div className="flex min-w-[16rem] flex-col gap-2 text-xs">
-					<div className="font-medium text-foreground">marimohub</div>
-					<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-						<InfoRow label="Version" value={versionValue} />
-						{v?.image && <InfoRow label="Image" value={v.image} />}
-						{v?.sandbox_image && <InfoRow label="Sandbox image" value={v.sandbox_image} />}
-						{v?.started_at && <InfoRow label="Started" value={<Timestamp iso={v.started_at} />} />}
-						{v?.replica && <InfoRow label="Replica" value={v.replica} />}
-						{v?.node && (
-							<InfoRow label="Node" value={<span className="tabular-nums">{v.node}</span>} />
-						)}
-						{v?.backends && (
-							<InfoRow
-								label="Backends"
-								value={
-									<span className="tabular-nums">
-										{v.backends.storage} · {v.backends.compute} · {v.backends.auth}
-									</span>
-								}
-							/>
-						)}
-					</dl>
-					{isSuperAdmin && caps && (
-						<div className="border-t pt-2">
-							<div className="mb-1 font-medium text-foreground">Policy</div>
-							<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-								<InfoRow label="Viewer mode" value={caps.viewer_mode} />
-								<InfoRow label="Sandbox sharing" value={caps.editor_sandbox_sharing} />
-								<InfoRow label="Default role" value={caps.default_role ?? 'members only'} />
-								<InfoRow
-									label="Features"
-									value={
-										[
-											caps.federation.available && 'federation',
-											caps.integrations.available && 'integrations',
-										]
-											.filter(Boolean)
-											.join(' · ') || 'none'
-									}
-								/>
-								<InfoRow
-									label="Limits"
-									value={
-										<span className="tabular-nums">
-											{caps.limits.max_concurrent_sessions_per_user ?? '∞'} sessions/user ·{' '}
-											{caps.limits.max_apps_per_project ?? '∞'} apps/project ·{' '}
-											{caps.limits.max_versions_per_notebook} versions/notebook
-										</span>
-									}
-								/>
-								{caps.sandbox_images.length > 0 && (
-									<InfoRow label="Images" value={caps.sandbox_images.join(', ')} />
-								)}
-								{caps.compute_profiles.length > 0 && (
-									<InfoRow
-										label="Profiles"
-										value={
-											caps.compute_profiles.map((p) => p.name).join(' · ') +
-											(caps.compute_profile_override === 'none'
-												? ''
-												: ` (override: ${caps.compute_profile_override})`)
-										}
-									/>
-								)}
-							</dl>
+				{({ close }) => (
+					<div className="flex w-56 flex-col">
+						<div className="flex items-baseline justify-between gap-3 px-2 pb-2 pt-0.5">
+							<span className="text-sm font-semibold">marimohub</span>
+							{href ? (
+								<a
+									href={href}
+									target="_blank"
+									rel="noreferrer"
+									className="inline-flex items-center gap-1 font-mono text-xs tabular-nums text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+								>
+									{version}
+									<ExternalLink className="size-3 shrink-0" />
+								</a>
+							) : (
+								<span className="font-mono text-xs tabular-nums text-muted-foreground">
+									{version}
+								</span>
+							)}
 						</div>
-					)}
-					<div className="flex gap-3 border-t pt-2 text-muted-foreground">
-						<a
-							href={SOURCE_URL}
-							target="_blank"
-							rel="noreferrer"
-							className="underline-offset-4 hover:text-foreground hover:underline"
-						>
-							Source
-						</a>
-						<a
-							href={`${SOURCE_URL}/issues`}
-							target="_blank"
-							rel="noreferrer"
-							className="underline-offset-4 hover:text-foreground hover:underline"
-						>
-							Report an issue
-						</a>
+						<div className="flex flex-col gap-0.5 border-t pt-1.5">
+							<LinkRow href={SOURCE_URL} icon={<Code2 />}>
+								Source
+							</LinkRow>
+							<LinkRow href={`${SOURCE_URL}/issues`} icon={<Bug />}>
+								Report an issue
+							</LinkRow>
+							{isSuperAdmin && (
+								<button
+									type="button"
+									className={ROW_CLASS}
+									onClick={() => {
+										close();
+										void navigate('/admin/settings');
+									}}
+								>
+									<Settings2 />
+									<span className="flex-1">Deployment settings</span>
+								</button>
+							)}
+						</div>
 					</div>
-				</div>
+				)}
 			</Popover>
 		</footer>
 	);

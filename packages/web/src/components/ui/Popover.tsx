@@ -13,8 +13,12 @@ import { cn } from '@/lib/utils';
 export interface PopoverProps {
 	/** The clickable trigger content (wrapped in a focusable button). */
 	trigger: ReactNode;
-	/** Popover body. Only mounted while open, so timers inside it run only then. */
-	children: ReactNode;
+	/**
+	 * Popover body. Only mounted while open, so timers inside it run only then.
+	 * The render-prop form receives `close` for content that must dismiss the
+	 * popover itself (e.g. an in-app navigation link).
+	 */
+	children: ReactNode | ((opts: { close: () => void }) => ReactNode);
 	/** Accessible label for the trigger button. */
 	label?: string;
 	/** Optional hover/focus tooltip on the trigger — a quick hint before pressing. */
@@ -76,6 +80,8 @@ export function Popover({
 					className,
 				)}
 			>
+				{/* Dialog implements the function-children form: it invokes them with
+			    its render props (including `close`), so both shapes pass through. */}
 				<Dialog className="p-3 outline-none">{children}</Dialog>
 			</AriaPopover>
 		</DialogTrigger>

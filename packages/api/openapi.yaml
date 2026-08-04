@@ -100,47 +100,8 @@ components:
       properties:
         version:
           type: string
-        image:
-          type:
-            - string
-            - 'null'
-        sandbox_image:
-          type:
-            - string
-            - 'null'
-        started_at:
-          type:
-            - string
-            - 'null'
-        replica:
-          type:
-            - string
-            - 'null'
-        node:
-          type:
-            - string
-            - 'null'
-        backends:
-          type: object
-          properties:
-            storage:
-              type: string
-            compute:
-              type: string
-            auth:
-              type: string
-          required:
-            - storage
-            - compute
-            - auth
       required:
         - version
-        - image
-        - sandbox_image
-        - started_at
-        - replica
-        - node
-        - backends
     Capabilities:
       type: object
       properties:
@@ -454,6 +415,162 @@ components:
         - event
         - actor
       additionalProperties: {}
+    AdminUserPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminUser'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
+    AdminUser:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        is_super_admin:
+          type: boolean
+      required:
+        - id
+        - email
+        - name
+        - updated_at
+        - is_super_admin
+    DeploymentConfig:
+      type: object
+      properties:
+        deployment:
+          $ref: '#/components/schemas/AdminDeployment'
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigGroup'
+        policy:
+          $ref: '#/components/schemas/AdminPolicy'
+      required:
+        - deployment
+        - groups
+        - policy
+    AdminDeployment:
+      type:
+        - object
+        - 'null'
+      properties:
+        version:
+          type: string
+        image:
+          type:
+            - string
+            - 'null'
+        sandbox_image:
+          type:
+            - string
+            - 'null'
+        started_at:
+          type:
+            - string
+            - 'null'
+        replica:
+          type:
+            - string
+            - 'null'
+        node:
+          type:
+            - string
+            - 'null'
+        backends:
+          type:
+            - object
+            - 'null'
+          properties:
+            storage:
+              type: string
+            compute:
+              type: string
+            auth:
+              type: string
+          required:
+            - storage
+            - compute
+            - auth
+      required:
+        - version
+        - image
+        - sandbox_image
+        - started_at
+        - replica
+        - node
+        - backends
+    ConfigGroup:
+      type: object
+      properties:
+        name:
+          type: string
+        backend:
+          type:
+            - string
+            - 'null'
+        settings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigSetting'
+      required:
+        - name
+        - backend
+        - settings
+    ConfigSetting:
+      type: object
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        value:
+          type:
+            - string
+            - 'null'
+        secret:
+          type: boolean
+        set:
+          type: boolean
+      required:
+        - key
+        - name
+        - value
+        - secret
+        - set
+    AdminPolicy:
+      type: object
+      properties:
+        default_role:
+          type:
+            - string
+            - 'null'
+          enum:
+            - admin
+            - editor
+            - viewer
+            - null
+        super_admins:
+          type: array
+          items:
+            type: string
+      required:
+        - default_role
+        - super_admins
     NotebookPage:
       type: object
       properties:
@@ -1373,7 +1490,10 @@ paths:
     get:
       tags:
         - System
-      summary: Get deployment version info
+      summary: Get the deployment version
+      description: Just the version string. The rest of the build/runtime identity
+        (image, replica, backends, …) is super-admin material on `GET
+        /api/v1/admin/config`.
       responses:
         '200':
           description: Deployment version information
@@ -2328,6 +2448,124 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/users:
+    get:
+      tags:
+        - Admin
+      summary: List all users in the identity directory
+      description: 'Every user who has signed in at least once, name-sorted. Currently
+        a single page (`next_cursor` is always null). Super-admin only, and
+        session-only: a PAT — even a super admin’s — is rejected with 403.'
+      security: &a1
+        - cookieAuth: []
+      responses:
+        '200':
+          description: The user directory, name-sorted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/AdminUserPage'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/config:
+    get:
+      tags:
+        - Admin
+      summary: Describe the deployment's configuration
+      description: Read-only view of every configuration group (storage, compute,
+        auth, …) as resolved from the serving replica's environment at boot;
+        secret values are never included, only whether they are set. Super-admin
+        only, session-only.
+      security: *a1
+      responses:
+        '200':
+          description: The deployment configuration, secrets redacted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/DeploymentConfig'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
           content:
             application/json:
               schema:
@@ -5829,8 +6067,7 @@ paths:
         scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The
         plaintext token is returned once, in this response, and never again.
         Requires session (SSO) auth — a token cannot mint tokens.'
-      security: &a1
-        - cookieAuth: []
+      security: *a1
       requestBody:
         required: true
         content:

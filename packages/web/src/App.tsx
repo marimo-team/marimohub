@@ -12,8 +12,11 @@ import { SignIn } from '@/components/SignIn/SignIn';
 import { ErrorBoundary, Button } from '@/components/ui';
 import { Toaster } from '@/components/ui/sonner';
 import { ApiRequestError } from '@/api/client';
+import { AdminLayout } from '@/components/Admin/AdminLayout';
 
 const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
+const AdminUsersPage = lazy(() => import('@/components/Admin/AdminUsersPage'));
+const AdminSettingsPage = lazy(() => import('@/components/Admin/AdminSettingsPage'));
 
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { isPending, error, user, signIn, refetchUser } = useAuth();
@@ -78,11 +81,6 @@ function PageFallback() {
 	);
 }
 
-function SuperAdminAuditLogs() {
-	const { user } = useAuth();
-	return user?.is_super_admin ? <AuditLogPage /> : <Navigate to="/" replace />;
-}
-
 function StandardLayout() {
 	return (
 		<div className="flex min-h-dvh flex-col">
@@ -93,7 +91,12 @@ function StandardLayout() {
 						<Routes>
 							<Route path="/" element={<ProjectList />} />
 							<Route path="/projects/:pid" element={<Project />} />
-							<Route path="/admin/audit-logs" element={<SuperAdminAuditLogs />} />
+							<Route path="/admin" element={<AdminLayout />}>
+								<Route index element={<Navigate to="/admin/users" replace />} />
+								<Route path="users" element={<AdminUsersPage />} />
+								<Route path="settings" element={<AdminSettingsPage />} />
+								<Route path="audit-logs" element={<AuditLogPage />} />
+							</Route>
 							<Route path="*" element={<Navigate to="/" replace />} />
 						</Routes>
 					</Suspense>

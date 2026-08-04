@@ -1,6 +1,7 @@
 export { createApi, generateOpenApiDocument } from './createApi';
 export type {
 	ApiDeps,
+	ConfigSummary,
 	HonoEnv,
 	SandboxUserHomeResolver,
 	Services,

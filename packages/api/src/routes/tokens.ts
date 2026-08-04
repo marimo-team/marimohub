@@ -1,15 +1,15 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { ForbiddenError, TokenId } from '@marimo-hub/core';
+import { TokenId } from '@marimo-hub/core';
 import type { PublicToken } from '@marimo-hub/core';
-import type { Context } from 'hono';
-import type { HonoEnv } from '../context';
 import { appendAudit } from '../log';
 import {
+	assertSessionAuthenticated,
 	commonErrors,
 	createApp,
 	errorResponses,
 	jsonBody,
 	jsonContent,
+	SESSION_ONLY_SECURITY,
 	SuccessResponseSchema,
 } from '../shared';
 
@@ -50,12 +50,6 @@ const TokenIdParam = z.object({
 });
 
 // --- Route definitions ---
-
-// Token management is session-only: a PAT is rejected with 403 (see
-// assertSessionAuthenticated). Override the global disjunctive security so the
-// generated OpenAPI advertises ONLY cookieAuth for these routes — a client must
-// not pick a bearer token it can't use here.
-const SESSION_ONLY_SECURITY = [{ cookieAuth: [] }];
 
 const createToken = createRoute({
 	method: 'post',
@@ -114,18 +108,6 @@ const revokeToken = createRoute({
 
 // --- App ---
 
-/**
- * Token-authenticated requests may not manage tokens: a leaked PAT must not
- * mint replacements or revoke its neighbors. Gate on the `authMethod` flag the
- * authN middleware set — not a re-parse of the Authorization header, which
- * would risk disagreeing with the authenticator over scheme casing/whitespace.
- */
-function assertSessionAuthenticated(c: Context<HonoEnv>): void {
-	if (c.get('authMethod') === 'pat') {
-		throw new ForbiddenError('Personal access tokens cannot manage tokens — sign in to do this');
-	}
-}
-
 // Explicit pick: the stored record also carries `user_id` (always the caller's
 // own id on these self-service routes), which the response contract omits.
 function toResponse(record: PublicToken) {
@@ -141,7 +123,7 @@ function toResponse(record: PublicToken) {
 const app = createApp();
 
 app.openapi(createToken, async (c) => {
-	assertSessionAuthenticated(c);
+	assertSessionAuthenticated(c, 'manage tokens');
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { name, expires_in_days } = c.req.valid('json');
@@ -165,7 +147,7 @@ app.openapi(createToken, async (c) => {
 });
 
 app.openapi(listTokens, async (c) => {
-	assertSessionAuthenticated(c);
+	assertSessionAuthenticated(c, 'manage tokens');
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const records = await deps.services.tokens.list(user.id);
@@ -173,7 +155,7 @@ app.openapi(listTokens, async (c) => {
 });
 
 app.openapi(revokeToken, async (c) => {
-	assertSessionAuthenticated(c);
+	assertSessionAuthenticated(c, 'manage tokens');
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { tokenId } = c.req.valid('param');

@@ -60,7 +60,10 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** Get deployment version info */
+		/**
+		 * Get the deployment version
+		 * @description Just the version string. The rest of the build/runtime identity (image, replica, backends, …) is super-admin material on `GET /api/v1/admin/config`.
+		 */
 		get: {
 			parameters: {
 				query?: never;
@@ -1094,6 +1097,168 @@ export interface paths {
 				};
 				/** @description Not found */
 				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/admin/users': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List all users in the identity directory
+		 * @description Every user who has signed in at least once, name-sorted. Currently a single page (`next_cursor` is always null). Super-admin only, and session-only: a PAT — even a super admin’s — is rejected with 403.
+		 */
+		get: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path?: never;
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description The user directory, name-sorted */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['AdminUserPage'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/admin/config': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Describe the deployment's configuration
+		 * @description Read-only view of every configuration group (storage, compute, auth, …) as resolved from the serving replica's environment at boot; secret values are never included, only whether they are set. Super-admin only, session-only.
+		 */
+		get: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path?: never;
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description The deployment configuration, secrets redacted */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['DeploymentConfig'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -5141,16 +5306,6 @@ export interface components {
 		};
 		DeploymentInfo: {
 			version: string;
-			image: string | null;
-			sandbox_image: string | null;
-			started_at: string | null;
-			replica: string | null;
-			node: string | null;
-			backends: {
-				storage: string;
-				compute: string;
-				auth: string;
-			};
 		};
 		Capabilities: {
 			federation: {
@@ -5281,6 +5436,53 @@ export interface components {
 			actor: string;
 		} & {
 			[key: string]: unknown;
+		};
+		AdminUserPage: {
+			items: components['schemas']['AdminUser'][];
+			next_cursor: string | null;
+		};
+		AdminUser: {
+			id: string;
+			email: string;
+			name: string;
+			/** Format: date-time */
+			updated_at: string;
+			is_super_admin: boolean;
+		};
+		DeploymentConfig: {
+			deployment: components['schemas']['AdminDeployment'];
+			groups: components['schemas']['ConfigGroup'][];
+			policy: components['schemas']['AdminPolicy'];
+		};
+		AdminDeployment: {
+			version: string;
+			image: string | null;
+			sandbox_image: string | null;
+			started_at: string | null;
+			replica: string | null;
+			node: string | null;
+			backends: {
+				storage: string;
+				compute: string;
+				auth: string;
+			} | null;
+		} | null;
+		ConfigGroup: {
+			name: string;
+			backend: string | null;
+			settings: components['schemas']['ConfigSetting'][];
+		};
+		ConfigSetting: {
+			key: string;
+			name: string;
+			value: string | null;
+			secret: boolean;
+			set: boolean;
+		};
+		AdminPolicy: {
+			/** @enum {string|null} */
+			default_role: 'admin' | 'editor' | 'viewer' | null;
+			super_admins: string[];
 		};
 		NotebookPage: {
 			items: components['schemas']['SnapshotNotebookEntry'][];

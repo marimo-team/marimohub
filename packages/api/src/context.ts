@@ -214,6 +214,35 @@ export interface PolicyConfig {
 	superAdmins?: string[];
 }
 
+export interface ConfigSettingSummary {
+	/** Env var id, e.g. `MARIMOHUB_AUTH_OIDC_ISSUER`. */
+	key: string;
+	/** Human-readable name from the config spec. */
+	name: string;
+	/** The configured (or default) value; always null when `secret`. */
+	value: string | null;
+	secret: boolean;
+	/** Whether the env var is explicitly set in this deployment. */
+	set: boolean;
+}
+
+/**
+ * Read-only description of the deployment's configuration, served by the
+ * super-admin `GET /api/v1/admin/config` route. Assembled by
+ * `@marimo-hub/config` from its config spec — secret values are never copied
+ * in, only whether they are set. Values reflect the serving replica's
+ * environment at boot.
+ */
+export interface ConfigSummary {
+	groups: {
+		/** Spec group name, e.g. `Auth`, `Storage`. */
+		name: string;
+		/** The resolved backend selector for the group; null for selector-less groups. */
+		backend: string | null;
+		settings: ConfigSettingSummary[];
+	}[];
+}
+
 /**
  * Everything the API needs, injected at composition time. This replaces the
  * Cloudflare-specific `Bindings: Env` coupling — routes read it from the Hono
@@ -265,6 +294,12 @@ export interface ApiDeps {
 	 * AI (the proxy 404s, no AI config injected into sessions).
 	 */
 	ai?: AiProxyConfig;
+	/**
+	 * Configuration summary for the super-admin settings page. Absent
+	 * (library/Workers wiring, tests): the route serves no groups, with the
+	 * policy-derived fields still filled.
+	 */
+	configSummary?: ConfigSummary;
 	/** Optional project integration service; absence disables its routes and injection. */
 	integrations?: ProjectIntegrationsService;
 	/**
