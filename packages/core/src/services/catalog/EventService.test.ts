@@ -113,6 +113,114 @@ describe('EventService', () => {
 		});
 	});
 
+	describe('listEvents', () => {
+		it('returns newest events first across days and pages without gaps', async () => {
+			vi.setSystemTime(new Date('2025-03-04T12:00:00.000Z'));
+			await events.append({ event: 'day-1', actor: uid('a') });
+			vi.setSystemTime(new Date('2025-03-05T12:00:00.000Z'));
+			await events.append({ event: 'day-2-first', actor: uid('a') });
+			await events.append({ event: 'day-2-second', actor: uid('b') });
+
+			const first = await events.listEvents({
+				from: '2025-03-04',
+				to: '2025-03-05',
+				limit: 2,
+			});
+			expect(first.items.map((event) => event.event)).toEqual(['day-2-second', 'day-2-first']);
+			expect(first.nextCursor).toBeTruthy();
+
+			const second = await events.listEvents({
+				from: '2025-03-04',
+				to: '2025-03-05',
+				limit: 2,
+				cursor: first.nextCursor ?? undefined,
+			});
+			expect(second.items.map((event) => event.event)).toEqual(['day-1']);
+			expect(second.nextCursor).toBeNull();
+		});
+
+		it('does not repeat a newer event appended between pages', async () => {
+			await events.append({ event: 'first', actor: uid('a') });
+			await events.append({ event: 'second', actor: uid('a') });
+			const first = await events.listEvents({
+				from: '2025-03-05',
+				to: '2025-03-05',
+				limit: 1,
+			});
+
+			await events.append({ event: 'newest', actor: uid('a') });
+			const second = await events.listEvents({
+				from: '2025-03-05',
+				to: '2025-03-05',
+				limit: 1,
+				cursor: first.nextCursor ?? undefined,
+			});
+			expect(first.items.map((event) => event.event)).toEqual(['second']);
+			expect(second.items.map((event) => event.event)).toEqual(['first']);
+		});
+
+		it('combines exact event, actor, and project filters', async () => {
+			await events.append({
+				event: 'notebook.update',
+				actor: uid('ada'),
+				project_id: 'proj-one',
+				payload: { nested: ['kept'] },
+			});
+			await events.append({
+				event: 'notebook.update',
+				actor: uid('grace'),
+				project_id: 'proj-one',
+			});
+			await events.append({
+				event: 'notebook.create',
+				actor: uid('ada'),
+				project_id: 'proj-one',
+			});
+
+			const page = await events.listEvents({
+				from: '2025-03-05',
+				to: '2025-03-05',
+				limit: 10,
+				event: 'notebook.update',
+				actor: 'ada',
+				projectId: 'proj-one',
+			});
+			expect(page.items).toHaveLength(1);
+			expect(page.items[0].payload).toEqual({ nested: ['kept'] });
+		});
+
+		it('rejects malformed and out-of-range cursors', async () => {
+			await expect(
+				events.listEvents({
+					from: '2025-03-05',
+					to: '2025-03-05',
+					limit: 10,
+					cursor: 'not-base64',
+				}),
+			).rejects.toThrow('Invalid event pagination cursor');
+
+			const invalidDate = btoa(JSON.stringify(['2025-02-30', 'event-id']));
+			await expect(
+				events.listEvents({
+					from: '2025-02-01',
+					to: '2025-03-02',
+					limit: 10,
+					cursor: invalidDate,
+				}),
+			).rejects.toThrow('Invalid event pagination cursor');
+
+			const outside = btoa(JSON.stringify(['2025-03-04', 'event-id']));
+			await expect(
+				events.listEvents({
+					from: '2025-03-05',
+					to: '2025-03-05',
+					limit: 10,
+					cursor: outside,
+				}),
+			).rejects.toThrow('outside the requested date range');
+		});
+	});
+
 	describe('daily rollover', () => {
 		it('writes to separate files for different days', async () => {
 			vi.setSystemTime(new Date('2025-03-05T23:59:00.000Z'));

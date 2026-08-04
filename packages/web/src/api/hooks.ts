@@ -1,4 +1,10 @@
-import { useQuery, useSuspenseQuery, useMutation, keepPreviousData } from '@tanstack/react-query';
+import {
+	useInfiniteQuery,
+	useQuery,
+	useSuspenseQuery,
+	useMutation,
+	keepPreviousData,
+} from '@tanstack/react-query';
 import { apiClient, apiData, apiDataWithResponse } from './client';
 import { useApiMutation } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
@@ -10,6 +16,7 @@ import {
 	sessionKeys,
 	systemKeys,
 	integrationKeys,
+	auditKeys,
 } from './queryKeys';
 import type {
 	IntegrationEntry,
@@ -28,6 +35,38 @@ const SESSIONS_POLL_INTERVAL_MS = 5_000;
  * the dependent UI just renders nothing rather than spamming the endpoint.
  */
 const IMMUTABLE_QUERY = { staleTime: Number.POSITIVE_INFINITY, retry: false } as const;
+
+export interface AuditLogFilters {
+	from: string;
+	to: string;
+	event: string;
+	actor: string;
+	projectId: string;
+}
+
+export function useAuditLogsQuery(filters: AuditLogFilters) {
+	return useInfiniteQuery({
+		queryKey: auditKeys.list(filters),
+		initialPageParam: null as string | null,
+		queryFn: ({ pageParam }) =>
+			apiData(
+				apiClient.GET('/api/v1/events', {
+					params: {
+						query: {
+							from: filters.from,
+							to: filters.to,
+							limit: 50,
+							...(pageParam ? { cursor: pageParam } : {}),
+							...(filters.event ? { event: filters.event } : {}),
+							...(filters.actor ? { actor: filters.actor } : {}),
+							...(filters.projectId ? { project_id: filters.projectId } : {}),
+						},
+					},
+				}),
+			),
+		getNextPageParam: (lastPage) => lastPage.next_cursor,
+	});
+}
 
 // Auth
 export function useUserQuery() {

@@ -186,6 +186,7 @@ describe('SnapshotSchema (looseObject rolling-deploy invariant)', () => {
 describe('EventSchema', () => {
 	it('preserves unknown fields (loose, append-only event records)', () => {
 		const parsed = EventSchema.parse({
+			id: '01HXYZ9ABCDEFGHJKMNPQRSTVW',
 			schema_version: 1,
 			ts: NOW,
 			event: 'session.started',
@@ -197,8 +198,13 @@ describe('EventSchema', () => {
 
 	it('rejects a bad timestamp', () => {
 		expect(
-			EventSchema.safeParse({ schema_version: 1, ts: 'not-a-date', event: 'x', actor: ACTOR })
-				.success,
+			EventSchema.safeParse({
+				id: '01HXYZ9ABCDEFGHJKMNPQRSTVW',
+				schema_version: 1,
+				ts: 'not-a-date',
+				event: 'x',
+				actor: ACTOR,
+			}).success,
 		).toBe(false);
 	});
 });

@@ -936,6 +936,106 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/events': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * List deployment audit events
+		 * @description Deployment-wide audit trail, newest first. Super-admin only. Date ranges are inclusive and limited to 30 UTC days.
+		 */
+		get: {
+			parameters: {
+				query?: {
+					limit?: number;
+					cursor?: string;
+					/** @description UTC calendar date */
+					from?: string;
+					/** @description UTC calendar date */
+					to?: string;
+					event?: string;
+					actor?: string;
+					project_id?: string;
+				};
+				header?: never;
+				path?: never;
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Deployment audit events, newest first */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['AuditLogPage'];
+						};
+					};
+				};
+				/** @description Bad request */
+				400: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Insufficient role */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/events': {
 		parameters: {
 			query?: never;
@@ -5069,6 +5169,25 @@ export interface components {
 		SuccessResponse: {
 			/** @enum {boolean} */
 			success: true;
+		};
+		AuditLogPage: {
+			items: components['schemas']['AuditLogEntry'][];
+			next_cursor: string | null;
+		};
+		AuditLogEntry: {
+			id: string;
+			schema_version: number;
+			/**
+			 * Format: date-time
+			 * @example 2025-03-05T14:00:00Z
+			 */
+			ts: string;
+			/** @example project.update */
+			event: string;
+			actor: string;
+			metadata: {
+				[key: string]: unknown;
+			};
 		};
 		AuditEvent: {
 			/**

@@ -26,6 +26,8 @@ import type {
 	ResolvedUser as ClientResolvedUser,
 	ApiToken as ClientApiToken,
 	ApiTokenCreated as ClientApiTokenCreated,
+	AuditLogEntry as ClientAuditLogEntry,
+	AuditLogPage as ClientAuditLogPage,
 	ApiResponse as ClientApiResponse,
 	ApiError as ClientApiError,
 } from '@marimo-hub/client';
@@ -68,6 +70,8 @@ export type ResolvedUser = ClientResolvedUser;
 export type ApiToken = ClientApiToken;
 /** The token-create response: metadata plus the one-time plaintext `token`. */
 export type ApiTokenCreated = ClientApiTokenCreated;
+export type AuditLogEntry = ClientAuditLogEntry;
+export type AuditLogPage = ClientAuditLogPage;
 export type ApiResponse<T> = ClientApiResponse<T>;
 export type ApiError = ClientApiError;
 export type User = ClientUser;

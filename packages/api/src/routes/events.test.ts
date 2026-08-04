@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { composeAuthenticators } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createApi } from '../createApi';
@@ -26,6 +27,125 @@ describe('Event routes', () => {
 		);
 		return data.id;
 	}
+
+	function superAdminApi() {
+		return createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: { policy: { superAdmins: [ACTOR] } },
+		});
+	}
+
+	it('lists deployment events for super admins, newest first with opaque metadata', async () => {
+		const { request: adminRequest, deps } = superAdminApi();
+		await deps.services.events.append({
+			event: 'token.create',
+			actor: ACTOR,
+			token_id: 'token-1',
+			payload: { nested: ['value'] },
+		});
+		await deps.services.events.append({
+			event: 'project.update',
+			actor: ACTOR,
+			project_id: 'proj-one',
+		});
+
+		const page = await expectOk<{
+			items: Record<string, any>[];
+			next_cursor: string | null;
+		}>(await adminRequest('GET', '/events?limit=10'));
+		expect(page.next_cursor).toBeNull();
+		expect(page.items.map((event) => event.event)).toEqual(['project.update', 'token.create']);
+		expect(page.items[1]).toMatchObject({
+			id: expect.any(String),
+			schema_version: 1,
+			actor: ACTOR,
+			metadata: { token_id: 'token-1', payload: { nested: ['value'] } },
+		});
+		expect(page.items[1].metadata.id).toBeUndefined();
+	});
+
+	it('paginates and combines exact deployment-event filters', async () => {
+		const { request: adminRequest, deps } = superAdminApi();
+		await deps.services.events.append({
+			event: 'notebook.update',
+			actor: ACTOR,
+			project_id: 'proj-one',
+		});
+		await deps.services.events.append({
+			event: 'notebook.update',
+			actor: uid('someone-else'),
+			project_id: 'proj-one',
+		});
+		await deps.services.events.append({
+			event: 'notebook.create',
+			actor: ACTOR,
+			project_id: 'proj-one',
+		});
+		await deps.services.events.append({
+			event: 'notebook.update',
+			actor: ACTOR,
+			project_id: 'proj-two',
+		});
+
+		const filtered = await expectOk<{ items: any[]; next_cursor: string | null }>(
+			await adminRequest(
+				'GET',
+				`/events?event=notebook.update&actor=${ACTOR}&project_id=proj-one&limit=1`,
+			),
+		);
+		expect(filtered.items).toHaveLength(1);
+		expect(filtered.items[0].metadata.project_id).toBe('proj-one');
+		expect(filtered.next_cursor).toBeNull();
+
+		const first = await expectOk<{ items: any[]; next_cursor: string | null }>(
+			await adminRequest('GET', '/events?limit=2'),
+		);
+		expect(first.items).toHaveLength(2);
+		expect(first.next_cursor).toBeTruthy();
+		const second = await expectOk<{ items: any[]; next_cursor: string | null }>(
+			await adminRequest('GET', `/events?limit=2&cursor=${encodeURIComponent(first.next_cursor!)}`),
+		);
+		expect(second.items).toHaveLength(2);
+		expect(new Set([...first.items, ...second.items].map((event) => event.id)).size).toBe(4);
+	});
+
+	it('requires deployment super-admin access for the global stream', async () => {
+		await expectError(await request('GET', '/events'), 403, 'FORBIDDEN');
+
+		const app = createApi(makeTestDeps(bucket));
+		await expectError(await app.request('/api/v1/events'), 401, 'UNAUTHORIZED');
+	});
+
+	it('accepts a PAT issued by a super admin', async () => {
+		const session = superAdminApi();
+		await session.request('GET', '/me');
+		const { token } = await expectOk<{ token: string }>(
+			await session.request('POST', '/me/tokens', { name: 'audit-reader' }),
+			201,
+		);
+		const app = createApi({
+			...session.deps,
+			authenticator: composeAuthenticators(session.deps.services.tokens, {
+				authenticate: async () => null,
+			}),
+		});
+		const page = await expectOk<{ items: any[] }>(
+			await app.request('/api/v1/events', {
+				headers: { authorization: `Bearer ${token}` },
+			}),
+		);
+		expect(page.items.some((event) => event.event === 'token.create')).toBe(true);
+	});
+
+	it('validates the global date range and cursor', async () => {
+		const { request: adminRequest } = superAdminApi();
+		await expectError(await adminRequest('GET', '/events?from=2026-01-01'), 422);
+		await expectError(await adminRequest('GET', '/events?from=2026-02-01&to=2026-01-01'), 422);
+		await expectError(await adminRequest('GET', '/events?from=2026-01-01&to=2026-01-31'), 422);
+		await expectError(await adminRequest('GET', '/events?from=2026-02-30&to=2026-03-01'), 422);
+		await expectError(await adminRequest('GET', '/events?cursor=not-base64'), 400, 'BAD_REQUEST');
+	});
 
 	it('returns the project’s events for today, in append order', async () => {
 		const pid = await createProject();

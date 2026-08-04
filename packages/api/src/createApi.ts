@@ -41,6 +41,7 @@ const OPENAPI_DOC = {
 		{ name: 'Integrations', description: 'Project and organization integrations' },
 		{ name: 'Secrets', description: 'Project secret management' },
 		{ name: 'Users', description: 'User identity resolution' },
+		{ name: 'Audit', description: 'Deployment and project audit events' },
 		{ name: 'System', description: 'Deployment metadata' },
 	],
 	// Every documented `/api/v1/*` route sits behind the authN guard, satisfiable

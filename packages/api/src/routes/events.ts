@@ -1,13 +1,94 @@
 import { createRoute, z } from '@hono/zod-openapi';
+import { ValidationError } from '@marimo-hub/core';
+import type { Event } from '@marimo-hub/core';
 import {
 	assertProjectRole,
+	assertSuperAdmin,
 	AuditEventResponseSchema,
+	AuditLogEntryResponseSchema,
 	commonErrors,
 	createApp,
 	errorResponses,
 	jsonContent,
 	ProjectIdParam,
 } from '../shared';
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, pageSchema, PaginationQuery } from '../pagination';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_EVENT_RANGE_DAYS = 30;
+const DateQuery = z
+	.string()
+	.regex(/^\d{4}-\d{2}-\d{2}$/)
+	.openapi({ example: '2026-07-01', description: 'UTC calendar date' });
+
+const GlobalEventQuery = PaginationQuery.extend({
+	from: DateQuery.optional(),
+	to: DateQuery.optional(),
+	event: z.string().min(1).optional(),
+	actor: z.string().min(1).optional(),
+	project_id: z.string().min(1).optional(),
+});
+
+function parseDate(value: string): number {
+	const parsed = Date.parse(`${value}T00:00:00.000Z`);
+	if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== value) {
+		throw new ValidationError(`Invalid UTC date: ${value}`);
+	}
+	return parsed;
+}
+
+function eventRange(
+	from: string | undefined,
+	to: string | undefined,
+): { from: string; to: string } {
+	if ((from === undefined) !== (to === undefined)) {
+		throw new ValidationError('from and to must be supplied together');
+	}
+	if (from === undefined || to === undefined) {
+		const end = new Date();
+		const endDate = end.toISOString().slice(0, 10);
+		return {
+			from: new Date(Date.parse(`${endDate}T00:00:00.000Z`) - 29 * DAY_MS)
+				.toISOString()
+				.slice(0, 10),
+			to: endDate,
+		};
+	}
+	const fromTime = parseDate(from);
+	const toTime = parseDate(to);
+	if (fromTime > toTime) throw new ValidationError('from must not be after to');
+	if ((toTime - fromTime) / DAY_MS + 1 > MAX_EVENT_RANGE_DAYS) {
+		throw new ValidationError(`Audit event ranges cannot exceed ${MAX_EVENT_RANGE_DAYS} days`);
+	}
+	return { from, to };
+}
+
+function auditLogEntry(event: Event) {
+	const { id, schema_version, ts, event: type, actor, ...metadata } = event;
+	return { id, schema_version, ts, event: type, actor, metadata };
+}
+
+const listGlobalEvents = createRoute({
+	method: 'get',
+	path: '/events',
+	tags: ['Audit'],
+	summary: 'List deployment audit events',
+	description:
+		'Deployment-wide audit trail, newest first. Super-admin only. Date ranges are inclusive ' +
+		'and limited to 30 UTC days.',
+	request: { query: GlobalEventQuery },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: pageSchema(AuditLogEntryResponseSchema, 'AuditLogPage'),
+			}),
+			'Deployment audit events, newest first',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403),
+	},
+});
 
 const listEvents = createRoute({
 	method: 'get',
@@ -38,6 +119,29 @@ const listEvents = createRoute({
 });
 
 const app = createApp();
+
+app.openapi(listGlobalEvents, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	assertSuperAdmin(user, deps.policy);
+	const query = c.req.valid('query');
+	const range = eventRange(query.from, query.to);
+	const page = await deps.services.events.listEvents({
+		...range,
+		limit: Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE),
+		cursor: query.cursor,
+		event: query.event,
+		actor: query.actor,
+		projectId: query.project_id,
+	});
+	return c.json(
+		{
+			success: true,
+			data: { items: page.items.map(auditLogEntry), next_cursor: page.nextCursor },
+		},
+		200,
+	);
+});
 
 app.openapi(listEvents, async (c) => {
 	const deps = c.get('deps');

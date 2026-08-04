@@ -41,6 +41,8 @@ export type ResolvedUser = components['schemas']['User'];
 export type ApiToken = components['schemas']['ApiToken'];
 /** The create response: metadata plus the one-time plaintext `token`. */
 export type ApiTokenCreated = components['schemas']['ApiTokenCreated'];
+export type AuditLogEntry = components['schemas']['AuditLogEntry'];
+export type AuditLogPage = components['schemas']['AuditLogPage'];
 
 export interface ApiError {
 	code: string;

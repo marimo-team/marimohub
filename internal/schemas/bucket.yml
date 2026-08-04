@@ -1566,6 +1566,9 @@ components:
     Event:
       type: object
       properties:
+        id:
+          type: string
+          minLength: 1
         schema_version:
           type: integer
           exclusiveMinimum: 0
@@ -1579,6 +1582,7 @@ components:
         actor:
           type: string
       required:
+        - id
         - schema_version
         - ts
         - event
