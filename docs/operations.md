@@ -109,6 +109,24 @@ maintenance cycle) carrying backend signals — catalog CAS contention, reaper
 activity, snapshot timing. Ship stdout to your log pipeline and alert on
 `level: error` events (e.g. `boot_failed`, `unhandled_rejection`).
 
+### Tracing (OpenTelemetry)
+
+Set the standard `OTEL_EXPORTER_OTLP_ENDPOINT` (OTLP over HTTP) to enable
+tracing: one SERVER span per request through the Hono server, honoring inbound
+W3C `traceparent` headers, with nested spans for every domain-service and
+storage call (`NotebookService.getNotebook`, `Bucket.get`, …). Span attributes
+are limited to resource identifiers and bucket keys — request payloads,
+tokens, and emails are never recorded. `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER` /
+`OTEL_TRACES_SAMPLER_ARG`, `OTEL_EXPORTER_OTLP_HEADERS`, and
+`OTEL_SDK_DISABLED` behave per the [OTEL spec](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/).
+Unset, tracing is fully disabled with no overhead. These are standard `OTEL_*`
+variables, so they are intentionally absent from the
+[Configuration reference](/configuration).
+
+The middleware traces every request, including static assets; use
+`OTEL_TRACES_SAMPLER=parentbased_traceidratio` with a ratio in
+`OTEL_TRACES_SAMPLER_ARG` to reduce span volume.
+
 ## Cost control
 
 Compute backends differ in cost model — pick per [Compute](/compute):

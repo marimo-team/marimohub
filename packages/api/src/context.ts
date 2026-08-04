@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { Hono, MiddlewareHandler } from 'hono';
 import type {
 	Authenticator,
 	AuthUser,
@@ -231,6 +231,12 @@ export interface ApiDeps {
 	 * so those routes stay public.
 	 */
 	authRoutes?: Hono;
+	/**
+	 * Optional request-tracing middleware (e.g. @hono/otel), registered ahead of
+	 * every route — including the sandbox-proxy short-circuits. Absent (Workers,
+	 * tests): no overhead.
+	 */
+	tracingMiddleware?: MiddlewareHandler;
 	/** How the notebook sandbox is mounted, exposed, and persisted. */
 	sandbox: SandboxConfig;
 	/** Deployment-wide authorization / abuse-guard knobs. */

@@ -281,7 +281,16 @@ function parseSandboxExposure(env: Env): SandboxExposure {
 	);
 }
 
-export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDeps {
+export interface CreateFromEnvOptions {
+	/** Wrap the bucket and services in OTEL spans (see `createServices`). */
+	tracing?: boolean;
+}
+
+export function createFromEnv(
+	env: Env = process.env,
+	metrics?: Metrics,
+	options?: CreateFromEnvOptions,
+): ApiDeps {
 	const bucket = makeStorage(env);
 	const exposure = parseSandboxExposure(env);
 	// The same-origin isolation guard only applies to `subdomain` mode (a separate
@@ -307,7 +316,7 @@ export function createFromEnv(env: Env = process.env, metrics?: Metrics): ApiDep
 		console.warn(profileNotice);
 		warnedUnsupportedProfileBackends.add(computeBackend);
 	}
-	const services = createServices(bucket, metrics);
+	const services = createServices(bucket, metrics, { tracing: options?.tracing });
 	const deps: ApiDeps = {
 		services,
 		bucket,

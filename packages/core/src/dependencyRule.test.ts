@@ -12,7 +12,16 @@ import { describe, expect, it } from 'vitest';
  * Adding an entry here is a deliberate architectural decision, not a fix for a
  * red test. A dependency that *reaches* something belongs behind a port.
  */
-const ALLOWED_DEPENDENCIES = new Set(['better-all', 'smol-toml', 'ulidx', 'yaml', 'zod']);
+const ALLOWED_DEPENDENCIES = new Set([
+	// The vendor-neutral OTEL facade: pure and I/O-free, every call is a no-op
+	// unless an entrypoint registers a provider (the SDK stays in apps/server).
+	'@opentelemetry/api',
+	'better-all',
+	'smol-toml',
+	'ulidx',
+	'yaml',
+	'zod',
+]);
 
 const pkg = JSON.parse(
 	readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),

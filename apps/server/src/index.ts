@@ -7,6 +7,7 @@
  * state lives in object storage + compute — so this scales horizontally.
  */
 import { serve } from '@hono/node-server';
+import { httpInstrumentationMiddleware } from '@hono/otel';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createApi } from '@marimo-hub/api';
@@ -14,6 +15,7 @@ import { createFromEnv, isConfigError } from '@marimo-hub/config';
 import { startMaintenance, startSessionLifecycle } from './cron';
 import { logEvent } from './log';
 import { WideEventMetrics } from './metrics';
+import { startOtel } from './otel';
 import { serveSpaFallback, serveStaticWithCache } from './staticCache';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 
@@ -50,12 +52,16 @@ process.on('uncaughtException', (err) => {
 // surfaces at the next flush).
 const metrics = new WideEventMetrics();
 
+// Tracing (standard OTEL_* env vars); the global provider must register before
+// requests are served.
+const otel = startOtel();
+
 // Config errors are deterministic — a restart can't fix them — so print a readable
 // remediation block to stderr and exit. (Transient backend problems go through the
 // non-fatal preflight below instead, so they never crashloop a replica.)
 let deps: ApiDeps;
 try {
-	deps = createFromEnv(process.env, metrics);
+	deps = createFromEnv(process.env, metrics, { tracing: otel !== null });
 } catch (err) {
 	if (isConfigError(err)) {
 		console.error(`\n${err.format()}\n`);
@@ -63,6 +69,7 @@ try {
 	}
 	throw err;
 }
+if (otel) deps.tracingMiddleware = httpInstrumentationMiddleware();
 const app = createApi(deps);
 
 // Boot preflight: probe downstream deps (storage conditional-writes, OIDC
@@ -123,3 +130,14 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
 // In `proxy` exposure mode, forward `…/proxy/<token>/` WebSocket upgrades to the
 // kernel (the HTTP side is handled inside `app.fetch`). A no-op otherwise.
 attachSandboxProxyUpgrade(server, deps);
+
+// Flush buffered spans on shutdown. Registered only when tracing is enabled so
+// the default signal semantics are unchanged otherwise.
+if (otel) {
+	const drain = () => {
+		server.close();
+		void otel.shutdown().finally(() => process.exit(0));
+	};
+	process.once('SIGTERM', drain);
+	process.once('SIGINT', drain);
+}

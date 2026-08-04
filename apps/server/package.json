@@ -11,9 +11,14 @@
 	},
 	"dependencies": {
 		"@hono/node-server": "catalog:",
+		"@hono/otel": "catalog:",
 		"@marimo-hub/api": "workspace:*",
 		"@marimo-hub/config": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
+		"@opentelemetry/api": "catalog:",
+		"@opentelemetry/exporter-trace-otlp-http": "catalog:",
+		"@opentelemetry/sdk-trace-base": "catalog:",
+		"@opentelemetry/sdk-trace-node": "catalog:",
 		"hono": "catalog:"
 	},
 	"devDependencies": {

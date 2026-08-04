@@ -1,8 +1,10 @@
 import type { Bucket } from '../ports/bucket';
 import { noopMetrics } from '../ports/metrics';
 import type { Metrics } from '../ports/metrics';
-import type { UserId } from '../ids';
+import type { NotebookId, ProjectId, SessionId, UserId } from '../ids';
 import { paths } from '../paths';
+import { traced } from '../tracing';
+import type { AttrExtractors } from '../tracing';
 import { CatalogService } from './catalog/CatalogService';
 import { EventService } from './catalog/EventService';
 import { IdempotencyService } from './catalog/IdempotencyService';
@@ -169,21 +171,122 @@ export { SessionService } from './runtime/SessionService';
 export { SessionRetirer, TakeoverRetirementError } from './runtime/SessionRetirer';
 export type { SessionRetirerDeps } from './runtime/SessionRetirer';
 
+// Attribute allowlists for the traced wrappers below: stable identifiers and
+// bucket keys only — never raw arguments, which can carry secrets (the PAT
+// bearer in TokenService.verify, emails in IdentityService.getByEmail/search,
+// notebook content).
+const project = (id: ProjectId) => ({ 'marimohub.project_id': id });
+const user = (id: UserId) => ({ 'marimohub.user_id': id });
+const notebook = (projectId: ProjectId, notebookId: NotebookId) => ({
+	...project(projectId),
+	'marimohub.notebook_id': notebookId,
+});
+const session = (projectId: ProjectId, id: SessionId) => ({
+	...project(projectId),
+	'marimohub.session_id': id,
+});
+const bucketKey = (key: string | string[]) => ({ 'bucket.key': key });
+const scope = (scope: string) => ({ 'marimohub.scope': scope });
+
+const bucketAttrs: AttrExtractors<Bucket> = {
+	get: bucketKey,
+	head: bucketKey,
+	put: bucketKey,
+	delete: bucketKey,
+	list: (options) => ({ 'bucket.prefix': options?.prefix }),
+};
+
+export interface CreateServicesOptions {
+	/**
+	 * Wrap the bucket and every service in OTEL spans (one per method call).
+	 * Enable only when a global tracer provider is registered — otherwise the
+	 * wrappers pay Proxy overhead to produce non-recording spans.
+	 */
+	tracing?: boolean;
+}
+
 /**
  * Compose the domain services over a bucket. `metrics` is optional and defaults
  * to a no-op, so tests and library-mode callers are unaffected; entrypoints pass
  * a real emitter (e.g. the wide-event logger) to light up observability.
  */
-export function createServices(bucket: Bucket, metrics: Metrics = noopMetrics) {
-	const events = new EventService(bucket);
-	const catalog = new CatalogService(bucket, metrics, events);
-	const projects = new ProjectService(bucket, catalog, metrics);
-	const notebooks = new NotebookService(bucket, catalog, metrics);
-	const sessions = new SessionService(bucket, metrics);
-	const identities = new IdentityService(bucket);
-	const tokens = new TokenService(bucket, identities);
-	const maintenance = new MaintenanceService(bucket, metrics);
-	const idempotency = new IdempotencyService(bucket);
+export function createServices(
+	rawBucket: Bucket,
+	metrics: Metrics = noopMetrics,
+	options?: CreateServicesOptions,
+) {
+	const wrap = <T extends object>(name: string, service: T, attrs?: AttrExtractors<T>): T =>
+		options?.tracing ? traced(name, service, attrs) : service;
+
+	// Wrapped as constructed, so cross-service calls (NotebookService →
+	// CatalogService → Bucket) are traced too.
+	const bucket = wrap('Bucket', rawBucket, bucketAttrs);
+	const events = wrap('EventService', new EventService(bucket), {
+		append: (event) => ({ 'marimohub.event': event.event, ...user(event.actor) }),
+		getEvents: (date) => ({ 'marimohub.date': date }),
+	});
+	const catalog = wrap('CatalogService', new CatalogService(bucket, metrics, events), {
+		initialize: user,
+	});
+	const projects = wrap('ProjectService', new ProjectService(bucket, catalog, metrics), {
+		getProject: project,
+		updateProject: project,
+		deleteProject: project,
+		hardDeleteProject: project,
+		addMember: project,
+		updateMemberRole: project,
+		removeMember: project,
+	});
+	const notebooks = wrap('NotebookService', new NotebookService(bucket, catalog, metrics), {
+		listNotebooks: project,
+		createNotebook: project,
+		getNotebook: notebook,
+		getNotebookContent: notebook,
+		duplicateNotebook: notebook,
+		updateNotebook: notebook,
+		restoreVersion: notebook,
+		commitSession: notebook,
+		deleteNotebook: notebook,
+		hardDeleteNotebook: notebook,
+		listVersions: notebook,
+		getVersion: notebook,
+		getLatestHtmlSnapshot: notebook,
+		getFsSnapshot: notebook,
+		setFsSnapshot: notebook,
+	});
+	const sessions = wrap('SessionService', new SessionService(bucket, metrics), {
+		createSession: (input) => ({
+			...notebook(input.project_id, input.notebook_id),
+			...user(input.user_id),
+		}),
+		getSession: session,
+		setRunning: session,
+		extendExpiry: session,
+		markSnapshotted: session,
+		markSandboxReclaimed: session,
+		heartbeat: session,
+		beginTerminating: session,
+		markTerminated: session,
+		terminate: session,
+		markFailed: session,
+		listSessions: (notebookId) => ({ 'marimohub.notebook_id': notebookId }),
+		listActiveByProject: project,
+		countActiveAppsForProject: project,
+		listActiveAppsForProject: project,
+		countActiveForUser: user,
+	});
+	const identities = wrap('IdentityService', new IdentityService(bucket), {
+		get: user,
+	});
+	const tokens = wrap('TokenService', new TokenService(bucket, identities), {
+		list: user,
+		revoke: (userId, tokenId) => ({ ...user(userId), 'marimohub.token_id': tokenId }),
+	});
+	const maintenance = wrap('MaintenanceService', new MaintenanceService(bucket, metrics));
+	const idempotency = wrap('IdempotencyService', new IdempotencyService(bucket), {
+		lookup: scope,
+		record: scope,
+	});
 	return {
 		catalog,
 		events,
