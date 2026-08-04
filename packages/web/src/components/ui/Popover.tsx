@@ -80,6 +80,8 @@ export function Popover({
 					className,
 				)}
 			>
+				{/* Dialog implements the function-children form: it invokes them with
+			    its render props (including `close`), so both shapes pass through. */}
 				<Dialog className="p-3 outline-none">{children}</Dialog>
 			</AriaPopover>
 		</DialogTrigger>
