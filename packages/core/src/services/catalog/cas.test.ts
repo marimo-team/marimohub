@@ -27,11 +27,16 @@ describe('withCasRetry', () => {
 	it('throws ConflictError once retries are exhausted', async () => {
 		const onExhausted = vi.fn();
 		await expect(
-			withCasRetry(async () => Promise.reject(new PreconditionFailedError('race')), {
-				retries: 3,
-				backoffMs: () => 0,
-				onExhausted,
-			}),
+			withCasRetry(
+				async () => {
+					throw new PreconditionFailedError('race');
+				},
+				{
+					retries: 3,
+					backoffMs: () => 0,
+					onExhausted,
+				},
+			),
 		).rejects.toBeInstanceOf(ConflictError);
 		expect(onExhausted).toHaveBeenCalledTimes(1);
 	});

@@ -339,12 +339,14 @@ function toSessionError(err: unknown): { code: string; message: string } {
 class AppClaimLostError extends Error {
 	constructor(readonly holder: SessionId) {
 		super('app claim lost');
+		this.name = 'AppClaimLostError';
 	}
 }
 
 class EditorClaimLostError extends Error {
 	constructor(readonly holder: SessionId) {
 		super('editor claim lost');
+		this.name = 'EditorClaimLostError';
 	}
 }
 

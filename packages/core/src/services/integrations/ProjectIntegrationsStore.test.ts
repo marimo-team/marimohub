@@ -1101,7 +1101,7 @@ describe('ProjectIntegrationsStore', () => {
 							// The rename is committed and readable here: whatever a concurrent
 							// reader sees now, it can echo back as an If-Match token.
 							exposed = await (await bucket.get(key))?.json<{ name: string; updated_at: string }>();
-							return Promise.reject(new Error('final head commit failed'));
+							throw new Error('final head commit failed');
 						}
 					}
 					return bucket.put(key, value, options);

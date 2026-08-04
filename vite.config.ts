@@ -52,7 +52,7 @@ export default defineConfig({
 			'eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
 			'react/react-in-jsx-scope': 'off',
 
-			// --- consistency + bug-catchers (added) ---
+			// --- consistency + bug-catchers ---
 			'eslint/eqeqeq': ['error', 'always', { null: 'ignore' }],
 			'eslint/prefer-const': 'error',
 			'eslint/prefer-template': 'error',
@@ -85,10 +85,10 @@ export default defineConfig({
 			// as callbacks), so it adds noise without catching real `this` loss.
 			'typescript/unbound-method': 'off',
 
-			// --- additional consistency + cleanup (batch 2) ---
-			// NB: `prefer-nullish-coalescing` was evaluated and rejected — our `||`
-			// fallbacks are intentional (empty-string/0 should fall through to the
-			// default), so `??` would change behavior. Don't re-add it.
+			// --- consistency + cleanup ---
+			// `prefer-nullish-coalescing` is intentionally off: our `||` fallbacks on
+			// empty-string/0 should fall through to the default, so `??` would change
+			// behavior.
 			'typescript/prefer-optional-chain': 'error',
 			'typescript/no-unnecessary-type-assertion': 'error',
 			// Force object literals to be validated by annotation, not branded past the
@@ -114,7 +114,7 @@ export default defineConfig({
 			'react/jsx-no-useless-fragment': 'error',
 			'react/no-array-index-key': 'error',
 
-			// --- autofixable style cleanups (batch 3) ---
+			// --- autofixable style cleanups ---
 			'react/self-closing-comp': 'error',
 			'react/jsx-boolean-value': 'error',
 			'react/jsx-curly-brace-presence': ['error', { props: 'never', children: 'never' }],
@@ -130,10 +130,50 @@ export default defineConfig({
 			'unicorn/prefer-array-flat': 'error',
 			'unicorn/prefer-logical-operator-over-ternary': 'error',
 			'unicorn/prefer-modern-math-apis': 'error',
-			// NB: `text-encoding-identifier-case` was evaluated and rejected — it
-			// rewrites `'utf-8'` to `'utf8'`, but `SandboxInstance.readFile` passes the
+			// `text-encoding-identifier-case` is intentionally off: it rewrites
+			// `'utf-8'` to `'utf8'`, but `SandboxInstance.readFile` passes the
 			// vendor-reported encoding straight through and the Cloudflare sandbox SDK
-			// emits `'utf-8'`, so normalizing it breaks that boundary type. Don't re-add it.
+			// emits `'utf-8'`, so normalizing it breaks that boundary type.
+
+			// --- production hardening ---
+			// Injection sinks: no code-from-string, no `javascript:` URLs.
+			'eslint/no-eval': 'error',
+			'eslint/no-implied-eval': 'error',
+			'eslint/no-new-func': 'error',
+			'eslint/no-script-url': 'error',
+
+			// `custom-error-definition` requires each error subclass to set `this.name`
+			// to its own class name — load-bearing because `isConfigError`/domain
+			// dispatch match on `err.name` across module-dup boundaries (see
+			// packages/config/src/errors.ts). The rest extend the existing
+			// `only-throw-error` guarantee to type-guards and rejected promises.
+			'unicorn/error-message': 'error',
+			'unicorn/custom-error-definition': 'error',
+			'unicorn/prefer-type-error': 'error',
+			'unicorn/no-thenable': 'error',
+			'unicorn/no-useless-promise-resolve-reject': 'error',
+			'typescript/prefer-promise-reject-errors': 'error',
+
+			// A value returned from a `new Promise(executor)` is discarded, and a
+			// returned promise's rejection is swallowed. Force a statement body.
+			'eslint/no-promise-executor-return': 'error',
+			// Reassigning a parameter mutates the caller's object and hides data flow.
+			'eslint/no-param-reassign': 'error',
+			'eslint/no-return-assign': 'error',
+			// `parseInt(x)` without a radix parses `'0x…'`/legacy-octal surprisingly.
+			'eslint/radix': 'error',
+			'unicorn/prefer-set-has': 'error',
+
+			'typescript/no-unnecessary-template-expression': 'error',
+			'typescript/no-meaningless-void-operator': 'error',
+			'typescript/no-redundant-type-constituents': 'error',
+
+			// Deferred — valuable, but each needs a case-by-case migration rather
+			// than a blanket flip: `no-non-null-assertion` (many `!` sites are safe
+			// after a `.has()`/regex guard), `no-unnecessary-condition` (trips on
+			// defensive checks at trust boundaries), `no-confusing-void-expression`
+			// (mostly `() => setState()` arrows). `no-await-in-loop` stays off: our
+			// loops are intentionally sequential (CAS retries, ordered writes).
 
 			// --- react hooks correctness (packages/web) ---
 			'react-hooks/rules-of-hooks': 'error',
@@ -188,6 +228,12 @@ export default defineConfig({
 					'typescript/no-misused-promises': 'off',
 					// Test doubles assert minimal object literals to SDK types on purpose.
 					'typescript/consistent-type-assertions': 'off',
+					// Redirect-validation tests use `javascript:` URLs as the malicious
+					// input they assert is rejected.
+					'eslint/no-script-url': 'off',
+					// Inline `new Promise((r) => setTimeout(r, ms))` sleeps are fine in
+					// tests; the swallowed-rejection footgun the rule guards doesn't apply.
+					'eslint/no-promise-executor-return': 'off',
 				},
 			},
 			{

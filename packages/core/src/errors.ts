@@ -8,6 +8,12 @@ export abstract class DomainError extends Error {
 	abstract readonly code: string;
 	/** HTTP status this error maps to. */
 	abstract readonly status: number;
+	constructor(message?: string) {
+		super(message);
+		// Default; concrete subclasses override with their own name. Guarantees a
+		// non-`Error` name even if a subclass forgets to set one.
+		this.name = 'DomainError';
+	}
 }
 
 export class BadRequestError extends DomainError {

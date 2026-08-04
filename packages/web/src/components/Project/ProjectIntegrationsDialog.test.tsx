@@ -434,10 +434,10 @@ describe('ProjectIntegrationsPanel — list view', () => {
 		setup({}, { kinds: [postgresKind, customEnvKind], entries });
 
 		expect(await screen.findAllByTestId('integration-row')).toHaveLength(30);
-		await user.type(
-			screen.getByRole('searchbox', { name: 'Search configured integrations' }),
-			'connection-29',
-		);
+		// Paste rather than `type`: filtering is synchronous, so per-keystroke typing
+		// just re-renders all 30 rows 13 times and can blow the test timeout in CI.
+		await user.click(screen.getByRole('searchbox', { name: 'Search configured integrations' }));
+		await user.paste('connection-29');
 
 		expect(screen.getAllByTestId('integration-row')).toHaveLength(1);
 		expect(screen.getByText('connection-29')).toBeInTheDocument();

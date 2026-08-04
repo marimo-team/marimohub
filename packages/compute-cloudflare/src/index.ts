@@ -54,7 +54,9 @@ async function waitForTunnelReady(url: string): Promise<void> {
 			// DNS not resolvable yet / connection refused — keep polling until the cap.
 		}
 		if (Date.now() >= deadline) return;
-		await new Promise((resolve) => setTimeout(resolve, TUNNEL_READY_INTERVAL_MS));
+		await new Promise((resolve) => {
+			setTimeout(resolve, TUNNEL_READY_INTERVAL_MS);
+		});
 	}
 }
 
