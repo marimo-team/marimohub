@@ -22,7 +22,10 @@ const ROW_GRID = 'grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto]';
 export default function AdminUsersPage() {
 	const search = useSearchField();
 	const { data: users } = useAdminUsersQuery();
-	const filtered = filterBySearch(users, search.query, (u) => `${u.name} ${u.email} ${u.id}`);
+	// Trimmed so a whitespace-only query counts as no search (filterBySearch
+	// semantics) — an empty directory then shows its own empty state.
+	const query = search.query.trim();
+	const filtered = filterBySearch(users, query, (u) => `${u.name} ${u.email} ${u.id}`);
 
 	return (
 		<PageContainer>
@@ -48,10 +51,10 @@ export default function AdminUsersPage() {
 			</div>
 
 			{filtered.length === 0 ? (
-				search.query ? (
+				query ? (
 					<EmptyState
 						icon={<SearchX />}
-						message={`No users matching "${search.query}"`}
+						message={`No users matching "${query}"`}
 						description="Try a different search term."
 					/>
 				) : (

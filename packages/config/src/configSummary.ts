@@ -1,5 +1,6 @@
 import type { ConfigSummary } from '@marimo-hub/api';
 import type { Env } from './env';
+import { readFolded } from './env';
 import type { ConfigBackend } from './spec';
 import { CONFIG_SPEC } from './spec';
 
@@ -17,8 +18,12 @@ import { CONFIG_SPEC } from './spec';
 export function buildConfigSummary(env: Env): ConfigSummary {
 	return {
 		groups: CONFIG_SPEC.map((group) => {
+			// Fold the selector like the most lenient wiring does (exposure/AI
+			// accept any casing), so the directory tracks the backend actually
+			// selected. The strict selectors (storage/compute/auth) reject non-
+			// canonical casing at boot, so folding can never diverge from them.
 			const backend = group.selector
-				? (env[group.selector] ?? group.selectorDefault ?? 'unset')
+				? (readFolded(env, group.selector) ?? group.selectorDefault ?? 'unset')
 				: null;
 			const applies = (b: ConfigBackend) =>
 				b.selectorValue === undefined || b.selectorValue === backend;

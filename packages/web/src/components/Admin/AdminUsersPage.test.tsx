@@ -70,9 +70,13 @@ describe('AdminUsersPage', () => {
 		expect(screen.getByText('No users matching "zzz-nope"')).toBeInTheDocument();
 	});
 
-	it('shows the empty state for an empty directory', async () => {
-		setup([]);
+	it('shows the empty state for an empty directory, even with a whitespace query', async () => {
+		const user = setup([]);
 		expect(await screen.findByText('No users yet')).toBeInTheDocument();
+
+		await user.type(screen.getByRole('searchbox', { name: 'Search users' }), '   ');
+		expect(screen.getByText('No users yet')).toBeInTheDocument();
+		expect(screen.queryByText(/No users matching/)).not.toBeInTheDocument();
 	});
 
 	// The race where a super admin was removed from MARIMOHUB_SUPER_ADMINS while

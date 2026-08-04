@@ -85,6 +85,12 @@ describe('buildConfigSummary', () => {
 		expect(keys.some((k) => k.includes('_E2B_'))).toBe(false);
 	});
 
+	it('folds selector casing/whitespace like the wiring does', () => {
+		const auth = group(buildConfigSummary({ MARIMOHUB_AUTH_BACKEND: ' OIDC ' }), 'Auth');
+		expect(auth.backend).toBe('oidc');
+		expect(auth.settings.map((s) => s.key)).toContain('MARIMOHUB_AUTH_OIDC_ISSUER');
+	});
+
 	it('treats an explicitly-empty env var as set, with its empty value', () => {
 		const summary = buildConfigSummary({
 			MARIMOHUB_AUTH_BACKEND: 'oidc',
