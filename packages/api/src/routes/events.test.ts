@@ -207,14 +207,21 @@ describe('Event routes', () => {
 		expect(events[0].project_id).toBe(pid);
 	});
 
-	it('rejects a non-admin member (403)', async () => {
+	it('allows a manager and rejects a lower-role member', async () => {
 		const pid = await createProject();
+		const manager = uid('user_manager');
 		const viewer = uid('user_viewer');
+		await expectOk(
+			await request('POST', `/projects/${pid}/members`, { user_id: manager, role: 'manager' }),
+			201,
+		);
 		await expectOk(
 			await request('POST', `/projects/${pid}/members`, { user_id: viewer, role: 'viewer' }),
 			201,
 		);
 
+		const managerRequest = createTestApi({ bucket, userId: manager }).request;
+		await expectOk(await managerRequest('GET', `/projects/${pid}/events`));
 		const viewerRequest = createTestApi({ bucket, userId: viewer }).request;
 		await expectError(await viewerRequest('GET', `/projects/${pid}/events`), 403);
 	});

@@ -13,7 +13,7 @@ export const AUTH_ENTITLEMENTS = [
 	'super-admin',
 	'default-role:viewer',
 	'default-role:editor',
-	'default-role:admin',
+	'default-role:manager',
 ] as const;
 
 export type AuthEntitlement = (typeof AUTH_ENTITLEMENTS)[number];

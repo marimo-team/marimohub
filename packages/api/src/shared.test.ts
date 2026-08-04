@@ -69,6 +69,24 @@ describe('assertProjectRole', () => {
 		).resolves.toMatchObject({ id });
 	});
 
+	it('passes when a manager meets the project-management requirement', async () => {
+		const bucket = new MemoryBucket();
+		const { id } = await seedProject(bucket, {
+			owner: uid('someone-else'),
+			members: [{ user_id: uid('manager-1'), role: 'manager' }],
+		});
+		const { projects } = createServices(bucket);
+
+		await expect(
+			assertProjectRole(
+				projects,
+				id,
+				{ id: uid('manager-1'), email: 'manager-1@example.com' },
+				'manager',
+			),
+		).resolves.toMatchObject({ id });
+	});
+
 	it('throws ForbiddenError when the member role is insufficient (viewer < editor)', async () => {
 		const bucket = new MemoryBucket();
 		const { id } = await seedProject(bucket, {
@@ -132,11 +150,13 @@ describe('assertProjectRole', () => {
 describe('session authorization assertions', () => {
 	const owner = uid('session-owner');
 	const editor = uid('other-editor');
+	const manager = uid('other-manager');
 	const admin = uid('other-admin');
 	const project = makeProject({
 		owner,
 		members: [
 			{ user_id: editor, role: 'editor' },
+			{ user_id: manager, role: 'manager' },
 			{ user_id: admin, role: 'admin' },
 		],
 	});
@@ -155,6 +175,12 @@ describe('session authorization assertions', () => {
 
 	it('denies admin attach while preserving force-stop authority', () => {
 		const subject = { id: admin, email: 'admin@example.com' };
+		expect(() => assertSessionAccess(project, session, subject, {})).toThrow(ForbiddenError);
+		expect(() => assertSessionControl(project, session, subject, {})).not.toThrow();
+	});
+
+	it('denies manager attach while preserving force-stop authority', () => {
+		const subject = { id: manager, email: 'manager@example.com' };
 		expect(() => assertSessionAccess(project, session, subject, {})).toThrow(ForbiddenError);
 		expect(() => assertSessionControl(project, session, subject, {})).not.toThrow();
 	});

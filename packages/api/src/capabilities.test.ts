@@ -84,6 +84,25 @@ describe('GET /api/v1/capabilities', () => {
 		});
 	});
 
+	it('reports a group-derived manager without treating them as a super admin', async () => {
+		const authenticator: Authenticator = {
+			authenticate: async () => ({
+				id: uid('group-manager'),
+				email: 'group-manager@example.com',
+				entitlements: ['default-role:manager'],
+			}),
+		};
+		const deps = makeTestDeps(new MemoryBucket(), { authenticator });
+		const app = createApi(deps);
+
+		expect(await expectOk(await app.request('/api/v1/capabilities'))).toMatchObject({
+			default_role: 'manager',
+		});
+		expect(await expectOk(await app.request('/api/v1/me'))).toMatchObject({
+			is_super_admin: false,
+		});
+	});
+
 	it('reports the editor sandbox sharing, defaulting to shared', async () => {
 		const defaulted = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		expect(

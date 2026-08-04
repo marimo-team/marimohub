@@ -97,7 +97,7 @@ const listEvents = createRoute({
 	summary: "List a project's audit events for one day",
 	description:
 		'Catalog mutation audit trail (project/notebook lifecycle, membership changes), ' +
-		'one UTC day at a time. Admin-only: events may record member management and deletions.',
+		'one UTC day at a time. Manager-only: events may record member management and deletions.',
 	request: {
 		params: ProjectIdParam,
 		query: z.object({
@@ -148,9 +148,9 @@ app.openapi(listEvents, async (c) => {
 	const { pid } = c.req.valid('param');
 	const { date } = c.req.valid('query');
 
-	// Unlike other reads (open by v1 policy), the audit trail is admin-only.
+	// Unlike other reads (open by v1 policy), the audit trail is manager-only.
 	// assertProjectRole also 404s a soft-deleted project (its own lifecycle guard).
-	await assertProjectRole(deps.services.projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
 
 	const day = date ?? new Date().toISOString().slice(0, 10);
 	const events = await deps.services.events.getEvents(day);

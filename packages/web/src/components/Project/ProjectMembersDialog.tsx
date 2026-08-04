@@ -26,8 +26,20 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useAuth } from '@/context/AuthContext';
 import { toastError } from '@/lib/errors';
-import { defaultAccessSummary, ROLES, roleDescriptions } from '@/lib/roles';
-import type { ProjectDetail, ProjectMember, ProjectRole, ResolvedUser, User } from '@/types';
+import {
+	ASSIGNABLE_ROLES,
+	canManageProject,
+	defaultAccessSummary,
+	roleDescriptions,
+} from '@/lib/roles';
+import type {
+	AssignableProjectRole,
+	ProjectDetail,
+	ProjectMember,
+	ProjectRole,
+	ResolvedUser,
+	User,
+} from '@/types';
 
 // Same validator the server's AddMemberBody uses, so the picker never offers
 // an "Invite by email" option the API would 422.
@@ -53,33 +65,46 @@ interface RoleBadgeProps {
 	value: ProjectRole;
 	descriptions: Record<ProjectRole, string>;
 	label: string;
+	legacyAdmin?: boolean;
 }
 
-function RoleBadge({ value, descriptions, label }: RoleBadgeProps) {
+function RoleBadge({ value, descriptions, label, legacyAdmin }: RoleBadgeProps) {
+	const displayRole = value === 'admin' && legacyAdmin ? 'Admin (legacy)' : roleLabel(value);
 	return (
 		<Tooltip
 			content={
 				<div className="flex max-w-72 flex-col gap-1">
-					<span className="font-semibold">{roleLabel(value)}</span>
+					<span className="font-semibold">{displayRole}</span>
 					<span>{descriptions[value]}</span>
 				</div>
 			}
 		>
 			<button
 				type="button"
-				aria-label={`${label}: ${roleLabel(value)}`}
+				aria-label={`${label}: ${displayRole}`}
 				className="inline-flex h-7 shrink-0 cursor-help items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 text-xs font-medium text-primary outline-none transition-colors hover:border-primary/40 hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 			>
-				{roleLabel(value)}
+				{displayRole}
 			</button>
 		</Tooltip>
+	);
+}
+
+function OwnerBadge({ label }: { label: string }) {
+	return (
+		<span
+			aria-label={`${label}: Owner`}
+			className="inline-flex h-7 shrink-0 items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 text-xs font-medium text-primary"
+		>
+			Owner
+		</span>
 	);
 }
 
 interface RoleSelectProps {
 	label: string;
 	value: ProjectRole;
-	onChange: (role: ProjectRole) => void;
+	onChange: (role: AssignableProjectRole) => void;
 	descriptions: Record<ProjectRole, string>;
 	disabled?: boolean;
 }
@@ -87,7 +112,12 @@ interface RoleSelectProps {
 function RoleSelect({ label, value, onChange, descriptions, disabled }: RoleSelectProps) {
 	const tooltip = (
 		<div className="flex flex-col gap-1">
-			{ROLES.map((role) => (
+			{value === 'admin' && (
+				<p>
+					<span className="font-semibold">admin (legacy)</span> — {descriptions.admin}
+				</p>
+			)}
+			{ASSIGNABLE_ROLES.map((role) => (
 				<p key={role}>
 					<span className="font-semibold">{role}</span> — {descriptions[role]}
 				</p>
@@ -99,11 +129,16 @@ function RoleSelect({ label, value, onChange, descriptions, disabled }: RoleSele
 			<select
 				aria-label={label}
 				value={value}
-				onChange={(e) => onChange(e.target.value as ProjectRole)}
+				onChange={(e) => onChange(e.target.value as AssignableProjectRole)}
 				disabled={disabled}
 				className="h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 			>
-				{ROLES.map((role) => (
+				{value === 'admin' && (
+					<option value="admin" disabled>
+						Admin (legacy)
+					</option>
+				)}
+				{ASSIGNABLE_ROLES.map((role) => (
 					<option key={role} value={role}>
 						{roleLabel(role)}
 					</option>
@@ -131,7 +166,7 @@ interface AddMemberPickerProps {
 	users: UserDirectory | undefined;
 	descriptions: Record<ProjectRole, string>;
 	/** Resolves true on success (errors are toasted by the caller). */
-	onAdd: (choice: MemberChoice, role: ProjectRole) => Promise<boolean>;
+	onAdd: (choice: MemberChoice, role: AssignableProjectRole) => Promise<boolean>;
 	isPending: boolean;
 }
 
@@ -144,7 +179,7 @@ interface AddMemberPickerProps {
  */
 function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: AddMemberPickerProps) {
 	const [query, setQuery] = useState('');
-	const [role, setRole] = useState<ProjectRole>('editor');
+	const [role, setRole] = useState<AssignableProjectRole>('editor');
 	const debounced = useDebouncedValue(query);
 	const search = useUserSearchQuery(debounced);
 
@@ -270,13 +305,13 @@ export interface ProjectMembersDialogProps {
 
 /**
  * Member management for a project: the member list (visible to everyone), and —
- * for admins — a role select and remove control per member plus a search-driven
+ * for managers — a role select and remove control per member plus a search-driven
  * add-member picker. The owner's row shows no controls: the API rejects changing
  * or removing the owner, so the UI doesn't offer it.
  */
 export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMembersDialogProps) {
 	const { user } = useAuth();
-	const isAdmin = project.your_role === 'admin';
+	const canManage = canManageProject(project.your_role);
 	const { data: members, isLoading } = useProjectMembersQuery(project.id);
 	const visibleMembers = members ?? project.members ?? [];
 	const { data: users, isLoading: usersLoading } = useUsersQuery([
@@ -304,7 +339,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 	const currentIdentity = user ? users?.[user.id] : undefined;
 	const currentDisplayName = currentIdentity?.name || user?.email || 'You';
 
-	const handleAdd = async (choice: MemberChoice, role: ProjectRole) => {
+	const handleAdd = async (choice: MemberChoice, role: AssignableProjectRole) => {
 		try {
 			await addMember.mutateAsync({ ...choice, role });
 			toast.success('email' in choice ? 'Invite added' : 'Member added');
@@ -315,7 +350,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 		}
 	};
 
-	const handleRoleChange = (member: ProjectMember, role: ProjectRole) => {
+	const handleRoleChange = (member: ProjectMember, role: AssignableProjectRole) => {
 		updateRole.mutate(
 			{ uid: memberKey(member), role },
 			{
@@ -379,11 +414,16 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 										</p>
 									</div>
 								</div>
-								{project.your_role ? (
+								{user?.id === project.owner ? (
+									<OwnerBadge label="Your role" />
+								) : project.your_role ? (
 									<RoleBadge
 										value={project.your_role}
 										descriptions={descriptions}
 										label="Your role"
+										legacyAdmin={
+											project.your_role === 'admin' && currentUserIsMember && !user?.is_super_admin
+										}
 									/>
 								) : (
 									<span className="text-xs text-muted-foreground">No Project Role</span>
@@ -450,15 +490,8 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 													)}
 												</span>
 												{isOwner ? (
-													<span className="flex shrink-0 items-center gap-2">
-														<span className="text-xs text-muted-foreground">Owner</span>
-														<RoleBadge
-															value="admin"
-															descriptions={descriptions}
-															label={`Role for ${key}`}
-														/>
-													</span>
-												) : isAdmin ? (
+													<OwnerBadge label={`Role for ${key}`} />
+												) : canManage ? (
 													<span className="flex shrink-0 items-center gap-1.5">
 														<RoleSelect
 															label={`Role for ${key}`}
@@ -481,6 +514,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 														value={member.role}
 														descriptions={descriptions}
 														label={`Role for ${key}`}
+														legacyAdmin={member.role === 'admin'}
 													/>
 												)}
 											</li>
@@ -489,7 +523,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 								</ul>
 							)}
 
-							{isAdmin && (
+							{canManage && (
 								<AddMemberPicker
 									members={visibleMembers}
 									users={users}

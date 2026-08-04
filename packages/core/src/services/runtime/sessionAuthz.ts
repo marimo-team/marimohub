@@ -1,5 +1,6 @@
 import type { EditorSandboxSharing, Role, SessionMode, ViewerMode } from '../../constants';
 import { viewerSessionModes } from '../../constants';
+import { roleAtLeast } from '../../authz';
 import type { UserId } from '../../ids';
 import type { Session } from '../../schema';
 import { MODE_POLICY, sessionMode } from './sessionState';
@@ -31,7 +32,7 @@ export function canStartSessionMode(
 	actor: Pick<SessionActor, 'role' | 'viewerMode'>,
 	mode: SessionMode,
 ): boolean {
-	if (actor.role === 'editor' || actor.role === 'admin') return true;
+	if (roleAtLeast(actor.role, 'editor')) return true;
 	return actor.role === 'viewer' && viewerSessionModes(actor.viewerMode).includes(mode);
 }
 
@@ -41,8 +42,8 @@ export function canStartSessionMode(
  * on session responses — is this function applied to (actor, session), so the
  * answers cannot drift between surfaces.
  *
- * Shared editors are reachable by every editor and administrator. Exclusive
- * editors are reachable only by their owner; an administrator may force-stop
+ * Shared editors are reachable by every editor or higher role. Exclusive
+ * editors are reachable only by their owner; a manager or admin may force-stop
  * one but may not attach. A viewer fully controls their own throwaway and may
  * attach to a shared app when their viewer tier grants it. Revoked membership
  * cuts access to every session.
@@ -52,12 +53,12 @@ export function sessionCan(
 	actor: SessionActor,
 	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
 ): boolean {
-	if (actor.role === 'editor' || actor.role === 'admin') {
+	if (roleAtLeast(actor.role, 'editor')) {
 		if (sessionMode(session) !== 'edit') return true;
 		const sharing = session.editor_sandbox_sharing ?? actor.editorSandboxSharing ?? 'shared';
 		if (sharing === 'shared') return true;
 		if (session.user_id === actor.userId) return true;
-		return action === 'stop' && actor.role === 'admin';
+		return action === 'stop' && roleAtLeast(actor.role, 'manager');
 	}
 	if (actor.role === null) return false;
 	if (session.ephemeral && session.user_id === actor.userId) {

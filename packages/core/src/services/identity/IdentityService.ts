@@ -77,7 +77,7 @@ export class IdentityService {
 		await this.bucket.put(paths.identity(user.id), JSON.stringify(record));
 		this.written.set(user.id, sig);
 		// Keep the directory cache coherent with what this process just wrote, so
-		// an admin can resolve this user by email (add-by-email canonicalization,
+		// a manager can resolve this user by email (add-by-email canonicalization,
 		// search) without waiting out the TTL.
 		if (this.directory) {
 			this.directory.entries = [

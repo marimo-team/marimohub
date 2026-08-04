@@ -17,7 +17,7 @@ const awsSecretSource = {
 };
 
 const project = (over: Partial<ProjectDetail> = {}): ProjectDetail =>
-	({ id: PID, name: 'Demo', your_role: 'admin', ...over }) as ProjectDetail;
+	({ id: PID, name: 'Demo', your_role: 'manager', ...over }) as ProjectDetail;
 
 const postgresKind: IntegrationKind = {
 	kind: 'postgres',
@@ -410,7 +410,7 @@ describe('ProjectIntegrationsPanel — list view', () => {
 		expect(screen.getByText('disabled')).toBeInTheDocument();
 	});
 
-	it('hides Add/Edit/Delete controls for a non-admin viewer', async () => {
+	it('hides Add/Edit/Delete controls for a non-manager viewer', async () => {
 		setup(
 			{ project: project({ your_role: 'viewer' }) },
 			{ kinds: [postgresKind], entries: [entry()] },
@@ -665,7 +665,7 @@ describe('ProjectIntegrationsPanel — enable/disable', () => {
 });
 
 describe('ProjectIntegrationsPanel — inherited org integrations', () => {
-	it('marks inherited entries and hides their controls, even for a project admin', async () => {
+	it('marks inherited entries and hides their controls, even for a project manager', async () => {
 		setup(
 			{},
 			{
@@ -740,7 +740,7 @@ describe('ProjectIntegrationsPanel — copy from another project', () => {
 	const SOURCE = {
 		id: 'p_2',
 		name: 'Analytics',
-		your_role: 'admin',
+		your_role: 'manager',
 		entries: [entry({ id: 'i_src', name: 'prod-db' })],
 	};
 
@@ -809,7 +809,7 @@ describe('ProjectIntegrationsPanel — copy from another project', () => {
 		expect(screen.queryByTestId('copy-source-row')).not.toBeInTheDocument();
 	});
 
-	it('explains that admin is required on the source project', async () => {
+	it('explains that manager is required on the source project', async () => {
 		const user = userEvent.setup();
 		setup(
 			{},

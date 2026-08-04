@@ -8,7 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotebookPage } from './NotebookPage';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { sessionKeys } from '@/api/queryKeys';
-import type { Session } from '@/types';
+import type { ProjectDetail, Session } from '@/types';
 
 const PID = 'proj-x';
 const NID = 'nb-1';
@@ -35,7 +35,7 @@ function runningSession(overrides: Partial<Session> = {}): Session {
 }
 
 interface FetchOptions {
-	role: 'admin' | 'editor' | 'viewer';
+	role: NonNullable<ProjectDetail['your_role']>;
 	viewerMode?: 'static' | 'applications' | 'ephemeral-sandbox';
 	/** Body of GET .../html; null = 404 (no snapshot captured yet). */
 	html?: string | null;

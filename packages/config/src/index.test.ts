@@ -337,13 +337,13 @@ describe('createFromEnv default role', () => {
 		expect(createFromEnv({ ...baseEnv }).policy.defaultRole).toBe('editor');
 	});
 
-	it('accepts explicit viewer/editor/admin (case-insensitive)', () => {
+	it('accepts explicit viewer/editor/manager (case-insensitive)', () => {
 		expect(createFromEnv({ ...baseEnv, MARIMOHUB_DEFAULT_ROLE: 'viewer' }).policy.defaultRole).toBe(
 			'viewer',
 		);
-		expect(createFromEnv({ ...baseEnv, MARIMOHUB_DEFAULT_ROLE: 'ADMIN' }).policy.defaultRole).toBe(
-			'admin',
-		);
+		expect(
+			createFromEnv({ ...baseEnv, MARIMOHUB_DEFAULT_ROLE: 'MANAGER' }).policy.defaultRole,
+		).toBe('manager');
 		expect(createFromEnv({ ...baseEnv, MARIMOHUB_DEFAULT_ROLE: 'Editor' }).policy.defaultRole).toBe(
 			'editor',
 		);
@@ -356,6 +356,9 @@ describe('createFromEnv default role', () => {
 	});
 
 	it('throws on an invalid role', () => {
+		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_DEFAULT_ROLE: 'admin' })).toThrow(
+			/Invalid MARIMOHUB_DEFAULT_ROLE/,
+		);
 		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_DEFAULT_ROLE: 'superadmin' })).toThrow(
 			/Invalid MARIMOHUB_DEFAULT_ROLE/,
 		);

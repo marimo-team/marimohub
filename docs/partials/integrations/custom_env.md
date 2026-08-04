@@ -8,7 +8,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `vars` | map&lt;string, string&gt; |  |  | Plain environment variables, visible to project admins |
+| `vars` | map&lt;string, string&gt; |  |  | Plain environment variables, visible to project managers |
 | `secrets` | object[] |  |  | Secret environment variables from encrypted values or an external manager |
 | `secrets[].name` | string | Yes |  |  |
 | `secrets[].value` 🔒 | string | Yes |  |  |

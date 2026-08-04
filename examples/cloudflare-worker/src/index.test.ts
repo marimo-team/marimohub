@@ -77,4 +77,19 @@ describe('Cloudflare Worker configuration', () => {
 			} as unknown as Env),
 		).toThrow('Invalid MARIMOHUB_EDITOR_SANDBOX_SHARING: per-user (expected shared, exclusive)');
 	});
+
+	it('accepts assignable default roles and rejects reserved admin', () => {
+		expect(
+			buildDeps(new Request('https://hub.example.com'), {
+				...baseEnv,
+				DEFAULT_ROLE: 'manager',
+			} as unknown as Env).policy.defaultRole,
+		).toBe('manager');
+		expect(() =>
+			buildDeps(new Request('https://hub.example.com'), {
+				...baseEnv,
+				DEFAULT_ROLE: 'admin',
+			} as unknown as Env),
+		).toThrow('Invalid DEFAULT_ROLE: admin (expected manager, editor, viewer, none)');
+	});
 });

@@ -21,6 +21,7 @@ const app = { mode: 'app' as const, ephemeral: undefined, user_id: OTHER };
 describe('canStartSessionMode', () => {
 	it('editor+ starts any mode regardless of viewer tier', () => {
 		expect(canStartSessionMode({ role: 'editor', viewerMode: 'static' }, 'app')).toBe(true);
+		expect(canStartSessionMode({ role: 'manager', viewerMode: undefined }, 'edit')).toBe(true);
 		expect(canStartSessionMode({ role: 'admin', viewerMode: undefined }, 'edit')).toBe(true);
 	});
 
@@ -47,10 +48,12 @@ describe('sessionCan', () => {
 		}
 	});
 
-	it('keeps exclusive editor kernels private while allowing admin shutdown', () => {
+	it('keeps exclusive editor kernels private while allowing manager shutdown', () => {
 		const exclusive = { ...otherEdit, editor_sandbox_sharing: 'exclusive' as const };
 		expect(sessionCan('attach', actor({ role: 'editor' }), exclusive)).toBe(false);
 		expect(sessionCan('stop', actor({ role: 'editor' }), exclusive)).toBe(false);
+		expect(sessionCan('attach', actor({ role: 'manager' }), exclusive)).toBe(false);
+		expect(sessionCan('stop', actor({ role: 'manager' }), exclusive)).toBe(true);
 		expect(sessionCan('attach', actor({ role: 'admin' }), exclusive)).toBe(false);
 		expect(sessionCan('stop', actor({ role: 'admin' }), exclusive)).toBe(true);
 	});

@@ -17,8 +17,8 @@ import {
 	createServices,
 	Millis,
 	ProxyExposure,
+	ASSIGNABLE_ROLES,
 	EDITOR_SANDBOX_SHARING_VALUES,
-	ROLES,
 	runPreflight,
 	SubdomainExposure,
 	VIEWER_MODES,
@@ -26,7 +26,7 @@ import {
 import type {
 	EditorSandboxSharing,
 	Metrics,
-	Role,
+	AssignableRole,
 	SandboxExposure,
 	ViewerMode,
 } from '@marimo-hub/core';
@@ -158,13 +158,13 @@ function parseSessionLifetime(env: Env): SessionLifetimeConfig {
  * The fallback role granted to any logged-in user who is not the project owner
  * or an explicit member. Defaults to `editor` so a logged-in user can edit
  * notebooks out of the box; set `none` (or `viewer`) to keep writes
- * members-only. Project edit/delete always requires `admin`, so even `editor`
+ * members-only. Project edit/delete always requires `manager`, so even `editor`
  * here cannot reach it.
  */
-function parseDefaultRole(env: Env): Role | undefined {
+function parseDefaultRole(env: Env): AssignableRole | undefined {
 	// `none` deserializes to undefined (members-only); unset falls back to `editor`.
 	return parseEnum(env, 'MARIMOHUB_DEFAULT_ROLE', {
-		allowed: ROLES,
+		allowed: ASSIGNABLE_ROLES,
 		fallback: 'editor',
 		offValues: ['none'],
 	});

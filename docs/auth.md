@@ -62,25 +62,28 @@ After deploy:
 
 Authentication decides who you are. Authorization decides what you may do on a
 project. Each project has an owner, who is implicitly `admin`, and a member list.
-Roles are ordered `viewer` < `editor` < `admin`; each role includes the
-capabilities below it. One deployment-wide exception sits above this per-project
+Roles are ordered `viewer` < `editor` < `manager` < `admin`; each role includes
+the capabilities below it. Manager is the highest role that can be assigned to
+a member. Admin is reserved for project owners, deployment super admins, and
+legacy member rows. One deployment-wide exception sits above this per-project
 model: a [super admin](#super-admins-marimohub_super_admins) is treated as
 `admin` on every project.
 
-| Role     | Description                                                                                          |
-| -------- | ---------------------------------------------------------------------------------------------------- |
-| `viewer` | Read projects, notebooks, code, and version history. Cannot change state.                            |
-| `editor` | Viewer access, plus create, update, and delete notebooks, restore versions, and run kernel sessions. |
-| `admin`  | Editor access, plus update or delete the project and manage members.                                 |
+| Role      | Description                                                                                          |
+| --------- | ---------------------------------------------------------------------------------------------------- |
+| `viewer`  | Read projects, notebooks, code, and version history. Cannot change state.                            |
+| `editor`  | Viewer access, plus create, update, and delete notebooks, restore versions, and run kernel sessions. |
+| `manager` | Editor access, plus update or delete the project and manage members.                                 |
+| `admin`   | Reserved authority with all Manager capabilities.                                                    |
 
-| Capability                                                      | `viewer` | `editor` | `admin` |
-| --------------------------------------------------------------- | :------: | :------: | :-----: |
-| See projects and notebooks, read versions and code              |    x     |    x     |    x    |
-| Create, update, and delete notebooks; save and restore versions |          |    x     |    x    |
-| Start and stop kernel sessions                                  |          |    x     |    x    |
-| Start, open, and use [notebook apps](./apps.md)                 |    \*    |    x     |    x    |
-| Stop or restart the shared notebook app                         |          |    x     |    x    |
-| Update or delete projects; manage members                       |          |          |    x    |
+| Capability                                                      | `viewer` | `editor` | `manager` | `admin` |
+| --------------------------------------------------------------- | :------: | :------: | :-------: | :-----: |
+| See projects and notebooks, read versions and code              |    x     |    x     |     x     |    x    |
+| Create, update, and delete notebooks; save and restore versions |          |    x     |     x     |    x    |
+| Start and stop kernel sessions                                  |          |    x     |     x     |    x    |
+| Start, open, and use [notebook apps](./apps.md)                 |    \*    |    x     |     x     |    x    |
+| Stop or restart the shared notebook app                         |          |    x     |     x     |    x    |
+| Update or delete projects; manage members                       |          |          |     x     |    x    |
 
 \* Viewers get app access only when the deployment sets
 `MARIMOHUB_VIEWER_MODE=applications` (or `ephemeral-sandbox`) — see
@@ -93,7 +96,7 @@ the project owner.
 
 ### Members: user ids and email invites
 
-A member is identified by user id (canonical) or by email. Admins can add a
+A member is identified by user id (canonical) or by email. Managers can add a
 member either way: a known email — someone who has signed in before — is
 resolved to their user id, while an unknown email is stored as a **pending
 invite**. At request time the caller matches a membership by their user id or,
@@ -109,7 +112,7 @@ present value other than boolean `true` is rejected. A domain allowlist always
 requires boolean `true`, even under `trusted-issuer`.
 
 Invite emails are PII of people who never signed in: the members list and
-project detail show them only to project admins (and to the invitee themself).
+project detail show them only to project managers (and to the invitee themself).
 The add-member picker searches the user directory
 (`GET /api/v1/users/search` — email, name, or id substring; everyone who has
 signed in at least once). Under `MARIMOHUB_DEFAULT_ROLE=none` the caller must
@@ -153,10 +156,10 @@ A logged-in user who is not the owner or a member falls back to
 
 - `editor` (default): every logged-in user can edit notebooks and run sessions in
   any project, but cannot update or delete projects.
+- `manager`: every logged-in user can manage every project. Use only in a fully
+  trusted deployment.
 - `viewer`: every logged-in user can read any project.
 - `none`: non-members cannot see projects they do not own or belong to.
-- `admin`: every logged-in user is a project admin. Use only in a fully trusted
-  deployment.
 
 ### Super admins: `MARIMOHUB_SUPER_ADMINS`
 
@@ -171,7 +174,13 @@ Project roles never grant this access.
 
 The web application gives super admins a deployment audit-log page. The page
 uses `GET /api/v1/events`. This endpoint returns at most 30 UTC days per query.
-Project admins retain access to each project's daily audit log.
+Project managers retain access to each project's daily audit log.
+
+Existing non-owner Admin memberships remain valid and can be demoted or removed,
+but the API does not allow new Admin assignments. A deployment introducing
+Manager must stop all old replicas before the first Manager row is stored; older
+versions cannot parse that role. Rolling back requires converting Manager rows
+first.
 
 An entry containing `@` matches the caller's login email, case-insensitively;
 any other entry matches the user id (the IdP `sub`) exactly. The two namespaces

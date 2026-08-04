@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
 	canAct,
+	ASSIGNABLE_ROLES,
 	effectiveRole,
 	ForbiddenError,
 	isSuperAdmin,
@@ -883,7 +884,7 @@ export const AdminDeploymentSchema = z
  */
 export const AdminPolicySchema = z
 	.object({
-		default_role: z.enum(ROLES).nullable(),
+		default_role: z.enum(ASSIGNABLE_ROLES).nullable(),
 		/** Raw MARIMOHUB_SUPER_ADMINS entries (emails or user ids). */
 		super_admins: z.array(z.string()),
 	})
@@ -937,7 +938,7 @@ export const CapabilitiesResponseSchema = z
 		 * Role granted to an authenticated non-member (MARIMOHUB_DEFAULT_ROLE);
 		 * null = members-only. The UI derives its role/access copy from this.
 		 */
-		default_role: z.enum(ROLES).nullable(),
+		default_role: z.enum(ASSIGNABLE_ROLES).nullable(),
 		limits: z.object({
 			max_concurrent_sessions_per_user: z.number().nullable(),
 			max_apps_per_project: z.number().nullable(),

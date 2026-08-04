@@ -46,18 +46,18 @@ any admitted caller attaches to it.
 
 ## Who can do what
 
-Editors and admins always have full app access. What a **viewer** gets is a
+Editors, managers, and admins always have full app access. What a **viewer** gets is a
 deployment decision, set by
 [`MARIMOHUB_VIEWER_MODE`](./auth.md#what-viewers-see-marimohub_viewer_mode)
 (each tier includes the previous one):
 
-| Action                                 | `viewer`, `static` (default) | `viewer`, `applications` | `viewer`, `ephemeral-sandbox` | `editor` | `admin` |
-| -------------------------------------- | :--------------------------: | :----------------------: | :---------------------------: | :------: | :-----: |
-| See that an app is running (indicator) |              x               |            x             |               x               |    x     |    x    |
-| Open and use a running app             |                              |            x             |               x               |    x     |    x    |
-| Start the app when none is running     |                              |            x             |               x               |    x     |    x    |
-| Keep the app alive by having it open   |                              |            x             |               x               |    x     |    x    |
-| Stop or restart the app                |                              |                          |                               |    x     |    x    |
+| Action                                 | `viewer`, `static` (default) | `viewer`, `applications` | `viewer`, `ephemeral-sandbox` | `editor` | `manager` | `admin` |
+| -------------------------------------- | :--------------------------: | :----------------------: | :---------------------------: | :------: | :-------: | :-----: |
+| See that an app is running (indicator) |              x               |            x             |               x               |    x     |     x     |    x    |
+| Open and use a running app             |                              |            x             |               x               |    x     |     x     |    x    |
+| Start the app when none is running     |                              |            x             |               x               |    x     |     x     |    x    |
+| Keep the app alive by having it open   |                              |            x             |               x               |    x     |     x     |    x    |
+| Stop or restart the app                |                              |                          |                               |    x     |     x     |    x    |
 
 Session create, heartbeat, and session listing enforce this server-side on
 every request; the UI simply hides what the caller cannot do. How kernel

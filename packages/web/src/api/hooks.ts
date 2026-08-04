@@ -21,11 +21,11 @@ import {
 } from './queryKeys';
 import type { AuditLogFilters } from './queryKeys';
 import type {
+	AssignableProjectRole,
 	IntegrationEntry,
 	NotebookDetail,
 	ResolvedUser,
 	ProjectFederation,
-	ProjectRole,
 } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
@@ -271,7 +271,7 @@ const memberKeys = (projectId: string) => [
 export function useAddMember(projectId: string) {
 	return useApiMutation(
 		// Exactly one of user_id / email, enforced server-side (422).
-		(body: { user_id?: string; email?: string; role: ProjectRole }) =>
+		(body: { user_id?: string; email?: string; role: AssignableProjectRole }) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/members', {
 					params: { path: { pid: projectId } },
@@ -284,7 +284,7 @@ export function useAddMember(projectId: string) {
 
 export function useUpdateMemberRole(projectId: string) {
 	return useApiMutation(
-		({ uid, role }: { uid: string; role: ProjectRole }) =>
+		({ uid, role }: { uid: string; role: AssignableProjectRole }) =>
 			apiData(
 				apiClient.PUT('/api/v1/projects/{pid}/members/{uid}', {
 					params: { path: { pid: projectId, uid } },

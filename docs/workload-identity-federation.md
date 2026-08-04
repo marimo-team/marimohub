@@ -62,7 +62,7 @@ example below; the full reference is
 ## Enable it for a project
 
 WIF is a deployment capability. A project receives no credentials until an
-admin enables it. Select **Environment & cloud access**, **Cloud access**, and
+manager enables it. Select **Environment & cloud access**, **Cloud access**, and
 **Federated cloud access**.
 
 For an API update, get the project and save its `ETag` response header. Then

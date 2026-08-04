@@ -573,7 +573,7 @@ export interface paths {
 		};
 		/**
 		 * List project members
-		 * @description Pending email invites are visible only to project admins (plus the invitee themself); other callers see the id-keyed rows only.
+		 * @description Pending email invites are visible only to project managers (plus the invitee themself); other callers see the id-keyed rows only.
 		 */
 		get: {
 			parameters: {
@@ -663,11 +663,7 @@ export interface paths {
 						 * @example teammate@example.com
 						 */
 						email?: string;
-						/**
-						 * @example editor
-						 * @enum {string}
-						 */
-						role: 'admin' | 'editor' | 'viewer';
+						role: components['schemas']['AssignableRole'];
 					};
 				};
 			};
@@ -772,11 +768,7 @@ export interface paths {
 			requestBody: {
 				content: {
 					'application/json': {
-						/**
-						 * @example admin
-						 * @enum {string}
-						 */
-						role: 'admin' | 'editor' | 'viewer';
+						role: components['schemas']['AssignableRole'] & unknown;
 					};
 				};
 			};
@@ -1048,7 +1040,7 @@ export interface paths {
 		};
 		/**
 		 * List a project's audit events for one day
-		 * @description Catalog mutation audit trail (project/notebook lifecycle, membership changes), one UTC day at a time. Admin-only: events may record member management and deletions.
+		 * @description Catalog mutation audit trail (project/notebook lifecycle, membership changes), one UTC day at a time. Manager-only: events may record member management and deletions.
 		 */
 		get: {
 			parameters: {
@@ -3559,7 +3551,7 @@ export interface paths {
 			};
 		};
 		put?: never;
-		/** Create an integration (admin only) */
+		/** Create an integration (manager only) */
 		post: {
 			parameters: {
 				query?: never;
@@ -3746,7 +3738,7 @@ export interface paths {
 		};
 		put?: never;
 		post?: never;
-		/** Delete an integration and its version history (admin only) */
+		/** Delete an integration and its version history (manager only) */
 		delete: {
 			parameters: {
 				query?: never;
@@ -3830,7 +3822,7 @@ export interface paths {
 		};
 		options?: never;
 		head?: never;
-		/** Update an integration (admin only); a config change appends a version */
+		/** Update an integration (manager only); a config change appends a version */
 		patch: {
 			parameters: {
 				query?: never;
@@ -4042,7 +4034,7 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Copy an integration from another project (admin of both projects) */
+		/** Copy an integration from another project (manager of both projects) */
 		post: {
 			parameters: {
 				query?: never;
@@ -4135,7 +4127,7 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Probe connectivity for an unsaved config or a stored instance (admin only) */
+		/** Probe connectivity for an unsaved config or a stored instance (manager only) */
 		post: {
 			parameters: {
 				query?: never;
@@ -5323,7 +5315,7 @@ export interface components {
 			/** @enum {string} */
 			editor_sandbox_sharing: 'shared' | 'exclusive';
 			/** @enum {string|null} */
-			default_role: 'admin' | 'editor' | 'viewer' | null;
+			default_role: 'manager' | 'editor' | 'viewer' | null;
 			limits: {
 				max_concurrent_sessions_per_user: number | null;
 				max_apps_per_project: number | null;
@@ -5387,13 +5379,13 @@ export interface components {
 			tags: string[];
 			federation?: components['schemas']['ProjectFederation'];
 			/** @enum {string|null} */
-			your_role: 'admin' | 'editor' | 'viewer' | null;
+			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | null;
 		};
 		ProjectMember: {
 			user_id?: string;
 			email?: string;
 			/** @enum {string} */
-			role: 'admin' | 'editor' | 'viewer';
+			role: 'admin' | 'manager' | 'editor' | 'viewer';
 		};
 		ProjectFederation: {
 			enabled: boolean;
@@ -5409,6 +5401,11 @@ export interface components {
 			/** @enum {boolean} */
 			success: true;
 		};
+		/**
+		 * @example editor
+		 * @enum {string}
+		 */
+		AssignableRole: 'manager' | 'editor' | 'viewer';
 		AuditLogPage: {
 			items: components['schemas']['AuditLogEntry'][];
 			next_cursor: string | null;
@@ -5484,7 +5481,7 @@ export interface components {
 		};
 		AdminPolicy: {
 			/** @enum {string|null} */
-			default_role: 'admin' | 'editor' | 'viewer' | null;
+			default_role: 'manager' | 'editor' | 'viewer' | null;
 			super_admins: string[];
 		};
 		NotebookPage: {

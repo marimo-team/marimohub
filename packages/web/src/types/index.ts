@@ -41,10 +41,11 @@ export type ProjectSummary = SnapshotProjectEntry;
 export type ProjectDetail = ClientProject;
 /** Per-project workload-identity federation opt-in. */
 export type ProjectFederation = ClientProjectFederation;
-// The client re-exports the raw OpenAPI `components` but no named alias for
-// these two, so they're derived here.
+// The client re-exports the raw OpenAPI `components` but no named aliases for
+// these role types, so they're derived here.
 export type ProjectMember = components['schemas']['ProjectMember'];
 export type ProjectRole = ProjectMember['role'];
+export type AssignableProjectRole = components['schemas']['AssignableRole'];
 /** Deployment capability flags from `GET /api/v1/capabilities`. */
 export type Capabilities = ClientCapabilities;
 export type NotebookEntry = SnapshotNotebookEntry;

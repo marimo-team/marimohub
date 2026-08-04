@@ -1,6 +1,7 @@
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {
 	Authenticator,
+	AssignableRole,
 	AuthUser,
 	Bucket,
 	BucketConfig,
@@ -13,7 +14,6 @@ import type {
 	Millis,
 	OrgIntegrationsService,
 	PreflightReport,
-	Role,
 	SandboxExposure,
 	SandboxProvider,
 	SandboxUserHome,
@@ -169,10 +169,10 @@ export interface PolicyConfig {
 	 * Deployment-wide fallback role (config: MARIMOHUB_DEFAULT_ROLE) granted to any
 	 * authenticated user who is neither the project owner nor an explicit member.
 	 * `editor` lets every logged-in user edit notebooks; undefined keeps writes
-	 * members-only. Project edit/delete always requires `admin`, so a default of
+	 * members-only. Project edit/delete always requires `manager`, so a default of
 	 * `editor` can never reach it.
 	 */
-	defaultRole?: Role;
+	defaultRole?: AssignableRole;
 	/**
 	 * What an effective `viewer` gets (config: MARIMOHUB_VIEWER_MODE), each tier
 	 * a superset of the last: `static` (the last captured HTML snapshot; sessions

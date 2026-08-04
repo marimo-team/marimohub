@@ -4,7 +4,7 @@ description: Configure project and organization data sources for notebook sessio
 
 # Integrations
 
-A **project admin** can connect a data source once for one project. A
+A **project manager** can connect a data source once for one project. A
 [super admin](./auth.md#super-admins-marimohub_super_admins) can connect a data
 source for the whole organization. Supported sources include the common SQL
 databases and warehouses (PostgreSQL, MySQL, SQL Server, MongoDB, ClickHouse,
@@ -483,7 +483,7 @@ variables, secret variables, and secret JSON bundles with optional prefixes.
 ## Managing integrations
 
 Open a project and select **Environment & cloud access**. Then select **Integrations**.
-Members can view the list and protected configuration. Project admins and
+Members can view the list and protected configuration. Project managers and
 [super admins](./auth.md#super-admins-marimohub_super_admins) can make changes.
 
 - **Add** selects a kind and opens its schema-based form.
@@ -495,7 +495,7 @@ Members can view the list and protected configuration. Project admins and
   Disable a broken integration to restore session access.
 - **Delete** removes the integration and its complete version history.
 - **Copy from another project** copies the current version and starts at v1.
-  You need admin access to both projects. Inline values get new encryption for
+  You need manager access to both projects. Inline values get new encryption for
   the destination. External references remain unchanged.
 
 Connection tests run from the server. The default egress policy permits only

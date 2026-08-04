@@ -4,7 +4,7 @@ import type { AuthSubject, AuthzPolicy } from '../../authz';
 import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import type { Role } from '../../constants';
+import type { AssignableRole } from '../../constants';
 import { Millis } from '../../duration';
 import { assertVersionMatch, ConflictError, NotFoundError } from '../../errors';
 import { createProjectId, SYSTEM_ACTOR } from '../../ids';
@@ -195,7 +195,12 @@ export class ProjectService {
 	 * invite for someone who hasn't logged in yet — see ProjectMemberSchema).
 	 * 409 if any of the person's identifiers is already on the roster.
 	 */
-	async addMember(id: ProjectId, member: NewMember, role: Role, actor: UserId): Promise<Project> {
+	async addMember(
+		id: ProjectId,
+		member: NewMember,
+		role: AssignableRole,
+		actor: UserId,
+	): Promise<Project> {
 		const existing = await this.getProject(id);
 		const userId = 'user_id' in member ? member.user_id : undefined;
 		const email = member.email !== undefined ? normalizeEmail(member.email) : undefined;
@@ -220,7 +225,7 @@ export class ProjectService {
 	async updateMemberRole(
 		id: ProjectId,
 		selector: string,
-		role: Role,
+		role: AssignableRole,
 		actor: UserId,
 	): Promise<Project> {
 		const existing = await this.getProject(id);

@@ -1,10 +1,15 @@
-import type { Capabilities, ProjectRole } from '@/types';
+import type { AssignableProjectRole, Capabilities, ProjectRole } from '@/types';
 
-// Derived from an exhaustive Record so the compiler fails here when the API
-// gains a role — a plain ProjectRole[] would silently accept a subset and the
-// new role would vanish from every dropdown. Key order is display order.
-const ROLE_ORDER: Record<ProjectRole, true> = { admin: true, editor: true, viewer: true };
-export const ROLES = Object.keys(ROLE_ORDER) as ProjectRole[];
+const ROLE_ORDER: Record<AssignableProjectRole, true> = {
+	manager: true,
+	editor: true,
+	viewer: true,
+};
+export const ASSIGNABLE_ROLES = Object.keys(ROLE_ORDER) as AssignableProjectRole[];
+
+export function canManageProject(role: ProjectRole | null): boolean {
+	return role === 'manager' || role === 'admin';
+}
 
 /**
  * Human copy for each role, derived from the deployment config rather than
@@ -22,7 +27,8 @@ export function roleDescriptions(caps: Capabilities | undefined): Record<Project
 					? 'View notebooks read-only and use notebooks running as apps'
 					: 'View notebooks and their last saved outputs (read-only)';
 	return {
-		admin: 'Manage members and project settings, plus everything an editor can do',
+		admin: 'Reserved for project owners, deployment super admins, and legacy assignments',
+		manager: 'Manage members and project settings, plus everything an editor can do',
 		editor: 'Create, edit, and run notebooks',
 		viewer,
 	};
@@ -40,8 +46,8 @@ export function defaultAccessSummary(caps: Capabilities | undefined): string | n
 		case 'viewer':
 			return 'Everyone who signs in can view this project by default; add members to grant more access.';
 		case 'editor':
-			return 'Everyone who signs in can edit notebooks in this project by default; add an admin to manage it.';
-		case 'admin':
-			return 'Everyone who signs in has full admin access to this project by default.';
+			return 'Everyone who signs in can edit notebooks in this project by default; add a manager to manage it.';
+		case 'manager':
+			return 'Everyone who signs in can manage this project by default.';
 	}
 }

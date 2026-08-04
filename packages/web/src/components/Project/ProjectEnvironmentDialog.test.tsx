@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
 import type { ProjectDetail } from '@/types';
 
-const project = (role: 'admin' | 'editor' | 'viewer' = 'admin') =>
+const project = (role: ProjectDetail['your_role'] = 'manager') =>
 	({
 		id: 'p_1',
 		name: 'Demo',
@@ -65,7 +65,7 @@ describe('ProjectEnvironmentDialog', () => {
 		expect(onClose).not.toHaveBeenCalled();
 	});
 
-	it('shows non-admins read-only federation status', async () => {
+	it('shows non-managers read-only federation status', async () => {
 		const user = userEvent.setup();
 		render(
 			<ProjectEnvironmentDialog

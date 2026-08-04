@@ -1,5 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { effectiveRole, ROLES, toPublicProject, UserId } from '@marimo-hub/core';
+import {
+	ASSIGNABLE_ROLES,
+	effectiveRole,
+	roleAtLeast,
+	toPublicProject,
+	UserId,
+} from '@marimo-hub/core';
 import type { AuthSubject, AuthzPolicy, Project, ProjectMember, Role } from '@marimo-hub/core';
 import {
 	assertProjectRole,
@@ -53,6 +59,8 @@ const UpdateProjectBody = z.object({
 	federation: FederationBody.optional(),
 });
 
+const AssignableRoleSchema = z.enum(ASSIGNABLE_ROLES).openapi('AssignableRole');
+
 // A member is identified by user id (preferred — the search picker resolves to
 // one) or by email. A known email is resolved to its user id server-side; an
 // unknown one is stored as a pending invite that activates on first login.
@@ -60,14 +68,14 @@ const AddMemberBody = z
 	.object({
 		user_id: z.string().min(1).optional().openapi({ example: 'user_01HXY00000000000000000000' }),
 		email: z.email().optional().openapi({ example: 'teammate@example.com' }),
-		role: z.enum(ROLES).openapi({ example: 'editor' }),
+		role: AssignableRoleSchema.openapi({ example: 'editor' }),
 	})
 	.refine((b) => (b.user_id === undefined) !== (b.email === undefined), {
 		message: 'Provide exactly one of user_id or email',
 	});
 
 const UpdateMemberRoleBody = z.object({
-	role: z.enum(ROLES).openapi({ example: 'admin' }),
+	role: AssignableRoleSchema.openapi({ example: 'manager' }),
 });
 
 const MemberIdParam = ProjectIdParam.extend({
@@ -88,7 +96,7 @@ const MemberIdParam = ProjectIdParam.extend({
 
 /**
  * Pending-invite rows carry raw email addresses (PII of people who never signed
- * in). Only admins manage membership, so only they get the full roster;
+ * in). Only managers and admins manage membership, so only they get the full roster;
  * everyone else sees the id rows plus — so invitees can find themselves — any
  * invite row matching their own login email.
  */
@@ -97,7 +105,7 @@ function visibleMembers(
 	role: Role | null,
 	subject: AuthSubject,
 ): ProjectMember[] {
-	if (role === 'admin') return members;
+	if (roleAtLeast(role, 'manager')) return members;
 	const email = subject.email.toLowerCase();
 	return members.filter((m) => m.user_id !== undefined || m.email === email);
 }
@@ -198,7 +206,7 @@ const listMembers = createRoute({
 	tags: ['Projects'],
 	summary: 'List project members',
 	description:
-		'Pending email invites are visible only to project admins (plus the invitee ' +
+		'Pending email invites are visible only to project managers (plus the invitee ' +
 		'themself); other callers see the id-keyed rows only.',
 	request: { params: ProjectIdParam },
 	responses: {
@@ -304,7 +312,7 @@ app.openapi(updateProject, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
 	const body = c.req.valid('json');
 	const project = await projects.updateProject(pid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(project.updated_at));
@@ -316,7 +324,7 @@ app.openapi(deleteProject, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
 	await projects.deleteProject(pid, user.id, ifMatchToken(c));
 	await retireLiveApps(deps, pid);
 	return c.json({ success: true }, 200);
@@ -336,7 +344,7 @@ app.openapi(addMember, async (c) => {
 	const { projects, identities } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
 	const body = c.req.valid('json');
 	// Both identifiers are passed to the service whenever both are known, so the
 	// duplicate check spans a person's id row AND any pending invite row — one
@@ -362,7 +370,7 @@ app.openapi(updateMember, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
 	const body = c.req.valid('json');
 	const project = await projects.updateMemberRole(pid, uid, body.role, user.id);
 	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
@@ -373,7 +381,7 @@ app.openapi(removeMember, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'admin', deps.policy);
+	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
 	await projects.removeMember(pid, uid, user.id);
 	return c.json({ success: true }, 200);
 });

@@ -21,6 +21,7 @@ describe('roleDescriptions', () => {
 	it('covers every role', () => {
 		const d = roleDescriptions(caps({}));
 		expect(d.admin).toBeTruthy();
+		expect(d.manager).toBeTruthy();
 		expect(d.editor).toBeTruthy();
 		expect(d.viewer).toBeTruthy();
 	});
@@ -35,6 +36,6 @@ describe('defaultAccessSummary', () => {
 		expect(defaultAccessSummary(caps({ default_role: null }))).toMatch(/members-only/);
 		expect(defaultAccessSummary(caps({ default_role: 'viewer' }))).toMatch(/can view/);
 		expect(defaultAccessSummary(caps({ default_role: 'editor' }))).toMatch(/can edit/);
-		expect(defaultAccessSummary(caps({ default_role: 'admin' }))).toMatch(/admin access/);
+		expect(defaultAccessSummary(caps({ default_role: 'manager' }))).toMatch(/can manage/);
 	});
 });

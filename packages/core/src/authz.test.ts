@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { canAct, canSeeProjectEntry, effectiveRole, isSuperAdmin, requireRole } from './authz';
+import {
+	canAct,
+	canSeeProjectEntry,
+	effectiveRole,
+	isSuperAdmin,
+	requireRole,
+	roleAtLeast,
+} from './authz';
 import type { AuthSubject } from './authz';
 import { ForbiddenError } from './errors';
 import { UserId } from './ids';
@@ -10,6 +17,7 @@ function subject(id: string, email = `${id}@example.com`): AuthSubject {
 }
 
 const OWNER = subject('user_owner');
+const MANAGER = subject('user_manager');
 const EDITOR = subject('user_editor');
 const VIEWER = subject('user_viewer');
 const STRANGER = subject('user_stranger');
@@ -19,6 +27,7 @@ const project = makeProject({
 	owner: OWNER.id,
 	members: [
 		{ user_id: OWNER.id, role: 'admin' },
+		{ user_id: MANAGER.id, role: 'manager' },
 		{ user_id: EDITOR.id, role: 'editor' },
 		{ user_id: VIEWER.id, role: 'viewer' },
 		{ email: 'invitee@example.com', role: 'editor' },
@@ -26,6 +35,16 @@ const project = makeProject({
 });
 
 describe('authz', () => {
+	describe('roleAtLeast', () => {
+		it('compares every role against the hierarchy and rejects no role', () => {
+			expect(roleAtLeast('admin', 'manager')).toBe(true);
+			expect(roleAtLeast('manager', 'manager')).toBe(true);
+			expect(roleAtLeast('editor', 'manager')).toBe(false);
+			expect(roleAtLeast('viewer', 'editor')).toBe(false);
+			expect(roleAtLeast(null, 'viewer')).toBe(false);
+		});
+	});
+
 	describe('effectiveRole', () => {
 		it('treats the owner as admin even if not listed as a member', () => {
 			const p = makeProject({ owner: OWNER.id, members: [] });
@@ -33,6 +52,7 @@ describe('authz', () => {
 		});
 
 		it('returns the member role', () => {
+			expect(effectiveRole(project, MANAGER)).toBe('manager');
 			expect(effectiveRole(project, EDITOR)).toBe('editor');
 			expect(effectiveRole(project, VIEWER)).toBe('viewer');
 		});
@@ -73,10 +93,14 @@ describe('authz', () => {
 		it('maps a group-derived entitlement to the highest per-user default role', () => {
 			const entitled = {
 				...STRANGER,
-				entitlements: ['default-role:viewer', 'default-role:editor'] as const,
+				entitlements: [
+					'default-role:viewer',
+					'default-role:manager',
+					'default-role:editor',
+				] as const,
 			};
-			expect(effectiveRole(project, entitled)).toBe('editor');
-			expect(effectiveRole(project, entitled, { defaultRole: 'viewer' })).toBe('editor');
+			expect(effectiveRole(project, entitled)).toBe('manager');
+			expect(effectiveRole(project, entitled, { defaultRole: 'viewer' })).toBe('manager');
 		});
 
 		it('keeps a higher deployment default when group entitlements are lower', () => {
@@ -84,19 +108,19 @@ describe('authz', () => {
 				...STRANGER,
 				entitlements: ['default-role:editor', 'default-role:viewer'] as const,
 			};
-			expect(effectiveRole(project, entitled, { defaultRole: 'admin' })).toBe('admin');
+			expect(effectiveRole(project, entitled, { defaultRole: 'manager' })).toBe('manager');
 		});
 
 		it('does not let a default-role entitlement override explicit membership', () => {
 			const entitledViewer = {
 				...VIEWER,
-				entitlements: ['default-role:admin'] as const,
+				entitlements: ['default-role:manager'] as const,
 			};
 			expect(effectiveRole(project, entitledViewer)).toBe('viewer');
 		});
 
 		it('does not let the default role override an explicit membership', () => {
-			expect(effectiveRole(project, VIEWER, { defaultRole: 'admin' })).toBe('viewer');
+			expect(effectiveRole(project, VIEWER, { defaultRole: 'manager' })).toBe('viewer');
 			expect(effectiveRole(project, OWNER, { defaultRole: 'viewer' })).toBe('admin');
 		});
 
@@ -153,16 +177,19 @@ describe('authz', () => {
 			expect(
 				isSuperAdmin({
 					...STRANGER,
-					entitlements: ['default-role:admin'],
+					entitlements: ['default-role:manager'],
 				}),
 			).toBe(false);
 		});
 	});
 
 	describe('canAct', () => {
-		it('honors the role hierarchy admin > editor > viewer', () => {
+		it('honors the role hierarchy admin > manager > editor > viewer', () => {
+			expect(canAct(project, MANAGER, 'manager')).toBe(true);
+			expect(canAct(project, MANAGER, 'admin')).toBe(false);
 			expect(canAct(project, EDITOR, 'viewer')).toBe(true);
 			expect(canAct(project, EDITOR, 'editor')).toBe(true);
+			expect(canAct(project, EDITOR, 'manager')).toBe(false);
 			expect(canAct(project, EDITOR, 'admin')).toBe(false);
 
 			expect(canAct(project, VIEWER, 'viewer')).toBe(true);
@@ -178,7 +205,7 @@ describe('authz', () => {
 
 		it('lets a default editor role act on notebooks but not the project', () => {
 			expect(canAct(project, STRANGER, 'editor', { defaultRole: 'editor' })).toBe(true);
-			expect(canAct(project, STRANGER, 'admin', { defaultRole: 'editor' })).toBe(false);
+			expect(canAct(project, STRANGER, 'manager', { defaultRole: 'editor' })).toBe(false);
 		});
 
 		it('lets a super admin act at every level', () => {
@@ -200,7 +227,7 @@ describe('authz', () => {
 			expect(() =>
 				requireRole(project, STRANGER, 'editor', { defaultRole: 'editor' }),
 			).not.toThrow();
-			expect(() => requireRole(project, STRANGER, 'admin', { defaultRole: 'editor' })).toThrow(
+			expect(() => requireRole(project, STRANGER, 'manager', { defaultRole: 'editor' })).toThrow(
 				ForbiddenError,
 			);
 		});

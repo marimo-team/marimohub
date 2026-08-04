@@ -179,7 +179,7 @@ describe('makeAuth oidc required vars', () => {
 		'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS',
-		'MARIMOHUB_AUTH_OIDC_DEFAULT_ADMIN_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS',
 	])('accepts %s as an independent group policy', (key) => {
 		expect(() =>
 			makeAuth({

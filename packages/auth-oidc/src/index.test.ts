@@ -1128,7 +1128,7 @@ describe('OIDC routes', () => {
 				claim: '/realm_access/roles',
 				allowed: ['hub-users'],
 				superAdmin: ['hub-admins'],
-				defaultRoles: { editor: ['hub-editors'], admin: ['hub-admins'] },
+				defaultRoles: { editor: ['hub-editors'], manager: ['hub-admins'] },
 			},
 		});
 		const txn = await beginOidcTransaction(routes);
@@ -1141,8 +1141,33 @@ describe('OIDC routes', () => {
 		await expect(
 			authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1])),
 		).resolves.toMatchObject({
-			entitlements: ['super-admin', 'default-role:admin'],
+			entitlements: ['super-admin', 'default-role:manager'],
 		});
+	});
+
+	it('maps a manager-only group without granting super-admin', async () => {
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 'user@example.com',
+			email_verified: true,
+			groups: ['hub-users', 'hub-managers'],
+		});
+		const { authenticator, routes } = makeOidc({
+			groups: {
+				claim: '/groups',
+				allowed: ['hub-users'],
+				defaultRoles: { manager: ['hub-managers'] },
+			},
+		});
+		const txn = await beginOidcTransaction(routes);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+		const sessionCookie = cookiePair(res, SESSION_COOKIE);
+		const user = await authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1]));
+
+		expect(user?.entitlements).toEqual(['default-role:manager']);
 	});
 
 	it('retains the group-authorization expiry when the policy maps no role', async () => {
@@ -1317,7 +1342,7 @@ describe('OIDC routes', () => {
 				claim: '/groups',
 				allowed: ['hub-users'],
 				superAdmin: ['hub-users'],
-				defaultRoles: { admin: ['hub-users'] },
+				defaultRoles: { manager: ['hub-users'] },
 			},
 		});
 		const txn = await beginOidcTransaction(routes);
@@ -1338,7 +1363,7 @@ describe('OIDC routes', () => {
 			id: subject,
 			email,
 			name,
-			entitlements: ['super-admin', 'default-role:admin'],
+			entitlements: ['super-admin', 'default-role:manager'],
 		});
 		expect(await authenticator.authenticate(requestWithCookie(token))).not.toHaveProperty(
 			'pictureUrl',
