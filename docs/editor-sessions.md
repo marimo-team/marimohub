@@ -60,6 +60,13 @@ Exclusive mode isolates the live sandbox, not the stored project data. Other
 project editors can still read the notebook, version history, and workspace.
 The mode does not create a private mount for each user.
 
+On CoreWeave, operators can configure a separate personal-storage profile with
+`MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE`. Persistent and temporary editor
+sandboxes then expose the authenticated user's VAST directory at
+`/mnt/<lowercase-email>`. Writes there persist independently of marimohub's
+notebook and workspace lifecycle, including from a temporary sandbox. Apps and
+viewer sandboxes never receive the personal-storage profile.
+
 ## Takeover safety
 
 Takeover always requires confirmation. The warning identifies the current owner

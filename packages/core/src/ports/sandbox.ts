@@ -163,6 +163,14 @@ export interface ComputeResources {
 	memoryBytes?: number;
 }
 
+/** A per-user directory selected before the sandbox Pod is created. */
+export interface SandboxUserHome {
+	/** Profile-facing directory key, currently the user's canonical email. */
+	key: string;
+	/** User-facing path inside the sandbox. */
+	path: string;
+}
+
 export interface CreateSandboxOptions {
 	/**
 	 * May the adapter reconnect to an existing sandbox with this id instead of
@@ -179,6 +187,8 @@ export interface CreateSandboxOptions {
 	image?: string;
 	/** Resources resolved by the control plane for this sandbox. */
 	resources?: ComputeResources;
+	/** Optional personal directory for an owner-isolated editor sandbox. */
+	userHome?: SandboxUserHome;
 }
 
 export interface SandboxProvider {
@@ -216,7 +226,11 @@ export interface FilesystemSnapshots {
 	/** Whether the feature is enabled for this provider (its config flag). */
 	readonly filesystemSnapshotsEnabled: boolean;
 	/** Create a sandbox restored FROM a native snapshot (boots from the image). */
-	createFromSnapshot(id: SandboxId, snapshotId: string): SandboxInstance;
+	createFromSnapshot(
+		id: SandboxId,
+		snapshotId: string,
+		options?: CreateSandboxOptions,
+	): SandboxInstance;
 	/** Capture the full filesystem of a live sandbox; returns the native snapshot id. */
 	captureSnapshot(sandbox: SandboxInstance): Promise<{ snapshotId: string; sizeBytes?: number }>;
 	/** Delete a native snapshot (best-effort latest-wins GC; tolerates not-found). */

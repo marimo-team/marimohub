@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createNotebookId, createProjectId, createServices, Millis } from '@marimo-hub/core';
+import {
+	BadRequestError,
+	createNotebookId,
+	createProjectId,
+	createServices,
+	Millis,
+} from '@marimo-hub/core';
 import type { NotebookId, ProjectId, Session, SessionId } from '@marimo-hub/core';
 import {
 	ACTOR,
@@ -188,6 +194,68 @@ describe('Session routes', () => {
 		expect(temporary.ephemeral).toBe(true);
 		expect(temporary.session_id).not.toBe(persistent.session_id);
 		expect(temporary.editor_sandbox_sharing).toBe('exclusive');
+	});
+
+	it('provisions persistent and temporary exclusive editors with their own homes', async () => {
+		const resolve = vi.fn((user: { email: string }) => ({
+			key: user.email,
+			path: `/mnt/${user.email}`,
+		}));
+		const home = { resolve };
+		const ownerCompute = makeFakeCompute();
+		const otherCompute = makeFakeCompute();
+		const exclusiveOwner = exclusiveApi(ACTOR, ownerCompute, {
+			sandbox: sandboxConfig({ userHome: home }),
+		});
+		const exclusiveOther = exclusiveApi(STRANGER, otherCompute, {
+			sandbox: sandboxConfig({ userHome: home }),
+		});
+
+		await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		expect(ownerCompute.lastCreateOptions?.userHome).toEqual({
+			key: `${ACTOR}@example.com`,
+			path: `/mnt/${ACTOR}@example.com`,
+		});
+
+		await expectOk<ApiSession>(
+			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
+		);
+		expect(otherCompute.lastCreateOptions?.userHome).toEqual({
+			key: `${STRANGER}@example.com`,
+			path: `/mnt/${STRANGER}@example.com`,
+		});
+		expect(resolve).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not provision shared apps with an editor personal home', async () => {
+		const compute = makeFakeCompute();
+		const resolve = vi.fn(() => ({ key: 'owner@example.com', path: '/mnt/owner@example.com' }));
+		const request = exclusiveApi(ACTOR, compute, {
+			sandbox: sandboxConfig({ userHome: { resolve } }),
+		});
+
+		await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode: 'app' }));
+		expect(compute.lastCreateOptions?.userHome).toBeUndefined();
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it('returns an actionable client error when personal storage cannot resolve the email', async () => {
+		const compute = makeFakeCompute();
+		const request = exclusiveApi(ACTOR, compute, {
+			sandbox: sandboxConfig({
+				userHome: {
+					resolve() {
+						throw new BadRequestError(
+							'Your authenticated email cannot be used for personal storage',
+						);
+					},
+				},
+			}),
+		});
+
+		const error = await expectError(await request('POST', sessionsPath()), 400, 'BAD_REQUEST');
+		expect(error.message).toContain('authenticated email cannot be used for personal storage');
+		expect(compute.lastCreateOptions).toBeUndefined();
 	});
 
 	it('does not restore a filesystem snapshot into a temporary editor sandbox', async () => {

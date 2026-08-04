@@ -1,6 +1,12 @@
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { asFilesystemSnapshots } from '../../ports/sandbox';
-import type { ComputeResources, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type {
+	ComputeResources,
+	CreateSandboxOptions,
+	SandboxInstance,
+	SandboxProvider,
+	SandboxUserHome,
+} from '../../ports/sandbox';
 import type { FsSnapshot } from '../../schema';
 import { logOperationalError } from '../../operationalLog';
 import type { NotebookService } from './NotebookService';
@@ -28,15 +34,21 @@ export function createOrRestoreSandbox(
 	restoreSnapshotId?: string,
 	image?: string,
 	resources?: ComputeResources,
+	userHome?: SandboxUserHome,
 ): SandboxInstance {
 	const fs = asFilesystemSnapshots(provider);
+	const common: CreateSandboxOptions = {
+		reuse: false,
+		...(resources ? { resources } : {}),
+		...(userHome ? { userHome } : {}),
+	};
 	// reuse: false — this id is brand new, so the adapter's reconnect lookup can
 	// never match and would just cost a round-trip on the critical path.
 	// The snapshot branch ignores `image`: a snapshot boots from the image it was
 	// captured on, so a base-image change only applies once no restore pointer exists.
 	return fs && restoreSnapshotId
-		? fs.createFromSnapshot(id, restoreSnapshotId)
-		: provider.create(id, { reuse: false, image, resources });
+		? fs.createFromSnapshot(id, restoreSnapshotId, common)
+		: provider.create(id, { ...common, ...(image ? { image } : {}) });
 }
 
 /**

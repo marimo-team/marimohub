@@ -210,6 +210,69 @@ Profile schema, egress allowlists, and binding overrides:
 [Profiles overview](https://docs.coreweave.com/products/sandboxes/profiles/profiles),
 [Profile examples](https://docs.coreweave.com/products/sandboxes/profiles/profile-examples).
 
+### Optional per-user VAST directories
+
+Copy the normal profile, including its network and placement settings, into a
+second, non-default profile for editor homes. Keep the normal profile without
+this volume: notebook apps are shared across users and must not inherit the
+starter's directory. The PVC must exist in the sandbox namespace, and each
+selected directory must be writable by the sandbox image's user (`appuser`, UID
+1000 in the default image). The shared-vast `csi.vastdata.com` driver with NFSv3
+allows kubelet to create a missing `subPathExpr` directory automatically as
+`root:root` mode `0777`, so that setup needs no directory pre-provisioner. Verify
+the behavior with your CSI configuration. If your setup creates `root:root` mode
+`0755`, use a supported `fsGroup` or a root init container to grant UID 1000
+access. The excerpt below shows the additional Pod fields; retain the ingress
+and egress blocks from the normal profile.
+
+```yaml
+display_name: marimohub-user-home
+spec:
+  namespace:
+    strategy: static
+    staticNamespace: marimohub-sandboxes
+  pod:
+    spec:
+      volumes:
+        - name: user-homes
+          persistentVolumeClaim:
+            claimName: vast-user-homes
+        - name: user-home-links
+          emptyDir: {}
+      initContainers:
+        - name: prepare-user-home-links
+          image: busybox:1.37
+          command: ['sh', '-c', 'chmod 1777 /links']
+          volumeMounts:
+            - name: user-home-links
+              mountPath: /links
+      containers:
+        - name: ''
+          volumeMounts:
+            - name: user-homes
+              mountPath: /var/run/marimohub/user-home
+              subPathExpr: $(MARIMOHUB_USER_HOME_KEY)
+            - name: user-home-links
+              mountPath: /mnt
+```
+
+Bind this profile under the `marimohub-user-home` name, then configure:
+
+```yaml
+MARIMOHUB_EDITOR_SANDBOX_SHARING: exclusive
+MARIMOHUB_COMPUTE_COREWEAVE_PROFILE: marimohub
+MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: marimohub-user-home
+```
+
+Kubernetes does not expand environment variables in `mountPath`, so marimohub
+creates `/mnt/<lowercase-email>` as a symlink to the isolated VAST mount. The
+`emptyDir` makes `/mnt` writable without running the sandbox as root. marimohub
+refuses to enable this profile unless editor sharing is `exclusive`, and refuses
+to start when the normal and user-home profile lists overlap. Because the
+`emptyDir` is mounted at `/mnt`, it shadows anything the sandbox image placed
+there. A user whose email changes receives a different directory; migrate or
+alias that data before changing the identity-provider email.
+
 ## 6. Install the ingress stack (Traefik + cert-manager)
 
 Both the hub and every sandbox are served through **Traefik**, with certificates

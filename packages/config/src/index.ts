@@ -44,6 +44,7 @@ import {
 import { makeIntegrations } from './integrations';
 import { makeStorage, makeSandboxBucketConfig } from './storage';
 import { makeWif } from './wif';
+import { makeSandboxUserHome } from './userHome';
 import { parseEnum, parseEnumOr, parseIntEnv, parseList } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -307,6 +308,8 @@ export function createFromEnv(
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
 	);
+	const editorSandboxSharing = parseEditorSandboxSharing(env);
+	const userHome = makeSandboxUserHome(env, editorSandboxSharing);
 	const profileNotice = unsupportedBackendNotice(
 		computeBackend,
 		computeProfiles,
@@ -344,11 +347,12 @@ export function createFromEnv(
 			computeProfile: profilesSupported ? computeProfiles.defaultProfile?.name : undefined,
 			computeProfiles: profilesSupported ? [...computeProfiles.profiles] : [],
 			computeProfileOverride: profilesSupported ? computeProfileOverride : 'none',
+			userHome,
 		},
 		policy: {
 			defaultRole: parseDefaultRole(env),
 			viewerMode: parseViewerMode(env),
-			editorSandboxSharing: parseEditorSandboxSharing(env),
+			editorSandboxSharing,
 			allowedOrigins: parseList(env.MARIMOHUB_ALLOWED_ORIGINS),
 			superAdmins: parseList(env.MARIMOHUB_SUPER_ADMINS),
 			maxConcurrentSessionsPerUser: parseCap(

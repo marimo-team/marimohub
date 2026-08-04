@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
 import type { SandboxId, SandboxProvider } from '@marimo-hub/core';
@@ -91,6 +91,74 @@ describe('CoreWeaveCompute', () => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID).exec('true');
 			expect(world.created[0].profileNames).toBeUndefined();
+		});
+
+		it('selects the user-home profile and exposes the email path safely', async () => {
+			const world = makeWorld();
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await makeCompute(world, {
+					...baseConfig,
+					profileNames: ['marimohub'],
+					userHomeProfileNames: ['marimohub-user-home'],
+				})
+					.create(SANDBOX_ID, {
+						userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+					})
+					.exec('true');
+
+				expect(world.created[0].profileNames).toEqual(['marimohub-user-home']);
+				expect(world.created[0].environmentVariables).toMatchObject({
+					MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
+				});
+				const command = world.registry.get('cw-1')!.fake.runCalls[0][2];
+				expect(command).toContain("if [ ! -d '/var/run/marimohub/user-home' ]");
+				expect(command).toContain(
+					'marimohub: user-home profile mount missing at /var/run/marimohub/user-home',
+				);
+				expect(command).toContain("ln -s '/var/run/marimohub/user-home' '/mnt/ada@example.com'");
+				expect(command).toMatch(/; true$/);
+				const ensureEvent = warn.mock.calls
+					.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
+					.find((event) => event.event === 'coreweave_ensure');
+				expect(ensureEvent).toMatchObject({
+					profile_names: ['marimohub-user-home'],
+					user_home_attached: true,
+				});
+				expect(ensureEvent).not.toHaveProperty('user_home_key');
+				expect(JSON.stringify(ensureEvent)).not.toContain('ada@example.com');
+			} finally {
+				warn.mockRestore();
+			}
+		});
+
+		it('merges user-home and object-storage environment variables', async () => {
+			const world = makeWorld();
+			await makeCompute(world, {
+				...baseConfig,
+				userHomeProfileNames: ['marimohub-user-home'],
+				objectStorageEndpoint: 'https://cwobject.com',
+				objectStorageRegion: 'us-east-04a',
+			})
+				.create(SANDBOX_ID, {
+					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+				})
+				.exec('true');
+
+			expect(world.created[0].environmentVariables).toEqual({
+				AWS_ENDPOINT_URL_S3: 'https://cwobject.com',
+				AWS_REGION: 'us-east-04a',
+				MARIMOHUB_USER_HOME_KEY: 'ada@example.com',
+			});
+		});
+
+		it('rejects a user home without a configured CoreWeave profile', () => {
+			const world = makeWorld();
+			expect(() =>
+				makeCompute(world).create(SANDBOX_ID, {
+					userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+				}),
+			).toThrow(/user-home profile is required/);
 		});
 
 		it('a per-create image override replaces the configured containerImage', async () => {

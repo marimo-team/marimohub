@@ -137,6 +137,24 @@ describe('SandboxProvisioner', () => {
 			expect(compute.lastCreateOptions).toEqual({ reuse: false, image: 'ghcr.io/marimo/custom:1' });
 		});
 
+		it('forwards a user home to sandbox creation', async () => {
+			const { instance } = makeFakeSandbox();
+			const compute = fakeComputeFrom(instance);
+			const provisioner = new SandboxProvisioner(compute);
+			const userHome = { key: 'ada@example.com', path: '/mnt/ada@example.com' };
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				userHome,
+			});
+
+			expect(compute.lastCreateOptions).toEqual({ reuse: false, userHome });
+		});
+
 		it('destroys the sandbox when a sessionEnv promise rejects (fail-closed creds)', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
