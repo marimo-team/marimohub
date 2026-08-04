@@ -106,7 +106,6 @@ export default defineConfig({
 			'unicorn/prefer-number-properties': 'error',
 			'unicorn/no-lonely-if': 'error',
 			'unicorn/prefer-array-some': 'error',
-			'unicorn/prefer-includes': 'error',
 			'unicorn/prefer-string-slice': 'error',
 			'unicorn/prefer-date-now': 'error',
 			'unicorn/explicit-length-check': 'error',
@@ -125,7 +124,6 @@ export default defineConfig({
 			// breaks calls to params typed `T | undefined` (not optional) and erases
 			// deliberate test intent (`fn(undefined)`), so only clean returns/defaults.
 			'unicorn/no-useless-undefined': ['error', { checkArguments: false }],
-			'unicorn/prefer-string-starts-ends-with': 'error',
 			'unicorn/prefer-regexp-test': 'error',
 			'unicorn/prefer-array-flat': 'error',
 			'unicorn/prefer-logical-operator-over-ternary': 'error',
@@ -174,6 +172,71 @@ export default defineConfig({
 			// defensive checks at trust boundaries), `no-confusing-void-expression`
 			// (mostly `() => setState()` arrows). `no-await-in-loop` stays off: our
 			// loops are intentionally sequential (CAS retries, ordered writes).
+
+			// --- correctness + foot-guns ---
+			'eslint/no-self-compare': 'error',
+			'eslint/no-unmodified-loop-condition': 'error',
+			'eslint/no-constructor-return': 'error',
+			'eslint/default-case-last': 'error',
+			'eslint/no-useless-concat': 'error',
+			'eslint/prefer-object-spread': 'error',
+			'eslint/symbol-description': 'error',
+			'typescript/no-array-delete': 'error',
+			'typescript/no-for-in-array': 'error',
+			'typescript/no-confusing-non-null-assertion': 'error',
+			'typescript/no-unnecessary-parameter-property-assignment': 'error',
+			'unicorn/no-negation-in-equality-check': 'error',
+			'unicorn/no-useless-fallback-in-spread': 'error',
+			'unicorn/no-array-method-this-argument': 'error',
+			'unicorn/require-array-join-separator': 'error',
+			'unicorn/consistent-existence-index-check': 'error',
+			'unicorn/no-single-promise-in-promise-methods': 'error',
+			'unicorn/no-await-in-promise-methods': 'error',
+
+			// --- perf / modern APIs ---
+			'unicorn/prefer-spread': 'error',
+			'unicorn/no-useless-spread': 'error',
+			'unicorn/prefer-set-size': 'error',
+			'unicorn/prefer-array-index-of': 'error',
+			'unicorn/prefer-blob-reading-methods': 'error',
+			'unicorn/prefer-modern-dom-apis': 'error',
+			'unicorn/prefer-dom-node-append': 'error',
+			'unicorn/prefer-dom-node-remove': 'error',
+			'unicorn/prefer-keyboard-event-key': 'error',
+
+			// --- type-aware ---
+			// These three supersede the AST-only unicorn `prefer-includes` /
+			// `prefer-string-starts-ends-with` / `prefer-array-find`: they catch the
+			// same patterns plus `s[0] === x`, `charAt`, `slice`, `indexOf === 0`.
+			// `prefer-includes`/`prefer-array-find` are off by omission; the
+			// starts/ends one is on via the default correctness category, so disable
+			// it explicitly to avoid duplicate diagnostics on the same code.
+			'unicorn/prefer-string-starts-ends-with': 'off',
+			'typescript/prefer-includes': 'error',
+			'typescript/prefer-string-starts-ends-with': 'error',
+			'typescript/prefer-find': 'error',
+			'typescript/prefer-reduce-type-parameter': 'error',
+			'typescript/prefer-return-this-type': 'error',
+			'typescript/prefer-as-const': 'error',
+			'typescript/no-unnecessary-type-constraint': 'error',
+
+			// Rejected — don't re-add:
+			// - `react-perf/jsx-no-new-*`: inline handlers/objects/JSX as props are
+			//   idiomatic and only cost when the child is memoized (100+ noisy,
+			//   non-autofixable hits).
+			// - `unicorn/prefer-at`: `.at()` returns `T | undefined`, breaking
+			//   typed-array bitwise code that index access types as `T`.
+			// - `typescript/non-nullable-type-assertion-style`: pushes `as` casts
+			//   toward `!`, at odds with the deferred `no-non-null-assertion`.
+			// - `unicorn/prefer-string-raw`: rewrites one segment of a `+`-built shell
+			//   string to a tagged template, tripping `prefer-template`.
+			// - `unicorn/no-array-for-each`: autofix isn't type-aware, would break
+			//   `Headers`/`Map`/`Set` `.forEach`.
+			// - `eslint/no-template-curly-in-string`: our `${…}` literals are
+			//   deliberate bash param-expansions in shell bootstrap scripts.
+			// - `unicorn/no-negated-condition`: stylistic if/else swaps.
+			// - `unicorn/consistent-function-scoping`: debatable, and noisy in tests.
+			// - `typescript/no-unnecessary-type-arguments`: churn for no current benefit.
 
 			// --- react hooks correctness (packages/web) ---
 			'react-hooks/rules-of-hooks': 'error',
@@ -234,6 +297,10 @@ export default defineConfig({
 					// Inline `new Promise((r) => setTimeout(r, ms))` sleeps are fine in
 					// tests; the swallowed-rejection footgun the rule guards doesn't apply.
 					'eslint/no-promise-executor-return': 'off',
+					// Tests concatenate fixture fragments and spread a `Buffer` into an
+					// array to compare bytes — both are deliberate.
+					'eslint/no-useless-concat': 'off',
+					'unicorn/no-useless-spread': 'off',
 				},
 			},
 			{

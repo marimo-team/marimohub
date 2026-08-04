@@ -21,7 +21,7 @@ function highlightEnv(line: string): string {
 	let value = after;
 	let comment = '';
 	const ci = after.indexOf('  #');
-	if (ci >= 0) {
+	if (ci !== -1) {
 		value = after.slice(0, ci);
 		comment = after.slice(ci);
 	}

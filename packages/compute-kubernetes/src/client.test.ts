@@ -318,7 +318,7 @@ describe('createK8sClient', () => {
 		const res = await client.exec('pod-1', ['sh', '-lc', 'cat'], bytes);
 		expect(objectMode).toBe(false);
 		expect(everyChunkWasRawBytes).toBe(true);
-		expect(Array.from(Buffer.concat(received))).toEqual([0xff, 0x00, 0x80, 0x7f]);
+		expect([...Buffer.concat(received)]).toEqual([0xff, 0x00, 0x80, 0x7f]);
 		expect(res.exitCode).toBe(0);
 	});
 

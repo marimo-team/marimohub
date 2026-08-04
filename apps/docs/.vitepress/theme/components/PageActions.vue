@@ -43,7 +43,7 @@ async function copyText(text: string): Promise<void> {
 	textarea.value = text;
 	textarea.style.position = 'fixed';
 	textarea.style.opacity = '0';
-	document.body.appendChild(textarea);
+	document.body.append(textarea);
 	textarea.select();
 	document.execCommand('copy');
 	textarea.remove();
@@ -69,7 +69,7 @@ function openIn(base: string): void {
 }
 
 function menuItems(): HTMLButtonElement[] {
-	return Array.from(menu.value?.querySelectorAll('button') ?? []);
+	return [...(menu.value?.querySelectorAll('button') ?? [])];
 }
 
 async function toggleMenu(): Promise<void> {

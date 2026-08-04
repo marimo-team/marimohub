@@ -8,7 +8,7 @@ describe('base64url', () => {
 			const encoded = toBase64Url(bytes);
 			// padding-free + URL-safe alphabet only
 			expect(encoded).not.toMatch(/[+/=]/);
-			expect(Array.from(fromBase64Url(encoded))).toEqual(Array.from(bytes));
+			expect([...fromBase64Url(encoded)]).toEqual([...bytes]);
 		}
 	});
 
