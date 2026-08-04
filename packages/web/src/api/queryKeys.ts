@@ -37,8 +37,8 @@ export const notebookKeys = {
 		[...notebookKeys.all, 'versions', { projectId, notebookId }] as const,
 	version: (projectId: string, notebookId: string, versionId: string) =>
 		[...notebookKeys.all, 'version', { projectId, notebookId, versionId }] as const,
-	html: (projectId: string, notebookId: string) =>
-		[...notebookKeys.all, 'html', { projectId, notebookId }] as const,
+	html: (projectId: string, notebookId: string, versionId?: string) =>
+		[...notebookKeys.all, 'html', { projectId, notebookId, versionId: versionId ?? null }] as const,
 };
 
 export const systemKeys = {

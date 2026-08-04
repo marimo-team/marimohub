@@ -227,7 +227,7 @@ describe('useNotebookHtmlQuery', () => {
 		expect(result.current.error?.message).toBe('Failed to load notebook outputs (HTTP 500)');
 	});
 
-	it('returns the html and the captured-at header', async () => {
+	it('returns the html and the captured-at and version headers', async () => {
 		stubFetch(
 			async () =>
 				new Response('<h1>out</h1>', {
@@ -235,6 +235,7 @@ describe('useNotebookHtmlQuery', () => {
 					headers: {
 						'content-type': 'text/html',
 						'X-Marimohub-Captured-At': '2025-03-05T14:00:00Z',
+						'X-Marimohub-Version-Id': 'ver-1',
 					},
 				}),
 		);
@@ -247,6 +248,7 @@ describe('useNotebookHtmlQuery', () => {
 		expect(result.current.data).toEqual({
 			html: '<h1>out</h1>',
 			capturedAt: '2025-03-05T14:00:00Z',
+			versionId: 'ver-1',
 		});
 	});
 

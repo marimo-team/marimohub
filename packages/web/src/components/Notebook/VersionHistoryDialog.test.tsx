@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { VersionHistoryDialog } from './VersionHistoryDialog';
 import type { NotebookEntry, NotebookVersion } from '@/types';
@@ -119,10 +120,12 @@ function renderDialog({
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const onClose = vi.fn();
 	const wrapper = ({ children }: { children: ReactNode }) => (
-		<QueryClientProvider client={client}>
-			{children}
-			<Toaster />
-		</QueryClientProvider>
+		<MemoryRouter>
+			<QueryClientProvider client={client}>
+				{children}
+				<Toaster />
+			</QueryClientProvider>
+		</MemoryRouter>
 	);
 	render(
 		<VersionHistoryDialog
@@ -193,6 +196,26 @@ describe('VersionHistoryDialog', () => {
 		expect(stamped).toHaveAttribute('href', 'https://github.com/org/repo/commit/deadbeefcafe0123');
 		const legacy = screen.getByRole('link', { name: 'abc123d' });
 		expect(legacy).toHaveAttribute('href', 'https://github.com/org/repo/commit/abc123def456');
+	});
+
+	it('links versions with a captured snapshot to the outputs page', async () => {
+		makeFetch({
+			versions: [
+				{
+					...version('v2', '2026-07-01T10:00:00Z', 'ran and saved'),
+					html_snapshot: { captured_at: '2026-07-01T10:00:00Z', size_bytes: 100 },
+				},
+				version('v1', '2026-06-30T10:00:00Z', 'never ran'),
+			],
+		});
+		renderDialog();
+
+		const rows = await screen.findAllByTestId('version-row');
+		expect(within(rows[0]).getByRole('link', { name: 'View outputs' })).toHaveAttribute(
+			'href',
+			`/projects/${PID}/notebooks/${NID}/snapshot?version=v2`,
+		);
+		expect(within(rows[1]).queryByRole('link', { name: 'View outputs' })).toBeNull();
 	});
 
 	it('shows no commit links for a local notebook', async () => {

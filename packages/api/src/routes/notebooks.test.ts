@@ -877,6 +877,54 @@ describe('Notebook routes', () => {
 		expect(await res.text()).toBe('<html><body>outputs</body></html>');
 	});
 
+	it('GET /{nid}/versions/{vid}/html serves that version’s snapshot with the same containment headers', async () => {
+		const created = await expectOk<any>(
+			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),
+			201,
+		);
+		const services = createServices(bucket);
+		const first = await services.notebooks.commitSession(
+			projectId,
+			created.id,
+			{ code: 'v2', html: '<html>first</html>' },
+			ACTOR,
+		);
+		await services.notebooks.commitSession(
+			projectId,
+			created.id,
+			{ code: 'v3', html: '<html>second</html>' },
+			ACTOR,
+		);
+
+		// The pinned version, not the latest.
+		const res = await request('GET', nb(`/${created.id}/versions/${first!.versionId}/html`));
+		expect(res.status).toBe(200);
+		expect(res.headers.get('Content-Security-Policy')).toBe('sandbox allow-scripts');
+		expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+		expect(res.headers.get('X-Marimohub-Version-Id')).toBe(first!.versionId);
+		expect(await res.text()).toBe('<html>first</html>');
+	});
+
+	it('GET /{nid}/versions/{vid}/html 404s: NO_HTML_SNAPSHOT for a snapshot-less version, NOT_FOUND for an unknown one', async () => {
+		const created = await expectOk<any>(
+			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),
+			201,
+		);
+		// The initial save captured no HTML.
+		const versions = await expectOk<any>(await request('GET', nb(`/${created.id}/versions`)));
+		const vid = versions.items[0].version_id;
+		await expectError(
+			await request('GET', nb(`/${created.id}/versions/${vid}/html`)),
+			404,
+			'NO_HTML_SNAPSHOT',
+		);
+		await expectError(
+			await request('GET', nb(`/${created.id}/versions/${createVersionId()}/html`)),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
 	it('GET /{nid}/html is visibility-gated: 404 for a non-member, 200 for a default-role viewer', async () => {
 		const created = await expectOk<any>(
 			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),

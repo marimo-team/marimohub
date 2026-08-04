@@ -792,35 +792,68 @@ export function useNotebookVersionQuery(
 	});
 }
 
-/** The latest captured HTML output snapshot, or null when no version has one yet. */
+/** A captured HTML output snapshot, or null when none exists (yet). */
 export interface NotebookHtmlSnapshot {
 	html: string;
 	/** When the snapshot was captured (`X-Marimohub-Captured-At`), for the banner. */
 	capturedAt: string | null;
+	/** The version it was captured for (`X-Marimohub-Version-Id`), for staleness. */
+	versionId: string | null;
 }
 
-/** Fetch the latest HTML snapshot; `NO_HTML_SNAPSHOT` is an empty state. */
-export function useNotebookHtmlQuery(projectId: string, notebookId: string) {
+function htmlSnapshotPath(projectId: string, notebookId: string, versionId?: string): string {
+	const base = notebookPath(projectId, notebookId);
+	return versionId ? `${base}/versions/${versionId}/html` : `${base}/html`;
+}
+
+async function fetchHtmlSnapshot(
+	projectId: string,
+	notebookId: string,
+	versionId?: string,
+): Promise<NotebookHtmlSnapshot | null> {
+	const res = await fetch(htmlSnapshotPath(projectId, notebookId, versionId));
+	if (res.status === 404) {
+		// Only "exists but never ran" is the empty state; a deleted/hidden
+		// notebook (code NOT_FOUND) must surface as an error, not "no outputs".
+		const body = (await res.json().catch(() => null)) as {
+			error?: { code?: string };
+		} | null;
+		if (body?.error?.code === 'NO_HTML_SNAPSHOT') return null;
+		throw new Error('Notebook not found');
+	}
+	if (!res.ok) throw new Error(`Failed to load notebook outputs (HTTP ${res.status})`);
+	return {
+		html: await res.text(),
+		capturedAt: res.headers.get('X-Marimohub-Captured-At'),
+		versionId: res.headers.get('X-Marimohub-Version-Id'),
+	};
+}
+
+/**
+ * Fetch the latest HTML snapshot (or a specific version's when `versionId` is
+ * set); `NO_HTML_SNAPSHOT` is an empty state.
+ */
+export function useNotebookHtmlQuery(projectId: string, notebookId: string, versionId?: string) {
 	return useQuery({
-		queryKey: notebookKeys.html(projectId, notebookId),
-		queryFn: async (): Promise<NotebookHtmlSnapshot | null> => {
-			const res = await fetch(`${notebookPath(projectId, notebookId)}/html`);
-			if (res.status === 404) {
-				// Only "exists but never ran" is the empty state; a deleted/hidden
-				// notebook (code NOT_FOUND) must surface as an error, not "no outputs".
-				const body = (await res.json().catch(() => null)) as {
-					error?: { code?: string };
-				} | null;
-				if (body?.error?.code === 'NO_HTML_SNAPSHOT') return null;
-				throw new Error('Notebook not found');
-			}
-			if (!res.ok) throw new Error(`Failed to load notebook outputs (HTTP ${res.status})`);
-			return {
-				html: await res.text(),
-				capturedAt: res.headers.get('X-Marimohub-Captured-At'),
-			};
-		},
+		queryKey: notebookKeys.html(projectId, notebookId, versionId),
+		queryFn: () => fetchHtmlSnapshot(projectId, notebookId, versionId),
 		staleTime: 5 * 60 * 1000,
+	});
+}
+
+/** Download the latest outputs snapshot as a standalone .html file. */
+export function useDownloadOutputsHtml(projectId: string) {
+	return useMutation({
+		mutationFn: async ({ notebookId, title }: { notebookId: string; title: string }) => {
+			const snapshot = await fetchHtmlSnapshot(projectId, notebookId);
+			if (!snapshot) {
+				throw new Error('No outputs have been captured yet — run the notebook first');
+			}
+			triggerDownload(
+				`${sanitizeFilename(title)}.html`,
+				new Blob([snapshot.html], { type: 'text/html' }),
+			);
+		},
 	});
 }
 

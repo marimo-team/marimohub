@@ -9,6 +9,10 @@ interface StaticNotebookViewProps {
 	title: string;
 	/** Banner copy: the role-gated viewer fallback vs the standalone SnapshotPage. */
 	variant?: 'viewer' | 'standalone';
+	/** Pin to one version's snapshot instead of the newest available. */
+	versionId?: string;
+	/** The notebook's current head; when the snapshot trails it, the banner says so. */
+	headVersionId?: string;
 }
 
 /**
@@ -25,8 +29,10 @@ export function StaticNotebookView({
 	notebookId,
 	title,
 	variant = 'viewer',
+	versionId,
+	headVersionId,
 }: StaticNotebookViewProps) {
-	const { data, isPending, isError } = useNotebookHtmlQuery(projectId, notebookId);
+	const { data, isPending, isError } = useNotebookHtmlQuery(projectId, notebookId, versionId);
 
 	if (isPending) {
 		return (
@@ -51,10 +57,13 @@ export function StaticNotebookView({
 	}
 
 	const capturedFrom = data?.capturedAt ? ` from ${formatRelative(data.capturedAt)}` : '';
+	const stale = !!data?.versionId && !!headVersionId && data.versionId !== headVersionId;
 	const banner = data
 		? variant === 'viewer'
 			? `Static snapshot of outputs${capturedFrom} — sessions are disabled for viewers.`
-			: `Static snapshot of outputs${capturedFrom} — captured when the last editing session ended.`
+			: stale
+				? `Static snapshot of outputs${capturedFrom} — the notebook has changed since these outputs were captured.`
+				: `Static snapshot of outputs${capturedFrom} — captured when the last editing session ended.`
 		: variant === 'viewer'
 			? "You're a viewer on this project — sessions are disabled."
 			: null;

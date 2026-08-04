@@ -1,12 +1,13 @@
 import { lazy, Suspense, useState } from 'react';
 import { toast } from 'sonner';
-import { MoveRight } from 'lucide-react';
+import { Camera, MoveRight } from 'lucide-react';
 import {
 	Button,
 	ConfirmDialog,
 	DialogModal,
 	displayName,
 	EmptyState,
+	IconLink,
 	Skeleton,
 	UserLabel,
 } from '@/components/ui';
@@ -80,6 +81,8 @@ interface VersionListItemProps {
 	showRestore: boolean;
 	/** GitHub link for the synced commit this version mirrors, when known. */
 	commitLink?: { href: string; label: string };
+	/** SnapshotPage link for this version's captured outputs, when it has any. */
+	outputsLink?: { to: string; state: { title: string } };
 	onSelect: () => void;
 	onRestore: () => void;
 }
@@ -93,6 +96,7 @@ function VersionListItem({
 	usersLoading,
 	showRestore,
 	commitLink,
+	outputsLink,
 	onSelect,
 	onRestore,
 }: VersionListItemProps) {
@@ -135,6 +139,18 @@ function VersionListItem({
 				>
 					{commitLink.label}
 				</a>
+			)}
+			{outputsLink && (
+				<IconLink
+					to={outputsLink.to}
+					state={outputsLink.state}
+					label="View outputs"
+					tooltip="View outputs"
+					size="sm"
+					className="shrink-0"
+				>
+					<Camera className="size-3.5" />
+				</IconLink>
 			)}
 			{showRestore && (
 				<Button variant="ghost" size="sm" onPress={onRestore} className="shrink-0">
@@ -180,6 +196,13 @@ export function VersionHistoryDialog({
 			? { href: githubCommitUrl(coords.repo, commit), label: shortCommit(commit) }
 			: undefined;
 	};
+	const outputsLinkFor = (v: NotebookVersion) =>
+		v.html_snapshot
+			? {
+					to: `/projects/${projectId}/notebooks/${notebook.id}/snapshot?version=${v.version_id}`,
+					state: { title: notebook.title },
+				}
+			: undefined;
 
 	const effectiveCompare =
 		compareId && ids.has(compareId) ? compareId : (versions[0]?.version_id ?? null);
@@ -287,6 +310,7 @@ export function VersionHistoryDialog({
 										usersLoading={usersLoading}
 										showRestore={restorable && i !== 0}
 										commitLink={commitLinkFor(v)}
+										outputsLink={outputsLinkFor(v)}
 										onSelect={() => {
 											setBaseId(v.version_id);
 											setCompareId(null);

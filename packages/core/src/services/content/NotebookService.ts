@@ -1,3 +1,4 @@
+import { all } from 'better-all';
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -719,19 +720,24 @@ export class NotebookService {
 		return fetched.filter((v): v is Version => v !== undefined);
 	}
 
+	/**
+	 * A malformed id is a client mistake, not a server fault: map the bare parse
+	 * Error to a domain 404 so the API renders a 4xx instead of a raw 500.
+	 */
+	private parseVersionId(versionId: string): VersionId {
+		try {
+			return VersionId.parse(versionId);
+		} catch {
+			throw new NotFoundError(`Version ${versionId} not found`);
+		}
+	}
+
 	async getVersion(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		versionId: string,
 	): Promise<{ version: Version; code: string }> {
-		// A malformed id is a client mistake, not a server fault: map the bare parse
-		// Error to a domain 404 so the API renders a 4xx instead of a raw 500.
-		let vid: VersionId;
-		try {
-			vid = VersionId.parse(versionId);
-		} catch {
-			throw new NotFoundError(`Version ${versionId} not found`);
-		}
+		const vid = this.parseVersionId(versionId);
 		const { source } = await this.getNotebook(projectId, notebookId);
 		const ver = paths.project(projectId).notebook(notebookId).version(vid);
 		const entryNotebook = remoteWorkspaceEntry(source);
@@ -749,6 +755,38 @@ export class NotebookService {
 		const code = await codeObj.text();
 
 		return { version, code };
+	}
+
+	/**
+	 * One version's HTML snapshot. NotFoundError when the version itself is
+	 * unknown; null when the version exists but captured no snapshot (or the
+	 * object was pruned).
+	 */
+	async getVersionHtmlSnapshot(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		versionId: string,
+	): Promise<{ versionId: string; capturedAt: string; html: string } | null> {
+		const vid = this.parseVersionId(versionId);
+		const ver = paths.project(projectId).notebook(notebookId).version(vid);
+		// Both object paths are deterministic, so the reads overlap; a
+		// snapshot-less version wastes one harmless html read.
+		const { version, htmlObj } = await all({
+			version: async () => {
+				const metaObj = await this.bucket.get(ver.meta);
+				if (!metaObj) {
+					throw new NotFoundError(`Version ${versionId} not found`);
+				}
+				return readStored(VersionSchema, metaObj, ver.meta);
+			},
+			htmlObj: async () => this.bucket.get(ver.html),
+		});
+		if (!version.html_snapshot || !htmlObj) return null;
+		return {
+			versionId: vid,
+			capturedAt: version.html_snapshot.captured_at,
+			html: await htmlObj.text(),
+		};
 	}
 
 	/**
