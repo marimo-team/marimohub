@@ -196,6 +196,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				// the exposure levels (`ingressMode`) and egress modes a sandbox selects.
 				// Defaults (`public`/`internet`) match the canonical CoreWeave profile.
 				profileNames: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_PROFILE),
+				userHomeProfileNames: parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE),
 				ingressMode: env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE,
 				egressMode: env.MARIMOHUB_COMPUTE_COREWEAVE_EGRESS_MODE,
 				maxLifetimeSeconds: resolveLifetimeBackstop(

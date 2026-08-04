@@ -312,6 +312,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'marimohub',
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE',
+						name: 'CoreWeave user-home profile names',
+						description:
+							'Comma-separated CoreWeave profile name(s) used only for editor/admin edit sandboxes. The profile must mount the selected PVC subdirectory at `/var/run/marimohub/user-home` with `subPathExpr: $(MARIMOHUB_USER_HOME_KEY)` and provide a writable `/mnt`. Requires `MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive`; apps and viewer sandboxes continue to use the normal profile.',
+						example: 'marimohub-user-home',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_MODE',
 						name: 'CoreWeave ingress mode',
 						description: 'Network ingress mode (backend/profile specific).',

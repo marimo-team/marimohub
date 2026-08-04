@@ -10,6 +10,7 @@ import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import type {
 	ComputeResources,
+	SandboxUserHome,
 	SandboxInstance,
 	SandboxProcess,
 	SandboxProvider,
@@ -100,6 +101,8 @@ export interface ProvisionOptions {
 	image?: string;
 	/** Backend-neutral resources resolved from the deployment's default compute profile. */
 	resources?: ComputeResources;
+	/** Personal directory selected for an owner-isolated editor sandbox. */
+	userHome?: SandboxUserHome;
 	/**
 	 * Environment + files to inject into the sandbox BEFORE the kernel starts — the
 	 * assembled output of the workload-identity broker (federated S3 creds) and/or
@@ -272,6 +275,7 @@ export class SandboxProvisioner {
 			options.restoreFilesystemSnapshotId,
 			options.image,
 			options.resources,
+			options.userHome,
 		);
 		const createMs = Date.now() - createStart;
 		try {

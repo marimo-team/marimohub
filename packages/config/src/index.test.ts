@@ -399,6 +399,51 @@ describe('createFromEnv default role', () => {
 		).toThrow(/Invalid MARIMOHUB_EDITOR_SANDBOX_SHARING.*shared, exclusive/);
 	});
 
+	it('requires exclusive CoreWeave editors when a user-home profile is configured', () => {
+		const coreweave = {
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
+		};
+		expect(() => createFromEnv(coreweave)).toThrow(
+			/requires MARIMOHUB_EDITOR_SANDBOX_SHARING=exclusive/,
+		);
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
+				MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+			}),
+		).toThrow(/requires the coreweave backend/);
+	});
+
+	it('resolves exclusive CoreWeave user homes from canonical email', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
+			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+		});
+		expect(
+			deps.sandbox.userHome?.resolve({ id: 'user-1' as never, email: ' Ada@Example.COM ' }),
+		).toEqual({ key: 'ada@example.com', path: '/mnt/ada@example.com' });
+	});
+
+	it('rejects an email that cannot be a CoreWeave subpath', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
+			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
+			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',
+		});
+		expect(() =>
+			deps.sandbox.userHome?.resolve({ id: 'user-1' as never, email: '../escape@example.com' }),
+		).toThrow(/cannot be used as a sandbox home directory/);
+	});
+
 	it('defaults persistWorkspace to "source" when MARIMOHUB_PERSIST_WORKSPACE is unset', () => {
 		expect(createFromEnv({ ...baseEnv }).sandbox.persistWorkspace).toBe('source');
 	});

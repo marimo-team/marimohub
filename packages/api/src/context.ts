@@ -16,6 +16,7 @@ import type {
 	Role,
 	SandboxExposure,
 	SandboxProvider,
+	SandboxUserHome,
 	Seconds,
 	ViewerMode,
 	WorkloadIdentityIssuer,
@@ -61,6 +62,10 @@ export interface SessionLifetimeConfig {
 export interface SandboxComputeProfile {
 	name: string;
 	resources: ComputeResources;
+}
+
+export interface SandboxUserHomeResolver {
+	resolve(user: AuthUser): SandboxUserHome;
 }
 
 /** Everything about how a notebook sandbox is mounted, exposed, and persisted. */
@@ -124,6 +129,8 @@ export interface SandboxConfig {
 	computeProfiles?: SandboxComputeProfile[];
 	/** Whether editors may persist a non-default profile on a notebook. */
 	computeProfileOverride?: 'none' | 'editors';
+	/** Resolve personal storage for owner-isolated editor sandboxes. */
+	userHome?: SandboxUserHomeResolver;
 }
 
 /**

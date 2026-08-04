@@ -57,7 +57,13 @@ import {
 	shellQuote,
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
-import type { ComputeResources, SandboxId, Seconds, Timings } from '@marimo-hub/core';
+import type {
+	ComputeResources,
+	SandboxId,
+	SandboxUserHome,
+	Seconds,
+	Timings,
+} from '@marimo-hub/core';
 import type {
 	CreateSandboxOptions,
 	ExecResult,
@@ -84,6 +90,9 @@ const DEFAULT_KERNEL_PORT = 2718;
 const DEFAULT_OWNER_TAG = 'marimohub';
 /** Prefix for the per-sandbox tag that encodes our `SandboxId`. */
 const ID_TAG_PREFIX = 'mh-sbx-';
+/** Fixed profile mount; a bootstrap symlink exposes it at `/mnt/<email>`. */
+const USER_HOME_MOUNT_PATH = '/var/run/marimohub/user-home';
+const USER_HOME_KEY_ENV = 'MARIMOHUB_USER_HOME_KEY';
 
 /** Longest a single in-sandbox port wait may block before we re-issue it. */
 const PORT_WAIT_CHUNK_MS = 30_000;
@@ -187,6 +196,8 @@ export interface CoreWeaveConfig {
 	 * Omit to use the runner's default profile.
 	 */
 	profileNames?: readonly string[];
+	/** Profile containing the per-user VAST/PVC mount. */
+	userHomeProfileNames?: readonly string[];
 	/**
 	 * Template for the public kernel URL. `{sandboxId}`, `{port}`, and `{host}` are
 	 * substituted. Default `https://{sandboxId}-{port}.{host}` where `{host}` is the
@@ -296,6 +307,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly client: CoreWeaveClient,
 		/** Reconnect-by-tag before creating. False on a fresh provision (skips a wasted list). */
 		private readonly reuse = true,
+		private readonly userHome?: SandboxUserHome,
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
 		this.kernelPort = config.kernelPort ?? DEFAULT_KERNEL_PORT;
@@ -327,8 +339,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const t3 = Date.now();
 		// Armed, not run: the snippet is spliced onto the first command we were going
 		// to send anyway, so it costs no round-trip of its own.
-		if (!existing && this.needsAwsConfigBootstrap()) {
-			this.pendingBootstrap = AWS_CONFIG_BOOTSTRAP;
+		if (!existing) {
+			this.pendingBootstrap = this.createBootstrap();
 		}
 		this.lastEnsureTimings = { find: t1 - t0, create: t2 - t1, boot: t3 - t2 };
 		console.warn(
@@ -372,6 +384,11 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	private createOptions(): SandboxRunOptions {
+		const objectStorage = this.objectStorageOptions();
+		const environmentVariables = {
+			...objectStorage.environmentVariables,
+			...(this.userHome ? { [USER_HOME_KEY_ENV]: this.userHome.key } : {}),
+		};
 		return {
 			containerImage: this.config.image ?? DEFAULT_CONTAINER_IMAGE,
 			ports: [this.kernelPort],
@@ -386,7 +403,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			...(this.config.maxLifetimeSeconds
 				? { maxLifetimeSeconds: this.config.maxLifetimeSeconds }
 				: {}),
-			...this.objectStorageOptions(),
+			...objectStorage,
+			...(Object.keys(environmentVariables).length > 0 ? { environmentVariables } : {}),
 			// `ensure` runs the readiness wait itself, on a tighter poll interval than
 			// the SDK's built-in one.
 			waitUntilRunning: false,
@@ -417,6 +435,21 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 
 	private needsAwsConfigBootstrap(): boolean {
 		return Boolean(this.config.objectStorageBuckets?.length || this.config.objectStorageEndpoint);
+	}
+
+	private createBootstrap(): string | undefined {
+		const snippets: string[] = [];
+		if (this.needsAwsConfigBootstrap()) snippets.push(AWS_CONFIG_BOOTSTRAP);
+		if (this.userHome) {
+			const parent = this.userHome.path.slice(0, this.userHome.path.lastIndexOf('/')) || '/';
+			snippets.push(
+				`test -d ${shellQuote(USER_HOME_MOUNT_PATH)} && ` +
+					`mkdir -p ${shellQuote(parent)} && ` +
+					`{ test -e ${shellQuote(this.userHome.path)} || ` +
+					`ln -s ${shellQuote(USER_HOME_MOUNT_PATH)} ${shellQuote(this.userHome.path)}; } || exit $?;`,
+			);
+		}
+		return snippets.length > 0 ? snippets.join(' ') : undefined;
 	}
 
 	/**
@@ -662,18 +695,28 @@ export class CoreWeaveCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		if (options?.userHome && !this.config.userHomeProfileNames?.length) {
+			throw new Error('A CoreWeave user-home profile is required for personal storage');
+		}
 		const resources = coreWeaveProfileResources(options?.resources);
 		const config =
-			options?.image || resources
+			options?.image || resources || options?.userHome
 				? {
 						...this.config,
 						...(options?.image ? { image: options.image } : {}),
+						...(options?.userHome ? { profileNames: this.config.userHomeProfileNames } : {}),
 						...(resources
 							? { resources: mergeCoreWeaveResources(this.config.resources, resources) }
 							: {}),
 					}
 				: this.config;
-		return new CoreWeaveSandboxInstance(id, config, this.getClient(), options?.reuse ?? true);
+		return new CoreWeaveSandboxInstance(
+			id,
+			config,
+			this.getClient(),
+			options?.reuse ?? true,
+			options?.userHome,
+		);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

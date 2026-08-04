@@ -761,6 +761,12 @@ app.openapi(createSession, async (c) => {
 		throw new BadRequestError('Temporary editor sessions are only available in exclusive mode');
 	}
 	const ephemeral = authorization.ephemeral || editorTemporary;
+	const userHome =
+		mode === 'edit' &&
+		sharing === 'exclusive' &&
+		(authorization.role === 'editor' || authorization.role === 'admin')
+			? deps.sandbox.userHome?.resolve(user)
+			: undefined;
 	const profileOverrideEligible = authorization.profileOverrideEligible;
 	const restrictedViewerCredentials = authorization.restrictedViewerCredentials;
 	const grants = (s: Session) => sessionGrantsFor(project, user, s, deps.policy);
@@ -1147,6 +1153,7 @@ app.openapi(createSession, async (c) => {
 						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
 						image,
 						resources: requestedComputeProfile.resources,
+						userHome,
 						sessionEnv,
 						entryNotebook: workspacePolicy.entryNotebook,
 						launchMode: mode,

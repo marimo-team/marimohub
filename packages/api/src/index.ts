@@ -1,5 +1,11 @@
 export { createApi, generateOpenApiDocument } from './createApi';
-export type { ApiDeps, HonoEnv, Services, SessionLifetimeConfig } from './context';
+export type {
+	ApiDeps,
+	HonoEnv,
+	SandboxUserHomeResolver,
+	Services,
+	SessionLifetimeConfig,
+} from './context';
 export { createApp, assertProjectRole } from './shared';
 export {
 	authorizeProxyRequest,
