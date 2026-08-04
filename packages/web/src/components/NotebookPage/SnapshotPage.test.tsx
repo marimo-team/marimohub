@@ -99,6 +99,16 @@ describe('SnapshotPage', () => {
 		expect(onlyReads(impl)).toBe(true);
 	});
 
+	it('shows a version-specific empty state when a pinned snapshot is gone', async () => {
+		makeFetch({ html: null });
+		renderPage('?version=ver-old');
+
+		await waitFor(() =>
+			expect(screen.getByText('No outputs for this version')).toBeInTheDocument(),
+		);
+		expect(screen.getByText(/or they have since been cleaned up/)).toBeInTheDocument();
+	});
+
 	it('shows the header with the notebook title and a back link to the project', async () => {
 		makeFetch({ html: '<html><body>x</body></html>' });
 		renderPage();

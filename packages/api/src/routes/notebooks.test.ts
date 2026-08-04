@@ -925,6 +925,31 @@ describe('Notebook routes', () => {
 		);
 	});
 
+	it('GET /{nid}/versions/{vid}/html is visibility-gated like the latest-snapshot route', async () => {
+		const created = await expectOk<any>(
+			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),
+			201,
+		);
+		const committed = await createServices(bucket).notebooks.commitSession(
+			projectId,
+			created.id,
+			{ code: 'v2', html: '<html>x</html>' },
+			ACTOR,
+		);
+		const path = nb(`/${created.id}/versions/${committed!.versionId}/html`);
+
+		// Under MARIMOHUB_DEFAULT_ROLE=none a non-member cannot even see the project.
+		const stranger = createTestApi({ bucket, userId: uid('user_z') }).request;
+		await expectError(await stranger('GET', path), 404, 'NOT_FOUND');
+
+		const viewer = createTestApi({
+			bucket,
+			userId: uid('user_v'),
+			deps: { policy: { defaultRole: 'viewer' } },
+		}).request;
+		expect((await viewer('GET', path)).status).toBe(200);
+	});
+
 	it('GET /{nid}/html is visibility-gated: 404 for a non-member, 200 for a default-role viewer', async () => {
 		const created = await expectOk<any>(
 			await request('POST', nb(''), { title: 'NB', description: 'D', code: 'v1' }),

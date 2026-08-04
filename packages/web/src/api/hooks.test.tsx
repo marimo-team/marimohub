@@ -216,6 +216,20 @@ describe('useNotebookHtmlQuery', () => {
 		expect(result.current.error?.message).toBe('Notebook not found');
 	});
 
+	it('names the version, not the notebook, when a pinned snapshot 404s', async () => {
+		const fetchMock = stubFetch(async () => jsonError('NOT_FOUND', 'gone', 404));
+
+		const { result } = renderHookWithClient(() => useNotebookHtmlQuery(PID, NID, 'ver-old'), {
+			toaster: false,
+		});
+
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(result.current.error?.message).toBe('Version not found');
+		expect(urlsOf(fetchMock)[0]).toBe(
+			`/api/v1/projects/${PID}/notebooks/${NID}/versions/ver-old/html`,
+		);
+	});
+
 	it('throws with the status on a server error', async () => {
 		stubFetch(async () => new Response('nope', { status: 500 }));
 
