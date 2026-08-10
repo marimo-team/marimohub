@@ -1,0 +1,93 @@
+name: Storage conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  storage-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 0.1.24
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+
+      # Started with `docker run` (not `services:`) because GitHub service
+      # containers cannot override the image command, and minio/fake-gcs-server
+      # both need one.
+      - name: Start storage emulators
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          docker run -d --name azurite -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.34.0 \
+            azurite-blob --blobHost 0.0.0.0
+          docker run -d --name fake-gcs -p 4443:4443 \
+            fsouza/fake-gcs-server:1.52.2 \
+            -scheme http -backend memory
+
+      - name: Wait for emulators
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9000/minio/health/live && break
+            sleep 1; [ "$i" = 30 ] && exit 1
+          done
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:10000/devstoreaccount1 || true)
+            [ "$code" != "000" ] && break
+            sleep 1; [ "$i" = 30 ] && exit 1
+          done
+          for i in $(seq 1 30); do
+            curl -fsS "http://127.0.0.1:4443/storage/v1/b?project=test" && break
+            sleep 1; [ "$i" = 30 ] && exit 1
+          done
+
+      - name: Create test buckets
+        env:
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://marimohub-test
+          az storage container create --name marimohub-test \
+            --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IiFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
+          curl -fsS -X POST "http://127.0.0.1:4443/storage/v1/b?project=test" \
+            -H 'Content-Type: application/json' -d '{"name":"marimohub-test"}'
+
+      - name: S3 contract against MinIO
+        env:
+          MARIMOHUB_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          MARIMOHUB_TEST_S3_BUCKET: marimohub-test
+          MARIMOHUB_TEST_S3_REGION: us-east-1
+          MARIMOHUB_TEST_S3_KEY: minioadmin
+          MARIMOHUB_TEST_S3_SECRET: minioadmin
+        run: pnpm --filter @marimo-hub/storage-s3 test
+
+      - name: Azure contract against Azurite
+        env:
+          MARIMOHUB_TEST_AZURE_CONTAINER: marimohub-test
+          MARIMOHUB_TEST_AZURE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IiFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
+        run: pnpm --filter @marimo-hub/storage-azure test
+
+      - name: GCS contract against fake-gcs-server
+        env:
+          MARIMOHUB_TEST_GCS_BUCKET: marimohub-test
+          MARIMOHUB_TEST_GCS_ENDPOINT: http://127.0.0.1:4443
+        run: pnpm --filter @marimo-hub/storage-gcs test
