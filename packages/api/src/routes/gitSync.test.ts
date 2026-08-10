@@ -63,12 +63,12 @@ describe('Git sync routes', () => {
 		'X-Marimohub-Commit': 'abc123',
 	});
 
-	it('rejects creating a synced notebook whose repo is not owner/repo (400)', async () => {
+	it('rejects creating a synced notebook whose repo is not owner/repo or a URL (400)', async () => {
 		await expectError(
 			await request('POST', `/projects/${projectId}/notebooks/git`, {
 				title: 'Bad repo',
 				description: 'd',
-				repo: 'git@github.com:org/repo.git',
+				repo: 'just-a-name',
 				branch: 'main',
 				entry_notebook: 'app.py',
 			}),

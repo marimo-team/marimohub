@@ -58,14 +58,14 @@ describe('SyncedNotebookDialog', () => {
 		expect(screen.getByText('Repository is required')).toBeInTheDocument();
 	});
 
-	it('rejects a repository that is not in owner/repo format', async () => {
+	it('rejects a repository that is neither owner/repo nor a repository URL', async () => {
 		const user = userEvent.setup();
 		renderDialog();
 
 		await user.type(screen.getByLabelText('Repository'), 'just-a-name');
 		await user.tab();
 
-		expect(screen.getByText(/owner\/repo format/i)).toBeInTheDocument();
+		expect(screen.getByText(/owner\/repo or a repository URL/i)).toBeInTheDocument();
 	});
 
 	it('POSTs to the git endpoint and hands the write-once token to onCreated', async () => {

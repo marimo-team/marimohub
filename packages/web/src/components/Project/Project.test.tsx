@@ -690,7 +690,7 @@ describe('Project — Notebook Actions', () => {
 		makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });
 		await renderProject();
 
-		const trigger = screen.getByRole('button', { name: 'Synced from GitHub — details' });
+		const trigger = screen.getByRole('button', { name: 'Synced from a git repository — details' });
 		// Outside the row anchor — RowLink's no-buttons-in-<a> invariant.
 		expect(trigger.closest('a')).toBeNull();
 		await user.click(trigger);

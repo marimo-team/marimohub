@@ -15,3 +15,6 @@ GET /api/v1/version removed the required property `data/node` from the response 
 GET /api/v1/version removed the required property `data/replica` from the response with the `200` status
 GET /api/v1/version removed the required property `data/sandbox_image` from the response with the `200` status
 GET /api/v1/version removed the required property `data/started_at` from the response with the `200` status
+
+GET /api/v1/projects/{pid}/notebooks/{nid} the response property `data/source/oneOf[subschema #2]/provider` became nullable for the status `200`
+PATCH /api/v1/projects/{pid}/notebooks/{nid}/source the response property `data/source/provider` became nullable for the status `200`

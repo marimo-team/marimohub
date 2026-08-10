@@ -10,6 +10,7 @@ import {
 	gitSourceConfigsEqual,
 	normalizeGitSourceConfig,
 	prepareSync,
+	providerForRepo,
 	SyncTokenRecordSchema,
 	verifySyncTokenRecord,
 } from '../../integrations/syncedSource';
@@ -151,7 +152,11 @@ export class SyncedNotebookService {
 					return current.pending_config ? withoutPending : null;
 				}
 				if (current.current_version_id === null) {
-					return { ...withoutPending, ...desired };
+					return {
+						...withoutPending,
+						...desired,
+						provider: providerForRepo(current, desired.repo),
+					};
 				}
 				return { ...current, pending_config: desired };
 			},
@@ -259,6 +264,7 @@ export class SyncedNotebookService {
 						return {
 							...withoutPending,
 							...currentPrepared.config,
+							provider: providerForRepo(git, currentPrepared.config.repo),
 							current_version_id: versionId,
 							commit: currentPrepared.commit,
 							last_synced_at: now,

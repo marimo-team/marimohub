@@ -17,3 +17,12 @@ records the existing write contract and needs no stored-data migration.
 ```text
 PUT /_system/events/{date}/{id}.json `added the new required request property `id``
 ```
+
+`provider` widened from const `github` to a nullable github/gitlab enum. Pure
+widening: every stored source (`provider: "github"`) still parses, and readers
+already treat the field as a display hint. No migration needed.
+
+```text
+GET /projects/{pid}/notebooks/{nid}/source.json the `provider` response property const value `github` was removed for the status `200`
+GET /projects/{pid}/notebooks/{nid}/source.json response property `oneOf[subschema #2]/provider` list-of-types was widened by adding types `null` to media type `application/json` of response `200`
+```

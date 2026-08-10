@@ -3,6 +3,8 @@ import { BadRequestError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
 import { toHex } from '../internal/hex';
 import type { GitSource, GitSourceConfig, Source } from '../schema';
+import { detectProvider, normalizeRepo, OWNER_REPO_PATTERN, repoHost, reposMatch } from './gitRepo';
+import type { GitProvider } from './gitRepo';
 import {
 	normalizeEntryNotebook,
 	normalizeWorkspaceRootPath,
@@ -13,7 +15,7 @@ import type { SyncedWorkspaceFile, SyncedWorkspaceFileMap } from './remoteWorksp
 export interface CreateSyncedNotebookInput {
 	title: string;
 	description: string;
-	provider?: 'github';
+	provider?: GitProvider;
 	repo: string;
 	branch: string;
 	root_path?: string;
@@ -62,23 +64,20 @@ function timingSafeEqual(a: string, b: string): boolean {
 	return diff === 0;
 }
 
-// Plain `owner/repo` coordinates — not a clone URL or `git@` remote (a bare
-// "anything/anything" check would admit both). The UI builds host links
-// (github.com/{repo}/…) from this, so a looser shape would produce broken URLs.
-const OWNER_REPO_PATTERN = /^[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+$/;
-
 export function normalizeGitSourceConfig(input: {
 	repo: string;
 	branch: string;
 	root_path?: string;
 	entry_notebook: string;
 }): GitSourceConfig {
-	const repo = input.repo.trim();
-	if (!repo) {
+	if (!input.repo.trim()) {
 		throw new BadRequestError('repo is required');
 	}
-	if (!OWNER_REPO_PATTERN.test(repo)) {
-		throw new BadRequestError('repo must use the owner/repo format, e.g. acme/analytics');
+	const repo = normalizeRepo(input.repo);
+	if (repo === null) {
+		throw new BadRequestError(
+			'repo must be owner/repo (hosted on github.com) or a repository URL, e.g. acme/analytics or https://gitlab.example.com/group/project',
+		);
 	}
 	const branch = input.branch.trim();
 	if (!branch) {
@@ -114,12 +113,33 @@ export function gitSourceConfigsEqual(a: GitSourceConfig, b: GitSourceConfig): b
 	);
 }
 
+/**
+ * Host detection wins; an explicit claim it couldn't make (e.g. GitLab at
+ * `code.example.com`) survives moves within the same host and is discarded on
+ * a host change.
+ */
+export function providerForRepo(
+	current: Pick<GitSource, 'repo' | 'provider'>,
+	nextRepo: string,
+): GitProvider | null {
+	const detected = detectProvider(nextRepo);
+	if (detected) return detected;
+	const host = repoHost(nextRepo);
+	return host !== null && host === repoHost(current.repo) ? current.provider : null;
+}
+
 export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
-	const config = normalizeGitSourceConfig(input);
+	let config = normalizeGitSourceConfig(input);
+	// Shorthand means github.com — unless the caller says GitLab, then gitlab.com.
+	if (input.provider === 'gitlab' && OWNER_REPO_PATTERN.test(config.repo)) {
+		config = { ...config, repo: `https://gitlab.com/${config.repo}` };
+	}
 	return {
 		schema_version: 1,
 		type: 'git',
-		provider: input.provider ?? 'github',
+		// Host detection wins over the caller's claim so the stored provider can
+		// never contradict a recognized host; the claim covers unknown hosts.
+		provider: detectProvider(config.repo) ?? input.provider ?? null,
 		...config,
 		sync_mode: 'push',
 		current_version_id: null,
@@ -165,21 +185,18 @@ export function prepareSync(
 ): { commit: string; config: GitSourceConfig; files: SyncedWorkspaceFileMap } {
 	const config = effectiveGitSourceConfig(source);
 	const rootPath = normalizeWorkspaceRootPath(input.root_path);
-	const received = {
-		'X-Marimohub-Repo': input.repo,
-		'X-Marimohub-Branch': input.branch,
-		'X-Marimohub-Root-Path': rootPath,
-	};
-	const expected = {
-		'X-Marimohub-Repo': config.repo,
-		'X-Marimohub-Branch': config.branch,
-		'X-Marimohub-Root-Path': config.root_path,
-	};
-	const mismatches = Object.entries(expected)
-		.filter(([header, value]) => received[header as keyof typeof received] !== value)
+	// Repo matches by repository, not byte-for-byte: CI pushers send bare paths
+	// (`$GITHUB_REPOSITORY`, `$CI_PROJECT_PATH`) while the store may hold a URL.
+	const checks: [header: string, received: string, expected: string, ok: boolean][] = [
+		['X-Marimohub-Repo', input.repo, config.repo, reposMatch(config.repo, input.repo)],
+		['X-Marimohub-Branch', input.branch, config.branch, input.branch === config.branch],
+		['X-Marimohub-Root-Path', rootPath, config.root_path, rootPath === config.root_path],
+	];
+	const mismatches = checks
+		.filter(([, , , ok]) => !ok)
 		.map(
-			([header, value]) =>
-				`${header} received ${JSON.stringify(received[header as keyof typeof received])}, expected ${JSON.stringify(value)}`,
+			([header, received, expected]) =>
+				`${header} received ${JSON.stringify(received)}, expected ${JSON.stringify(expected)}`,
 		);
 	if (mismatches.length > 0) {
 		throw new BadRequestError(

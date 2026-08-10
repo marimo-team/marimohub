@@ -4,14 +4,14 @@ import { useNotebookQuery } from '@/api/hooks';
 import { Popover } from '@/components/ui';
 import { formatRelative } from '@/lib/time';
 import {
+	gitBranchUrl,
+	gitCommitUrl,
+	gitCoords,
 	gitEntryPath,
-	githubBranchUrl,
-	githubCommitUrl,
-	githubCoords,
-	githubRepoUrl,
-	githubSourceUrl,
+	gitSourceUrl,
+	providerLabel,
 	shortCommit,
-} from '@/lib/github';
+} from '@/lib/git';
 
 const LINK_CLASSES = 'text-primary underline-offset-2 hover:underline';
 
@@ -20,9 +20,9 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 	// can advance the source underneath a cached read and nothing invalidates it.
 	const { data: notebook, isError } = useNotebookQuery(projectId, notebookId, { staleTime: 0 });
 	const source = notebook?.source.type === 'git' ? notebook.source : undefined;
-	// Null when no trustworthy GitHub link exists (non-github provider, or a repo
-	// that isn't plain owner/repo) — metadata then renders without links.
-	const coords = githubCoords(notebook?.source);
+	// Null when no trustworthy host link exists (unrecognized host, or a repo
+	// that isn't owner/repo or a URL) — metadata then renders without links.
+	const coords = gitCoords(notebook?.source);
 
 	if (isError) {
 		return <p className="text-xs text-destructive">Failed to load sync details.</p>;
@@ -32,17 +32,14 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 	}
 	return (
 		<div className="flex min-w-[14rem] flex-col gap-2 text-xs">
-			<div className="font-medium text-foreground">Synced from GitHub</div>
+			<div className="font-medium text-foreground">
+				{coords ? `Synced from ${providerLabel(coords.provider)}` : 'Synced from a git repository'}
+			</div>
 			<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-muted-foreground">
 				<dt>Repository</dt>
 				<dd className="min-w-0 truncate">
 					{coords ? (
-						<a
-							href={githubRepoUrl(coords.repo)}
-							target="_blank"
-							rel="noreferrer"
-							className={LINK_CLASSES}
-						>
+						<a href={coords.baseUrl} target="_blank" rel="noreferrer" className={LINK_CLASSES}>
 							{source.repo}
 						</a>
 					) : (
@@ -53,7 +50,7 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 				<dd className="min-w-0 truncate">
 					{coords ? (
 						<a
-							href={githubBranchUrl(coords.repo, coords.branch)}
+							href={gitBranchUrl(coords, coords.branch)}
 							target="_blank"
 							rel="noreferrer"
 							className={LINK_CLASSES}
@@ -68,7 +65,7 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 				<dd className="min-w-0 truncate">
 					{coords ? (
 						<a
-							href={githubSourceUrl(coords)}
+							href={gitSourceUrl(coords)}
 							target="_blank"
 							rel="noreferrer"
 							className={LINK_CLASSES}
@@ -85,7 +82,7 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 						<dd>
 							{coords ? (
 								<a
-									href={githubCommitUrl(coords.repo, source.commit)}
+									href={gitCommitUrl(coords, source.commit)}
 									target="_blank"
 									rel="noreferrer"
 									className={`font-mono ${LINK_CLASSES}`}
@@ -105,12 +102,12 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 			</dl>
 			{coords && (
 				<a
-					href={githubSourceUrl(coords)}
+					href={gitSourceUrl(coords)}
 					target="_blank"
 					rel="noreferrer"
 					className={`flex items-center gap-1 pt-0.5 font-medium ${LINK_CLASSES}`}
 				>
-					View source on GitHub
+					View source on {providerLabel(coords.provider)}
 					<ExternalLink className="size-3" />
 				</a>
 			)}
@@ -119,7 +116,7 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 }
 
 /**
- * GitHub metadata behind a compact trigger (the project row's git tile, the
+ * Git-host metadata behind a compact trigger (the project row's git tile, the
  * editor's repo chip): repo/branch/file/commit with links, loaded only while
  * the popover is open.
  */
@@ -136,8 +133,8 @@ export function GitSourcePopover({
 }) {
 	return (
 		<Popover
-			label="Synced from GitHub — details"
-			tooltip="Synced from GitHub"
+			label="Synced from a git repository — details"
+			tooltip="Synced from a git repository"
 			trigger={trigger}
 			triggerClassName={triggerClassName}
 		>

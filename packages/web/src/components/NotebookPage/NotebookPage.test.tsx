@@ -612,7 +612,9 @@ describe('NotebookPage git-synced editor', () => {
 		});
 		renderPage();
 
-		await waitFor(() => expect(screen.getByText(/updated on GitHub/)).toBeInTheDocument());
+		await waitFor(() =>
+			expect(screen.getByText(/updated in its git repository/)).toBeInTheDocument(),
+		);
 		expect(screen.getByText('Restart to update')).toBeInTheDocument();
 	});
 
@@ -621,7 +623,7 @@ describe('NotebookPage git-synced editor', () => {
 		const { container } = renderPage();
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
-		expect(screen.queryByText(/updated on GitHub/)).toBeNull();
+		expect(screen.queryByText(/updated in its git repository/)).toBeNull();
 	});
 
 	it('header shows the repo chip whose popover links to the source on GitHub', async () => {
@@ -629,7 +631,9 @@ describe('NotebookPage git-synced editor', () => {
 		makeFetch({ role: 'editor', sourceType: 'git', session: gitEditSession() });
 		renderPage();
 
-		await user.click(await screen.findByRole('button', { name: 'Synced from GitHub — details' }));
+		await user.click(
+			await screen.findByRole('button', { name: 'Synced from a git repository — details' }),
+		);
 		const popover = await screen.findByRole('dialog');
 		expect(within(popover).getByRole('link', { name: 'org/repo' })).toHaveAttribute(
 			'href',
@@ -654,7 +658,9 @@ describe('NotebookPage git-synced editor', () => {
 		const { container } = renderPage('app');
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
-		expect(screen.queryByRole('button', { name: 'Synced from GitHub — details' })).toBeNull();
+		expect(
+			screen.queryByRole('button', { name: 'Synced from a git repository — details' }),
+		).toBeNull();
 	});
 
 	it('shows the banner without a restart CTA when the caller cannot stop the session', async () => {
@@ -669,7 +675,9 @@ describe('NotebookPage git-synced editor', () => {
 		});
 		renderPage();
 
-		await waitFor(() => expect(screen.getByText(/updated on GitHub/)).toBeInTheDocument());
+		await waitFor(() =>
+			expect(screen.getByText(/updated in its git repository/)).toBeInTheDocument(),
+		);
 		expect(screen.queryByText('Restart to update')).toBeNull();
 	});
 
@@ -682,7 +690,7 @@ describe('NotebookPage git-synced editor', () => {
 		const { container } = renderPage();
 
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
-		expect(screen.queryByText(/updated on GitHub/)).toBeNull();
+		expect(screen.queryByText(/updated in its git repository/)).toBeNull();
 	});
 
 	it('Restart to update confirms (cancel is a no-op), then tears down and starts fresh', async () => {
@@ -700,7 +708,7 @@ describe('NotebookPage git-synced editor', () => {
 		// The dialog, not a teardown, is what a click produces.
 		expect(sessionPosts(impl)).toHaveLength(1);
 		let dialog = await screen.findByRole('dialog');
-		expect(within(dialog).getByText(/latest version from GitHub/)).toBeInTheDocument();
+		expect(within(dialog).getByText(/latest synced version/)).toBeInTheDocument();
 
 		await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 		expect(impl.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);

@@ -69,17 +69,59 @@ describe('SyncedNotebookService', () => {
 			expect(p?.notebook_count).toBe(1);
 		});
 
-		it('rejects a repo that is not plain owner/repo', async () => {
-			for (const repo of [
-				'https://gitlab.com/group/project',
-				'git@github.com:owner/repo.git',
-				'just-a-name',
-				'a/b/c',
-			]) {
+		it('rejects a repo that is neither owner/repo nor a repository URL', async () => {
+			for (const repo of ['just-a-name', 'a/b/c', 'https://gitlab.com/only-group']) {
 				await expect(
 					notebooks.synced.create(projectId, { ...CREATE_INPUT, repo }, ACTOR),
-				).rejects.toThrow('repo must use the owner/repo format');
+				).rejects.toThrow('repo must be owner/repo');
 			}
+		});
+
+		it('accepts repository URLs and derives the provider from the host', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, repo: 'https://gitlab.example.com/group1/marimo/nb' },
+				ACTOR,
+			);
+			const nb = await notebooks.getNotebook(projectId, meta.id);
+			expect(nb.source).toMatchObject({
+				type: 'git',
+				provider: 'gitlab',
+				repo: 'https://gitlab.example.com/group1/marimo/nb',
+			});
+		});
+
+		it('maps owner/repo shorthand to gitlab.com when provider is gitlab', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, repo: 'group/project', provider: 'gitlab' },
+				ACTOR,
+			);
+			const nb = await notebooks.getNotebook(projectId, meta.id);
+			expect(nb.source).toMatchObject({
+				provider: 'gitlab',
+				repo: 'https://gitlab.com/group/project',
+			});
+		});
+
+		it('prefers host detection over a contradictory explicit provider', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, repo: 'https://gitlab.com/group/project', provider: 'github' },
+				ACTOR,
+			);
+			const nb = await notebooks.getNotebook(projectId, meta.id);
+			expect(nb.source).toMatchObject({ provider: 'gitlab' });
+		});
+
+		it('stores a null provider for unrecognized hosts', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, repo: 'https://code.my-company.org/team/repo' },
+				ACTOR,
+			);
+			const nb = await notebooks.getNotebook(projectId, meta.id);
+			expect(nb.source).toMatchObject({ provider: null });
 		});
 	});
 
@@ -103,21 +145,21 @@ describe('SyncedNotebookService', () => {
 	});
 
 	describe('updateSource', () => {
-		it('rejects a repo that is not plain owner/repo', async () => {
+		it('rejects a repo that is neither owner/repo nor a repository URL', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 			await expect(
 				notebooks.synced.updateSource(
 					projectId,
 					meta.id,
 					{
-						repo: 'git@github.com:owner/repo.git',
+						repo: 'just-a-name',
 						branch: 'main',
 						root_path: '',
 						entry_notebook: 'app.py',
 					},
 					ACTOR,
 				),
-			).rejects.toThrow('repo must use the owner/repo format');
+			).rejects.toThrow('repo must be owner/repo');
 		});
 
 		it('updates an unsynced draft immediately', async () => {
@@ -143,6 +185,52 @@ describe('SyncedNotebookService', () => {
 			});
 			expect(source.pending_config).toBeUndefined();
 			expect((await notebooks.getNotebook(projectId, meta.id)).meta.status).toBe('draft');
+		});
+
+		it('re-derives the provider when an unsynced draft moves to another host', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+
+			const source = await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{
+					repo: 'https://gitlab.com/group/project',
+					branch: 'main',
+					root_path: '',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+
+			expect(source).toMatchObject({
+				repo: 'https://gitlab.com/group/project',
+				provider: 'gitlab',
+			});
+		});
+
+		it('keeps an explicit provider across a path-only change on an unrecognized host', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, repo: 'https://code.my-company.org/team/old', provider: 'gitlab' },
+				ACTOR,
+			);
+
+			const source = await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{
+					repo: 'https://code.my-company.org/team/new',
+					branch: 'main',
+					root_path: '',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+
+			expect(source).toMatchObject({
+				repo: 'https://code.my-company.org/team/new',
+				provider: 'gitlab',
+			});
 		});
 
 		it('stages edits after a sync and keeps serving the active source', async () => {
@@ -245,6 +333,19 @@ describe('SyncedNotebookService', () => {
 			}
 		});
 
+		it('accepts a bare-path repo header for a URL-stored repo (CI states $CI_PROJECT_PATH)', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, repo: 'https://gitlab.example.com/group1/marimo/nb' },
+				ACTOR,
+			);
+			const updated = await notebooks.synced.sync(projectId, meta.id, {
+				...syncInput('commit-aaaa'),
+				repo: 'group1/marimo/nb',
+			});
+			expect(updated.status).toBe('active');
+		});
+
 		it('reports every mismatched source header with received and expected values', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 			await expect(
@@ -296,6 +397,34 @@ describe('SyncedNotebookService', () => {
 			}
 			expect(await notebooks.getNotebookContent(projectId, meta.id)).toBe('print("new")');
 			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(2);
+		});
+
+		it('re-derives the provider when a pending repo change lands', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
+			await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{
+					repo: 'https://gitlab.com/group/project',
+					branch: 'main',
+					root_path: '',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+
+			await notebooks.synced.sync(projectId, meta.id, {
+				...syncInput('commit-bbbb'),
+				repo: 'group/project',
+			});
+
+			const after = await notebooks.getNotebook(projectId, meta.id);
+			expect(after.source).toMatchObject({
+				repo: 'https://gitlab.com/group/project',
+				provider: 'gitlab',
+				commit: 'commit-bbbb',
+			});
 		});
 
 		// A stale-source push whose commit was already claimed by a concurrent push

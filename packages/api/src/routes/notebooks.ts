@@ -64,7 +64,8 @@ const CreateNotebookBody = z.object({
 const CreateGitNotebookBody = z.object({
 	title: z.string().min(1).openapi({ example: 'GitHub app' }),
 	description: z.string().openapi({ example: 'Synced from a git repository' }),
-	provider: z.literal('github').optional().openapi({ example: 'github' }),
+	provider: z.enum(['github', 'gitlab']).optional().openapi({ example: 'github' }),
+	// `owner/repo` (GitHub shorthand) or a repository URL.
 	repo: z.string().min(1).openapi({ example: 'marimo-team/marimohub' }),
 	branch: z.string().min(1).openapi({ example: 'main' }),
 	// Repo subdirectory whose tree is mirrored; `entry_notebook` is relative to it.

@@ -587,8 +587,8 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 						>
 							<AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-500" />
 							<span>
-								This notebook was updated on GitHub since this session started — you're viewing an
-								older version.
+								This notebook was updated in its git repository since this session started — you're
+								viewing an older version.
 							</span>
 							{session?.can?.stop && (
 								<Button
@@ -685,7 +685,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					isOpen={confirmEditRestart.isOpen}
 					onClose={confirmEditRestart.close}
 					title={sharedPersistentEditor ? 'Restart Shared Sandbox' : 'Restart Session'}
-					description={`Restart the session for "${title}" to load the latest version from GitHub? Changes made in this sandbox aren't synced back and will be lost.${
+					description={`Restart the session for "${title}" to load the latest synced version? Changes made in this sandbox aren't synced back and will be lost.${
 						sharedPersistentEditor
 							? ` All connected editors will be disconnected.${sessionConnectionHint(session)}`
 							: ''
