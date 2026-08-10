@@ -6,6 +6,15 @@
 		"schedule:monthly"
 	],
 	"timezone": "America/New_York",
+	"vulnerabilityAlerts": {
+		"description": "Security remediations bypass the monthly schedule and the 14-day npm cooldown",
+		"enabled": true,
+		"schedule": ["at any time"],
+		"minimumReleaseAge": null,
+		"labels": ["security"],
+		"prPriority": 10
+	},
+	"osvVulnerabilityAlerts": true,
 	"customManagers": [
 		{
 			"customType": "regex",

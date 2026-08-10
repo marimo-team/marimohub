@@ -2,15 +2,11 @@ name: Schemas
 
 # Breaking-change gate for the committed specs (see internal/schemas/README.md).
 # Freshness is enforced by the drift tests in `vp run -r test`; this job only
-# diffs each spec against the base branch. Vetted breaks are allowlisted per
-# spec in internal/schemas/allowed-breaking/.
+# classifies each spec's diff against the PR's merge-base with the base branch.
+# Vetted breaks are allowlisted per spec in internal/schemas/allowed-breaking/.
 
 on:
   pull_request:
-    paths:
-      - 'packages/api/openapi.yaml'
-      - 'internal/schemas/**'
-      - '.github/workflows/schemas.yml'
 
 permissions:
   contents: read
@@ -21,12 +17,26 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Fetch base branch
+        with:
+          fetch-depth: 0
+      - name: Detect spec changes since merge-base
+        id: detect
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          base="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA")"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          if git diff --quiet "$base" "$HEAD_SHA" -- packages/api/openapi.yaml internal/schemas; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No spec changes between merge-base $base and $HEAD_SHA; nothing to check."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
       # Single static binary, checksum-pinned like the SHA-pinned actions above.
       - name: Install oasdiff
+        if: steps.detect.outputs.changed == 'true'
         env:
           OASDIFF_VERSION: 1.27.0
           OASDIFF_SHA256: 335de79be8df706735f7ab3edc35186e853c8add93d489d67e4e7fd70a07d08a
@@ -35,12 +45,13 @@ jobs:
           echo "${OASDIFF_SHA256}  /tmp/oasdiff.tar.gz" | sha256sum -c -
           tar -xzf /tmp/oasdiff.tar.gz -C /tmp oasdiff
           sudo install /tmp/oasdiff /usr/local/bin/oasdiff
-      - name: Diff specs against base
+      - name: Diff specs against merge-base
+        if: steps.detect.outputs.changed == 'true'
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE: ${{ steps.detect.outputs.base }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          base="origin/$BASE_REF"
           failed=0
           for entry in \
             'packages/api/openapi.yaml api' \
@@ -49,14 +60,15 @@ jobs:
           do
             spec="${entry% *}"
             name="${entry#* }"
-            if ! git cat-file -e "$base:$spec" 2>/dev/null; then
-              echo "::notice file=$spec::no $base baseline yet; skipping breaking-change check"
+            if ! git cat-file -e "$BASE:$spec" 2>/dev/null; then
+              echo "::notice file=$spec::no merge-base baseline yet; skipping breaking-change check"
               continue
             fi
-            if git diff --quiet "$base" -- "$spec"; then
+            if git diff --quiet "$BASE" "$HEAD_SHA" -- "$spec"; then
               continue
             fi
-            git show "$base:$spec" > "/tmp/base-$name.yml"
+            git show "$BASE:$spec" > "/tmp/base-$name.yml"
+            git show "$HEAD_SHA:$spec" > "/tmp/head-$name.yml"
             ignore=()
             allow="internal/schemas/allowed-breaking/$name.md"
             if [ -f "$allow" ]; then
@@ -64,9 +76,9 @@ jobs:
             fi
             {
               echo "## \`$spec\`"
-              oasdiff changelog "/tmp/base-$name.yml" "$spec" --format markdown
+              oasdiff changelog "/tmp/base-$name.yml" "/tmp/head-$name.yml" --format markdown
             } >> "$GITHUB_STEP_SUMMARY"
-            oasdiff breaking "/tmp/base-$name.yml" "$spec" \
+            oasdiff breaking "/tmp/base-$name.yml" "/tmp/head-$name.yml" \
               --fail-on ERR --format githubactions "${ignore[@]}" || failed=1
           done
           exit "$failed"
