@@ -149,6 +149,19 @@ export class ReconciliationService {
 				// Rule 2 — live record, sandbox gone (crashed / idle-timed-out). The
 				// kernel URL is dead; mark the record failed (it didn't stop cleanly) so it
 				// stops being served and gets reaped on schedule.
+
+				// A fresh `starting` record legitimately has no live sandbox yet: the saga
+				// writes the record (with sandbox_id) BEFORE creating the sandbox, and a
+				// cold provision can take minutes. Failing it here would strand the caller
+				// on a terminal record (setRunning no-ops) with a live sandbox behind it,
+				// and release the app claim mid-provision. Aged `starting` records still
+				// fall through: a provision that died must eventually be marked failed.
+				if (
+					session.status === 'starting' &&
+					now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
+				) {
+					continue;
+				}
 				try {
 					await this.sessions.markFailed(session.project_id, session.session_id);
 					markedDead++;
