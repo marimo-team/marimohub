@@ -85,6 +85,21 @@ describe('apiData', () => {
 		expect(init?.body).toBeUndefined();
 	});
 
+	it('sends a bodyless POST without a body or content type', async () => {
+		const fn = stubFetch(async () => jsonResponse({ success: true, data: null }));
+
+		await apiData(
+			apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat', {
+				params: { path: { pid: 'p1', nid: 'n1', sid: 's1' } },
+			}),
+		);
+
+		const [, init] = fn.mock.calls[0] ?? [];
+		expect(init?.method).toBe('POST');
+		expect(init?.body).toBeUndefined();
+		expect(new Headers(init?.headers).get('content-type')).toBeNull();
+	});
+
 	it('throws ApiRequestError with the server code/message on { success: false }', async () => {
 		stubFetch(async () =>
 			jsonResponse({ success: false, error: { code: 'FORBIDDEN', message: 'nope' } }, 403),
