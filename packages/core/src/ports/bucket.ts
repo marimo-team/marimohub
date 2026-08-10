@@ -14,17 +14,29 @@ export interface BucketObjectBody extends BucketObject {
 
 export interface BucketListResult {
 	objects: BucketObject[];
+	/** Whether more objects or delimited prefixes remain after this page. */
 	truncated: boolean;
+	/** Resume token, present if and only if `truncated` is true. */
 	cursor?: string;
+	/** Rolled-up prefixes count toward the page's `limit`. */
 	delimitedPrefixes: string[];
 }
 
 export interface BucketListOptions {
 	prefix?: string;
 	delimiter?: string;
+	/** Opaque resume token from a truncated result. Takes precedence over `startAfter`. */
 	cursor?: string;
+	/** Positive integer maximum for combined object and delimited-prefix entries in one page. */
 	limit?: number;
+	/** Exclusive lower bound on object keys. */
 	startAfter?: string;
+}
+
+export function assertValidBucketListLimit(limit: number | undefined): void {
+	if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+		throw new RangeError('Bucket list limit must be a positive integer');
+	}
 }
 
 export interface BucketPutOptions {

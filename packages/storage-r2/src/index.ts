@@ -1,4 +1,5 @@
 import { PreconditionFailedError } from '@marimo-hub/core';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -73,10 +74,18 @@ export class R2BucketAdapter implements Bucket {
 	}
 
 	async delete(key: string | string[]): Promise<void> {
+		if (Array.isArray(key)) {
+			// The Workers binding accepts at most 1000 keys per delete call.
+			for (let offset = 0; offset < key.length; offset += 1000) {
+				await this.r2.delete(key.slice(offset, offset + 1000));
+			}
+			return;
+		}
 		await this.r2.delete(key);
 	}
 
 	async list(options?: BucketListOptions): Promise<BucketListResult> {
+		assertValidBucketListLimit(options?.limit);
 		const result = await this.r2.list({
 			prefix: options?.prefix,
 			delimiter: options?.delimiter,

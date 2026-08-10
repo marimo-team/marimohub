@@ -114,34 +114,50 @@ class FakeR2Bucket {
 
 		const sorted = [...this.store.keys()].filter((k) => k.startsWith(prefix)).sort();
 
-		const prefixes: string[] = [];
+		const prefixes = new Set<string>();
 		const objectKeys: string[] = [];
+		let emitted = 0;
+		let lastConsumed: string | undefined;
+		let truncated = false;
 		for (const key of sorted) {
 			if (after && key <= after) continue;
 			if (delimiter) {
 				const rest = key.slice(prefix.length);
 				const idx = rest.indexOf(delimiter);
 				if (idx !== -1) {
-					const pfx = prefix + rest.slice(0, idx + delimiter.length);
-					if (!prefixes.includes(pfx)) prefixes.push(pfx);
+					const delimitedPrefix = prefix + rest.slice(0, idx + delimiter.length);
+					if (prefixes.has(delimitedPrefix)) {
+						lastConsumed = key;
+						continue;
+					}
+					if (emitted === limit) {
+						truncated = true;
+						break;
+					}
+					prefixes.add(delimitedPrefix);
+					emitted++;
+					lastConsumed = key;
 					continue;
 				}
 			}
+			if (emitted === limit) {
+				truncated = true;
+				break;
+			}
 			objectKeys.push(key);
+			emitted++;
+			lastConsumed = key;
 		}
 
-		const pageKeys = delimiter ? objectKeys : objectKeys.slice(0, limit);
-		const truncated = !delimiter && objectKeys.length > limit;
-
-		const objects: R2Object[] = pageKeys.map((key) => {
+		const objects: R2Object[] = objectKeys.map((key) => {
 			return makeR2Object(key, this.store.get(key)!);
 		});
 
 		return {
 			objects,
 			truncated,
-			cursor: truncated ? pageKeys[pageKeys.length - 1] : undefined,
-			delimitedPrefixes: prefixes,
+			cursor: truncated ? lastConsumed : undefined,
+			delimitedPrefixes: [...prefixes],
 		} as unknown as R2Objects;
 	}
 }
@@ -278,5 +294,41 @@ describe('R2BucketAdapter list / put forwarding', () => {
 
 		expect(seen?.httpMetadata).toEqual({ contentType: 'text/x-python' });
 		expect(seen?.customMetadata).toEqual({ source: 'git' });
+	});
+});
+
+describe('R2BucketAdapter delete chunking', () => {
+	function recordingR2(): { r2: R2Bucket; batches: (string | string[])[] } {
+		const batches: (string | string[])[] = [];
+		const r2 = {
+			delete: async (keys: string | string[]) => {
+				batches.push(keys);
+			},
+		} as unknown as R2Bucket;
+		return { r2, batches };
+	}
+
+	it('chunks large deletes into batches of at most 1000 keys', async () => {
+		const { r2, batches } = recordingR2();
+		const keys = Array.from({ length: 2500 }, (_, index) => `k/${index}`);
+
+		await new R2BucketAdapter(r2).delete(keys);
+
+		expect(batches.map((batch) => (Array.isArray(batch) ? batch.length : 1))).toEqual([
+			1000, 1000, 500,
+		]);
+		expect(batches.flat()).toEqual(keys);
+	});
+
+	it('does not call the binding for an empty array', async () => {
+		const { r2, batches } = recordingR2();
+		await new R2BucketAdapter(r2).delete([]);
+		expect(batches).toHaveLength(0);
+	});
+
+	it('passes a single key through unchanged', async () => {
+		const { r2, batches } = recordingR2();
+		await new R2BucketAdapter(r2).delete('solo');
+		expect(batches).toEqual(['solo']);
 	});
 });

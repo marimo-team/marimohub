@@ -1,0 +1,85 @@
+name: Storage conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  storage-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AZURITE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 0.1.24
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+
+      # Started with `docker run` (not `services:`) because GitHub service
+      # containers cannot override the image command used by these emulators.
+      # fake-gcs-server does not enforce the generation and delimiter-page
+      # semantics this contract protects, so GCS remains hermetic-only here.
+      - name: Start storage emulators
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          docker run -d --name azurite -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+
+      - name: Wait for emulators
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9000/minio/health/live && break
+            sleep 1; [ "$i" = 30 ] && exit 1
+          done
+          for i in $(seq 1 30); do
+            az storage container list --connection-string "$AZURITE_CONNECTION_STRING" \
+              --num-results 1 --only-show-errors --output none && break
+            sleep 1; [ "$i" = 30 ] && exit 1
+          done
+
+      - name: Create test buckets
+        env:
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://marimohub-test
+          for i in $(seq 1 10); do
+            az storage container create --name marimohub-test \
+              --connection-string "$AZURITE_CONNECTION_STRING" \
+              --only-show-errors --output none && break
+            sleep 1; [ "$i" = 10 ] && exit 1
+          done
+
+      - name: S3 contract against MinIO
+        env:
+          MARIMOHUB_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          MARIMOHUB_TEST_S3_BUCKET: marimohub-test
+          MARIMOHUB_TEST_S3_REGION: us-east-1
+          MARIMOHUB_TEST_S3_KEY: minioadmin
+          MARIMOHUB_TEST_S3_SECRET: minioadmin
+        run: vp run --no-cache --filter @marimo-hub/storage-s3 --fail-if-no-match test
+
+      - name: Azure contract against Azurite
+        env:
+          MARIMOHUB_TEST_AZURE_CONTAINER: marimohub-test
+          MARIMOHUB_TEST_AZURE_CONNECTION_STRING: ${{ env.AZURITE_CONNECTION_STRING }}
+        run: vp run --no-cache --filter @marimo-hub/storage-azure --fail-if-no-match test

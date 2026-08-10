@@ -37,6 +37,24 @@ export async function listAllKeys(bucket: Bucket, prefix: string): Promise<strin
 	return keys;
 }
 
+/** Collect every rolled-up prefix because remote stores paginate delimiter listings. */
+export async function listAllPrefixes(
+	bucket: Bucket,
+	prefix: string,
+	delimiter = '/',
+): Promise<string[]> {
+	const prefixes = new Set<string>();
+	let cursor: string | undefined;
+	do {
+		const result = await bucket.list({ prefix, delimiter, cursor });
+		for (const delimitedPrefix of result.delimitedPrefixes) {
+			prefixes.add(delimitedPrefix);
+		}
+		cursor = result.truncated ? result.cursor : undefined;
+	} while (cursor);
+	return [...prefixes].sort();
+}
+
 /**
  * Recursively delete every object under a prefix (the paginated list + batch
  * delete used by the hard-delete paths). Returns the number of keys removed.

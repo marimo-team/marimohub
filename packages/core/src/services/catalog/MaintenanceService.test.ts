@@ -146,6 +146,22 @@ describe('MaintenanceService', () => {
 	});
 
 	describe('pruneEvents', () => {
+		it('deletes old day folders across every listing page', async () => {
+			clock.set(Date.parse('2025-06-17T00:00:00.000Z'));
+			for (let day = 1; day <= 5; day++) {
+				await bucket.put(paths.event(`2020-01-0${day}`, 'e1'), '{}');
+			}
+			const originalList = bucket.list.bind(bucket);
+			bucket.list = (options) => originalList({ ...options, limit: 2 });
+
+			const deleted = await maintenance.pruneEvents({ retentionMs: 90 * DAY_MS });
+
+			expect(deleted).toBe(5);
+			for (let day = 1; day <= 5; day++) {
+				expect(await bucket.get(paths.event(`2020-01-0${day}`, 'e1'))).toBeNull();
+			}
+		});
+
 		it('deletes day folders past retention and keeps recent ones', async () => {
 			clock.set(Date.parse('2025-06-17T00:00:00.000Z'));
 			await bucket.put(paths.event('2020-01-01', 'e1'), '{}');

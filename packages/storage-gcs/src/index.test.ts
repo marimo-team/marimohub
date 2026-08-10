@@ -137,15 +137,57 @@ function makeFakeGcsFetch(): typeof fetch {
 		// List: GET /storage/v1/b/BUCKET/o?prefix=&delimiter=
 		if (method === 'GET' && oIndex === -1 && url.pathname.endsWith('/o')) {
 			const prefix = q.get('prefix') ?? '';
-			const items = [...store.entries()]
-				.filter(([k]) => k.startsWith(prefix))
-				.map(([k, v]) => ({
-					name: k,
-					generation: String(v.generation),
-					size: String(v.content.length),
-					updated: v.updated,
-				}));
-			return json({ items });
+			const delimiter = q.get('delimiter');
+			const limit = Number(q.get('maxResults') ?? 1000);
+			const cursor = q.get('pageToken');
+			const startOffset = q.get('startOffset');
+			const prefixes = new Set<string>();
+			const items: { name: string; generation: string; size: string; updated: string }[] = [];
+			let emitted = 0;
+			let lastConsumed: string | undefined;
+			let truncated = false;
+			for (const [name, value] of [...store.entries()].sort(([left], [right]) =>
+				left < right ? -1 : left > right ? 1 : 0,
+			)) {
+				if (!name.startsWith(prefix) || (cursor && name <= cursor)) continue;
+				if (!cursor && startOffset && name < startOffset) continue;
+				if (delimiter) {
+					const rest = name.slice(prefix.length);
+					const index = rest.indexOf(delimiter);
+					if (index !== -1) {
+						const delimitedPrefix = prefix + rest.slice(0, index + delimiter.length);
+						if (prefixes.has(delimitedPrefix)) {
+							lastConsumed = name;
+							continue;
+						}
+						if (emitted === limit) {
+							truncated = true;
+							break;
+						}
+						prefixes.add(delimitedPrefix);
+						emitted++;
+						lastConsumed = name;
+						continue;
+					}
+				}
+				if (emitted === limit) {
+					truncated = true;
+					break;
+				}
+				items.push({
+					name,
+					generation: String(value.generation),
+					size: String(value.content.length),
+					updated: value.updated,
+				});
+				emitted++;
+				lastConsumed = name;
+			}
+			return json({
+				items,
+				prefixes: [...prefixes],
+				...(truncated ? { nextPageToken: lastConsumed } : {}),
+			});
 		}
 
 		if (key === undefined) return new Response('not found', { status: 404 });
@@ -412,7 +454,7 @@ describe('GcsStorage auth and request mapping', () => {
 		expect(seenUrl?.searchParams.get('delimiter')).toBe('/');
 		expect(seenUrl?.searchParams.get('maxResults')).toBe('25');
 		expect(seenUrl?.searchParams.get('pageToken')).toBe('cursor-1');
-		expect(seenUrl?.searchParams.get('startOffset')).toBe('runs/a.ipynb');
+		expect(seenUrl?.searchParams.get('startOffset')).toBeNull();
 		expect(result).toMatchObject({
 			objects: [{ key: 'runs/a.py', etag: '101', size: 9 }],
 			truncated: true,
@@ -443,6 +485,22 @@ describe('GcsStorage auth and request mapping', () => {
 });
 
 describe('GcsStorage error propagation and edge cases', () => {
+	it('paginates mixed-case and punctuation keys without duplicates or gaps', async () => {
+		const bucket = new GcsStorage({ bucket: 'test', fetchImpl: makeFakeGcsFetch() });
+		const keys = ['order/a', 'order/A', 'order/_', 'order/-'];
+		for (const key of keys) await bucket.put(key, key);
+
+		const seen: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const result = await bucket.list({ prefix: 'order/', limit: 1, cursor });
+			seen.push(...result.objects.map((object) => object.key));
+			cursor = result.cursor;
+		} while (cursor);
+
+		expect(seen).toEqual([...keys].sort());
+	});
+
 	it('percent-encodes slashes in the object key path segment', async () => {
 		let seenUrl = '';
 		const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {

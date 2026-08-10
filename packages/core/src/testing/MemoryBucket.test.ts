@@ -185,15 +185,18 @@ describe('MemoryBucket', () => {
 			expect(keys.size).toBe(1500);
 		});
 
-		it('delimited listings still return all prefixes in one shot (no pagination)', async () => {
+		it('paginates delimited prefixes', async () => {
 			for (let i = 0; i < 1500; i++) {
 				await bucket.put(`p/${String(i).padStart(4, '0')}/data`, '{}');
 			}
 
-			// With a delimiter, should return all 1500 collapsed prefixes in one call
-			const result = await bucket.list({ prefix: 'p/', delimiter: '/' });
-			expect(result.truncated).toBe(false);
-			expect(result.delimitedPrefixes).toHaveLength(1500);
+			const first = await bucket.list({ prefix: 'p/', delimiter: '/' });
+			expect(first.truncated).toBe(true);
+			expect(first.delimitedPrefixes).toHaveLength(1000);
+
+			const second = await bucket.list({ prefix: 'p/', delimiter: '/', cursor: first.cursor });
+			expect(second.truncated).toBe(false);
+			expect(second.delimitedPrefixes).toHaveLength(500);
 		});
 	});
 });

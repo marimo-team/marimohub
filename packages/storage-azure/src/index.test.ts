@@ -243,9 +243,11 @@ describe('AzureStorage request mapping', () => {
 		const fake = makeFakeContainer();
 		const bucket = new AzureStorage({ containerClient: fake.client });
 
-		await expect(
-			bucket.put('missing', 'value', { onlyIfEtagMatches: 'bogus-etag' }),
-		).rejects.toBeInstanceOf(PreconditionFailedError);
+		const error = await bucket
+			.put('missing', 'value', { onlyIfEtagMatches: 'bogus-etag' })
+			.catch((cause) => cause);
+		expect(error).toBeInstanceOf(PreconditionFailedError);
+		expect(error.message).toBe('ETag mismatch for key "missing"');
 		expect(fake.calls.uploads[0]?.options?.conditions?.ifMatch).toBe('"bogus-etag"');
 	});
 
@@ -278,9 +280,11 @@ describe('AzureStorage error handling', () => {
 				},
 			}),
 		} as unknown as ContainerClient;
-		await expect(
-			new AzureStorage({ containerClient: client }).put('k', 'v'),
-		).rejects.toBeInstanceOf(PreconditionFailedError);
+		const error = await new AzureStorage({ containerClient: client })
+			.put('k', 'v')
+			.catch((cause) => cause);
+		expect(error).toBeInstanceOf(PreconditionFailedError);
+		expect(error.message).toBe('Precondition not met for key "k"');
 
 		const deniedClient = {
 			getBlockBlobClient: () => ({
@@ -292,6 +296,25 @@ describe('AzureStorage error handling', () => {
 		await expect(
 			new AzureStorage({ containerClient: deniedClient }).put('k', 'v'),
 		).rejects.toMatchObject({ statusCode: 403 });
+	});
+
+	it('maps BlobAlreadyExists for create-if-absent writes to PreconditionFailedError', async () => {
+		const client = {
+			getBlockBlobClient: () => ({
+				uploadData: async () => {
+					throw azureError(409, 'BlobAlreadyExists');
+				},
+			}),
+		} as unknown as ContainerClient;
+		const bucket = new AzureStorage({ containerClient: client });
+
+		const error = await bucket.put('k', 'v', { onlyIfNotExists: true }).catch((cause) => cause);
+		expect(error).toBeInstanceOf(PreconditionFailedError);
+		expect(error.message).toBe('Key "k" already exists');
+		await expect(bucket.put('k', 'v')).rejects.toMatchObject({
+			statusCode: 409,
+			code: 'BlobAlreadyExists',
+		});
 	});
 
 	it('propagates non-404 read failures', async () => {
