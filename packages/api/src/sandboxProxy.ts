@@ -13,7 +13,7 @@
 import type { MiddlewareHandler } from 'hono';
 import { ForbiddenError, ProxyExposure, verifyProxyToken } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
-import { describeError, logEvent } from './log';
+import { errorMetadataChain, logEvent } from './log';
 import { assertSessionAccess, fail } from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
@@ -237,7 +237,9 @@ export async function forwardHttp(
 		// Node's fetch requires this when streaming a request body.
 		(init as { duplex?: string }).duplex = 'half';
 	}
-	// The token in the path routes to the session; keep it out of logs.
+	// The token in the path routes to the session; keep it out of logs. That is
+	// also why the error below is logged as metadata, not free-form text — a
+	// fetch failure's message/stack can quote the target URL.
 	const target = new URL(targetUrl).origin;
 	let upstream: Response | undefined;
 	const attempts = retryable ? 2 : 1;
@@ -254,7 +256,7 @@ export async function forwardHttp(
 				target,
 				attempt,
 				will_retry: attempt < attempts,
-				error: describeError(err),
+				error: errorMetadataChain(err),
 			});
 		}
 	}

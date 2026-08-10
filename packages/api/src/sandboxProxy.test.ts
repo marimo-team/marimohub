@@ -377,12 +377,22 @@ describe('forwardHttp', () => {
 		expect(seen.origin).toBe(origin);
 	});
 
+	/** A port with nothing listening: reserve an ephemeral one, then free it. */
+	async function closedPort(): Promise<number> {
+		const s = createServer();
+		await new Promise<void>((resolve) => s.listen(0, '127.0.0.1', resolve));
+		const port = (s.address() as AddressInfo).port;
+		await new Promise<void>((resolve) => s.close(() => resolve()));
+		return port;
+	}
+
 	it('returns 502 and logs a structured event when the kernel is unreachable', async () => {
 		const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const deadOrigin = `http://127.0.0.1:${await closedPort()}`;
 		try {
 			const res = await forwardHttp(
 				new Request('https://hub/x'),
-				'http://127.0.0.1:1/proxy/tok/down',
+				`${deadOrigin}/proxy/tok/down`,
 				'sess-123',
 			);
 			expect(res.status).toBe(502);
@@ -397,13 +407,20 @@ describe('forwardHttp', () => {
 				level: 'warn',
 				session_id: 'sess-123',
 				method: 'GET',
-				target: 'http://127.0.0.1:1',
+				target: deadOrigin,
 				attempt: 1,
 				will_retry: true,
 			});
 			expect(events[1]).toMatchObject({ attempt: 2, will_retry: false });
-			// The routing token in the path must not reach the logs.
-			for (const e of events) expect(JSON.stringify(e)).not.toContain('/proxy/tok');
+			for (const e of events) {
+				const line = JSON.stringify(e);
+				// The diagnostic code survives (it lives on the fetch error's cause)…
+				expect(line).toContain('ECONNREFUSED');
+				// …but never free-form error text: no message/stack that could quote
+				// the token-bearing target URL, and no token.
+				expect(line).not.toContain('/proxy/tok');
+				expect(line).not.toContain('fetch failed');
+			}
 		} finally {
 			logSpy.mockRestore();
 		}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { bestEffort, describeError, logEvent } from './log';
+import { bestEffort, describeError, errorMetadataChain, logEvent } from './log';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -97,6 +97,41 @@ describe('describeError', () => {
 			{ path: 'meta.title', message: 'Required' },
 			{ path: 'status', message: 'Invalid enum value' },
 		]);
+	});
+});
+
+describe('errorMetadataChain', () => {
+	it('keeps enum-ish codes down the cause chain but never free-form text', () => {
+		// The shape undici throws for a failed proxy fetch: a bland TypeError whose
+		// cause carries the diagnostic code — and whose message can quote the
+		// requested URL, token-bearing path included.
+		const cause = Object.assign(
+			new Error('connect ECONNRESET http://kernel:2718/proxy/secret-token/assets/app.js'),
+			{ code: 'ECONNRESET' },
+		);
+		const err = Object.assign(new TypeError('fetch failed'), { cause });
+
+		const out = errorMetadataChain(err);
+
+		expect(out).toEqual({
+			error_name: 'TypeError',
+			cause: { error_name: 'Error', error_code: 'ECONNRESET' },
+		});
+		expect(JSON.stringify(out)).not.toContain('secret-token');
+	});
+
+	it('renders a non-Error cause without echoing it, and stops at the depth limit', () => {
+		const err = Object.assign(new Error('outer'), {
+			cause: Object.assign(new Error('inner'), { cause: 'raw secret string' }),
+		});
+		expect(errorMetadataChain(err)).toEqual({
+			error_name: 'Error',
+			cause: { error_name: 'Error', cause: { error_name: 'non-error(string)' } },
+		});
+		expect(errorMetadataChain(err, 1)).toEqual({
+			error_name: 'Error',
+			cause: { error_name: 'Error' },
+		});
 	});
 });
 
