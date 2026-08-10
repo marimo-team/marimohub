@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DomainError } from './errors';
 import {
 	NOTEBOOK_STATUSES,
 	PROJECT_STATUSES,
@@ -65,7 +66,9 @@ const MAX_STORED_OBJECT_ISSUES = 20;
  * error. Diagnostics retain field paths and issue codes, but not stored values
  * or validator messages.
  */
-export class StoredObjectError extends Error {
+export class StoredObjectError extends DomainError {
+	readonly code = 'SERVICE_UNAVAILABLE';
+	readonly status = 503;
 	readonly reason: 'invalid_json' | 'schema_mismatch';
 	readonly object: string;
 	readonly issues?: { path: string; code: string }[];
@@ -76,7 +79,7 @@ export class StoredObjectError extends Error {
 		reason: 'invalid_json' | 'schema_mismatch',
 		options?: { issues?: { path: string; code: string }[]; causeName?: string },
 	) {
-		super(`Corrupted stored object: ${what}`);
+		super('Stored data is temporarily unavailable');
 		this.name = 'StoredObjectError';
 		this.object = what;
 		this.reason = reason;

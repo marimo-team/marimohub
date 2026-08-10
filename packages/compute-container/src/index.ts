@@ -36,6 +36,7 @@ import type {
 	SetEnvVarsOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 
 /** marimo's kernel port (matches SandboxProvisioner's MARIMO_PORT). */
 const KERNEL_PORT = 2718;
@@ -106,6 +107,7 @@ export function containerResourceArgs(resources: ComputeResources = {}): string[
 let procSeq = 0;
 
 class ContainerSandboxInstance implements SandboxInstance {
+	readonly supportsBucketMount = false;
 	private readonly name: string;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
@@ -166,7 +168,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 
 	async exec(cmd: string): Promise<ExecResult> {
 		const res = await this.dexec(cmd);
-		return { success: res.exitCode === 0, stdout: res.stdout, stderr: res.stderr };
+		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 
 	async execStream(cmd: string, _options?: ExecStreamOptions): Promise<ReadableStream> {
@@ -182,13 +184,13 @@ class ContainerSandboxInstance implements SandboxInstance {
 
 	async readFile(path: string): Promise<ReadFileResult> {
 		const res = await this.dexec(`cat ${shellQuote(path)}`);
-		if (res.exitCode !== 0) return { success: false, content: '' };
+		if (res.exitCode !== 0) return readFileFailure('READ_FAILED');
 		return { success: true, content: res.stdout, encoding: 'utf-8' };
 	}
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
 		const res = await this.dexec(buildFindFilesCommand(path, options));
-		if (res.exitCode !== 0) return { success: false, files: [] };
+		if (res.exitCode !== 0) return listFilesFailure();
 		return { success: true, files: parseFindFilesOutput(res.stdout, path, options) };
 	}
 

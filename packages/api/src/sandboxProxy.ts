@@ -19,7 +19,12 @@ import { assertSessionAccess, fail } from './shared';
 /** Outcome of routing a `/proxy/<token>/…` request. */
 export type ProxyDecision =
 	| { kind: 'pass' } // Not a proxy path — let the normal app handle it.
-	| { kind: 'reject'; status: 401 | 403 | 404 | 410 | 503; code: string; message: string }
+	| {
+			kind: 'reject';
+			status: 401 | 403 | 404 | 410 | 503;
+			code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'GONE' | 'SERVICE_UNAVAILABLE';
+			message: string;
+	  }
 	| {
 			kind: 'forward';
 			targetUrl: string;
@@ -263,7 +268,13 @@ export async function forwardHttp(
 	if (!upstream) {
 		// Kernel unreachable (e.g. torn down mid-request) — a gateway failure, not a
 		// server bug, so don't surface a 500 through the error handler.
-		return new Response('Kernel unavailable', { status: 502 });
+		return Response.json(
+			{
+				success: false,
+				error: { code: 'SERVICE_UNAVAILABLE', message: 'Kernel unavailable' },
+			},
+			{ status: 502 },
+		);
 	}
 	if (GATEWAY_STATUSES.has(upstream.status)) {
 		// Passed through verbatim, but a 502/503/504 minted between hub and kernel

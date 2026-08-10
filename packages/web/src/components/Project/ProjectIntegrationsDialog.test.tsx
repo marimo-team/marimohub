@@ -2,10 +2,11 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { OrgIntegrationsDialog, ProjectIntegrationsPanel } from './ProjectIntegrationsDialog';
 import type { IntegrationDetail, IntegrationEntry, IntegrationKind, ProjectDetail } from '@/types';
+import { createTestQueryClient } from '@/test/render';
 
 const PID = 'p_1';
 
@@ -290,7 +291,7 @@ function setup(
 ) {
 	const calls = makeFetch(fetchOpts);
 	const onBack = vi.fn();
-	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const client = createTestQueryClient();
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={client}>
 			{children}
@@ -692,7 +693,7 @@ describe('ProjectIntegrationsPanel — inherited org integrations', () => {
 describe('OrgIntegrationsDialog', () => {
 	function setupOrg(fetchOpts: FetchOpts) {
 		const calls = makeFetch(fetchOpts);
-		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const client = createTestQueryClient();
 		const wrapper = ({ children }: { children: ReactNode }) => (
 			<QueryClientProvider client={client}>
 				{children}
@@ -827,7 +828,7 @@ describe('ProjectIntegrationsPanel — copy from another project', () => {
 	it('does not offer the copy entry point in the org dialog', async () => {
 		const user = userEvent.setup();
 		makeFetch({ kinds: [postgresKind], entries: [], orgEntries: [] });
-		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const client = createTestQueryClient();
 		render(<OrgIntegrationsDialog isOpen onClose={vi.fn()} />, {
 			wrapper: ({ children }: { children: ReactNode }) => (
 				<QueryClientProvider client={client}>{children}</QueryClientProvider>

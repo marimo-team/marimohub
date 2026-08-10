@@ -1,10 +1,24 @@
 import type { SandboxId } from '../ids';
 import type { Timings } from '../timing';
 
-export interface ExecResult {
-	success: boolean;
-	stdout: string;
-	stderr: string;
+export type ExecResult =
+	| { success: true; stdout: string; stderr: string }
+	| {
+			success: false;
+			stdout: string;
+			stderr: string;
+			error: { code: 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR' };
+	  };
+
+export function execResult(
+	success: boolean,
+	stdout: string,
+	stderr: string,
+	failureCode: 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR' = 'COMMAND_FAILED',
+): ExecResult {
+	return success
+		? { success: true, stdout, stderr }
+		: { success: false, stdout, stderr, error: { code: failureCode } };
 }
 
 export interface GitCheckoutOptions {
@@ -52,10 +66,18 @@ export interface SandboxProcess {
 	getLogs(): Promise<{ stdout: string; stderr: string }>;
 }
 
-export interface ReadFileResult {
-	success: boolean;
-	content: string;
-	encoding?: 'utf-8' | 'base64';
+export type ReadFileResult =
+	| { success: true; content: string; encoding?: 'utf-8' | 'base64' }
+	| {
+			success: false;
+			content: '';
+			error: { code: 'NOT_FOUND' | 'READ_FAILED' | 'BACKEND_ERROR' };
+	  };
+
+export function readFileFailure(
+	code: 'NOT_FOUND' | 'READ_FAILED' | 'BACKEND_ERROR' = 'READ_FAILED',
+): ReadFileResult {
+	return { success: false, content: '', error: { code } };
 }
 
 export interface FileInfo {
@@ -66,9 +88,14 @@ export interface FileInfo {
 	size: number;
 }
 
-export interface ListFilesResult {
-	success: boolean;
-	files: FileInfo[];
+export type ListFilesResult =
+	| { success: true; files: FileInfo[] }
+	| { success: false; files: []; error: { code: 'LIST_FAILED' | 'BACKEND_ERROR' } };
+
+export function listFilesFailure(
+	code: 'LIST_FAILED' | 'BACKEND_ERROR' = 'LIST_FAILED',
+): ListFilesResult {
+	return { success: false, files: [], error: { code } };
 }
 
 export interface ListFilesOptions {
@@ -102,6 +129,8 @@ export interface SetEnvVarsOptions {
 }
 
 export interface SandboxInstance {
+	/** Whether `mountBucket` is a real backend capability rather than a copy fallback signal. */
+	readonly supportsBucketMount?: boolean;
 	/**
 	 * Resolve the backing sandbox without running anything in it, so an adapter
 	 * that creates lazily pays its create here rather than inside whichever call

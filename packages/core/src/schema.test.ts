@@ -74,7 +74,7 @@ describe('parseStored', () => {
 			expect.unreachable('should have thrown');
 		} catch (err) {
 			expect(err).toBeInstanceOf(Error);
-			expect((err as Error).message).toBe('Corrupted stored object: _system/catalog.json');
+			expect((err as Error).message).toBe('Stored data is temporarily unavailable');
 			expect(err).toMatchObject({
 				reason: 'schema_mismatch',
 				object: '_system/catalog.json',

@@ -79,7 +79,12 @@ describe('Git sync routes', () => {
 
 	it('rejects a request with no Authorization header (401)', async () => {
 		const { notebookId } = await createSyncedNotebook();
-		await expectError(await syncRequest({ notebookId }), 401, 'UNAUTHORIZED');
+		const error = await expectError(
+			await syncRequest({ notebookId, headers: { 'X-Request-Id': 'sync-req-123' } }),
+			401,
+			'UNAUTHORIZED',
+		);
+		expect(error.request_id).toBe('sync-req-123');
 	});
 
 	it('rejects a malformed Authorization header (400)', async () => {

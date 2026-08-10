@@ -6,6 +6,17 @@ export interface SecretRef {
 	locator: string;
 }
 
+export class SecretResolutionError extends Error {
+	constructor(
+		readonly reason: 'not_found' | 'invalid_value' | 'unavailable',
+		message: string,
+		options?: { cause?: unknown },
+	) {
+		super(message, options);
+		this.name = 'SecretResolutionError';
+	}
+}
+
 /** Dereferences one integration secret. Implemented by `packages/secrets-*` adapters. */
 export interface SecretResolver {
 	/** Matches `SecretRef.backend`. */

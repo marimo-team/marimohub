@@ -2,6 +2,7 @@ import type { Bucket } from '../../ports/bucket';
 import type { SandboxProvider } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 import { Millis } from '../../duration';
+import { ConflictError } from '../../errors';
 import { logOperationalError } from '../../operationalLog';
 import { captureFilesystemSnapshot } from '../content/filesystemSnapshots';
 import type { NotebookService } from '../content/NotebookService';
@@ -22,11 +23,13 @@ export interface SessionRetirerDeps {
 
 export class TakeoverRetirementError extends Error {
 	readonly drainStarted: boolean;
+	override readonly cause: unknown;
 
 	constructor(cause: unknown, drainStarted: boolean) {
 		super(cause instanceof Error ? cause.message : 'Could not retire the editor for takeover');
 		this.name = 'TakeoverRetirementError';
 		this.drainStarted = drainStarted;
+		this.cause = cause;
 	}
 }
 
@@ -90,7 +93,7 @@ export class SessionRetirer {
 				},
 			);
 			if (!terminating.transitioned) {
-				throw new Error('Another request already started terminating the editor session');
+				throw new ConflictError('Another request already started terminating the editor session');
 			}
 			drainStarted = true;
 			await this.teardownForTakeover(terminating.session);
@@ -132,7 +135,7 @@ export class SessionRetirer {
 		const assertLease = async (): Promise<void> => {
 			if (leaseLost || !(await renewLease())) {
 				leaseLost = true;
-				throw new Error('The takeover drain lease is no longer owned by this request');
+				throw new ConflictError('The takeover drain lease is no longer owned by this request');
 			}
 		};
 		const advanceLease = async (stage: TakeoverDrainStage): Promise<void> => {
@@ -147,7 +150,7 @@ export class SessionRetirer {
 				))
 			) {
 				leaseLost = true;
-				throw new Error('The takeover drain lease is no longer owned by this request');
+				throw new ConflictError('The takeover drain lease is no longer owned by this request');
 			}
 		};
 		const renewalTimer = setInterval(() => {

@@ -36,4 +36,10 @@ describe('toastError', () => {
 		toastError(new Error('could not save'));
 		expect(error).toHaveBeenCalledWith('could not save');
 	});
+
+	it('uses recovery guidance for stale writes', () => {
+		const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+		toastError(new ApiRequestError('PRECONDITION_FAILED', 'stale revision'));
+		expect(error).toHaveBeenCalledWith('Someone else changed this item. Reload it and try again.');
+	});
 });

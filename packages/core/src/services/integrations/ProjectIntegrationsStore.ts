@@ -7,6 +7,7 @@ import {
 	NotFoundError,
 	PreconditionFailedError,
 	ResourceExhaustedError,
+	UnavailableError,
 	ValidationError,
 } from '../../errors';
 import type { IntegrationId, ProjectId, UserId } from '../../ids';
@@ -35,6 +36,7 @@ import type {
 	UpdateIntegrationInput,
 } from '../../ports/integrations';
 import type { ManagedSecretCodec, SecretRef, SecretResolver } from '../../ports/secrets';
+import { SecretResolutionError } from '../../ports/secrets';
 import { metricsObserver, saga } from '../../saga';
 import {
 	CURRENT_INTEGRATION_CONFIG_VERSION,
@@ -1060,10 +1062,18 @@ class ScopedIntegrationsStore {
 		}
 		try {
 			return await resolver.resolve(ref);
-		} catch {
-			throw new ValidationError(
-				`Cannot resolve secret field "${at}" with backend "${ref.backend}".`,
+		} catch (err) {
+			if (err instanceof SecretResolutionError && err.reason !== 'unavailable') {
+				throw new ValidationError(
+					`Cannot resolve secret field "${at}" with backend "${ref.backend}".`,
+				);
+			}
+			logOperationalError(
+				'secret_resolution_failed',
+				{ operation: 'integration.secret.resolve', backend: ref.backend, field: at },
+				err,
 			);
+			throw new UnavailableError(`Secret backend "${ref.backend}" is temporarily unavailable.`);
 		}
 	}
 

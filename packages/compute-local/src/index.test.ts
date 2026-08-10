@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { SandboxId } from '@marimo-hub/core';
 import { afterEach, describe, expect, it } from 'vitest';
+import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectFileResult } from '@marimo-hub/core/testing';
 import { LocalCompute, prepareMarimoCommand, rewriteWorkspace } from './index';
 
@@ -162,7 +163,7 @@ describe('LocalCompute file ops', () => {
 
 	it('returns success:false listing a missing directory', async () => {
 		const sb = newSandbox();
-		expect(await sb.listFiles('/workspace/does-not-exist')).toEqual({ success: false, files: [] });
+		expect(await sb.listFiles('/workspace/does-not-exist')).toEqual(listFilesFailure());
 	});
 
 	it('gitCheckout throws when the clone fails', async () => {

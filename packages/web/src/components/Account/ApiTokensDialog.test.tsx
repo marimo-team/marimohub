@@ -2,10 +2,11 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ApiTokensDialog } from './ApiTokensDialog';
 import type { ApiToken } from '@/types';
+import { createTestQueryClient } from '@/test/render';
 
 const TOKEN_ID = '01HXY0S6GWMBASVAG3PZ7Y2K5T';
 const PLAINTEXT = `mhub_pat_${TOKEN_ID}_${'a'.repeat(32)}`;
@@ -52,7 +53,7 @@ function makeFetch(tokens: ApiToken[]) {
 function setup(tokens: ApiToken[] = []) {
 	const calls = makeFetch(tokens);
 	const onClose = vi.fn();
-	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const client = createTestQueryClient();
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={client}>
 			{children}
@@ -175,7 +176,7 @@ describe('ApiTokensDialog', () => {
 				);
 			}),
 		);
-		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const client = createTestQueryClient();
 		const wrapper = ({ children }: { children: ReactNode }) => (
 			<QueryClientProvider client={client}>
 				{children}

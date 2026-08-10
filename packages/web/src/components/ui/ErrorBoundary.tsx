@@ -5,6 +5,7 @@ import { Button } from './Button';
 interface ErrorBoundaryProps {
 	children: ReactNode;
 	fallback?: ReactNode;
+	onRetry?: () => void;
 }
 
 interface ErrorBoundaryState {
@@ -27,6 +28,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 	}
 
 	handleRetry = (): void => {
+		this.props.onRetry?.();
 		this.setState({ hasError: false, error: null });
 	};
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Seconds } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
+import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectListFilesResult } from '@marimo-hub/core/testing';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
 import { createE2bClient, E2bCompute } from './index';
@@ -254,7 +255,11 @@ describe('E2bCompute', () => {
 			.create(SANDBOX_ID)
 			.readFile('/missing.py');
 
-		expect(res).toEqual({ success: false, content: '' });
+		expect(res).toEqual({
+			success: false,
+			content: '',
+			error: { code: 'READ_FAILED' },
+		});
 	});
 
 	it('exec reports success:false on a non-zero command result', async () => {
@@ -264,6 +269,7 @@ describe('E2bCompute', () => {
 			success: false,
 			stdout: '',
 			stderr: 'fatal',
+			error: { code: 'COMMAND_FAILED' },
 		});
 	});
 
@@ -381,7 +387,7 @@ describe('E2bCompute', () => {
 			});
 			await expect(
 				new E2bCompute(baseConfig, fake).create(SANDBOX_ID).listFiles('/workspace'),
-			).resolves.toEqual({ success: false, files: [] });
+			).resolves.toEqual(listFilesFailure());
 		});
 	});
 

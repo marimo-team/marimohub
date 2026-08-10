@@ -77,9 +77,19 @@ describe('CloudflareSandboxProvider', () => {
 		});
 
 		it('surfaces success:false from the SDK exec result', async () => {
-			fakeSandbox.exec.mockResolvedValueOnce({ success: false, stdout: '', stderr: 'boom' });
+			fakeSandbox.exec.mockResolvedValueOnce({
+				success: false,
+				stdout: '',
+				stderr: 'boom',
+				error: { code: 'COMMAND_FAILED' },
+			});
 			const res = await makeProvider().create(SANDBOX_ID).exec('bad');
-			expect(res).toEqual({ success: false, stdout: '', stderr: 'boom' });
+			expect(res).toEqual({
+				success: false,
+				stdout: '',
+				stderr: 'boom',
+				error: { code: 'COMMAND_FAILED' },
+			});
 		});
 	});
 

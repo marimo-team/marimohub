@@ -25,7 +25,6 @@ import type { UserDirectory } from '@/api/hooks';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useAuth } from '@/context/AuthContext';
-import { toastError } from '@/lib/errors';
 import {
 	ASSIGNABLE_ROLES,
 	canManageProject,
@@ -344,8 +343,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			await addMember.mutateAsync({ ...choice, role });
 			toast.success('email' in choice ? 'Invite added' : 'Member added');
 			return true;
-		} catch (err) {
-			toastError(err);
+		} catch {
 			return false;
 		}
 	};
@@ -355,7 +353,6 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			{ uid: memberKey(member), role },
 			{
 				onSuccess: () => toast.success('Role updated'),
-				onError: toastError,
 			},
 		);
 	};
@@ -368,7 +365,6 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 				toast.success('Member removed');
 				confirmRemove.close();
 			},
-			onError: toastError,
 		});
 	};
 

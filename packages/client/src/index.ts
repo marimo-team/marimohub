@@ -48,10 +48,9 @@ export type AdminUser = components['schemas']['AdminUser'];
 /** Redacted deployment configuration from the super-admin `GET /api/v1/admin/config`. */
 export type DeploymentConfig = components['schemas']['DeploymentConfig'];
 
-export interface ApiError {
-	code: string;
-	message: string;
-}
+export type ApiError = components['schemas']['ErrorResponse']['error'];
+export type ServerErrorCode = ApiError['code'];
+export type ApiRequestErrorCode = ServerErrorCode | 'NETWORK_ERROR' | 'PARSE_ERROR' | 'UNKNOWN';
 
 export interface ApiResponse<T> {
 	success: boolean;
@@ -60,12 +59,22 @@ export interface ApiResponse<T> {
 }
 
 export class ApiRequestError extends Error {
-	code: string;
+	readonly code: ApiRequestErrorCode;
+	readonly status?: number;
+	readonly requestId?: string;
+	readonly details?: ApiError['details'];
 
-	constructor(code: string, message: string) {
+	constructor(
+		code: ApiRequestErrorCode,
+		message: string,
+		options: { status?: number; requestId?: string; details?: ApiError['details'] } = {},
+	) {
 		super(message);
 		this.name = 'ApiRequestError';
 		this.code = code;
+		this.status = options.status;
+		this.requestId = options.requestId;
+		this.details = options.details;
 	}
 }
 
@@ -148,7 +157,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function malformedResponse(status?: number): ApiRequestError {
 	const detail = status === undefined ? '' : `Server returned ${status} with a `;
-	return new ApiRequestError('PARSE_ERROR', `${detail}malformed response envelope`);
+	return new ApiRequestError('PARSE_ERROR', `${detail}malformed response envelope`, { status });
 }
 
 function unwrapEnvelope<T>(value: T, status: number): ApiData<T> {
@@ -158,9 +167,22 @@ function unwrapEnvelope<T>(value: T, status: number): ApiData<T> {
 
 	if (!value.success) {
 		const error = isRecord(value.error) ? value.error : undefined;
+		const details = Array.isArray(error?.details)
+			? error.details.filter(
+					(detail): detail is { field: string; message: string } =>
+						isRecord(detail) &&
+						typeof detail.field === 'string' &&
+						typeof detail.message === 'string',
+				)
+			: undefined;
 		throw new ApiRequestError(
-			typeof error?.code === 'string' ? error.code : 'UNKNOWN',
+			typeof error?.code === 'string' ? (error.code as ServerErrorCode) : 'UNKNOWN',
 			typeof error?.message === 'string' ? error.message : 'Request failed',
+			{
+				status,
+				requestId: typeof error?.request_id === 'string' ? error.request_id : undefined,
+				details,
+			},
 		);
 	}
 
@@ -199,4 +221,21 @@ export async function apiDataWithResponse<T>(
 /** Unwrap the API envelope and normalize API, transport, and parse failures. */
 export async function apiData<T>(request: Promise<FetchResult<T>>): Promise<ApiData<T>> {
 	return (await apiDataWithResponse(request)).data;
+}
+
+export async function apiErrorFromResponse(
+	response: Response,
+	fallbackMessage: string,
+): Promise<ApiRequestError> {
+	try {
+		const body: unknown = await response.clone().json();
+		try {
+			unwrapEnvelope(body, response.status);
+		} catch (err) {
+			if (err instanceof ApiRequestError) return err;
+		}
+	} catch {
+		// Raw-content endpoints and intermediaries may return non-JSON error bodies.
+	}
+	return new ApiRequestError('UNKNOWN', fallbackMessage, { status: response.status });
 }

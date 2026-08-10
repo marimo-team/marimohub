@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { SecretResolutionError } from '@marimo-hub/core';
 import { AwsSecretsManagerResolver } from './index';
 import type { GetSecretValueResult, SecretFetcher } from './index';
 
@@ -60,7 +61,7 @@ describe('AwsSecretsManagerResolver', () => {
 		await expect(r.resolve(ref('bin'))).rejects.toThrow(/binary/);
 	});
 
-	it('maps a not-found/access-denied error without leaking the value', async () => {
+	it('maps a not-found error without leaking the value', async () => {
 		const err = Object.assign(new Error('secret value here should never surface'), {
 			name: 'ResourceNotFoundException',
 		});
@@ -70,6 +71,16 @@ describe('AwsSecretsManagerResolver', () => {
 		await expect(r.resolve(ref('gone'))).rejects.toThrow(/ResourceNotFoundException/);
 		await expect(r.resolve(ref('gone'))).rejects.not.toThrow(/gone/);
 		await expect(r.resolve(ref('gone'))).rejects.not.toThrow(/should never surface/);
+		await expect(r.resolve(ref('gone'))).rejects.toMatchObject({ reason: 'not_found' });
+	});
+
+	it('classifies IAM and transport failures as backend outages', async () => {
+		const r = resolver(async () => {
+			throw Object.assign(new Error('denied'), { name: 'AccessDeniedException' });
+		});
+		const error = await r.resolve(ref('prod/key')).catch((err: unknown) => err);
+		expect(error).toBeInstanceOf(SecretResolutionError);
+		expect(error).toMatchObject({ reason: 'unavailable' });
 	});
 
 	it('caches within the TTL and refetches after it', async () => {

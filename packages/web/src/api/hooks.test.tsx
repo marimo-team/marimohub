@@ -213,7 +213,7 @@ describe('useNotebookHtmlQuery', () => {
 		});
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
-		expect(result.current.error?.message).toBe('Notebook not found');
+		expect(result.current.error?.message).toBe('gone');
 	});
 
 	it('names the version, not the notebook, when a pinned snapshot 404s', async () => {
@@ -224,7 +224,7 @@ describe('useNotebookHtmlQuery', () => {
 		});
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
-		expect(result.current.error?.message).toBe('Version not found');
+		expect(result.current.error?.message).toBe('gone');
 		expect(urlsOf(fetchMock)[0]).toBe(
 			`/api/v1/projects/${PID}/notebooks/${NID}/versions/ver-old/html`,
 		);
@@ -474,9 +474,16 @@ describe('deployment-scoped queries', () => {
 	] as const)('%s does not retry a failure', async (_name, useHook) => {
 		const fetchMock = stubFetch(async () => jsonError('INTERNAL_ERROR', 'boom', 500));
 
-		const { result } = renderHookWithClient(() => useHook(), { toaster: false });
+		const { result } = renderHookWithClient(() => useHook(), {
+			toaster: false,
+			errorBoundary: _name === 'useCapabilitiesQuery',
+		});
 
-		await waitFor(() => expect(result.current.isError).toBe(true));
+		if (_name !== 'useCapabilitiesQuery') {
+			await waitFor(() => expect(result.current.isError).toBe(true));
+		} else {
+			await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+		}
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 });

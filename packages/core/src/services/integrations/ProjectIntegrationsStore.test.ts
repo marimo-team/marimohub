@@ -5,12 +5,14 @@ import {
 	NotFoundError,
 	PreconditionFailedError,
 	ResourceExhaustedError,
+	UnavailableError,
 	ValidationError,
 } from '../../errors';
 import { createIntegrationId, createProjectId, createSessionId } from '../../ids';
 import type { ProjectId, SessionId } from '../../ids';
 import { paths } from '../../paths';
 import type { Bucket, BucketListOptions } from '../../ports/bucket';
+import { SecretResolutionError } from '../../ports/secrets';
 import type { SecretResolver } from '../../ports/secrets';
 import { ACTOR, MemoryBucket } from '../../testing';
 import { AesGcmSecretCodec } from '../secrets/AesGcmSecretCodec';
@@ -261,7 +263,9 @@ describe('ProjectIntegrationsStore', () => {
 		const head = await (await bucket.get(key))!.json<Record<string, unknown>>();
 		await bucket.put(key, JSON.stringify({ ...head, current_version: 0 }));
 
-		await expect(makeStore(bucket).list(pid)).rejects.toThrow(/Corrupted stored object/);
+		await expect(makeStore(bucket).list(pid)).rejects.toThrow(
+			'Stored data is temporarily unavailable',
+		);
 	});
 
 	it('does not expose secret values thrown by an integration renderer', async () => {
@@ -695,8 +699,32 @@ describe('ProjectIntegrationsStore', () => {
 			expect(String(error)).not.toContain(locator);
 			expect(String(error)).not.toContain(providerMessage);
 			expect(String(error)).toContain('backend "vault"');
+			expect(error).toBeInstanceOf(UnavailableError);
 		}
 		expect(resolve).toHaveBeenCalledTimes(2);
+	});
+
+	it('reports an invalid secret reference as validation failure', async () => {
+		const resolve = vi.fn(async () => {
+			throw new SecretResolutionError('not_found', 'missing');
+		});
+		const store = makeStore(bucket, true, [{ ...vaultResolver, resolve }]);
+		const created = await store.create(
+			pid,
+			{
+				kind: 'echo',
+				name: 'prod',
+				config: {
+					token: {
+						$secret: { kind: 'reference', backend: 'vault', locator: 'missing' },
+					},
+				},
+			},
+			ACTOR,
+		);
+		await expect(store.test(pid, { source: 'stored', id: created.id })).rejects.toBeInstanceOf(
+			ValidationError,
+		);
 	});
 
 	it('resolves a stored reference before running its connection test', async () => {

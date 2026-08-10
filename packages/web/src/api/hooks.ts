@@ -5,7 +5,7 @@ import {
 	useMutation,
 	keepPreviousData,
 } from '@tanstack/react-query';
-import { apiClient, apiData, apiDataWithResponse } from './client';
+import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from './client';
 import { useApiMutation } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
 import { sanitizeFilename, triggerDownload } from '../lib/download';
@@ -122,6 +122,7 @@ export function useCapabilitiesQuery(enabled = true) {
 		queryKey: systemKeys.capabilities(),
 		queryFn: () => apiData(apiClient.GET('/api/v1/capabilities')),
 		enabled,
+		throwOnError: true,
 		...IMMUTABLE_QUERY,
 	});
 }
@@ -832,15 +833,16 @@ async function fetchHtmlSnapshot(
 ): Promise<NotebookHtmlSnapshot | null> {
 	const res = await fetch(htmlSnapshotPath(projectId, notebookId, versionId));
 	if (res.status === 404) {
-		// Only "exists but never ran" is the empty state; a deleted/hidden
-		// notebook (code NOT_FOUND) must surface as an error, not "no outputs".
-		const body = (await res.json().catch(() => null)) as {
-			error?: { code?: string };
-		} | null;
-		if (body?.error?.code === 'NO_HTML_SNAPSHOT') return null;
-		throw new Error(versionId ? 'Version not found' : 'Notebook not found');
+		const error = await apiErrorFromResponse(
+			res,
+			versionId ? 'Version not found' : 'Notebook not found',
+		);
+		if (isApiErrorCode(error, 'NO_HTML_SNAPSHOT')) return null;
+		throw error;
 	}
-	if (!res.ok) throw new Error(`Failed to load notebook outputs (HTTP ${res.status})`);
+	if (!res.ok) {
+		throw await apiErrorFromResponse(res, `Failed to load notebook outputs (HTTP ${res.status})`);
+	}
 	return {
 		html: await res.text(),
 		capturedAt: res.headers.get('X-Marimohub-Captured-At'),

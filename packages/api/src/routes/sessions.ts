@@ -664,7 +664,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 		await assertAccess();
 		const currentClaim = await deps.services.sessions.getEditorClaim(pid, nid);
 		if (effectiveEditorSharing(currentClaim, deps.policy.editorSandboxSharing) !== 'exclusive') {
-			throw new BadRequestError('Takeover is only available in exclusive editor mode');
+			throw new ConflictError('Takeover is only available in exclusive editor mode');
 		}
 		const claim = await deps.services.sessions.reserveTakeover(pid, nid, {
 			takeoverId: body.takeover_id,
@@ -686,10 +686,19 @@ app.openapi(takeoverEditorSession, async (c) => {
 					body.takeover_id,
 					crypto.randomUUID(),
 				);
-				if (!completed) throw new Error('Another request owns the takeover drain lease');
+				if (!completed) throw new ConflictError('Another request owns the takeover drain lease');
 				await audit('session.takeover.success');
 				return c.json({ success: true }, 200);
-			} catch {
+			} catch (err) {
+				if (err instanceof ConflictError) throw err;
+				logEvent({
+					level: 'error',
+					event: 'session_takeover_drain_failed',
+					project_id: pid,
+					notebook_id: nid,
+					takeover_id: body.takeover_id,
+					error: errorMetadata(err),
+				});
 				throw new UnavailableError(
 					'The prior editor is still shutting down; retry this takeover shortly',
 				);
@@ -697,7 +706,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 		}
 		if (holder.notebook_id !== nid || holder.user_id === user.id || holder.ephemeral) {
 			await deps.services.sessions.cancelRequestedTakeover(pid, nid, body.takeover_id);
-			throw new BadRequestError('The selected session cannot be taken over');
+			throw new ConflictError('The selected session cannot be taken over');
 		}
 		const activity = await inspectEditorActivity(deps, holder);
 		observer.tag('activity', activity.state);
@@ -716,6 +725,9 @@ app.openapi(takeoverEditorSession, async (c) => {
 			await sessionRetirer(deps).retireForTakeover(holder, user.id);
 			await deps.services.sessions.setTakeoverPhase(pid, nid, body.takeover_id, 'ready');
 		} catch (err) {
+			if (err instanceof TakeoverRetirementError && err.cause instanceof ConflictError) {
+				throw err.cause;
+			}
 			if (err instanceof TakeoverRetirementError && err.drainStarted) {
 				await deps.services.sessions
 					.setTakeoverPhase(pid, nid, body.takeover_id, 'draining')
@@ -723,6 +735,14 @@ app.openapi(takeoverEditorSession, async (c) => {
 			} else {
 				await deps.services.sessions.cancelRequestedTakeover(pid, nid, body.takeover_id);
 			}
+			logEvent({
+				level: 'error',
+				event: 'session_takeover_retirement_failed',
+				project_id: pid,
+				notebook_id: nid,
+				takeover_id: body.takeover_id,
+				error: errorMetadata(err instanceof TakeoverRetirementError ? err.cause : err),
+			});
 			throw new UnavailableError(
 				'Could not safely save and stop the current editor; no replacement was started',
 			);
@@ -807,7 +827,7 @@ app.openapi(createSession, async (c) => {
 		? undefined
 		: notebook.source.current_version_id;
 	if (!workspacePolicy.persistSessionEdits && !syncedVersionId) {
-		throw new BadRequestError('Synced notebook has not been synced yet');
+		throw new ConflictError('Synced notebook has not been synced yet');
 	}
 	const workspacePrefix = syncedVersionId
 		? paths.project(pid).notebook(nid).version(syncedVersionId).workspacePrefix

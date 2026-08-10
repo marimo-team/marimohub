@@ -52,6 +52,7 @@ import type {
 	StartProcessOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 
 const WORKSPACE = '/workspace';
 
@@ -184,6 +185,7 @@ export interface LocalComputeOptions {
 }
 
 class LocalSandboxInstance implements SandboxInstance {
+	readonly supportsBucketMount = false;
 	private readonly root: string;
 	private readonly host: string;
 	private readonly bindHost: string;
@@ -254,8 +256,10 @@ class LocalSandboxInstance implements SandboxInstance {
 			let stderr = '';
 			child.stdout?.on('data', (d) => (stdout += d.toString()));
 			child.stderr?.on('data', (d) => (stderr += d.toString()));
-			child.on('error', (err) => resolve({ success: false, stdout, stderr: stderr + String(err) }));
-			child.on('close', (code) => resolve({ success: code === 0, stdout, stderr }));
+			child.on('error', (err) =>
+				resolve(execResult(false, stdout, stderr + String(err), 'SPAWN_FAILED')),
+			);
+			child.on('close', (code) => resolve(execResult(code === 0, stdout, stderr)));
 		});
 	}
 
@@ -269,8 +273,9 @@ class LocalSandboxInstance implements SandboxInstance {
 		try {
 			const content = await readFile(this.mapPath(p), 'utf-8');
 			return { success: true, content, encoding: 'utf-8' };
-		} catch {
-			return { success: false, content: '' };
+		} catch (err) {
+			const code = (err as NodeJS.ErrnoException).code;
+			return readFileFailure(code === 'ENOENT' || code === 'ENOTDIR' ? 'NOT_FOUND' : 'READ_FAILED');
 		}
 	}
 
@@ -304,7 +309,7 @@ class LocalSandboxInstance implements SandboxInstance {
 			}
 			return { success: true, files };
 		} catch {
-			return { success: false, files: [] };
+			return listFilesFailure();
 		}
 	}
 

@@ -205,8 +205,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -278,8 +296,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -358,8 +394,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -441,8 +495,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -540,8 +612,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -617,8 +707,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -717,8 +825,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -822,8 +948,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -904,8 +1048,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1001,8 +1163,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1096,8 +1276,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1177,8 +1375,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1258,8 +1474,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1350,8 +1584,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1454,8 +1706,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1587,8 +1857,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1686,8 +1974,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1823,8 +2129,35 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1900,8 +2233,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1984,8 +2335,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2080,6 +2449,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Precondition failed (If-Match did not match the current version) */
 				412: {
 					headers: {
@@ -2089,8 +2467,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2166,8 +2562,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2259,8 +2673,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2344,8 +2776,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2424,8 +2874,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2505,8 +2973,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2598,8 +3084,35 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2697,8 +3210,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2787,8 +3318,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2869,8 +3418,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2943,8 +3510,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3030,8 +3615,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3140,8 +3743,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3258,6 +3879,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
 					headers: {
@@ -3272,6 +3902,15 @@ export interface paths {
 					headers: {
 						/** @description Seconds to wait before retrying. */
 						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
 						[name: string]: unknown;
 					};
 					content: {
@@ -3360,8 +3999,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3427,8 +4084,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3528,8 +4203,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3624,8 +4317,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3714,8 +4425,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3798,8 +4527,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3899,8 +4646,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3995,8 +4760,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -4090,8 +4873,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -4183,6 +4984,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
 					headers: {
@@ -4197,6 +5007,15 @@ export interface paths {
 					headers: {
 						/** @description Seconds to wait before retrying. */
 						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
 						[name: string]: unknown;
 					};
 					content: {
@@ -4291,8 +5110,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -4376,8 +5213,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -4465,8 +5320,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -4548,8 +5421,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -4648,8 +5539,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -4743,8 +5652,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -4836,6 +5763,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
 					headers: {
@@ -4850,6 +5786,15 @@ export interface paths {
 					headers: {
 						/** @description Seconds to wait before retrying. */
 						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
 						[name: string]: unknown;
 					};
 					content: {
@@ -5056,8 +6001,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -5135,6 +6098,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
 					headers: {
@@ -5149,6 +6121,15 @@ export interface paths {
 					headers: {
 						/** @description Seconds to wait before retrying. */
 						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
 						[name: string]: unknown;
 					};
 					content: {
@@ -5235,8 +6216,26 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Validation error */
 				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -5282,20 +6281,28 @@ export interface components {
 				/** @enum {string} */
 				code:
 					| 'BAD_REQUEST'
-					| 'UNAUTHORIZED'
-					| 'FORBIDDEN'
+					| 'PRECONDITION_FAILED'
 					| 'NOT_FOUND'
 					| 'CONFLICT'
-					| 'GONE'
-					| 'PRECONDITION_FAILED'
-					| 'PAYLOAD_TOO_LARGE'
+					| 'EDIT_SESSION_OWNED'
+					| 'EDIT_SESSION_CHANGED'
+					| 'TAKEOVER_IN_PROGRESS'
+					| 'FORBIDDEN'
 					| 'VALIDATION_ERROR'
-					| 'RESOURCE_EXHAUSTED'
 					| 'NOT_INITIALIZED'
-					| 'NO_HTML_SNAPSHOT'
 					| 'SERVICE_UNAVAILABLE'
+					| 'RESOURCE_EXHAUSTED'
+					| 'UNAUTHORIZED'
+					| 'GONE'
+					| 'PAYLOAD_TOO_LARGE'
+					| 'NO_HTML_SNAPSHOT'
 					| 'INTERNAL_ERROR';
 				message: string;
+				/** @description Field-level validation failures. */
+				details?: {
+					field: string;
+					message: string;
+				}[];
 				request_id?: string;
 			};
 		};

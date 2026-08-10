@@ -25,6 +25,7 @@ import type {
 	SetEnvVarsOptions,
 	StartProcessOptions,
 } from '@marimo-hub/core/ports';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SandboxType = Sandbox<any>;
@@ -61,6 +62,7 @@ async function waitForTunnelReady(url: string): Promise<void> {
 }
 
 class CloudflareSandboxInstance implements SandboxInstance {
+	readonly supportsBucketMount = true;
 	private sandbox: SandboxType;
 	private useTunnel: boolean;
 	private envDefaults: Record<string, string> = {};
@@ -72,7 +74,7 @@ class CloudflareSandboxInstance implements SandboxInstance {
 
 	async exec(cmd: string): Promise<ExecResult> {
 		const res = await this.sandbox.exec(this.withDefaults(cmd));
-		return { success: res.success, stdout: res.stdout, stderr: res.stderr };
+		return execResult(res.success, res.stdout, res.stderr);
 	}
 
 	async execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream> {
@@ -83,13 +85,16 @@ class CloudflareSandboxInstance implements SandboxInstance {
 
 	async readFile(path: string): Promise<ReadFileResult> {
 		const res = await this.sandbox.readFile(path);
-		return { success: res.success, content: res.content, encoding: res.encoding };
+		return res.success
+			? { success: true, content: res.content, encoding: res.encoding }
+			: readFileFailure('READ_FAILED');
 	}
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
 		const res = await this.sandbox.listFiles(path, options);
+		if (!res.success) return listFilesFailure();
 		return {
-			success: res.success,
+			success: true,
 			files: res.files.map((f) => ({
 				name: f.name,
 				absolutePath: f.absolutePath,

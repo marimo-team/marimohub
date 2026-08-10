@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BadRequestError } from '../errors';
+import { BadRequestError, ConflictError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
 import { toHex } from '../internal/hex';
 import type { GitSource, GitSourceConfig, Source } from '../schema';
@@ -208,7 +208,7 @@ export async function verifySyncTokenRecord(
 
 export function assertSyncedSource(source: Source): GitSource {
 	if (source.type !== 'git') {
-		throw new BadRequestError('Notebook is not backed by a synced source');
+		throw new ConflictError('Notebook is not backed by a synced source');
 	}
 	return source;
 }

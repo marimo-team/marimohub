@@ -117,7 +117,7 @@ describe('Session routes', () => {
 		expect(all).toHaveLength(0);
 	});
 
-	it('POST /sessions for an unsynced GitHub notebook returns 400 and does not provision', async () => {
+	it('POST /sessions for an unsynced GitHub notebook returns 409 and does not provision', async () => {
 		const services = createServices(bucket);
 		const { meta } = await services.notebooks.synced.create(
 			pid,
@@ -132,7 +132,7 @@ describe('Session routes', () => {
 		);
 		const path = `/projects/${pid}/notebooks/${meta.id}/sessions`;
 
-		await expectError(await owner('POST', path), 400, 'BAD_REQUEST');
+		await expectError(await owner('POST', path), 409, 'CONFLICT');
 		expect(await services.sessions.listSessions(meta.id)).toHaveLength(0);
 	});
 
@@ -418,8 +418,8 @@ describe('Session routes', () => {
 				expected_activity: state.holder!.activity.state,
 				acknowledge_disruption: true,
 			}),
-			503,
-			'SERVICE_UNAVAILABLE',
+			409,
+			'CONFLICT',
 		);
 
 		expect(takeoverSandbox.calls.destroy).toBe(0);
@@ -489,7 +489,12 @@ describe('Session routes', () => {
 		const activity = makeFakeSandbox();
 		activity.instance.exec = async () => {
 			await services.projects.removeMember(pid, STRANGER, ACTOR);
-			return { success: false, stdout: '', stderr: '' };
+			return {
+				success: false,
+				stdout: '',
+				stderr: '',
+				error: { code: 'COMMAND_FAILED' },
+			};
 		};
 		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(activity.instance), {
 			policy: { defaultRole: undefined },
@@ -524,7 +529,12 @@ describe('Session routes', () => {
 				new Date().toISOString(),
 			);
 			await services.sessions.markTerminated(pid, persistent.session_id);
-			return { success: false, stdout: '', stderr: '' };
+			return {
+				success: false,
+				stdout: '',
+				stderr: '',
+				error: { code: 'COMMAND_FAILED' },
+			};
 		};
 		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(activity.instance));
 
@@ -535,8 +545,8 @@ describe('Session routes', () => {
 				expected_activity: 'unknown',
 				acknowledge_disruption: true,
 			}),
-			503,
-			'SERVICE_UNAVAILABLE',
+			409,
+			'CONFLICT',
 		);
 
 		expect(activity.calls.destroy).toBe(0);

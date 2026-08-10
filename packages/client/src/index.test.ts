@@ -100,15 +100,29 @@ describe('apiData', () => {
 		expect(new Headers(init?.headers).get('content-type')).toBeNull();
 	});
 
-	it('throws ApiRequestError with the server code/message on { success: false }', async () => {
+	it('throws ApiRequestError with server error metadata on { success: false }', async () => {
 		stubFetch(async () =>
-			jsonResponse({ success: false, error: { code: 'FORBIDDEN', message: 'nope' } }, 403),
+			jsonResponse(
+				{
+					success: false,
+					error: {
+						code: 'FORBIDDEN',
+						message: 'nope',
+						request_id: 'req-123',
+						details: [{ field: 'role', message: 'Insufficient role' }],
+					},
+				},
+				403,
+			),
 		);
 
 		await expect(apiData(apiClient.GET('/api/v1/me'))).rejects.toMatchObject({
 			name: 'ApiRequestError',
 			code: 'FORBIDDEN',
 			message: 'nope',
+			status: 403,
+			requestId: 'req-123',
+			details: [{ field: 'role', message: 'Insufficient role' }],
 		});
 	});
 

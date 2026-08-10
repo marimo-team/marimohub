@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { systemKeys } from '@/api/queryKeys';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import {
@@ -115,17 +115,20 @@ describe('useSandboxImages', () => {
 		await waitFor(() => expect(result.current).toEqual(['img-a', 'img-b']));
 	});
 
-	it('returns an empty list when the capabilities query fails', async () => {
+	it('surfaces a capabilities failure through the error boundary', async () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonError('INTERNAL', 'capabilities unavailable', 500)),
 		);
 
-		const { result, client } = renderHookWithClient(() => useSandboxImages(), { toaster: false });
+		const { client } = renderHookWithClient(() => useSandboxImages(), {
+			toaster: false,
+			errorBoundary: true,
+		});
 
 		await waitFor(() =>
 			expect(client.getQueryState(systemKeys.capabilities())?.status).toBe('error'),
 		);
-		expect(result.current).toEqual([]);
+		expect(screen.getByText('Request failed')).toBeInTheDocument();
 	});
 });

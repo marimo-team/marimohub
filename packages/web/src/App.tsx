@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { Header } from '@/components/Header/Header';
@@ -18,6 +19,28 @@ const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
 const AdminUsersPage = lazy(() => import('@/components/Admin/AdminUsersPage'));
 const AdminSettingsPage = lazy(() => import('@/components/Admin/AdminSettingsPage'));
 
+function AppErrorBoundary({ children }: { children: React.ReactNode }) {
+	return (
+		<QueryErrorResetBoundary>
+			{({ reset }) => <ErrorBoundary onRetry={reset}>{children}</ErrorBoundary>}
+		</QueryErrorResetBoundary>
+	);
+}
+
+function NotFoundPage() {
+	return (
+		<div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+			<h1 className="text-xl font-semibold">Page not found</h1>
+			<p className="text-sm text-muted-foreground">
+				The page may have moved, or you may not have access to it.
+			</p>
+			<Button variant="default" onPress={() => window.location.assign('/')}>
+				Back to projects
+			</Button>
+		</div>
+	);
+}
+
 function AuthGate({ children }: { children: React.ReactNode }) {
 	const { isPending, error, user, signIn, refetchUser } = useAuth();
 
@@ -34,7 +57,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 		// Not signed in (401 from /api/v1/me) → show the sign-in screen. Any other
 		// failure (network, 5xx, forbidden) shows an error with retry + sign-in.
 		const isUnauthorized = error instanceof ApiRequestError && error.code === 'UNAUTHORIZED';
-		if (isUnauthorized) {
+		if (!error || isUnauthorized) {
 			return <SignIn />;
 		}
 
@@ -86,7 +109,7 @@ function StandardLayout() {
 		<div className="flex min-h-dvh flex-col">
 			<Header />
 			<main className="flex flex-1 overflow-hidden">
-				<ErrorBoundary>
+				<AppErrorBoundary>
 					<Suspense fallback={<PageFallback />}>
 						<Routes>
 							<Route path="/" element={<ProjectList />} />
@@ -97,10 +120,10 @@ function StandardLayout() {
 								<Route path="settings" element={<AdminSettingsPage />} />
 								<Route path="audit-logs" element={<AuditLogPage />} />
 							</Route>
-							<Route path="*" element={<Navigate to="/" replace />} />
+							<Route path="*" element={<NotFoundPage />} />
 						</Routes>
 					</Suspense>
-				</ErrorBoundary>
+				</AppErrorBoundary>
 			</main>
 			<Footer />
 		</div>
@@ -110,7 +133,7 @@ function StandardLayout() {
 function AppContent() {
 	return (
 		<>
-			<ErrorBoundary>
+			<AppErrorBoundary>
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
 						<Route path="/projects/:pid/notebooks/:nid" element={<NotebookPage />} />
@@ -124,7 +147,7 @@ function AppContent() {
 						<Route path="*" element={<StandardLayout />} />
 					</Routes>
 				</Suspense>
-			</ErrorBoundary>
+			</AppErrorBoundary>
 
 			<Toaster />
 		</>
@@ -133,7 +156,7 @@ function AppContent() {
 
 function App() {
 	return (
-		<ErrorBoundary>
+		<AppErrorBoundary>
 			<BrowserRouter>
 				<ThemeProvider>
 					<AuthProvider>
@@ -143,7 +166,7 @@ function App() {
 					</AuthProvider>
 				</ThemeProvider>
 			</BrowserRouter>
-		</ErrorBoundary>
+		</AppErrorBoundary>
 	);
 }
 

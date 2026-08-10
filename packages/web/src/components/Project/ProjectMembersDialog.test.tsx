@@ -2,11 +2,12 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
 import { AuthProvider } from '@/context/AuthContext';
 import { userKeys } from '@/api/queryKeys';
+import { createTestQueryClient } from '@/test/render';
 import type { Capabilities, ProjectDetail, ProjectMember, ResolvedUser, User } from '@/types';
 
 const PID = 'proj-1';
@@ -107,7 +108,7 @@ function makeFetch({
 }
 
 async function renderDialog(yourRole: ProjectDetail['your_role']) {
-	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const client = createTestQueryClient();
 	client.setQueryData(userKeys.me(), currentTestUser);
 	const onClose = vi.fn();
 	const wrapper = ({ children }: { children: ReactNode }) => (

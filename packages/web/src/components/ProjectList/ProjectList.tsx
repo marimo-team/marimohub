@@ -21,7 +21,6 @@ import {
 import { useProjectsQuery, useCreateProject } from '@/api/hooks';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useSearchField } from '@/hooks/useSearchField';
-import { toastError } from '@/lib/errors';
 import { filterBySearch } from '@/lib/search';
 
 const projectSchema = z.object({
@@ -48,8 +47,8 @@ export function ProjectList() {
 				await createProject.mutateAsync({ name, description: description || name });
 				toast.success(`Created project "${name}"`);
 				createModal.close();
-			} catch (err) {
-				toastError(err);
+			} catch {
+				return;
 			}
 		},
 	});

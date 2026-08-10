@@ -253,12 +253,21 @@ describe('createApp defaultHook', () => {
 		expect(res.status).toBe(422);
 		const body = (await res.json()) as {
 			success: boolean;
-			error: { code: string; message: string };
+			error: {
+				code: string;
+				message: string;
+				details: { field: string; message: string }[];
+			};
 		};
 		expect(body.success).toBe(false);
 		expect(body.error.code).toBe('VALIDATION_ERROR');
-		// The hook flattens every zod issue into one "path: message" string.
-		expect(typeof body.error.message).toBe('string');
-		expect(body.error.message.length).toBeGreaterThan(0);
+		expect(body.error.message).toContain('n:');
+		expect(body.error.message).toContain('label:');
+		expect(body.error.details).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ field: 'n' }),
+				expect.objectContaining({ field: 'label' }),
+			]),
+		);
 	});
 });

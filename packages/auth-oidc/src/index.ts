@@ -20,7 +20,7 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { jwtVerify, SignJWT } from 'jose';
 import * as oauth from 'oauth4webapi';
-import { ASSIGNABLE_ROLES, AUTH_ENTITLEMENTS, UserId } from '@marimo-hub/core';
+import { ASSIGNABLE_ROLES, AUTH_ENTITLEMENTS, logOperationalError, UserId } from '@marimo-hub/core';
 import type { AssignableRole, AuthEntitlement, Authenticator, AuthUser } from '@marimo-hub/core';
 
 export type EmailVerificationPolicy = 'required' | 'trusted-issuer';
@@ -544,7 +544,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		let url: URL | undefined;
 		try {
 			url = discoveredEndpoint(as, 'authorization_endpoint');
-		} catch {
+		} catch (err) {
+			logOperationalError('oidc_authorization_endpoint_invalid', {}, err);
 			return c.json(
 				{
 					success: false,
@@ -632,7 +633,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				userInfo = await oauth.processUserInfoResponse(as, client, claims.sub, userInfoResponse);
 				if (userInfo.sub !== claims.sub) throw new Error('userinfo subject mismatch');
 			}
-		} catch {
+		} catch (err) {
+			logOperationalError('oidc_callback_exchange_failed', {}, err);
 			return callbackError(c, 'auth_failed', returnTo);
 		}
 
@@ -664,7 +666,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			let groups: string[];
 			try {
 				groups = parseGroups(rawGroups, maxGroups) ?? [];
-			} catch {
+			} catch (err) {
+				logOperationalError('oidc_group_claim_invalid', {}, err);
 				return callbackError(c, 'auth_failed', returnTo);
 			}
 			if (
@@ -687,7 +690,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				...(pictureUrl ? { pictureUrl } : {}),
 				...(config.groups ? { entitlements: entitlements ?? [] } : {}),
 			});
-		} catch {
+		} catch (err) {
+			logOperationalError('oidc_session_signing_failed', {}, err);
 			return callbackError(c, 'auth_failed', returnTo);
 		}
 		setCookie(c, SESSION_COOKIE, session, {
@@ -707,7 +711,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		let url: URL | undefined;
 		try {
 			url = discoveredEndpoint(as, 'end_session_endpoint');
-		} catch {
+		} catch (err) {
+			logOperationalError('oidc_end_session_endpoint_invalid', {}, err);
 			return c.redirect(postLoginRedirect);
 		}
 		if (url) {

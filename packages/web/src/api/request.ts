@@ -1,10 +1,11 @@
 import { ApiRequestError } from './client';
+import type { ApiRequestErrorCode } from './client';
 
 export const projectPath = (projectId: string) => `/api/v1/projects/${projectId}`;
 export const notebookPath = (projectId: string, notebookId: string) =>
 	`${projectPath(projectId)}/notebooks/${notebookId}`;
 
-export function isApiErrorCode(err: unknown, code: string): boolean {
+export function isApiErrorCode(err: unknown, code: ApiRequestErrorCode): boolean {
 	return err instanceof ApiRequestError && err.code === code;
 }
 

@@ -1,2 +1,13 @@
-export { apiClient, apiData, apiDataWithResponse, ApiRequestError } from '@marimo-hub/client';
-export type { ApiError, ApiResponse } from '@marimo-hub/client';
+export {
+	apiClient,
+	apiData,
+	apiDataWithResponse,
+	apiErrorFromResponse,
+	ApiRequestError,
+} from '@marimo-hub/client';
+export type {
+	ApiError,
+	ApiResponse,
+	ApiRequestErrorCode,
+	ServerErrorCode,
+} from '@marimo-hub/client';

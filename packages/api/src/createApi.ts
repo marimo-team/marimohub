@@ -26,6 +26,7 @@ import usersApp from './routes/users';
 import { createOidcDiscovery } from './oidcDiscovery';
 import { sandboxProxyMiddleware } from './sandboxProxy';
 import { createApp, fail } from './shared';
+import type { ErrorCode } from './shared';
 
 const OPENAPI_DOC = {
 	openapi: '3.1.0' as const,
@@ -127,10 +128,14 @@ export function createApi(rawDeps: ApiDeps) {
 			for (const [name, value] of res.headers) {
 				if (name.toLowerCase() !== 'content-type') c.header(name, value);
 			}
+			const errorCodesByStatus: Partial<Record<number, ErrorCode>> = {
+				400: 'BAD_REQUEST',
+				401: 'UNAUTHORIZED',
+				403: 'FORBIDDEN',
+				404: 'NOT_FOUND',
+			};
 			const code =
-				{ 400: 'BAD_REQUEST', 401: 'UNAUTHORIZED', 403: 'FORBIDDEN', 404: 'NOT_FOUND' }[
-					res.status
-				] ?? (res.status >= 500 ? 'INTERNAL_ERROR' : 'BAD_REQUEST');
+				errorCodesByStatus[res.status] ?? (res.status >= 500 ? 'INTERNAL_ERROR' : 'BAD_REQUEST');
 			if (res.status >= 500) {
 				logEvent({
 					level: 'error',
@@ -177,6 +182,7 @@ export function createApi(rawDeps: ApiDeps) {
 	// Correlation id: reuse an inbound `X-Request-Id` or mint one, echo it on the
 	// response header, and thread it into error envelopes + logs for tracing.
 	app.use(`${API_PREFIX}/*`, requestId());
+	app.use('/api/sync/*', requestId());
 
 	// Body-size cap: the API buffers request bodies in full (Hono parses JSON in
 	// memory), so an unbounded POST could OOM the service. Reject anything past

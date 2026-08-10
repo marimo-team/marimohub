@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core';
+import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectListFilesResult } from '@marimo-hub/core/testing';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
 import { DockerCompute, spawnDockerRunner } from './docker';
@@ -133,7 +134,11 @@ describe('DockerCompute', () => {
 		});
 		const res = await new DockerCompute({}, runner).create(SANDBOX_ID).readFile('/missing.py');
 
-		expect(res).toEqual({ success: false, content: '' });
+		expect(res).toEqual({
+			success: false,
+			content: '',
+			error: { code: 'READ_FAILED' },
+		});
 	});
 
 	it('execStream exposes stdout as a readable stream', async () => {
@@ -455,7 +460,7 @@ describe('DockerCompute', () => {
 			const { runner } = fakeRunner(onlyFind('', 1));
 			await expect(
 				new DockerCompute({}, runner).create(SANDBOX_ID).listFiles('/workspace'),
-			).resolves.toEqual({ success: false, files: [] });
+			).resolves.toEqual(listFilesFailure());
 		});
 	});
 

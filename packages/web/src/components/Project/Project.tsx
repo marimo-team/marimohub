@@ -92,7 +92,6 @@ import { VersionHistoryDialog } from '@/components/Notebook/VersionHistoryDialog
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useSearchField } from '@/hooks/useSearchField';
-import { errorMessage, toastError } from '@/lib/errors';
 import { filterBySearch } from '@/lib/search';
 import { formatRelative } from '@/lib/time';
 import { syncUrl } from '@/lib/links';
@@ -200,8 +199,8 @@ export function Project() {
 				});
 				toast.success(`Updated project "${name}"`);
 				editProjectModal.close();
-			} catch (err) {
-				toastError(err);
+			} catch {
+				return;
 			}
 		},
 	});
@@ -222,8 +221,8 @@ export function Project() {
 				await deleteProject.mutateAsync(pid!);
 				toast.success(`Deleted "${project.name}"`);
 				void navigate('/');
-			} catch (err) {
-				toastError(err);
+			} catch {
+				return;
 			}
 		},
 	});
@@ -250,8 +249,8 @@ export function Project() {
 				});
 				toast.success(`Created "${name}"`);
 				closeCreateModal();
-			} catch (err) {
-				toastError(err);
+			} catch {
+				return;
 			}
 		},
 	});
@@ -262,13 +261,8 @@ export function Project() {
 	});
 
 	const handleSaveCloudAccess = async (enabled: boolean) => {
-		try {
-			await updateProject.mutateAsync({ projectId: pid!, federation: { enabled } });
-			toast.success(enabled ? 'Federated cloud access enabled' : 'Federated cloud access disabled');
-		} catch (error) {
-			toastError(error);
-			throw error;
-		}
+		await updateProject.mutateAsync({ projectId: pid!, federation: { enabled } });
+		toast.success(enabled ? 'Federated cloud access enabled' : 'Federated cloud access disabled');
 	};
 
 	// Map each notebook to its "most alive" session so a row shows the strongest state.
@@ -323,32 +317,29 @@ export function Project() {
 				toast.success(`Deleted "${nb.title}"`);
 				deleteModal.close();
 			},
-			onError: toastError,
 		});
 	};
 
 	const handleDuplicate = (nb: NotebookEntry) => {
-		toast.promise(duplicateNotebook.mutateAsync({ notebookId: nb.id }), {
-			loading: `Duplicating "${nb.title}"...`,
-			success: `Duplicated "${nb.title}"`,
-			error: (err: Error) => err.message,
-		});
+		duplicateNotebook.mutate(
+			{ notebookId: nb.id },
+			{ onSuccess: () => toast.success(`Duplicated "${nb.title}"`) },
+		);
 	};
 
 	const handleDownloadFile = (nb: NotebookEntry) => {
-		downloadNotebookFile.mutate({ notebookId: nb.id, title: nb.title }, { onError: toastError });
+		downloadNotebookFile.mutate({ notebookId: nb.id, title: nb.title });
 	};
 
 	const handleDownloadOutputs = (nb: NotebookEntry) => {
-		downloadOutputsHtml.mutate({ notebookId: nb.id, title: nb.title }, { onError: toastError });
+		downloadOutputsHtml.mutate({ notebookId: nb.id, title: nb.title });
 	};
 
 	const handleDownloadWorkspace = (nb: NotebookEntry) => {
-		toast.promise(downloadWorkspace.mutateAsync({ notebookId: nb.id, title: nb.title }), {
-			loading: `Preparing workspace for "${nb.title}"...`,
-			success: 'Workspace downloaded',
-			error: (err: Error) => err.message,
-		});
+		downloadWorkspace.mutate(
+			{ notebookId: nb.id, title: nb.title },
+			{ onSuccess: () => toast.success('Workspace downloaded') },
+		);
 	};
 
 	const handleStop = () => {
@@ -360,7 +351,6 @@ export function Project() {
 				toast.success(`Stopped "${stop.notebook.title}"`);
 				stopModal.close();
 			},
-			onError: toastError,
 		});
 	};
 
@@ -377,7 +367,6 @@ export function Project() {
 				);
 				appModal.close();
 			},
-			onError: toastError,
 		});
 	};
 
@@ -397,7 +386,7 @@ export function Project() {
 				sessionId: computeRestartSession.session_id,
 			})
 			.then(() => toast.success(`Restarted the session for "${computeTarget.title}"`))
-			.catch((error) => toast.error(errorMessage(error)));
+			.catch(() => {});
 	};
 
 	const handleSyncedCreated = (result: SyncedNotebookCreated) => {

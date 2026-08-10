@@ -3,6 +3,7 @@ import { CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
 import type { SandboxId, SandboxProvider } from '@marimo-hub/core';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
+import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
 import { coreWeaveProfileResources, CoreWeaveCompute, portWaitCommand } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
@@ -703,7 +704,7 @@ describe('CoreWeaveCompute', () => {
 		it('returns success:false when the find command fails', async () => {
 			const world = makeWorld(onlyFind('', 1));
 			const res = await makeCompute(world).create(SANDBOX_ID).listFiles('/workspace');
-			expect(res).toEqual({ success: false, files: [] });
+			expect(res).toEqual(listFilesFailure());
 		});
 	});
 

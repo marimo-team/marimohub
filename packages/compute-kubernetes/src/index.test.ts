@@ -258,7 +258,11 @@ describe('KubernetesCompute', () => {
 			});
 			const res = await makeCompute(world).create(SANDBOX_ID).readFile('/workspace/missing.py');
 
-			expect(res).toEqual({ success: false, content: '' });
+			expect(res).toEqual({
+				success: false,
+				content: '',
+				error: { code: 'READ_FAILED' },
+			});
 		});
 
 		it('writeFile streams a large file via stdin, never into the exec argv (ARG_MAX)', async () => {

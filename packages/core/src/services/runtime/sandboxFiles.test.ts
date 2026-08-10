@@ -9,6 +9,7 @@ import {
 	MemoryBucket,
 	RecordingBucket,
 } from '../../testing';
+import { listFilesFailure } from '../../ports/sandbox';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
 
 // `makeFsSandbox`'s default root — every test mounts the notebook here.
@@ -382,7 +383,7 @@ describe('captureWorkspace', () => {
 			const { instance: base } = makeFsSandbox({ files: { 'data/keep.csv': 'precious' } });
 			const instance = {
 				...base,
-				listFiles: async () => ({ success: false, files: [] }),
+				listFiles: async () => listFilesFailure(),
 			} as unknown as typeof base;
 
 			await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
@@ -400,7 +401,12 @@ describe('captureWorkspace', () => {
 				...base,
 				exec: async (cmd: string) =>
 					cmd.startsWith('base64 -w0') && cmd.includes('bad.txt')
-						? { success: false, stdout: '', stderr: 'io error' }
+						? {
+								success: false,
+								stdout: '',
+								stderr: 'io error',
+								error: { code: 'COMMAND_FAILED' },
+							}
 						: base.exec(cmd),
 			} as unknown as typeof base;
 

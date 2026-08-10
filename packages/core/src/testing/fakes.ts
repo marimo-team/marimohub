@@ -15,6 +15,7 @@ import type {
 	SetEnvVarsOptions,
 	StartProcessOptions,
 } from '../ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '../ports/sandbox';
 
 /** URL the fake sandbox reports from `exposePort`. */
 export const EXPOSED_URL = 'https://sandbox.example/kernel';
@@ -96,7 +97,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 			calls.readFile.push(path);
 			const content = opts.files?.[path];
 			if (content === undefined) {
-				return { success: false, content: '' };
+				return readFileFailure('NOT_FOUND');
 			}
 			return { success: true, content };
 		},
@@ -217,7 +218,7 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 			if (capture) {
 				const rel = toRel(fsUnquote(capture[1]));
 				const bytes = fs.get(rel);
-				if (bytes === undefined) return { success: false, stdout: '', stderr: 'not found' };
+				if (bytes === undefined) return execResult(false, '', 'not found');
 				return { success: true, stdout: fsBase64Encode(bytes), stderr: '' };
 			}
 			// mkdir -p ... (and any other prep command): no-op success.
@@ -229,7 +230,7 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 		async readFile(path: string): Promise<ReadFileResult> {
 			calls.readFile.push(path);
 			const bytes = fs.get(toRel(path));
-			if (bytes === undefined) return { success: false, content: '' };
+			if (bytes === undefined) return readFileFailure('NOT_FOUND');
 			return { success: true, content: new TextDecoder().decode(bytes), encoding: 'utf-8' };
 		},
 		async listFiles(path: string): Promise<ListFilesResult> {
@@ -327,10 +328,10 @@ export class RecordingCompute implements SandboxProvider {
 		// with empty artifacts. `destroy()` records the teardown.
 		return {
 			async readFile() {
-				return { success: false as const };
+				return readFileFailure('NOT_FOUND');
 			},
 			async listFiles() {
-				return { success: false as const, files: [] };
+				return listFilesFailure();
 			},
 			async destroy() {
 				destroyed.push(id);

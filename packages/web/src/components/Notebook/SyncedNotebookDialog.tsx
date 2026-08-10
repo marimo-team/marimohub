@@ -72,8 +72,8 @@ export function SyncedNotebookDialog({
 					syncUrl: data.sync_url,
 					token: data.sync_token,
 				});
-			} catch (err) {
-				toast.error((err as Error).message);
+			} catch {
+				return;
 			}
 		},
 	});

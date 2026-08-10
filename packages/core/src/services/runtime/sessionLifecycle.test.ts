@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { paths } from '../../paths';
 import type { SandboxInstance } from '../../ports/sandbox';
+import { listFilesFailure } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 import {
 	fakeComputeFrom,
@@ -337,8 +338,12 @@ describe('SessionLifecycleService', () => {
 		it('does not stamp the reclaim marker when the destroy fails (retried next sweep)', async () => {
 			const failing = {
 				...makeFakeSandbox().instance,
-				readFile: async () => ({ success: false as const, content: '' }),
-				listFiles: async () => ({ success: false as const, files: [] }),
+				readFile: async () => ({
+					success: false as const,
+					content: '' as const,
+					error: { code: 'READ_FAILED' as const },
+				}),
+				listFiles: async () => listFilesFailure(),
 				destroy: async () => {
 					throw new Error('compute API down');
 				},
@@ -595,7 +600,12 @@ describe('kernelActiveConnections', () => {
 	});
 
 	it('returns null when the exec fails', async () => {
-		const sandbox = sandboxWith(async () => ({ success: false, stdout: '', stderr: 'boom' }));
+		const sandbox = sandboxWith(async () => ({
+			success: false,
+			stdout: '',
+			stderr: 'boom',
+			error: { code: 'COMMAND_FAILED' },
+		}));
 		expect(await kernelActiveConnections(sandbox)).toBeNull();
 	});
 

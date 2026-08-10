@@ -2,7 +2,6 @@ import { AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { FormDialog, useAppForm, useSeedOnOpen } from '@/components/form';
 import { useCapabilitiesQuery, useNotebookQuery, useUpdateNotebook } from '@/api/hooks';
-import { toastError } from '@/lib/errors';
 import {
 	computeProfileOptions,
 	computeProfilePickerValue,
@@ -54,8 +53,8 @@ export function ChangeComputeProfileDialog({
 						: undefined,
 				);
 				onClose();
-			} catch (err) {
-				toastError(err);
+			} catch {
+				return;
 			}
 		},
 	});

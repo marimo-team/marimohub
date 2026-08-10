@@ -234,13 +234,14 @@ describe('Notebook routes', () => {
 				compute_profile: 'large',
 			};
 			await expectError(await profileApi()('POST', nb(''), { ...body, compute_profile: 'x' }), 400);
-			await expectError(await profileApi('none')('POST', nb(''), body), 400);
+			await expectError(await profileApi('none')('POST', nb(''), body), 403, 'FORBIDDEN');
 			await expectError(
 				await profileApi('none')('POST', nb(''), {
 					...body,
 					compute_profile: 'default',
 				}),
-				400,
+				403,
+				'FORBIDDEN',
 			);
 		});
 
@@ -397,7 +398,7 @@ describe('Notebook routes', () => {
 			root_path: '',
 			entry_notebook: 'app.py',
 		};
-		await expectError(await request('PATCH', nb(`/${local.id}/source`), body), 400, 'BAD_REQUEST');
+		await expectError(await request('PATCH', nb(`/${local.id}/source`), body), 409, 'CONFLICT');
 
 		const synced = await expectOk<any>(
 			await request('POST', nb('/git'), {
