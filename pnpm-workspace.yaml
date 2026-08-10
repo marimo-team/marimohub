@@ -78,6 +78,7 @@ minimumReleaseAgeExclude:
   - '@marimo-team/*'
   # Security fixes take precedence over the release-age cooldown.
   - brace-expansion
+  - nanoid
   - postcss
   - tar
   - undici
