@@ -377,18 +377,14 @@ describe('forwardHttp', () => {
 		expect(seen.origin).toBe(origin);
 	});
 
-	/** A port with nothing listening: reserve an ephemeral one, then free it. */
-	async function closedPort(): Promise<number> {
-		const s = createServer();
-		await new Promise<void>((resolve) => s.listen(0, '127.0.0.1', resolve));
-		const port = (s.address() as AddressInfo).port;
-		await new Promise<void>((resolve) => s.close(() => resolve()));
-		return port;
-	}
-
 	it('returns 502 and logs a structured event when the kernel is unreachable', async () => {
 		const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-		const deadOrigin = `http://127.0.0.1:${await closedPort()}`;
+		// A deterministic dead endpoint: a server we keep listening (so no other
+		// process can grab the port) that kills every connection on accept.
+		const dead = createServer();
+		dead.on('connection', (socket) => socket.destroy());
+		await new Promise<void>((resolve) => dead.listen(0, '127.0.0.1', resolve));
+		const deadOrigin = `http://127.0.0.1:${(dead.address() as AddressInfo).port}`;
 		try {
 			const res = await forwardHttp(
 				new Request('https://hub/x'),
@@ -413,16 +409,21 @@ describe('forwardHttp', () => {
 			});
 			expect(events[1]).toMatchObject({ attempt: 2, will_retry: false });
 			for (const e of events) {
-				const line = JSON.stringify(e);
-				// The diagnostic code survives (it lives on the fetch error's cause)…
-				expect(line).toContain('ECONNREFUSED');
+				// A diagnostic code survives on the fetch error's cause (which exact
+				// code — ECONNRESET vs UND_ERR_SOCKET — depends on RST timing, so the
+				// precise-code property is pinned in log.test.ts instead)…
+				const error = e.error as { error_name: string; cause?: { error_code?: unknown } };
+				expect(error.error_name).toBe('TypeError');
+				expect(typeof error.cause?.error_code).toBe('string');
 				// …but never free-form error text: no message/stack that could quote
 				// the token-bearing target URL, and no token.
+				const line = JSON.stringify(e);
 				expect(line).not.toContain('/proxy/tok');
 				expect(line).not.toContain('fetch failed');
 			}
 		} finally {
 			logSpy.mockRestore();
+			await new Promise<void>((resolve) => dead.close(() => resolve()));
 		}
 	});
 
