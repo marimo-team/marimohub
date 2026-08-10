@@ -29,13 +29,13 @@ describe('SessionService.countActiveForUser', () => {
 		// ACTOR: one starting, one running, one terminated.
 		await create(ACTOR);
 		const running = await create(ACTOR);
-		await sessions.heartbeat(projectId, running.session_id); // -> running
+		await sessions.setRunning(projectId, running.session_id, 'https://sandbox.example');
 		const dead = await create(ACTOR);
 		await sessions.terminate(projectId, dead.session_id); // -> terminated (not counted)
 
 		// A different user's live session must not count toward ACTOR.
 		const other = await create(OTHER);
-		await sessions.heartbeat(projectId, other.session_id);
+		await sessions.setRunning(projectId, other.session_id, 'https://sandbox.example');
 
 		expect(await sessions.countActiveForUser(ACTOR)).toBe(2);
 		expect(await sessions.countActiveForUser(OTHER)).toBe(1);
@@ -46,14 +46,14 @@ describe('SessionService.countActiveForUser', () => {
 		// expired: reaped by the TTL sweep — terminal, must not count. Driven to
 		// `expired` first, in isolation, so the time-advance doesn't reap the others.
 		const gone = await create(ACTOR);
-		await sessions.heartbeat(projectId, gone.session_id); // -> running
+		await sessions.setRunning(projectId, gone.session_id, 'https://sandbox.example');
 		advanceTime(6 * 60 * 1000);
 		expect(await sessions.expireStale()).toBe(1); // -> expired
 		restoreClock();
 
 		// One genuinely-active session that must be counted.
 		const live = await create(ACTOR);
-		await sessions.heartbeat(projectId, live.session_id); // -> running
+		await sessions.setRunning(projectId, live.session_id, 'https://sandbox.example');
 
 		// terminating: on its way out — a stop should immediately free the slot.
 		const stopping = await create(ACTOR);

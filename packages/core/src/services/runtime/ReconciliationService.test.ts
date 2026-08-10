@@ -136,7 +136,7 @@ describe('ReconciliationService', () => {
 		// workspace keys it created, and rewind the FS-snapshot pointer.
 		await putSession({ status: 'expired', sandbox_id: terminalId, started_at: iso(-60 * 60_000) });
 		const live = await createSession(healthyId);
-		await sessions.heartbeat(projectId, live.session_id); // -> running
+		await sessions.setRunning(projectId, live.session_id, 'https://kernel.example');
 		compute.active = [{ id: terminalId }, { id: healthyId }];
 
 		const result = await reconciler.reconcile();
@@ -225,7 +225,7 @@ describe('ReconciliationService', () => {
 
 	it('Rule 2: marks a record failed when its sandbox has vanished', async () => {
 		const session = await createSession(goneId);
-		await sessions.heartbeat(projectId, session.session_id); // -> running
+		await sessions.setRunning(projectId, session.session_id, 'https://kernel.example');
 		compute.active = []; // sandbox is no longer live
 
 		const result = await reconciler.reconcile();
@@ -266,7 +266,7 @@ describe('ReconciliationService', () => {
 
 	it('leaves a healthy running session untouched', async () => {
 		const session = await createSession(healthyId);
-		await sessions.heartbeat(projectId, session.session_id); // -> running
+		await sessions.setRunning(projectId, session.session_id, 'https://kernel.example');
 		compute.active = [{ id: healthyId }];
 
 		const result = await reconciler.reconcile();
@@ -389,7 +389,7 @@ describe('ReconciliationService', () => {
 
 	it('Rule 1: reclaims a lingering sandbox behind a terminating record', async () => {
 		const session = await createSession(goneId);
-		await sessions.heartbeat(projectId, session.session_id); // -> running
+		await sessions.setRunning(projectId, session.session_id, 'https://kernel.example');
 		await sessions.beginTerminating(projectId, session.session_id); // -> terminating
 		// Teardown stalled/crashed: the sandbox is still live and billing while the
 		// record sits in `terminating`. The provider-truth net must destroy it.
@@ -403,7 +403,7 @@ describe('ReconciliationService', () => {
 
 	it('Rule 2 does not misfire on a terminating record whose sandbox vanished', async () => {
 		const session = await createSession(healthyId);
-		await sessions.heartbeat(projectId, session.session_id); // -> running
+		await sessions.setRunning(projectId, session.session_id, 'https://kernel.example');
 		await sessions.beginTerminating(projectId, session.session_id); // -> terminating
 		compute.active = []; // sandbox already gone
 

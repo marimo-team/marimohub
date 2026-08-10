@@ -592,28 +592,32 @@ app.openapi(getEditorSession, async (c) => {
 	if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
 	const claim = await deps.services.sessions.getEditorClaim(pid, nid);
 	const sharing = effectiveEditorSharing(claim, deps.policy.editorSandboxSharing);
-	const holder = claim?.session_id
+	const claimedSession = claim?.session_id
 		? await deps.services.sessions.getSession(pid, claim.session_id).catch(() => null)
 		: undefined;
-	const activity = holder ? await inspectEditorActivity(deps, holder) : undefined;
+	// A terminal session is a stale claim, not a holder eligible for takeover.
+	const holder =
+		claimedSession &&
+		(claimedSession.status === 'starting' ||
+			claimedSession.status === 'running' ||
+			claimedSession.status === 'terminating')
+			? { ...claimedSession, status: claimedSession.status }
+			: null;
+	const holderView = holder
+		? {
+				session_id: holder.session_id,
+				user_id: holder.user_id,
+				status: holder.status,
+				started_at: holder.started_at,
+				activity: await inspectEditorActivity(deps, holder),
+			}
+		: null;
 	return c.json(
 		{
 			success: true,
 			data: {
 				sharing,
-				holder:
-					holder &&
-					(holder.status === 'starting' ||
-						holder.status === 'running' ||
-						holder.status === 'terminating')
-						? {
-								session_id: holder.session_id,
-								user_id: holder.user_id,
-								status: holder.status,
-								started_at: holder.started_at,
-								activity: activity!,
-							}
-						: null,
+				holder: holderView,
 				can_take_over:
 					sharing === 'exclusive' && !!holder && holder.user_id !== user.id && !claim?.transfer,
 				...(claim?.transfer ? { transfer: { status: claim.transfer.phase } } : {}),
