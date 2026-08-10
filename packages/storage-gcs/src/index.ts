@@ -368,9 +368,6 @@ export class GcsStorage implements Bucket {
 		if (options?.delimiter) params.set('delimiter', options.delimiter);
 		if (options?.limit !== undefined) params.set('maxResults', String(options.limit));
 		if (options?.cursor) params.set('pageToken', options.cursor);
-		// NOTE: GCS `startOffset` is INCLUSIVE, whereas the port's `startAfter` is
-		// exclusive — they differ only at the exact boundary key. Pagination uses
-		// `cursor` (pageToken), so this matters only for direct `startAfter` callers.
 		if (options?.startAfter) params.set('startOffset', options.startAfter);
 
 		const url = `${this.apiEndpoint}/storage/v1/b/${this.bucket}/o?${params}`;
@@ -385,6 +382,8 @@ export class GcsStorage implements Bucket {
 		return {
 			objects: (json.items ?? [])
 				.filter((o): o is GcsObjectResource & { name: string } => Boolean(o.name))
+				// GCS startOffset is inclusive; the Bucket port's startAfter is exclusive.
+				.filter((o) => options?.cursor || !options?.startAfter || o.name > options.startAfter)
 				.map((o) => ({
 					key: o.name,
 					etag: o.generation ?? '',

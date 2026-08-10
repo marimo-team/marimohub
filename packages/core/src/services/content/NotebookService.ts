@@ -34,7 +34,7 @@ import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject } from '../catalog/cas';
 import { buildNotebookEntry, buildNotebookMeta, buildVersion, localSource } from './notebookMeta';
 import { SyncedNotebookService } from './SyncedNotebookService';
-import { deleteByPrefix, listAllKeys, listAllObjects } from '../catalog/storage';
+import { deleteByPrefix, listAllKeys, listAllObjects, listAllPrefixes } from '../catalog/storage';
 
 /**
  * Maximum number of immutable version folders to retain per notebook. Older
@@ -696,10 +696,10 @@ export class NotebookService {
 
 	async listVersions(projectId: ProjectId, notebookId: NotebookId): Promise<Version[]> {
 		const nb = paths.project(projectId).notebook(notebookId);
-		const result = await this.bucket.list({ prefix: `${nb.base}/versions/`, delimiter: '/' });
+		const versionPrefixes = await listAllPrefixes(this.bucket, `${nb.base}/versions/`);
 
 		const fetched = await mapWithConcurrency(
-			result.delimitedPrefixes,
+			versionPrefixes,
 			BUCKET_SCAN_CONCURRENCY,
 			async (pfx) => {
 				const key = `${pfx}version.json`;
@@ -838,11 +838,10 @@ export class NotebookService {
 		try {
 			const nb = paths.project(projectId).notebook(notebookId);
 			const versionsRoot = `${nb.base}/versions/`;
-			const listing = await this.bucket.list({ prefix: versionsRoot, delimiter: '/' });
 
 			// Each delimited prefix is `.../versions/{vid}/`; sort ascending so the
 			// newest (largest ULID) sort last.
-			const versionPrefixes = [...listing.delimitedPrefixes].sort();
+			const versionPrefixes = await listAllPrefixes(this.bucket, versionsRoot);
 			if (versionPrefixes.length <= max) {
 				return;
 			}

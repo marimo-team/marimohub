@@ -101,25 +101,40 @@ export class MemoryBucket implements Bucket {
 
 		const prefixes = new Set<string>();
 		const objectKeys: string[] = [];
+		let emitted = 0;
+		let lastConsumed: string | undefined;
+		let truncated = false;
 		for (const key of sorted) {
 			if (after && key <= after) continue;
 			if (delimiter) {
 				const rest = key.slice(prefix.length);
 				const idx = rest.indexOf(delimiter);
 				if (idx !== -1) {
-					prefixes.add(prefix + rest.slice(0, idx + delimiter.length));
+					const delimitedPrefix = prefix + rest.slice(0, idx + delimiter.length);
+					if (prefixes.has(delimitedPrefix)) {
+						lastConsumed = key;
+						continue;
+					}
+					if (emitted === limit) {
+						truncated = true;
+						break;
+					}
+					prefixes.add(delimitedPrefix);
+					emitted++;
+					lastConsumed = key;
 					continue;
 				}
 			}
+			if (emitted === limit) {
+				truncated = true;
+				break;
+			}
 			objectKeys.push(key);
+			emitted++;
+			lastConsumed = key;
 		}
 
-		// Emulate S3/R2 paging for object listings: at most `limit` per page, with a
-		// cursor to resume. Delimited (prefix-rollup) listings are returned whole.
-		const pageKeys = delimiter ? objectKeys : objectKeys.slice(0, limit);
-		const truncated = !delimiter && objectKeys.length > limit;
-
-		const objects: BucketObject[] = pageKeys.map((key) => {
+		const objects: BucketObject[] = objectKeys.map((key) => {
 			const stored = this.store.get(key)!;
 			return { key, etag: stored.etag, size: stored.body.length, uploaded: stored.uploaded };
 		});
@@ -127,7 +142,7 @@ export class MemoryBucket implements Bucket {
 		return {
 			objects,
 			truncated,
-			cursor: truncated ? pageKeys[pageKeys.length - 1] : undefined,
+			cursor: truncated ? lastConsumed : undefined,
 			delimitedPrefixes: [...prefixes].sort(),
 		};
 	}

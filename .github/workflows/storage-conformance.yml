@@ -28,19 +28,17 @@ jobs:
             - args: ['--frozen-lockfile']
 
       # Started with `docker run` (not `services:`) because GitHub service
-      # containers cannot override the image command, and minio/fake-gcs-server
-      # both need one.
+      # containers cannot override the image command used by these emulators.
+      # fake-gcs-server does not enforce the generation and delimiter-page
+      # semantics this contract protects, so GCS remains hermetic-only here.
       - name: Start storage emulators
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
           docker run -d --name azurite -p 10000:10000 \
-            mcr.microsoft.com/azure-storage/azurite:3.34.0 \
-            azurite-blob --blobHost 0.0.0.0
-          docker run -d --name fake-gcs -p 4443:4443 \
-            fsouza/fake-gcs-server:1.52.2 \
-            -scheme http -backend memory
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
 
       - name: Wait for emulators
         run: |
@@ -53,10 +51,6 @@ jobs:
             [ "$code" != "000" ] && break
             sleep 1; [ "$i" = 30 ] && exit 1
           done
-          for i in $(seq 1 30); do
-            curl -fsS "http://127.0.0.1:4443/storage/v1/b?project=test" && break
-            sleep 1; [ "$i" = 30 ] && exit 1
-          done
 
       - name: Create test buckets
         env:
@@ -67,9 +61,7 @@ jobs:
         run: |
           aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://marimohub-test
           az storage container create --name marimohub-test \
-            --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IiFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
-          curl -fsS -X POST "http://127.0.0.1:4443/storage/v1/b?project=test" \
-            -H 'Content-Type: application/json' -d '{"name":"marimohub-test"}'
+            --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
 
       - name: S3 contract against MinIO
         env:
@@ -83,11 +75,5 @@ jobs:
       - name: Azure contract against Azurite
         env:
           MARIMOHUB_TEST_AZURE_CONTAINER: marimohub-test
-          MARIMOHUB_TEST_AZURE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IiFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
+          MARIMOHUB_TEST_AZURE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
         run: pnpm --filter @marimo-hub/storage-azure test
-
-      - name: GCS contract against fake-gcs-server
-        env:
-          MARIMOHUB_TEST_GCS_BUCKET: marimohub-test
-          MARIMOHUB_TEST_GCS_ENDPOINT: http://127.0.0.1:4443
-        run: pnpm --filter @marimo-hub/storage-gcs test

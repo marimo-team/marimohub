@@ -25,6 +25,7 @@ export type AzureStorageConfig =
 
 type AzureError = {
 	statusCode?: number;
+	code?: string;
 };
 
 function statusCode(err: unknown): number | undefined {
@@ -37,6 +38,11 @@ function isNotFound(err: unknown): boolean {
 
 function isPreconditionFailed(err: unknown): boolean {
 	return statusCode(err) === 412;
+}
+
+// Create-style conditional uploads can report the collision as BlobAlreadyExists.
+function isAlreadyExists(err: unknown): boolean {
+	return (err as AzureError)?.code === 'BlobAlreadyExists';
 }
 
 function conditionETag(etag: string): string {
@@ -194,7 +200,7 @@ export class AzureStorage implements Bucket {
 				uploaded: response.lastModified ?? new Date(),
 			};
 		} catch (err) {
-			if (isPreconditionFailed(err)) {
+			if (isPreconditionFailed(err) || (options?.onlyIfNotExists && isAlreadyExists(err))) {
 				throw new PreconditionFailedError(`ETag mismatch for key "${key}"`);
 			}
 			throw err;

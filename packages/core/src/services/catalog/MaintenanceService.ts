@@ -4,7 +4,7 @@ import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
 import { CatalogSchema, readStored } from '../../schema';
-import { listAllObjects } from './storage';
+import { listAllObjects, listAllPrefixes } from './storage';
 
 // Every commit writes a new catalog snapshot; at ~20 writes/day that is
 // thousands of accumulating objects per year. The event log grows the same way
@@ -98,10 +98,7 @@ export class MaintenanceService {
 		const retentionMs = opts?.retentionMs ?? DEFAULT_EVENT_RETENTION_MS;
 		const cutoff = Date.now() - retentionMs;
 
-		const { delimitedPrefixes } = await this.bucket.list({
-			prefix: paths.eventsPrefix,
-			delimiter: '/',
-		});
+		const delimitedPrefixes = await listAllPrefixes(this.bucket, paths.eventsPrefix);
 
 		let deleted = 0;
 		for (const dayPrefix of delimitedPrefixes) {

@@ -67,6 +67,12 @@ function isPreconditionFailed(err: unknown): boolean {
 	return name === 'PreconditionFailed' || httpStatus(err) === 412;
 }
 
+// S3 reports some losing conditional writes as retryable 409 conflicts instead of 412.
+function isConditionalRequestConflict(err: unknown): boolean {
+	const name = (err as { name?: string })?.name;
+	return name === 'ConditionalRequestConflict' || httpStatus(err) === 409;
+}
+
 function* chunk<T>(items: T[], size: number): Generator<T[]> {
 	for (let i = 0; i < items.length; i += size) {
 		yield items.slice(i, i + size);
@@ -144,6 +150,8 @@ export class S3Storage implements Bucket {
 			// if the key already exists), which `isPreconditionFailed` maps below.
 			input.IfNoneMatch = '*';
 		}
+		const matchesEtag = options?.onlyIfEtagMatches !== undefined;
+		const conditional = matchesEtag || options?.onlyIfNotExists === true;
 
 		try {
 			const res = await this.client.send(new PutObjectCommand(input));
@@ -154,7 +162,11 @@ export class S3Storage implements Bucket {
 				uploaded: new Date(),
 			};
 		} catch (err) {
-			if (isPreconditionFailed(err)) {
+			if (
+				isPreconditionFailed(err) ||
+				(conditional && isConditionalRequestConflict(err)) ||
+				(matchesEtag && isNotFound(err))
+			) {
 				throw new PreconditionFailedError(`ETag mismatch for key "${key}"`);
 			}
 			throw err;

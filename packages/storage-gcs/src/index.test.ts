@@ -137,15 +137,57 @@ function makeFakeGcsFetch(): typeof fetch {
 		// List: GET /storage/v1/b/BUCKET/o?prefix=&delimiter=
 		if (method === 'GET' && oIndex === -1 && url.pathname.endsWith('/o')) {
 			const prefix = q.get('prefix') ?? '';
-			const items = [...store.entries()]
-				.filter(([k]) => k.startsWith(prefix))
-				.map(([k, v]) => ({
-					name: k,
-					generation: String(v.generation),
-					size: String(v.content.length),
-					updated: v.updated,
-				}));
-			return json({ items });
+			const delimiter = q.get('delimiter');
+			const limit = Number(q.get('maxResults') ?? 1000);
+			const cursor = q.get('pageToken');
+			const startOffset = q.get('startOffset');
+			const prefixes = new Set<string>();
+			const items: { name: string; generation: string; size: string; updated: string }[] = [];
+			let emitted = 0;
+			let lastConsumed: string | undefined;
+			let truncated = false;
+			for (const [name, value] of [...store.entries()].sort(([left], [right]) =>
+				left.localeCompare(right),
+			)) {
+				if (!name.startsWith(prefix) || (cursor && name <= cursor)) continue;
+				if (!cursor && startOffset && name < startOffset) continue;
+				if (delimiter) {
+					const rest = name.slice(prefix.length);
+					const index = rest.indexOf(delimiter);
+					if (index !== -1) {
+						const delimitedPrefix = prefix + rest.slice(0, index + delimiter.length);
+						if (prefixes.has(delimitedPrefix)) {
+							lastConsumed = name;
+							continue;
+						}
+						if (emitted === limit) {
+							truncated = true;
+							break;
+						}
+						prefixes.add(delimitedPrefix);
+						emitted++;
+						lastConsumed = name;
+						continue;
+					}
+				}
+				if (emitted === limit) {
+					truncated = true;
+					break;
+				}
+				items.push({
+					name,
+					generation: String(value.generation),
+					size: String(value.content.length),
+					updated: value.updated,
+				});
+				emitted++;
+				lastConsumed = name;
+			}
+			return json({
+				items,
+				prefixes: [...prefixes],
+				...(truncated ? { nextPageToken: lastConsumed } : {}),
+			});
 		}
 
 		if (key === undefined) return new Response('not found', { status: 404 });

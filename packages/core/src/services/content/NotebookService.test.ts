@@ -16,7 +16,7 @@ import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS } from './NotebookService';
 import type { NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
-import { listAllKeys } from '../catalog/storage';
+import { listAllKeys, listAllPrefixes } from '../catalog/storage';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -27,8 +27,7 @@ async function countVersionFolders(
 	notebookId: NotebookId,
 ): Promise<number> {
 	const nb = paths.project(projectId).notebook(notebookId);
-	const res = await bucket.list({ prefix: `${nb.base}/versions/`, delimiter: '/' });
-	return res.delimitedPrefixes.length;
+	return (await listAllPrefixes(bucket, `${nb.base}/versions/`)).length;
 }
 
 describe('NotebookService', () => {
@@ -742,19 +741,23 @@ describe('NotebookService', () => {
 			// Save MAX_VERSIONS + 5 more times (well over the cap).
 			const extraSaves = MAX_VERSIONS + 5;
 			let currentVid = oldestVid;
-			for (let i = 1; i <= extraSaves; i++) {
-				const updated = await notebooks.updateNotebook(
-					projectId,
-					created.id,
-					{ code: `v${i}`, message: `save ${i}` },
-					ACTOR,
-				);
-				// Track the live current version id via the source file.
-				const source = await (await bucket.get(
-					paths.project(projectId).notebook(created.id).source,
-				))!.json<{ current_version_id: string }>();
-				currentVid = source.current_version_id as typeof currentVid;
-				void updated;
+			const originalList = bucket.list.bind(bucket);
+			bucket.list = (options) => originalList({ ...options, limit: 2 });
+			try {
+				for (let i = 1; i <= extraSaves; i++) {
+					await notebooks.updateNotebook(
+						projectId,
+						created.id,
+						{ code: `v${i}`, message: `save ${i}` },
+						ACTOR,
+					);
+					const source = await (await bucket.get(
+						paths.project(projectId).notebook(created.id).source,
+					))!.json<{ current_version_id: string }>();
+					currentVid = source.current_version_id as typeof currentVid;
+				}
+			} finally {
+				bucket.list = originalList;
 			}
 
 			// The right things were deleted: version-folder count is bounded.
@@ -949,6 +952,21 @@ describe('NotebookService', () => {
 	});
 
 	describe('listVersions / getVersion', () => {
+		it('returns versions across every listing page', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			for (let version = 2; version <= 4; version++) {
+				await notebooks.updateNotebook(projectId, created.id, { code: `v${version}` }, ACTOR);
+			}
+			const originalList = bucket.list.bind(bucket);
+			bucket.list = (options) => originalList({ ...options, limit: 2 });
+
+			expect(await notebooks.listVersions(projectId, created.id)).toHaveLength(4);
+		});
+
 		it('returns all versions in order of creation', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,

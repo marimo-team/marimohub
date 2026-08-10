@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MemoryBucket } from '../../testing';
 import type { BucketListOptions } from '../../ports/bucket';
-import { deleteByPrefix, listAllKeys, listAllObjects } from './storage';
+import { deleteByPrefix, listAllKeys, listAllObjects, listAllPrefixes } from './storage';
 
 /**
  * MemoryBucket pages at `limit` (default 1000). These helpers never pass a
@@ -92,6 +92,19 @@ describe('listAllKeys', () => {
 
 		const got = await listAllKeys(bucket, 'projects/p/');
 		expect(got.sort()).toEqual([...keys].sort());
+	});
+});
+
+describe('listAllPrefixes', () => {
+	it('returns every sorted prefix across multiple pages', async () => {
+		const bucket = new SmallPageBucket(2);
+		await seed(bucket, ['p/e/1', 'p/c/1', 'p/a/1', 'p/b/1', 'p/d/1', 'p/a/2']);
+
+		expect(await listAllPrefixes(bucket, 'p/')).toEqual(['p/a/', 'p/b/', 'p/c/', 'p/d/', 'p/e/']);
+	});
+
+	it('returns an empty array when no prefixes match', async () => {
+		expect(await listAllPrefixes(new MemoryBucket(), 'p/')).toEqual([]);
 	});
 });
 

@@ -82,20 +82,9 @@ function pagedDelimiterBucket(inner: Bucket, pageSize: number): Bucket {
 		head: (key) => inner.head(key),
 		put: (key, value, options) => inner.put(key, value, options),
 		delete: (key) => inner.delete(key),
-		async list(options: BucketListOptions = {}) {
+		list(options: BucketListOptions = {}) {
 			if (!options.delimiter) return inner.list(options);
-			const { cursor, ...firstPage } = options;
-			const complete = await inner.list(firstPage);
-			const offset = cursor === undefined ? 0 : Number(cursor.slice('test-page:'.length));
-			const delimitedPrefixes = complete.delimitedPrefixes.slice(offset, offset + pageSize);
-			const next = offset + delimitedPrefixes.length;
-			const truncated = next < complete.delimitedPrefixes.length;
-			return {
-				objects: [],
-				delimitedPrefixes,
-				truncated,
-				...(truncated ? { cursor: `test-page:${next}` } : {}),
-			};
+			return inner.list({ ...options, limit: pageSize });
 		},
 	};
 }

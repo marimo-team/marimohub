@@ -213,12 +213,22 @@ describe('FsStorage', () => {
 			expect(both.objects.map((o) => o.key)).toEqual(['b/4.json']);
 		});
 
-		it('delimited listings are returned whole regardless of limit', async () => {
+		it('paginates delimited listings', async () => {
 			const bucket = new FsStorage({ root: makeRoot() });
 			for (let i = 0; i < 5; i++) await bucket.put(`p/${i}/data`, '{}');
-			const result = await bucket.list({ prefix: 'p/', delimiter: '/', limit: 2 });
-			expect(result.truncated).toBe(false);
-			expect(result.delimitedPrefixes).toHaveLength(5);
+
+			const first = await bucket.list({ prefix: 'p/', delimiter: '/', limit: 2 });
+			expect(first.truncated).toBe(true);
+			expect(first.delimitedPrefixes).toEqual(['p/0/', 'p/1/']);
+
+			const second = await bucket.list({
+				prefix: 'p/',
+				delimiter: '/',
+				limit: 2,
+				cursor: first.cursor,
+			});
+			expect(second.truncated).toBe(true);
+			expect(second.delimitedPrefixes).toEqual(['p/2/', 'p/3/']);
 		});
 	});
 

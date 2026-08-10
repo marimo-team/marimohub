@@ -113,22 +113,40 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 					const sorted = [...store.map.keys()].filter((k) => k.startsWith(prefix)).sort();
 					const prefixes = new Set<string>();
 					const keys: string[] = [];
+					let emitted = 0;
+					let lastConsumed: string | undefined;
+					let truncated = false;
 					for (const key of sorted) {
 						if (after && key <= after) continue;
 						if (delimiter) {
 							const rest = key.slice(prefix.length);
 							const idx = rest.indexOf(delimiter);
 							if (idx !== -1) {
-								prefixes.add(prefix + rest.slice(0, idx + delimiter.length));
+								const delimitedPrefix = prefix + rest.slice(0, idx + delimiter.length);
+								if (prefixes.has(delimitedPrefix)) {
+									lastConsumed = key;
+									continue;
+								}
+								if (emitted === limit) {
+									truncated = true;
+									break;
+								}
+								prefixes.add(delimitedPrefix);
+								emitted++;
+								lastConsumed = key;
 								continue;
 							}
 						}
+						if (emitted === limit) {
+							truncated = true;
+							break;
+						}
 						keys.push(key);
+						emitted++;
+						lastConsumed = key;
 					}
-					const page = delimiter ? keys : keys.slice(0, limit);
-					const truncated = !delimiter && keys.length > limit;
 					return {
-						Contents: page.map((k) => {
+						Contents: keys.map((k) => {
 							const s = store.map.get(k)!;
 							return {
 								Key: k,
@@ -138,7 +156,7 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 							};
 						}),
 						IsTruncated: truncated,
-						NextContinuationToken: truncated ? page[page.length - 1] : undefined,
+						NextContinuationToken: truncated ? lastConsumed : undefined,
 						CommonPrefixes: [...prefixes].sort().map((Prefix) => ({ Prefix })),
 					};
 				}
@@ -327,6 +345,51 @@ describe('S3Storage error classification', () => {
 		await expect(s3.put('k', 'v', { onlyIfEtagMatches: 'x' })).rejects.toBeInstanceOf(
 			PreconditionFailedError,
 		);
+	});
+
+	it('maps a conditional-write 409 to PreconditionFailedError', async () => {
+		vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(
+			Object.assign(new Error('ConditionalRequestConflict'), {
+				name: 'ConditionalRequestConflict',
+				$metadata: { httpStatusCode: 409 },
+			}),
+		);
+		const s3 = new S3Storage(CFG);
+
+		await expect(s3.put('k', 'v', { onlyIfEtagMatches: 'e' })).rejects.toBeInstanceOf(
+			PreconditionFailedError,
+		);
+		await expect(s3.put('k2', 'v', { onlyIfNotExists: true })).rejects.toBeInstanceOf(
+			PreconditionFailedError,
+		);
+	});
+
+	it('maps a missing object on an If-Match put to PreconditionFailedError', async () => {
+		vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(
+			Object.assign(new Error('NoSuchKey'), {
+				name: 'NoSuchKey',
+				$metadata: { httpStatusCode: 404 },
+			}),
+		);
+		const s3 = new S3Storage(CFG);
+
+		await expect(s3.put('k', 'v', { onlyIfEtagMatches: 'e' })).rejects.toBeInstanceOf(
+			PreconditionFailedError,
+		);
+	});
+
+	it('propagates an unconditional-put 409 unchanged', async () => {
+		vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(
+			Object.assign(new Error('OperationAborted'), {
+				name: 'OperationAborted',
+				$metadata: { httpStatusCode: 409 },
+			}),
+		);
+		const s3 = new S3Storage(CFG);
+		const error = await s3.put('k', 'v').catch((cause) => cause);
+
+		expect(error).not.toBeInstanceOf(PreconditionFailedError);
+		expect(error.name).toBe('OperationAborted');
 	});
 });
 

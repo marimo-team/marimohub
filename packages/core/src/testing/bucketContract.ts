@@ -81,6 +81,65 @@ export function bucketContract(name: string, makeBucket: () => Bucket | Promise<
 			expect(keys).toEqual(['p/1', 'p/2']);
 		});
 
+		it('paginates with limit and cursor to completion without duplicates or gaps', async () => {
+			const keys = Array.from({ length: 5 }, (_, i) => `pg/${i}`);
+			for (const key of keys) await bucket.put(key, 'x');
+
+			const seen: string[] = [];
+			let cursor: string | undefined;
+			let pages = 0;
+			do {
+				const result = await bucket.list({ prefix: 'pg/', limit: 2, cursor });
+				expect(result.objects.length).toBeLessThanOrEqual(2);
+				expect(Boolean(result.cursor)).toBe(result.truncated);
+				seen.push(...result.objects.map((object) => object.key));
+				cursor = result.truncated ? result.cursor : undefined;
+				expect(++pages).toBeLessThan(20);
+			} while (cursor);
+
+			expect([...seen].sort()).toEqual(keys);
+			expect(new Set(seen).size).toBe(keys.length);
+		});
+
+		it('treats startAfter as an exclusive lower bound', async () => {
+			await bucket.put('sa/a', '1');
+			await bucket.put('sa/b', '2');
+			await bucket.put('sa/c', '3');
+
+			const result = await bucket.list({ prefix: 'sa/', startAfter: 'sa/b' });
+			expect(result.objects.map((object) => object.key)).toEqual(['sa/c']);
+		});
+
+		it('paginates a delimited listing larger than the limit to completion', async () => {
+			for (const key of ['dp/a/1', 'dp/a/2', 'dp/b/1', 'dp/c/1', 'dp/d/1', 'dp/top']) {
+				await bucket.put(key, 'x');
+			}
+
+			const prefixes = new Set<string>();
+			const objects = new Set<string>();
+			let cursor: string | undefined;
+			let pages = 0;
+			do {
+				const result = await bucket.list({ prefix: 'dp/', delimiter: '/', limit: 2, cursor });
+				expect(result.objects.length + result.delimitedPrefixes.length).toBeLessThanOrEqual(2);
+				expect(Boolean(result.cursor)).toBe(result.truncated);
+				for (const prefix of result.delimitedPrefixes) prefixes.add(prefix);
+				for (const object of result.objects) objects.add(object.key);
+				cursor = result.truncated ? result.cursor : undefined;
+				expect(++pages).toBeLessThan(20);
+			} while (cursor);
+
+			expect([...prefixes].sort()).toEqual(['dp/a/', 'dp/b/', 'dp/c/', 'dp/d/']);
+			expect([...objects]).toEqual(['dp/top']);
+		});
+
+		it('omits the cursor from a non-truncated listing', async () => {
+			await bucket.put('nt/1', 'x');
+			const result = await bucket.list({ prefix: 'nt/' });
+			expect(result.truncated).toBe(false);
+			expect(result.cursor).toBeUndefined();
+		});
+
 		it('conditional put succeeds when the etag matches', async () => {
 			const first = await bucket.put('cas.json', '1');
 			const second = await bucket.put('cas.json', '2', { onlyIfEtagMatches: first.etag });

@@ -294,6 +294,25 @@ describe('AzureStorage error handling', () => {
 		).rejects.toMatchObject({ statusCode: 403 });
 	});
 
+	it('maps BlobAlreadyExists for create-if-absent writes to PreconditionFailedError', async () => {
+		const client = {
+			getBlockBlobClient: () => ({
+				uploadData: async () => {
+					throw azureError(409, 'BlobAlreadyExists');
+				},
+			}),
+		} as unknown as ContainerClient;
+		const bucket = new AzureStorage({ containerClient: client });
+
+		await expect(bucket.put('k', 'v', { onlyIfNotExists: true })).rejects.toBeInstanceOf(
+			PreconditionFailedError,
+		);
+		await expect(bucket.put('k', 'v')).rejects.toMatchObject({
+			statusCode: 409,
+			code: 'BlobAlreadyExists',
+		});
+	});
+
 	it('propagates non-404 read failures', async () => {
 		const deniedClient = {
 			getBlobClient: () => ({
