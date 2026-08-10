@@ -9,6 +9,7 @@
 		"build": "vitepress build",
 		"preview": "vitepress preview",
 		"test": "vp test",
+		"typecheck": "tsc --noEmit",
 		"integrations:generate": "UPDATE_INTEGRATION_DOCS=1 vp test integrations-docs/generate"
 	},
 	"devDependencies": {
