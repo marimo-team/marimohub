@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitepress';
+import type { Plugin } from 'vitepress';
 import llmstxt from 'vitepress-plugin-llms';
 
 const REPO = 'https://github.com/marimo-team/marimohub';
 const SITE = 'https://marimohub.docs.marimo.io';
 const OPENAPI_PATH = fileURLToPath(new URL('../../../packages/api/openapi.yaml', import.meta.url));
 
-const openApiArtifact = {
+const openApiArtifact: Plugin = {
 	name: 'marimohub-openapi-artifact',
 	apply: 'build' as const,
 	generateBundle() {
@@ -32,6 +33,7 @@ export default defineConfig({
 	vite: {
 		plugins: [
 			openApiArtifact,
+			// The plugin is compiled against Vite 8; VitePress 1 supplies the compatible Vite 5 API.
 			// Emits llms.txt, llms-full.txt, and a raw-markdown twin next to every page.
 			llmstxt({
 				domain: SITE,
@@ -41,7 +43,7 @@ export default defineConfig({
 				ignoreFilesPerOutput: { llmsTxt: ['index.md'] },
 				// Mirrors srcExclude: setup/** and partials/** are @include-d into pages.
 				ignoreFiles: ['README.md', 'setup/**', 'partials/**'],
-			}),
+			}) as unknown as Plugin[],
 		],
 	},
 

@@ -5,20 +5,20 @@ TypeScript monorepo for marimohub). Read this before making changes.
 
 ## Build / test / lint commands
 
-| Purpose                | Command                          | Expected on success |
-| ---------------------- | -------------------------------- | ------------------- |
-| Install                | `pnpm install --frozen-lockfile` | exit 0              |
-| Check (typecheck+lint) | `pnpm check`                     | exit 0, no errors   |
-| Typecheck (+lint)      | `pnpm typecheck`                 | exit 0, no errors   |
-| Tests                  | `pnpm test`                      | all pass            |
-| Coverage               | `pnpm test:coverage`             | report (v8)         |
-| Build                  | `pnpm build`                     | exit 0              |
+| Purpose          | Command                          | Expected on success |
+| ---------------- | -------------------------------- | ------------------- |
+| Install          | `pnpm install --frozen-lockfile` | exit 0              |
+| Check (fmt+lint) | `pnpm check`                     | exit 0, no errors   |
+| Typecheck        | `pnpm typecheck`                 | exit 0, no errors   |
+| Tests            | `pnpm test`                      | all pass            |
+| Coverage         | `pnpm test:coverage`             | report (v8)         |
+| Build            | `pnpm build`                     | exit 0              |
 
 The toolchain is **vite-plus** (`vp`). `pnpm check` runs `vp check`
-(typecheck + lint); `pnpm typecheck` is an alias for the same (vite-plus does
-not expose a type-only command). `pnpm test` runs each package's `test` script
-(vitest); `pnpm build` builds every package. Use these as the done-criteria for
-any change.
+(format + lint; it does not run the TypeScript compiler). `pnpm typecheck` runs
+`vp run -r typecheck` — each package's `tsc --noEmit`. CI runs both. `pnpm test`
+runs each package's `test` script (vitest); `pnpm build` builds every package.
+Use these as the done-criteria for any change.
 
 ## Architecture (5 bullets)
 

@@ -11,9 +11,11 @@ import container from 'markdown-it-container';
 const CONTAINERS = ['tip', 'warning', 'info', 'danger'] as const;
 
 const md = new MarkdownIt({ html: false, linkify: true });
+// The container typings depend on a distinct MarkdownIt declaration from the one this package uses.
+const markdownItContainer = container as unknown as Parameters<typeof md.use>[0];
 
 for (const type of CONTAINERS) {
-	md.use(container, type, {
+	md.use(markdownItContainer, type, {
 		render(tokens: { nesting: number; info: string }[], idx: number) {
 			const token = tokens[idx];
 			if (token.nesting === 1) {

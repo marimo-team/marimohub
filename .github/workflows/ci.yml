@@ -42,6 +42,7 @@ jobs:
             vite-task-${{ runner.os }}-${{ runner.arch }}-
 
       - run: vp check
+      - run: vp run -r typecheck
       - run: vp run audit:prod
 
       # Build resolves packages from source, not dist, so it's independent of the
