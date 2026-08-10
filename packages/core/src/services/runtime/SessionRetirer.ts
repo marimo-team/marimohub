@@ -281,7 +281,6 @@ export class SessionRetirer {
 			try {
 				const persistEdits =
 					sessionPersistsEdits(session) && (await this.deps.sessions.ownsEditorClaim(session));
-				persisted = persistEdits;
 				persisted = await this.provisioner.captureSession(
 					sandbox,
 					this.deps.notebooks,
@@ -294,6 +293,8 @@ export class SessionRetirer {
 					{ persistEdits },
 				);
 			} catch (err) {
+				// A failed capture means this sandbox's state was not committed as a version.
+				// Snapshotting it would point restores at unsaved state and delete the last good snapshot.
 				logOperationalError(
 					'session_capture_failed',
 					{
