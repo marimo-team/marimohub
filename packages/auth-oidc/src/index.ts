@@ -608,7 +608,12 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			// the redirect below must hold even if the sanitizer or signing changes.
 			returnTo = sanitizeReturnTo(typeof payload.returnTo === 'string' ? payload.returnTo : null);
 		} catch (err) {
-			logOperationalError('oidc_txn_cookie_invalid', {}, err);
+			// The transaction cookie lives ~10 minutes; expiry (a stale redirect or
+			// slow IdP round-trip) is routine. Log only genuine signature/claim
+			// failures, mirroring the session-verify path above.
+			if ((err as { code?: string }).code !== 'ERR_JWT_EXPIRED') {
+				logOperationalError('oidc_txn_cookie_invalid', {}, err);
+			}
 			return callbackError(c, 'session_expired');
 		}
 
@@ -640,7 +645,17 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				if (userInfo.sub !== claims.sub) throw new Error('userinfo subject mismatch');
 			}
 		} catch (err) {
-			logOperationalError('oidc_callback_exchange_failed', {}, err);
+			// A user declining consent at the IdP arrives as `error=access_denied` —
+			// a normal outcome, not an operational failure. Duck-typed (name, not
+			// instanceof) so the check holds even if the oauth4webapi class identity
+			// differs across bundling or test mocks.
+			const declined =
+				err instanceof Error &&
+				err.name === 'AuthorizationResponseError' &&
+				(err as { error?: string }).error === 'access_denied';
+			if (!declined) {
+				logOperationalError('oidc_callback_exchange_failed', {}, err);
+			}
 			return callbackError(c, 'auth_failed', returnTo);
 		}
 

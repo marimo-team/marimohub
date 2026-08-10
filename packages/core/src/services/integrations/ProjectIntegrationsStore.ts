@@ -1063,6 +1063,18 @@ class ScopedIntegrationsStore {
 		try {
 			return await resolver.resolve(ref);
 		} catch (err) {
+			if (err instanceof SecretResolutionError && err.reason === 'forbidden') {
+				// Persistent permission gap, not an outage: 422 so nobody retries it,
+				// plus an operator trail since the fix is backend-side (e.g. IAM).
+				logOperationalError(
+					'secret_resolution_forbidden',
+					{ operation: 'integration.secret.resolve', backend: ref.backend, field: at },
+					err,
+				);
+				throw new ValidationError(
+					`Secret backend "${ref.backend}" denied access to the secret for field "${at}". Check the deployment's secret-manager permissions.`,
+				);
+			}
 			if (err instanceof SecretResolutionError && err.reason !== 'unavailable') {
 				throw new ValidationError(
 					`Cannot resolve secret field "${at}" with backend "${ref.backend}".`,

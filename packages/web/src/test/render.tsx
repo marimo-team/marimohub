@@ -12,7 +12,14 @@ import { createQueryClient } from '@/api/queryClient';
 
 export function createTestQueryClient(): QueryClient {
 	const client = createQueryClient();
-	client.setDefaultOptions({ queries: { retry: false }, mutations: { retry: false } });
+	// Merge, don't replace: tests must keep every production default (staleTime,
+	// future additions) and override only retry.
+	const defaults = client.getDefaultOptions();
+	client.setDefaultOptions({
+		...defaults,
+		queries: { ...defaults.queries, retry: false },
+		mutations: { ...defaults.mutations, retry: false },
+	});
 	return client;
 }
 

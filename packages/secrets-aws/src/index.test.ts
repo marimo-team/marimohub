@@ -74,9 +74,18 @@ describe('AwsSecretsManagerResolver', () => {
 		await expect(r.resolve(ref('gone'))).rejects.toMatchObject({ reason: 'not_found' });
 	});
 
-	it('classifies IAM and transport failures as backend outages', async () => {
+	it('classifies IAM denials as forbidden — persistent, never worth a retry', async () => {
 		const r = resolver(async () => {
 			throw Object.assign(new Error('denied'), { name: 'AccessDeniedException' });
+		});
+		const error = await r.resolve(ref('prod/key')).catch((err: unknown) => err);
+		expect(error).toBeInstanceOf(SecretResolutionError);
+		expect(error).toMatchObject({ reason: 'forbidden' });
+	});
+
+	it('classifies transport failures as backend outages', async () => {
+		const r = resolver(async () => {
+			throw Object.assign(new Error('reset'), { name: 'TimeoutError' });
 		});
 		const error = await r.resolve(ref('prod/key')).catch((err: unknown) => err);
 		expect(error).toBeInstanceOf(SecretResolutionError);

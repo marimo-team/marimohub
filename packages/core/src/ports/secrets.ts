@@ -8,7 +8,12 @@ export interface SecretRef {
 
 export class SecretResolutionError extends Error {
 	constructor(
-		readonly reason: 'not_found' | 'invalid_value' | 'unavailable',
+		/**
+		 * `forbidden` = the backend rejected our credentials/permissions — a
+		 * persistent configuration problem, never retriable. `unavailable` is
+		 * reserved for genuine transport/backend outages.
+		 */
+		readonly reason: 'not_found' | 'invalid_value' | 'forbidden' | 'unavailable',
 		message: string,
 		options?: { cause?: unknown },
 	) {

@@ -52,6 +52,35 @@ export type ApiError = components['schemas']['ErrorResponse']['error'];
 export type ServerErrorCode = ApiError['code'];
 export type ApiRequestErrorCode = ServerErrorCode | 'NETWORK_ERROR' | 'PARSE_ERROR' | 'UNKNOWN';
 
+// A `satisfies Record<ServerErrorCode, true>` map, not a cast: a server can
+// emit codes this client build doesn't know (deploy skew), and the compiler
+// forces this list back in sync whenever the generated union grows.
+const KNOWN_SERVER_ERROR_CODES = {
+	BAD_REQUEST: true,
+	UNAUTHORIZED: true,
+	FORBIDDEN: true,
+	NOT_FOUND: true,
+	CONFLICT: true,
+	EDIT_SESSION_OWNED: true,
+	EDIT_SESSION_CHANGED: true,
+	TAKEOVER_IN_PROGRESS: true,
+	GONE: true,
+	PRECONDITION_FAILED: true,
+	PAYLOAD_TOO_LARGE: true,
+	VALIDATION_ERROR: true,
+	RESOURCE_EXHAUSTED: true,
+	NOT_INITIALIZED: true,
+	NO_HTML_SNAPSHOT: true,
+	SERVICE_UNAVAILABLE: true,
+	INTERNAL_ERROR: true,
+} satisfies Record<ServerErrorCode, true>;
+
+function knownServerErrorCode(value: unknown): ApiRequestErrorCode {
+	return typeof value === 'string' && Object.hasOwn(KNOWN_SERVER_ERROR_CODES, value)
+		? (value as ServerErrorCode)
+		: 'UNKNOWN';
+}
+
 export interface ApiResponse<T> {
 	success: boolean;
 	data?: T;
@@ -176,7 +205,7 @@ function unwrapEnvelope<T>(value: T, status: number): ApiData<T> {
 				)
 			: undefined;
 		throw new ApiRequestError(
-			typeof error?.code === 'string' ? (error.code as ServerErrorCode) : 'UNKNOWN',
+			knownServerErrorCode(error?.code),
 			typeof error?.message === 'string' ? error.message : 'Request failed',
 			{
 				status,

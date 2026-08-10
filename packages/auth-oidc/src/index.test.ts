@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { SignJWT } from 'jose';
 import {
 	claimAtPointer,
@@ -1920,26 +1920,30 @@ describe('OIDC login discovery failure', () => {
 });
 
 describe('operational logging for swallowed verification failures', () => {
-	function spyOnOperationalLog() {
-		return vi.spyOn(console, 'error').mockImplementation(() => {});
-	}
-	const loggedEvents = (spy: ReturnType<typeof spyOnOperationalLog>) =>
+	const makeSpy = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+	let spy: ReturnType<typeof makeSpy>;
+	beforeEach(() => {
+		spy = makeSpy();
+	});
+	// Guaranteed even when an assertion throws, so a silenced console.error can
+	// never leak into later tests in this file.
+	afterEach(() => {
+		spy.mockRestore();
+	});
+	const loggedEvents = () =>
 		spy.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('oidc_'));
 
 	it('logs a session cookie that fails verification, without echoing the token', async () => {
-		const spy = spyOnOperationalLog();
 		const forged = await signSession({ sub: 'user-1', email: 'a@b.co', secret: 'x'.repeat(32) });
 
 		await expect(makeAuthenticator().authenticate(requestWithCookie(forged))).resolves.toBeNull();
 
-		const lines = loggedEvents(spy);
+		const lines = loggedEvents();
 		expect(lines.some((line) => line.includes('oidc_session_verify_failed'))).toBe(true);
 		expect(lines.some((line) => line.includes(forged))).toBe(false);
-		spy.mockRestore();
 	});
 
 	it('does not log routine session expiry', async () => {
-		const spy = spyOnOperationalLog();
 		const expired = await signSession({
 			sub: 'user-1',
 			email: 'a@b.co',
@@ -1948,12 +1952,10 @@ describe('operational logging for swallowed verification failures', () => {
 
 		await expect(makeAuthenticator().authenticate(requestWithCookie(expired))).resolves.toBeNull();
 
-		expect(loggedEvents(spy)).toEqual([]);
-		spy.mockRestore();
+		expect(loggedEvents()).toEqual([]);
 	});
 
 	it('logs an unverifiable transaction cookie on the callback path', async () => {
-		const spy = spyOnOperationalLog();
 		const { routes } = createOidcAuth(BASE_CONFIG);
 
 		const res = await routes.request('/api/auth/callback?code=abc&state=xyz', {
@@ -1962,18 +1964,67 @@ describe('operational logging for swallowed verification failures', () => {
 
 		expect(res.status).toBe(302);
 		expect(res.headers.get('location')).toBe('/?auth_error=session_expired');
-		expect(loggedEvents(spy).some((line) => line.includes('oidc_txn_cookie_invalid'))).toBe(true);
-		spy.mockRestore();
+		expect(loggedEvents().some((line) => line.includes('oidc_txn_cookie_invalid'))).toBe(true);
+	});
+
+	it('does not log an expired transaction cookie — a stale redirect is routine', async () => {
+		const { routes } = createOidcAuth(BASE_CONFIG);
+		const expiredTxn = await signSession({
+			typ: 'mh-oidc-txn+jwt',
+			expirationTime: Math.floor(Date.now() / 1000) - 60,
+		});
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=xyz', {
+			headers: { cookie: `${TXN_COOKIE}=${expiredTxn}` },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe('/?auth_error=session_expired');
+		expect(loggedEvents()).toEqual([]);
 	});
 
 	it('does not log a merely missing transaction cookie', async () => {
-		const spy = spyOnOperationalLog();
 		const { routes } = createOidcAuth(BASE_CONFIG);
 
 		const res = await routes.request('/api/auth/callback?code=abc&state=xyz');
 
 		expect(res.status).toBe(302);
-		expect(loggedEvents(spy)).toEqual([]);
-		spy.mockRestore();
+		expect(loggedEvents()).toEqual([]);
+	});
+
+	it('does not log a user declining consent at the IdP', async () => {
+		const { routes } = createOidcAuth(BASE_CONFIG);
+		const txnCookie = await beginOidcTransaction(routes);
+		oauthMock.validateAuthResponse.mockImplementation(() => {
+			throw Object.assign(new Error('authorization response error'), {
+				name: 'AuthorizationResponseError',
+				error: 'access_denied',
+			});
+		});
+
+		const res = await routes.request('/api/auth/callback?error=access_denied&state=state-1', {
+			headers: { cookie: txnCookie },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toContain('auth_error=auth_failed');
+		expect(loggedEvents()).toEqual([]);
+	});
+
+	it('still logs a genuine token-exchange failure', async () => {
+		const { routes } = createOidcAuth(BASE_CONFIG);
+		const txnCookie = await beginOidcTransaction(routes);
+		oauthMock.validateAuthResponse.mockImplementation(() => {
+			throw new Error('exchange blew up');
+		});
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txnCookie },
+		});
+
+		expect(res.status).toBe(302);
+		expect(loggedEvents().some((line) => line.includes('oidc_callback_exchange_failed'))).toBe(
+			true,
+		);
 	});
 });

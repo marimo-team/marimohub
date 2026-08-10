@@ -550,16 +550,9 @@ describe('deployment-scoped queries', () => {
 	] as const)('%s does not retry a failure', async (_name, useHook) => {
 		const fetchMock = stubFetch(async () => jsonError('INTERNAL_ERROR', 'boom', 500));
 
-		const { result } = renderHookWithClient(() => useHook(), {
-			toaster: false,
-			errorBoundary: _name === 'useCapabilitiesQuery',
-		});
+		const { result } = renderHookWithClient(() => useHook(), { toaster: false });
 
-		if (_name !== 'useCapabilitiesQuery') {
-			await waitFor(() => expect(result.current.isError).toBe(true));
-		} else {
-			await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-		}
+		await waitFor(() => expect(result.current.isError).toBe(true));
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 });

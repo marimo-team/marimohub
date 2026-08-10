@@ -180,9 +180,18 @@ export function useNotebookSession(
 	const stop = useCallback(() => {
 		const s = sessionRef.current;
 		if (s) {
-			generation.bump();
+			const gen = generation.bump();
 			setStarting(false);
-			stopSession.mutate(s.session_id);
+			// The global toast is suppressed for this mutation, so a failed stop must
+			// surface inline — otherwise the page shows no session AND no error.
+			stopSession.mutate(s.session_id, {
+				onError: (err) => {
+					if (!generation.isCurrent(gen)) return;
+					// Already gone (stopped/reaped underneath us): the stop succeeded in effect.
+					if (isNotFoundError(err)) return;
+					setError(toSessionError(err));
+				},
+			});
 			commitSession(null);
 		}
 	}, [stopSession, commitSession, generation]);

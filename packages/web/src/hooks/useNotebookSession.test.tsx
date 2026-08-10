@@ -201,6 +201,43 @@ describe('useNotebookSession', () => {
 		expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true);
 	});
 
+	it('stop() surfaces a failed stop inline — the toast is suppressed for this path', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+				init?.method === 'DELETE'
+					? jsonError('SERVICE_UNAVAILABLE', 'teardown failed', 503)
+					: jsonOk(makeSession()),
+			),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await waitFor(() => expect(result.current.session).not.toBeNull());
+
+		act(() => result.current.stop());
+
+		await waitFor(() => expect(result.current.error?.message).toBe('teardown failed'));
+		expect(result.current.session).toBeNull();
+	});
+
+	it('stop() treats an already-reaped (404) session as stopped, with no error', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+				init?.method === 'DELETE' ? jsonError('NOT_FOUND', 'gone', 404) : jsonOk(makeSession()),
+			),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await waitFor(() => expect(result.current.session).not.toBeNull());
+
+		act(() => result.current.stop());
+		await settleHook();
+
+		expect(result.current.session).toBeNull();
+		expect(result.current.error).toBeNull();
+	});
+
 	it('retry via start() recovers from an error', async () => {
 		let calls = 0;
 		vi.stubGlobal(

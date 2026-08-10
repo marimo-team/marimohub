@@ -90,7 +90,12 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 			result = await this.fetch(secretId);
 		} catch (err) {
 			const name = describeAwsError(err);
-			const reason = name === 'ResourceNotFoundException' ? 'not_found' : 'unavailable';
+			const reason =
+				name === 'ResourceNotFoundException'
+					? 'not_found'
+					: name === 'AccessDeniedException' || name === 'UnauthorizedException'
+						? 'forbidden'
+						: 'unavailable';
 			throw new SecretResolutionError(reason, `AWS Secrets Manager resolution failed: ${name}`, {
 				cause: err,
 			});

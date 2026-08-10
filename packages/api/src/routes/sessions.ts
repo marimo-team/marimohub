@@ -725,7 +725,14 @@ app.openapi(takeoverEditorSession, async (c) => {
 			await sessionRetirer(deps).retireForTakeover(holder, user.id);
 			await deps.services.sessions.setTakeoverPhase(pid, nid, body.takeover_id, 'ready');
 		} catch (err) {
-			if (err instanceof TakeoverRetirementError && err.cause instanceof ConflictError) {
+			// Only the pre-drain lease race surfaces as a 409; once the drain has
+			// started, even a ConflictError cause must fall through to the phase
+			// bookkeeping and log below, or the persisted takeover state goes stale.
+			if (
+				err instanceof TakeoverRetirementError &&
+				err.cause instanceof ConflictError &&
+				!err.drainStarted
+			) {
 				throw err.cause;
 			}
 			if (err instanceof TakeoverRetirementError && err.drainStarted) {
