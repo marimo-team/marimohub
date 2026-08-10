@@ -129,6 +129,37 @@ describe('startMaintenance', () => {
 		expect(events).toEqual([expect.objectContaining({ event: 'maintenance_skipped_not_leader' })]);
 	});
 
+	it('guards against overlap: a hung cycle is not re-entered on the next tick', async () => {
+		const acquireSpy = vi.spyOn(MaintenanceLock.prototype, 'acquire');
+		const releaseSpy = vi.spyOn(MaintenanceLock.prototype, 'release');
+		let resolveExpire!: (n: number) => void;
+		const expireStale = vi.spyOn(deps.services.sessions, 'expireStale').mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveExpire = resolve;
+				}),
+		);
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		expect(expireStale).toHaveBeenCalledTimes(1);
+
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS * 2);
+		// Still hung: the overlap guard held — no second acquire, and crucially no
+		// release while the first cycle is mid-run.
+		expect(expireStale).toHaveBeenCalledTimes(1);
+		expect(acquireSpy).toHaveBeenCalledTimes(1);
+		expect(releaseSpy).not.toHaveBeenCalled();
+		expect(
+			parseLoggedEvents(logSpy).filter((e) => e.event === 'maintenance_cycle_overlap_skipped'),
+		).toHaveLength(2);
+
+		resolveExpire(0);
+		await flushRun();
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		expect(expireStale).toHaveBeenCalledTimes(2);
+	});
+
 	it('forwards orphaned notebook snapshots to reapFilesystemSnapshots', async () => {
 		const orphaned = [{ snapshot_id: 'snap-1', captured_at: new Date().toISOString() }];
 		vi.spyOn(deps.services.notebooks, 'sweepDeletedNotebooks').mockResolvedValue({

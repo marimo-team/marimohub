@@ -48,63 +48,77 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 	const lock = new MaintenanceLock(deps.bucket);
 	const holder = `${os.hostname()}:${process.pid}`;
 
+	// In-flight guard (same hazard as startSessionLifecycle): a cycle that outlives
+	// the 5-minute interval must not overlap the next tick — the lease would happily
+	// renew for the same holder, and the first finisher's release would drop it
+	// mid-run for the second.
+	let running = false;
 	const run = async () => {
-		// Defense-in-depth: only the lease holder sweeps. Skip quietly otherwise.
-		if (!(await lock.acquire(holder).catch(() => false))) {
-			logEvent({ level: 'debug', event: 'maintenance_skipped_not_leader', holder });
+		if (running) {
+			logEvent({ level: 'debug', event: 'maintenance_cycle_overlap_skipped', holder });
 			return;
 		}
+		running = true;
 		try {
-			const sessionsExpired = await sessions.expireStale();
-			const reconcile = await reconciler.reconcile();
-			if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
-				logEvent({
-					level: 'warn',
-					event: 'orphan_sandboxes_reaped',
-					count: reconcile.orphansReaped,
-					sandbox_ids: reconcile.orphanSandboxIds.join(','),
-				});
+			// Defense-in-depth: only the lease holder sweeps. Skip quietly otherwise.
+			if (!(await lock.acquire(holder).catch(() => false))) {
+				logEvent({ level: 'debug', event: 'maintenance_skipped_not_leader', holder });
+				return;
 			}
-			const sessionsReaped = await sessions.reapTerminated();
-			const snapshotsPruned = await maintenance.expireSnapshots();
-			const eventsPruned = await maintenance.pruneEvents();
-			const idempotencyPruned = await idempotency.prune();
-			// Projects before notebooks: a swept project wipes its whole subtree, so
-			// its soft-deleted notebooks are reclaimed without per-notebook work.
-			const projectsSwept = await projects.sweepDeletedProjects();
-			const notebooksSwept = await notebooks.sweepDeletedNotebooks();
+			try {
+				const sessionsExpired = await sessions.expireStale();
+				const reconcile = await reconciler.reconcile();
+				if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
+					logEvent({
+						level: 'warn',
+						event: 'orphan_sandboxes_reaped',
+						count: reconcile.orphansReaped,
+						sandbox_ids: reconcile.orphanSandboxIds.join(','),
+					});
+				}
+				const sessionsReaped = await sessions.reapTerminated();
+				const snapshotsPruned = await maintenance.expireSnapshots();
+				const eventsPruned = await maintenance.pruneEvents();
+				const idempotencyPruned = await idempotency.prune();
+				// Projects before notebooks: a swept project wipes its whole subtree, so
+				// its soft-deleted notebooks are reclaimed without per-notebook work.
+				const projectsSwept = await projects.sweepDeletedProjects();
+				const notebooksSwept = await notebooks.sweepDeletedNotebooks();
 
-			// The purged notebooks' snapshot ids live in CoreWeave, not the bucket, so
-			// the subtree wipe above can't free them — reclaim them here.
-			const snapshotsReaped = await reapFilesystemSnapshots(
-				deps.compute,
-				notebooksSwept.orphanedSnapshots,
-			);
+				// The purged notebooks' snapshot ids live in CoreWeave, not the bucket, so
+				// the subtree wipe above can't free them — reclaim them here.
+				const snapshotsReaped = await reapFilesystemSnapshots(
+					deps.compute,
+					notebooksSwept.orphanedSnapshots,
+				);
 
-			logEvent({
-				level: 'info',
-				event: 'maintenance_cycle',
-				holder,
-				sessions_expired: sessionsExpired,
-				sessions_reaped: sessionsReaped,
-				snapshots_pruned: snapshotsPruned,
-				events_pruned: eventsPruned,
-				idempotency_pruned: idempotencyPruned,
-				projects_swept: projectsSwept,
-				notebooks_swept: notebooksSwept.purged,
-				snapshots_reaped: snapshotsReaped,
-				orphans_reaped: reconcile.skipped ? null : reconcile.orphansReaped,
-				...metrics.collect(),
-			});
-		} catch (err) {
-			logEvent({
-				level: 'error',
-				event: 'maintenance_failed',
-				error: err instanceof Error ? err.message : String(err),
-				name: err instanceof Error ? err.name : undefined,
-			});
+				logEvent({
+					level: 'info',
+					event: 'maintenance_cycle',
+					holder,
+					sessions_expired: sessionsExpired,
+					sessions_reaped: sessionsReaped,
+					snapshots_pruned: snapshotsPruned,
+					events_pruned: eventsPruned,
+					idempotency_pruned: idempotencyPruned,
+					projects_swept: projectsSwept,
+					notebooks_swept: notebooksSwept.purged,
+					snapshots_reaped: snapshotsReaped,
+					orphans_reaped: reconcile.skipped ? null : reconcile.orphansReaped,
+					...metrics.collect(),
+				});
+			} catch (err) {
+				logEvent({
+					level: 'error',
+					event: 'maintenance_failed',
+					error: err instanceof Error ? err.message : String(err),
+					name: err instanceof Error ? err.name : undefined,
+				});
+			} finally {
+				await lock.release(holder).catch(() => {});
+			}
 		} finally {
-			await lock.release(holder).catch(() => {});
+			running = false;
 		}
 	};
 	void run();
