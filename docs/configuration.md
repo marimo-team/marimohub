@@ -210,7 +210,7 @@ Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kube
 | `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` | TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress. | — | — | `marimo-kernels-wildcard-tls` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT` | ServiceAccount the kernel Pod runs as. Omit for the namespace default. | — | — | `marimo-kernel` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET` | `imagePullSecrets` name for pulling a private kernel image. | — | — | `regcred` |
-| `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY` | Kernel-container `imagePullPolicy`: `Always`, `IfNotPresent`, or `Never`. Defaults like Kubernetes: `Always` for a `:latest`/untagged image, `IfNotPresent` for a pinned tag or digest. Pin the image to skip the per-start registry round-trip. | — | `Always for `:latest`, else IfNotPresent` | `Always` |
+| `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY` | Kernel-container `imagePullPolicy`: `Always`, `IfNotPresent`, or `Never`. Defaults like Kubernetes: `Always` for a `:latest`/untagged image, `IfNotPresent` for a pinned tag or digest. Pin the image to skip the per-start registry round-trip. | — | `Always for :latest, else IfNotPresent` | `Always` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_CPU` | CPU requested for each kernel Pod (Kubernetes quantity). | — | — | `2` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_MEMORY` | Memory requested for each kernel Pod (Kubernetes quantity). | — | — | `4Gi` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_GPU` | GPU count, mapped to the `nvidia.com/gpu` limit. | — | — | `1` |

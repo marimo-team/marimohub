@@ -104,23 +104,23 @@ export interface EnsureSandboxOptions {
 }
 
 /**
- * Where a pod's startup time went, read back from the cluster after it reaches
- * `Running`: pod conditions carry exact transition timestamps and the kubelet's
- * `Pulled` event states the pull duration verbatim. This is the breakdown that
- * answers "why did this user's sandbox take 3s to start".
+ * Pod phase plus the boot timestamps that ride along on the same read. The
+ * boot poll GETs the Pod every interval anyway, so capturing these there costs
+ * no extra API call and keeps the startup breakdown off the readiness path.
+ * Timestamps come from conditions with `status=True` only — a transient
+ * `Ready=False` must not be reported as readiness.
  */
-export interface K8sPodStartupInfo {
+export interface K8sPodPhaseInfo {
+	/** Pod phase (`Pending` | `Running` | `Succeeded` | `Failed` | `Unknown`). */
+	phase?: string;
+	/** UID of this Pod incarnation (a recreated Pod reuses the name, not the UID). */
+	uid?: string;
 	/** Pod `creationTimestamp`. */
 	createdAt?: Date;
-	/** `PodScheduled` condition transition time. */
+	/** `PodScheduled=True` transition time. */
 	scheduledAt?: Date;
-	/** `Ready` condition transition time. */
+	/** `Ready=True` transition time. */
 	readyAt?: Date;
-	/**
-	 * Kubelet `Pulled` event message — either `Successfully pulled image "…" in
-	 * 1.2s …` or `Container image "…" already present on machine`.
-	 */
-	imagePullMessage?: string;
 }
 
 export interface K8sSandboxInfo {
@@ -143,12 +143,16 @@ export interface K8sClient {
 	 * exist. `createdPod` is false when the Pod pre-existed (a reconnect).
 	 */
 	ensure(options: EnsureSandboxOptions): Promise<{ createdPod: boolean }>;
-	/** Pod phase, or `undefined` if the Pod does not exist. */
-	getPhase(name: string): Promise<string | undefined>;
+	/** Pod phase + boot timestamps, or `undefined` if the Pod does not exist. */
+	getPhase(name: string): Promise<K8sPodPhaseInfo | undefined>;
 	/** Latest scheduler rejection for the Pod, when one exists. */
 	getSchedulingFailure(name: string): Promise<string | undefined>;
-	/** Startup timestamps + image-pull event for the Pod; best-effort. */
-	getStartupInfo(name: string): Promise<K8sPodStartupInfo | undefined>;
+	/**
+	 * Kubelet `Pulled` event message for the Pod incarnation `uid` — either
+	 * `Successfully pulled image "…" in 1.2s …` or `Container image "…" already
+	 * present on machine`. Best-effort: `undefined` on any failure.
+	 */
+	getImagePullMessage(name: string, uid?: string): Promise<string | undefined>;
 	/** Run a command in the Pod; `stdin` is piped to the process when provided. */
 	exec(name: string, command: string[], stdin?: string | Uint8Array): Promise<K8sExecResult>;
 	/** Delete the Pod + Service + Ingress for a session. Idempotent (tolerates 404). */

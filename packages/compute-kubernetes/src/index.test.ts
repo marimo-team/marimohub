@@ -18,7 +18,7 @@ import type {
 	EnsureSandboxOptions,
 	K8sClient,
 	K8sExecResult,
-	K8sPodStartupInfo,
+	K8sPodPhaseInfo,
 	KubernetesConfig,
 } from './index';
 
@@ -56,7 +56,8 @@ function makeWorld(opts?: {
 	execImpl?: ExecImpl;
 	phase?: string;
 	schedulingFailure?: string;
-	startupInfo?: K8sPodStartupInfo;
+	bootInfo?: Omit<K8sPodPhaseInfo, 'phase'>;
+	imagePullMessage?: string;
 }) {
 	const ensured: EnsureSandboxOptions[] = [];
 	const deleted: string[] = [];
@@ -70,9 +71,12 @@ function makeWorld(opts?: {
 			if (createdPod) pods.set(o.name, { sandboxId: o.sandboxId, phase: opts?.phase ?? 'Running' });
 			return { createdPod };
 		},
-		getPhase: async (name) => pods.get(name)?.phase,
+		getPhase: async (name) => {
+			const p = pods.get(name);
+			return p ? { phase: p.phase, ...opts?.bootInfo } : undefined;
+		},
 		getSchedulingFailure: async () => opts?.schedulingFailure,
-		getStartupInfo: async () => opts?.startupInfo,
+		getImagePullMessage: async () => opts?.imagePullMessage,
 		exec: async (name, command, stdin) => {
 			execCalls.push({ name, command, stdin });
 			return opts?.execImpl?.(command, stdin) ?? { stdout: '', stderr: '', exitCode: 0 };
@@ -662,15 +666,16 @@ describe('KubernetesCompute', () => {
 	});
 
 	describe('boot observability', () => {
-		const startupInfo: K8sPodStartupInfo = {
+		const bootInfo: Omit<K8sPodPhaseInfo, 'phase'> = {
+			uid: 'uid-1',
 			createdAt: new Date(1000),
 			scheduledAt: new Date(1080),
 			readyAt: new Date(3300),
-			imagePullMessage: 'Successfully pulled image "img" in 2.096s (2.5s including waiting)',
 		};
+		const imagePullMessage = 'Successfully pulled image "img" in 2.096s (2.5s including waiting)';
 
 		it('drainTimings reports create/boot plus the cluster-side breakdown, once', async () => {
-			const world = makeWorld({ startupInfo });
+			const world = makeWorld({ bootInfo, imagePullMessage });
 			const inst = makeCompute(world).create(SANDBOX_ID);
 			await inst.exec('true');
 			const timings = inst.drainTimings!();
@@ -681,7 +686,7 @@ describe('KubernetesCompute', () => {
 		});
 
 		it('a reconnect skips the (stale) cluster-side breakdown', async () => {
-			const world = makeWorld({ startupInfo });
+			const world = makeWorld({ bootInfo, imagePullMessage });
 			const compute = makeCompute(world);
 			await compute.create(SANDBOX_ID).exec('true');
 			// Same Pod, new instance — the breakdown belongs to the first boot.
@@ -692,18 +697,20 @@ describe('KubernetesCompute', () => {
 			expect(timings.image_pull).toBeUndefined();
 		});
 
-		it('a hanging diagnostics read cannot block readiness', async () => {
+		it('a hanging image-pull-event read cannot block readiness', async () => {
 			vi.useFakeTimers();
 			try {
-				const world = makeWorld();
-				world.client.getStartupInfo = () => new Promise(() => {});
+				const world = makeWorld({ bootInfo });
+				world.client.getImagePullMessage = () => new Promise(() => {});
 				const inst = makeCompute(world).create(SANDBOX_ID);
 				const ready = inst.ready!();
 				await vi.advanceTimersByTimeAsync(1000);
 				await ready;
 				const timings = inst.drainTimings!();
 				expect(timings.create).toBeGreaterThanOrEqual(0);
-				expect(timings.schedule).toBeUndefined();
+				// The poll-captured breakdown still lands; only the pull ms is missing.
+				expect(timings.schedule).toBe(80);
+				expect(timings.image_pull).toBeUndefined();
 			} finally {
 				vi.useRealTimers();
 			}
@@ -719,7 +726,7 @@ describe('KubernetesCompute', () => {
 		});
 
 		it('emits one structured k8s_ensure log line per boot', async () => {
-			const world = makeWorld({ startupInfo });
+			const world = makeWorld({ bootInfo, imagePullMessage });
 			await makeCompute(world).create(SANDBOX_ID).exec('true');
 			const lines = warnSpy.mock.calls
 				.map((c: unknown[]) => c[0])
@@ -734,7 +741,7 @@ describe('KubernetesCompute', () => {
 				schedule_ms: 80,
 				image_pull_ms: 2096,
 				pod_ready_ms: 2300,
-				image_pull_event: startupInfo.imagePullMessage,
+				image_pull_event: imagePullMessage,
 			});
 		});
 	});

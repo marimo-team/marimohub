@@ -101,8 +101,9 @@ Every session start logs a `session_provision` event on the server. Key tags:
 | `provision_files_ms`                | workspace copy into the sandbox      |
 | `provision_waitport_ms`             | marimo launch until its port answers |
 
-Each boot also logs one `k8s_ensure` line with the same breakdown. From the
-cluster side:
+Each boot also logs one `k8s_ensure` line with the cluster-side rows (create,
+boot, schedule, image pull, pod ready); `files` and `waitport` appear only on
+`session_provision`. From the cluster side:
 
 ```bash
 kubectl -n marimo-kernels describe pod mh-<id>       # conditions + events

@@ -273,10 +273,11 @@ describe('createK8sClient', () => {
 		});
 	});
 
-	it('reads the startup breakdown from pod conditions and the Pulled event', async () => {
+	it('getPhase carries the boot timestamps from True conditions on the same read', async () => {
 		k8sMock.core.readNamespacedPod.mockResolvedValueOnce({
 			metadata: { uid: 'uid-current', creationTimestamp: new Date('2026-01-01T00:00:00.000Z') },
 			status: {
+				phase: 'Running',
 				conditions: [
 					{
 						type: 'PodScheduled',
@@ -297,6 +298,18 @@ describe('createK8sClient', () => {
 				],
 			},
 		});
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(client.getPhase('mh-sb')).resolves.toEqual({
+			phase: 'Running',
+			uid: 'uid-current',
+			createdAt: new Date('2026-01-01T00:00:00.000Z'),
+			scheduledAt: new Date('2026-01-01T00:00:00.100Z'),
+			readyAt: new Date('2026-01-01T00:00:02.500Z'),
+		});
+	});
+
+	it('getImagePullMessage matches only the current Pod incarnation', async () => {
 		k8sMock.core.listNamespacedEvent.mockResolvedValueOnce({
 			items: [
 				{ reason: 'Scheduled', message: 'assigned' },
@@ -316,19 +329,16 @@ describe('createK8sClient', () => {
 		});
 		const client = createK8sClient({ namespace: 'kernels' });
 
-		await expect(client.getStartupInfo('mh-sb')).resolves.toEqual({
-			createdAt: new Date('2026-01-01T00:00:00.000Z'),
-			scheduledAt: new Date('2026-01-01T00:00:00.100Z'),
-			readyAt: new Date('2026-01-01T00:00:02.500Z'),
-			imagePullMessage: 'Successfully pulled image "img" in 2.096s (…)',
-		});
+		await expect(client.getImagePullMessage('mh-sb', 'uid-current')).resolves.toBe(
+			'Successfully pulled image "img" in 2.096s (…)',
+		);
 	});
 
-	it('getStartupInfo is best-effort: an unreadable pod yields undefined', async () => {
-		k8sMock.core.readNamespacedPod.mockRejectedValueOnce(new Error('api down'));
+	it('getImagePullMessage is best-effort: an unreadable event list yields undefined', async () => {
+		k8sMock.core.listNamespacedEvent.mockRejectedValueOnce(new Error('api down'));
 		const client = createK8sClient({ namespace: 'kernels' });
 
-		await expect(client.getStartupInfo('mh-sb')).resolves.toBeUndefined();
+		await expect(client.getImagePullMessage('mh-sb', 'uid-current')).resolves.toBeUndefined();
 	});
 
 	it('collects exec stdout/stderr and maps terminal status to an exit code', async () => {

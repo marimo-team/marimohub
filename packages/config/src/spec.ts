@@ -608,7 +608,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'Kubernetes image pull policy',
 						description:
 							'Kernel-container `imagePullPolicy`: `Always`, `IfNotPresent`, or `Never`. Defaults like Kubernetes: `Always` for a `:latest`/untagged image, `IfNotPresent` for a pinned tag or digest. Pin the image to skip the per-start registry round-trip.',
-						default: 'Always for `:latest`, else IfNotPresent',
+						default: 'Always for :latest, else IfNotPresent',
 						example: 'Always',
 					},
 					{

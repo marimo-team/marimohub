@@ -26,7 +26,7 @@ import type {
 	EnsureSandboxOptions,
 	K8sClient,
 	K8sExecResult,
-	K8sPodStartupInfo,
+	K8sPodPhaseInfo,
 	K8sSandboxInfo,
 	KubernetesConfig,
 } from './shared';
@@ -236,11 +236,20 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			return { createdPod };
 		},
 
-		async getPhase(name: string): Promise<string | undefined> {
+		async getPhase(name: string): Promise<K8sPodPhaseInfo | undefined> {
 			const { core } = await apis();
 			try {
 				const pod = await core.readNamespacedPod({ name, namespace });
-				return pod.status?.phase;
+				const transition = (type: string) =>
+					pod.status?.conditions?.find((c) => c.type === type && c.status === 'True')
+						?.lastTransitionTime;
+				return {
+					phase: pod.status?.phase,
+					uid: pod.metadata?.uid,
+					createdAt: pod.metadata?.creationTimestamp,
+					scheduledAt: transition('PodScheduled'),
+					readyAt: transition('Ready'),
+				};
 			} catch (err) {
 				if (hasCode(err, 404)) return undefined;
 				throw err;
@@ -282,36 +291,20 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			}
 		},
 
-		async getStartupInfo(name: string): Promise<K8sPodStartupInfo | undefined> {
+		async getImagePullMessage(name: string, uid?: string): Promise<string | undefined> {
 			const { core } = await apis();
 			try {
-				const [pod, events] = await Promise.all([
-					core.readNamespacedPod({ name, namespace }),
-					core
-						.listNamespacedEvent({
-							namespace,
-							fieldSelector: `involvedObject.kind=Pod,involvedObject.name=${name}`,
-						})
-						.catch(() => {}),
-				]);
-				// Only conditions that actually hold: a transient `Ready=False` carries a
-				// transition time too and must not be reported as readiness.
-				const transition = (type: string) =>
-					pod.status?.conditions?.find((c) => c.type === type && c.status === 'True')
-						?.lastTransitionTime;
+				const events = await core.listNamespacedEvent({
+					namespace,
+					fieldSelector: `involvedObject.kind=Pod,involvedObject.name=${name}`,
+				});
 				// Events are name-scoped, and names are deterministic per sandbox — match
 				// the current Pod's UID so a recreated Pod never picks up an old event.
-				const uid = pod.metadata?.uid;
-				return {
-					createdAt: pod.metadata?.creationTimestamp,
-					scheduledAt: transition('PodScheduled'),
-					readyAt: transition('Ready'),
-					imagePullMessage: events?.items.find(
-						(e) => e.reason === 'Pulled' && (!uid || e.involvedObject?.uid === uid),
-					)?.message,
-				};
+				return events.items.find(
+					(e) => e.reason === 'Pulled' && (!uid || e.involvedObject?.uid === uid),
+				)?.message;
 			} catch {
-				// Diagnostics only — never fail a boot because the breakdown was unreadable.
+				// Diagnostics only — never fail a boot because the event was unreadable.
 				return undefined;
 			}
 		},

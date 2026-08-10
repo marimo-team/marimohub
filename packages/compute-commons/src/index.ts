@@ -189,13 +189,18 @@ export function iterableToStream(iterable: AsyncIterable<string>): ReadableStrea
  * sandbox image's PATH.
  */
 export function portWaitCommand(port: number, seconds: number): string {
+	// The connect timeout is clamped to the remaining budget: against a
+	// blackholed port (packets dropped, not refused) a fixed 1s timeout could
+	// let the final connect run past the deadline.
 	const script =
 		'import socket,sys,time\n' +
 		`end=time.monotonic()+${seconds}\n` +
 		'while True:\n' +
-		'    s=socket.socket(); s.settimeout(1)\n' +
-		`    if s.connect_ex(("127.0.0.1",${port}))==0: sys.exit(0)\n` +
+		'    left=end-time.monotonic()\n' +
+		'    s=socket.socket(); s.settimeout(max(0.01,min(1,left)))\n' +
+		`    ok=s.connect_ex(("127.0.0.1",${port}))==0\n` +
 		'    s.close()\n' +
+		'    if ok: sys.exit(0)\n' +
 		'    if time.monotonic()>=end: sys.exit(1)\n' +
 		'    time.sleep(0.05)\n';
 	return `python3 -c ${shellQuote(script)}`;

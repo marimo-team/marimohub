@@ -53,7 +53,7 @@ import {
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId, Timings } from '@marimo-hub/core';
 import { createK8sClient } from './client';
-import type { K8sClient, K8sExecResult, KubernetesConfig } from './shared';
+import type { K8sClient, K8sExecResult, K8sPodPhaseInfo, KubernetesConfig } from './shared';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 export * from './shared';
 import type {
@@ -93,11 +93,11 @@ const PORT_WAIT_CHUNK_MS = 30_000;
 /** First such chunk, kept short so a kernel that dies on launch is caught quickly. */
 const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
 /**
- * Cap on the post-boot diagnostics fetch (pod conditions + events). The
- * breakdown is best-effort; a slow API server must never delay a sandbox that
- * is already Running.
+ * Cap on the one post-boot diagnostics read (the kubelet `Pulled` event; the
+ * rest of the breakdown rides the boot poll for free). Best-effort — a slow
+ * API server must never delay a sandbox that is already Running.
  */
-const STARTUP_INFO_TIMEOUT_MS = 500;
+const IMAGE_PULL_EVENT_TIMEOUT_MS = 250;
 
 /**
  * Milliseconds from a kubelet `Pulled` event message — `Successfully pulled
@@ -162,6 +162,8 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private envDefaults: Record<string, string> = {};
 	private execCount = 0;
 	private lastEnsureTimings?: Timings;
+	/** Latest Pod snapshot from the boot poll (uid + condition timestamps). */
+	private bootInfo?: K8sPodPhaseInfo;
 
 	constructor(
 		private readonly id: SandboxId,
@@ -223,9 +225,11 @@ class KubernetesSandboxInstance implements SandboxInstance {
 
 	/**
 	 * Record where the boot went — the adapter-side create/boot waits plus the
-	 * cluster-side schedule/pull/ready breakdown read back from the Pod — into
-	 * `drainTimings()` (folded into the `session_provision` wide event as
-	 * `provision_reachable_*_ms`) and one structured `k8s_ensure` log line.
+	 * cluster-side schedule/pull/ready breakdown — into `drainTimings()` (folded
+	 * into the `session_provision` wide event as `provision_reachable_*_ms`) and
+	 * one structured `k8s_ensure` log line. The condition timestamps were
+	 * captured by the boot poll itself; only the image-pull event needs a read
+	 * here, and it is capped so it cannot hold up an already-Running sandbox.
 	 */
 	private async recordEnsure(createdPod: boolean, createMs: number, bootMs: number): Promise<void> {
 		const timings: Timings = { create: createMs, boot: bootMs };
@@ -233,16 +237,16 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		// A reconnect's Pod booted long ago — its conditions would report a stale
 		// breakdown as if this provision paid for it.
 		if (createdPod) {
-			const info = await this.boundedStartupInfo();
+			const info = this.bootInfo;
+			pullMessage = await this.boundedImagePullMessage(info?.uid);
 			const since = (from?: Date, to?: Date): number | undefined =>
 				from && to && to.getTime() >= from.getTime() ? to.getTime() - from.getTime() : undefined;
 			const schedule = since(info?.createdAt, info?.scheduledAt);
 			const ready = since(info?.createdAt, info?.readyAt);
-			const pull = parseImagePullMs(info?.imagePullMessage);
+			const pull = parseImagePullMs(pullMessage);
 			if (schedule !== undefined) timings.schedule = schedule;
 			if (ready !== undefined) timings.pod_ready = ready;
 			if (pull !== undefined) timings.image_pull = pull;
-			pullMessage = info?.imagePullMessage;
 		}
 		this.lastEnsureTimings = timings;
 		console.warn(
@@ -263,16 +267,14 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		);
 	}
 
-	/** The diagnostics read, capped so it cannot hold up an already-Running sandbox. */
-	private async boundedStartupInfo(): Promise<
-		Awaited<ReturnType<K8sClient['getStartupInfo']>> | undefined
-	> {
+	/** The one post-`Running` diagnostics read, capped so it cannot delay readiness. */
+	private async boundedImagePullMessage(uid: string | undefined): Promise<string | undefined> {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const gaveUp = new Promise<undefined>((resolve) => {
-			timer = setTimeout(() => resolve(undefined), STARTUP_INFO_TIMEOUT_MS);
+			timer = setTimeout(() => resolve(undefined), IMAGE_PULL_EVENT_TIMEOUT_MS);
 		});
 		try {
-			return await Promise.race([this.client.getStartupInfo(this.name), gaveUp]);
+			return await Promise.race([this.client.getImagePullMessage(this.name, uid), gaveUp]);
 		} finally {
 			clearTimeout(timer);
 		}
@@ -298,7 +300,11 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		const timeout = this.config.podReadyTimeout ?? Millis.minutes(2);
 		await pollUntilReady(
 			async () => {
-				const phase = await this.client.getPhase(this.name);
+				const info = await this.client.getPhase(this.name);
+				// Keep the snapshot: the boot breakdown (uid, schedule/ready times)
+				// comes from this poll, so no extra read holds up readiness later.
+				this.bootInfo = info ?? this.bootInfo;
+				const phase = info?.phase;
 				// A terminal phase is unrecoverable — throw to abort the wait at once.
 				if (phase === 'Failed' || phase === 'Succeeded') {
 					throw new Error(`pod ${this.name} entered terminal phase ${phase} before becoming ready`);
