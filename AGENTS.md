@@ -50,7 +50,11 @@ Dependencies point **inward only**. `core` and `api` never import an adapter;
 adapters depend on `core`'s port interfaces. `config` (and the entrypoints) are
 the only places concrete adapters are imported. **Reject PRs that violate this**
 — e.g. an `@marimo-hub/storage-*` / `compute-*` / `auth-*` import appearing in
-`packages/core` or `packages/api`.
+`packages/core` or `packages/api`. The rule is enforced mechanically: a
+`no-restricted-imports` override in `vite.config.ts` (files `packages/core/**`,
+`packages/api/**`) bans `@marimo-hub/{storage,compute,auth,credentials,secrets}-*`
+imports, and a colocated `package-dependencies.test.ts` in each of `core` and
+`api` fails if an adapter appears in their `package.json`.
 
 ## Conventions
 
