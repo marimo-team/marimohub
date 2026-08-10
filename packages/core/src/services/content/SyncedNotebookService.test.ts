@@ -228,6 +228,25 @@ describe('SyncedNotebookService', () => {
 			});
 		});
 
+		it('treats a bare shorthand edit of a URL-form GitHub source as a no-op', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, repo: 'https://github.com/owner/repo' },
+				ACTOR,
+			);
+			await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
+
+			const source = await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{ repo: 'owner/repo', branch: 'main', root_path: '', entry_notebook: 'app.py' },
+				ACTOR,
+			);
+
+			expect(source.repo).toBe('https://github.com/owner/repo');
+			expect(source.pending_config).toBeUndefined();
+		});
+
 		it('keeps an explicit provider across a path-only change on an unrecognized host', async () => {
 			const { meta } = await notebooks.synced.create(
 				projectId,

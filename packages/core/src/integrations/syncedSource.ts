@@ -143,14 +143,23 @@ function rehomeShorthand(config: GitSourceConfig, origin: string | null): GitSou
 /**
  * Resolve an updated config against the current source so shorthand keeps the
  * same meaning on create and update: a bare `owner/repo` names a path on the
- * host the source already lives on (github.com shorthand stays bare).
+ * host the source already lives on (github.com shorthand stays bare, matching
+ * create — recognized by host so every canonical GitHub origin qualifies).
  */
 export function resolveUpdatedConfig(
 	current: GitSource,
 	desired: GitSourceConfig,
 ): GitSourceConfig {
-	const origin = repoOrigin(current.repo);
-	return rehomeShorthand(desired, origin === 'https://github.com' ? null : origin);
+	const onGitHub = repoHost(current.repo) === 'github.com';
+	const rehomed = rehomeShorthand(desired, onGitHub ? null : repoOrigin(current.repo));
+	// A bare edit that names the repository the source already tracks must not
+	// stage a phantom change when the stored spelling differs — e.g. a URL-form
+	// GitHub source (`https://github.com/owner/repo`) edited with bare
+	// `owner/repo`. Return the stored spelling verbatim so equality holds.
+	if (rehomed.repo !== current.repo && reposMatch(current.repo, rehomed.repo)) {
+		return { ...rehomed, repo: current.repo };
+	}
+	return rehomed;
 }
 
 export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
