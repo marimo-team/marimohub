@@ -547,6 +547,19 @@ describe('OIDC routes', () => {
 		expect(setCookie).toContain('Secure');
 	});
 
+	it('re-discovers after a failed discovery instead of caching the rejection', async () => {
+		oauthMock.discoveryRequest.mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND issuer'));
+		const { routes } = makeOidc();
+
+		const first = await routes.request('/api/auth/login');
+		expect(first.status).toBe(500);
+
+		// Same adapter instance: the retry must re-discover, not replay the rejection.
+		const second = await routes.request('/api/auth/login');
+		expect(second.status).toBe(302);
+		expect(oauthMock.discoveryRequest).toHaveBeenCalledTimes(2);
+	});
+
 	it('defaults prompt to select_account, forcing the account chooser', async () => {
 		const { routes } = makeOidc({});
 

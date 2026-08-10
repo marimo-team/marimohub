@@ -387,12 +387,18 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 	const clientAuth = oauth.ClientSecretPost(config.clientSecret);
 
 	// Discovery is cached for the lifetime of the adapter (one fetch per process).
+	// A rejected discovery must not stay cached: null the slot so the next request
+	// re-discovers instead of replaying a transient DNS/IdP failure forever.
 	let asPromise: Promise<oauth.AuthorizationServer> | null = null;
 	function authServer(): Promise<oauth.AuthorizationServer> {
 		if (!asPromise) {
 			asPromise = oauth
 				.discoveryRequest(issuerUrl, { algorithm: 'oidc' })
-				.then((res) => oauth.processDiscoveryResponse(issuerUrl, res));
+				.then((res) => oauth.processDiscoveryResponse(issuerUrl, res))
+				.catch((err: unknown) => {
+					asPromise = null;
+					throw err;
+				});
 		}
 		return asPromise;
 	}
