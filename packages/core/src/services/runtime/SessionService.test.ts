@@ -1,14 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import {
-	ACTOR,
-	advanceTime,
-	expectHeartbeatAdvanced,
-	expectNotFound,
-	MemoryBucket,
-	restoreClock,
-	uid,
-	useFakeClock,
-} from '../../testing';
+import { ACTOR, advanceTime, expectNotFound, MemoryBucket, restoreClock, uid } from '../../testing';
+import { PreconditionFailedError } from '../../errors';
 import { createNotebookId, createProjectId } from '../../ids';
 import type { SessionId } from '../../ids';
 import { paths } from '../../paths';
@@ -64,16 +56,27 @@ describe('SessionService', () => {
 	});
 
 	describe('heartbeat', () => {
-		it('updates status to running and refreshes last_heartbeat', async () => {
+		it('does not promote a starting session', async () => {
 			const created = await sessions.createSession({
 				notebook_id: notebookId,
 				project_id: projectId,
 				user_id: ACTOR,
 			});
 
-			const updated = await sessions.heartbeat(projectId, created.session_id);
-			expect(updated.status).toBe('running');
-			expectHeartbeatAdvanced(updated, created);
+			const putSpy = vi.spyOn(bucket, 'put');
+			const result = await sessions.heartbeat(projectId, created.session_id);
+
+			expect(result.status).toBe('starting');
+			expect(result.last_heartbeat).toBe(created.last_heartbeat);
+			expect(putSpy).not.toHaveBeenCalled();
+			putSpy.mockRestore();
+
+			const running = await sessions.setRunning(
+				projectId,
+				created.session_id,
+				'https://sandbox.example',
+			);
+			expect(running.status).toBe('running');
 		});
 
 		it('throws NotFoundError for missing session', async () => {
@@ -88,21 +91,16 @@ describe('SessionService', () => {
 				project_id: projectId,
 				user_id: ACTOR,
 			});
+			await sessions.setRunning(projectId, created.session_id, 'https://sandbox.example');
 
 			const putSpy = vi.spyOn(bucket, 'put');
 
-			// First heartbeat persists the `starting` → `running` transition.
 			await sessions.heartbeat(projectId, created.session_id);
-			expect(putSpy).toHaveBeenCalledTimes(1);
+			expect(putSpy).not.toHaveBeenCalled();
 
-			// Second heartbeat is already running and still fresh → coalesced.
-			await sessions.heartbeat(projectId, created.session_id);
-			expect(putSpy).toHaveBeenCalledTimes(1);
-
-			// Past the interval, it persists again.
 			advanceTime(61 * 1000);
 			await sessions.heartbeat(projectId, created.session_id);
-			expect(putSpy).toHaveBeenCalledTimes(2);
+			expect(putSpy).toHaveBeenCalledTimes(1);
 			restoreClock();
 
 			putSpy.mockRestore();
@@ -134,8 +132,7 @@ describe('SessionService', () => {
 				project_id: projectId,
 				user_id: ACTOR,
 			});
-			// Drive the session to `expired` via the stale reaper.
-			await sessions.heartbeat(projectId, session.session_id);
+			await sessions.setRunning(projectId, session.session_id, 'https://sandbox.example');
 			advanceTime(6 * 60 * 1000);
 			expect(await sessions.expireStale()).toBe(1);
 			restoreClock();
@@ -151,25 +148,47 @@ describe('SessionService', () => {
 
 			putSpy.mockRestore();
 		});
+	});
 
-		it('promotes a starting session to running and updates last_heartbeat', async () => {
+	describe('releaseEditorFor', () => {
+		it('logs an operational error when the release fails for a non-CAS reason', async () => {
 			const created = await sessions.createSession({
 				notebook_id: notebookId,
 				project_id: projectId,
 				user_id: ACTOR,
 			});
-			expect(created.status).toBe('starting');
+			await sessions.claimEditor(projectId, notebookId, created.session_id, 'shared');
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const put = vi.spyOn(bucket, 'put').mockRejectedValue(new Error('bucket down'));
 
-			const clock = useFakeClock(new Date(created.last_heartbeat).getTime() + 1000);
+			await expect(sessions.releaseEditorFor(created)).resolves.toBeUndefined();
 
-			const updated = await sessions.heartbeat(projectId, created.session_id);
-			expect(updated.status).toBe('running');
-			expectHeartbeatAdvanced(updated, created, { strict: true });
+			const line = log.mock.calls.find((call) =>
+				String(call[0]).includes('editor_claim_release_failed'),
+			)?.[0] as string;
+			expect(line).toContain('session.editor_claim.release');
+			expect(line).toContain(created.session_id);
+			put.mockRestore();
+			log.mockRestore();
+		});
 
-			const stored = await sessions.getSession(projectId, created.session_id);
-			expect(stored.status).toBe('running');
+		it('stays silent when the release loses the CAS race', async () => {
+			const created = await sessions.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			await sessions.claimEditor(projectId, notebookId, created.session_id, 'shared');
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const put = vi
+				.spyOn(bucket, 'put')
+				.mockRejectedValue(new PreconditionFailedError('etag mismatch'));
 
-			clock.restore();
+			await expect(sessions.releaseEditorFor(created)).resolves.toBeUndefined();
+
+			expect(log).not.toHaveBeenCalled();
+			put.mockRestore();
+			log.mockRestore();
 		});
 	});
 
@@ -180,6 +199,7 @@ describe('SessionService', () => {
 				project_id: projectId,
 				user_id: ACTOR,
 			});
+			await sessions.setRunning(projectId, session.session_id, 'https://sandbox.example');
 			const key = paths.session(projectId, session.session_id);
 			const raw = await (await bucket.get(key))?.json<Record<string, unknown>>();
 			const pin = [{ id: 'intg-0000000000000000', name: 'prod', kind: 'postgres', version: 3 }];
@@ -188,7 +208,9 @@ describe('SessionService', () => {
 				JSON.stringify({ ...raw, integrations: pin, future_field: 'from-a-newer-replica' }),
 			);
 
+			advanceTime(61 * 1000);
 			await sessions.heartbeat(projectId, session.session_id);
+			restoreClock();
 
 			const rewritten = await (await bucket.get(key))?.json<Record<string, unknown>>();
 			expect(rewritten?.status).toBe('running');
@@ -265,7 +287,7 @@ describe('SessionService', () => {
 				project_id: projectId,
 				user_id: ACTOR,
 			});
-			await sessions.heartbeat(projectId, session.session_id);
+			await sessions.setRunning(projectId, session.session_id, 'https://sandbox.example');
 			advanceTime(6 * 60 * 1000);
 			expect(await sessions.expireStale()).toBe(1);
 			restoreClock();
@@ -425,7 +447,7 @@ describe('SessionService', () => {
 				project_id: projectId,
 				user_id: ACTOR,
 			});
-			await sessions.heartbeat(projectId, created.session_id);
+			await sessions.setRunning(projectId, created.session_id, 'https://sandbox.example');
 			advanceTime(6 * 60 * 1000);
 			expect(await sessions.expireStale()).toBe(1);
 			restoreClock();
@@ -760,9 +782,11 @@ describe('SessionService', () => {
 				project_id: projectId,
 				user_id: ACTOR,
 			});
-			// A heartbeat promotes starting → running WITHOUT stamping a sandbox_url;
-			// there is no live kernel to reconnect to, so it must not be reused.
-			await sessions.heartbeat(projectId, created.session_id);
+			// Older replicas may have written this invalid intermediate state.
+			await bucket.put(
+				paths.session(projectId, created.session_id),
+				JSON.stringify({ ...created, status: 'running' }),
+			);
 
 			expect(await sessions.findReusable(projectId, notebookId, ACTOR)).toBeUndefined();
 		});
@@ -775,8 +799,7 @@ describe('SessionService', () => {
 				project_id: projectId,
 				user_id: ACTOR,
 			});
-			// Set to running
-			await sessions.heartbeat(projectId, session.session_id);
+			await sessions.setRunning(projectId, session.session_id, 'https://sandbox.example');
 
 			// Move time forward past TTL (5 minutes)
 			advanceTime(6 * 60 * 1000);
@@ -796,7 +819,7 @@ describe('SessionService', () => {
 				project_id: projectId,
 				user_id: ACTOR,
 			});
-			await sessions.heartbeat(projectId, session.session_id);
+			await sessions.setRunning(projectId, session.session_id, 'https://sandbox.example');
 
 			const expired = await sessions.expireStale();
 			expect(expired).toBe(0);
@@ -897,7 +920,7 @@ describe('SessionService', () => {
 				project_id: projectId,
 				user_id: ACTOR,
 			});
-			await sessions.heartbeat(projectId, session.session_id);
+			await sessions.setRunning(projectId, session.session_id, 'https://sandbox.example');
 
 			advanceTime(25 * 60 * 60 * 1000);
 

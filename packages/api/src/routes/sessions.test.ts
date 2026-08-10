@@ -381,6 +381,19 @@ describe('Session routes', () => {
 		expect(discarded.status).toBe('terminated');
 	});
 
+	it('does not offer takeover when a claim names a terminal session', async () => {
+		const services = createServices(bucket);
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const exclusiveOther = exclusiveApi(STRANGER);
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		await services.sessions.terminate(pid, persistent.session_id as SessionId);
+
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+
+		expect(state.holder).toBeNull();
+		expect(state.can_take_over).toBe(false);
+	});
+
 	it('keeps the claim protected when the strict takeover save fails', async () => {
 		const exclusiveOwner = exclusiveApi(ACTOR);
 		const failing = makeFakeSandbox();

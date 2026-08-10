@@ -135,7 +135,7 @@ describe('Integration: full service stack', () => {
 	});
 
 	describe('session lifecycle', () => {
-		it('create -> heartbeat -> terminate', async () => {
+		it('create -> run -> terminate', async () => {
 			const project = await services.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
 			const nb = await services.notebooks.createNotebook(
 				project.id,
@@ -150,8 +150,12 @@ describe('Integration: full service stack', () => {
 			});
 			expect(session.status).toBe('starting');
 
-			const heartbeated = await services.sessions.heartbeat(project.id, session.session_id);
-			expect(heartbeated.status).toBe('running');
+			const running = await services.sessions.setRunning(
+				project.id,
+				session.session_id,
+				'https://sandbox.example',
+			);
+			expect(running.status).toBe('running');
 
 			const terminated = await services.sessions.terminate(project.id, session.session_id);
 			expect(terminated.status).toBe('terminated');

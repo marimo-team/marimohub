@@ -25,6 +25,7 @@ describe('sessionState', () => {
 	});
 
 	it('treats a no-op transition as null (skip the write)', () => {
+		expect(nextStatus('starting', 'heartbeat')).toBeNull(); // provisioning owns promotion
 		expect(nextStatus('running', 'running')).toBeNull(); // already running
 		expect(nextStatus('running', 'heartbeat')).toBeNull(); // status unchanged
 		expect(nextStatus('terminating', 'terminate')).toBeNull(); // already terminating

@@ -247,14 +247,16 @@ export class SessionService {
 		}));
 	}
 
-	/** Refresh a live session's heartbeat (keeps it off the TTL reaper). Coalesced
-	 * to ~1 write/60s; never revives a terminal/terminating session. */
+	/** Refresh a running session's heartbeat (keeps it off the TTL reaper).
+	 * Coalesced to ~1 write/60s; never revives a terminal/terminating session.
+	 * Provisioning owns the `starting` to `running` transition so a heartbeat
+	 * cannot create a claim-holding session without a sandbox URL. */
 	async heartbeat(projectId: ProjectId, id: SessionId): Promise<Session> {
 		return this.mutate(projectId, id, (session) => {
-			if (isTerminal(session.status) || session.status === 'terminating') return null;
+			if (session.status !== 'running') return null;
 			const ageMs = Date.now() - new Date(session.last_heartbeat).getTime();
-			if (session.status === 'running' && ageMs < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
-			return { ...session, status: 'running', last_heartbeat: new Date().toISOString() };
+			if (ageMs < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
+			return { ...session, last_heartbeat: new Date().toISOString() };
 		});
 	}
 
@@ -775,9 +777,19 @@ export class SessionService {
 				{ onlyIfEtagMatches: obj.etag },
 			);
 		} catch (err) {
-			if (!(err instanceof PreconditionFailedError)) {
-				this.metrics.increment('sessions.editor_claim.release_error');
-			}
+			// A losing CAS means another request changed the claim, so this release
+			// must not touch it. Other teardown failures are swallowed but logged.
+			if (err instanceof PreconditionFailedError) return;
+			this.metrics.increment('sessions.editor_claim.release_error');
+			logOperationalError(
+				'editor_claim_release_failed',
+				{
+					operation: 'session.editor_claim.release',
+					object: key,
+					session_id: session.session_id,
+				},
+				err,
+			);
 		}
 	}
 

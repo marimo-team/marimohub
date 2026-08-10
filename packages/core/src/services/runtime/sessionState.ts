@@ -30,7 +30,6 @@ const machine = createStateMachine<SessionStatus, SessionEvent>({
 	transitions: {
 		starting: {
 			running: 'running',
-			heartbeat: 'running',
 			terminate: 'terminating',
 			fail: 'failed',
 			expire: 'expired',
