@@ -106,7 +106,7 @@ Read regardless of the selected compute backend.
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |
 | `MARIMOHUB_COMPUTE_ASSET_URL` | Base URL for marimo frontend assets (e.g. a CDN). Omit to use the bundled assets. | — | — | `https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist` |
-| `MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS` | How long a session start waits for the marimo kernel to come up before failing. Generous by default because a cold sandbox may resolve + download the notebook environment on first boot. Served on `/api/v1/capabilities` so the client bounds its own startup wait with the same value. | — | `120` | `300` |
+| `MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS` | How long a session start waits for the marimo kernel to come up before failing. Generous by default because a cold sandbox may resolve + download the notebook environment on first boot. Served on `/api/v1/capabilities` so the client bounds its own startup wait with the same value. | — | `120` | — |
 
 ### CoreWeave Sandbox
 

@@ -112,22 +112,45 @@ const DEFAULT_SESSION_LIFETIME_EXTENSION_S = 1800; // 30m slide while editors co
 const DEFAULT_SESSION_SWEEP_INTERVAL_S = 60;
 
 /**
+ * An integer-seconds env var as `Millis`. `dflt` fills in when unset (omitted:
+ * unset stays undefined). Below the floor — 1, or 0 with `allowZero` — throws,
+ * so every seconds-valued knob validates and words its error identically.
+ */
+function parseSecondsEnv(
+	env: Env,
+	key: string,
+	opts: { dflt: number; allowZero?: boolean },
+): Millis;
+function parseSecondsEnv(
+	env: Env,
+	key: string,
+	opts?: { dflt?: number; allowZero?: boolean },
+): Millis | undefined;
+function parseSecondsEnv(
+	env: Env,
+	key: string,
+	opts?: { dflt?: number; allowZero?: boolean },
+): Millis | undefined {
+	const n = parseIntEnv(env, key) ?? opts?.dflt;
+	if (n === undefined) return undefined;
+	const min = opts?.allowZero ? 0 : 1;
+	if (n < min) {
+		throw new ConfigError(`Invalid ${key}: ${n} (expected an integer >= ${min})`, {
+			variable: key,
+		});
+	}
+	return Millis.seconds(n);
+}
+
+/**
  * Parse the marimohub-owned session lifetime policy: the graceful TTL enforced
  * by the lifecycle sweep, the idle timeout, the periodic snapshot cadence, and
  * connection-awareness. All optional with safe defaults; snapshot interval `0`
  * disables periodic snapshots.
  */
 function parseSessionLifetime(env: Env): SessionLifetimeConfig {
-	const seconds = (key: string, dflt: number, opts?: { allowZero?: boolean }) => {
-		const n = parseIntEnv(env, key) ?? dflt;
-		const min = opts?.allowZero ? 0 : 1;
-		if (n < min) {
-			throw new ConfigError(`Invalid ${key}: ${n} (expected an integer >= ${min})`, {
-				variable: key,
-			});
-		}
-		return Millis.seconds(n);
-	};
+	const seconds = (key: string, dflt: number, opts?: { allowZero?: boolean }) =>
+		parseSecondsEnv(env, key, { dflt, ...opts });
 	return {
 		maxLifetimeMs: seconds(
 			'MARIMOHUB_SESSION_MAX_LIFETIME_SECONDS',
@@ -152,24 +175,6 @@ function parseSessionLifetime(env: Env): SessionLifetimeConfig {
 			DEFAULT_SESSION_SWEEP_INTERVAL_S,
 		),
 	};
-}
-
-/**
- * How long a session provision waits for the marimo kernel to come up before
- * failing the start. Undefined defers to the core default (2 minutes); the
- * value is also served on `/api/v1/capabilities` so the client bounds its own
- * startup wait with it.
- */
-function parseSandboxStartupTimeout(env: Env): Millis | undefined {
-	const key = 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS';
-	const seconds = parseIntEnv(env, key);
-	if (seconds === undefined) return undefined;
-	if (seconds < 1) {
-		throw new ConfigError(`Invalid ${key}: ${seconds} (expected an integer >= 1)`, {
-			variable: key,
-		});
-	}
-	return Millis.seconds(seconds);
 }
 
 /**
@@ -357,7 +362,8 @@ export function createFromEnv(
 			hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
 			workdir: env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
 			assetUrl: env.MARIMOHUB_COMPUTE_ASSET_URL,
-			startupTimeoutMs: parseSandboxStartupTimeout(env),
+			// Unset defers to the core default (2 min); served on /api/v1/capabilities.
+			startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),
 			exposure,
 			appBaseUrl: env.MARIMOHUB_APP_BASE_URL,
 			persistWorkspace: parsePersistWorkspace(env),

@@ -476,10 +476,14 @@ export class SandboxProvisioner {
 			// `provisionFailure` drops the adapter's message, so a deadline-shaped
 			// failure must be classified here or the caller can't tell "kernel took
 			// too long" (raise the timeout) from "kernel crashed" (read the logs).
-			// A wait that consumed the full window is a timeout; a probe error (e.g.
-			// the process exited) propagates well before the deadline.
+			// A wait that consumed the full window is a timeout — unless the adapter
+			// already attributed the failure to the process ("… before port N …",
+			// the shared wording of the exited-early errors): crash detection can
+			// land arbitrarily close to the deadline, and elapsed time alone would
+			// then tell the operator to raise the timeout for a crash.
+			const crashed = err instanceof Error && /before port \d+/.test(err.message);
 			const timedOut =
-				portWaitStart !== undefined && Date.now() - portWaitStart >= startupTimeoutMs;
+				!crashed && portWaitStart !== undefined && Date.now() - portWaitStart >= startupTimeoutMs;
 			const step = timedOut
 				? `starting the marimo kernel: not ready within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`
 				: 'starting the marimo kernel';

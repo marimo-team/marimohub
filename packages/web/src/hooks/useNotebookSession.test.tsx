@@ -384,7 +384,7 @@ describe('useNotebookSession', () => {
 		});
 		expect(result.current.error).toEqual({
 			code: 'STARTUP_TIMEOUT',
-			message: 'The kernel did not start within 31 seconds.',
+			message: 'The kernel did not start within 1s.',
 			kind: 'startup',
 		});
 		expect(result.current.session).toBeNull();
@@ -417,7 +417,7 @@ describe('useNotebookSession', () => {
 		});
 		expect(result.current.error).toEqual({
 			code: 'STARTUP_TIMEOUT',
-			message: 'The kernel did not start within 150 seconds.',
+			message: 'The kernel did not start within 120s.',
 			kind: 'startup',
 		});
 	});
@@ -453,7 +453,7 @@ describe('useNotebookSession', () => {
 		});
 		expect(result.current.error).toEqual({
 			code: 'STARTUP_TIMEOUT',
-			message: 'The app did not start within 31 seconds.',
+			message: 'The app did not start within 1s.',
 			kind: 'startup',
 		});
 
@@ -461,6 +461,110 @@ describe('useNotebookSession', () => {
 		await settleHook();
 		expect(result.current.error).toBeNull();
 		expect(result.current.isRunning).toBe(true);
+	});
+
+	it('arms the startup clock for a starting app adopted as a replacement', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				const path = String(url);
+				if (init?.method === 'POST') return jsonOk(makeSession());
+				// The watched app ends underneath the page…
+				if (path.endsWith('/sessions/sess-1')) {
+					return jsonOk(makeSession({ status: 'terminated', sandbox_url: undefined }));
+				}
+				// …and the replacement scan finds someone else's restart, still starting.
+				if (path.endsWith(`/projects/${PID}/sessions`)) {
+					return jsonOk({
+						items: [
+							makeSession({
+								session_id: 'sess-2',
+								status: 'starting',
+								sandbox_url: undefined,
+								mode: 'app',
+							}),
+						],
+					});
+				}
+				if (path.endsWith('/sessions/sess-2')) {
+					return jsonOk(
+						makeSession({ session_id: 'sess-2', status: 'starting', sandbox_url: undefined }),
+					);
+				}
+				throw new Error(`unexpected fetch: ${path}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(
+			() => useNotebookSession(PID, NID, { mode: 'app', startupTimeoutSeconds: 1 }),
+			{ toaster: false },
+		);
+		await settleHook();
+		expect(result.current.isRunning).toBe(true);
+
+		// Run-watch tick adopts the starting replacement.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(10_000);
+		});
+		await settleHook();
+		expect(result.current.session?.session_id).toBe('sess-2');
+		expect(result.current.session?.status).toBe('starting');
+
+		// The adopted watch gets its own full timeout window — then fails.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2_000);
+		});
+		expect(result.current.error).toBeNull();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(31_000);
+		});
+		expect(result.current.error?.code).toBe('STARTUP_TIMEOUT');
+	});
+
+	it('a late poll response cannot resurrect a session after the startup timeout', async () => {
+		vi.useFakeTimers();
+		let releasePoll!: (response: Response) => void;
+		const held = new Promise<Response>((resolve) => {
+			releasePoll = resolve;
+		});
+		let polls = 0;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') {
+					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+				}
+				if (String(url).endsWith('/sessions/sess-1')) {
+					polls += 1;
+					// The first poll hangs until after the timeout has concluded.
+					return polls === 1
+						? held
+						: jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+				}
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(
+			() => useNotebookSession(PID, NID, { startupTimeoutSeconds: 1 }),
+			{ toaster: false },
+		);
+		await settleHook();
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(33_000);
+		});
+		expect(result.current.error?.code).toBe('STARTUP_TIMEOUT');
+
+		// The stale in-flight poll finally answers `running` — and must be ignored.
+		await act(async () => {
+			releasePoll(jsonOk(makeSession()));
+			await Promise.resolve();
+		});
+		await settleHook();
+		expect(result.current.session).toBeNull();
+		expect(result.current.error?.code).toBe('STARTUP_TIMEOUT');
 	});
 
 	it('posts heartbeats while running and ignores heartbeat failures', async () => {

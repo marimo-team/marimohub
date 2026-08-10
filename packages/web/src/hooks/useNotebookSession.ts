@@ -145,6 +145,18 @@ export function useNotebookSession(
 	// under an older render read, so a `setSession` without it re-arms a session
 	// the user has already left behind.
 	const commitSession = useCallback((next: Session | null) => {
+		// The startup clock follows whichever `starting` session is committed —
+		// this is the only commit point, so a start AND an adopted replacement app
+		// both arm it. Kept across re-commits of the same session, cleared
+		// otherwise so a stale timestamp can't instantly fail the next watch.
+		if (next?.status !== 'starting') {
+			startingSinceRef.current = null;
+		} else if (
+			startingSinceRef.current === null ||
+			sessionRef.current?.session_id !== next.session_id
+		) {
+			startingSinceRef.current = Date.now();
+		}
 		sessionRef.current = next;
 		setSession(next);
 	}, []);
@@ -179,7 +191,6 @@ export function useNotebookSession(
 						concludeAccessLost();
 						return;
 					}
-					startingSinceRef.current = data.status === 'starting' ? Date.now() : null;
 					commitSession(data);
 				},
 				(err) => {
@@ -273,6 +284,9 @@ export function useNotebookSession(
 
 	const failStart = useCallback(
 		(failure?: Session['error'], code?: string) => {
+			// Terminal: invalidate in-flight polls so a late `running` response
+			// cannot resurrect the session after the failure is shown.
+			generation.bump();
 			setError(
 				failure
 					? { message: failure.message, code: failure.code, kind: 'startup' }
@@ -285,7 +299,7 @@ export function useNotebookSession(
 			);
 			commitSession(null);
 		},
-		[startFailedMessage, commitSession],
+		[startFailedMessage, commitSession, generation],
 	);
 
 	/**
@@ -322,13 +336,15 @@ export function useNotebookSession(
 			if (session?.status !== 'starting') return;
 			// Watched longer than the deployment's startup timeout (plus grace) means
 			// whichever request was provisioning has died without failing the record —
-			// give up instead of polling forever.
-			const deadlineMs =
-				(startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S) * 1000 + STARTUP_TIMEOUT_GRACE_MS;
+			// give up instead of polling forever. The message names the CONFIGURED
+			// timeout, matching the server's own timeout error; the grace is an
+			// implementation detail.
+			const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
+			const deadlineMs = timeoutSeconds * 1000 + STARTUP_TIMEOUT_GRACE_MS;
 			if (startingSinceRef.current !== null && Date.now() - startingSinceRef.current > deadlineMs) {
 				failStart({
 					code: 'STARTUP_TIMEOUT',
-					message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${Math.round(deadlineMs / 1000)} seconds.`,
+					message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
 				});
 				return;
 			}

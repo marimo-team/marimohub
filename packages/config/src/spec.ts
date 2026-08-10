@@ -276,7 +276,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'How long a session start waits for the marimo kernel to come up before failing. Generous by default because a cold sandbox may resolve + download the notebook environment on first boot. Served on `/api/v1/capabilities` so the client bounds its own startup wait with the same value.',
 						default: '120',
-						example: '300',
 					},
 				],
 			},

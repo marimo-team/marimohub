@@ -255,6 +255,27 @@ describe('SandboxProvisioner', () => {
 			);
 		});
 
+		it('reads an adapter-attributed crash as a crash even at the deadline', async () => {
+			const { instance } = makeFakeSandbox({
+				failWaitForPort: new Error('process exited (code 1) before port 2718 was ready.'),
+				logs: { stdout: '', stderr: 'boom' },
+			});
+			const failure = await new SandboxProvisioner(fakeComputeFrom(instance))
+				.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					// 0ms: the whole window is consumed, so only the adapter's "before
+					// port" attribution keeps this from reading as a timeout.
+					startupTimeoutMs: Millis.of(0),
+				})
+				.catch((err: Error) => err);
+			expect((failure as Error).message).not.toContain('startup timeout');
+			expect((failure as Error).message).toContain('boom');
+		});
+
 		it('keeps a pre-deadline kernel crash distinct from a startup timeout', async () => {
 			const { instance } = makeFakeSandbox({
 				failWaitForPort: new Error('process exited before the port opened'),
