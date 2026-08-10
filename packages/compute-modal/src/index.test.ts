@@ -186,6 +186,12 @@ describe('ModalCompute', () => {
 		expect(world.created[0].sandbox.execCalls[0].command).toEqual(['sh', '-lc', 'true']);
 	});
 
+	it('pins an idle main process so the image entrypoint cannot boot its own marimo', async () => {
+		const world = makeWorld();
+		await makeCompute(world).create(SANDBOX_ID, { reuse: false }).exec('true');
+		expect(world.created[0].options.command).toEqual(['sleep', 'infinity']);
+	});
+
 	it('keeps unset resources as an exact create-options no-op', async () => {
 		expect(modalProfileResources(undefined)).toEqual({});
 		expect(modalProfileResources({ cpu: 0.5, memoryBytes: 512 * 1024 ** 2 })).toEqual({
