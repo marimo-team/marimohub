@@ -124,15 +124,19 @@ export function rewriteWorkspace(cmd: string, root: string): string {
  *    pyproject.toml doesn't declare it (installed into an ephemeral env);
  *  - append `--host <bindHost>` when binding a non-default interface (Docker:
  *    0.0.0.0), so the kernel is reachable through the published port.
- * Non-`uv run` commands and already-configured ones pass through unchanged.
+ * Commands without a `uv run` launch segment and already-configured ones pass
+ * through unchanged.
  */
 export function prepareMarimoCommand(cmd: string, bindHost: string): string {
-	if (!cmd.startsWith('uv run ')) return cmd;
+	const uvRunPrefix = /(^|&&\s*)uv run (?=[^&]*\bmarimo\b)/;
+	const match = uvRunPrefix.exec(cmd);
+	if (!match) return cmd;
+	const launchStart = match.index + match[1].length;
 	let out = cmd;
-	if (!out.includes('--with marimo')) {
-		out = out.replace(/^uv run /, 'uv run --with marimo ');
+	if (!out.slice(launchStart).includes('--with marimo')) {
+		out = out.replace(uvRunPrefix, '$1uv run --with marimo ');
 	}
-	if (bindHost !== '127.0.0.1' && out.includes('marimo') && !out.includes('--host')) {
+	if (bindHost !== '127.0.0.1' && !out.slice(launchStart).includes('--host')) {
 		out = `${out} --host ${bindHost}`;
 	}
 	return out;

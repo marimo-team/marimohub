@@ -39,6 +39,13 @@ describe('prepareMarimoCommand (pure)', () => {
 		);
 	});
 
+	it('injects `--with marimo` when setup commands prefix the uv run command', () => {
+		const command = 'if test -f pyproject.toml; then uv sync; fi && uv run --no-sync marimo edit';
+		expect(prepareMarimoCommand(command, '127.0.0.1')).toBe(
+			'if test -f pyproject.toml; then uv sync; fi && uv run --with marimo --no-sync marimo edit',
+		);
+	});
+
 	it('does not double-inject `--with marimo`', () => {
 		const already = 'uv run --with marimo marimo edit';
 		expect(prepareMarimoCommand(already, '127.0.0.1')).toBe(already);
