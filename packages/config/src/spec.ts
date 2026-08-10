@@ -270,6 +270,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Base URL for marimo frontend assets (e.g. a CDN). Omit to use the bundled assets.',
 						example: 'https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist',
 					},
+					{
+						id: 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS',
+						name: 'Sandbox startup timeout (seconds)',
+						description:
+							'How long a session start waits for the marimo kernel to come up before failing. Generous by default because a cold sandbox may resolve + download the notebook environment on first boot. Served on `/api/v1/capabilities` so the client bounds its own startup wait with the same value.',
+						default: '120',
+						example: '300',
+					},
 				],
 			},
 			{

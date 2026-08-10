@@ -1,8 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
+	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 	isSuperAdmin,
 	MAX_REQUEST_BYTES,
 	MAX_VERSIONS,
+	Millis,
 	viewerSessionModes,
 } from '@marimo-hub/core';
 import {
@@ -109,6 +111,9 @@ app.openapi(capabilitiesRoute, (c) => {
 			max_page_size: MAX_PAGE_SIZE,
 		},
 		sandbox_images: deps.sandbox.images ?? [],
+		sandbox_startup_timeout_seconds: Millis.toSeconds(
+			deps.sandbox.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
+		),
 		compute_profiles: (deps.sandbox.computeProfiles ?? []).map((profile) => ({
 			name: profile.name,
 			...toComputeResourcesResponse(profile.resources),

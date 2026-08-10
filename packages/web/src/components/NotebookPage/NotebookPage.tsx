@@ -184,6 +184,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 			(!showEditorChoice || editIntent === 'temporary'),
 		mode: isApp ? 'app' : 'edit',
 		editIntent,
+		startupTimeoutSeconds: capabilities?.sandbox_startup_timeout_seconds,
 	});
 
 	// Freeze the theme when the URL is first established, not on every toggle:

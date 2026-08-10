@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { Millis } from '../../duration';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { paths } from '../../paths';
 import {
@@ -206,6 +207,74 @@ describe('SandboxProvisioner', () => {
 			});
 
 			expect(calls.startProcess[0].cmd).toContain(`--asset-url="${assetUrl}"`);
+		});
+
+		it('waits for the kernel port with the configured startup timeout (default 2 minutes)', async () => {
+			const defaulted = makeFakeSandbox();
+			await new SandboxProvisioner(fakeComputeFrom(defaulted.instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+			});
+			expect(defaulted.calls.waitForPortOptions).toEqual([{ timeout: 120_000 }]);
+
+			const configured = makeFakeSandbox();
+			await new SandboxProvisioner(fakeComputeFrom(configured.instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				startupTimeoutMs: Millis.seconds(300),
+			});
+			expect(configured.calls.waitForPortOptions).toEqual([{ timeout: 300_000 }]);
+		});
+
+		it('names the startup timeout (and the config var) when the port wait consumes the full window', async () => {
+			const { instance } = makeFakeSandbox({
+				failWaitForPort: new Error('timed out after 0ms'),
+				logs: { stdout: 'Resolved 42 packages', stderr: '' },
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			// A 0ms window means the (instant) rejection has already consumed it, so
+			// the deadline classification triggers without waiting out a real timeout.
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					startupTimeoutMs: Millis.of(0),
+				}),
+			).rejects.toThrow(
+				/not ready within the 0s startup timeout \(MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS\)[\s\S]*Resolved 42 packages/,
+			);
+		});
+
+		it('keeps a pre-deadline kernel crash distinct from a startup timeout', async () => {
+			const { instance } = makeFakeSandbox({
+				failWaitForPort: new Error('process exited before the port opened'),
+				logs: { stdout: '', stderr: 'ModuleNotFoundError: no module named marimo' },
+			});
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			const failure = await provisioner
+				.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				})
+				.catch((err: Error) => err);
+			expect(failure).toBeInstanceOf(Error);
+			expect((failure as Error).message).toContain('starting the marimo kernel');
+			expect((failure as Error).message).toContain('ModuleNotFoundError');
+			expect((failure as Error).message).not.toContain('startup timeout');
 		});
 
 		it('injects sessionEnv (files + env) BEFORE starting the kernel', async () => {

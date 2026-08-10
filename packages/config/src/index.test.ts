@@ -80,6 +80,21 @@ describe('createFromEnv auth backend selection', () => {
 		expect(deps.sandbox.computeProfileOverride).toBe('editors');
 	});
 
+	it('parses the sandbox startup timeout into ms, defaulting to unset (core default)', () => {
+		const devEnv = { ...baseEnv, MARIMOHUB_AUTH_BACKEND: 'dev' };
+		expect(createFromEnv({ ...devEnv }).sandbox.startupTimeoutMs).toBeUndefined();
+		expect(
+			createFromEnv({ ...devEnv, MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: '300' }).sandbox
+				.startupTimeoutMs,
+		).toBe(300_000);
+		expect(() =>
+			createFromEnv({ ...devEnv, MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: '0' }),
+		).toThrow(/MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS/);
+		expect(() =>
+			createFromEnv({ ...devEnv, MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 'soon' }),
+		).toThrow(/MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS/);
+	});
+
 	it('rejects an invalid compute profile override policy', () => {
 		expect(() =>
 			createFromEnv({

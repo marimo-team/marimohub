@@ -2,6 +2,7 @@ import { all, allSettled } from 'better-all';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import type { SessionMode } from '../../constants';
+import { Millis } from '../../duration';
 import { UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
@@ -24,11 +25,13 @@ import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sand
 import type { WorkspaceRestoreStats } from './sandboxFiles';
 
 /**
- * How long to wait for marimo to bind its port. Generous because a cold sandbox
- * may build its uv venv from scratch (e.g. the `uv-sandbox` launch strategy
- * resolves + downloads the notebook's deps on first boot). See marimoLaunch.ts.
+ * Default wait for marimo to bind its port (override per deployment via
+ * `startupTimeoutMs`, config: MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS).
+ * Generous because a cold sandbox may build its uv venv from scratch (e.g. the
+ * `uv-sandbox` launch strategy resolves + downloads the notebook's deps on
+ * first boot). See marimoLaunch.ts.
  */
-const MARIMO_PORT_TIMEOUT_MS = 120_000; // 2 minutes
+export const DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS = Millis.minutes(2);
 /**
  * Default sandbox working directory. Override per-deployment via the `workdir`
  * option (config: MARIMOHUB_COMPUTE_WORKDIR) when the sandbox image's user can't
@@ -115,6 +118,12 @@ export interface ProvisionOptions {
 	sessionEnv?: SessionEnv | Promise<SessionEnv | undefined>;
 	/** Workspace-relative notebook file marimo should open. Defaults to `notebook.py`. */
 	entryNotebook?: string;
+	/**
+	 * How long to wait for the marimo kernel to bind its port before failing the
+	 * provision. Covers setup too (a cold env may install/build first). Defaults
+	 * to `DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS`.
+	 */
+	startupTimeoutMs?: Millis;
 	/**
 	 * Session mode driving the marimo subcommand (see `LAUNCH_MODES`). `app`
 	 * sandboxes must also pass `workspaceLoadMode: 'copy-only'` — a mounted
@@ -435,7 +444,9 @@ export class SandboxProvisioner {
 			assetUrl: options.assetUrl,
 			baseUrl: options.baseUrl,
 		});
+		const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS;
 		let process: SandboxProcess | undefined;
+		let portWaitStart: number | undefined;
 		try {
 			// Setup rides the kernel command instead of spending its own exec, and
 			// failures still surface through the process log read below. `&&` so a
@@ -444,10 +455,9 @@ export class SandboxProvisioner {
 			const command = [...launch.setup, launch.start].join(' && ');
 			const proc = await sw.time('start', () => sandbox.startProcess(command, { cwd: mountPath }));
 			process = proc;
+			portWaitStart = Date.now();
 			// Covers setup as well, so a slow kernel env (install/build) shows up here.
-			await sw.time('waitport', () =>
-				proc.waitForPort(MARIMO_PORT, { timeout: MARIMO_PORT_TIMEOUT_MS }),
-			);
+			await sw.time('waitport', () => proc.waitForPort(MARIMO_PORT, { timeout: startupTimeoutMs }));
 		} catch (err) {
 			// Surface the kernel's own output so a startup crash isn't an opaque
 			// "exited before ready". Best-effort.
@@ -463,12 +473,17 @@ export class SandboxProvisioner {
 					// getLogs can fail once the process/sandbox is gone — ignore.
 				}
 			}
-			throw provisionFailure(
-				kernelLogs
-					? `starting the marimo kernel; kernel output:\n${kernelLogs}`
-					: 'starting the marimo kernel',
-				err,
-			);
+			// `provisionFailure` drops the adapter's message, so a deadline-shaped
+			// failure must be classified here or the caller can't tell "kernel took
+			// too long" (raise the timeout) from "kernel crashed" (read the logs).
+			// A wait that consumed the full window is a timeout; a probe error (e.g.
+			// the process exited) propagates well before the deadline.
+			const timedOut =
+				portWaitStart !== undefined && Date.now() - portWaitStart >= startupTimeoutMs;
+			const step = timedOut
+				? `starting the marimo kernel: not ready within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`
+				: 'starting the marimo kernel';
+			throw provisionFailure(kernelLogs ? `${step}; kernel output:\n${kernelLogs}` : step, err);
 		}
 	}
 

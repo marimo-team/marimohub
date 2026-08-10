@@ -14,6 +14,7 @@ import type {
 	SandboxProvider,
 	SetEnvVarsOptions,
 	StartProcessOptions,
+	WaitForPortOptions,
 } from '../ports/sandbox';
 import { execResult, listFilesFailure, readFileFailure } from '../ports/sandbox';
 
@@ -35,6 +36,8 @@ export interface SandboxCalls {
 	setEnvDefaults: Record<string, string>[];
 	readFile: string[];
 	waitForPort: number[];
+	/** Options of each `waitForPort` call, index-aligned with `waitForPort`. */
+	waitForPortOptions: (WaitForPortOptions | undefined)[];
 	destroy: number;
 	/** Method names in call order (for the methods that record), for ordering assertions. */
 	sequence: string[];
@@ -45,6 +48,10 @@ export interface FakeSandboxOptions {
 	failExec?: string;
 	/** When true, `mountBucket` rejects (forcing the manual-copy fallback path). */
 	failMount?: boolean;
+	/** When set, `waitForPort` rejects with this error (the kernel never came up). */
+	failWaitForPort?: Error;
+	/** What `getLogs` returns — the kernel output surfaced on a startup failure. */
+	logs?: { stdout: string; stderr: string };
 	/** Files the sandbox reports as present when `readFile` is called. */
 	files?: Record<string, string>;
 }
@@ -70,6 +77,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 		setEnvDefaults: [],
 		readFile: [],
 		waitForPort: [],
+		waitForPortOptions: [],
 		destroy: 0,
 		sequence: [],
 	};
@@ -78,10 +86,12 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 		id: 'proc_1',
 		command: 'uv run marimo edit',
 		kill: async () => {},
-		waitForPort: async (port: number) => {
+		waitForPort: async (port: number, options?: WaitForPortOptions) => {
 			calls.waitForPort.push(port);
+			calls.waitForPortOptions.push(options);
+			if (opts.failWaitForPort) throw opts.failWaitForPort;
 		},
-		getLogs: async () => ({ stdout: '', stderr: '' }),
+		getLogs: async () => opts.logs ?? { stdout: '', stderr: '' },
 	};
 
 	const instance: SandboxInstance = {
@@ -202,6 +212,7 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 		setEnvDefaults: [],
 		readFile: [],
 		waitForPort: [],
+		waitForPortOptions: [],
 		destroy: 0,
 		sequence: [],
 	};

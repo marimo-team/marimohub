@@ -353,6 +353,116 @@ describe('useNotebookSession', () => {
 		expect(result.current.session).toBeNull();
 	});
 
+	it('fails a session stuck in starting once the startup timeout (plus grace) elapses', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST' || String(url).endsWith('/sessions/sess-1')) {
+					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+				}
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(
+			() => useNotebookSession(PID, NID, { startupTimeoutSeconds: 1 }),
+			{ toaster: false },
+		);
+		await settleHook();
+		expect(result.current.session?.status).toBe('starting');
+
+		// Inside the 1s timeout + 30s grace: still polling, no error.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2_000);
+		});
+		expect(result.current.error).toBeNull();
+		expect(result.current.session?.status).toBe('starting');
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(31_000);
+		});
+		expect(result.current.error).toEqual({
+			code: 'STARTUP_TIMEOUT',
+			message: 'The kernel did not start within 31 seconds.',
+			kind: 'startup',
+		});
+		expect(result.current.session).toBeNull();
+	});
+
+	it('falls back to the 120s server default when no capability timeout is provided', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST' || String(url).endsWith('/sessions/sess-1')) {
+					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+				}
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+
+		// 120s default + 30s grace = 150s deadline.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(149_000);
+		});
+		expect(result.current.error).toBeNull();
+		expect(result.current.session?.status).toBe('starting');
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(4_000);
+		});
+		expect(result.current.error).toEqual({
+			code: 'STARTUP_TIMEOUT',
+			message: 'The kernel did not start within 150 seconds.',
+			kind: 'startup',
+		});
+	});
+
+	it('says "The app" for app-mode startup timeouts, and a retry recovers', async () => {
+		vi.useFakeTimers();
+		let posts = 0;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') {
+					posts += 1;
+					// First start wedges in `starting`; the retry comes up immediately.
+					return posts === 1
+						? jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }))
+						: jsonOk(makeSession());
+				}
+				if (String(url).endsWith('/sessions/sess-1')) {
+					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+				}
+				throw new Error(`unexpected fetch: ${String(url)}`);
+			}),
+		);
+
+		const { result } = renderHookWithClient(
+			() => useNotebookSession(PID, NID, { mode: 'app', startupTimeoutSeconds: 1 }),
+			{ toaster: false },
+		);
+		await settleHook();
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(33_000);
+		});
+		expect(result.current.error).toEqual({
+			code: 'STARTUP_TIMEOUT',
+			message: 'The app did not start within 31 seconds.',
+			kind: 'startup',
+		});
+
+		act(() => result.current.start());
+		await settleHook();
+		expect(result.current.error).toBeNull();
+		expect(result.current.isRunning).toBe(true);
+	});
+
 	it('posts heartbeats while running and ignores heartbeat failures', async () => {
 		vi.useFakeTimers();
 		const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {

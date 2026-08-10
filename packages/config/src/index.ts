@@ -155,6 +155,24 @@ function parseSessionLifetime(env: Env): SessionLifetimeConfig {
 }
 
 /**
+ * How long a session provision waits for the marimo kernel to come up before
+ * failing the start. Undefined defers to the core default (2 minutes); the
+ * value is also served on `/api/v1/capabilities` so the client bounds its own
+ * startup wait with it.
+ */
+function parseSandboxStartupTimeout(env: Env): Millis | undefined {
+	const key = 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS';
+	const seconds = parseIntEnv(env, key);
+	if (seconds === undefined) return undefined;
+	if (seconds < 1) {
+		throw new ConfigError(`Invalid ${key}: ${seconds} (expected an integer >= 1)`, {
+			variable: key,
+		});
+	}
+	return Millis.seconds(seconds);
+}
+
+/**
  * The fallback role granted to any logged-in user who is not the project owner
  * or an explicit member. Defaults to `editor` so a logged-in user can edit
  * notebooks out of the box; set `none` (or `viewer`) to keep writes
@@ -339,6 +357,7 @@ export function createFromEnv(
 			hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME ?? '',
 			workdir: env.MARIMOHUB_COMPUTE_WORKDIR ?? '/workspace',
 			assetUrl: env.MARIMOHUB_COMPUTE_ASSET_URL,
+			startupTimeoutMs: parseSandboxStartupTimeout(env),
 			exposure,
 			appBaseUrl: env.MARIMOHUB_APP_BASE_URL,
 			persistWorkspace: parsePersistWorkspace(env),

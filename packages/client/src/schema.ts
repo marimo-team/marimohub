@@ -6332,6 +6332,7 @@ export interface components {
 				max_page_size: number;
 			};
 			sandbox_images: string[];
+			sandbox_startup_timeout_seconds: number;
 			compute_profiles: (components['schemas']['ComputeResources'] & {
 				name: string;
 			})[];

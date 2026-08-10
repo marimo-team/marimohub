@@ -1200,6 +1200,7 @@ app.openapi(createSession, async (c) => {
 						bucketHandle,
 						workdir: sandbox.workdir,
 						assetUrl: sandbox.assetUrl,
+						startupTimeoutMs: sandbox.startupTimeoutMs,
 						baseUrl,
 						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
 						image,

@@ -972,6 +972,12 @@ export const CapabilitiesResponseSchema = z
 		 * the deployment offers no image choice (single image or imageless backend).
 		 */
 		sandbox_images: z.array(z.string()),
+		/**
+		 * How long the server waits for a kernel to come up before failing a
+		 * session start (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS). Clients bound
+		 * their own "still starting" waits with it instead of hardcoding a copy.
+		 */
+		sandbox_startup_timeout_seconds: z.number(),
 		compute_profiles: z.array(
 			ComputeResourcesResponseSchema.extend({
 				name: z.string(),

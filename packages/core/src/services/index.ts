@@ -97,7 +97,11 @@ export type { CreatedToken, CreateTokenInput } from './tokens/TokenService';
 export { composeAuthenticators } from './tokens/composeAuthenticators';
 export { listAllKeys } from './catalog/storage';
 export { mutateObject, withCasRetry, type CasRetryOptions } from './catalog/cas';
-export { createWorkspaceLoadStrategies, SandboxProvisioner } from './runtime/SandboxProvisioner';
+export {
+	createWorkspaceLoadStrategies,
+	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
+	SandboxProvisioner,
+} from './runtime/SandboxProvisioner';
 export type {
 	BucketConfig,
 	ProvisionOptions,

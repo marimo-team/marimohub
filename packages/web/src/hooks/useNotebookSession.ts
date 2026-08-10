@@ -12,6 +12,17 @@ const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 /** How often to poll a still-`starting` session until it is running, in ms. */
 const START_POLL_INTERVAL_MS = 2_000;
 
+/** Startup-timeout fallback when capabilities are unavailable (server default). */
+const DEFAULT_STARTUP_TIMEOUT_S = 120;
+
+/**
+ * Slack past the server's startup timeout before the client fails a
+ * still-`starting` session itself. The server enforces the timeout on the
+ * kernel wait and returns a richer error, so this only catches a start nothing
+ * else concludes (e.g. the provisioning replica died mid-start).
+ */
+const STARTUP_TIMEOUT_GRACE_MS = 30_000;
+
 /**
  * How often a running page re-checks its session. This surfaces app stops and
  * exclusive-editor takeovers as terminal UI instead of leaving a dead iframe.
@@ -90,7 +101,18 @@ export function useNotebookSession(
 		enabled = true,
 		mode = 'edit',
 		editIntent,
-	}: { enabled?: boolean; mode?: 'edit' | 'app'; editIntent?: 'temporary' } = {},
+		startupTimeoutSeconds,
+	}: {
+		enabled?: boolean;
+		mode?: 'edit' | 'app';
+		editIntent?: 'temporary';
+		/**
+		 * The deployment's sandbox-startup timeout
+		 * (`capabilities.sandbox_startup_timeout_seconds`); a still-`starting`
+		 * session older than this (plus grace) is failed instead of polled forever.
+		 */
+		startupTimeoutSeconds?: number;
+	} = {},
 ): NotebookSession {
 	const startSession = useStartSession(projectId, notebookId, mode, editIntent);
 	const startPersistentSession = useStartSession(projectId, notebookId, mode);
@@ -115,6 +137,9 @@ export function useNotebookSession(
 	// Bumped by every start/stop/restart: a poll issued before one still lands
 	// afterwards, re-arming the dying session or failing the fresh one.
 	const generation = useGeneration();
+	// When this client began watching a still-`starting` session (client clock, so
+	// server/client skew can't fail a fresh start). Null while nothing is starting.
+	const startingSinceRef = useRef<number | null>(null);
 
 	// The state and the ref must move together: the ref is what handlers entered
 	// under an older render read, so a `setSession` without it re-arms a session
@@ -154,6 +179,7 @@ export function useNotebookSession(
 						concludeAccessLost();
 						return;
 					}
+					startingSinceRef.current = data.status === 'starting' ? Date.now() : null;
 					commitSession(data);
 				},
 				(err) => {
@@ -294,6 +320,18 @@ export function useNotebookSession(
 	useInterval(
 		() => {
 			if (session?.status !== 'starting') return;
+			// Watched longer than the deployment's startup timeout (plus grace) means
+			// whichever request was provisioning has died without failing the record —
+			// give up instead of polling forever.
+			const deadlineMs =
+				(startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S) * 1000 + STARTUP_TIMEOUT_GRACE_MS;
+			if (startingSinceRef.current !== null && Date.now() - startingSinceRef.current > deadlineMs) {
+				failStart({
+					code: 'STARTUP_TIMEOUT',
+					message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${Math.round(deadlineMs / 1000)} seconds.`,
+				});
+				return;
+			}
 			pollSession(
 				session.session_id,
 				(next) => {
