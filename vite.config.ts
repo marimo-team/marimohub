@@ -321,6 +321,7 @@ export default defineConfig({
 								'@marimo-hub/compute-*',
 								'@marimo-hub/auth-*',
 								'@marimo-hub/credentials-*',
+								'@marimo-hub/secrets-*',
 							],
 						},
 					],
