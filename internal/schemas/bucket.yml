@@ -1056,8 +1056,12 @@ components:
               type: string
               const: git
             provider:
-              type: string
-              const: github
+              anyOf:
+                - type: string
+                  enum:
+                    - github
+                    - gitlab
+                - type: 'null'
             repo:
               type: string
             branch:

@@ -408,8 +408,10 @@ export const LocalSourceSchema = z.object({
 // A git repository mirrored into the store by an external pusher (e.g. a CI
 // workflow). The platform never reaches out to the host — content arrives by
 // `push` only — so `provider` is informational (for display/links) and `repo`,
-// `branch`, `commit` are plain git coordinates, host-agnostic. Sync fields are
-// null until the first push lands; see `SyncedNotebookService`.
+// `branch`, `commit` are plain git coordinates, host-agnostic. `repo` is
+// either `owner/repo` (GitHub shorthand) or a repository URL; `provider` is
+// null when the host isn't recognized (the UI then renders no links). Sync
+// fields are null until the first push lands; see `SyncedNotebookService`.
 export const GitSourceConfigSchema = z.object({
 	repo: z.string(),
 	branch: z.string(),
@@ -422,7 +424,7 @@ export type GitSourceConfig = z.infer<typeof GitSourceConfigSchema>;
 export const GitSourceSchema = z.object({
 	schema_version: SchemaVersionSchema,
 	type: z.literal('git'),
-	provider: z.literal('github'),
+	provider: z.enum(['github', 'gitlab']).nullable(),
 	...GitSourceConfigSchema.shape,
 	pending_config: GitSourceConfigSchema.optional(),
 	sync_mode: z.literal('push'),

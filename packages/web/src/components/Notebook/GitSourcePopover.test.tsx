@@ -88,13 +88,53 @@ describe('GitSourcePopover', () => {
 		);
 	});
 
-	it('renders metadata without links when the repo is not plain owner/repo', async () => {
+	it('links a self-hosted GitLab URL repo with GitLab deep-link paths', async () => {
+		renderPopover({
+			...GIT_SOURCE,
+			provider: 'gitlab',
+			repo: 'https://my-gitlab-url.my-company.org/group1/marimo/nb',
+		});
+		await userEvent.click(screen.getByRole('button'));
+
+		expect(await screen.findByText('Synced from GitLab')).toBeInTheDocument();
+		expect(
+			screen.getByRole('link', { name: 'https://my-gitlab-url.my-company.org/group1/marimo/nb' }),
+		).toHaveAttribute('href', 'https://my-gitlab-url.my-company.org/group1/marimo/nb');
+		expect(screen.getByRole('link', { name: 'main' })).toHaveAttribute(
+			'href',
+			'https://my-gitlab-url.my-company.org/group1/marimo/nb/-/tree/main',
+		);
+		expect(screen.getByRole('link', { name: 'apps/dashboard.py' })).toHaveAttribute(
+			'href',
+			'https://my-gitlab-url.my-company.org/group1/marimo/nb/-/blob/abc123def456/apps/dashboard.py',
+		);
+		expect(screen.getByRole('link', { name: 'abc123d' })).toHaveAttribute(
+			'href',
+			'https://my-gitlab-url.my-company.org/group1/marimo/nb/-/commit/abc123def456',
+		);
+		expect(screen.getByRole('link', { name: /View source on GitLab/ })).toBeInTheDocument();
+	});
+
+	it('renders metadata without links when the host is not recognized', async () => {
+		renderPopover({
+			...GIT_SOURCE,
+			provider: null,
+			repo: 'https://code.my-company.org/team/repo',
+		});
+		await userEvent.click(screen.getByRole('button'));
+
+		expect(await screen.findByText('Synced from a git repository')).toBeInTheDocument();
+		expect(screen.getByText('https://code.my-company.org/team/repo')).toBeInTheDocument();
+		expect(screen.getByText('abc123d')).toBeInTheDocument();
+		expect(screen.getByText('apps/dashboard.py')).toBeInTheDocument();
+		expect(screen.queryByRole('link')).toBeNull();
+	});
+
+	it('renders metadata without links when the repo is a legacy git@ remote', async () => {
 		renderPopover({ ...GIT_SOURCE, repo: 'git@github.com:acme/analytics.git' });
 		await userEvent.click(screen.getByRole('button'));
 
 		expect(await screen.findByText('git@github.com:acme/analytics.git')).toBeInTheDocument();
-		expect(screen.getByText('abc123d')).toBeInTheDocument();
-		expect(screen.getByText('apps/dashboard.py')).toBeInTheDocument();
 		expect(screen.queryByRole('link')).toBeNull();
 	});
 });

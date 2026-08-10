@@ -62,11 +62,23 @@ Content-Type: application/json
 
 | Field            | Required | Notes                                                                       |
 | ---------------- | -------- | --------------------------------------------------------------------------- |
-| `provider`       | no       | Where the repo is hosted. Currently `github`; defaults to `github`.         |
-| `repo`           | yes      | `owner/name`. Informational + matched on each push.                         |
+| `provider`       | no       | `github` or `gitlab`. Usually derived from `repo`; see below.               |
+| `repo`           | yes      | `owner/name` or a repository URL. Informational + matched on each push.     |
 | `branch`         | yes      | Branch this notebook tracks.                                                |
 | `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`). |
 | `entry_notebook` | yes      | The `.py` notebook to open, **relative to `root_path`**.                    |
+
+`repo` accepts `owner/repo` (GitHub shorthand; gitlab.com when `provider` is
+`gitlab`) or a repository URL such as
+`https://gitlab.example.com/group/subgroup/project` — nested GitLab groups
+included. Scheme-less `host.tld/group/project` and SSH remotes
+(`git@host:path.git`) are rewritten to https on write.
+
+`provider` picks the UI's link layout (GitLab nests deep links under `/-/`).
+It is derived from the host name — hosts containing `github` or `gitlab` are
+recognized — so pass it only when the host doesn't give it away (e.g.
+`code.example.com`). With no recognized host and no `provider`, the UI shows
+the sync metadata without links.
 
 The response returns the notebook plus its sync credentials:
 
@@ -102,6 +114,9 @@ Content-Type: application/json
 }
 ```
 
+When editing, a bare `owner/repo` keeps naming a path on the host the source
+already lives on; github.com shorthand stays bare.
+
 Before the first push, changes take effect immediately. After a notebook has
 synced, changes remain pending until an archive matching the new configuration
 arrives. The notebook continues serving its last successful version in the
@@ -127,7 +142,7 @@ X-Marimohub-Commit: 9f2c1ab…
 | Header                       | Required | Notes                                                       |
 | ---------------------------- | -------- | ----------------------------------------------------------- |
 | `Authorization`              | yes      | `Bearer <sync_token>`.                                      |
-| `X-Marimohub-Repo`           | yes      | Must match the notebook's `repo`.                           |
+| `X-Marimohub-Repo`           | yes      | Must name the notebook's `repo` (path form is accepted).    |
 | `X-Marimohub-Branch`         | yes      | Must match the notebook's `branch`.                         |
 | `X-Marimohub-Root-Path`      | no       | Must match the notebook's `root_path` (defaults to `""`).   |
 | `X-Marimohub-Commit`         | yes      | The git commit SHA being pushed.                            |
@@ -135,7 +150,9 @@ X-Marimohub-Commit: 9f2c1ab…
 
 `X-Marimohub-Repo` / `-Branch` / `-Root-Path` re-state the notebook's
 configuration so a misrouted workflow can't push to the wrong notebook; a
-mismatch is rejected with `400`. The response names every mismatched header and
+mismatch is rejected with `400`. `X-Marimohub-Repo` may state the repo as its
+bare path even when the notebook stores a full URL — `$GITHUB_REPOSITORY` and
+`$CI_PROJECT_PATH` work as-is. The response names every mismatched header and
 includes its received and expected values, for example:
 
 ```json
@@ -204,6 +221,26 @@ jobs:
             -H "X-Marimohub-Root-Path: apps" \
             -H "X-Marimohub-Commit: ${{ github.sha }}" \
             --data-binary @sync.tgz
+```
+
+## GitLab CI example
+
+```yaml
+sync-notebook:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  script:
+    - git archive --format=tar.gz -o sync.tgz "HEAD:apps"
+    - |
+      curl --fail-with-body -X POST "$MARIMOHUB_SYNC_URL" \
+        -H "Authorization: Bearer $MARIMOHUB_SYNC_TOKEN" \
+        -H "Content-Type: application/gzip" \
+        -H "X-Marimohub-Archive-Format: tar.gz" \
+        -H "X-Marimohub-Repo: $CI_PROJECT_PATH" \
+        -H "X-Marimohub-Branch: main" \
+        -H "X-Marimohub-Root-Path: apps" \
+        -H "X-Marimohub-Commit: $CI_COMMIT_SHA" \
+        --data-binary @sync.tgz
 ```
 
 ## Rotating the sync token

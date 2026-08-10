@@ -21,7 +21,7 @@ import {
 import type { UserDirectory } from '@/api/hooks';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { toastError } from '@/lib/errors';
-import { githubCommitUrl, githubCoords, shortCommit, versionCommit } from '@/lib/github';
+import { gitCommitUrl, gitCoords, shortCommit, versionCommit } from '@/lib/git';
 import { formatRelative } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { NotebookEntry, NotebookVersion } from '@/types';
@@ -79,7 +79,7 @@ interface VersionListItemProps {
 	users: UserDirectory | undefined;
 	usersLoading: boolean;
 	showRestore: boolean;
-	/** GitHub link for the synced commit this version mirrors, when known. */
+	/** Host link for the synced commit this version mirrors, when known. */
 	commitLink?: { href: string; label: string };
 	/** SnapshotPage link for this version's captured outputs, when it has any. */
 	outputsLink?: { to: string; state: { title: string } };
@@ -134,7 +134,7 @@ function VersionListItem({
 					href={commitLink.href}
 					target="_blank"
 					rel="noreferrer"
-					title="View commit on GitHub"
+					title="View commit"
 					className="shrink-0 rounded font-mono text-[11px] text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
 				>
 					{commitLink.label}
@@ -186,15 +186,13 @@ export function VersionHistoryDialog({
 
 	// The repo behind each sync version's commit link. The dialog mounts only
 	// while open, so this fetch is on-demand; local notebooks (and git sources
-	// without a trustworthy GitHub repo) just get no chips.
+	// without a trustworthy host link) just get no chips.
 	const { data: detail } = useNotebookQuery(projectId, notebook.id);
-	const coords = githubCoords(detail?.source);
+	const coords = gitCoords(detail?.source);
 	const commitLinkFor = (v: NotebookVersion): { href: string; label: string } | undefined => {
 		if (!coords) return undefined;
 		const commit = versionCommit(v);
-		return commit
-			? { href: githubCommitUrl(coords.repo, commit), label: shortCommit(commit) }
-			: undefined;
+		return commit ? { href: gitCommitUrl(coords, commit), label: shortCommit(commit) } : undefined;
 	};
 	const outputsLinkFor = (v: NotebookVersion) =>
 		v.html_snapshot

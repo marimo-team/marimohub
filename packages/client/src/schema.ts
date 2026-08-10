@@ -1512,7 +1512,7 @@ export interface paths {
 						 * @example github
 						 * @enum {string}
 						 */
-						provider?: 'github';
+						provider?: 'github' | 'gitlab';
 						/** @example marimo-team/marimohub */
 						repo: string;
 						/** @example main */
@@ -1766,8 +1766,8 @@ export interface paths {
 								source: {
 									/** @enum {string} */
 									type: 'git';
-									/** @enum {string} */
-									provider: 'github';
+									/** @enum {string|null} */
+									provider: 'github' | 'gitlab' | null;
 									repo: string;
 									branch: string;
 									root_path: string;
@@ -5575,8 +5575,8 @@ export interface components {
 			| {
 					/** @enum {string} */
 					type: 'git';
-					/** @enum {string} */
-					provider: 'github';
+					/** @enum {string|null} */
+					provider: 'github' | 'gitlab' | null;
 					repo: string;
 					branch: string;
 					root_path: string;

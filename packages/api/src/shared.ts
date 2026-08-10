@@ -657,7 +657,8 @@ export const GitSourceConfigResponseSchema = z
 
 export const GitSourceResponseSchema = z.object({
 	type: z.literal('git'),
-	provider: z.literal('github'),
+	// Null when the repo's host isn't a recognized provider (links can't be built).
+	provider: z.enum(['github', 'gitlab']).nullable(),
 	...GitSourceConfigResponseSchema.shape,
 	pending_config: GitSourceConfigResponseSchema.optional(),
 	sync_mode: z.literal('push'),

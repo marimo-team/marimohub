@@ -9,6 +9,7 @@ import {
 	useSeedOnOpen,
 } from '@/components/form';
 import { useCreateSyncedNotebook } from '@/api/hooks';
+import { isRepoInput, REPO_INPUT_HINT } from '@/lib/git';
 
 export interface SyncedNotebookCreated {
 	notebookId: string;
@@ -27,10 +28,7 @@ export interface SyncedNotebookDialogProps {
 
 const syncedSchema = z.object({
 	title: requiredText('Notebook name'),
-	repo: requiredText('Repository').regex(
-		/^[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+$/,
-		'Use the owner/repo format, e.g. acme/analytics',
-	),
+	repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
 	branch: requiredText('Branch'),
 	rootPath: optionalText(),
 	entryNotebook: requiredText('Notebook file').regex(
@@ -95,7 +93,12 @@ export function SyncedNotebookDialog({
 				{(f) => <f.TextField label="Notebook name" placeholder="my_dashboard" autoFocus />}
 			</form.AppField>
 			<form.AppField name="repo">
-				{(f) => <f.TextField label="Repository" placeholder="owner/repo" />}
+				{(f) => (
+					<f.TextField
+						label="Repository"
+						placeholder="owner/repo or https://gitlab.example.com/group/project"
+					/>
+				)}
 			</form.AppField>
 			<form.AppField name="branch">
 				{(f) => <f.TextField label="Branch" placeholder="main" />}

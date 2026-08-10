@@ -223,7 +223,7 @@ describe('VersionHistoryDialog', () => {
 		renderDialog();
 
 		await screen.findAllByTestId('version-row');
-		expect(screen.queryByTitle('View commit on GitHub')).toBeNull();
+		expect(screen.queryByTitle('View commit')).toBeNull();
 	});
 
 	it('defaults the diff to previous → current', async () => {

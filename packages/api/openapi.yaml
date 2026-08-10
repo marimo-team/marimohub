@@ -791,9 +791,13 @@ components:
               enum:
                 - git
             provider:
-              type: string
+              type:
+                - string
+                - 'null'
               enum:
                 - github
+                - gitlab
+                - null
             repo:
               type: string
             branch:
@@ -2838,6 +2842,7 @@ paths:
                   type: string
                   enum:
                     - github
+                    - gitlab
                   example: github
                 repo:
                   type: string
@@ -3093,9 +3098,13 @@ paths:
                             enum:
                               - git
                           provider:
-                            type: string
+                            type:
+                              - string
+                              - 'null'
                             enum:
                               - github
+                              - gitlab
+                              - null
                           repo:
                             type: string
                           branch:

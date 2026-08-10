@@ -18,6 +18,7 @@ import {
 	WriteOnceWarning,
 } from '@/components/ui';
 import { useNotebookQuery, useRotateSyncToken, useUpdateGitSource } from '@/api/hooks';
+import { isRepoInput, REPO_INPUT_HINT } from '@/lib/git';
 import { DOCS_SYNCING_URL } from '@/lib/links';
 import { formatRelative } from '@/lib/time';
 
@@ -33,10 +34,7 @@ interface SyncSettingsDialogProps {
 }
 
 const settingsSchema = z.object({
-	repo: requiredText('Repository').regex(
-		/^[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+$/,
-		'Use the owner/repo format, e.g. acme/analytics',
-	),
+	repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
 	branch: requiredText('Branch'),
 	rootPath: optionalText(),
 	entryNotebook: requiredText('Notebook file').regex(
@@ -188,7 +186,13 @@ export function SyncSettingsDialog({
 		>
 			<div className="grid gap-4 sm:grid-cols-2">
 				<form.AppField name="repo">
-					{(f) => <f.TextField label="Repository" placeholder="owner/repo" isDisabled={!source} />}
+					{(f) => (
+						<f.TextField
+							label="Repository"
+							placeholder="owner/repo or https://gitlab.example.com/group/project"
+							isDisabled={!source}
+						/>
+					)}
 				</form.AppField>
 				<form.AppField name="branch">
 					{(f) => <f.TextField label="Branch" placeholder="main" isDisabled={!source} />}
