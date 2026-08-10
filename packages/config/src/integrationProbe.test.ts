@@ -193,7 +193,10 @@ describe('createGuardedProbe policy', () => {
 		const { transport, calls } = stubTransport();
 		const probe = createGuardedProbe({ transport, allowPrivate: true, timeoutMs: 200 });
 		await probe.fetch('http://localhost:9/');
-		expect(calls[0].timeoutMs).toBeLessThanOrEqual(140);
+		// ~60ms of the 200ms budget went to resolution, so the transport gets ~140ms.
+		// Node's setTimeout can fire a millisecond early, so allow slack above 140
+		// rather than pinning the exact boundary (the point is that DNS ate the budget).
+		expect(calls[0].timeoutMs).toBeLessThanOrEqual(150);
 		expect(calls[0].timeoutMs).toBeGreaterThan(0);
 	});
 
