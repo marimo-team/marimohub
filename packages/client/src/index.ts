@@ -95,8 +95,12 @@ async function dispatchRequest(request: Request): Promise<Response> {
 	const url = new URL(request.url);
 	const input =
 		url.origin === defaultBaseUrl ? `${url.pathname}${url.search}${url.hash}` : url.href;
+	// Read the body via clone().text() rather than gating on `request.body`:
+	// Firefox has no Request.body getter (Bugzilla #1387483), so that check
+	// silently dropped every POST/PUT/PATCH payload there.
+	const body = await request.clone().text();
 	return globalThis.fetch(input, {
-		body: request.body ? await request.clone().text() : undefined,
+		body: body === '' ? undefined : body,
 		cache: request.cache,
 		credentials: request.credentials,
 		headers: request.headers,

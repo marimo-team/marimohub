@@ -53,6 +53,38 @@ describe('apiData', () => {
 		expect(init?.body).toBe(JSON.stringify({ name: 'Example', description: 'Typed request' }));
 	});
 
+	it('forwards the body even when the Request.body getter is missing (Firefox)', async () => {
+		// Firefox never shipped the Request.body stream getter (Bugzilla #1387483);
+		// the dispatcher must not rely on it to detect a payload.
+		class BodyGetterlessRequest extends Request {
+			override get body(): Request['body'] {
+				return undefined as unknown as null;
+			}
+		}
+		vi.stubGlobal('Request', BodyGetterlessRequest);
+		const fn = stubFetch(async () => jsonResponse({ success: true, data: null }));
+
+		await apiData(
+			apiClient.POST('/api/v1/projects', {
+				body: { name: 'Firefox', description: 'No Request.body getter' },
+			}),
+		);
+
+		const [, init] = fn.mock.calls[0] ?? [];
+		expect(init?.body).toBe(
+			JSON.stringify({ name: 'Firefox', description: 'No Request.body getter' }),
+		);
+	});
+
+	it('omits the body for bodyless requests', async () => {
+		const fn = stubFetch(async () => jsonResponse({ success: true, data: null }));
+
+		await apiData(apiClient.GET('/api/v1/me'));
+
+		const [, init] = fn.mock.calls[0] ?? [];
+		expect(init?.body).toBeUndefined();
+	});
+
 	it('throws ApiRequestError with the server code/message on { success: false }', async () => {
 		stubFetch(async () =>
 			jsonResponse({ success: false, error: { code: 'FORBIDDEN', message: 'nope' } }, 403),
