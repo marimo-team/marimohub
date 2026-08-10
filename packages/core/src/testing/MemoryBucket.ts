@@ -1,4 +1,5 @@
 import { PreconditionFailedError } from '../errors';
+import { assertValidBucketListLimit } from '../ports/bucket';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -87,6 +88,7 @@ export class MemoryBucket implements Bucket {
 	}
 
 	async list(options?: BucketListOptions): Promise<BucketListResult> {
+		assertValidBucketListLimit(options?.limit);
 		const prefix = options?.prefix ?? '';
 		const delimiter = options?.delimiter;
 		const limit = options?.limit ?? 1000;

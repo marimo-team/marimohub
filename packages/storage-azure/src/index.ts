@@ -9,6 +9,7 @@ import type {
 } from '@azure/storage-blob';
 import type { TokenCredential } from '@azure/core-auth';
 import { PreconditionFailedError } from '@marimo-hub/core';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -200,8 +201,16 @@ export class AzureStorage implements Bucket {
 				uploaded: response.lastModified ?? new Date(),
 			};
 		} catch (err) {
-			if (isPreconditionFailed(err) || (options?.onlyIfNotExists && isAlreadyExists(err))) {
-				throw new PreconditionFailedError(`ETag mismatch for key "${key}"`);
+			if (options?.onlyIfNotExists && isAlreadyExists(err)) {
+				throw new PreconditionFailedError(`Key "${key}" already exists`);
+			}
+			if (isPreconditionFailed(err)) {
+				const message = options?.onlyIfNotExists
+					? `Key "${key}" already exists`
+					: options?.onlyIfEtagMatches !== undefined
+						? `ETag mismatch for key "${key}"`
+						: `Precondition not met for key "${key}"`;
+				throw new PreconditionFailedError(message);
 			}
 			throw err;
 		}
@@ -229,6 +238,7 @@ export class AzureStorage implements Bucket {
 	}
 
 	async list(options?: BucketListOptions): Promise<BucketListResult> {
+		assertValidBucketListLimit(options?.limit);
 		const iterable = options?.delimiter
 			? this.client.listBlobsByHierarchy(options.delimiter, { prefix: options.prefix })
 			: this.client.listBlobsFlat({ prefix: options?.prefix });

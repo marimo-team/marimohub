@@ -23,6 +23,7 @@ import { importPKCS8, SignJWT } from 'jose';
 import { ofetch } from 'ofetch';
 import type { $Fetch } from 'ofetch';
 import { PreconditionFailedError } from '@marimo-hub/core';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -363,37 +364,52 @@ export class GcsStorage implements Bucket {
 	}
 
 	async list(options?: BucketListOptions): Promise<BucketListResult> {
-		const params = new URLSearchParams();
-		if (options?.prefix) params.set('prefix', options.prefix);
-		if (options?.delimiter) params.set('delimiter', options.delimiter);
-		if (options?.limit !== undefined) params.set('maxResults', String(options.limit));
-		if (options?.cursor) params.set('pageToken', options.cursor);
-		if (options?.startAfter) params.set('startOffset', options.startAfter);
+		assertValidBucketListLimit(options?.limit);
+		let pageToken = options?.cursor;
+		const startAfter = options?.cursor ? undefined : options?.startAfter;
 
-		const url = `${this.apiEndpoint}/storage/v1/b/${this.bucket}/o?${params}`;
-		const res = await this.client.raw(url, { headers: await this.authHeaders() });
-		if (!res.ok) return this.failNonOk(res, 'list', options?.prefix ?? '');
-		const json = (await res.json()) as {
-			items?: GcsObjectResource[];
-			prefixes?: string[];
-			nextPageToken?: string;
-		};
+		while (true) {
+			const params = new URLSearchParams();
+			if (options?.prefix) params.set('prefix', options.prefix);
+			if (options?.delimiter) params.set('delimiter', options.delimiter);
+			if (options?.limit !== undefined) params.set('maxResults', String(options.limit));
+			if (pageToken) params.set('pageToken', pageToken);
+			if (startAfter) params.set('startOffset', startAfter);
 
-		return {
-			objects: (json.items ?? [])
+			const url = `${this.apiEndpoint}/storage/v1/b/${this.bucket}/o?${params}`;
+			const res = await this.client.raw(url, { headers: await this.authHeaders() });
+			if (!res.ok) return this.failNonOk(res, 'list', options?.prefix ?? '');
+			const json = (await res.json()) as {
+				items?: GcsObjectResource[];
+				prefixes?: string[];
+				nextPageToken?: string;
+			};
+			const objects = (json.items ?? [])
 				.filter((o): o is GcsObjectResource & { name: string } => Boolean(o.name))
-				// GCS startOffset is inclusive; the Bucket port's startAfter is exclusive.
-				.filter((o) => options?.cursor || !options?.startAfter || o.name > options.startAfter)
+				.filter((o) => !startAfter || o.name > startAfter)
 				.map((o) => ({
 					key: o.name,
 					etag: o.generation ?? '',
 					size: Number(o.size ?? 0),
 					uploaded: o.updated ? new Date(o.updated) : new Date(),
-				})),
-			truncated: Boolean(json.nextPageToken),
-			cursor: json.nextPageToken,
-			delimitedPrefixes: json.prefixes ?? [],
-		};
+				}));
+			const delimitedPrefixes = json.prefixes ?? [];
+
+			if (
+				objects.length > 0 ||
+				delimitedPrefixes.length > 0 ||
+				!json.nextPageToken ||
+				!startAfter
+			) {
+				return {
+					objects,
+					truncated: Boolean(json.nextPageToken),
+					cursor: json.nextPageToken,
+					delimitedPrefixes,
+				};
+			}
+			pageToken = json.nextPageToken;
+		}
 	}
 
 	/**

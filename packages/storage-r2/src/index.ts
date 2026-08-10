@@ -1,4 +1,5 @@
 import { PreconditionFailedError } from '@marimo-hub/core';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -84,6 +85,7 @@ export class R2BucketAdapter implements Bucket {
 	}
 
 	async list(options?: BucketListOptions): Promise<BucketListResult> {
+		assertValidBucketListLimit(options?.limit);
 		const result = await this.r2.list({
 			prefix: options?.prefix,
 			delimiter: options?.delimiter,

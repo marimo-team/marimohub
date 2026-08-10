@@ -16,6 +16,8 @@ jobs:
   storage-conformance:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      AZURITE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
@@ -47,8 +49,8 @@ jobs:
             sleep 1; [ "$i" = 30 ] && exit 1
           done
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:10000/devstoreaccount1 || true)
-            [ "$code" != "000" ] && break
+            az storage container list --connection-string "$AZURITE_CONNECTION_STRING" \
+              --num-results 1 --only-show-errors --output none && break
             sleep 1; [ "$i" = 30 ] && exit 1
           done
 
@@ -60,8 +62,12 @@ jobs:
           AWS_EC2_METADATA_DISABLED: 'true'
         run: |
           aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://marimohub-test
-          az storage container create --name marimohub-test \
-            --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
+          for i in $(seq 1 10); do
+            az storage container create --name marimohub-test \
+              --connection-string "$AZURITE_CONNECTION_STRING" \
+              --only-show-errors --output none && break
+            sleep 1; [ "$i" = 10 ] && exit 1
+          done
 
       - name: S3 contract against MinIO
         env:
@@ -70,10 +76,10 @@ jobs:
           MARIMOHUB_TEST_S3_REGION: us-east-1
           MARIMOHUB_TEST_S3_KEY: minioadmin
           MARIMOHUB_TEST_S3_SECRET: minioadmin
-        run: vp run --filter @marimo-hub/storage-s3 --fail-if-no-match test
+        run: vp run --no-cache --filter @marimo-hub/storage-s3 --fail-if-no-match test
 
       - name: Azure contract against Azurite
         env:
           MARIMOHUB_TEST_AZURE_CONTAINER: marimohub-test
-          MARIMOHUB_TEST_AZURE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
-        run: vp run --filter @marimo-hub/storage-azure --fail-if-no-match test
+          MARIMOHUB_TEST_AZURE_CONNECTION_STRING: ${{ env.AZURITE_CONNECTION_STRING }}
+        run: vp run --no-cache --filter @marimo-hub/storage-azure --fail-if-no-match test

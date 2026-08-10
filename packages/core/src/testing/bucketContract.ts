@@ -101,12 +101,18 @@ export function bucketContract(name: string, makeBucket: () => Bucket | Promise<
 			expect(new Set(seen).size).toBe(keys.length);
 		});
 
+		it.each([0, -1, 1.5])('rejects invalid list limit %s', async (limit) => {
+			await expect(bucket.list({ limit })).rejects.toThrow(
+				'Bucket list limit must be a positive integer',
+			);
+		});
+
 		it('treats startAfter as an exclusive lower bound', async () => {
 			await bucket.put('sa/a', '1');
 			await bucket.put('sa/b', '2');
 			await bucket.put('sa/c', '3');
 
-			const result = await bucket.list({ prefix: 'sa/', startAfter: 'sa/b' });
+			const result = await bucket.list({ prefix: 'sa/', limit: 1, startAfter: 'sa/b' });
 			expect(result.objects.map((object) => object.key)).toEqual(['sa/c']);
 		});
 

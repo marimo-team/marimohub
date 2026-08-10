@@ -20,6 +20,7 @@ import {
 } from '@aws-sdk/client-s3';
 import type { PutObjectCommandInput } from '@aws-sdk/client-s3';
 import { PreconditionFailedError } from '@marimo-hub/core';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -67,10 +68,8 @@ function isPreconditionFailed(err: unknown): boolean {
 	return name === 'PreconditionFailed' || httpStatus(err) === 412;
 }
 
-// S3 reports some losing conditional writes as retryable 409 conflicts instead of 412.
 function isConditionalRequestConflict(err: unknown): boolean {
-	const name = (err as { name?: string })?.name;
-	return name === 'ConditionalRequestConflict' || httpStatus(err) === 409;
+	return (err as { name?: string })?.name === 'ConditionalRequestConflict';
 }
 
 function* chunk<T>(items: T[], size: number): Generator<T[]> {
@@ -162,12 +161,19 @@ export class S3Storage implements Bucket {
 				uploaded: new Date(),
 			};
 		} catch (err) {
-			if (
-				isPreconditionFailed(err) ||
-				(conditional && isConditionalRequestConflict(err)) ||
-				(matchesEtag && isNotFound(err))
-			) {
-				throw new PreconditionFailedError(`ETag mismatch for key "${key}"`);
+			if (isPreconditionFailed(err)) {
+				const message = options?.onlyIfNotExists
+					? `Key "${key}" already exists`
+					: matchesEtag
+						? `ETag mismatch for key "${key}"`
+						: `Precondition not met for key "${key}"`;
+				throw new PreconditionFailedError(message);
+			}
+			if (conditional && isConditionalRequestConflict(err)) {
+				throw new PreconditionFailedError(`Conditional request conflict for key "${key}"`);
+			}
+			if (matchesEtag && isNotFound(err)) {
+				throw new PreconditionFailedError(`Key "${key}" does not exist`);
 			}
 			throw err;
 		}
@@ -203,6 +209,7 @@ export class S3Storage implements Bucket {
 	}
 
 	async list(options?: BucketListOptions): Promise<BucketListResult> {
+		assertValidBucketListLimit(options?.limit);
 		const res = await this.client.send(
 			new ListObjectsV2Command({
 				Bucket: this.bucket,

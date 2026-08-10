@@ -147,7 +147,7 @@ function makeFakeGcsFetch(): typeof fetch {
 			let lastConsumed: string | undefined;
 			let truncated = false;
 			for (const [name, value] of [...store.entries()].sort(([left], [right]) =>
-				left.localeCompare(right),
+				left < right ? -1 : left > right ? 1 : 0,
 			)) {
 				if (!name.startsWith(prefix) || (cursor && name <= cursor)) continue;
 				if (!cursor && startOffset && name < startOffset) continue;
@@ -454,7 +454,7 @@ describe('GcsStorage auth and request mapping', () => {
 		expect(seenUrl?.searchParams.get('delimiter')).toBe('/');
 		expect(seenUrl?.searchParams.get('maxResults')).toBe('25');
 		expect(seenUrl?.searchParams.get('pageToken')).toBe('cursor-1');
-		expect(seenUrl?.searchParams.get('startOffset')).toBe('runs/a.ipynb');
+		expect(seenUrl?.searchParams.get('startOffset')).toBeNull();
 		expect(result).toMatchObject({
 			objects: [{ key: 'runs/a.py', etag: '101', size: 9 }],
 			truncated: true,
@@ -485,6 +485,22 @@ describe('GcsStorage auth and request mapping', () => {
 });
 
 describe('GcsStorage error propagation and edge cases', () => {
+	it('paginates mixed-case and punctuation keys without duplicates or gaps', async () => {
+		const bucket = new GcsStorage({ bucket: 'test', fetchImpl: makeFakeGcsFetch() });
+		const keys = ['order/a', 'order/A', 'order/_', 'order/-'];
+		for (const key of keys) await bucket.put(key, key);
+
+		const seen: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const result = await bucket.list({ prefix: 'order/', limit: 1, cursor });
+			seen.push(...result.objects.map((object) => object.key));
+			cursor = result.cursor;
+		} while (cursor);
+
+		expect(seen).toEqual([...keys].sort());
+	});
+
 	it('percent-encodes slashes in the object key path segment', async () => {
 		let seenUrl = '';
 		const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {

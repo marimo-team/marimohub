@@ -27,10 +27,16 @@ export interface BucketListOptions {
 	delimiter?: string;
 	/** Opaque resume token from a truncated result. Takes precedence over `startAfter`. */
 	cursor?: string;
-	/** Maximum combined object and delimited-prefix entries returned in one page. */
+	/** Positive integer maximum for combined object and delimited-prefix entries in one page. */
 	limit?: number;
 	/** Exclusive lower bound on object keys. */
 	startAfter?: string;
+}
+
+export function assertValidBucketListLimit(limit: number | undefined): void {
+	if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+		throw new RangeError('Bucket list limit must be a positive integer');
+	}
 }
 
 export interface BucketPutOptions {

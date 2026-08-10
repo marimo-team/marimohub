@@ -25,6 +25,7 @@ import { constants, mkdirSync, realpathSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { PreconditionFailedError } from '@marimo-hub/core';
+import { assertValidBucketListLimit } from '@marimo-hub/core/ports';
 import type {
 	Bucket,
 	BucketListOptions,
@@ -288,6 +289,7 @@ export class FsStorage implements Bucket {
 	}
 
 	async list(options?: BucketListOptions): Promise<BucketListResult> {
+		assertValidBucketListLimit(options?.limit);
 		const prefix = options?.prefix ?? '';
 		const delimiter = options?.delimiter;
 		const limit = options?.limit ?? 1000;
