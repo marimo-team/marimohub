@@ -36,8 +36,8 @@
  * cluster/ingress-controller specific (`ingressClassName`, a wildcard-cert
  * `tlsSecretName`, and a matching `*.{host}` DNS record are required for the
  * returned URL to resolve); marimo must run tokenless behind marimohub's own auth
- * (the provisioner passes `--no-token`); and the in-pod port probe assumes
- * `python3` is on the image PATH.
+ * (the provisioner passes `--no-token`); and the in-pod port wait assumes
+ * `python3` is on the image PATH (see `portWaitCommand`).
  */
 import {
 	buildFindFilesCommand,
@@ -45,14 +45,15 @@ import {
 	mapWithConcurrency,
 	parseFindFilesOutput,
 	pollUntilReady,
+	portWaitCommand,
 	shellQuote,
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core';
-import type { SandboxId } from '@marimo-hub/core';
+import type { SandboxId, Timings } from '@marimo-hub/core';
 import { createK8sClient } from './client';
-import type { K8sClient, KubernetesConfig } from './shared';
+import type { K8sClient, K8sExecResult, KubernetesConfig } from './shared';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 export * from './shared';
 import type {
@@ -81,6 +82,43 @@ import type {
 const DEFAULT_KERNEL_PORT = 2718;
 /** Default marimo-capable image when `MARIMOHUB_COMPUTE_IMAGE` is unset. */
 const DEFAULT_IMAGE = 'ghcr.io/marimo-team/marimo:latest';
+/**
+ * How often to poll a fresh Pod for `Running`. Each poll is one cheap pod GET;
+ * a 1s interval would round every boot up to the next whole second (the same
+ * quantization the CoreWeave adapter fixed with its tighter boot poll).
+ */
+const BOOT_POLL_INTERVAL_MS = 250;
+/** Longest a single in-pod port wait may block before we re-issue it. */
+const PORT_WAIT_CHUNK_MS = 30_000;
+/** First such chunk, kept short so a kernel that dies on launch is caught quickly. */
+const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
+/**
+ * Cap on the post-boot diagnostics fetch (pod conditions + events). The
+ * breakdown is best-effort; a slow API server must never delay a sandbox that
+ * is already Running.
+ */
+const STARTUP_INFO_TIMEOUT_MS = 500;
+
+/**
+ * Milliseconds from a kubelet `Pulled` event message — `Successfully pulled
+ * image "…" in 2.096s (…)` parses the Go duration; `already present on machine`
+ * means the pull cost nothing. `undefined` when the message is missing or from
+ * a kubelet whose wording changed.
+ */
+export function parseImagePullMs(message: string | undefined): number | undefined {
+	if (!message) return undefined;
+	if (message.includes('already present')) return 0;
+	const duration = message.match(/ in ([0-9.hms]+)/)?.[1];
+	if (!duration) return undefined;
+	let ms = 0;
+	let matched = false;
+	for (const [, value, unit] of duration.matchAll(/([\d.]+)(ms|s|m|h)/g)) {
+		matched = true;
+		ms +=
+			Number(value) * { ms: 1, s: 1000, m: 60_000, h: 3_600_000 }[unit as 'ms' | 's' | 'm' | 'h'];
+	}
+	return matched && Number.isFinite(ms) ? Math.round(ms) : undefined;
+}
 
 export function kubernetesProfileResources(
 	resources: ComputeResources | undefined,
@@ -122,6 +160,8 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private resolved = false;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
+	private execCount = 0;
+	private lastEnsureTimings?: Timings;
 
 	constructor(
 		private readonly id: SandboxId,
@@ -160,7 +200,8 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 */
 	private async ensure(): Promise<void> {
 		if (this.resolved) return;
-		await this.client.ensure({
+		const t0 = Date.now();
+		const { createdPod } = await this.client.ensure({
 			name: this.name,
 			sandboxId: this.id,
 			host: this.ingressHost(),
@@ -171,10 +212,82 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			tlsSecretName: this.config.tlsSecretName,
 			serviceAccountName: this.config.serviceAccountName,
 			imagePullSecret: this.config.imagePullSecret,
+			imagePullPolicy: this.config.imagePullPolicy,
 			resources: this.config.resources,
 		});
+		const t1 = Date.now();
 		await this.waitForRunning();
 		this.resolved = true;
+		await this.recordEnsure(createdPod, t1 - t0, Date.now() - t1);
+	}
+
+	/**
+	 * Record where the boot went — the adapter-side create/boot waits plus the
+	 * cluster-side schedule/pull/ready breakdown read back from the Pod — into
+	 * `drainTimings()` (folded into the `session_provision` wide event as
+	 * `provision_reachable_*_ms`) and one structured `k8s_ensure` log line.
+	 */
+	private async recordEnsure(createdPod: boolean, createMs: number, bootMs: number): Promise<void> {
+		const timings: Timings = { create: createMs, boot: bootMs };
+		let pullMessage: string | undefined;
+		// A reconnect's Pod booted long ago — its conditions would report a stale
+		// breakdown as if this provision paid for it.
+		if (createdPod) {
+			const info = await this.boundedStartupInfo();
+			const since = (from?: Date, to?: Date): number | undefined =>
+				from && to && to.getTime() >= from.getTime() ? to.getTime() - from.getTime() : undefined;
+			const schedule = since(info?.createdAt, info?.scheduledAt);
+			const ready = since(info?.createdAt, info?.readyAt);
+			const pull = parseImagePullMs(info?.imagePullMessage);
+			if (schedule !== undefined) timings.schedule = schedule;
+			if (ready !== undefined) timings.pod_ready = ready;
+			if (pull !== undefined) timings.image_pull = pull;
+			pullMessage = info?.imagePullMessage;
+		}
+		this.lastEnsureTimings = timings;
+		console.warn(
+			JSON.stringify({
+				ts: new Date().toISOString(),
+				event: 'k8s_ensure',
+				sandbox_id: this.id,
+				pod: this.name,
+				namespace: this.namespace,
+				created: createdPod,
+				create_ms: createMs,
+				boot_ms: bootMs,
+				...(timings.schedule !== undefined ? { schedule_ms: timings.schedule } : {}),
+				...(timings.image_pull !== undefined ? { image_pull_ms: timings.image_pull } : {}),
+				...(timings.pod_ready !== undefined ? { pod_ready_ms: timings.pod_ready } : {}),
+				...(pullMessage ? { image_pull_event: pullMessage } : {}),
+			}),
+		);
+	}
+
+	/** The diagnostics read, capped so it cannot hold up an already-Running sandbox. */
+	private async boundedStartupInfo(): Promise<
+		Awaited<ReturnType<K8sClient['getStartupInfo']>> | undefined
+	> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const gaveUp = new Promise<undefined>((resolve) => {
+			timer = setTimeout(() => resolve(undefined), STARTUP_INFO_TIMEOUT_MS);
+		});
+		try {
+			return await Promise.race([this.client.getStartupInfo(this.name), gaveUp]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	drainTimings(): Timings {
+		const t = this.lastEnsureTimings ?? {};
+		this.lastEnsureTimings = undefined;
+		return t;
+	}
+
+	drainCounters(): Record<string, number> {
+		const counters = { execs: this.execCount };
+		this.execCount = 0;
+		return counters;
 	}
 
 	async ready(): Promise<void> {
@@ -194,7 +307,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			},
 			{
 				timeoutMs: timeout,
-				intervalMs: 1000,
+				intervalMs: BOOT_POLL_INTERVAL_MS,
 				timeoutMessage: async () => {
 					const schedulingFailure = await this.client.getSchedulingFailure(this.name);
 					return `timed out waiting for pod ${this.name} to reach Running after ${timeout}ms${
@@ -210,9 +323,28 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		return withEnvPrefix(cmd, this.env, this.envDefaults);
 	}
 
+	/**
+	 * Run a shell command in the Pod, counting the round-trip.
+	 *
+	 * `login` splits two contracts: commands that run user/notebook code (exec,
+	 * git, the kernel itself, the port probe) get a login shell so an image that
+	 * exposes `uv`/`python3` via profile scripts keeps working; adapter-internal
+	 * protocol commands whose stdout we parse (readFile's cat, the launch PID
+	 * echo) get a plain `sh -c`, because profile output on stdout would corrupt
+	 * the result — and they only use shell builtins/coreutils, so they need no
+	 * profile PATH.
+	 */
+	private execInPod(
+		cmd: string,
+		opts?: { login?: boolean; stdin?: string | Uint8Array },
+	): Promise<K8sExecResult> {
+		this.execCount++;
+		return this.client.exec(this.name, ['sh', opts?.login ? '-lc' : '-c', cmd], opts?.stdin);
+	}
+
 	async exec(cmd: string): Promise<ExecResult> {
 		await this.ensure();
-		const res = await this.client.exec(this.name, ['sh', '-lc', this.withEnv(cmd)]);
+		const res = await this.execInPod(this.withEnv(cmd), { login: true });
 		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 
@@ -232,7 +364,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	async readFile(path: string): Promise<ReadFileResult> {
 		try {
 			await this.ensure();
-			const res = await this.client.exec(this.name, ['sh', '-lc', `cat -- ${shellQuote(path)}`]);
+			const res = await this.execInPod(`cat -- ${shellQuote(path)}`);
 			if (res.exitCode !== 0) return readFileFailure('READ_FAILED');
 			return { success: true, content: res.stdout, encoding: 'utf-8' };
 		} catch {
@@ -247,10 +379,9 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		// mkdir and streams content over stdin, so bytes are never interpolated.
 		await mapWithConcurrency(files, WRITE_CONCURRENCY, async (f) => {
 			const dir = f.path.slice(0, f.path.lastIndexOf('/')) || '/';
-			const res = await this.client.exec(
-				this.name,
-				['sh', '-lc', `mkdir -p ${shellQuote(dir)} && cat > ${shellQuote(f.path)}`],
-				f.content,
+			const res = await this.execInPod(
+				`mkdir -p ${shellQuote(dir)} && cat > ${shellQuote(f.path)}`,
+				{ stdin: f.content },
 			);
 			if (res.exitCode !== 0) throw new Error(`writeFile ${f.path} failed: ${res.stderr}`);
 		});
@@ -303,11 +434,16 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		const cwd = options?.cwd ? `cd ${shellQuote(options.cwd)}; ` : '';
 		// Launch marimo detached so it outlives this exec session (the kernel must keep
 		// serving after startProcess returns). setsid + redirect + background; echo PID.
+		// The OUTER shell is non-login (its stdout is the PID we parse); the inner
+		// detached shell is a login shell so profile-provided env reaches the kernel
+		// (its output goes to the log file, where profile noise is harmless).
 		const launch = `${cwd}setsid sh -lc ${shellQuote(this.withEnv(cmd))} >${logFile} 2>&1 </dev/null & echo $!`;
-		const started = await this.client.exec(this.name, ['sh', '-lc', launch]);
+		const started = await this.execInPod(launch);
 		const pid = started.stdout.trim();
 
-		const execIn = (c: string) => this.client.exec(this.name, ['sh', '-lc', c]);
+		const execIn = (c: string) => this.execInPod(c);
+		const execLogin = (c: string) => this.execInPod(c, { login: true });
+		const readLog = async () => (await execIn(`cat ${logFile} 2>/dev/null || true`)).stdout;
 		const name = this.name;
 		return {
 			id: `k8s-proc-${pid || PROC_SEQ}`,
@@ -323,20 +459,40 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			},
 			async waitForPort(port: number, opts?: WaitForPortOptions): Promise<void> {
 				const timeout = opts?.timeout ?? 30_000;
-				// In-pod TCP probe (mirrors the CoreWeave/local adapters), run via exec.
-				const probe =
-					`python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); ` +
-					`sys.exit(0 if s.connect_ex(('127.0.0.1',${port}))==0 else 1)"`;
-				await pollUntilReady(async () => (await execIn(probe)).exitCode === 0, {
-					timeoutMs: timeout,
-					intervalMs: 500,
-					timeoutMessage: async () =>
-						`timed out waiting for port ${port} on pod ${name} after ${timeout}ms.\n${(await execIn(`cat ${logFile} 2>/dev/null || true`)).stdout}`,
-				});
+				// Loop IN-POD rather than probing from here: every exec is a fresh
+				// websocket through the API server plus a python3 spawn, so an external
+				// poll quantizes the wait to that round-trip + interval grid. Chunked
+				// (mirroring the CoreWeave adapter) so each boundary is where a dead
+				// kernel gets noticed; the first chunk is short so a launch that fails
+				// outright reports fast. `attempts` bounds the loop if the in-pod
+				// waiter itself returns instantly (e.g. python3 missing).
+				const deadline = Date.now() + timeout;
+				const attempts = 1 + Math.ceil(timeout / PORT_WAIT_CHUNK_MS);
+				let chunkMs = PORT_WAIT_FIRST_CHUNK_MS;
+				for (let i = 0; i < attempts; i++) {
+					const remainingMs = deadline - Date.now();
+					if (remainingMs <= 0) break;
+					// Fractional seconds: the in-pod waiter runs a monotonic ms-precision
+					// deadline, so the chunks sum to the full timeout — no whole-second
+					// rounding in either direction.
+					const seconds = Number((Math.min(chunkMs, remainingMs) / 1000).toFixed(2));
+					chunkMs = PORT_WAIT_CHUNK_MS;
+					if ((await execLogin(portWaitCommand(port, seconds))).exitCode === 0) return;
+					// The chunk elapsed with the port closed. A dead kernel never opens
+					// it, so check liveness before spending another chunk — and word the
+					// error so the provisioner classifies it as a crash, not a timeout.
+					if (pid && (await execIn(`kill -0 ${pid} 2>/dev/null`)).exitCode !== 0) {
+						throw new Error(
+							`process exited before port ${port} opened.\n${await readLog()}`.trim(),
+						);
+					}
+				}
+				throw new Error(
+					`timed out waiting for port ${port} on pod ${name} after ${timeout}ms.\n${await readLog()}`,
+				);
 			},
 			async getLogs(): Promise<{ stdout: string; stderr: string }> {
-				const log = await execIn(`cat ${logFile} 2>/dev/null || true`);
-				return { stdout: log.stdout, stderr: '' };
+				return { stdout: await readLog(), stderr: '' };
 			},
 		};
 	}

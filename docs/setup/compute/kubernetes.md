@@ -20,6 +20,9 @@ MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=traefik
 MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
 # Optional per-kernel resources:
 # MARIMOHUB_COMPUTE_KUBERNETES_CPU=2  MARIMOHUB_COMPUTE_KUBERNETES_MEMORY=4Gi  MARIMOHUB_COMPUTE_KUBERNETES_GPU=1
+# Optional tuning:
+# MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY=IfNotPresent  # default: Always for :latest, else IfNotPresent
+# MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS=120
 ```
 
 See [Deploying → Kubernetes](/deploying/kubernetes) for the full RBAC + ingress recipe.
@@ -33,4 +36,9 @@ network with your own resource limits and GPUs.
 You own the ingress, DNS, TLS, and RBAC. If kernels never become reachable, the
 wildcard DNS/TLS is the usual culprit. For a single host without a cluster,
 `docker` is far simpler; for zero infra, use `modal`.
+:::
+
+::: tip Slow kernel starts?
+Pin the image by digest (not `:latest`) and pre-pull it on kernel nodes — see
+[Startup latency](/deploying/kubernetes#startup-latency).
 :::

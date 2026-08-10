@@ -62,12 +62,56 @@ MARIMOHUB_EDITOR_SANDBOX_SHARING=shared                     # shared | exclusive
 # MARIMOHUB_COMPUTE_KUBERNETES_GPU=1
 # MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT=marimo-kernel
 # MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET=regcred
+# MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY=IfNotPresent   # default: Always for :latest, else IfNotPresent
+# MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS=120
 ```
 
 See [Configuration → Compute → Kubernetes](../configuration.md#compute) for every
 variable. Before you change the sharing mode, follow the drain procedure in
 [Editor sessions](../editor-sessions.md#changing-the-sharing-mode). The same
 procedure applies when you upgrade from a release without editor claims.
+
+## Startup latency
+
+Each session boots a fresh Pod, so start time is dominated by scheduling and
+the image pull. If starts are slow:
+
+1. **Pin the sandbox image by digest** (`image@sha256:…`) or an immutable
+   version tag, and roll `MARIMOHUB_COMPUTE_IMAGE` to ship a new one. A pinned
+   image gets `imagePullPolicy: IfNotPresent`, so a node that has it never
+   contacts the registry; a `:latest`/untagged image gets `Always` (it would go
+   stale otherwise) and pays a registry round-trip on every start. Override
+   with `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY` if you know better.
+2. **Pre-pull the image on kernel nodes.** The first session on a new node
+   pays the full pull. Run a small DaemonSet with the sandbox image, or an
+   image-cache operator such as
+   [kube-fledged](https://github.com/senthilrch/kube-fledged).
+3. **Check scheduling.** Tight CPU/memory/GPU requests, taints, or a cold
+   autoscaler show up as a large `schedule_ms` and `FailedScheduling` events.
+
+### Where the time went
+
+Every session start logs a `session_provision` event on the server. Key tags:
+
+| Tag                                 | Meaning                              |
+| ----------------------------------- | ------------------------------------ |
+| `provision_reachable_schedule_ms`   | Pod created → scheduled              |
+| `provision_reachable_image_pull_ms` | image pull (`0` = cached)            |
+| `provision_reachable_pod_ready_ms`  | Pod created → ready                  |
+| `provision_files_ms`                | workspace copy into the sandbox      |
+| `provision_waitport_ms`             | marimo launch until its port answers |
+
+Each boot also logs one `k8s_ensure` line with the same breakdown. From the
+cluster side:
+
+```bash
+kubectl -n marimo-kernels describe pod mh-<id>       # conditions + events
+```
+
+Large `image_pull_ms` → steps 1–2. Large `schedule_ms` → step 3. Large
+`waitport_ms` with the others small → the kernel env itself is slow to boot
+(e.g. `uv` resolving packages on first run — see
+[Sandbox image](../sandbox-image.md)).
 
 ## Topology
 
@@ -95,6 +139,9 @@ procedure applies when you upgrade from a release without editor claims.
   `--no-token`); do not expose `*.<hostname>` without marimohub in front.
 - The Ingress/TLS scheme is cluster-specific — confirm your ingress controller
   honours per-host rules and the wildcard certificate.
+- The per-session Ingress route is created but not waited on, so the kernel
+  URL can 404/502 briefly after a session starts. If the window is long, check
+  your ingress controller's sync latency.
 
 ## Troubleshooting
 

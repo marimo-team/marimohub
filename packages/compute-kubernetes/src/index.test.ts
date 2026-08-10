@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
@@ -8,8 +8,19 @@ import {
 	expectFileResult,
 	expectListFilesResult,
 } from '@marimo-hub/core/testing';
-import { KubernetesCompute, kubernetesProfileResources, resourceName } from './index';
-import type { EnsureSandboxOptions, K8sClient, K8sExecResult, KubernetesConfig } from './index';
+import {
+	KubernetesCompute,
+	kubernetesProfileResources,
+	parseImagePullMs,
+	resourceName,
+} from './index';
+import type {
+	EnsureSandboxOptions,
+	K8sClient,
+	K8sExecResult,
+	K8sPodStartupInfo,
+	KubernetesConfig,
+} from './index';
 
 /**
  * Tests for the native Kubernetes compute adapter.
@@ -32,7 +43,21 @@ const baseConfig: KubernetesConfig = {
 
 type ExecImpl = (command: string[], stdin?: string | Uint8Array) => K8sExecResult | undefined;
 
-function makeWorld(opts?: { execImpl?: ExecImpl; phase?: string; schedulingFailure?: string }) {
+/** Swallow the adapter's structured `k8s_ensure` log lines; tests read the spy. */
+let warnSpy: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+	warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+afterEach(() => {
+	warnSpy.mockRestore();
+});
+
+function makeWorld(opts?: {
+	execImpl?: ExecImpl;
+	phase?: string;
+	schedulingFailure?: string;
+	startupInfo?: K8sPodStartupInfo;
+}) {
 	const ensured: EnsureSandboxOptions[] = [];
 	const deleted: string[] = [];
 	const execCalls: { name: string; command: string[]; stdin?: string | Uint8Array }[] = [];
@@ -41,11 +66,13 @@ function makeWorld(opts?: { execImpl?: ExecImpl; phase?: string; schedulingFailu
 	const client: K8sClient = {
 		ensure: async (o) => {
 			ensured.push(o);
-			if (!pods.has(o.name))
-				pods.set(o.name, { sandboxId: o.sandboxId, phase: opts?.phase ?? 'Running' });
+			const createdPod = !pods.has(o.name);
+			if (createdPod) pods.set(o.name, { sandboxId: o.sandboxId, phase: opts?.phase ?? 'Running' });
+			return { createdPod };
 		},
 		getPhase: async (name) => pods.get(name)?.phase,
 		getSchedulingFailure: async () => opts?.schedulingFailure,
+		getStartupInfo: async () => opts?.startupInfo,
 		exec: async (name, command, stdin) => {
 			execCalls.push({ name, command, stdin });
 			return opts?.execImpl?.(command, stdin) ?? { stdout: '', stderr: '', exitCode: 0 };
@@ -74,8 +101,24 @@ function makeCompute(world: ReturnType<typeof makeWorld>, config: KubernetesConf
 	return new KubernetesCompute(config, world.client);
 }
 
-/** The actual command string the adapter wraps in `['sh','-lc', …]`. */
+/** The actual command string the adapter wraps in `['sh','-c', …]`. */
 const shCmd = (call: { command: string[] }) => call.command[2];
+
+describe('parseImagePullMs', () => {
+	it('parses the kubelet Pulled message Go durations', () => {
+		expect(
+			parseImagePullMs('Successfully pulled image "x" in 588ms (588ms including waiting)'),
+		).toBe(588);
+		expect(parseImagePullMs('Successfully pulled image "x" in 2.096s (…)')).toBe(2096);
+		expect(parseImagePullMs('Successfully pulled image "x" in 1m2.5s (…)')).toBe(62_500);
+	});
+
+	it('maps a cached image to 0 and unknown wording to undefined', () => {
+		expect(parseImagePullMs('Container image "x" already present on machine')).toBe(0);
+		expect(parseImagePullMs(undefined)).toBeUndefined();
+		expect(parseImagePullMs('some future kubelet wording')).toBeUndefined();
+	});
+});
 
 describe('resourceName', () => {
 	it('derives a DNS-1123-safe name prefixed with mh-', () => {
@@ -86,7 +129,7 @@ describe('resourceName', () => {
 
 describe('KubernetesCompute', () => {
 	describe('exec()', () => {
-		it('maps exit code 0 to success and shapes the command as sh -lc', async () => {
+		it('runs user commands in a login shell (profile-provided PATH keeps working)', async () => {
 			const world = makeWorld();
 			const result = await makeCompute(world).create(SANDBOX_ID).exec('echo hi');
 			expectExecResult(result, { success: true, stdout: '', stderr: '' });
@@ -146,12 +189,13 @@ describe('KubernetesCompute', () => {
 			expect(world.ensured[0]).toMatchObject({ image: 'override-image' });
 		});
 
-		it('passes resources, service account, and image pull secret through', async () => {
+		it('passes resources, service account, and image pull settings through', async () => {
 			const world = makeWorld();
 			await makeCompute(world, {
 				...baseConfig,
 				serviceAccountName: 'marimo-kernel',
 				imagePullSecret: 'regcred',
+				imagePullPolicy: 'Always',
 				resources: { cpu: '2', memory: '4Gi', gpu: '1' },
 			})
 				.create(SANDBOX_ID)
@@ -159,6 +203,7 @@ describe('KubernetesCompute', () => {
 			expect(world.ensured[0]).toMatchObject({
 				serviceAccountName: 'marimo-kernel',
 				imagePullSecret: 'regcred',
+				imagePullPolicy: 'Always',
 				resources: { cpu: '2', memory: '4Gi', gpu: '1' },
 			});
 		});
@@ -239,6 +284,21 @@ describe('KubernetesCompute', () => {
 			expect(call.stdin).toBe('x=1');
 			expect(shCmd(call)).toContain("mkdir -p '/workspace'");
 			expect(shCmd(call)).toContain("cat > '/workspace/notebook.py'");
+			// Protocol command, NOT a login shell: profile stdout would corrupt the
+			// exec result, and cat/mkdir need no profile PATH.
+			expect(call.command[1]).toBe('-c');
+		});
+
+		it('readFile runs its cat in a non-login shell (profile stdout would corrupt content)', async () => {
+			const world = makeWorld({
+				execImpl: (cmd) =>
+					cmd[2].startsWith('cat -- ')
+						? { stdout: 'print(1)', stderr: '', exitCode: 0 }
+						: undefined,
+			});
+			await makeCompute(world).create(SANDBOX_ID).readFile('/workspace/notebook.py');
+			const call = world.execCalls.find((c) => shCmd(c).startsWith('cat -- '))!;
+			expect(call.command[1]).toBe('-c');
 		});
 
 		it('readFile returns file contents from the in-pod cat', async () => {
@@ -393,27 +453,90 @@ describe('KubernetesCompute', () => {
 	});
 
 	describe('startProcess().waitForPort()', () => {
-		it('launches marimo detached and polls the in-pod port probe', async () => {
-			let probes = 0;
+		it('launches marimo detached and waits with a chunked IN-POD loop', async () => {
+			let chunks = 0;
 			const world = makeWorld({
 				execImpl: (cmd) => {
 					if (cmd[2].includes('setsid')) return { stdout: '4242', stderr: '', exitCode: 0 };
 					if (cmd[2].includes('connect_ex')) {
-						probes++;
-						return { stdout: '', stderr: '', exitCode: probes >= 2 ? 0 : 1 };
+						chunks++;
+						return { stdout: '', stderr: '', exitCode: chunks >= 2 ? 0 : 1 };
 					}
+					// Liveness check between chunks: the kernel is still running.
+					if (cmd[2].startsWith('kill -0')) return { stdout: '', stderr: '', exitCode: 0 };
 					return;
 				},
 			});
 			const inst = makeCompute(world).create(SANDBOX_ID);
 			const proc = await inst.startProcess('uv run marimo edit --port 2718', { cwd: '/workspace' });
 			await proc.waitForPort(2718, { timeout: 5000 });
-			expect(probes).toBeGreaterThanOrEqual(2);
+			expect(chunks).toBe(2);
+
+			// The probe loops in-pod on its own deadline — one exec per CHUNK, not
+			// one exec per probe attempt.
+			const wait = world.execCalls.find((c) => shCmd(c).includes('connect_ex'))!;
+			expect(shCmd(wait)).toContain('while');
 
 			const launch = world.execCalls.find((c) => shCmd(c).includes('setsid'))!;
 			expect(shCmd(launch)).toContain("cd '/workspace'");
 			expect(shCmd(launch)).toContain('uv run marimo edit --port 2718');
+			// Outer shell non-login (its stdout is the parsed PID); the detached
+			// inner shell is a login shell so profile env reaches the kernel.
+			expect(launch.command[1]).toBe('-c');
+			expect(shCmd(launch)).toContain('setsid sh -lc');
 			expect(proc.id).toContain('4242');
+		});
+
+		it('honors a sub-second timeout in the chunk it hands to the pod', async () => {
+			const world = makeWorld({
+				execImpl: (cmd) => {
+					if (cmd[2].includes('setsid')) return { stdout: '4242', stderr: '', exitCode: 0 };
+					if (cmd[2].includes('connect_ex')) return { stdout: '', stderr: '', exitCode: 0 };
+					return;
+				},
+			});
+			const proc = await makeCompute(world).create(SANDBOX_ID).startProcess('run kernel');
+			await proc.waitForPort(2718, { timeout: 250 });
+			const wait = world.execCalls.find((c) => shCmd(c).includes('connect_ex'))!;
+			expect(shCmd(wait)).toContain('time.monotonic()+0.25');
+		});
+
+		it('reports a kernel that died as exited-before-port, with its log', async () => {
+			const world = makeWorld({
+				execImpl: (cmd) => {
+					if (cmd[2].includes('setsid')) return { stdout: '4242', stderr: '', exitCode: 0 };
+					if (cmd[2].includes('connect_ex')) return { stdout: '', stderr: '', exitCode: 1 };
+					if (cmd[2].startsWith('kill -0')) return { stdout: '', stderr: '', exitCode: 1 };
+					if (cmd[2].includes('cat /tmp/mh-proc')) {
+						return { stdout: 'Traceback: boom', stderr: '', exitCode: 0 };
+					}
+					return;
+				},
+			});
+			const proc = await makeCompute(world).create(SANDBOX_ID).startProcess('run kernel');
+			// The first line must match the provisioner's crash attribution
+			// (`/before port \d+/`) so a crash is never reported as a timeout.
+			await expect(proc.waitForPort(2718, { timeout: 5000 })).rejects.toThrow(
+				/^process exited before port 2718 opened\.\nTraceback: boom/,
+			);
+		});
+
+		it('times out with the pod name and log when the port never opens', async () => {
+			const world = makeWorld({
+				execImpl: (cmd) => {
+					if (cmd[2].includes('setsid')) return { stdout: '4242', stderr: '', exitCode: 0 };
+					if (cmd[2].includes('connect_ex')) return { stdout: '', stderr: '', exitCode: 1 };
+					if (cmd[2].startsWith('kill -0')) return { stdout: '', stderr: '', exitCode: 0 };
+					if (cmd[2].includes('cat /tmp/mh-proc')) {
+						return { stdout: 'still importing', stderr: '', exitCode: 0 };
+					}
+					return;
+				},
+			});
+			const proc = await makeCompute(world).create(SANDBOX_ID).startProcess('run kernel');
+			await expect(proc.waitForPort(2718, { timeout: 100 })).rejects.toThrow(
+				/timed out waiting for port 2718 on pod mh-sb-abc after 100ms[\s\S]*still importing/,
+			);
 		});
 
 		it('getLogs reads the launch log and kill sends the requested signal', async () => {
@@ -535,6 +658,84 @@ describe('KubernetesCompute', () => {
 
 			const active = await compute.listActive();
 			expect(active).toEqual([{ id: 'sb-abc', createdAt: '2020-01-01T00:00:00.000Z' }]);
+		});
+	});
+
+	describe('boot observability', () => {
+		const startupInfo: K8sPodStartupInfo = {
+			createdAt: new Date(1000),
+			scheduledAt: new Date(1080),
+			readyAt: new Date(3300),
+			imagePullMessage: 'Successfully pulled image "img" in 2.096s (2.5s including waiting)',
+		};
+
+		it('drainTimings reports create/boot plus the cluster-side breakdown, once', async () => {
+			const world = makeWorld({ startupInfo });
+			const inst = makeCompute(world).create(SANDBOX_ID);
+			await inst.exec('true');
+			const timings = inst.drainTimings!();
+			expect(timings.create).toBeGreaterThanOrEqual(0);
+			expect(timings.boot).toBeGreaterThanOrEqual(0);
+			expect(timings).toMatchObject({ schedule: 80, pod_ready: 2300, image_pull: 2096 });
+			expect(inst.drainTimings!()).toEqual({});
+		});
+
+		it('a reconnect skips the (stale) cluster-side breakdown', async () => {
+			const world = makeWorld({ startupInfo });
+			const compute = makeCompute(world);
+			await compute.create(SANDBOX_ID).exec('true');
+			// Same Pod, new instance — the breakdown belongs to the first boot.
+			const reconnected = compute.create(SANDBOX_ID);
+			await reconnected.exec('true');
+			const timings = reconnected.drainTimings!();
+			expect(timings.schedule).toBeUndefined();
+			expect(timings.image_pull).toBeUndefined();
+		});
+
+		it('a hanging diagnostics read cannot block readiness', async () => {
+			vi.useFakeTimers();
+			try {
+				const world = makeWorld();
+				world.client.getStartupInfo = () => new Promise(() => {});
+				const inst = makeCompute(world).create(SANDBOX_ID);
+				const ready = inst.ready!();
+				await vi.advanceTimersByTimeAsync(1000);
+				await ready;
+				const timings = inst.drainTimings!();
+				expect(timings.create).toBeGreaterThanOrEqual(0);
+				expect(timings.schedule).toBeUndefined();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('drainCounters counts exec round-trips and resets on drain', async () => {
+			const world = makeWorld();
+			const inst = makeCompute(world).create(SANDBOX_ID);
+			await inst.exec('a');
+			await inst.exec('b');
+			expect(inst.drainCounters!()).toEqual({ execs: 2 });
+			expect(inst.drainCounters!()).toEqual({ execs: 0 });
+		});
+
+		it('emits one structured k8s_ensure log line per boot', async () => {
+			const world = makeWorld({ startupInfo });
+			await makeCompute(world).create(SANDBOX_ID).exec('true');
+			const lines = warnSpy.mock.calls
+				.map((c: unknown[]) => c[0])
+				.filter((s: unknown): s is string => typeof s === 'string' && s.includes('k8s_ensure'));
+			expect(lines).toHaveLength(1);
+			expect(JSON.parse(lines[0])).toMatchObject({
+				event: 'k8s_ensure',
+				sandbox_id: 'sb-abc',
+				pod: NAME,
+				namespace: 'default',
+				created: true,
+				schedule_ms: 80,
+				image_pull_ms: 2096,
+				pod_ready_ms: 2300,
+				image_pull_event: startupInfo.imagePullMessage,
+			});
 		});
 	});
 

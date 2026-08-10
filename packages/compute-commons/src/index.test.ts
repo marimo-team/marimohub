@@ -1,3 +1,6 @@
+import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { describe, it, expect } from 'vitest';
 import {
 	base64Encode,
@@ -7,6 +10,7 @@ import {
 	mapWithConcurrency,
 	parseFindFilesOutput,
 	pollUntilReady,
+	portWaitCommand,
 	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
@@ -214,6 +218,58 @@ async function readAll(stream: ReadableStream): Promise<string> {
 	}
 	return out;
 }
+
+describe('portWaitCommand', () => {
+	it('loops in-sandbox on a monotonic deadline instead of returning per probe', () => {
+		const cmd = portWaitCommand(2718, 30);
+		expect(cmd).toContain('connect_ex(("127.0.0.1",2718))');
+		expect(cmd).toContain('time.monotonic()+30');
+		// Exits 0 the moment the port answers, 1 only on its own deadline.
+		expect(cmd).toContain('sys.exit(0)');
+		expect(cmd).toContain('sys.exit(1)');
+		// Sub-second granularity is the point: a 1s sleep would reintroduce the
+		// quantization this replaced.
+		expect(cmd).toContain('time.sleep(0.05)');
+	});
+
+	it('accepts fractional seconds', () => {
+		expect(portWaitCommand(2718, 0.25)).toContain('time.monotonic()+0.25');
+	});
+
+	// Wall-clock coverage: the shell/python versions actually available decide
+	// whether these run; the deadline math is what they verify.
+	const havePython = (() => {
+		try {
+			return spawnSync('python3', ['-V']).status === 0;
+		} catch {
+			return false;
+		}
+	})();
+
+	it.skipIf(!havePython)('honors a sub-second deadline against a closed port', () => {
+		const start = Date.now();
+		// Port 9 (discard) is closed on loopback; connect is refused instantly.
+		const res = spawnSync('sh', ['-c', portWaitCommand(9, 0.5)], { timeout: 10_000 });
+		const elapsed = Date.now() - start;
+		expect(res.status).toBe(1);
+		// Full 500ms honored (a whole-second date loop could exit almost
+		// immediately), without ballooning to the next whole second.
+		expect(elapsed).toBeGreaterThanOrEqual(450);
+		expect(elapsed).toBeLessThan(3000);
+	});
+
+	it.skipIf(!havePython)('exits 0 as soon as the port answers', async () => {
+		const srv = createServer();
+		await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+		const port = (srv.address() as AddressInfo).port;
+		try {
+			const res = spawnSync('sh', ['-c', portWaitCommand(port, 5)], { timeout: 10_000 });
+			expect(res.status).toBe(0);
+		} finally {
+			srv.close();
+		}
+	});
+});
 
 describe('iterableToStream', () => {
 	it('streams every chunk as UTF-8 then closes', async () => {

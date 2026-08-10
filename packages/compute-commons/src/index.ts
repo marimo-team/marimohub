@@ -177,6 +177,30 @@ export function iterableToStream(iterable: AsyncIterable<string>): ReadableStrea
 	});
 }
 
+/**
+ * Shell command that blocks until `port` accepts a connection, for at most
+ * `seconds` (fractions allowed). Exits 0 as soon as it does, 1 on its own
+ * deadline. Adapters whose only probe channel is a per-command round-trip
+ * (CoreWeave exec, k8s Pod exec) run this IN-SANDBOX so the wait isn't
+ * quantized to the round-trip + poll interval. The whole loop runs inside one
+ * `python3` on a `time.monotonic()` deadline — millisecond-accurate, where a
+ * shell `date +%s` loop truncates to whole seconds and can end a chunk almost
+ * a second early. Always probes at least once. Assumes `python3` on the
+ * sandbox image's PATH.
+ */
+export function portWaitCommand(port: number, seconds: number): string {
+	const script =
+		'import socket,sys,time\n' +
+		`end=time.monotonic()+${seconds}\n` +
+		'while True:\n' +
+		'    s=socket.socket(); s.settimeout(1)\n' +
+		`    if s.connect_ex(("127.0.0.1",${port}))==0: sys.exit(0)\n` +
+		'    s.close()\n' +
+		'    if time.monotonic()>=end: sys.exit(1)\n' +
+		'    time.sleep(0.05)\n';
+	return `python3 -c ${shellQuote(script)}`;
+}
+
 export interface PollOptions {
 	/** Give up after this many ms. Default 30000. */
 	timeoutMs?: number;

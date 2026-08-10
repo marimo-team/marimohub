@@ -16,11 +16,17 @@ import { Readable, Writable } from 'node:stream';
 import type * as K8s from '@kubernetes/client-node';
 import type { V1Container, V1Ingress, V1Pod, V1Service, V1Status } from '@kubernetes/client-node';
 import { SandboxId } from '@marimo-hub/core';
-import { MANAGED_BY_LABEL, MANAGED_BY_VALUE, SANDBOX_ID_ANNOTATION } from './shared';
+import {
+	defaultImagePullPolicy,
+	MANAGED_BY_LABEL,
+	MANAGED_BY_VALUE,
+	SANDBOX_ID_ANNOTATION,
+} from './shared';
 import type {
 	EnsureSandboxOptions,
 	K8sClient,
 	K8sExecResult,
+	K8sPodStartupInfo,
 	K8sSandboxInfo,
 	KubernetesConfig,
 } from './shared';
@@ -61,12 +67,18 @@ function podManifest(o: EnsureSandboxOptions): V1Pod {
 		},
 		spec: {
 			restartPolicy: 'Never',
+			// The keep-alive `sleep` ignores SIGTERM, so the k8s default 30s grace
+			// would leave every deleted Pod Terminating (still holding its resources,
+			// still phase Running) for 30s. Nothing in the Pod needs a graceful stop —
+			// session state is captured before destroy — so keep the window short.
+			terminationGracePeriodSeconds: 5,
 			serviceAccountName: o.serviceAccountName,
 			imagePullSecrets: o.imagePullSecret ? [{ name: o.imagePullSecret }] : undefined,
 			containers: [
 				{
 					name: CONTAINER_NAME,
 					image: o.image,
+					imagePullPolicy: o.imagePullPolicy ?? defaultImagePullPolicy(o.image),
 					// Keep-alive: the Pod idles while we exec marimo into it (see
 					// startProcess). Mirrors the CoreWeave "main process is keep-alive".
 					command: ['sh', '-c', 'sleep infinity'],
@@ -186,11 +198,13 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 	let apisPromise: Promise<Apis> | undefined;
 	const apis = (): Promise<Apis> => (apisPromise ??= loadApis());
 
-	async function createTolerant(create: () => Promise<unknown>): Promise<void> {
+	/** True when the resource was created now, false when it already existed. */
+	async function createTolerant(create: () => Promise<unknown>): Promise<boolean> {
 		try {
 			await create();
+			return true;
 		} catch (err) {
-			if (hasCode(err, 409)) return; // already exists — idempotent
+			if (hasCode(err, 409)) return false; // already exists — idempotent
 			throw err;
 		}
 	}
@@ -205,11 +219,11 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 	}
 
 	return {
-		async ensure(o: EnsureSandboxOptions): Promise<void> {
+		async ensure(o: EnsureSandboxOptions): Promise<{ createdPod: boolean }> {
 			const { core, net } = await apis();
 			// Order-independent: k8s is declarative (a Service's selector / an
 			// Ingress's backend need not pre-exist), so the creates fan out.
-			await Promise.all([
+			const [createdPod] = await Promise.all([
 				createTolerant(() => core.createNamespacedPod({ namespace, body: podManifest(o) })),
 				createTolerant(() => core.createNamespacedService({ namespace, body: serviceManifest(o) })),
 				// No host configured → no Ingress (the URL will be unroutable; documented).
@@ -219,6 +233,7 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 						)
 					: undefined,
 			]);
+			return { createdPod };
 		},
 
 		async getPhase(name: string): Promise<string | undefined> {
@@ -263,6 +278,40 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 					});
 				return failures.at(-1)?.message;
 			} catch {
+				return undefined;
+			}
+		},
+
+		async getStartupInfo(name: string): Promise<K8sPodStartupInfo | undefined> {
+			const { core } = await apis();
+			try {
+				const [pod, events] = await Promise.all([
+					core.readNamespacedPod({ name, namespace }),
+					core
+						.listNamespacedEvent({
+							namespace,
+							fieldSelector: `involvedObject.kind=Pod,involvedObject.name=${name}`,
+						})
+						.catch(() => {}),
+				]);
+				// Only conditions that actually hold: a transient `Ready=False` carries a
+				// transition time too and must not be reported as readiness.
+				const transition = (type: string) =>
+					pod.status?.conditions?.find((c) => c.type === type && c.status === 'True')
+						?.lastTransitionTime;
+				// Events are name-scoped, and names are deterministic per sandbox — match
+				// the current Pod's UID so a recreated Pod never picks up an old event.
+				const uid = pod.metadata?.uid;
+				return {
+					createdAt: pod.metadata?.creationTimestamp,
+					scheduledAt: transition('PodScheduled'),
+					readyAt: transition('Ready'),
+					imagePullMessage: events?.items.find(
+						(e) => e.reason === 'Pulled' && (!uid || e.involvedObject?.uid === uid),
+					)?.message,
+				};
+			} catch {
+				// Diagnostics only — never fail a boot because the breakdown was unreadable.
 				return undefined;
 			}
 		},

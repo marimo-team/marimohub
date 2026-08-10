@@ -293,6 +293,16 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				env,
 				'MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS',
 			);
+			const pullPolicy = env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY;
+			if (pullPolicy && !['Always', 'IfNotPresent', 'Never'].includes(pullPolicy)) {
+				throw new ConfigError(
+					`Invalid MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY: ${pullPolicy}`,
+					{
+						variable: 'MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY',
+						remediation: 'Use Always, IfNotPresent, or Never.',
+					},
+				);
+			}
 			return new KubernetesCompute({
 				namespace: env.MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE,
 				image: defaultImage,
@@ -302,6 +312,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				tlsSecretName: env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
 				serviceAccountName: env.MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT,
 				imagePullSecret: env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET,
+				imagePullPolicy: pullPolicy as 'Always' | 'IfNotPresent' | 'Never' | undefined,
 				resources: hasResources ? resources : undefined,
 				podReadyTimeout:
 					podReadySeconds === undefined ? undefined : Millis.seconds(podReadySeconds),

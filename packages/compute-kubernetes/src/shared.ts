@@ -11,6 +11,26 @@ export const MANAGED_BY_VALUE = 'marimohub';
 /** Annotation that carries the verbatim `SandboxId` for `listActive()` mapping. */
 export const SANDBOX_ID_ANNOTATION = 'marimohub.io/sandbox-id';
 
+/** `imagePullPolicy` for the kernel container. See `defaultImagePullPolicy`. */
+export type ImagePullPolicy = 'Always' | 'IfNotPresent' | 'Never';
+
+/**
+ * Tag-sensitive pull-policy default, mirroring Kubernetes' own: `Always` for a
+ * mutable `:latest`/untagged image (correctness — a cached stale image would
+ * otherwise be served forever), `IfNotPresent` for a pinned tag or digest
+ * (performance — skips the per-start registry round-trip, which `Always`
+ * costs even when the image is cached). Pinning the image is what unlocks the
+ * fast path; an explicit `imagePullPolicy` config overrides this.
+ */
+export function defaultImagePullPolicy(image: string): ImagePullPolicy {
+	if (image.includes('@')) return 'IfNotPresent'; // digest-pinned, immutable
+	// The tag is after the last ':' only when that ':' follows the last '/'
+	// (otherwise it's a registry port, e.g. `registry:5000/img`).
+	const lastSegment = image.slice(image.lastIndexOf('/') + 1);
+	const tag = lastSegment.includes(':') ? lastSegment.slice(lastSegment.indexOf(':') + 1) : '';
+	return !tag || tag === 'latest' ? 'Always' : 'IfNotPresent';
+}
+
 export interface KubernetesResources {
 	/** CPU request/limit (e.g. `1`, `500m`). */
 	cpu?: string;
@@ -49,6 +69,8 @@ export interface KubernetesConfig {
 	serviceAccountName?: string;
 	/** `imagePullSecrets` name for pulling a private kernel image. */
 	imagePullSecret?: string;
+	/** Kernel-container pull policy. Default: see `defaultImagePullPolicy`. */
+	imagePullPolicy?: ImagePullPolicy;
 	/** CPU/memory/GPU requested for each kernel Pod. */
 	resources?: KubernetesResources;
 	/** How long to wait for the Pod to reach `Running`. Default 2 minutes. */
@@ -77,7 +99,28 @@ export interface EnsureSandboxOptions {
 	tlsSecretName?: string;
 	serviceAccountName?: string;
 	imagePullSecret?: string;
+	imagePullPolicy?: ImagePullPolicy;
 	resources?: KubernetesResources;
+}
+
+/**
+ * Where a pod's startup time went, read back from the cluster after it reaches
+ * `Running`: pod conditions carry exact transition timestamps and the kubelet's
+ * `Pulled` event states the pull duration verbatim. This is the breakdown that
+ * answers "why did this user's sandbox take 3s to start".
+ */
+export interface K8sPodStartupInfo {
+	/** Pod `creationTimestamp`. */
+	createdAt?: Date;
+	/** `PodScheduled` condition transition time. */
+	scheduledAt?: Date;
+	/** `Ready` condition transition time. */
+	readyAt?: Date;
+	/**
+	 * Kubelet `Pulled` event message — either `Successfully pulled image "…" in
+	 * 1.2s …` or `Container image "…" already present on machine`.
+	 */
+	imagePullMessage?: string;
 }
 
 export interface K8sSandboxInfo {
@@ -95,12 +138,17 @@ export interface K8sSandboxInfo {
  * seam: tests pass an in-memory fake, production passes the real client.
  */
 export interface K8sClient {
-	/** Create the Pod + Service + Ingress for a session if they don't already exist. */
-	ensure(options: EnsureSandboxOptions): Promise<void>;
+	/**
+	 * Create the Pod + Service + Ingress for a session if they don't already
+	 * exist. `createdPod` is false when the Pod pre-existed (a reconnect).
+	 */
+	ensure(options: EnsureSandboxOptions): Promise<{ createdPod: boolean }>;
 	/** Pod phase, or `undefined` if the Pod does not exist. */
 	getPhase(name: string): Promise<string | undefined>;
 	/** Latest scheduler rejection for the Pod, when one exists. */
 	getSchedulingFailure(name: string): Promise<string | undefined>;
+	/** Startup timestamps + image-pull event for the Pod; best-effort. */
+	getStartupInfo(name: string): Promise<K8sPodStartupInfo | undefined>;
 	/** Run a command in the Pod; `stdin` is piped to the process when provided. */
 	exec(name: string, command: string[], stdin?: string | Uint8Array): Promise<K8sExecResult>;
 	/** Delete the Pod + Service + Ingress for a session. Idempotent (tolerates 404). */
