@@ -8,6 +8,20 @@ const repoRoot = path.resolve(here, '../..');
 const PORT = 4321;
 const BASE_URL = `http://localhost:${PORT}`;
 
+// CI runs one browser per matrix job via E2E_BROWSER (see .github/workflows/e2e.yml).
+// The local default is chromium so `pnpm e2e` only needs the chromium install.
+const allProjects = [
+	{ name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+	{ name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+	{ name: 'webkit', use: { ...devices['Desktop Safari'] } },
+];
+const browsers = (process.env.E2E_BROWSER ?? 'chromium').split(',');
+for (const browser of browsers) {
+	if (!allProjects.some((p) => p.name === browser)) {
+		throw new Error(`Unknown E2E_BROWSER "${browser}" (expected chromium, firefox, or webkit)`);
+	}
+}
+
 // Boots apps/server serving the prebuilt SPA, wired to the local ports (memory
 // storage, dev auth, no compute) for zero external deps. State is shared across
 // the single server process, so tests run serially with unique names.
@@ -22,7 +36,7 @@ export default defineConfig({
 		baseURL: BASE_URL,
 		trace: 'on-first-retry',
 	},
-	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+	projects: allProjects.filter((p) => browsers.includes(p.name)),
 	// Builds web + server (cached `vp run` tasks) and serves the SPA from
 	// packages/web/dist. A warm `e2e:serve` server is reused via reuseExistingServer.
 	webServer: {

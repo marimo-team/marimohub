@@ -16,8 +16,13 @@ concurrency:
 
 jobs:
   e2e:
+    name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The Playwright webServer shells out to `pnpm exec vp run`, so pnpm must be
@@ -32,12 +37,14 @@ jobs:
           cache: true
           run-install: |
             - args: ['--frozen-lockfile']
-      - run: pnpm --filter @marimo-hub/e2e install-browser
+      - run: pnpm --filter @marimo-hub/e2e exec playwright install --with-deps ${{ matrix.browser }}
       - run: pnpm e2e
+        env:
+          E2E_BROWSER: ${{ matrix.browser }}
       - name: Upload report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.browser }}
           path: apps/e2e/playwright-report/
           retention-days: 7
