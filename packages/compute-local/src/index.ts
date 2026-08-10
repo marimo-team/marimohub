@@ -131,15 +131,20 @@ export function prepareMarimoCommand(cmd: string, bindHost: string): string {
 	const uvRunPrefix = /(^|&&\s*)uv run (?=[^&]*\bmarimo\b)/;
 	const match = uvRunPrefix.exec(cmd);
 	if (!match) return cmd;
+	// Localize edits to the launch segment (`uv run … marimo …`), which runs from
+	// `uv run` to the next `&&` (or end of string). Flags injected outside it would
+	// land on an unrelated setup/teardown command.
 	const launchStart = match.index + match[1].length;
-	let out = cmd;
-	if (!out.slice(launchStart).includes('--with marimo')) {
-		out = out.replace(uvRunPrefix, '$1uv run --with marimo ');
+	const nextSep = cmd.slice(launchStart).search(/&&/);
+	const launchEnd = nextSep === -1 ? cmd.length : launchStart + nextSep;
+	let segment = cmd.slice(launchStart, launchEnd);
+	if (!segment.includes('--with marimo')) {
+		segment = segment.replace(/^uv run /, 'uv run --with marimo ');
 	}
-	if (bindHost !== '127.0.0.1' && !out.slice(launchStart).includes('--host')) {
-		out = `${out} --host ${bindHost}`;
+	if (bindHost !== '127.0.0.1' && !segment.includes('--host')) {
+		segment = segment.replace(/\s*$/, ` --host ${bindHost}$&`);
 	}
-	return out;
+	return cmd.slice(0, launchStart) + segment + cmd.slice(launchEnd);
 }
 
 export interface LocalComputeOptions {

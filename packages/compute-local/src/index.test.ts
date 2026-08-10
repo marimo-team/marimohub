@@ -68,6 +68,25 @@ describe('prepareMarimoCommand (pure)', () => {
 			'uv run --with marimo marimo edit --host 1.2.3.4',
 		);
 	});
+
+	it('appends `--host` to the launch segment when setup commands prefix it (Docker mode)', () => {
+		const command = 'if test -f pyproject.toml; then uv sync; fi && uv run --no-sync marimo edit';
+		expect(prepareMarimoCommand(command, '0.0.0.0')).toBe(
+			'if test -f pyproject.toml; then uv sync; fi && uv run --with marimo --no-sync marimo edit --host 0.0.0.0',
+		);
+	});
+
+	it('appends `--host` to the launch segment, not a trailing command (Docker mode)', () => {
+		expect(prepareMarimoCommand('uv run marimo edit && sh notify.sh', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit --host 0.0.0.0 && sh notify.sh',
+		);
+	});
+
+	it('scopes `--host` detection to the launch segment, ignoring a trailing flag', () => {
+		expect(prepareMarimoCommand('uv run marimo edit && tool --host 1.2.3.4', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit --host 0.0.0.0 && tool --host 1.2.3.4',
+		);
+	});
 });
 
 describe('rewriteWorkspace (pure)', () => {
