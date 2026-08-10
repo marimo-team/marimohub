@@ -201,6 +201,8 @@ components:
           type: array
           items:
             type: string
+        sandbox_startup_timeout_seconds:
+          type: number
         compute_profiles:
           type: array
           items:
@@ -226,6 +228,7 @@ components:
         - default_role
         - limits
         - sandbox_images
+        - sandbox_startup_timeout_seconds
         - compute_profiles
         - compute_profile_override
     ComputeResources:

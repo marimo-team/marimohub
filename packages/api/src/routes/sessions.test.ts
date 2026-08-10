@@ -149,6 +149,61 @@ describe('Session routes', () => {
 		expect(data.error).toBeUndefined();
 	});
 
+	it('passes the configured sandbox startup timeout through to the kernel port wait', async () => {
+		const sb = makeFakeSandbox();
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(sb.instance),
+			deps: { sandbox: sandboxConfig({ startupTimeoutMs: Millis.seconds(300) }) },
+		}).request;
+		await expectOk<ApiSession>(await api('POST', sessionsPath()));
+		expect(sb.calls.waitForPortOptions).toEqual([{ timeout: 300_000 }]);
+	});
+
+	it('surfaces a startup timeout as a 503 naming the timeout, on the response AND the record', async () => {
+		const sb = makeFakeSandbox({
+			failWaitForPort: new Error('timed out'),
+			logs: { stdout: 'Resolved 42 packages', stderr: '' },
+		});
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(sb.instance),
+			// 0ms: the fake's instant rejection has already consumed the window, so
+			// the provisioner classifies it as a timeout without a real 2-minute wait.
+			deps: { sandbox: sandboxConfig({ startupTimeoutMs: Millis.of(0) }) },
+		}).request;
+
+		const error = await expectError(await api('POST', sessionsPath()), 503, 'SERVICE_UNAVAILABLE');
+		expect(error.message).toContain('startup timeout');
+		expect(error.message).toContain('MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS');
+		expect(error.message).toContain('Resolved 42 packages');
+
+		// A client polling GET …/sessions/{sid} sees the same reason on the record.
+		const [record] = await createServices(bucket).sessions.listSessions(nid);
+		expect(record.status).toBe('failed');
+		expect(record.error?.message).toContain('startup timeout');
+	});
+
+	it('serves the sandbox startup timeout on /capabilities', async () => {
+		const defaults = await expectOk<{ sandbox_startup_timeout_seconds: number }>(
+			await owner('GET', '/capabilities'),
+		);
+		expect(defaults.sandbox_startup_timeout_seconds).toBe(120);
+
+		const configured = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: { sandbox: sandboxConfig({ startupTimeoutMs: Millis.seconds(300) }) },
+		}).request;
+		const overridden = await expectOk<{ sandbox_startup_timeout_seconds: number }>(
+			await configured('GET', '/capabilities'),
+		);
+		expect(overridden.sandbox_startup_timeout_seconds).toBe(300);
+	});
+
 	it('defaults to one shared edit sandbox across users', async () => {
 		const first = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
 		const sharedOther = createTestApi({

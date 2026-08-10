@@ -88,6 +88,14 @@ export interface SandboxConfig {
 	 */
 	assetUrl?: string;
 	/**
+	 * How long a session provision waits for the marimo kernel to come up before
+	 * failing the start (config: MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS).
+	 * Undefined = the core default (2 minutes). Also served on
+	 * `/api/v1/capabilities` so the client bounds its own startup wait with the
+	 * same value.
+	 */
+	startupTimeoutMs?: Millis;
+	/**
 	 * How kernels are surfaced to the browser (config: MARIMOHUB_SANDBOX_EXPOSURE):
 	 * `subdomain` (direct, isolated domain) or `proxy` (forwarded through the app at
 	 * `…/proxy/<token>/`), independent of the compute backend. Optional — `createApi`
