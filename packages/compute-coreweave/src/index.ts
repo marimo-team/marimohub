@@ -53,6 +53,7 @@ import {
 	buildGitCloneCommand,
 	iterableToStream,
 	parseFindFilesOutput,
+	portWaitCommand,
 	removeUndefined,
 	shellQuote,
 	withEnvPrefix,
@@ -112,23 +113,6 @@ const BOOT_POLL_INTERVAL_MS = 100;
  * carries an exit code, so only the status distinguishes them from `running`.
  */
 const TERMINAL_PROCESS_STATUSES = new Set<CommandProcessStatus>(['exited', 'failed', 'cancelled']);
-
-/**
- * Shell that blocks until `port` accepts a connection, for at most `seconds`.
- * Exits 0 as soon as it does, 1 on its own deadline. `sleep 0.05 || sleep 1`
- * degrades to whole seconds on an image whose sleep is POSIX-integer-only,
- * rather than spinning hot. Assumes `python3` and `date` (see INTEGRATION
- * SURFACE above).
- */
-export function portWaitCommand(port: number, seconds: number): string {
-	const probe =
-		`python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); ` +
-		`sys.exit(0 if s.connect_ex(('127.0.0.1',${port}))==0 else 1)"`;
-	return (
-		`end=$(( $(date +%s) + ${seconds} )); ` +
-		`while [ "$(date +%s)" -lt "$end" ]; do ${probe} && exit 0; sleep 0.05 || sleep 1; done; exit 1`
-	);
-}
 
 /**
  * CAIOS rejects path-style requests, and boto3 defaults to path style for a

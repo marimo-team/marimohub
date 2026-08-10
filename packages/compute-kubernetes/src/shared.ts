@@ -11,6 +11,26 @@ export const MANAGED_BY_VALUE = 'marimohub';
 /** Annotation that carries the verbatim `SandboxId` for `listActive()` mapping. */
 export const SANDBOX_ID_ANNOTATION = 'marimohub.io/sandbox-id';
 
+/** `imagePullPolicy` for the kernel container. See `defaultImagePullPolicy`. */
+export type ImagePullPolicy = 'Always' | 'IfNotPresent' | 'Never';
+
+/**
+ * Tag-sensitive pull-policy default, mirroring Kubernetes' own: `Always` for a
+ * mutable `:latest`/untagged image (correctness — a cached stale image would
+ * otherwise be served forever), `IfNotPresent` for a pinned tag or digest
+ * (performance — skips the per-start registry round-trip, which `Always`
+ * costs even when the image is cached). Pinning the image is what unlocks the
+ * fast path; an explicit `imagePullPolicy` config overrides this.
+ */
+export function defaultImagePullPolicy(image: string): ImagePullPolicy {
+	if (image.includes('@')) return 'IfNotPresent'; // digest-pinned, immutable
+	// The tag is after the last ':' only when that ':' follows the last '/'
+	// (otherwise it's a registry port, e.g. `registry:5000/img`).
+	const lastSegment = image.slice(image.lastIndexOf('/') + 1);
+	const tag = lastSegment.includes(':') ? lastSegment.slice(lastSegment.indexOf(':') + 1) : '';
+	return !tag || tag === 'latest' ? 'Always' : 'IfNotPresent';
+}
+
 export interface KubernetesResources {
 	/** CPU request/limit (e.g. `1`, `500m`). */
 	cpu?: string;
@@ -49,6 +69,8 @@ export interface KubernetesConfig {
 	serviceAccountName?: string;
 	/** `imagePullSecrets` name for pulling a private kernel image. */
 	imagePullSecret?: string;
+	/** Kernel-container pull policy. Default: see `defaultImagePullPolicy`. */
+	imagePullPolicy?: ImagePullPolicy;
 	/** CPU/memory/GPU requested for each kernel Pod. */
 	resources?: KubernetesResources;
 	/** How long to wait for the Pod to reach `Running`. Default 2 minutes. */
@@ -77,7 +99,28 @@ export interface EnsureSandboxOptions {
 	tlsSecretName?: string;
 	serviceAccountName?: string;
 	imagePullSecret?: string;
+	imagePullPolicy?: ImagePullPolicy;
 	resources?: KubernetesResources;
+}
+
+/**
+ * Pod phase plus the boot timestamps that ride along on the same read. The
+ * boot poll GETs the Pod every interval anyway, so capturing these there costs
+ * no extra API call and keeps the startup breakdown off the readiness path.
+ * Timestamps come from conditions with `status=True` only — a transient
+ * `Ready=False` must not be reported as readiness.
+ */
+export interface K8sPodPhaseInfo {
+	/** Pod phase (`Pending` | `Running` | `Succeeded` | `Failed` | `Unknown`). */
+	phase?: string;
+	/** UID of this Pod incarnation (a recreated Pod reuses the name, not the UID). */
+	uid?: string;
+	/** Pod `creationTimestamp`. */
+	createdAt?: Date;
+	/** `PodScheduled=True` transition time. */
+	scheduledAt?: Date;
+	/** `Ready=True` transition time. */
+	readyAt?: Date;
 }
 
 export interface K8sSandboxInfo {
@@ -95,12 +138,21 @@ export interface K8sSandboxInfo {
  * seam: tests pass an in-memory fake, production passes the real client.
  */
 export interface K8sClient {
-	/** Create the Pod + Service + Ingress for a session if they don't already exist. */
-	ensure(options: EnsureSandboxOptions): Promise<void>;
-	/** Pod phase, or `undefined` if the Pod does not exist. */
-	getPhase(name: string): Promise<string | undefined>;
+	/**
+	 * Create the Pod + Service + Ingress for a session if they don't already
+	 * exist. `createdPod` is false when the Pod pre-existed (a reconnect).
+	 */
+	ensure(options: EnsureSandboxOptions): Promise<{ createdPod: boolean }>;
+	/** Pod phase + boot timestamps, or `undefined` if the Pod does not exist. */
+	getPhase(name: string): Promise<K8sPodPhaseInfo | undefined>;
 	/** Latest scheduler rejection for the Pod, when one exists. */
 	getSchedulingFailure(name: string): Promise<string | undefined>;
+	/**
+	 * Kubelet `Pulled` event message for the Pod incarnation `uid` — either
+	 * `Successfully pulled image "…" in 1.2s …` or `Container image "…" already
+	 * present on machine`. Best-effort: `undefined` on any failure.
+	 */
+	getImagePullMessage(name: string, uid?: string): Promise<string | undefined>;
 	/** Run a command in the Pod; `stdin` is piped to the process when provided. */
 	exec(name: string, command: string[], stdin?: string | Uint8Array): Promise<K8sExecResult>;
 	/** Delete the Pod + Service + Ingress for a session. Idempotent (tolerates 404). */

@@ -54,7 +54,12 @@ vi.mock('@kubernetes/client-node', () => ({
 }));
 
 import { createK8sClient } from './client';
-import { MANAGED_BY_LABEL, MANAGED_BY_VALUE, SANDBOX_ID_ANNOTATION } from './shared';
+import {
+	defaultImagePullPolicy,
+	MANAGED_BY_LABEL,
+	MANAGED_BY_VALUE,
+	SANDBOX_ID_ANNOTATION,
+} from './shared';
 
 const SANDBOX_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
 
@@ -81,19 +86,22 @@ describe('createK8sClient', () => {
 		k8sMock.core.createNamespacedPod.mockRejectedValueOnce({ code: 409 });
 		const client = createK8sClient({ namespace: 'kernels' });
 
-		await client.ensure({
-			name: 'mh-sb',
-			sandboxId: SANDBOX_ID,
-			host: 'sb.example.com',
-			image: 'kernel-image',
-			port: 2718,
-			namespace: 'kernels',
-			ingressClassName: 'nginx',
-			tlsSecretName: 'wildcard-cert',
-			serviceAccountName: 'kernel-sa',
-			imagePullSecret: 'regcred',
-			resources: { cpu: '2', memory: '4Gi', gpu: '1' },
-		});
+		// A 409 on the Pod means we reconnected to an existing sandbox.
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: 'sb.example.com',
+				image: 'kernel-image:v1',
+				port: 2718,
+				namespace: 'kernels',
+				ingressClassName: 'nginx',
+				tlsSecretName: 'wildcard-cert',
+				serviceAccountName: 'kernel-sa',
+				imagePullSecret: 'regcred',
+				resources: { cpu: '2', memory: '4Gi', gpu: '1' },
+			}),
+		).resolves.toEqual({ createdPod: false });
 
 		expect(k8sMock.kubeConfigs).toHaveLength(1);
 		const pod = k8sMock.core.createNamespacedPod.mock.calls[0]?.[0].body;
@@ -105,12 +113,17 @@ describe('createK8sClient', () => {
 				annotations: { [SANDBOX_ID_ANNOTATION]: SANDBOX_ID },
 			},
 			spec: {
+				// Short grace: the keep-alive `sleep` ignores SIGTERM, and 30s of
+				// Terminating per deleted Pod holds resources for nothing.
+				terminationGracePeriodSeconds: 5,
 				serviceAccountName: 'kernel-sa',
 				imagePullSecrets: [{ name: 'regcred' }],
 				containers: [
 					{
 						name: 'marimo',
-						image: 'kernel-image',
+						image: 'kernel-image:v1',
+						// Pinned tag → cached nodes skip the registry round-trip.
+						imagePullPolicy: 'IfNotPresent',
 						ports: [{ containerPort: 2718 }],
 						resources: {
 							requests: { cpu: '2', memory: '4Gi' },
@@ -135,16 +148,58 @@ describe('createK8sClient', () => {
 	it('skips ingress creation when no host is configured', async () => {
 		const client = createK8sClient({});
 
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: '',
+				image: 'kernel-image',
+				port: 2718,
+				namespace: 'default',
+			}),
+		).resolves.toEqual({ createdPod: true });
+
+		expect(k8sMock.net.createNamespacedIngress).not.toHaveBeenCalled();
+	});
+
+	it('honours an explicit imagePullPolicy override', async () => {
+		const client = createK8sClient({});
 		await client.ensure({
 			name: 'mh-sb',
 			sandboxId: SANDBOX_ID,
 			host: '',
-			image: 'kernel-image',
+			image: 'kernel-image:v1',
+			port: 2718,
+			namespace: 'default',
+			imagePullPolicy: 'Always',
+		});
+
+		const pod = k8sMock.core.createNamespacedPod.mock.calls[0]?.[0].body;
+		expect(pod.spec.containers[0].imagePullPolicy).toBe('Always');
+	});
+
+	it('defaults the pull policy per tag mutability, like Kubernetes itself', async () => {
+		// Mutable :latest must keep refreshing — a cached stale image would
+		// otherwise be served forever under IfNotPresent.
+		const client = createK8sClient({});
+		await client.ensure({
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			host: '',
+			image: 'ghcr.io/marimo-team/marimo:latest',
 			port: 2718,
 			namespace: 'default',
 		});
+		const pod = k8sMock.core.createNamespacedPod.mock.calls[0]?.[0].body;
+		expect(pod.spec.containers[0].imagePullPolicy).toBe('Always');
 
-		expect(k8sMock.net.createNamespacedIngress).not.toHaveBeenCalled();
+		expect(defaultImagePullPolicy('img')).toBe('Always');
+		expect(defaultImagePullPolicy('img:latest')).toBe('Always');
+		expect(defaultImagePullPolicy('img:v1')).toBe('IfNotPresent');
+		expect(defaultImagePullPolicy('img@sha256:abc')).toBe('IfNotPresent');
+		// A registry port is not a tag.
+		expect(defaultImagePullPolicy('registry:5000/img')).toBe('Always');
+		expect(defaultImagePullPolicy('registry:5000/img:v1')).toBe('IfNotPresent');
 	});
 
 	it('adds limits only for fields supplied by a compute profile', async () => {
@@ -216,6 +271,74 @@ describe('createK8sClient', () => {
 			namespace: 'kernels',
 			fieldSelector: 'involvedObject.kind=Pod,involvedObject.name=mh-sb',
 		});
+	});
+
+	it('getPhase carries the boot timestamps from True conditions on the same read', async () => {
+		k8sMock.core.readNamespacedPod.mockResolvedValueOnce({
+			metadata: { uid: 'uid-current', creationTimestamp: new Date('2026-01-01T00:00:00.000Z') },
+			status: {
+				phase: 'Running',
+				conditions: [
+					{
+						type: 'PodScheduled',
+						status: 'True',
+						lastTransitionTime: new Date('2026-01-01T00:00:00.100Z'),
+					},
+					// A transient not-Ready condition must not be reported as readiness.
+					{
+						type: 'Ready',
+						status: 'False',
+						lastTransitionTime: new Date('2026-01-01T00:00:01.000Z'),
+					},
+					{
+						type: 'Ready',
+						status: 'True',
+						lastTransitionTime: new Date('2026-01-01T00:00:02.500Z'),
+					},
+				],
+			},
+		});
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(client.getPhase('mh-sb')).resolves.toEqual({
+			phase: 'Running',
+			uid: 'uid-current',
+			createdAt: new Date('2026-01-01T00:00:00.000Z'),
+			scheduledAt: new Date('2026-01-01T00:00:00.100Z'),
+			readyAt: new Date('2026-01-01T00:00:02.500Z'),
+		});
+	});
+
+	it('getImagePullMessage matches only the current Pod incarnation', async () => {
+		k8sMock.core.listNamespacedEvent.mockResolvedValueOnce({
+			items: [
+				{ reason: 'Scheduled', message: 'assigned' },
+				// Same Pod NAME from a previous session — a recreated Pod reuses the
+				// deterministic name, so only the current UID's event counts.
+				{
+					reason: 'Pulled',
+					message: 'stale pull from a previous pod',
+					involvedObject: { uid: 'uid-old' },
+				},
+				{
+					reason: 'Pulled',
+					message: 'Successfully pulled image "img" in 2.096s (…)',
+					involvedObject: { uid: 'uid-current' },
+				},
+			],
+		});
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(client.getImagePullMessage('mh-sb', 'uid-current')).resolves.toBe(
+			'Successfully pulled image "img" in 2.096s (…)',
+		);
+	});
+
+	it('getImagePullMessage is best-effort: an unreadable event list yields undefined', async () => {
+		k8sMock.core.listNamespacedEvent.mockRejectedValueOnce(new Error('api down'));
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await expect(client.getImagePullMessage('mh-sb', 'uid-current')).resolves.toBeUndefined();
 	});
 
 	it('collects exec stdout/stderr and maps terminal status to an exit code', async () => {

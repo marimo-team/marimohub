@@ -5,7 +5,7 @@ import type { SandboxId, SandboxProvider } from '@marimo-hub/core';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
 import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
-import { coreWeaveProfileResources, CoreWeaveCompute, portWaitCommand } from './index';
+import { coreWeaveProfileResources, CoreWeaveCompute } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
 import { fakeProcess, makeWorld, procResult } from './testWorld';
 
@@ -395,21 +395,6 @@ describe('CoreWeaveCompute', () => {
 			await inst.exec('true');
 			expect(inst.drainCounters!()).toEqual({ execs: 2 });
 			expect(inst.drainCounters!()).toEqual({ execs: 0 });
-		});
-	});
-
-	describe('portWaitCommand()', () => {
-		it('loops in-sandbox on its own deadline instead of returning per probe', () => {
-			const cmd = portWaitCommand(2718, 30);
-			expect(cmd).toContain("connect_ex(('127.0.0.1',2718))");
-			// Bounded in-sandbox, exits 0 the moment the port answers.
-			expect(cmd).toContain('+ 30 ');
-			expect(cmd).toContain('&& exit 0');
-			expect(cmd).toMatch(/exit 1$/);
-			// Sub-second granularity is the point: a 1s sleep would reintroduce the
-			// quantization this replaced. The `|| sleep 1` is the fallback for an image
-			// whose sleep takes only whole seconds.
-			expect(cmd).toContain('sleep 0.05 || sleep 1');
 		});
 	});
 

@@ -151,6 +151,15 @@ describe('makeCompute fail-fast', () => {
 		);
 	});
 
+	it('rejects an invalid kubernetes image pull policy', () => {
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY: 'ifnotpresent',
+			}),
+		).toThrow(/MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY/);
+	});
+
 	it('requires the e2b api key before constructing the adapter', () => {
 		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'e2b' })).toThrow(
 			/MARIMOHUB_COMPUTE_E2B_API_KEY/,
