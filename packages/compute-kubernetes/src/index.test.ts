@@ -715,6 +715,28 @@ describe('KubernetesCompute', () => {
 			expect(reads).toBe(2);
 		});
 
+		it('discards a Ready refresh from a different Pod incarnation', async () => {
+			const world = makeWorld({ imagePullMessage });
+			const base = {
+				phase: 'Running',
+				uid: 'uid-1',
+				createdAt: new Date(1000),
+				scheduledAt: new Date(1080),
+			};
+			let reads = 0;
+			// The Pod was deleted and recreated (same name, new uid) between the
+			// Running poll and the refresh — its timestamps are not this boot's.
+			world.client.getPhase = async () =>
+				++reads === 1
+					? base
+					: { ...base, uid: 'uid-2', createdAt: new Date(9000), readyAt: new Date(9500) };
+			const inst = makeCompute(world).create(SANDBOX_ID);
+			await inst.exec('true');
+			const timings = inst.drainTimings!();
+			expect(timings.schedule).toBe(80);
+			expect(timings.pod_ready).toBeUndefined();
+		});
+
 		it('a hanging image-pull-event read cannot block readiness', async () => {
 			vi.useFakeTimers();
 			try {

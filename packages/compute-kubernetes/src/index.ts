@@ -250,7 +250,10 @@ class KubernetesSandboxInstance implements SandboxInstance {
 						this.bounded(this.client.getPhase(this.name).catch(() => {})),
 			]);
 			pullMessage = message;
-			const info = refreshed ?? this.bootInfo;
+			// Accept the refresh only for the SAME Pod incarnation: the deterministic
+			// name means a Pod deleted and recreated in this window would otherwise
+			// donate its own boot timestamps to this one's breakdown.
+			const info = refreshed && refreshed.uid === this.bootInfo?.uid ? refreshed : this.bootInfo;
 			const since = (from?: Date, to?: Date): number | undefined =>
 				from && to && to.getTime() >= from.getTime() ? to.getTime() - from.getTime() : undefined;
 			const schedule = since(info?.createdAt, info?.scheduledAt);
