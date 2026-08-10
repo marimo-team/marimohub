@@ -3,6 +3,12 @@ import { NotFoundError } from 'modal';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
+import {
+	computeContract,
+	CONTRACT_HIDDEN_FILE,
+	CONTRACT_SANDBOX_ID,
+	CONTRACT_VISIBLE_FILE,
+} from '@marimo-hub/core/testing/compute-contract';
 import { modalProfileResources, ModalCompute } from './index';
 import type {
 	ModalClientLike,
@@ -431,3 +437,56 @@ describe('ModalCompute', () => {
 		expect(await compute.proxy(new Request('https://example.com'))).toBeNull();
 	});
 });
+
+function contractWorld() {
+	const world = makeWorld();
+	const create = world.client.sandboxes.create.bind(world.client.sandboxes);
+	world.client.sandboxes.create = async (app, image, options) => {
+		const sandbox = (await create(app, image, options)) as FakeSandbox;
+		sandbox.execImpl = (command) =>
+			command[2]?.includes('mh-contract-fail')
+				? processResult(1, '', 'scripted failure')
+				: processResult();
+		return sandbox;
+	};
+	return world;
+}
+
+let contractWorldRef: ReturnType<typeof makeWorld>;
+
+computeContract(
+	'ModalCompute',
+	() => {
+		contractWorldRef = contractWorld();
+		return makeCompute(contractWorldRef);
+	},
+	{
+		mountFallsBack: true,
+		semantics: {
+			failingCommand: 'mh-contract-fail',
+			// Modal maps every filesystem read exception to READ_FAILED.
+			absentFile: { path: '/workspace/contract-absent.txt', code: 'READ_FAILED' },
+			hiddenFiles: {
+				dir: '/workspace',
+				seed: async () => {
+					const sandbox = new FakeSandbox();
+					sandbox.directories.set('/workspace', [
+						{
+							name: CONTRACT_VISIBLE_FILE,
+							path: `/workspace/${CONTRACT_VISIBLE_FILE}`,
+							type: 'file',
+							size: 1,
+						},
+						{
+							name: CONTRACT_HIDDEN_FILE,
+							path: `/workspace/${CONTRACT_HIDDEN_FILE}`,
+							type: 'file',
+							size: 1,
+						},
+					]);
+					contractWorldRef.existing.set(CONTRACT_SANDBOX_ID, sandbox);
+				},
+			},
+		},
+	},
+);

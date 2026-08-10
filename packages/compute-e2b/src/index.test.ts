@@ -250,6 +250,48 @@ describe('E2bCompute', () => {
 		expect([...fake.sandboxes.values()][0].killed).toBe(true);
 	});
 
+	it('concurrent first calls provision exactly one sandbox', async () => {
+		const fake = new FakeE2b();
+		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+		await Promise.all([
+			sb.exec('true'),
+			sb.writeFiles([{ path: '/a', content: '1' }]),
+			sb.exposePort(2718, { hostname: 'ignored' }),
+		]);
+		expect(fake.createCalls).toHaveLength(1);
+		expect(fake.sandboxes.size).toBe(1);
+	});
+
+	it('a failed create is retryable (the rejected provision is not cached)', async () => {
+		class FlakyCreateE2b extends FakeE2b {
+			failuresRemaining = 1;
+
+			override async create(options: Parameters<FakeE2b['create']>[0]): Promise<E2bSandboxHandle> {
+				if (this.failuresRemaining-- > 0) throw new Error('provision failed');
+				return super.create(options);
+			}
+		}
+		const fake = new FlakyCreateE2b();
+		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+		await expect(sb.exec('true')).rejects.toThrow('provision failed');
+		await expect(sb.exec('true')).resolves.toMatchObject({ success: true });
+		expect(fake.sandboxes.size).toBe(1);
+	});
+
+	it('destroy kills every sandbox carrying our id, not just the first match', async () => {
+		const fake = new FakeE2b();
+		await fake.create({
+			metadata: { 'mh-sandbox-id': SANDBOX_ID, 'mh-owner': 'marimohub' },
+		});
+		await fake.create({
+			metadata: { 'mh-sandbox-id': SANDBOX_ID, 'mh-owner': 'marimohub' },
+		});
+
+		await new E2bCompute(baseConfig, fake).create(SANDBOX_ID).destroy();
+
+		expect([...fake.sandboxes.values()].every((sandbox) => sandbox.killed)).toBe(true);
+	});
+
 	it('readFile returns success:false when the SDK read throws', async () => {
 		const res = await new E2bCompute(baseConfig, new FakeE2b())
 			.create(SANDBOX_ID)
@@ -565,6 +607,16 @@ describe('createE2bClient', () => {
 	});
 });
 
-computeContract('E2bCompute', () => new E2bCompute(baseConfig, new FakeE2b()), {
-	mountFallsBack: true,
-});
+computeContract(
+	'E2bCompute',
+	() =>
+		new E2bCompute(baseConfig, new FakeE2b({ failOn: (cmd) => cmd.includes('mh-contract-fail') })),
+	{
+		mountFallsBack: true,
+		semantics: {
+			failingCommand: 'mh-contract-fail',
+			// The SDK does not distinguish a missing file from other read failures.
+			absentFile: { path: '/contract-absent.txt', code: 'READ_FAILED' },
+		},
+	},
+);

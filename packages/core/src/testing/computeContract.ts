@@ -4,13 +4,10 @@
  * Compute adapters are translation layers: each maps the port onto a backend
  * SDK/HTTP/CLI and is mostly tested by asserting the calls it emits against a
  * backend-shaped fake. So unlike `bucketContract` (which verifies CAS behavior
- * against a faithful store), this contract pins only the fake-agnostic
- * invariants every adapter must honor regardless of backend — a fresh instance
- * exposes the full method surface, `exec` returns a well-formed `ExecResult`,
- * `exposePort` yields a parseable URL, `proxy` never throws, and `destroy`
- * resolves. Behavioral round-trips (writeFile/readFile, exit-code mapping,
- * lifecycle polling) stay in each adapter's own suite, where the fake models
- * that backend.
+ * against a faithful store), this contract pins the fake-agnostic invariants
+ * every adapter must honor regardless of backend. Behavioral invariants are
+ * opt-in through `semantics`; backend-specific translation details stay in each
+ * adapter's own suite, where the fake models that backend.
  *
  * Imports `vitest` — only invoke from a `*.test.ts`. Exposed at the
  * `@marimo-hub/core/testing/compute-contract` subpath so it never reaches runtime.
@@ -18,9 +15,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { SandboxId } from '../ids';
 import type { SandboxInstance, SandboxProvider } from '../ports/sandbox';
-import { expectListFilesResult } from './assertions';
+import { expectExecResult, expectFileResult, expectListFilesResult } from './assertions';
 
-const CONTRACT_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
+export const CONTRACT_SANDBOX_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
+/** Fixed names the hidden-file semantic case asserts on; seeds must create both. */
+export const CONTRACT_VISIBLE_FILE = 'contract-visible.txt';
+export const CONTRACT_HIDDEN_FILE = '.contract-hidden';
+
+const CONTRACT_ID = CONTRACT_SANDBOX_ID;
 
 const REQUIRED_METHODS: (keyof SandboxInstance)[] = [
 	'exec',
@@ -52,6 +54,22 @@ export interface ComputeContractOptions {
 	mountFallsBack?: boolean;
 	/** Hostname passed to `exposePort`; some adapters embed it in the URL. */
 	hostname?: string;
+	semantics?: ComputeContractSemantics;
+}
+
+/**
+ * Behavioral cases each backend/fake can opt into. Every field is optional:
+ * a fake that cannot model a behavior omits the field and the case is skipped.
+ */
+export interface ComputeContractSemantics {
+	/** Shell command guaranteed to exit non-zero in this backend/fake. */
+	failingCommand?: string;
+	/** A path guaranteed absent, plus the error code the adapter maps it to. */
+	absentFile?: { path: string; code: 'NOT_FOUND' | 'READ_FAILED' };
+	/** Directory listing whose seed creates the contract's visible and hidden fixtures. */
+	hiddenFiles?: { dir: string; seed: (inst: SandboxInstance) => Promise<void> };
+	/** Command whose stdout is the value of the named environment variable. */
+	envProbe?: (name: string) => string;
 }
 
 export function computeContract(
@@ -60,6 +78,7 @@ export function computeContract(
 	opts: ComputeContractOptions = {},
 ): void {
 	const hostname = opts.hostname ?? 'hub.example.com';
+	const semantics = opts.semantics ?? {};
 
 	describe(`Compute contract: ${name}`, () => {
 		let provider: SandboxProvider;
@@ -167,6 +186,55 @@ export function computeContract(
 
 			it('advertises supportsBucketMount: false so the provisioner skips the mount', () => {
 				expect(provider.create(CONTRACT_ID).supportsBucketMount).toBe(false);
+			});
+		}
+
+		if (semantics.failingCommand !== undefined) {
+			const failingCommand = semantics.failingCommand;
+			it('a nonzero-exit command maps to success:false with a typed error code', async () => {
+				const res = await provider.create(CONTRACT_ID).exec(failingCommand);
+				expectExecResult(res, { success: false });
+			});
+		}
+
+		if (semantics.absentFile !== undefined) {
+			const absentFile = semantics.absentFile;
+			it('readFile of an absent path returns a typed failure, not a throw', async () => {
+				const res = await provider.create(CONTRACT_ID).readFile(absentFile.path);
+				expectFileResult(res, { success: false, error: { code: absentFile.code } });
+			});
+		}
+
+		if (semantics.hiddenFiles !== undefined) {
+			const hiddenFiles = semantics.hiddenFiles;
+			it('listFiles hides dotfiles unless includeHidden is set', async () => {
+				const inst = provider.create(CONTRACT_ID);
+				await hiddenFiles.seed(inst);
+				const byDefault = await inst.listFiles(hiddenFiles.dir);
+				expectListFilesResult(byDefault, { success: true });
+				const defaultNames = byDefault.files.map((f) => f.name);
+				expect(defaultNames).toContain(CONTRACT_VISIBLE_FILE);
+				expect(defaultNames).not.toContain(CONTRACT_HIDDEN_FILE);
+				const withHidden = await inst.listFiles(hiddenFiles.dir, { includeHidden: true });
+				expect(withHidden.files.map((f) => f.name)).toContain(CONTRACT_HIDDEN_FILE);
+			});
+		}
+
+		if (semantics.envProbe !== undefined) {
+			const envProbe = semantics.envProbe;
+			it('setEnvVars onlyIfUnset defers to a var already set without onlyIfUnset', async () => {
+				const inst = provider.create(CONTRACT_ID);
+				await inst.setEnvVars({ MH_CONTRACT_ENV: 'forced' });
+				await inst.setEnvVars({ MH_CONTRACT_ENV: 'default' }, { onlyIfUnset: true });
+				const res = await inst.exec(envProbe('MH_CONTRACT_ENV'));
+				expect(res.stdout.trim()).toBe('forced');
+			});
+
+			it('setEnvVars onlyIfUnset applies when nothing else set the var', async () => {
+				const inst = provider.create(CONTRACT_ID);
+				await inst.setEnvVars({ MH_CONTRACT_ENV_UNSET: 'default' }, { onlyIfUnset: true });
+				const res = await inst.exec(envProbe('MH_CONTRACT_ENV_UNSET'));
+				expect(res.stdout.trim()).toBe('default');
 			});
 		}
 	});

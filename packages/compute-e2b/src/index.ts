@@ -136,7 +136,7 @@ export interface E2bConfig {
 
 class E2bSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
-	private handle?: E2bSandboxHandle;
+	private handlePromise?: Promise<E2bSandboxHandle>;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
 
@@ -151,19 +151,27 @@ class E2bSandboxInstance implements SandboxInstance {
 	}
 
 	/** Resolve the live E2B sandbox for our id: cached → reconnect-by-tag → create. */
-	private async ensure(): Promise<E2bSandboxHandle> {
-		if (this.handle) return this.handle;
-		const existing = (await this.client.list()).find((s) => s.metadata?.[ID_META_KEY] === this.id);
-		this.handle = existing
-			? await this.client.connect(existing.sandboxId)
-			: await this.client.create({
-					template: this.config.template,
-					metadata: { [ID_META_KEY]: this.id, [OWNER_META_KEY]: this.ownerTag },
-					...(this.config.maxLifetimeSeconds
-						? { timeoutMs: Seconds.toMillis(this.config.maxLifetimeSeconds) }
-						: {}),
-				});
-		return this.handle;
+	private ensure(): Promise<E2bSandboxHandle> {
+		// Sharing the in-flight lookup closes the check-then-create race between callers.
+		if (this.handlePromise) return this.handlePromise;
+		const promise = (async () => {
+			const existing = (await this.client.list()).find(
+				(s) => s.metadata?.[ID_META_KEY] === this.id,
+			);
+			if (existing) return this.client.connect(existing.sandboxId);
+			return this.client.create({
+				template: this.config.template,
+				metadata: { [ID_META_KEY]: this.id, [OWNER_META_KEY]: this.ownerTag },
+				...(this.config.maxLifetimeSeconds
+					? { timeoutMs: Seconds.toMillis(this.config.maxLifetimeSeconds) }
+					: {}),
+			});
+		})();
+		this.handlePromise = promise;
+		promise.catch(() => {
+			if (this.handlePromise === promise) this.handlePromise = undefined;
+		});
+		return promise;
 	}
 
 	async exec(cmd: string): Promise<ExecResult> {
@@ -280,16 +288,17 @@ class E2bSandboxInstance implements SandboxInstance {
 	}
 
 	async destroy(): Promise<void> {
-		// Kill the cached handle if we have one; otherwise resolve-by-tag and kill.
-		if (this.handle) {
-			await this.handle.kill().catch(() => {});
-			this.handle = undefined;
-			return;
+		const pending = this.handlePromise;
+		this.handlePromise = undefined;
+		if (pending) {
+			const cached = await pending.catch(() => null);
+			if (cached) await cached.kill().catch(() => {});
 		}
-		const existing = (await this.client.list()).find((s) => s.metadata?.[ID_META_KEY] === this.id);
-		if (existing) {
-			const h = await this.client.connect(existing.sandboxId);
-			await h.kill().catch(() => {});
+		// Sweep by tag to reap duplicates left by provisioning races from older instances.
+		const matches = (await this.client.list()).filter((s) => s.metadata?.[ID_META_KEY] === this.id);
+		for (const match of matches) {
+			const handle = await this.client.connect(match.sandboxId).catch(() => null);
+			if (handle) await handle.kill().catch(() => {});
 		}
 	}
 }
