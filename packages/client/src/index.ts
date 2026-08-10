@@ -91,24 +91,11 @@ const timeoutMiddleware: Middleware = {
 const defaultBaseUrl =
 	typeof globalThis.location === 'object' ? globalThis.location.origin : 'http://localhost';
 
-async function dispatchRequest(request: Request): Promise<Response> {
-	const url = new URL(request.url);
-	const input =
-		url.origin === defaultBaseUrl ? `${url.pathname}${url.search}${url.hash}` : url.href;
-	return globalThis.fetch(input, {
-		body: request.body ? await request.clone().text() : undefined,
-		cache: request.cache,
-		credentials: request.credentials,
-		headers: request.headers,
-		integrity: request.integrity,
-		keepalive: request.keepalive,
-		method: request.method,
-		mode: request.mode,
-		redirect: request.redirect,
-		referrer: request.referrer,
-		referrerPolicy: request.referrerPolicy,
-		signal: request.signal,
-	});
+function dispatchRequest(request: Request): Promise<Response> {
+	// Forward the Request itself rather than reconstructing RequestInit. The
+	// reconstruction dropped JSON bodies in Firefox after request middleware ran.
+	// Native fetch preserves the request's internal body stream across browsers.
+	return globalThis.fetch(request);
 }
 
 export function createApiClient(options: ClientOptions = {}) {

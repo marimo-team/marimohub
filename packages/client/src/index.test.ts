@@ -47,10 +47,15 @@ describe('apiData', () => {
 		);
 
 		const [input, init] = fn.mock.calls[0] ?? [];
-		expect(input).toBe('/api/v1/projects');
-		expect(init?.method).toBe('POST');
-		expect(new Headers(init?.headers).get('content-type')).toBe('application/json');
-		expect(init?.body).toBe(JSON.stringify({ name: 'Example', description: 'Typed request' }));
+		expect(input).toBeInstanceOf(Request);
+		expect(init).toBeUndefined();
+		const request = input as Request;
+		expect(new URL(request.url).pathname).toBe('/api/v1/projects');
+		expect(request.method).toBe('POST');
+		expect(request.headers.get('content-type')).toBe('application/json');
+		expect(await request.clone().text()).toBe(
+			JSON.stringify({ name: 'Example', description: 'Typed request' }),
+		);
 	});
 
 	it('throws ApiRequestError with the server code/message on { success: false }', async () => {
@@ -103,9 +108,10 @@ describe('apiData', () => {
 
 	it('throws NETWORK_ERROR when the request times out', async () => {
 		stubFetch(
-			(_input, init) =>
+			(input) =>
 				new Promise<Response>((_resolve, reject) => {
-					init?.signal?.addEventListener('abort', () =>
+					const signal = input instanceof Request ? input.signal : undefined;
+					signal?.addEventListener('abort', () =>
 						reject(new DOMException('The operation was aborted', 'AbortError')),
 					);
 				}),
