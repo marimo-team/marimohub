@@ -118,24 +118,53 @@ export function rewriteWorkspace(cmd: string, root: string): string {
 }
 
 /**
+ * Scan from `start` for the end of the current shell command, i.e. the first
+ * top-level (outside single/double quotes) separator — `&&`, `||`, `|`, `;`, or
+ * a backgrounding `&`. Returns `cmd.length` if none. Not a full shell parser:
+ * it tracks quoting so an `&&` inside a quoted argument is not mistaken for a
+ * separator, which is enough for the launch commands we rewrite.
+ */
+function commandSegmentEnd(cmd: string, start: number): number {
+	let quote: '"' | "'" | null = null;
+	for (let i = start; i < cmd.length; i++) {
+		const ch = cmd[i];
+		if (quote) {
+			if (ch === quote) quote = null;
+			continue;
+		}
+		if (ch === '"' || ch === "'") quote = ch;
+		else if (ch === ';' || ch === '|' || ch === '&') return i;
+	}
+	return cmd.length;
+}
+
+/**
  * Adjust a `uv run … marimo …` command for local execution. Pure (no `this`) so
  * the branchy rewrite logic is unit-testable:
  *  - inject `--with marimo` so marimo is available even if the notebook's
  *    pyproject.toml doesn't declare it (installed into an ephemeral env);
  *  - append `--host <bindHost>` when binding a non-default interface (Docker:
  *    0.0.0.0), so the kernel is reachable through the published port.
- * Non-`uv run` commands and already-configured ones pass through unchanged.
+ * Commands without a `uv run` launch segment and already-configured ones pass
+ * through unchanged.
  */
 export function prepareMarimoCommand(cmd: string, bindHost: string): string {
-	if (!cmd.startsWith('uv run ')) return cmd;
-	let out = cmd;
-	if (!out.includes('--with marimo')) {
-		out = out.replace(/^uv run /, 'uv run --with marimo ');
+	const uvRunPrefix = /(^|&&\s*)uv run (?=[^&]*\bmarimo\b)/;
+	const match = uvRunPrefix.exec(cmd);
+	if (!match) return cmd;
+	// Localize edits to the launch segment (`uv run … marimo …`), which runs from
+	// `uv run` to the next top-level separator (or end of string). Flags injected
+	// outside it would land on an unrelated setup/teardown command.
+	const launchStart = match.index + match[1].length;
+	const launchEnd = commandSegmentEnd(cmd, launchStart);
+	let segment = cmd.slice(launchStart, launchEnd);
+	if (!segment.includes('--with marimo')) {
+		segment = segment.replace(/^uv run /, 'uv run --with marimo ');
 	}
-	if (bindHost !== '127.0.0.1' && out.includes('marimo') && !out.includes('--host')) {
-		out = `${out} --host ${bindHost}`;
+	if (bindHost !== '127.0.0.1' && !segment.includes('--host')) {
+		segment = segment.replace(/\s*$/, ` --host ${bindHost}$&`);
 	}
-	return out;
+	return cmd.slice(0, launchStart) + segment + cmd.slice(launchEnd);
 }
 
 export interface LocalComputeOptions {

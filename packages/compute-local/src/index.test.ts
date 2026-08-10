@@ -39,6 +39,13 @@ describe('prepareMarimoCommand (pure)', () => {
 		);
 	});
 
+	it('injects `--with marimo` when setup commands prefix the uv run command', () => {
+		const command = 'if test -f pyproject.toml; then uv sync; fi && uv run --no-sync marimo edit';
+		expect(prepareMarimoCommand(command, '127.0.0.1')).toBe(
+			'if test -f pyproject.toml; then uv sync; fi && uv run --with marimo --no-sync marimo edit',
+		);
+	});
+
 	it('does not double-inject `--with marimo`', () => {
 		const already = 'uv run --with marimo marimo edit';
 		expect(prepareMarimoCommand(already, '127.0.0.1')).toBe(already);
@@ -59,6 +66,43 @@ describe('prepareMarimoCommand (pure)', () => {
 	it('does NOT append `--host` when one is already present', () => {
 		expect(prepareMarimoCommand('uv run marimo edit --host 1.2.3.4', '0.0.0.0')).toBe(
 			'uv run --with marimo marimo edit --host 1.2.3.4',
+		);
+	});
+
+	it('appends `--host` to the launch segment when setup commands prefix it (Docker mode)', () => {
+		const command = 'if test -f pyproject.toml; then uv sync; fi && uv run --no-sync marimo edit';
+		expect(prepareMarimoCommand(command, '0.0.0.0')).toBe(
+			'if test -f pyproject.toml; then uv sync; fi && uv run --with marimo --no-sync marimo edit --host 0.0.0.0',
+		);
+	});
+
+	it('appends `--host` to the launch segment, not a trailing command (Docker mode)', () => {
+		expect(prepareMarimoCommand('uv run marimo edit && sh notify.sh', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit --host 0.0.0.0 && sh notify.sh',
+		);
+	});
+
+	it('scopes `--host` detection to the launch segment, ignoring a trailing flag', () => {
+		expect(prepareMarimoCommand('uv run marimo edit && tool --host 1.2.3.4', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit --host 0.0.0.0 && tool --host 1.2.3.4',
+		);
+	});
+
+	it('stops the launch segment at a pipe, not a trailing command (Docker mode)', () => {
+		expect(prepareMarimoCommand('uv run marimo edit | tee log', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit --host 0.0.0.0 | tee log',
+		);
+	});
+
+	it('stops the launch segment at a semicolon, not a trailing command (Docker mode)', () => {
+		expect(prepareMarimoCommand('uv run marimo edit; touch done', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit --host 0.0.0.0; touch done',
+		);
+	});
+
+	it('does not truncate the launch segment at an `&&` inside quotes', () => {
+		expect(prepareMarimoCommand('uv run marimo edit -c "a && b"', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit -c "a && b" --host 0.0.0.0',
 		);
 	});
 });
