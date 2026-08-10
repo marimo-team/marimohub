@@ -66,6 +66,18 @@ function captureOutput(child: ChildProcess) {
 	return { stdout, stderr };
 }
 
+function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+	if (!child.pid) {
+		child.kill(signal);
+		return;
+	}
+	try {
+		process.kill(-child.pid, signal);
+	} catch {
+		child.kill(signal);
+	}
+}
+
 const WORKSPACE = '/workspace';
 
 export interface PortRange {
@@ -291,20 +303,18 @@ class LocalSandboxInstance implements SandboxInstance {
 
 	async execStream(cmd: string, _options?: ExecStreamOptions): Promise<ReadableStream> {
 		await this.ensureRoot();
-		const child = this.spawnShell(this.rewriteCmd(cmd));
+		const child = this.spawnShell(this.rewriteCmd(cmd), { detached: true });
 		this.children.add(child);
 		// An undrained stderr pipe can fill and block the child before stdout completes.
 		child.stderr?.resume();
 		const forget = () => this.children.delete(child);
 		child.once('exit', forget);
 		child.once('error', forget);
-		const stream = Readable.toWeb(child.stdout ?? Readable.from([])) as ReadableStream;
-		const nodeCancel = stream.cancel.bind(stream);
-		stream.cancel = (reason?: unknown) => {
-			child.kill('SIGKILL');
-			return nodeCancel(reason);
-		};
-		return stream;
+		const stdout = child.stdout ?? Readable.from([]);
+		stdout.once('close', () => {
+			if (stdout.readableAborted) killProcessGroup(child, 'SIGKILL');
+		});
+		return Readable.toWeb(stdout) as ReadableStream;
 	}
 
 	async readFile(p: string): Promise<ReadFileResult> {
@@ -429,11 +439,7 @@ class LocalSandboxInstance implements SandboxInstance {
 			id,
 			command,
 			async kill(signal?: string) {
-				try {
-					if (child.pid) process.kill(-child.pid, (signal as NodeJS.Signals) ?? 'SIGTERM');
-				} catch {
-					child.kill((signal as NodeJS.Signals) ?? 'SIGTERM');
-				}
+				killProcessGroup(child, (signal as NodeJS.Signals) ?? 'SIGTERM');
 			},
 			async waitForPort(port: number, opts?: WaitForPortOptions) {
 				const real = portMap.get(port) ?? port;
@@ -471,11 +477,7 @@ class LocalSandboxInstance implements SandboxInstance {
 
 	async destroy(): Promise<void> {
 		for (const child of this.children) {
-			try {
-				if (child.pid) process.kill(-child.pid, 'SIGKILL');
-			} catch {
-				child.kill('SIGKILL');
-			}
+			killProcessGroup(child, 'SIGKILL');
 		}
 		this.children.clear();
 		this.portMap.clear();

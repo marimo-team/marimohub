@@ -18,7 +18,6 @@ import type { SandboxInstance, SandboxProvider } from '../ports/sandbox';
 import { expectExecResult, expectFileResult, expectListFilesResult } from './assertions';
 
 export const CONTRACT_SANDBOX_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
-/** Fixed names the hidden-file semantic case asserts on; seeds must create both. */
 export const CONTRACT_VISIBLE_FILE = 'contract-visible.txt';
 export const CONTRACT_HIDDEN_FILE = '.contract-hidden';
 
@@ -70,6 +69,12 @@ export interface ComputeContractSemantics {
 	hiddenFiles?: { dir: string; seed: (inst: SandboxInstance) => Promise<void> };
 	/** Command whose stdout is the value of the named environment variable. */
 	envProbe?: (name: string) => string;
+	/** Backend-defined environment value that an onlyIfUnset default must preserve. */
+	preexistingEnv?: {
+		name: string;
+		value: string;
+		setup: (inst: SandboxInstance) => Promise<() => void | Promise<void>>;
+	};
 }
 
 export function computeContract(
@@ -236,6 +241,21 @@ export function computeContract(
 				const res = await inst.exec(envProbe('MH_CONTRACT_ENV_UNSET'));
 				expect(res.stdout.trim()).toBe('default');
 			});
+
+			if (semantics.preexistingEnv !== undefined) {
+				const preexistingEnv = semantics.preexistingEnv;
+				it('setEnvVars onlyIfUnset preserves a backend-defined value', async () => {
+					const inst = provider.create(CONTRACT_ID);
+					const cleanup = await preexistingEnv.setup(inst);
+					try {
+						await inst.setEnvVars({ [preexistingEnv.name]: 'default' }, { onlyIfUnset: true });
+						const res = await inst.exec(envProbe(preexistingEnv.name));
+						expect(res.stdout.trim()).toBe(preexistingEnv.value);
+					} finally {
+						await cleanup();
+					}
+				});
+			}
 		}
 	});
 }

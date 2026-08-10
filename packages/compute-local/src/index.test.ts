@@ -424,10 +424,26 @@ describe('LocalCompute process hygiene', () => {
 
 	it('cancelling an execStream kills the child', async () => {
 		const sb = newSandbox();
+		await sb.writeFiles([{ path: '/workspace/.keep', content: '' }]);
 		const stream = await sb.execStream('sleep 1 && echo alive > /workspace/alive.txt');
 		await stream.cancel();
 		await new Promise((resolve) => setTimeout(resolve, 1500));
 		const read = await sb.readFile('/workspace/alive.txt');
+		expect(read.success).toBe(false);
+	}, 10_000);
+
+	it('cancelling an execStream reader kills the process group', async () => {
+		const sb = newSandbox();
+		await sb.writeFiles([{ path: '/workspace/.keep', content: '' }]);
+		const stream = await sb.execStream(
+			'(sleep 1; echo alive > /workspace/descendant.txt) & printf ready; wait',
+		);
+		const reader = stream.getReader();
+		const first = await reader.read();
+		expect(new TextDecoder().decode(first.value)).toBe('ready');
+		await reader.cancel();
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		const read = await sb.readFile('/workspace/descendant.txt');
 		expect(read.success).toBe(false);
 	}, 10_000);
 
@@ -499,6 +515,18 @@ computeContract('LocalCompute', () => new LocalCompute(), {
 				]),
 		},
 		envProbe: (name) => `printenv ${name}`,
+		preexistingEnv: {
+			name: 'MH_CONTRACT_ENV_PREEXISTING',
+			value: 'host',
+			setup: async () => {
+				const previous = process.env.MH_CONTRACT_ENV_PREEXISTING;
+				process.env.MH_CONTRACT_ENV_PREEXISTING = 'host';
+				return () => {
+					if (previous === undefined) delete process.env.MH_CONTRACT_ENV_PREEXISTING;
+					else process.env.MH_CONTRACT_ENV_PREEXISTING = previous;
+				};
+			},
+		},
 	},
 });
 

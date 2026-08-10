@@ -53,6 +53,7 @@ class FakeE2b implements E2bClient {
 		private readonly opts: {
 			failOn?: (cmd: string) => boolean;
 			runResult?: (cmd: string) => E2bExecResult | undefined;
+			beforeKill?: (sandbox: FakeSandbox) => Promise<void>;
 		} = {},
 	) {}
 
@@ -97,7 +98,10 @@ class FakeE2b implements E2bClient {
 				},
 			},
 			getHost: (port) => `${port}-${sb.info.sandboxId}.e2b.app`,
-			kill: async () => void (sb.killed = true),
+			kill: async () => {
+				sb.killed = true;
+				await this.opts.beforeKill?.(sb);
+			},
 		};
 	}
 
@@ -169,6 +173,30 @@ describe('E2bCompute', () => {
 		const only = [...fake.sandboxes.values()][0];
 		expect(only.files.get('/a')).toBe('1');
 		expect(only.files.get('/b')).toBe('2');
+	});
+
+	it('does not reconnect to or destroy another owner sandbox with the same id', async () => {
+		const fake = new FakeE2b();
+		await fake.create({
+			metadata: { 'mh-sandbox-id': SANDBOX_ID, 'mh-owner': 'another-deployment' },
+		});
+		const compute = new E2bCompute(baseConfig, fake);
+		const sb = compute.create(SANDBOX_ID);
+
+		await sb.writeFiles([{ path: '/owned', content: 'yes' }]);
+		expect(fake.createCalls).toHaveLength(2);
+		const foreign = [...fake.sandboxes.values()].find(
+			(sandbox) => sandbox.info.metadata?.['mh-owner'] === 'another-deployment',
+		)!;
+		const owned = [...fake.sandboxes.values()].find(
+			(sandbox) => sandbox.info.metadata?.['mh-owner'] === 'marimohub',
+		)!;
+		expect(foreign.files.has('/owned')).toBe(false);
+		expect(owned.files.get('/owned')).toBe('yes');
+
+		await sb.destroy();
+		expect(foreign.killed).toBe(false);
+		expect(owned.killed).toBe(true);
 	});
 
 	it('destroy reconnects by metadata when the instance has no cached handle', async () => {
@@ -250,16 +278,54 @@ describe('E2bCompute', () => {
 		expect([...fake.sandboxes.values()][0].killed).toBe(true);
 	});
 
-	it('concurrent first calls provision exactly one sandbox', async () => {
+	it('concurrent calls through separate instances provision exactly one sandbox', async () => {
 		const fake = new FakeE2b();
-		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+		const compute = new E2bCompute(baseConfig, fake);
 		await Promise.all([
-			sb.exec('true'),
-			sb.writeFiles([{ path: '/a', content: '1' }]),
-			sb.exposePort(2718, { hostname: 'ignored' }),
+			compute.create(SANDBOX_ID).exec('true'),
+			compute.create(SANDBOX_ID).writeFiles([{ path: '/a', content: '1' }]),
+			compute.create(SANDBOX_ID).exposePort(2718, { hostname: 'ignored' }),
 		]);
 		expect(fake.createCalls).toHaveLength(1);
 		expect(fake.sandboxes.size).toBe(1);
+	});
+
+	it('waits for destroy before provisioning a replacement', async () => {
+		let signalKillStarted!: () => void;
+		let releaseKill!: () => void;
+		const killStarted = new Promise<void>((resolve) => {
+			signalKillStarted = resolve;
+		});
+		const killReleased = new Promise<void>((resolve) => {
+			releaseKill = resolve;
+		});
+		let pauseNextKill = true;
+		const fake = new FakeE2b({
+			beforeKill: async () => {
+				if (!pauseNextKill) return;
+				pauseNextKill = false;
+				signalKillStarted();
+				await killReleased;
+			},
+		});
+		const compute = new E2bCompute(baseConfig, fake);
+		const first = compute.create(SANDBOX_ID);
+		await first.exec('true');
+
+		const destroying = first.destroy();
+		await killStarted;
+		const replacing = compute.create(SANDBOX_ID).exec('true');
+		await Promise.resolve();
+		expect(fake.createCalls).toHaveLength(1);
+
+		releaseKill();
+		await destroying;
+		await replacing;
+
+		expect(fake.createCalls).toHaveLength(2);
+		const live = [...fake.sandboxes.values()].filter((sandbox) => !sandbox.killed);
+		expect(live).toHaveLength(1);
+		expect(live[0].info.metadata?.['mh-owner']).toBe('marimohub');
 	});
 
 	it('a failed create is retryable (the rejected provision is not cached)', async () => {

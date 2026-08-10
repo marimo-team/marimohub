@@ -16,4 +16,10 @@ describe('Utf8TailBuffer', () => {
 		buffer.append(Buffer.from([0xa9]));
 		expect(buffer.toString()).toBe('é');
 	});
+
+	it('does not retain half of an astral character at the truncation boundary', () => {
+		const buffer = new Utf8TailBuffer(2);
+		buffer.append(Buffer.from('a😀b'));
+		expect(buffer.toString()).toBe('b');
+	});
 });

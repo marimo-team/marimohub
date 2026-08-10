@@ -10,7 +10,10 @@ export class Utf8TailBuffer {
 	append(chunk: Buffer): void {
 		this.text += this.decoder.write(chunk);
 		if (this.text.length > this.maxChars) {
-			this.text = this.text.slice(this.text.length - this.maxChars);
+			let start = this.text.length - this.maxChars;
+			const code = this.text.charCodeAt(start);
+			if (code >= 0xdc00 && code <= 0xdfff) start += 1;
+			this.text = this.text.slice(start);
 		}
 	}
 

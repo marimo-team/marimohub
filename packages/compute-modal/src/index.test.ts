@@ -6,7 +6,6 @@ import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,
-	CONTRACT_SANDBOX_ID,
 	CONTRACT_VISIBLE_FILE,
 } from '@marimo-hub/core/testing/compute-contract';
 import { modalProfileResources, ModalCompute } from './index';
@@ -69,6 +68,19 @@ class FakeSandbox implements ModalSandboxLike {
 		this.tags = tags;
 	}
 
+	private writeFile(path: string, content: string | Uint8Array): void {
+		this.files.set(path, content);
+		const separator = path.lastIndexOf('/');
+		const directory = separator === 0 ? '/' : path.slice(0, separator);
+		const name = path.slice(separator + 1);
+		const entries = this.directories.get(directory) ?? [];
+		const entry = { name, path, type: 'file' as const, size: content.length };
+		const existing = entries.findIndex((candidate) => candidate.path === path);
+		if (existing === -1) entries.push(entry);
+		else entries[existing] = entry;
+		this.directories.set(directory, entries);
+	}
+
 	filesystem = {
 		readText: async (path: string) => {
 			const value = this.files.get(path);
@@ -76,10 +88,10 @@ class FakeSandbox implements ModalSandboxLike {
 			return value;
 		},
 		writeText: async (content: string, path: string) => {
-			this.files.set(path, content);
+			this.writeFile(path, content);
 		},
 		writeBytes: async (content: Uint8Array, path: string) => {
-			this.files.set(path, content);
+			this.writeFile(path, content);
 		},
 		listFiles: async (path: string) => this.directories.get(path) ?? [],
 	};
@@ -452,41 +464,19 @@ function contractWorld() {
 	return world;
 }
 
-let contractWorldRef: ReturnType<typeof makeWorld>;
-
-computeContract(
-	'ModalCompute',
-	() => {
-		contractWorldRef = contractWorld();
-		return makeCompute(contractWorldRef);
-	},
-	{
-		mountFallsBack: true,
-		semantics: {
-			failingCommand: 'mh-contract-fail',
-			// Modal maps every filesystem read exception to READ_FAILED.
-			absentFile: { path: '/workspace/contract-absent.txt', code: 'READ_FAILED' },
-			hiddenFiles: {
-				dir: '/workspace',
-				seed: async () => {
-					const sandbox = new FakeSandbox();
-					sandbox.directories.set('/workspace', [
-						{
-							name: CONTRACT_VISIBLE_FILE,
-							path: `/workspace/${CONTRACT_VISIBLE_FILE}`,
-							type: 'file',
-							size: 1,
-						},
-						{
-							name: CONTRACT_HIDDEN_FILE,
-							path: `/workspace/${CONTRACT_HIDDEN_FILE}`,
-							type: 'file',
-							size: 1,
-						},
-					]);
-					contractWorldRef.existing.set(CONTRACT_SANDBOX_ID, sandbox);
-				},
-			},
+computeContract('ModalCompute', () => makeCompute(contractWorld()), {
+	mountFallsBack: true,
+	semantics: {
+		failingCommand: 'mh-contract-fail',
+		// Modal maps every filesystem read exception to READ_FAILED.
+		absentFile: { path: '/workspace/contract-absent.txt', code: 'READ_FAILED' },
+		hiddenFiles: {
+			dir: '/workspace',
+			seed: (inst) =>
+				inst.writeFiles([
+					{ path: `/workspace/${CONTRACT_VISIBLE_FILE}`, content: 'v' },
+					{ path: `/workspace/${CONTRACT_HIDDEN_FILE}`, content: 'h' },
+				]),
 		},
 	},
-);
+});
