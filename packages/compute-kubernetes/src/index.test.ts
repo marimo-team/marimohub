@@ -697,6 +697,24 @@ describe('KubernetesCompute', () => {
 			expect(timings.image_pull).toBeUndefined();
 		});
 
+		it('refreshes the conditions once when Ready lags the Running snapshot', async () => {
+			const world = makeWorld({ imagePullMessage });
+			const base = {
+				phase: 'Running',
+				uid: 'uid-1',
+				createdAt: new Date(1000),
+				scheduledAt: new Date(1080),
+			};
+			let reads = 0;
+			// Ready flips True only after the boot poll has already seen Running.
+			world.client.getPhase = async () =>
+				++reads === 1 ? base : { ...base, readyAt: new Date(3300) };
+			const inst = makeCompute(world).create(SANDBOX_ID);
+			await inst.exec('true');
+			expect(inst.drainTimings!()).toMatchObject({ pod_ready: 2300, image_pull: 2096 });
+			expect(reads).toBe(2);
+		});
+
 		it('a hanging image-pull-event read cannot block readiness', async () => {
 			vi.useFakeTimers();
 			try {

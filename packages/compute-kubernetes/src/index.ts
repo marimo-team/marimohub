@@ -93,11 +93,12 @@ const PORT_WAIT_CHUNK_MS = 30_000;
 /** First such chunk, kept short so a kernel that dies on launch is caught quickly. */
 const PORT_WAIT_FIRST_CHUNK_MS = 2_000;
 /**
- * Cap on the one post-boot diagnostics read (the kubelet `Pulled` event; the
- * rest of the breakdown rides the boot poll for free). Best-effort — a slow
- * API server must never delay a sandbox that is already Running.
+ * Cap on the post-boot diagnostics reads (the kubelet `Pulled` event, plus a
+ * one-shot condition refresh when `Ready` lags `Running`; the rest of the
+ * breakdown rides the boot poll for free). Best-effort — a slow API server
+ * must never delay a sandbox that is already Running.
  */
-const IMAGE_PULL_EVENT_TIMEOUT_MS = 250;
+const POST_BOOT_READ_TIMEOUT_MS = 250;
 
 /**
  * Milliseconds from a kubelet `Pulled` event message — `Successfully pulled
@@ -237,8 +238,19 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		// A reconnect's Pod booted long ago — its conditions would report a stale
 		// breakdown as if this provision paid for it.
 		if (createdPod) {
-			const info = this.bootInfo;
-			pullMessage = await this.boundedImagePullMessage(info?.uid);
+			// The poll stops at the first Running snapshot, and `Ready=True` can lag
+			// that by a status update — refresh once (bounded, concurrent with the
+			// event read) so the ready timestamp isn't silently dropped.
+			const [message, refreshed] = await Promise.all([
+				this.bounded(this.client.getImagePullMessage(this.name, this.bootInfo?.uid)),
+				this.bootInfo?.readyAt
+					? undefined
+					: // Caught on the inner promise: getPhase can reject even after the
+						// bound fires, and a late rejection must not go unhandled.
+						this.bounded(this.client.getPhase(this.name).catch(() => {})),
+			]);
+			pullMessage = message;
+			const info = refreshed ?? this.bootInfo;
 			const since = (from?: Date, to?: Date): number | undefined =>
 				from && to && to.getTime() >= from.getTime() ? to.getTime() - from.getTime() : undefined;
 			const schedule = since(info?.createdAt, info?.scheduledAt);
@@ -267,14 +279,14 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		);
 	}
 
-	/** The one post-`Running` diagnostics read, capped so it cannot delay readiness. */
-	private async boundedImagePullMessage(uid: string | undefined): Promise<string | undefined> {
+	/** A post-`Running` diagnostics read, capped so it cannot delay readiness. */
+	private async bounded<T>(read: Promise<T>): Promise<T | undefined> {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const gaveUp = new Promise<undefined>((resolve) => {
-			timer = setTimeout(() => resolve(undefined), IMAGE_PULL_EVENT_TIMEOUT_MS);
+			timer = setTimeout(() => resolve(undefined), POST_BOOT_READ_TIMEOUT_MS);
 		});
 		try {
-			return await Promise.race([this.client.getImagePullMessage(this.name, uid), gaveUp]);
+			return await Promise.race([read, gaveUp]);
 		} finally {
 			clearTimeout(timer);
 		}
