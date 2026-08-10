@@ -12,6 +12,12 @@ describe('normalizeRepo', () => {
 		expect(normalizeRepo('acme/.git')).toBeNull();
 	});
 
+	it('rejects dot-only shorthand repo names but keeps dotted ones', () => {
+		expect(normalizeRepo('acme/.')).toBeNull();
+		expect(normalizeRepo('acme/..')).toBeNull();
+		expect(normalizeRepo('acme/.github')).toBe('acme/.github');
+	});
+
 	it('canonicalizes repository URLs, stripping trailing slashes and .git', () => {
 		expect(normalizeRepo('https://gitlab.com/group/project')).toBe(
 			'https://gitlab.com/group/project',

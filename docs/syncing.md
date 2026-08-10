@@ -114,6 +114,9 @@ Content-Type: application/json
 }
 ```
 
+When editing, a bare `owner/repo` keeps naming a path on the host the source
+already lives on; github.com shorthand stays bare.
+
 Before the first push, changes take effect immediately. After a notebook has
 synced, changes remain pending until an archive matching the new configuration
 arrives. The notebook continues serving its last successful version in the

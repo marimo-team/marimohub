@@ -7,8 +7,10 @@ export type GitProvider = 'github' | 'gitlab';
 
 // Plain `owner/repo` coordinates — not a clone URL or `git@` remote (a bare
 // "anything/anything" check would admit both). Owners cannot contain dots,
-// which is also what keeps `host.tld/path` inputs out of this branch.
-export const OWNER_REPO_PATTERN = /^[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+$/;
+// which is also what keeps `host.tld/path` inputs out of this branch. The
+// lookahead rejects dot-only repo names (`owner/..` would escape the owner in
+// a built URL) while allowing dotted names like `acme/.github`.
+export const OWNER_REPO_PATTERN = /^[A-Za-z0-9_-]+\/(?!\.+$)[A-Za-z0-9._-]+$/;
 
 // `ssh://git@host:port/path` — the port is an SSH port, meaningless in an
 // https link, so it is dropped.
@@ -95,6 +97,12 @@ export function repoPath(repo: string): string {
 export function repoHost(repo: string): string | null {
 	if (OWNER_REPO_PATTERN.test(repo)) return 'github.com';
 	return parseRepoUrl(repo)?.host ?? null;
+}
+
+/** The `scheme://host[:port]` of a URL-shaped repo; null for shorthand. */
+export function repoOrigin(repo: string): string | null {
+	const url = parseRepoUrl(repo);
+	return url ? `${url.protocol}//${url.host}` : null;
 }
 
 /**

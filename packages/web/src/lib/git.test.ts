@@ -89,6 +89,11 @@ describe('gitCoords', () => {
 		expect(gitCoords(gitSource({ repo: 'a/b/c' }))).toBeNull();
 		expect(gitCoords(gitSource({ repo: 'https://gitlab.com/only-group' }))).toBeNull();
 	});
+
+	it('returns null for dot segments that would escape the repo path', () => {
+		expect(gitCoords(gitSource({ repo: 'acme/..' }))).toBeNull();
+		expect(gitCoords(gitSource({ repo: 'https://gitlab.example.com/acme/../other' }))).toBeNull();
+	});
 });
 
 describe('link builders', () => {
@@ -173,6 +178,7 @@ describe('isRepoInput', () => {
 		expect(isRepoInput('just-a-name')).toBe(false);
 		expect(isRepoInput('a/b/c')).toBe(false);
 		expect(isRepoInput('gitlab/group/project')).toBe(false);
+		expect(isRepoInput('owner/..')).toBe(false);
 		expect(isRepoInput('https://gitlab.com/only-group')).toBe(false);
 		expect(isRepoInput('https://oauth2:token@gitlab.com/group/project')).toBe(false);
 		expect(isRepoInput('ftp://gitlab.com/group/project')).toBe(false);

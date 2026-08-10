@@ -20,8 +20,9 @@ export interface GitSourceCoords {
 
 // Server-validated on new sources; older or API-written records may carry
 // other shapes, which must degrade to "no link". Mirrors the server's
-// OWNER_REPO_PATTERN (core gitRepo.ts).
-const OWNER_REPO_PATTERN = /^[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+$/;
+// OWNER_REPO_PATTERN (core gitRepo.ts), including the dot-only repo-name
+// rejection (`owner/..` would escape the owner in a built URL).
+const OWNER_REPO_PATTERN = /^[A-Za-z0-9_-]+\/(?!\.+$)[A-Za-z0-9._-]+$/;
 
 /**
  * Percent-encode each segment while keeping `/` separators — branches and
@@ -55,6 +56,7 @@ function parseStoredRepo(
 		.split('/')
 		.filter(Boolean);
 	if (segments.length < 2) return null;
+	if (segments.some((s) => s === '.' || s === '..')) return null;
 	const host = url.hostname.toLowerCase();
 	// Host-name detection first; the stored provider is an unverified claim,
 	// used only when the host says nothing (e.g. a self-hosted instance whose

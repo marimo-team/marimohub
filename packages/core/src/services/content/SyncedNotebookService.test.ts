@@ -208,6 +208,26 @@ describe('SyncedNotebookService', () => {
 			});
 		});
 
+		it('re-homes a shorthand repo onto the host the source already lives on', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, repo: 'group/project', provider: 'gitlab' },
+				ACTOR,
+			);
+
+			const source = await notebooks.synced.updateSource(
+				projectId,
+				meta.id,
+				{ repo: 'team/new', branch: 'main', root_path: '', entry_notebook: 'app.py' },
+				ACTOR,
+			);
+
+			expect(source).toMatchObject({
+				repo: 'https://gitlab.com/team/new',
+				provider: 'gitlab',
+			});
+		});
+
 		it('keeps an explicit provider across a path-only change on an unrecognized host', async () => {
 			const { meta } = await notebooks.synced.create(
 				projectId,

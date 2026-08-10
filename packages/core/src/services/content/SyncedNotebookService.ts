@@ -11,6 +11,7 @@ import {
 	normalizeGitSourceConfig,
 	prepareSync,
 	providerForRepo,
+	resolveUpdatedConfig,
 	SyncTokenRecordSchema,
 	verifySyncTokenRecord,
 } from '../../integrations/syncedSource';
@@ -143,22 +144,23 @@ export class SyncedNotebookService {
 			nb.source,
 			(raw) => assertSyncedSource(parseStored(SourceSchema, raw, nb.source)),
 			(current) => {
+				const resolved = resolveUpdatedConfig(current, desired);
 				const active = gitSourceConfig(current);
-				if (current.pending_config && gitSourceConfigsEqual(current.pending_config, desired)) {
+				if (current.pending_config && gitSourceConfigsEqual(current.pending_config, resolved)) {
 					return null;
 				}
 				const { pending_config: _pendingConfig, ...withoutPending } = current;
-				if (gitSourceConfigsEqual(active, desired)) {
+				if (gitSourceConfigsEqual(active, resolved)) {
 					return current.pending_config ? withoutPending : null;
 				}
 				if (current.current_version_id === null) {
 					return {
 						...withoutPending,
-						...desired,
-						provider: providerForRepo(current, desired.repo),
+						...resolved,
+						provider: providerForRepo(current, resolved.repo),
 					};
 				}
-				return { ...current, pending_config: desired };
+				return { ...current, pending_config: resolved };
 			},
 		);
 		const now = new Date().toISOString();

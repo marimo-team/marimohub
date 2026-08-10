@@ -3,7 +3,14 @@ import { BadRequestError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
 import { toHex } from '../internal/hex';
 import type { GitSource, GitSourceConfig, Source } from '../schema';
-import { detectProvider, normalizeRepo, OWNER_REPO_PATTERN, repoHost, reposMatch } from './gitRepo';
+import {
+	detectProvider,
+	normalizeRepo,
+	OWNER_REPO_PATTERN,
+	repoHost,
+	repoOrigin,
+	reposMatch,
+} from './gitRepo';
 import type { GitProvider } from './gitRepo';
 import {
 	normalizeEntryNotebook,
@@ -128,12 +135,30 @@ export function providerForRepo(
 	return host !== null && host === repoHost(current.repo) ? current.provider : null;
 }
 
+function rehomeShorthand(config: GitSourceConfig, origin: string | null): GitSourceConfig {
+	if (!origin || !OWNER_REPO_PATTERN.test(config.repo)) return config;
+	return { ...config, repo: `${origin}/${config.repo}` };
+}
+
+/**
+ * Resolve an updated config against the current source so shorthand keeps the
+ * same meaning on create and update: a bare `owner/repo` names a path on the
+ * host the source already lives on (github.com shorthand stays bare).
+ */
+export function resolveUpdatedConfig(
+	current: GitSource,
+	desired: GitSourceConfig,
+): GitSourceConfig {
+	const origin = repoOrigin(current.repo);
+	return rehomeShorthand(desired, origin === 'https://github.com' ? null : origin);
+}
+
 export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
-	let config = normalizeGitSourceConfig(input);
 	// Shorthand means github.com — unless the caller says GitLab, then gitlab.com.
-	if (input.provider === 'gitlab' && OWNER_REPO_PATTERN.test(config.repo)) {
-		config = { ...config, repo: `https://gitlab.com/${config.repo}` };
-	}
+	const config = rehomeShorthand(
+		normalizeGitSourceConfig(input),
+		input.provider === 'gitlab' ? 'https://gitlab.com' : null,
+	);
 	return {
 		schema_version: 1,
 		type: 'git',
