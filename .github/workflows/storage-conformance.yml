@@ -70,10 +70,10 @@ jobs:
           MARIMOHUB_TEST_S3_REGION: us-east-1
           MARIMOHUB_TEST_S3_KEY: minioadmin
           MARIMOHUB_TEST_S3_SECRET: minioadmin
-        run: pnpm --filter @marimo-hub/storage-s3 test
+        run: vp run --filter @marimo-hub/storage-s3 --fail-if-no-match test
 
       - name: Azure contract against Azurite
         env:
           MARIMOHUB_TEST_AZURE_CONTAINER: marimohub-test
           MARIMOHUB_TEST_AZURE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
-        run: pnpm --filter @marimo-hub/storage-azure test
+        run: vp run --filter @marimo-hub/storage-azure --fail-if-no-match test
