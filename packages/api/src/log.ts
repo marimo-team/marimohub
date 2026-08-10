@@ -32,6 +32,22 @@ export function errorMetadata(err: unknown): Record<string, string | number> {
 	return out;
 }
 
+/**
+ * {@link errorMetadata} applied down the `cause` chain. Undici fetch failures
+ * put the diagnostic code (ECONNRESET, UND_ERR_SOCKET, ENOTFOUND…) on a nested
+ * cause, not the top-level `TypeError: fetch failed` — this keeps that signal
+ * while staying free-form-text-safe (a fetch error's message can quote the
+ * requested URL, which may carry a routing token in its path).
+ */
+export function errorMetadataChain(err: unknown, depth = 3): Record<string, unknown> {
+	const out: Record<string, unknown> = errorMetadata(err);
+	const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+	if (cause !== undefined && cause !== null && depth > 0) {
+		out.cause = errorMetadataChain(cause, depth - 1);
+	}
+	return out;
+}
+
 export async function bestEffort(
 	operation: string,
 	fields: Record<string, unknown>,

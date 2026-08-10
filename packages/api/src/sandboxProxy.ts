@@ -13,6 +13,7 @@
 import type { MiddlewareHandler } from 'hono';
 import { ForbiddenError, ProxyExposure, verifyProxyToken } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
+import { errorMetadataChain, logEvent } from './log';
 import { assertSessionAccess, fail } from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
@@ -206,29 +207,75 @@ function responseHeaders(headers: Headers): Headers {
 	return out;
 }
 
+/** Upstream statuses that mean "a gateway between hub and kernel failed", not the kernel itself. */
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
+
 /**
  * Forward an authorized HTTP request to the kernel and return its response,
  * streaming the body. WebSocket upgrades are handled separately (the Node
  * entrypoint) since `fetch` can't carry them on every runtime.
+ *
+ * GET/HEAD get one immediate retry when the fetch itself throws: the common
+ * cause is the kernel (uvicorn, ~5s keep-alive) closing a pooled connection
+ * the hub is about to reuse — a race that bursts of parallel asset requests
+ * hit, and that a fresh connection resolves. Requests with a body are never
+ * retried (the stream is already consumed).
  */
-export async function forwardHttp(request: Request, targetUrl: string): Promise<Response> {
+export async function forwardHttp(
+	request: Request,
+	targetUrl: string,
+	sessionId?: string,
+): Promise<Response> {
 	const init: RequestInit = {
 		method: request.method,
 		headers: requestHeaders(request, targetUrl),
 		redirect: 'manual',
 	};
-	if (request.method !== 'GET' && request.method !== 'HEAD') {
+	const retryable = request.method === 'GET' || request.method === 'HEAD';
+	if (!retryable) {
 		init.body = request.body;
 		// Node's fetch requires this when streaming a request body.
 		(init as { duplex?: string }).duplex = 'half';
 	}
-	let upstream: Response;
-	try {
-		upstream = await fetch(targetUrl, init);
-	} catch {
+	// The token in the path routes to the session; keep it out of logs. That is
+	// also why the error below is logged as metadata, not free-form text — a
+	// fetch failure's message/stack can quote the target URL.
+	const target = new URL(targetUrl).origin;
+	let upstream: Response | undefined;
+	const attempts = retryable ? 2 : 1;
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			upstream = await fetch(targetUrl, init);
+			break;
+		} catch (err) {
+			logEvent({
+				level: 'warn',
+				event: 'sandbox_proxy_upstream_error',
+				session_id: sessionId ?? null,
+				method: request.method,
+				target,
+				attempt,
+				will_retry: attempt < attempts,
+				error: errorMetadataChain(err),
+			});
+		}
+	}
+	if (!upstream) {
 		// Kernel unreachable (e.g. torn down mid-request) — a gateway failure, not a
 		// server bug, so don't surface a 500 through the error handler.
 		return new Response('Kernel unavailable', { status: 502 });
+	}
+	if (GATEWAY_STATUSES.has(upstream.status)) {
+		// Passed through verbatim, but a 502/503/504 minted between hub and kernel
+		// (e.g. the sandbox-side ingress) is invisible without this line.
+		logEvent({
+			level: 'warn',
+			event: 'sandbox_proxy_upstream_gateway_status',
+			session_id: sessionId ?? null,
+			method: request.method,
+			target,
+			status: upstream.status,
+		});
 	}
 	return new Response(upstream.body, {
 		status: upstream.status,
@@ -250,6 +297,6 @@ export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv
 		if (decision.kind === 'reject') {
 			return fail(c, decision.code, decision.message, decision.status);
 		}
-		return forwardHttp(c.req.raw, decision.targetUrl);
+		return forwardHttp(c.req.raw, decision.targetUrl, decision.sessionId);
 	};
 }

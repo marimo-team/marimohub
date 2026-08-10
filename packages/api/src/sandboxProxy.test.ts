@@ -306,9 +306,31 @@ describe('authorizeProxyRequest', () => {
 describe('forwardHttp', () => {
 	let server: Server;
 	let origin: string;
+	let flakyHits: number;
+
+	beforeEach(() => {
+		flakyHits = 0;
+	});
 
 	beforeAll(async () => {
 		server = createServer((req, res) => {
+			if (req.url === '/flaky') {
+				// First connection dies mid-request (a closed keep-alive socket, from
+				// the client's perspective); subsequent attempts succeed.
+				flakyHits++;
+				if (flakyHits === 1) {
+					req.socket.destroy();
+					return;
+				}
+				res.writeHead(200, { 'content-type': 'text/plain' });
+				res.end('recovered');
+				return;
+			}
+			if (req.url === '/badgateway') {
+				res.writeHead(502, { 'content-type': 'text/plain' });
+				res.end('upstream ingress says no');
+				return;
+			}
 			if (req.url === '/setcookie') {
 				res.writeHead(200, {
 					'set-cookie': 'mh_session=attacker; Path=/',
@@ -355,9 +377,106 @@ describe('forwardHttp', () => {
 		expect(seen.origin).toBe(origin);
 	});
 
-	it('returns 502 when the kernel is unreachable', async () => {
-		const res = await forwardHttp(new Request('https://hub/x'), 'http://127.0.0.1:1/down');
-		expect(res.status).toBe(502);
+	it('returns 502 and logs a structured event when the kernel is unreachable', async () => {
+		const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+		// A deterministic dead endpoint: a server we keep listening (so no other
+		// process can grab the port) that kills every connection on accept.
+		const dead = createServer();
+		dead.on('connection', (socket) => socket.destroy());
+		await new Promise<void>((resolve) => dead.listen(0, '127.0.0.1', resolve));
+		const deadOrigin = `http://127.0.0.1:${(dead.address() as AddressInfo).port}`;
+		try {
+			const res = await forwardHttp(
+				new Request('https://hub/x'),
+				`${deadOrigin}/proxy/tok/down`,
+				'sess-123',
+			);
+			expect(res.status).toBe(502);
+			expect(await res.text()).toBe('Kernel unavailable');
+
+			const events = logSpy.mock.calls
+				.map(([line]) => JSON.parse(line as string) as Record<string, unknown>)
+				.filter((e) => e.event === 'sandbox_proxy_upstream_error');
+			// GET → one retry → two logged attempts, both failed.
+			expect(events).toHaveLength(2);
+			expect(events[0]).toMatchObject({
+				level: 'warn',
+				session_id: 'sess-123',
+				method: 'GET',
+				target: deadOrigin,
+				attempt: 1,
+				will_retry: true,
+			});
+			expect(events[1]).toMatchObject({ attempt: 2, will_retry: false });
+			for (const e of events) {
+				// A diagnostic code survives on the fetch error's cause (which exact
+				// code — ECONNRESET vs UND_ERR_SOCKET — depends on RST timing, so the
+				// precise-code property is pinned in log.test.ts instead)…
+				const error = e.error as { error_name: string; cause?: { error_code?: unknown } };
+				expect(error.error_name).toBe('TypeError');
+				expect(typeof error.cause?.error_code).toBe('string');
+				// …but never free-form error text: no message/stack that could quote
+				// the token-bearing target URL, and no token.
+				const line = JSON.stringify(e);
+				expect(line).not.toContain('/proxy/tok');
+				expect(line).not.toContain('fetch failed');
+			}
+		} finally {
+			logSpy.mockRestore();
+			await new Promise<void>((resolve) => dead.close(() => resolve()));
+		}
+	});
+
+	it('retries a GET once when the connection drops, and succeeds on the fresh connection', async () => {
+		const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const res = await forwardHttp(new Request('https://hub/x'), `${origin}/flaky`);
+			expect(res.status).toBe(200);
+			expect(await res.text()).toBe('recovered');
+			expect(flakyHits).toBe(2);
+		} finally {
+			logSpy.mockRestore();
+		}
+	});
+
+	it('does not retry a request with a body', async () => {
+		const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const res = await forwardHttp(
+				new Request('https://hub/x', { method: 'POST', body: 'cell code' }),
+				`${origin}/flaky`,
+			);
+			expect(res.status).toBe(502);
+			expect(flakyHits).toBe(1);
+		} finally {
+			logSpy.mockRestore();
+		}
+	});
+
+	it('passes an upstream gateway status through verbatim and logs it', async () => {
+		const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const res = await forwardHttp(
+				new Request('https://hub/x'),
+				`${origin}/badgateway`,
+				'sess-123',
+			);
+			expect(res.status).toBe(502);
+			expect(await res.text()).toBe('upstream ingress says no');
+
+			const events = logSpy.mock.calls
+				.map(([line]) => JSON.parse(line as string) as Record<string, unknown>)
+				.filter((e) => e.event === 'sandbox_proxy_upstream_gateway_status');
+			expect(events).toHaveLength(1);
+			expect(events[0]).toMatchObject({
+				level: 'warn',
+				session_id: 'sess-123',
+				status: 502,
+				target: origin,
+			});
+		} finally {
+			logSpy.mockRestore();
+		}
 	});
 
 	it('strips hub credentials (Cookie/Authorization/CF-Access) before the kernel sees the request', async () => {
