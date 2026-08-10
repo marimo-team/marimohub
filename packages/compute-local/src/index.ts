@@ -118,6 +118,27 @@ export function rewriteWorkspace(cmd: string, root: string): string {
 }
 
 /**
+ * Scan from `start` for the end of the current shell command, i.e. the first
+ * top-level (outside single/double quotes) separator — `&&`, `||`, `|`, `;`, or
+ * a backgrounding `&`. Returns `cmd.length` if none. Not a full shell parser:
+ * it tracks quoting so an `&&` inside a quoted argument is not mistaken for a
+ * separator, which is enough for the launch commands we rewrite.
+ */
+function commandSegmentEnd(cmd: string, start: number): number {
+	let quote: '"' | "'" | null = null;
+	for (let i = start; i < cmd.length; i++) {
+		const ch = cmd[i];
+		if (quote) {
+			if (ch === quote) quote = null;
+			continue;
+		}
+		if (ch === '"' || ch === "'") quote = ch;
+		else if (ch === ';' || ch === '|' || ch === '&') return i;
+	}
+	return cmd.length;
+}
+
+/**
  * Adjust a `uv run … marimo …` command for local execution. Pure (no `this`) so
  * the branchy rewrite logic is unit-testable:
  *  - inject `--with marimo` so marimo is available even if the notebook's
@@ -132,11 +153,10 @@ export function prepareMarimoCommand(cmd: string, bindHost: string): string {
 	const match = uvRunPrefix.exec(cmd);
 	if (!match) return cmd;
 	// Localize edits to the launch segment (`uv run … marimo …`), which runs from
-	// `uv run` to the next `&&` (or end of string). Flags injected outside it would
-	// land on an unrelated setup/teardown command.
+	// `uv run` to the next top-level separator (or end of string). Flags injected
+	// outside it would land on an unrelated setup/teardown command.
 	const launchStart = match.index + match[1].length;
-	const nextSep = cmd.slice(launchStart).search(/&&/);
-	const launchEnd = nextSep === -1 ? cmd.length : launchStart + nextSep;
+	const launchEnd = commandSegmentEnd(cmd, launchStart);
 	let segment = cmd.slice(launchStart, launchEnd);
 	if (!segment.includes('--with marimo')) {
 		segment = segment.replace(/^uv run /, 'uv run --with marimo ');

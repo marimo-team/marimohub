@@ -87,6 +87,24 @@ describe('prepareMarimoCommand (pure)', () => {
 			'uv run --with marimo marimo edit --host 0.0.0.0 && tool --host 1.2.3.4',
 		);
 	});
+
+	it('stops the launch segment at a pipe, not a trailing command (Docker mode)', () => {
+		expect(prepareMarimoCommand('uv run marimo edit | tee log', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit --host 0.0.0.0 | tee log',
+		);
+	});
+
+	it('stops the launch segment at a semicolon, not a trailing command (Docker mode)', () => {
+		expect(prepareMarimoCommand('uv run marimo edit; touch done', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit --host 0.0.0.0; touch done',
+		);
+	});
+
+	it('does not truncate the launch segment at an `&&` inside quotes', () => {
+		expect(prepareMarimoCommand('uv run marimo edit -c "a && b"', '0.0.0.0')).toBe(
+			'uv run --with marimo marimo edit -c "a && b" --host 0.0.0.0',
+		);
+	});
 });
 
 describe('rewriteWorkspace (pure)', () => {
