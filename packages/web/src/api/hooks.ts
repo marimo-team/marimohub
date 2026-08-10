@@ -6,7 +6,7 @@ import {
 	keepPreviousData,
 } from '@tanstack/react-query';
 import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from './client';
-import { useApiMutation } from './mutation';
+import { useApiMutation, useInvalidate } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
 import { sanitizeFilename, triggerDownload } from '../lib/download';
 import {
@@ -116,13 +116,16 @@ export function useVersionQuery() {
 	});
 }
 
-/** Deployment capability flags (e.g. whether WIF is configured). */
+/**
+ * Deployment capability flags (e.g. whether WIF is configured). Never throws
+ * into the error boundary: consumers (NotebookPage, Project) deliberately treat
+ * a failed probe as "grant nothing" rather than crashing the page.
+ */
 export function useCapabilitiesQuery(enabled = true) {
 	return useQuery({
 		queryKey: systemKeys.capabilities(),
 		queryFn: () => apiData(apiClient.GET('/api/v1/capabilities')),
 		enabled,
-		throwOnError: true,
 		...IMMUTABLE_QUERY,
 	});
 }
@@ -452,8 +455,9 @@ export function useCreateIntegration(scope: IntegrationsScope) {
 }
 
 export function useUpdateIntegration(scope: IntegrationsScope) {
-	return useApiMutation(
-		({
+	const invalidate = useInvalidate();
+	return useMutation({
+		mutationFn: ({
 			id,
 			etag,
 			...body
@@ -479,8 +483,15 @@ export function useUpdateIntegration(scope: IntegrationsScope) {
 							body,
 						}),
 			),
-		(variables) => integrationsInvalidations(scope, variables.id),
-	);
+		onSuccess: (_data, variables) => invalidate(...integrationsInvalidations(scope, variables.id)),
+		onError: (err, variables) => {
+			// A 412 means the cached ETag is stale. Refetch so the "reload and try
+			// again" guidance in the toast is a re-render away, not a re-open.
+			if (isApiErrorCode(err, 'PRECONDITION_FAILED')) {
+				invalidate(...integrationsInvalidations(scope, variables.id));
+			}
+		},
+	});
 }
 
 export function useDeleteIntegration(scope: IntegrationsScope) {
@@ -988,6 +999,8 @@ function useStartSessionRequest(
 ) {
 	return useMutation({
 		mutationFn: () => startSessionRequest(projectId, notebookId, mode, computeProfile, editIntent),
+		// useNotebookSession renders start failures as the inline session panel.
+		meta: { suppressErrorToast: true },
 	});
 }
 
@@ -1039,10 +1052,15 @@ export function useRestartSession(projectId: string) {
 	);
 }
 
-export function useStopSession(projectId: string, notebookId: string) {
+export function useStopSession(
+	projectId: string,
+	notebookId: string,
+	opts?: { suppressErrorToast?: boolean },
+) {
 	return useApiMutation(
 		(sessionId: string) => stopSessionRequest(projectId, notebookId, sessionId),
 		() => [sessionKeys.listByProject(projectId)],
+		opts?.suppressErrorToast ? { suppressErrorToast: true } : undefined,
 	);
 }
 

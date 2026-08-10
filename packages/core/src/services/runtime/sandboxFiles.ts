@@ -214,7 +214,9 @@ export async function captureWorkspace(
 			// to the mirror-delete below with an empty `present` set would treat every
 			// captured key as stale and delete it, wiping still-present workspace data
 			// on a transient listing failure.
-			console.warn(`captureWorkspace: listing ${workingDir} failed; skipping capture + cleanup`);
+			console.warn(
+				`captureWorkspace: listing ${workingDir} failed (${listing.error.code}); skipping capture + cleanup`,
+			);
 			return;
 		}
 		// Select the files to capture first — sequentially, since the count/byte caps

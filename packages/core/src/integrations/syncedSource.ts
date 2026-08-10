@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BadRequestError, ConflictError } from '../errors';
+import { BadRequestError, ConflictError, ValidationError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
 import { toHex } from '../internal/hex';
 import type { GitSource, GitSourceConfig, Source } from '../schema';
@@ -82,7 +82,7 @@ export function normalizeGitSourceConfig(input: {
 	}
 	const repo = normalizeRepo(input.repo);
 	if (repo === null) {
-		throw new BadRequestError(
+		throw new ValidationError(
 			'repo must be owner/repo (hosted on github.com) or a repository URL, e.g. acme/analytics or https://gitlab.example.com/group/project',
 		);
 	}
@@ -233,7 +233,7 @@ export function prepareSync(
 				`${header} received ${JSON.stringify(received)}, expected ${JSON.stringify(expected)}`,
 		);
 	if (mismatches.length > 0) {
-		throw new BadRequestError(
+		throw new ValidationError(
 			`Sync source mismatch: ${mismatches.join('; ')}. Update the request headers or the notebook's sync settings.`,
 		);
 	}
@@ -244,7 +244,7 @@ export function prepareSync(
 
 	const files = toSyncedWorkspaceFileMap(input.files);
 	if (!files.has(config.entry_notebook)) {
-		throw new BadRequestError(`entry_notebook not found in sync archive: ${config.entry_notebook}`);
+		throw new ValidationError(`entry_notebook not found in sync archive: ${config.entry_notebook}`);
 	}
 	return { commit, config, files };
 }

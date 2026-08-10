@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core';
+import { listFilesFailure } from '@marimo-hub/core/ports';
 
 /**
  * Tests for the Cloudflare Containers compute adapter.
@@ -215,6 +216,10 @@ describe('CloudflareSandboxProvider', () => {
 	});
 
 	describe('instance.mountBucket()', () => {
+		it('advertises supportsBucketMount: true so mount failures are not hidden', () => {
+			expect(makeProvider().create(SANDBOX_ID).supportsBucketMount).toBe(true);
+		});
+
 		it('reshapes the options object into positional (name, path, {endpoint,prefix,credentials})', async () => {
 			// The single most error-prone line in the adapter: object → positional args.
 			fakeSandbox.mountBucket.mockResolvedValueOnce(undefined);
@@ -300,6 +305,12 @@ describe('CloudflareSandboxProvider', () => {
 	});
 
 	describe('instance.listFiles()', () => {
+		it('translates a vendor failure into the typed failure envelope', async () => {
+			fakeSandbox.listFiles.mockResolvedValueOnce({ success: false, files: [] });
+			const res = await makeProvider().create(SANDBOX_ID).listFiles('/w');
+			expect(res).toEqual(listFilesFailure());
+		});
+
 		it('projects each FileInfo field and forwards the options', async () => {
 			fakeSandbox.listFiles.mockResolvedValueOnce({
 				success: true,

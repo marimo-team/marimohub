@@ -115,13 +115,13 @@ describe('useSandboxImages', () => {
 		await waitFor(() => expect(result.current).toEqual(['img-a', 'img-b']));
 	});
 
-	it('surfaces a capabilities failure through the error boundary', async () => {
+	it('falls back to no images on a capabilities failure instead of throwing', async () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonError('INTERNAL', 'capabilities unavailable', 500)),
 		);
 
-		const { client } = renderHookWithClient(() => useSandboxImages(), {
+		const { result, client } = renderHookWithClient(() => useSandboxImages(), {
 			toaster: false,
 			errorBoundary: true,
 		});
@@ -129,6 +129,9 @@ describe('useSandboxImages', () => {
 		await waitFor(() =>
 			expect(client.getQueryState(systemKeys.capabilities())?.status).toBe('error'),
 		);
-		expect(screen.getByText('Request failed')).toBeInTheDocument();
+		// The grant-nothing fallback: consumers render without profile choices
+		// rather than crashing the page into the boundary.
+		expect(screen.queryByText('Request failed')).not.toBeInTheDocument();
+		expect(result.current).toEqual([]);
 	});
 });

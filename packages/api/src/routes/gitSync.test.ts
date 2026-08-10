@@ -63,7 +63,7 @@ describe('Git sync routes', () => {
 		'X-Marimohub-Commit': 'abc123',
 	});
 
-	it('rejects creating a synced notebook whose repo is not owner/repo or a URL (400)', async () => {
+	it('rejects creating a synced notebook whose repo is not owner/repo or a URL (422)', async () => {
 		await expectError(
 			await request('POST', `/projects/${projectId}/notebooks/git`, {
 				title: 'Bad repo',
@@ -72,8 +72,8 @@ describe('Git sync routes', () => {
 				branch: 'main',
 				entry_notebook: 'app.py',
 			}),
-			400,
-			'BAD_REQUEST',
+			422,
+			'VALIDATION_ERROR',
 		);
 	});
 
@@ -183,8 +183,8 @@ describe('Git sync routes', () => {
 					'X-Marimohub-Root-Path': 'apps',
 				},
 			}),
-			400,
-			'BAD_REQUEST',
+			422,
+			'VALIDATION_ERROR',
 		);
 
 		expect(error.message).toContain('X-Marimohub-Repo received "other/repo", expected "org/repo"');

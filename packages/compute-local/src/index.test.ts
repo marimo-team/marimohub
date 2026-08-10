@@ -135,10 +135,10 @@ describe('LocalCompute file ops', () => {
 		expect(list.files.map((f) => f.name)).toContain('notebook.py');
 	});
 
-	it('returns success:false reading a missing file', async () => {
+	it('returns NOT_FOUND reading a missing file', async () => {
 		const sb = newSandbox();
 		const read = await sb.readFile('/workspace/nope.py');
-		expectFileResult(read, { success: false });
+		expectFileResult(read, { success: false, error: { code: 'NOT_FOUND' } });
 	});
 
 	it('rejects mountBucket so the provisioner falls back to copy', async () => {

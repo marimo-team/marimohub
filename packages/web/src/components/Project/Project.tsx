@@ -321,9 +321,14 @@ export function Project() {
 	};
 
 	const handleDuplicate = (nb: NotebookEntry) => {
+		// Loading feedback only — the error toast comes from the global mutation cache.
+		const loadingToast = toast.loading(`Duplicating "${nb.title}"...`);
 		duplicateNotebook.mutate(
 			{ notebookId: nb.id },
-			{ onSuccess: () => toast.success(`Duplicated "${nb.title}"`) },
+			{
+				onSuccess: () => toast.success(`Duplicated "${nb.title}"`, { id: loadingToast }),
+				onError: () => toast.dismiss(loadingToast),
+			},
 		);
 	};
 
@@ -336,9 +341,13 @@ export function Project() {
 	};
 
 	const handleDownloadWorkspace = (nb: NotebookEntry) => {
+		const loadingToast = toast.loading(`Preparing workspace for "${nb.title}"...`);
 		downloadWorkspace.mutate(
 			{ notebookId: nb.id, title: nb.title },
-			{ onSuccess: () => toast.success('Workspace downloaded') },
+			{
+				onSuccess: () => toast.success('Workspace downloaded', { id: loadingToast }),
+				onError: () => toast.dismiss(loadingToast),
+			},
 		);
 	};
 

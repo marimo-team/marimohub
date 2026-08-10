@@ -475,7 +475,12 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 					...(entitlements?.length ? { entitlements } : {}),
 					...(entitlementsExpiresAt ? { entitlementsExpiresAt } : {}),
 				};
-			} catch {
+			} catch (err) {
+				// Expired sessions are routine (every request until re-auth); anything
+				// else — bad signature, malformed claims — is worth an operator trail.
+				if ((err as { code?: string }).code !== 'ERR_JWT_EXPIRED') {
+					logOperationalError('oidc_session_verify_failed', {}, err);
+				}
 				return null;
 			}
 		},
@@ -602,7 +607,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			// Re-sanitize on the way out (defense in depth): the cookie is signed, but
 			// the redirect below must hold even if the sanitizer or signing changes.
 			returnTo = sanitizeReturnTo(typeof payload.returnTo === 'string' ? payload.returnTo : null);
-		} catch {
+		} catch (err) {
+			logOperationalError('oidc_txn_cookie_invalid', {}, err);
 			return callbackError(c, 'session_expired');
 		}
 

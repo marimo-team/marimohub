@@ -1918,3 +1918,62 @@ describe('OIDC login discovery failure', () => {
 		expect(res.headers.get('location')).toBe('/signed-out');
 	});
 });
+
+describe('operational logging for swallowed verification failures', () => {
+	function spyOnOperationalLog() {
+		return vi.spyOn(console, 'error').mockImplementation(() => {});
+	}
+	const loggedEvents = (spy: ReturnType<typeof spyOnOperationalLog>) =>
+		spy.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('oidc_'));
+
+	it('logs a session cookie that fails verification, without echoing the token', async () => {
+		const spy = spyOnOperationalLog();
+		const forged = await signSession({ sub: 'user-1', email: 'a@b.co', secret: 'x'.repeat(32) });
+
+		await expect(makeAuthenticator().authenticate(requestWithCookie(forged))).resolves.toBeNull();
+
+		const lines = loggedEvents(spy);
+		expect(lines.some((line) => line.includes('oidc_session_verify_failed'))).toBe(true);
+		expect(lines.some((line) => line.includes(forged))).toBe(false);
+		spy.mockRestore();
+	});
+
+	it('does not log routine session expiry', async () => {
+		const spy = spyOnOperationalLog();
+		const expired = await signSession({
+			sub: 'user-1',
+			email: 'a@b.co',
+			expirationTime: Math.floor(Date.now() / 1000) - 60,
+		});
+
+		await expect(makeAuthenticator().authenticate(requestWithCookie(expired))).resolves.toBeNull();
+
+		expect(loggedEvents(spy)).toEqual([]);
+		spy.mockRestore();
+	});
+
+	it('logs an unverifiable transaction cookie on the callback path', async () => {
+		const spy = spyOnOperationalLog();
+		const { routes } = createOidcAuth(BASE_CONFIG);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=xyz', {
+			headers: { cookie: `${TXN_COOKIE}=garbage` },
+		});
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get('location')).toBe('/?auth_error=session_expired');
+		expect(loggedEvents(spy).some((line) => line.includes('oidc_txn_cookie_invalid'))).toBe(true);
+		spy.mockRestore();
+	});
+
+	it('does not log a merely missing transaction cookie', async () => {
+		const spy = spyOnOperationalLog();
+		const { routes } = createOidcAuth(BASE_CONFIG);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=xyz');
+
+		expect(res.status).toBe(302);
+		expect(loggedEvents(spy)).toEqual([]);
+		spy.mockRestore();
+	});
+});

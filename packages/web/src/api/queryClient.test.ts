@@ -1,7 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MutationObserver } from '@tanstack/react-query';
 import { ApiRequestError } from './client';
 import { createQueryClient, shouldRetryRequest } from './queryClient';
 import { userKeys } from './queryKeys';
+import { toastError } from '@/lib/errors';
+
+vi.mock('@/lib/errors', () => ({ toastError: vi.fn() }));
+
+beforeEach(() => {
+	vi.mocked(toastError).mockClear();
+});
 
 describe('shouldRetryRequest', () => {
 	it('does not retry client errors', () => {
@@ -31,5 +39,26 @@ describe('createQueryClient', () => {
 			}),
 		).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
 		expect(client.getQueryData(userKeys.me())).toBeNull();
+	});
+
+	it('toasts mutation failures by default', async () => {
+		const client = createQueryClient();
+		const observer = new MutationObserver(client, {
+			mutationFn: () => Promise.reject(new ApiRequestError('CONFLICT', 'nope', { status: 409 })),
+		});
+
+		await observer.mutate().catch(() => {});
+		expect(toastError).toHaveBeenCalledWith(expect.objectContaining({ code: 'CONFLICT' }));
+	});
+
+	it('meta.suppressErrorToast opts a mutation out of the default toast', async () => {
+		const client = createQueryClient();
+		const observer = new MutationObserver(client, {
+			mutationFn: () => Promise.reject(new ApiRequestError('CONFLICT', 'nope', { status: 409 })),
+			meta: { suppressErrorToast: true },
+		});
+
+		await observer.mutate().catch(() => {});
+		expect(toastError).not.toHaveBeenCalled();
 	});
 });

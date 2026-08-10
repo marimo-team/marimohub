@@ -632,8 +632,8 @@ describe('Notebook routes', () => {
 					'X-Marimohub-Commit': 'abc123',
 				},
 			}),
-			400,
-			'BAD_REQUEST',
+			422,
+			'VALIDATION_ERROR',
 		);
 
 		await expectError(

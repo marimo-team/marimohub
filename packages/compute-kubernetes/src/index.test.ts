@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
+import { listFilesFailure } from '@marimo-hub/core/ports';
 import { computeContract } from '@marimo-hub/core/testing/compute-contract';
 import {
 	expectExecResult,
@@ -362,19 +363,17 @@ describe('KubernetesCompute', () => {
 				execImpl: (cmd) =>
 					cmd[2].includes('find') ? { stdout: '', stderr: 'missing', exitCode: 1 } : undefined,
 			});
-			await expect(makeCompute(world).create(SANDBOX_ID).listFiles('/workspace')).resolves.toEqual({
-				success: false,
-				files: [],
-			});
+			await expect(makeCompute(world).create(SANDBOX_ID).listFiles('/workspace')).resolves.toEqual(
+				listFilesFailure(),
+			);
 		});
 
 		it('returns success:false when ensure or exec throws', async () => {
 			const world = makeWorld({ phase: 'Failed' });
 
-			await expect(makeCompute(world).create(SANDBOX_ID).listFiles('/workspace')).resolves.toEqual({
-				success: false,
-				files: [],
-			});
+			await expect(makeCompute(world).create(SANDBOX_ID).listFiles('/workspace')).resolves.toEqual(
+				listFilesFailure('BACKEND_ERROR'),
+			);
 		});
 	});
 

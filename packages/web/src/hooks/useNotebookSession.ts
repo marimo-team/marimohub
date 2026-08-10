@@ -95,7 +95,8 @@ export function useNotebookSession(
 	const startSession = useStartSession(projectId, notebookId, mode, editIntent);
 	const startPersistentSession = useStartSession(projectId, notebookId, mode);
 	const startDefaultSession = useStartSessionWithDefault(projectId, notebookId, mode, editIntent);
-	const stopSession = useStopSession(projectId, notebookId);
+	// Stop/restart failures render inline (session panel), never as a toast.
+	const stopSession = useStopSession(projectId, notebookId, { suppressErrorToast: true });
 
 	const [session, setSession] = useState<Session | null>(null);
 	const [error, setError] = useState<SessionError | null>(null);

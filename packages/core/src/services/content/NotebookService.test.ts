@@ -6,6 +6,7 @@ import {
 	DomainError,
 	NotFoundError,
 	PreconditionFailedError,
+	ValidationError,
 } from '../../errors';
 import { createNotebookId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
@@ -406,7 +407,7 @@ describe('NotebookService', () => {
 			const { meta } = await create();
 			await expect(
 				sync(meta.id, 'abc123', [{ path: 'other.py', bytes: enc('print(1)') }]),
-			).rejects.toThrow(BadRequestError);
+			).rejects.toThrow(ValidationError);
 		});
 
 		it('rotates and verifies sync tokens', async () => {
