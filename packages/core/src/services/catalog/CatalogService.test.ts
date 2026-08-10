@@ -112,7 +112,9 @@ describe('CatalogService', () => {
 
 		it('throws a corrupted-object error on malformed catalog JSON', async () => {
 			await bucket.put(paths.catalog, JSON.stringify({ bad: true }));
-			await expect(catalog.getCurrentSnapshot()).rejects.toThrow(/Corrupted stored object/);
+			await expect(catalog.getCurrentSnapshot()).rejects.toThrow(
+				'Stored data is temporarily unavailable',
+			);
 		});
 	});
 
@@ -268,7 +270,7 @@ describe('CatalogService', () => {
 		it('throws a corrupted-object error on malformed catalog JSON', async () => {
 			await bucket.put(paths.catalog, JSON.stringify({ not: 'a catalog' }));
 			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(
-				/Corrupted stored object/,
+				/Stored data is temporarily unavailable/,
 			);
 		});
 
@@ -276,7 +278,7 @@ describe('CatalogService', () => {
 			const current = await catalog.getCurrentSnapshot();
 			await bucket.put(paths.snapshot(current.snapshot_id), JSON.stringify({ nope: true }));
 			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(
-				/Corrupted stored object/,
+				/Stored data is temporarily unavailable/,
 			);
 		});
 

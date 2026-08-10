@@ -39,8 +39,8 @@ export function ChangeBaseImageDialog({
 						: `Base image set to "${imageLabel(choice)}"`,
 				);
 				onClose();
-			} catch (err) {
-				toast.error((err as Error).message);
+			} catch {
+				return;
 			}
 		},
 	});

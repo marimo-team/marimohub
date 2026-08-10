@@ -48,7 +48,6 @@ import {
 import type { IntegrationsScope } from '@/api/hooks';
 import { BRAND_ICONS } from './brandIcons';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
-import { toastError } from '@/lib/errors';
 import { canManageProject } from '@/lib/roles';
 import { filterBySearch } from '@/lib/search';
 import type { IntegrationEntry, IntegrationKind, ProjectDetail } from '@/types';
@@ -297,7 +296,6 @@ function ListView({
 			{
 				onSuccess: () =>
 					toast.success(entry.enabled ? `${entry.name} disabled` : `${entry.name} enabled`),
-				onError: toastError,
 			},
 		);
 	};
@@ -310,7 +308,6 @@ function ListView({
 				toast.success('Integration deleted');
 				confirmDelete.close();
 			},
-			onError: toastError,
 		});
 	};
 
@@ -659,8 +656,8 @@ function CopyView({
 			});
 			toast.success(`Copied ${trimmed}`);
 			onDone();
-		} catch (err) {
-			toastError(err);
+		} catch {
+			return;
 		}
 	};
 
@@ -861,8 +858,8 @@ function EditorForm({
 				toast.success('Integration added');
 			}
 			onDone();
-		} catch (err) {
-			toastError(err);
+		} catch {
+			return;
 		}
 	};
 
@@ -883,8 +880,8 @@ function EditorForm({
 			} else {
 				toast.error(`Connection failed${result.details ? ` — ${result.details}` : ''}`);
 			}
-		} catch (err) {
-			toastError(err);
+		} catch {
+			return;
 		}
 	};
 

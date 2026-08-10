@@ -95,7 +95,8 @@ export function useNotebookSession(
 	const startSession = useStartSession(projectId, notebookId, mode, editIntent);
 	const startPersistentSession = useStartSession(projectId, notebookId, mode);
 	const startDefaultSession = useStartSessionWithDefault(projectId, notebookId, mode, editIntent);
-	const stopSession = useStopSession(projectId, notebookId);
+	// Stop/restart failures render inline (session panel), never as a toast.
+	const stopSession = useStopSession(projectId, notebookId, { suppressErrorToast: true });
 
 	const [session, setSession] = useState<Session | null>(null);
 	const [error, setError] = useState<SessionError | null>(null);
@@ -179,9 +180,18 @@ export function useNotebookSession(
 	const stop = useCallback(() => {
 		const s = sessionRef.current;
 		if (s) {
-			generation.bump();
+			const gen = generation.bump();
 			setStarting(false);
-			stopSession.mutate(s.session_id);
+			// The global toast is suppressed for this mutation, so a failed stop must
+			// surface inline — otherwise the page shows no session AND no error.
+			stopSession.mutate(s.session_id, {
+				onError: (err) => {
+					if (!generation.isCurrent(gen)) return;
+					// Already gone (stopped/reaped underneath us): the stop succeeded in effect.
+					if (isNotFoundError(err)) return;
+					setError(toSessionError(err));
+				},
+			});
 			commitSession(null);
 		}
 	}, [stopSession, commitSession, generation]);

@@ -5,8 +5,8 @@ import {
 	useMutation,
 	keepPreviousData,
 } from '@tanstack/react-query';
-import { apiClient, apiData, apiDataWithResponse } from './client';
-import { useApiMutation } from './mutation';
+import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from './client';
+import { useApiMutation, useInvalidate } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
 import { sanitizeFilename, triggerDownload } from '../lib/download';
 import {
@@ -116,7 +116,11 @@ export function useVersionQuery() {
 	});
 }
 
-/** Deployment capability flags (e.g. whether WIF is configured). */
+/**
+ * Deployment capability flags (e.g. whether WIF is configured). Never throws
+ * into the error boundary: consumers (NotebookPage, Project) deliberately treat
+ * a failed probe as "grant nothing" rather than crashing the page.
+ */
 export function useCapabilitiesQuery(enabled = true) {
 	return useQuery({
 		queryKey: systemKeys.capabilities(),
@@ -451,8 +455,9 @@ export function useCreateIntegration(scope: IntegrationsScope) {
 }
 
 export function useUpdateIntegration(scope: IntegrationsScope) {
-	return useApiMutation(
-		({
+	const invalidate = useInvalidate();
+	return useMutation({
+		mutationFn: ({
 			id,
 			etag,
 			...body
@@ -478,8 +483,15 @@ export function useUpdateIntegration(scope: IntegrationsScope) {
 							body,
 						}),
 			),
-		(variables) => integrationsInvalidations(scope, variables.id),
-	);
+		onSuccess: (_data, variables) => invalidate(...integrationsInvalidations(scope, variables.id)),
+		onError: (err, variables) => {
+			// A 412 means the cached ETag is stale. Refetch so the "reload and try
+			// again" guidance in the toast is a re-render away, not a re-open.
+			if (isApiErrorCode(err, 'PRECONDITION_FAILED')) {
+				invalidate(...integrationsInvalidations(scope, variables.id));
+			}
+		},
+	});
 }
 
 export function useDeleteIntegration(scope: IntegrationsScope) {
@@ -832,15 +844,16 @@ async function fetchHtmlSnapshot(
 ): Promise<NotebookHtmlSnapshot | null> {
 	const res = await fetch(htmlSnapshotPath(projectId, notebookId, versionId));
 	if (res.status === 404) {
-		// Only "exists but never ran" is the empty state; a deleted/hidden
-		// notebook (code NOT_FOUND) must surface as an error, not "no outputs".
-		const body = (await res.json().catch(() => null)) as {
-			error?: { code?: string };
-		} | null;
-		if (body?.error?.code === 'NO_HTML_SNAPSHOT') return null;
-		throw new Error(versionId ? 'Version not found' : 'Notebook not found');
+		const error = await apiErrorFromResponse(
+			res,
+			versionId ? 'Version not found' : 'Notebook not found',
+		);
+		if (isApiErrorCode(error, 'NO_HTML_SNAPSHOT')) return null;
+		throw error;
 	}
-	if (!res.ok) throw new Error(`Failed to load notebook outputs (HTTP ${res.status})`);
+	if (!res.ok) {
+		throw await apiErrorFromResponse(res, `Failed to load notebook outputs (HTTP ${res.status})`);
+	}
 	return {
 		html: await res.text(),
 		capturedAt: res.headers.get('X-Marimohub-Captured-At'),
@@ -986,6 +999,8 @@ function useStartSessionRequest(
 ) {
 	return useMutation({
 		mutationFn: () => startSessionRequest(projectId, notebookId, mode, computeProfile, editIntent),
+		// useNotebookSession renders start failures as the inline session panel.
+		meta: { suppressErrorToast: true },
 	});
 }
 
@@ -1037,10 +1052,15 @@ export function useRestartSession(projectId: string) {
 	);
 }
 
-export function useStopSession(projectId: string, notebookId: string) {
+export function useStopSession(
+	projectId: string,
+	notebookId: string,
+	opts?: { suppressErrorToast?: boolean },
+) {
 	return useApiMutation(
 		(sessionId: string) => stopSessionRequest(projectId, notebookId, sessionId),
 		() => [sessionKeys.listByProject(projectId)],
+		opts?.suppressErrorToast ? { suppressErrorToast: true } : undefined,
 	);
 }
 

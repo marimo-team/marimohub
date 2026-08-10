@@ -12,7 +12,6 @@ import {
 } from '@/components/ui';
 import { useApiTokensQuery, useCreateApiToken, useRevokeApiToken } from '@/api/hooks';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
-import { toastError } from '@/lib/errors';
 import { formatDuration, formatRelative } from '@/lib/time';
 import type { ApiToken, ApiTokenCreated } from '@/types';
 
@@ -67,8 +66,8 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 			setCreated(result);
 			setName('');
 			setExpiresInDays('');
-		} catch (err) {
-			toastError(err);
+		} catch {
+			return;
 		}
 	};
 
@@ -80,7 +79,6 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 				toast.success('Token revoked');
 				confirmRevoke.close();
 			},
-			onError: toastError,
 		});
 	};
 

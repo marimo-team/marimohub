@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { MemoryBucket } from '../../testing';
-import { BadRequestError, DomainError, NotFoundError, PreconditionFailedError } from '../../errors';
+import {
+	BadRequestError,
+	ConflictError,
+	DomainError,
+	NotFoundError,
+	PreconditionFailedError,
+	ValidationError,
+} from '../../errors';
 import { createNotebookId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
@@ -400,7 +407,7 @@ describe('NotebookService', () => {
 			const { meta } = await create();
 			await expect(
 				sync(meta.id, 'abc123', [{ path: 'other.py', bytes: enc('print(1)') }]),
-			).rejects.toThrow(BadRequestError);
+			).rejects.toThrow(ValidationError);
 		});
 
 		it('rotates and verifies sync tokens', async () => {
@@ -534,10 +541,10 @@ describe('NotebookService', () => {
 
 			await expect(
 				notebooks.updateNotebook(projectId, meta.id, { code: 'hacked' }, ACTOR),
-			).rejects.toThrow(BadRequestError);
+			).rejects.toThrow(ConflictError);
 			await expect(
 				notebooks.updateNotebook(projectId, meta.id, { deps: 'hacked' }, ACTOR),
-			).rejects.toThrow(BadRequestError);
+			).rejects.toThrow(ConflictError);
 		});
 
 		it('updates metadata without creating a version when no code change', async () => {
@@ -806,7 +813,7 @@ describe('NotebookService', () => {
 	});
 
 	describe('restoreVersion', () => {
-		it('rejects a non-local (git) notebook with BadRequestError', async () => {
+		it('rejects a non-local (git) notebook with ConflictError', async () => {
 			const { meta } = await notebooks.synced.create(
 				projectId,
 				{
@@ -821,7 +828,7 @@ describe('NotebookService', () => {
 
 			await expect(
 				notebooks.restoreVersion(projectId, meta.id, createVersionId(), ACTOR),
-			).rejects.toThrow(BadRequestError);
+			).rejects.toThrow(ConflictError);
 		});
 
 		it('throws NotFoundError when the version folder does not exist', async () => {

@@ -43,6 +43,18 @@ import type { SandboxId } from '@marimo-hub/core';
 class TieredSandboxInstance implements SandboxInstance {
 	/** Memoised backend choice — resolved once, then every op routes to it. */
 	private backend?: Promise<SandboxInstance>;
+	/** The settled backend, once {@link pick} completes, so sync reads can see it. */
+	private resolved?: SandboxInstance;
+
+	/**
+	 * Reflects the pinned backend's capability (E2B false, Cloudflare true).
+	 * `undefined` until the backend is chosen, which keeps the provisioner on its
+	 * legacy try-mount-then-copy path; by the mount step the provisioner has
+	 * already exec'd against the sandbox, so the backend is always pinned.
+	 */
+	get supportsBucketMount(): boolean | undefined {
+		return this.resolved?.supportsBucketMount;
+	}
 
 	constructor(
 		private readonly id: SandboxId,
@@ -65,7 +77,12 @@ class TieredSandboxInstance implements SandboxInstance {
 	 * probe on every reconnect.
 	 */
 	private resolve(): Promise<SandboxInstance> {
-		if (!this.backend) this.backend = this.pick();
+		if (!this.backend) {
+			this.backend = this.pick().then((backend) => {
+				this.resolved = backend;
+				return backend;
+			});
+		}
 		return this.backend;
 	}
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
-import { ModalClient, NotFoundError } from 'modal';
+import { ModalClient, NotFoundError as ModalNotFoundError } from 'modal';
 import {
 	buildGitCloneCommand,
 	mapWithConcurrency,
@@ -8,7 +8,7 @@ import {
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
-import { SandboxId } from '@marimo-hub/core';
+import { NotFoundError, SandboxId } from '@marimo-hub/core';
 import type {
 	ActiveSandbox,
 	ComputeResources,
@@ -17,6 +17,7 @@ import type {
 	ExecStreamOptions,
 	ExposePortOptions,
 	ExposePortResult,
+	FileInfo,
 	GitCheckoutOptions,
 	ListFilesOptions,
 	ListFilesResult,
@@ -30,6 +31,7 @@ import type {
 	StartProcessOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 
 export interface ModalConfig {
 	tokenId: string;
@@ -125,7 +127,8 @@ export function modalProfileResources(resources: ComputeResources | undefined): 
 
 function isNotFound(error: unknown): boolean {
 	return (
-		error instanceof NotFoundError || (error instanceof Error && error.name === 'NotFoundError')
+		error instanceof ModalNotFoundError ||
+		(error instanceof Error && error.name === 'NotFoundError')
 	);
 }
 
@@ -167,7 +170,7 @@ async function runProcess(process: ModalProcessLike): Promise<ExecResult> {
 		readStream(process.stderr),
 		process.wait(),
 	]);
-	return { success: exitCode === 0, stdout, stderr };
+	return execResult(exitCode === 0, stdout, stderr);
 }
 
 function delay(ms: number): Promise<void> {
@@ -179,6 +182,7 @@ function delay(ms: number): Promise<void> {
 let processSequence = 0;
 
 class ModalSandboxInstance implements SandboxInstance {
+	readonly supportsBucketMount = false;
 	private sandboxPromise?: Promise<ModalSandboxLike>;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
@@ -265,7 +269,7 @@ class ModalSandboxInstance implements SandboxInstance {
 			const content = await (await this.getSandbox()).filesystem.readText(path);
 			return { success: true, content, encoding: 'utf-8' };
 		} catch {
-			return { success: false, content: '' };
+			return readFileFailure('READ_FAILED');
 		}
 	}
 
@@ -284,7 +288,7 @@ class ModalSandboxInstance implements SandboxInstance {
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
 		try {
 			const filesystem = (await this.getSandbox()).filesystem;
-			const files: ListFilesResult['files'] = [];
+			const files: FileInfo[] = [];
 			const visit = async (directory: string): Promise<void> => {
 				for (const file of await filesystem.listFiles(directory)) {
 					if (!options?.includeHidden && file.name.startsWith('.')) continue;
@@ -301,7 +305,7 @@ class ModalSandboxInstance implements SandboxInstance {
 			await visit(path);
 			return { success: true, files };
 		} catch {
-			return { success: false, files: [] };
+			return listFilesFailure('BACKEND_ERROR');
 		}
 	}
 

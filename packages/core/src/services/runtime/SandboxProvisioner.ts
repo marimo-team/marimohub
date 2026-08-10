@@ -164,9 +164,7 @@ function provisionFailure(step: string, err: unknown): UnavailableError {
 	// The vendor message is deliberately dropped: an SDK can echo the request it
 	// failed on, credentials included, and this string is shown to the caller and
 	// persisted on the session record.
-	const wrapped = new UnavailableError(parts.join(' '));
-	(wrapped as { cause?: unknown }).cause = err;
-	return wrapped;
+	return new UnavailableError(parts.join(' '), { cause: err });
 }
 
 /**
@@ -236,6 +234,7 @@ class MountOrCopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 	constructor(private copyFallback: WorkspaceLoadStrategy) {}
 
 	async load(ctx: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
+		if (ctx.sandbox.supportsBucketMount === false) return this.copyFallback.load(ctx);
 		try {
 			await ctx.sandbox.mountBucket({
 				bucketName: ctx.bucket.name,
@@ -246,6 +245,9 @@ class MountOrCopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 			});
 			return { usedFallback: false };
 		} catch (err) {
+			if (ctx.sandbox.supportsBucketMount) {
+				throw provisionFailure('mounting the notebook workspace into the sandbox', err);
+			}
 			if (!ctx.bucketHandle) {
 				throw provisionFailure('mounting the notebook workspace into the sandbox', err);
 			}
@@ -366,10 +368,7 @@ export class SandboxProvisioner {
 				await (sandbox.ready?.() ?? sandbox.exec('true'));
 			});
 		} catch (err) {
-			throw new UnavailableError(
-				`Sandbox compute backend is not available. ` +
-					`(${err instanceof Error ? err.message : String(err)})`,
-			);
+			throw new UnavailableError('Sandbox compute backend is not available', { cause: err });
 		}
 	}
 

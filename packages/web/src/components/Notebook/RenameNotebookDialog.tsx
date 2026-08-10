@@ -34,8 +34,8 @@ export function RenameNotebookDialog({
 				await updateNotebook.mutateAsync({ notebookId: notebook.id, title: name });
 				toast.success(`Renamed to "${name}"`);
 				onClose();
-			} catch (err) {
-				toast.error((err as Error).message);
+			} catch {
+				return;
 			}
 		},
 	});

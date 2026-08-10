@@ -392,7 +392,10 @@ describe('forwardHttp', () => {
 				'sess-123',
 			);
 			expect(res.status).toBe(502);
-			expect(await res.text()).toBe('Kernel unavailable');
+			expect(await res.json()).toEqual({
+				success: false,
+				error: { code: 'SERVICE_UNAVAILABLE', message: 'Kernel unavailable' },
+			});
 
 			const events = logSpy.mock.calls
 				.map(([line]) => JSON.parse(line as string) as Record<string, unknown>)

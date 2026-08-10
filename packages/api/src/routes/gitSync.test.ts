@@ -63,7 +63,7 @@ describe('Git sync routes', () => {
 		'X-Marimohub-Commit': 'abc123',
 	});
 
-	it('rejects creating a synced notebook whose repo is not owner/repo or a URL (400)', async () => {
+	it('rejects creating a synced notebook whose repo is not owner/repo or a URL (422)', async () => {
 		await expectError(
 			await request('POST', `/projects/${projectId}/notebooks/git`, {
 				title: 'Bad repo',
@@ -72,14 +72,19 @@ describe('Git sync routes', () => {
 				branch: 'main',
 				entry_notebook: 'app.py',
 			}),
-			400,
-			'BAD_REQUEST',
+			422,
+			'VALIDATION_ERROR',
 		);
 	});
 
 	it('rejects a request with no Authorization header (401)', async () => {
 		const { notebookId } = await createSyncedNotebook();
-		await expectError(await syncRequest({ notebookId }), 401, 'UNAUTHORIZED');
+		const error = await expectError(
+			await syncRequest({ notebookId, headers: { 'X-Request-Id': 'sync-req-123' } }),
+			401,
+			'UNAUTHORIZED',
+		);
+		expect(error.request_id).toBe('sync-req-123');
 	});
 
 	it('rejects a malformed Authorization header (400)', async () => {
@@ -178,8 +183,8 @@ describe('Git sync routes', () => {
 					'X-Marimohub-Root-Path': 'apps',
 				},
 			}),
-			400,
-			'BAD_REQUEST',
+			422,
+			'VALIDATION_ERROR',
 		);
 
 		expect(error.message).toContain('X-Marimohub-Repo received "other/repo", expected "org/repo"');

@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import { zipSync } from 'fflate';
 import {
 	BadRequestError,
+	ForbiddenError,
 	NotebookId,
 	NotFoundError,
 	ProjectId,
@@ -150,7 +151,7 @@ function checkComputeProfile(
 	if (value === undefined) return value;
 	const profiles = sandbox.computeProfiles ?? [];
 	if (sandbox.computeProfileOverride !== 'editors') {
-		throw new BadRequestError('This deployment does not allow compute profile selection');
+		throw new ForbiddenError('This deployment does not allow compute profile selection');
 	}
 	if (value === null) return value;
 	const known = profiles.some((profile) => profile.name === value);
@@ -264,7 +265,7 @@ const updateGitSource = createRoute({
 			'Git source updated',
 		),
 		...commonErrors(),
-		...errorResponses(400, 403, 404),
+		...errorResponses(400, 403, 404, 409),
 	},
 });
 
@@ -317,7 +318,7 @@ const updateNotebook = createRoute({
 			EtagResponseHeader,
 		),
 		...commonErrors(),
-		...errorResponses(403, 404, 412),
+		...errorResponses(403, 404, 409, 412),
 	},
 });
 
@@ -424,7 +425,7 @@ const restoreVersion = createRoute({
 			'Version restored as a new save; returns the updated notebook',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404),
+		...errorResponses(403, 404, 409),
 	},
 });
 

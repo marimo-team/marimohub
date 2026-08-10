@@ -54,6 +54,9 @@ export function expectExecResult(received: ExecResult, expected: Partial<ExecRes
 	expect(typeof received.success).toBe('boolean');
 	expect(typeof received.stdout).toBe('string');
 	expect(typeof received.stderr).toBe('string');
+	if (!received.success) {
+		expect(['COMMAND_FAILED', 'SPAWN_FAILED', 'BACKEND_ERROR']).toContain(received.error.code);
+	}
 	for (const key of Object.keys(expected) as (keyof ExecResult)[]) {
 		expect(received[key], key).toEqual(expected[key]);
 	}
@@ -61,8 +64,8 @@ export function expectExecResult(received: ExecResult, expected: Partial<ExecRes
 
 /**
  * Assert a `ReadFileResult` envelope ({ success, content, encoding? }) and match
- * the given fields. The provisioner's fallback contract hinges on the failure
- * shape `{ success: false, content: '' }`, so adapters assert this constantly.
+ * the given fields. The provisioner's fallback contract hinges on an empty
+ * failure result with a typed error code, so adapters assert this constantly.
  */
 export function expectFileResult(
 	received: ReadFileResult,
@@ -70,6 +73,9 @@ export function expectFileResult(
 ): void {
 	expect(typeof received.success).toBe('boolean');
 	expect(typeof received.content).toBe('string');
+	if (!received.success) {
+		expect(['NOT_FOUND', 'READ_FAILED', 'BACKEND_ERROR']).toContain(received.error.code);
+	}
 	for (const key of Object.keys(expected) as (keyof ReadFileResult)[]) {
 		expect(received[key], key).toEqual(expected[key]);
 	}
@@ -81,6 +87,9 @@ export function expectListFilesResult(
 ): void {
 	expect(typeof received.success).toBe('boolean');
 	expect(Array.isArray(received.files)).toBe(true);
+	if (!received.success) {
+		expect(['LIST_FAILED', 'BACKEND_ERROR']).toContain(received.error.code);
+	}
 	for (const file of received.files) {
 		expect(typeof file.name).toBe('string');
 		expect(typeof file.absolutePath).toBe('string');

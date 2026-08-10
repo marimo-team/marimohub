@@ -83,6 +83,7 @@ import type {
 	StartProcessOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 
 /** marimo's hardcoded kernel port (see `SandboxProvisioner`'s `MARIMO_PORT`). */
 const DEFAULT_KERNEL_PORT = 2718;
@@ -287,6 +288,7 @@ function isDeadStatus(status: SandboxInfo['status']): boolean {
 let PROC_SEQ = 0;
 
 class CoreWeaveSandboxInstance implements SandboxInstance {
+	readonly supportsBucketMount = false;
 	private readonly idTag: string;
 	private readonly kernelPort: number;
 	private sandbox?: CoreWeaveSandbox;
@@ -479,7 +481,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const sandbox = await this.ensure();
 		this.execCount++;
 		const res = await sandbox.commands.run(['sh', '-lc', this.withEnv(cmd)]);
-		return { success: res.exitCode === 0, stdout: res.stdout, stderr: res.stderr };
+		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 
 	async execStream(cmd: string, _options?: ExecStreamOptions): Promise<ReadableStream> {
@@ -494,7 +496,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			const content = await sandbox.files.readText(path);
 			return { success: true, content, encoding: 'utf-8' };
 		} catch {
-			return { success: false, content: '' };
+			return readFileFailure('READ_FAILED');
 		}
 	}
 
@@ -525,10 +527,10 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// PERSIST_WORKSPACE=workspace.
 		try {
 			const res = await this.exec(buildFindFilesCommand(path, options));
-			if (!res.success) return { success: false, files: [] };
+			if (!res.success) return listFilesFailure();
 			return { success: true, files: parseFindFilesOutput(res.stdout, path, options) };
 		} catch {
-			return { success: false, files: [] };
+			return listFilesFailure('BACKEND_ERROR');
 		}
 	}
 

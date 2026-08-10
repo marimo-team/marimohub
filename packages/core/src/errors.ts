@@ -3,13 +3,30 @@
  * so the API's error handler is a single `instanceof DomainError` check instead
  * of a per-type if-ladder, and adding an error never touches the API layer.
  */
+export const DOMAIN_ERROR_CODES = [
+	'BAD_REQUEST',
+	'PRECONDITION_FAILED',
+	'NOT_FOUND',
+	'CONFLICT',
+	'EDIT_SESSION_OWNED',
+	'EDIT_SESSION_CHANGED',
+	'TAKEOVER_IN_PROGRESS',
+	'FORBIDDEN',
+	'VALIDATION_ERROR',
+	'NOT_INITIALIZED',
+	'SERVICE_UNAVAILABLE',
+	'RESOURCE_EXHAUSTED',
+] as const;
+
+export type DomainErrorCode = (typeof DOMAIN_ERROR_CODES)[number];
+
 export abstract class DomainError extends Error {
 	/** Stable, machine-readable code surfaced in the API error envelope. */
-	abstract readonly code: string;
+	abstract readonly code: DomainErrorCode;
 	/** HTTP status this error maps to. */
 	abstract readonly status: number;
-	constructor(message?: string) {
-		super(message);
+	constructor(message?: string, options?: ErrorOptions) {
+		super(message, options);
 		// Default; concrete subclasses override with their own name. Guarantees a
 		// non-`Error` name even if a subclass forgets to set one.
 		this.name = 'DomainError';
@@ -116,8 +133,8 @@ export class NotInitializedError extends DomainError {
 export class UnavailableError extends DomainError {
 	readonly code = 'SERVICE_UNAVAILABLE';
 	readonly status = 503;
-	constructor(message = 'Service unavailable') {
-		super(message);
+	constructor(message = 'Service unavailable', options?: ErrorOptions) {
+		super(message, options);
 		this.name = 'UnavailableError';
 	}
 }

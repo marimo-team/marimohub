@@ -45,6 +45,7 @@ import type {
 	StartProcessOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 
 /** Sandbox metadata key carrying OUR SandboxId (E2B assigns its own ids). */
 const ID_META_KEY = 'mh-sandbox-id';
@@ -134,6 +135,7 @@ export interface E2bConfig {
 }
 
 class E2bSandboxInstance implements SandboxInstance {
+	readonly supportsBucketMount = false;
 	private handle?: E2bSandboxHandle;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
@@ -169,7 +171,7 @@ class E2bSandboxInstance implements SandboxInstance {
 		// Forced vars ride the SDK's per-command `envs`; defaults can't (that channel
 		// always overwrites), so they go in as a guarded shell prefix instead.
 		const res = await sb.commands.run(this.withDefaults(cmd), { envs: this.env });
-		return { success: res.exitCode === 0, stdout: res.stdout, stderr: res.stderr };
+		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 
 	async execStream(cmd: string, _options?: ExecStreamOptions): Promise<ReadableStream> {
@@ -188,7 +190,7 @@ class E2bSandboxInstance implements SandboxInstance {
 			const content = await sb.files.read(path);
 			return { success: true, content, encoding: 'utf-8' };
 		} catch {
-			return { success: false, content: '' };
+			return readFileFailure('READ_FAILED');
 		}
 	}
 
@@ -196,7 +198,7 @@ class E2bSandboxInstance implements SandboxInstance {
 		// The SDK filesystem API has no recursive list shape we rely on; shell out
 		// via `find` (not on the provision/teardown hot path).
 		const res = await this.exec(buildFindFilesCommand(path, options));
-		if (!res.success) return { success: false, files: [] };
+		if (!res.success) return listFilesFailure();
 		return { success: true, files: parseFindFilesOutput(res.stdout, path, options) };
 	}
 

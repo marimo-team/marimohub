@@ -605,6 +605,8 @@ describe('Project — Notebook Actions', () => {
 	it('duplicates a notebook from the overflow menu', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
+		const toastLoading = vi.spyOn(toast, 'loading');
+		const toastSuccess = vi.spyOn(toast, 'success');
 		await renderProject();
 
 		await chooseNotebookAction(user, 'Duplicate');
@@ -613,6 +615,13 @@ describe('Project — Notebook Actions', () => {
 			expect(
 				calls.some((c) => c.method === 'POST' && c.url.endsWith('/notebooks/nb-1/duplicate')),
 			).toBe(true),
+		);
+		// A slow duplicate shows progress, and the success toast replaces it in place.
+		expect(toastLoading).toHaveBeenCalledWith(expect.stringContaining('Duplicating'));
+		await waitFor(() =>
+			expect(toastSuccess).toHaveBeenCalledWith(expect.stringContaining('Duplicated'), {
+				id: toastLoading.mock.results[0]?.value,
+			}),
 		);
 	});
 
@@ -653,6 +662,7 @@ describe('Project — Notebook Actions', () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
 		const { createObjectURL } = installDownloadMocks();
+		const toastLoading = vi.spyOn(toast, 'loading');
 		await renderProject();
 
 		await chooseNotebookAction(user, 'Download workspace');
@@ -663,6 +673,7 @@ describe('Project — Notebook Actions', () => {
 			).toBe(true),
 		);
 		expect(createObjectURL).toHaveBeenCalledOnce();
+		expect(toastLoading).toHaveBeenCalledWith(expect.stringContaining('Preparing workspace'));
 	});
 
 	it('offers one unified sync settings action for a git-backed notebook', async () => {

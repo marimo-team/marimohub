@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { QueryKey } from '@tanstack/react-query';
+import type { MutationMeta, QueryKey } from '@tanstack/react-query';
 
 /** Keys are taken per call, so they may depend on a mutation's variables. */
 export function useInvalidate(): (...keys: readonly QueryKey[]) => void {
@@ -19,10 +19,12 @@ export function useInvalidate(): (...keys: readonly QueryKey[]) => void {
 export function useApiMutation<TData, TVariables = void>(
 	mutationFn: (variables: TVariables) => Promise<TData>,
 	invalidates?: (variables: TVariables, data: TData) => readonly QueryKey[],
+	meta?: MutationMeta,
 ) {
 	const invalidate = useInvalidate();
 	return useMutation({
 		mutationFn,
+		meta,
 		onSuccess: (data, variables) => {
 			if (invalidates) invalidate(...invalidates(variables, data));
 		},

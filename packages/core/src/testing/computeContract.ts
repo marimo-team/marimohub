@@ -164,6 +164,10 @@ export function computeContract(
 					}),
 				).rejects.toThrow();
 			});
+
+			it('advertises supportsBucketMount: false so the provisioner skips the mount', () => {
+				expect(provider.create(CONTRACT_ID).supportsBucketMount).toBe(false);
+			});
 		}
 	});
 }

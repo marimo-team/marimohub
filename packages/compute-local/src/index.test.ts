@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { SandboxId } from '@marimo-hub/core';
 import { afterEach, describe, expect, it } from 'vitest';
+import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectFileResult } from '@marimo-hub/core/testing';
 import { LocalCompute, prepareMarimoCommand, rewriteWorkspace } from './index';
 
@@ -134,10 +135,10 @@ describe('LocalCompute file ops', () => {
 		expect(list.files.map((f) => f.name)).toContain('notebook.py');
 	});
 
-	it('returns success:false reading a missing file', async () => {
+	it('returns NOT_FOUND reading a missing file', async () => {
 		const sb = newSandbox();
 		const read = await sb.readFile('/workspace/nope.py');
-		expectFileResult(read, { success: false });
+		expectFileResult(read, { success: false, error: { code: 'NOT_FOUND' } });
 	});
 
 	it('rejects mountBucket so the provisioner falls back to copy', async () => {
@@ -162,7 +163,7 @@ describe('LocalCompute file ops', () => {
 
 	it('returns success:false listing a missing directory', async () => {
 		const sb = newSandbox();
-		expect(await sb.listFiles('/workspace/does-not-exist')).toEqual({ success: false, files: [] });
+		expect(await sb.listFiles('/workspace/does-not-exist')).toEqual(listFilesFailure());
 	});
 
 	it('gitCheckout throws when the clone fails', async () => {

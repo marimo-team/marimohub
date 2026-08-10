@@ -20,7 +20,6 @@ import {
 } from '@/api/hooks';
 import type { UserDirectory } from '@/api/hooks';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
-import { toastError } from '@/lib/errors';
 import { gitCommitUrl, gitCoords, shortCommit, versionCommit } from '@/lib/git';
 import { formatRelative } from '@/lib/time';
 import { cn } from '@/lib/utils';
@@ -230,7 +229,6 @@ export function VersionHistoryDialog({
 				setBaseId(null);
 				setCompareId(null);
 			},
-			onError: toastError,
 		});
 	};
 

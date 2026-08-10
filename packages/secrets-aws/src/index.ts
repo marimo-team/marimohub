@@ -9,6 +9,7 @@
  */
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { SecretsManagerClientConfig } from '@aws-sdk/client-secrets-manager';
+import { SecretResolutionError } from '@marimo-hub/core';
 import type { SecretRef, SecretResolver } from '@marimo-hub/core';
 
 /** The raw `GetSecretValue` result the resolver needs — the seam tests fake. */
@@ -58,9 +59,15 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 
 		if (result.SecretString === undefined) {
 			if (result.SecretBinary !== undefined) {
-				throw new Error('AWS Secrets Manager returned a binary value; only strings are supported.');
+				throw new SecretResolutionError(
+					'invalid_value',
+					'AWS Secrets Manager returned a binary value; only strings are supported.',
+				);
 			}
-			throw new Error('AWS Secrets Manager returned no string value.');
+			throw new SecretResolutionError(
+				'invalid_value',
+				'AWS Secrets Manager returned no string value.',
+			);
 		}
 
 		return jsonKey === undefined
@@ -82,8 +89,16 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 		try {
 			result = await this.fetch(secretId);
 		} catch (err) {
-			// SDK errors (ResourceNotFound / AccessDenied) carry no secret value.
-			throw new Error(`AWS Secrets Manager resolution failed: ${describeAwsError(err)}`);
+			const name = describeAwsError(err);
+			const reason =
+				name === 'ResourceNotFoundException'
+					? 'not_found'
+					: name === 'AccessDeniedException' || name === 'UnauthorizedException'
+						? 'forbidden'
+						: 'unavailable';
+			throw new SecretResolutionError(reason, `AWS Secrets Manager resolution failed: ${name}`, {
+				cause: err,
+			});
 		}
 		if (this.cacheTtlMs > 0) {
 			this.cache.set(secretId, { result, expires: this.now() + this.cacheTtlMs });
@@ -105,10 +120,16 @@ function selectJsonKey(secretString: string, key: string): string {
 	try {
 		parsed = JSON.parse(secretString);
 	} catch {
-		throw new Error('AWS Secrets Manager value is not valid JSON for the requested selection.');
+		throw new SecretResolutionError(
+			'invalid_value',
+			'AWS Secrets Manager value is not valid JSON for the requested selection.',
+		);
 	}
 	if (typeof parsed !== 'object' || parsed === null || !Object.hasOwn(parsed, key)) {
-		throw new Error('AWS Secrets Manager value does not contain the requested JSON key.');
+		throw new SecretResolutionError(
+			'invalid_value',
+			'AWS Secrets Manager value does not contain the requested JSON key.',
+		);
 	}
 	const value = (parsed as Record<string, unknown>)[key];
 	return typeof value === 'string' ? value : JSON.stringify(value);

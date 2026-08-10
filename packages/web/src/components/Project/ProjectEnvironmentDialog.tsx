@@ -127,7 +127,7 @@ function CloudAccessPanel({
 				await onSave(value.enabled);
 				form.reset({ enabled: value.enabled });
 			} catch {
-				// The parent reports the mutation error; keep this draft for retry.
+				// Keep the draft for retry; the global mutation handler reports the error.
 			}
 		},
 	});

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NotFoundError } from 'modal';
 import type { SandboxId } from '@marimo-hub/core';
+import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
 import { modalProfileResources, ModalCompute } from './index';
 import type {
@@ -306,6 +307,19 @@ describe('ModalCompute', () => {
 			.listFiles('/workspace', { recursive: true });
 
 		expect(result.files.map((file) => file.relativePath)).toEqual(['a.py', 'sub', 'sub/b.py']);
+	});
+
+	it('returns BACKEND_ERROR when the SDK listing throws', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		sandbox.filesystem.listFiles = async () => {
+			throw new Error('boom');
+		};
+		world.existing.set(SANDBOX_ID, sandbox);
+
+		await expect(makeCompute(world).create(SANDBOX_ID).listFiles('/workspace')).resolves.toEqual(
+			listFilesFailure('BACKEND_ERROR'),
+		);
 	});
 
 	it('exposes the SDK tunnel and terminates the named sandbox', async () => {

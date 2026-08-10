@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { systemKeys } from '@/api/queryKeys';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import {
@@ -115,17 +115,23 @@ describe('useSandboxImages', () => {
 		await waitFor(() => expect(result.current).toEqual(['img-a', 'img-b']));
 	});
 
-	it('returns an empty list when the capabilities query fails', async () => {
+	it('falls back to no images on a capabilities failure instead of throwing', async () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => jsonError('INTERNAL', 'capabilities unavailable', 500)),
 		);
 
-		const { result, client } = renderHookWithClient(() => useSandboxImages(), { toaster: false });
+		const { result, client } = renderHookWithClient(() => useSandboxImages(), {
+			toaster: false,
+			errorBoundary: true,
+		});
 
 		await waitFor(() =>
 			expect(client.getQueryState(systemKeys.capabilities())?.status).toBe('error'),
 		);
+		// The grant-nothing fallback: consumers render without profile choices
+		// rather than crashing the page into the boundary.
+		expect(screen.queryByText('Request failed')).not.toBeInTheDocument();
 		expect(result.current).toEqual([]);
 	});
 });

@@ -3,7 +3,7 @@ import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { Millis } from '../../duration';
-import { assertVersionMatch, BadRequestError, NotFoundError } from '../../errors';
+import { assertVersionMatch, ConflictError, NotFoundError } from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR, VersionId } from '../../ids';
 import { remoteWorkspaceEntry } from '../../integrations/remoteWorkspace';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
@@ -368,7 +368,7 @@ export class NotebookService {
 		const { meta: existing, source } = detail;
 		assertVersionMatch(existing.updated_at, expectedVersion);
 		if (source.type !== 'local' && (input.code !== undefined || input.deps !== undefined)) {
-			throw new BadRequestError('Remote-backed notebook source is updated only by sync');
+			throw new ConflictError('Remote-backed notebook source is updated only by sync');
 		}
 		const now = new Date().toISOString();
 
@@ -462,7 +462,7 @@ export class NotebookService {
 	): Promise<NotebookMeta> {
 		const detail = await this.getNotebook(projectId, notebookId);
 		if (detail.source.type !== 'local') {
-			throw new BadRequestError('Cannot restore a version of a non-local notebook');
+			throw new ConflictError('Cannot restore a version of a non-local notebook');
 		}
 
 		const ver = paths.project(projectId).notebook(notebookId).version(versionId);

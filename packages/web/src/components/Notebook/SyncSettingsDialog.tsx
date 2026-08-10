@@ -104,8 +104,8 @@ export function SyncSettingsDialog({
 						: 'Sync settings saved',
 				);
 				onClose();
-			} catch (err) {
-				toast.error((err as Error).message);
+			} catch {
+				return;
 			}
 		},
 	});
@@ -253,7 +253,6 @@ export function SyncSettingsDialog({
 							setConfirmRotate(false);
 							toast.success(`Rotated sync token for "${title}"`);
 						},
-						onError: (err) => toast.error(err.message),
 					});
 				}}
 			/>

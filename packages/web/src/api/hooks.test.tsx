@@ -11,7 +11,9 @@ import {
 	useRestartApp,
 	useRestartSession,
 	useStartSession,
+	useStopSession,
 	useUpdateGitSource,
+	useUpdateIntegration,
 	useUpdateNotebook,
 	useUpdateProject,
 	useUserQuery,
@@ -213,7 +215,7 @@ describe('useNotebookHtmlQuery', () => {
 		});
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
-		expect(result.current.error?.message).toBe('Notebook not found');
+		expect(result.current.error?.message).toBe('gone');
 	});
 
 	it('names the version, not the notebook, when a pinned snapshot 404s', async () => {
@@ -224,7 +226,7 @@ describe('useNotebookHtmlQuery', () => {
 		});
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
-		expect(result.current.error?.message).toBe('Version not found');
+		expect(result.current.error?.message).toBe('gone');
 		expect(urlsOf(fetchMock)[0]).toBe(
 			`/api/v1/projects/${PID}/notebooks/${NID}/versions/ver-old/html`,
 		);
@@ -392,6 +394,80 @@ describe.each([
 
 		// A restart that half-ran (stopped, never started) is worse than one that failed.
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(spy).not.toHaveBeenCalled();
+	});
+});
+
+describe('session mutation toast suppression', () => {
+	// Start/stop failures on the notebook page render as the inline session
+	// panel; the meta flag is what keeps the global mutation-cache toast quiet.
+	it('useStartSession marks failures to skip the global error toast', async () => {
+		stubFetch(async () => jsonError('SERVICE_UNAVAILABLE', 'no capacity', 503));
+
+		const { result, client } = renderHookWithClient(() => useStartSession(PID, NID), {
+			toaster: false,
+		});
+		await act(async () => {
+			await result.current.mutateAsync().catch(() => {});
+		});
+
+		expect(client.getMutationCache().getAll().at(-1)?.meta).toEqual({ suppressErrorToast: true });
+	});
+
+	it('useStopSession suppresses the toast only when asked', async () => {
+		stubFetch(async () => jsonError('SERVICE_UNAVAILABLE', 'teardown failed', 503));
+
+		const { result, client } = renderHookWithClient(
+			() => ({
+				quiet: useStopSession(PID, NID, { suppressErrorToast: true }),
+				loud: useStopSession(PID, NID),
+			}),
+			{ toaster: false },
+		);
+		await act(async () => {
+			await result.current.quiet.mutateAsync('sess-1').catch(() => {});
+			await result.current.loud.mutateAsync('sess-2').catch(() => {});
+		});
+
+		const metas = client
+			.getMutationCache()
+			.getAll()
+			.map((mutation) => mutation.meta);
+		expect(metas).toEqual([{ suppressErrorToast: true }, undefined]);
+	});
+});
+
+describe('useUpdateIntegration conflict recovery', () => {
+	const scope = { pid: PID };
+
+	it('refetches the stale integration after a 412 so a retry gets a fresh ETag', async () => {
+		stubFetch(async () => jsonError('PRECONDITION_FAILED', 'stale etag', 412));
+
+		const { result, client } = renderHookWithClient(() => useUpdateIntegration(scope), {
+			toaster: false,
+		});
+		const spy = vi.spyOn(client, 'invalidateQueries');
+		await act(async () => {
+			await result.current.mutateAsync({ id: 'int-1', etag: 'W/"1"', name: 'n' }).catch(() => {});
+		});
+
+		expect(invalidatedKeys(spy)).toEqual([
+			projectKeys.integrations(PID),
+			projectKeys.integration(PID, 'int-1'),
+		]);
+	});
+
+	it('leaves the cache alone on non-conflict failures', async () => {
+		stubFetch(async () => jsonError('FORBIDDEN', 'no', 403));
+
+		const { result, client } = renderHookWithClient(() => useUpdateIntegration(scope), {
+			toaster: false,
+		});
+		const spy = vi.spyOn(client, 'invalidateQueries');
+		await act(async () => {
+			await result.current.mutateAsync({ id: 'int-1', etag: 'W/"1"', name: 'n' }).catch(() => {});
+		});
+
 		expect(spy).not.toHaveBeenCalled();
 	});
 });

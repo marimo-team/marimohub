@@ -20,7 +20,7 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { jwtVerify, SignJWT } from 'jose';
 import * as oauth from 'oauth4webapi';
-import { ASSIGNABLE_ROLES, AUTH_ENTITLEMENTS, UserId } from '@marimo-hub/core';
+import { ASSIGNABLE_ROLES, AUTH_ENTITLEMENTS, logOperationalError, UserId } from '@marimo-hub/core';
 import type { AssignableRole, AuthEntitlement, Authenticator, AuthUser } from '@marimo-hub/core';
 
 export type EmailVerificationPolicy = 'required' | 'trusted-issuer';
@@ -475,7 +475,12 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 					...(entitlements?.length ? { entitlements } : {}),
 					...(entitlementsExpiresAt ? { entitlementsExpiresAt } : {}),
 				};
-			} catch {
+			} catch (err) {
+				// Expired sessions are routine (every request until re-auth); anything
+				// else — bad signature, malformed claims — is worth an operator trail.
+				if ((err as { code?: string }).code !== 'ERR_JWT_EXPIRED') {
+					logOperationalError('oidc_session_verify_failed', {}, err);
+				}
 				return null;
 			}
 		},
@@ -544,7 +549,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		let url: URL | undefined;
 		try {
 			url = discoveredEndpoint(as, 'authorization_endpoint');
-		} catch {
+		} catch (err) {
+			logOperationalError('oidc_authorization_endpoint_invalid', {}, err);
 			return c.json(
 				{
 					success: false,
@@ -601,7 +607,13 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			// Re-sanitize on the way out (defense in depth): the cookie is signed, but
 			// the redirect below must hold even if the sanitizer or signing changes.
 			returnTo = sanitizeReturnTo(typeof payload.returnTo === 'string' ? payload.returnTo : null);
-		} catch {
+		} catch (err) {
+			// The transaction cookie lives ~10 minutes; expiry (a stale redirect or
+			// slow IdP round-trip) is routine. Log only genuine signature/claim
+			// failures, mirroring the session-verify path above.
+			if ((err as { code?: string }).code !== 'ERR_JWT_EXPIRED') {
+				logOperationalError('oidc_txn_cookie_invalid', {}, err);
+			}
 			return callbackError(c, 'session_expired');
 		}
 
@@ -632,7 +644,18 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				userInfo = await oauth.processUserInfoResponse(as, client, claims.sub, userInfoResponse);
 				if (userInfo.sub !== claims.sub) throw new Error('userinfo subject mismatch');
 			}
-		} catch {
+		} catch (err) {
+			// A user declining consent at the IdP arrives as `error=access_denied` —
+			// a normal outcome, not an operational failure. Duck-typed (name, not
+			// instanceof) so the check holds even if the oauth4webapi class identity
+			// differs across bundling or test mocks.
+			const declined =
+				err instanceof Error &&
+				err.name === 'AuthorizationResponseError' &&
+				(err as { error?: string }).error === 'access_denied';
+			if (!declined) {
+				logOperationalError('oidc_callback_exchange_failed', {}, err);
+			}
 			return callbackError(c, 'auth_failed', returnTo);
 		}
 
@@ -664,7 +687,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			let groups: string[];
 			try {
 				groups = parseGroups(rawGroups, maxGroups) ?? [];
-			} catch {
+			} catch (err) {
+				logOperationalError('oidc_group_claim_invalid', {}, err);
 				return callbackError(c, 'auth_failed', returnTo);
 			}
 			if (
@@ -687,7 +711,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				...(pictureUrl ? { pictureUrl } : {}),
 				...(config.groups ? { entitlements: entitlements ?? [] } : {}),
 			});
-		} catch {
+		} catch (err) {
+			logOperationalError('oidc_session_signing_failed', {}, err);
 			return callbackError(c, 'auth_failed', returnTo);
 		}
 		setCookie(c, SESSION_COOKIE, session, {
@@ -707,7 +732,8 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		let url: URL | undefined;
 		try {
 			url = discoveredEndpoint(as, 'end_session_endpoint');
-		} catch {
+		} catch (err) {
+			logOperationalError('oidc_end_session_endpoint_invalid', {}, err);
 			return c.redirect(postLoginRedirect);
 		}
 		if (url) {

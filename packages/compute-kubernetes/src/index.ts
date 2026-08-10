@@ -53,6 +53,7 @@ import { Millis } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import { createK8sClient } from './client';
 import type { K8sClient, KubernetesConfig } from './shared';
+import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 export * from './shared';
 import type {
 	ActiveSandbox,
@@ -112,6 +113,7 @@ export function resourceName(id: SandboxId): string {
 let PROC_SEQ = 0;
 
 class KubernetesSandboxInstance implements SandboxInstance {
+	readonly supportsBucketMount = false;
 	private readonly name: string;
 	private readonly namespace: string;
 	private readonly image: string;
@@ -211,7 +213,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	async exec(cmd: string): Promise<ExecResult> {
 		await this.ensure();
 		const res = await this.client.exec(this.name, ['sh', '-lc', this.withEnv(cmd)]);
-		return { success: res.exitCode === 0, stdout: res.stdout, stderr: res.stderr };
+		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 
 	async execStream(cmd: string, _options?: ExecStreamOptions): Promise<ReadableStream> {
@@ -231,10 +233,10 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		try {
 			await this.ensure();
 			const res = await this.client.exec(this.name, ['sh', '-lc', `cat -- ${shellQuote(path)}`]);
-			if (res.exitCode !== 0) return { success: false, content: '' };
+			if (res.exitCode !== 0) return readFileFailure('READ_FAILED');
 			return { success: true, content: res.stdout, encoding: 'utf-8' };
 		} catch {
-			return { success: false, content: '' };
+			return readFileFailure('BACKEND_ERROR');
 		}
 	}
 
@@ -259,10 +261,10 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		// on teardown to enumerate the working dir under PERSIST_WORKSPACE=workspace.
 		try {
 			const res = await this.exec(buildFindFilesCommand(path, options));
-			if (!res.success) return { success: false, files: [] };
+			if (!res.success) return listFilesFailure();
 			return { success: true, files: parseFindFilesOutput(res.stdout, path, options) };
 		} catch {
-			return { success: false, files: [] };
+			return listFilesFailure('BACKEND_ERROR');
 		}
 	}
 

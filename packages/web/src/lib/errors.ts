@@ -1,4 +1,5 @@
 import { toast } from 'sonner';
+import { ApiRequestError } from '@/api/client';
 
 /**
  * A displayable message for anything thrown. Rejections from the api hooks are
@@ -11,5 +12,9 @@ export function errorMessage(err: unknown): string {
 }
 
 export function toastError(err: unknown): void {
+	if (err instanceof ApiRequestError && err.code === 'PRECONDITION_FAILED') {
+		toast.error('Someone else changed this item. Reload it and try again.');
+		return;
+	}
 	toast.error(errorMessage(err));
 }

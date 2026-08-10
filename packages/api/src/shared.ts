@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
 	canAct,
 	ASSIGNABLE_ROLES,
+	DOMAIN_ERROR_CODES,
 	effectiveRole,
 	ForbiddenError,
 	isSuperAdmin,
@@ -283,14 +284,19 @@ export function createApp() {
 	return new OpenAPIHono<HonoEnv>({
 		defaultHook: (result, c) => {
 			if (!result.success) {
-				// One `field: message` per failing field, deduped, so the caller can see
-				// exactly what to fix instead of one comma-run blob.
-				const seen = new Set<string>();
-				const message = result.error.issues
-					.map((i) => `${i.path.join('.') || '(body)'}: ${i.message}`)
-					.filter((m) => !seen.has(m) && (seen.add(m), true))
-					.join('; ');
-				return fail(c, 'VALIDATION_ERROR', message, 422);
+				const details = [
+					...new Map(
+						result.error.issues.map((issue) => {
+							const detail = {
+								field: issue.path.join('.') || '(body)',
+								message: issue.message,
+							};
+							return [`${detail.field}\u0000${detail.message}`, detail] as const;
+						}),
+					).values(),
+				];
+				const message = details.map((detail) => `${detail.field}: ${detail.message}`).join('; ');
+				return fail(c, 'VALIDATION_ERROR', message, 422, { details });
 			}
 		},
 	});
@@ -321,14 +327,30 @@ export function ok<T>(c: Context, data: T) {
 /** Backoff hint (seconds) for the retriable statuses, surfaced as `Retry-After`. */
 const RETRY_AFTER_SECONDS: Record<number, number> = { 429: 5, 503: 2 };
 
-export function fail(c: Context, code: string, message: string, status: number) {
+export interface ErrorDetail {
+	field: string;
+	message: string;
+}
+
+export function fail(
+	c: Context,
+	code: ErrorCode,
+	message: string,
+	status: number,
+	options: { details?: ErrorDetail[] } = {},
+) {
 	const retryAfter = RETRY_AFTER_SECONDS[status];
 	if (retryAfter !== undefined) c.header('Retry-After', String(retryAfter));
 	const requestId = (c.var as { requestId?: string }).requestId;
 	return c.json(
 		{
 			success: false as const,
-			error: { code, message, ...(requestId ? { request_id: requestId } : {}) },
+			error: {
+				code,
+				message,
+				...(options.details ? { details: options.details } : {}),
+				...(requestId ? { request_id: requestId } : {}),
+			},
 		},
 		status as ContentfulStatusCode,
 	);
@@ -445,19 +467,11 @@ export const SessionIdParam = NotebookIdParam.extend({
  * layer emits directly (auth, validation, body-limit, proxy, the catch-all).
  */
 export const ERROR_CODES = [
-	'BAD_REQUEST',
+	...DOMAIN_ERROR_CODES,
 	'UNAUTHORIZED',
-	'FORBIDDEN',
-	'NOT_FOUND',
-	'CONFLICT',
 	'GONE',
-	'PRECONDITION_FAILED',
 	'PAYLOAD_TOO_LARGE',
-	'VALIDATION_ERROR',
-	'RESOURCE_EXHAUSTED',
-	'NOT_INITIALIZED',
 	'NO_HTML_SNAPSHOT',
-	'SERVICE_UNAVAILABLE',
 	'INTERNAL_ERROR',
 ] as const;
 
@@ -469,6 +483,10 @@ export const ErrorResponseSchema = z
 		error: z.object({
 			code: z.enum(ERROR_CODES),
 			message: z.string(),
+			details: z
+				.array(z.object({ field: z.string(), message: z.string() }))
+				.optional()
+				.openapi({ description: 'Field-level validation failures.' }),
 			/** Correlation id (also on the `X-Request-Id` header) for support/tracing. */
 			request_id: z.string().optional(),
 		}),
@@ -495,6 +513,7 @@ const ERROR_DESCRIPTIONS: Record<number, string> = {
 	422: 'Validation error',
 	429: 'Resource limit reached',
 	503: 'Service unavailable',
+	500: 'Internal server error',
 };
 
 /** `Retry-After` header schema, documented on the retriable (429/503) responses. */
@@ -516,14 +535,14 @@ export function errorResponses(...codes: number[]) {
 
 /**
  * Errors reachable on any authenticated `/api/v1/*` route regardless of its
- * handler: 401 (the authN guard), 422 (request body / path-param validation via
- * the OpenAPIHono `defaultHook`), and 503 (a storage/compute dependency is
- * transiently unavailable). Spread into a route's `responses` alongside its
+ * handler: 401 (the authN guard), 413 (the body-size guard), 422 (request body /
+ * path-param validation via the OpenAPIHono `defaultHook`), 500 (the catch-all),
+ * and 503 (a transient storage/compute outage). Spread into a route's `responses` alongside its
  * handler-specific codes so the generated client models them too:
  *   responses: { 200: ..., ...commonErrors(), ...errorResponses(403, 404) }
  */
 export function commonErrors() {
-	return errorResponses(401, 422, 503);
+	return errorResponses(401, 413, 422, 500, 503);
 }
 
 // --- Domain response schemas for OpenAPI docs ---

@@ -318,6 +318,49 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess).toHaveLength(1);
 		});
 
+		it('never attempts the mount when the backend advertises supportsBucketMount: false', async () => {
+			const { instance: base, calls } = makeFakeSandbox({ failMount: true });
+			const instance = { ...base, supportsBucketMount: false };
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			const bucketHandle = new MemoryBucket();
+			const nb = paths.project(projectId).notebook(notebookId);
+			await bucketHandle.put(nb.code, 'import marimo as mo');
+			await bucketHandle.put(nb.deps, '[project]\nname = "nb"');
+
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+			});
+
+			expect(result.usedFallback).toBe(true);
+			expect(calls.mountBucket).toHaveLength(0);
+		});
+
+		it('does not hide a mount failure when the backend advertises mount support', async () => {
+			const { instance: base, calls } = makeFakeSandbox({ failMount: true });
+			const instance = { ...base, supportsBucketMount: true };
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle: new MemoryBucket(),
+				}),
+			).rejects.toThrow('Failed to start sandbox while mounting the notebook workspace');
+			expect(calls.mountBucket).toHaveLength(1);
+			expect(calls.writeFiles).toHaveLength(0);
+			expect(calls.startProcess).toHaveLength(0);
+		});
+
 		// A command round-trip is the dominant unit of startup cost on a remote
 		// backend (~220ms each on CoreWeave), so these lock in the count. Each was a
 		// measured regression: a duplicate mkdir, a reachability no-op, and a setup

@@ -108,7 +108,7 @@ describe('Integrations routes', () => {
 		expect(JSON.stringify(events)).not.toContain('sup3r-secret');
 	});
 
-	it('returns a sanitized 500 and logs safe diagnostics for malformed stored JSON', async () => {
+	it('returns a sanitized 503 and logs safe diagnostics for malformed stored JSON', async () => {
 		const pid = await createProject();
 		const created = await createPg(pid);
 		const key = paths
@@ -119,10 +119,13 @@ describe('Integrations routes', () => {
 
 		const res = await request('GET', `/projects/${pid}/integrations/${created.id}`);
 		const body = (await res.json()) as Record<string, unknown>;
-		expect(res.status).toBe(500);
+		expect(res.status).toBe(503);
 		expect(body).toMatchObject({
 			success: false,
-			error: { code: 'INTERNAL_ERROR', message: 'Internal server error' },
+			error: {
+				code: 'SERVICE_UNAVAILABLE',
+				message: 'Stored data is temporarily unavailable',
+			},
 		});
 		expect(JSON.stringify(body)).not.toContain(key);
 		expect(JSON.stringify(body)).not.toContain('stored-secret-do-not-log');

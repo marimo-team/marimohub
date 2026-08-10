@@ -40,10 +40,8 @@ function parseZip(bytes: Uint8Array): ArchiveFile[] {
 	let unzipped: Record<string, Uint8Array>;
 	try {
 		unzipped = unzipSync(bytes);
-	} catch (err) {
-		throw new BadRequestError(
-			`Invalid zip archive${err instanceof Error ? `: ${err.message}` : ''}`,
-		);
+	} catch {
+		throw new BadRequestError('Invalid zip archive');
 	}
 	const files = new Map<string, Uint8Array>();
 	for (const [path, body] of Object.entries(unzipped)) {
@@ -185,10 +183,8 @@ function gunzip(bytes: Uint8Array): Uint8Array {
 	let out: Uint8Array;
 	try {
 		out = gunzipSync(bytes);
-	} catch (err) {
-		throw new BadRequestError(
-			`Invalid gzip archive${err instanceof Error ? `: ${err.message}` : ''}`,
-		);
+	} catch {
+		throw new BadRequestError('Invalid gzip archive');
 	}
 	if (out.length > MAX_DECOMPRESSED_BYTES) {
 		throw new BadRequestError('Decompressed archive exceeds the size limit');
