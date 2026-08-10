@@ -236,6 +236,34 @@ describe('ReconciliationService', () => {
 		expect(stored.status).toBe('failed');
 	});
 
+	it('Rule 2: leaves a fresh starting record alone while its provision is in flight', async () => {
+		// The saga writes the record before creating the sandbox, so a fresh
+		// `starting` record with no live sandbox is a provision, not a corpse.
+		const session = await createSession(goneId);
+		compute.active = [];
+
+		const result = await reconciler.reconcile();
+
+		expect(result.markedDead).toBe(0);
+		const stored = await sessions.getSession(projectId, session.session_id);
+		expect(stored.status).toBe('starting');
+	});
+
+	it('Rule 2: fails a starting record once past the provision grace', async () => {
+		const session = await putSession({
+			status: 'starting',
+			sandbox_id: goneId,
+			started_at: iso(-20 * 60_000), // past RECLAIM_PROVISION_GRACE_MS (15m)
+		});
+		compute.active = [];
+
+		const result = await reconciler.reconcile();
+
+		expect(result.markedDead).toBe(1);
+		const stored = await sessions.getSession(projectId, session.session_id);
+		expect(stored.status).toBe('failed');
+	});
+
 	it('leaves a healthy running session untouched', async () => {
 		const session = await createSession(healthyId);
 		await sessions.heartbeat(projectId, session.session_id); // -> running
@@ -429,6 +457,17 @@ describe('ReconciliationService', () => {
 			const stored = await sessions.getSession(projectId, session.session_id);
 			expect(stored.status).toBe('failed');
 			expect(await claim()).toBeNull();
+		});
+
+		it('Rule 2: keeps the app claim while a fresh starting app is still provisioning', async () => {
+			const session = await createApp(goneId);
+			compute.active = [];
+
+			const result = await reconciler.reconcile();
+
+			expect(result.markedDead).toBe(0);
+			expect((await sessions.getSession(projectId, session.session_id)).status).toBe('starting');
+			expect(await claim()).toBe(session.session_id);
 		});
 	});
 });
