@@ -480,8 +480,12 @@ export class SandboxProvisioner {
 			// already attributed the failure to the process ("… before port N …",
 			// the shared wording of the exited-early errors): crash detection can
 			// land arbitrarily close to the deadline, and elapsed time alone would
-			// then tell the operator to raise the timeout for a crash.
-			const crashed = err instanceof Error && /before port \d+/.test(err.message);
+			// then tell the operator to raise the timeout for a crash. Only the
+			// FIRST line is the adapter's attribution — the rest is appended
+			// process output, which can echo a "before port" phrase into a genuine
+			// timeout message.
+			const attribution = err instanceof Error ? err.message.split('\n', 1)[0] : '';
+			const crashed = /before port \d+/.test(attribution);
 			const timedOut =
 				!crashed && portWaitStart !== undefined && Date.now() - portWaitStart >= startupTimeoutMs;
 			const step = timedOut

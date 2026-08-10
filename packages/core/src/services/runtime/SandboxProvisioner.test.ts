@@ -255,6 +255,27 @@ describe('SandboxProvisioner', () => {
 			);
 		});
 
+		it('classifies on the attribution line only — appended output echoing "before port" stays a timeout', async () => {
+			const { instance } = makeFakeSandbox({
+				// An adapter timeout error whose appended process-output tail happens
+				// to contain the crash phrase.
+				failWaitForPort: new Error(
+					'timed out waiting for port 2718 after 0ms.\n' +
+						'earlier attempt: process exited (code 1) before port 2718 was ready.',
+				),
+			});
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					startupTimeoutMs: Millis.of(0),
+				}),
+			).rejects.toThrow(/startup timeout \(MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS\)/);
+		});
+
 		it('reads an adapter-attributed crash as a crash even at the deadline', async () => {
 			const { instance } = makeFakeSandbox({
 				failWaitForPort: new Error('process exited (code 1) before port 2718 was ready.'),
