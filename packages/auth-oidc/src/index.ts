@@ -453,9 +453,12 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				if (!validSubject(payload.sub) || !validEmail(payload.email)) return null;
 				const name = displayNameClaim(payload.name);
 				const pictureUrl = pictureUrlClaim(payload.picture_url);
-				const hasGroupAuthorization = Array.isArray(payload.entitlements);
+				// Alias into a const: `Array.isArray` narrows a const binding, but not a
+				// mutable index-signature access like `payload.entitlements`.
+				const entitlementsClaim = payload.entitlements;
+				const hasGroupAuthorization = Array.isArray(entitlementsClaim);
 				const entitlements = hasGroupAuthorization
-					? payload.entitlements.filter(
+					? entitlementsClaim.filter(
 							(value): value is AuthEntitlement =>
 								typeof value === 'string' && AUTH_ENTITLEMENT_SET.has(value),
 						)
