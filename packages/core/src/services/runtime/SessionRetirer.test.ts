@@ -130,6 +130,65 @@ describe('SessionRetirer', () => {
 		});
 	});
 
+	it('does not snapshot or advance the restore pointer when the capture fails', async () => {
+		const { instance } = makeFakeSandbox();
+		const compute = snapshotProvider(instance);
+		const captureSnapshot = vi.spyOn(compute, 'captureSnapshot');
+		const deleteSnapshot = vi.spyOn(compute, 'deleteSnapshot');
+		await notebooks.setFsSnapshot(projectId, notebookId, {
+			snapshot_id: 'known-good',
+			captured_at: new Date().toISOString(),
+		});
+		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockRejectedValue(
+			new Error('bucket unavailable'),
+		);
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const session = await persistentSession();
+		await sessions.beginTerminating(projectId, session.session_id);
+
+		await retirer(compute).retire(session);
+
+		expect(captureSnapshot).not.toHaveBeenCalled();
+		expect(deleteSnapshot).not.toHaveBeenCalled();
+		expect(await notebooks.getFsSnapshot(projectId, notebookId)).toMatchObject({
+			snapshot_id: 'known-good',
+		});
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
+	});
+
+	it('snapshots and GCs the previous snapshot after a successful capture', async () => {
+		const { instance } = makeFakeSandbox();
+		const compute = snapshotProvider(instance);
+		const deleteSnapshot = vi.spyOn(compute, 'deleteSnapshot');
+		await notebooks.setFsSnapshot(projectId, notebookId, {
+			snapshot_id: 'previous',
+			captured_at: new Date().toISOString(),
+		});
+		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+		const session = await persistentSession();
+		await sessions.beginTerminating(projectId, session.session_id);
+
+		await retirer(compute).retire(session);
+
+		expect(await notebooks.getFsSnapshot(projectId, notebookId)).toMatchObject({
+			snapshot_id: 'snapshot-after-takeover',
+		});
+		expect(deleteSnapshot).toHaveBeenCalledWith('previous');
+	});
+
+	it('does not snapshot when the capture reports nothing persisted', async () => {
+		const { instance } = makeFakeSandbox();
+		const compute = snapshotProvider(instance);
+		const captureSnapshot = vi.spyOn(compute, 'captureSnapshot');
+		vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(false);
+		const session = await persistentSession();
+		await sessions.beginTerminating(projectId, session.session_id);
+
+		await retirer(compute).retire(session);
+
+		expect(captureSnapshot).not.toHaveBeenCalled();
+	});
+
 	it('captures an owner-scoped filesystem snapshot during takeover', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const compute = snapshotProvider(instance);
