@@ -92,6 +92,7 @@ export interface ModalClientLike {
 			image: unknown,
 			options: {
 				name: string;
+				command: string[];
 				tags: Record<string, string>;
 				encryptedPorts: number[];
 				timeoutMs: number;
@@ -196,6 +197,11 @@ class ModalSandboxInstance implements SandboxInstance {
 		return this.client.apps.fromName(appName, { createIfMissing: true }).then((app) =>
 			this.client.sandboxes.create(app, this.client.images.fromRegistry(this.config.image), {
 				name: this.id,
+				// Pin an idle main process. With no command the SDK sends empty
+				// entrypointArgs and Modal boots the image's ENTRYPOINT — a marimo
+				// that grabs the kernel port before the provisioner's `setup && start`
+				// exec, which then rewrites /opt/venv under the live server (#103).
+				command: ['sleep', 'infinity'],
 				tags: {
 					[OWNER_TAG]: appName,
 					[SANDBOX_ID_TAG]: this.id,
