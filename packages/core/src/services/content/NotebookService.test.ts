@@ -535,6 +535,37 @@ describe('NotebookService', () => {
 			expect(snapshot.projects[0].updated_at).toBe(stored.updated_at);
 		});
 
+		it('does not fail or resurrect a notebook purged after its metadata commit', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Original', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const realUpdateEntry = catalog.updateNotebookEntry.bind(catalog);
+			let purged = false;
+			vi.spyOn(catalog, 'updateNotebookEntry').mockImplementation(async (...args) => {
+				if (!purged && args[0] === 'notebook.update') {
+					purged = true;
+					await notebooks.deleteNotebook(projectId, created.id, ACTOR);
+					await notebooks.hardDeleteNotebook(projectId, created.id);
+				}
+				return realUpdateEntry(...args);
+			});
+
+			const updated = await notebooks.updateNotebook(
+				projectId,
+				created.id,
+				{ title: 'Delayed' },
+				ACTOR,
+			);
+
+			const snapshot = await catalog.getCurrentSnapshot();
+			const project = snapshot.projects.find((entry) => entry.id === projectId)!;
+			expect(updated.title).toBe('Delayed');
+			expect(project.notebooks[0].status).toBe('deleted');
+			expect(project.notebook_count).toBe(0);
+		});
+
 		it('merges a concurrent metadata update after retrying the CAS', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
@@ -1009,6 +1040,31 @@ describe('NotebookService', () => {
 	});
 
 	describe('deleteNotebook', () => {
+		it('projects its tombstone when hard deletion wins before the catalog write', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Doomed', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const realUpdateEntry = catalog.updateNotebookEntry.bind(catalog);
+			let purged = false;
+			vi.spyOn(catalog, 'updateNotebookEntry').mockImplementation(async (...args) => {
+				if (!purged && args[0] === 'notebook.delete') {
+					purged = true;
+					await notebooks.hardDeleteNotebook(projectId, created.id);
+				}
+				return realUpdateEntry(...args);
+			});
+
+			await notebooks.deleteNotebook(projectId, created.id, ACTOR);
+
+			const snapshot = await catalog.getCurrentSnapshot();
+			const project = snapshot.projects.find((entry) => entry.id === projectId)!;
+			expect(purged).toBe(true);
+			expect(project.notebooks[0].status).toBe('deleted');
+			expect(project.notebook_count).toBe(0);
+		});
+
 		it('rejects a stale expectedVersion with PreconditionFailedError', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,

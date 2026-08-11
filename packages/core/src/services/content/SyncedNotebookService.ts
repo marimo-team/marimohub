@@ -1,5 +1,4 @@
 import type { Bucket } from '../../ports/bucket';
-import { NotFoundError } from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR } from '../../ids';
 import type { NotebookId, ProjectId, UserId, VersionId } from '../../ids';
 import {
@@ -29,14 +28,10 @@ import { compensableWrite, metricsObserver, saga } from '../../saga';
 import { NotebookMetaSchema, parseStored, readStored, SourceSchema } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject } from '../catalog/cas';
-import {
-	buildNotebookEntry,
-	buildNotebookMeta,
-	buildVersion,
-	notebookCatalogPatch,
-} from './notebookMeta';
+import { buildNotebookEntry, buildNotebookMeta, buildVersion } from './notebookMeta';
 import { listAllKeys } from '../catalog/storage';
 import type { GitSource, NotebookMeta, Source } from '../../schema';
+import { loadNotebookCatalogPatch } from './catalogProjection';
 
 interface SyncedNotebookServiceHooks {
 	getNotebook: (
@@ -60,13 +55,6 @@ export class SyncedNotebookService {
 		private metrics: Metrics,
 		private hooks: SyncedNotebookServiceHooks,
 	) {}
-
-	private async loadNotebookCatalogPatch(projectId: ProjectId, notebookId: NotebookId) {
-		const key = paths.project(projectId).notebook(notebookId).meta;
-		const obj = await this.bucket.get(key);
-		if (!obj) throw new NotFoundError(`Notebook ${notebookId} not found`);
-		return notebookCatalogPatch(await readStored(NotebookMetaSchema, obj, key));
-	}
 
 	async create(
 		projectId: ProjectId,
@@ -188,7 +176,7 @@ export class SyncedNotebookService {
 			actor,
 			projectId,
 			notebookId,
-			() => this.loadNotebookCatalogPatch(projectId, notebookId),
+			() => loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
 		);
 		return source;
 	}
@@ -299,7 +287,7 @@ export class SyncedNotebookService {
 			actor,
 			projectId,
 			notebookId,
-			() => this.loadNotebookCatalogPatch(projectId, notebookId),
+			() => loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
 		);
 
 		await this.hooks.pruneVersions(projectId, notebookId, versionToKeep);

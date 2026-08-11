@@ -213,13 +213,14 @@ export class CatalogService {
 	 * CAS-mutate the snapshot to patch a single project's summary entry. `patch`
 	 * receives the matched entry and returns the fields to merge; a project that
 	 * doesn't match is left untouched (and if none matches, the snapshot is
-	 * rewritten unchanged). Async patches run again when the catalog CAS retries.
+	 * rewritten unchanged). Returning `undefined` applies no entry fields. Async
+	 * patches run again when the catalog CAS retries.
 	 */
 	updateProjectEntry(
 		operation: string,
 		actor: UserId,
 		projectId: ProjectId,
-		patch: (project: SnapshotProjectEntry) => Awaitable<Partial<SnapshotProjectEntry>>,
+		patch: (project: SnapshotProjectEntry) => Awaitable<Partial<SnapshotProjectEntry> | undefined>,
 		context: Record<string, unknown> = { project_id: projectId },
 	): Promise<Snapshot> {
 		return this.mutateSnapshot(
@@ -228,7 +229,7 @@ export class CatalogService {
 			async (snap) => {
 				const project = snap.projects.find((entry) => entry.id === projectId);
 				if (project === undefined) return snap;
-				const projectPatch = await patch(project);
+				const projectPatch = (await patch(project)) ?? {};
 				return {
 					...snap,
 					projects: snap.projects.map((entry) =>
@@ -269,15 +270,20 @@ export class CatalogService {
 	 * `patch` returns the notebook fields to merge; the optional `projectPatch`
 	 * merges other project-level fields (e.g. `notebook_count`) in the same write.
 	 * A patched notebook `updated_at` automatically advances the project's aggregate
-	 * timestamp. A notebook that doesn't match is left untouched.
+	 * timestamp. Returning `undefined` applies no notebook fields. A notebook that
+	 * doesn't match is left untouched.
 	 */
 	updateNotebookEntry(
 		operation: string,
 		actor: UserId,
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		patch: (notebook: SnapshotNotebookEntry) => Awaitable<Partial<SnapshotNotebookEntry>>,
-		projectPatch?: (project: SnapshotProjectEntry) => Awaitable<Partial<SnapshotProjectEntry>>,
+		patch: (
+			notebook: SnapshotNotebookEntry,
+		) => Awaitable<Partial<SnapshotNotebookEntry> | undefined>,
+		projectPatch?: (
+			project: SnapshotProjectEntry,
+		) => Awaitable<Partial<SnapshotProjectEntry> | undefined>,
 	): Promise<Snapshot> {
 		return this.updateProjectEntry(
 			operation,
@@ -285,12 +291,15 @@ export class CatalogService {
 			projectId,
 			async (p) => {
 				const notebook = p.notebooks.find((entry) => entry.id === notebookId);
-				const notebookPatch = notebook === undefined ? undefined : await patch(notebook);
-				const updatedAt = notebookPatch?.updated_at;
+				const notebookPatch = notebook === undefined ? undefined : ((await patch(notebook)) ?? {});
+				const resolvedProjectPatch = (await projectPatch?.(p)) ?? {};
+				let updatedAt = p.updated_at;
+				for (const candidate of [notebookPatch?.updated_at, resolvedProjectPatch?.updated_at]) {
+					if (candidate !== undefined && candidate > updatedAt) updatedAt = candidate;
+				}
 				return {
-					updated_at:
-						updatedAt !== undefined && updatedAt > p.updated_at ? updatedAt : p.updated_at,
-					...(await projectPatch?.(p)),
+					...resolvedProjectPatch,
+					updated_at: updatedAt,
 					notebooks:
 						notebookPatch === undefined
 							? p.notebooks

@@ -378,6 +378,26 @@ describe('ProjectService', () => {
 			expect(snapshot.projects[0].name).toBe('Winner');
 		});
 
+		it('does not fail or resurrect a project purged after its metadata commit', async () => {
+			const created = await projects.createProject({ name: 'Original', description: 'D' }, ACTOR);
+			const realUpdateEntry = catalog.updateProjectEntry.bind(catalog);
+			let purged = false;
+			vi.spyOn(catalog, 'updateProjectEntry').mockImplementation(async (...args) => {
+				if (!purged && args[0] === 'project.update') {
+					purged = true;
+					await projects.deleteProject(created.id, ACTOR);
+					await projects.hardDeleteProject(created.id);
+				}
+				return realUpdateEntry(...args);
+			});
+
+			const updated = await projects.updateProject(created.id, { name: 'Delayed' }, ACTOR);
+
+			const snapshot = await catalog.getCurrentSnapshot();
+			expect(updated.name).toBe('Delayed');
+			expect(snapshot.projects[0].status).toBe('deleted');
+		});
+
 		it('returns 412 when If-Match becomes stale during the CAS', async () => {
 			const created = await projects.createProject({ name: 'Original', description: 'D' }, ACTOR);
 			const metaKey = paths.project(created.id).meta;
@@ -503,6 +523,25 @@ describe('ProjectService', () => {
 	});
 
 	describe('deleteProject (soft-delete)', () => {
+		it('projects its tombstone when hard deletion wins before the catalog write', async () => {
+			const created = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
+			const realUpdateEntry = catalog.updateProjectEntry.bind(catalog);
+			let purged = false;
+			vi.spyOn(catalog, 'updateProjectEntry').mockImplementation(async (...args) => {
+				if (!purged && args[0] === 'project.delete') {
+					purged = true;
+					await projects.hardDeleteProject(created.id);
+				}
+				return realUpdateEntry(...args);
+			});
+
+			await projects.deleteProject(created.id, ACTOR);
+
+			const snapshot = await catalog.getCurrentSnapshot();
+			expect(purged).toBe(true);
+			expect(snapshot.projects[0].status).toBe('deleted');
+		});
+
 		it('marks the project deleted but retains its bytes', async () => {
 			const created = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
 

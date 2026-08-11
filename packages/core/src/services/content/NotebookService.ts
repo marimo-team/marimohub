@@ -41,6 +41,7 @@ import {
 } from './notebookMeta';
 import { SyncedNotebookService } from './SyncedNotebookService';
 import { deleteByPrefix, listAllKeys, listAllObjects, listAllPrefixes } from '../catalog/storage';
+import { loadNotebookCatalogPatch } from './catalogProjection';
 
 /**
  * Maximum number of immutable version folders to retain per notebook. Older
@@ -148,13 +149,6 @@ export class NotebookService {
 		const readme = readmeObj ? await readmeObj.text() : null;
 
 		return { meta, readme, source };
-	}
-
-	private async loadNotebookCatalogPatch(projectId: ProjectId, notebookId: NotebookId) {
-		const key = paths.project(projectId).notebook(notebookId).meta;
-		const obj = await this.bucket.get(key);
-		if (!obj) throw new NotFoundError(`Notebook ${notebookId} not found`);
-		return notebookCatalogPatch(await readStored(NotebookMetaSchema, obj, key));
 	}
 
 	async getNotebookContent(projectId: ProjectId, notebookId: NotebookId): Promise<string> {
@@ -457,7 +451,7 @@ export class NotebookService {
 		}
 
 		await this.catalog.updateNotebookEntry('notebook.update', actor, projectId, notebookId, () =>
-			this.loadNotebookCatalogPatch(projectId, notebookId),
+			loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
 		);
 
 		return updated;
@@ -672,7 +666,7 @@ export class NotebookService {
 		expectedVersion?: string,
 	): Promise<void> {
 		const nb = paths.project(projectId).notebook(notebookId);
-		const { written } = await mutateObjectWithOutcome(
+		const { value: updated, written } = await mutateObjectWithOutcome(
 			this.bucket,
 			nb.meta,
 			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
@@ -695,7 +689,9 @@ export class NotebookService {
 			actor,
 			projectId,
 			notebookId,
-			() => this.loadNotebookCatalogPatch(projectId, notebookId),
+			async () =>
+				(await loadNotebookCatalogPatch(this.bucket, projectId, notebookId)) ??
+				notebookCatalogPatch(updated),
 			(p) => ({
 				notebook_count: Math.max(0, p.notebook_count - 1),
 			}),
