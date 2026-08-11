@@ -23,7 +23,7 @@ for (const browser of browsers) {
 }
 
 // The lifecycle spec needs a real kernel through the local compute adapter, so
-// it runs only on Chromium and can be skipped on hosts without uv.
+// it runs only on Chromium. Set E2E_LIFECYCLE=0 on hosts without uv.
 const LIFECYCLE_SPEC = /session\.lifecycle\.spec\.ts$/;
 const runLifecycle = browsers.includes('chromium') && process.env.E2E_LIFECYCLE !== '0';
 
@@ -76,6 +76,8 @@ export default defineConfig({
 			PORT: String(PORT),
 			MARIMOHUB_STORAGE_BACKEND: 'memory',
 			MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+			// webServer is config-wide, so CRUD shares this backend when the lifecycle project runs.
+			// Those specs intentionally never open a notebook and therefore never start compute.
 			MARIMOHUB_COMPUTE_BACKEND: runLifecycle ? 'local' : 'none',
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_STATIC_ROOT: 'packages/web/dist',
