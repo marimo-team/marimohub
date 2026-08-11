@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { AuthProvider } from '@/context/AuthContext';
 import { ErrorBoundary } from '@/components/ui';
 import type { AdminUser } from '@/types';
 import AdminUsersPage from './AdminUsersPage';
@@ -12,6 +13,7 @@ const USERS: AdminUser[] = [
 		email: 'ada@example.com',
 		name: 'Ada Lovelace',
 		updated_at: '2026-08-01T12:00:00.000Z',
+		suspended_at: null,
 		is_super_admin: true,
 	},
 	{
@@ -19,20 +21,50 @@ const USERS: AdminUser[] = [
 		email: 'grace@example.com',
 		name: 'Grace Hopper',
 		updated_at: '2026-08-02T09:30:00.000Z',
+		suspended_at: null,
 		is_super_admin: false,
 	},
 ];
 
-function setup(items: AdminUser[] = USERS) {
+// Default to a signed-in user absent from the directory so existing assertions
+// see no self-row; individual tests override to exercise self-suspension.
+function setup(items: AdminUser[] = USERS, currentUserId = 'user-self') {
+	let current = items.map((item) => ({ ...item }));
+	const me = {
+		id: currentUserId,
+		email: `${currentUserId}@example.com`,
+		name: 'Current User',
+		logout_url: null,
+		is_super_admin: true,
+	};
 	vi.stubGlobal(
 		'fetch',
-		vi.fn(async (input: RequestInfo | URL) => {
+		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = String(input);
-			if (url === '/api/v1/admin/users') return jsonOk({ items, next_cursor: null });
+			if (url === '/api/v1/me') return jsonOk(me);
+			if (url === '/api/v1/admin/users') return jsonOk({ items: current, next_cursor: null });
+			const match = /^\/api\/v1\/users\/([^/]+)\/suspension$/.exec(url);
+			if (match) {
+				const userId = decodeURIComponent(match[1]);
+				const suspended = init?.method === 'PUT';
+				current = current.map((item) =>
+					item.id === userId
+						? {
+								...item,
+								suspended_at: suspended ? '2026-08-11T18:00:00.000Z' : null,
+							}
+						: item,
+				);
+				return jsonOk(current.find((item) => item.id === userId));
+			}
 			throw new Error(`unexpected fetch: ${url}`);
 		}),
 	);
-	renderWithClient(<AdminUsersPage />);
+	renderWithClient(
+		<AuthProvider>
+			<AdminUsersPage />
+		</AuthProvider>,
+	);
 	return userEvent.setup();
 }
 
@@ -54,6 +86,56 @@ describe('AdminUsersPage', () => {
 		expect(rows).toHaveLength(2);
 		expect(rows[0]).toHaveTextContent('Super admin');
 		expect(rows[1]).not.toHaveTextContent('Super admin');
+	});
+
+	it('confirms suspension and refreshes the row with a suspended badge', async () => {
+		const user = setup();
+		await screen.findByText('Grace Hopper');
+
+		const rows = screen.getAllByTestId('admin-user-row');
+		await user.click(rows[1].querySelector('button')!);
+		expect(screen.getByRole('heading', { name: 'Suspend Grace Hopper' })).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Suspend' }));
+
+		expect(await screen.findByText('Suspended')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Reactivate' })).toBeInTheDocument();
+		expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+			'/api/v1/users/user-grace/suspension',
+			expect.objectContaining({ method: 'PUT' }),
+		);
+	});
+
+	it('reactivates a suspended user', async () => {
+		const user = setup([USERS[0], { ...USERS[1], suspended_at: '2026-08-11T18:00:00.000Z' }]);
+		await screen.findByText('Suspended');
+
+		await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+		expect(screen.getByRole('heading', { name: 'Reactivate Grace Hopper' })).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+
+		expect(await screen.findAllByRole('button', { name: 'Suspend' })).toHaveLength(2);
+		expect(screen.queryByText('Suspended')).not.toBeInTheDocument();
+		expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+			'/api/v1/users/user-grace/suspension',
+			expect.objectContaining({ method: 'DELETE' }),
+		);
+	});
+
+	it('disables self-suspension for the signed-in super admin', async () => {
+		setup(USERS, 'user-ada');
+		await screen.findByText('Ada Lovelace');
+
+		const rows = screen.getAllByTestId('admin-user-row');
+		const selfButton = rows[0].querySelector('button')!;
+		// The self row's Suspend action is disabled once /me resolves; the API would
+		// reject a self-suspension, so the UI never offers the failing confirmation.
+		await waitFor(() => expect(selfButton).toBeDisabled());
+		expect(selfButton.closest('[title]')).toHaveAttribute(
+			'title',
+			'You cannot suspend your own account',
+		);
+		// Another user's row stays actionable.
+		expect(rows[1].querySelector('button')!).toBeEnabled();
 	});
 
 	it('filters by name, email, or id from the search box', async () => {
@@ -90,7 +172,9 @@ describe('AdminUsersPage', () => {
 			);
 			renderWithClient(
 				<ErrorBoundary>
-					<AdminUsersPage />
+					<AuthProvider>
+						<AdminUsersPage />
+					</AuthProvider>
 				</ErrorBoundary>,
 			);
 			expect(await screen.findByText('Something went wrong')).toBeInTheDocument();

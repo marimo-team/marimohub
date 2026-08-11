@@ -96,7 +96,14 @@ export {
 export type { CreatedToken, CreateTokenInput } from './tokens/TokenService';
 export { composeAuthenticators } from './tokens/composeAuthenticators';
 export { listAllKeys } from './catalog/storage';
-export { mutateObject, withCasRetry, type CasRetryOptions } from './catalog/cas';
+export {
+	mutateObject,
+	mutateObjectWithOutcome,
+	withCasRetry,
+	type CasRetryOptions,
+	type CasWriter,
+	type ObjectMutationOutcome,
+} from './catalog/cas';
 export {
 	createWorkspaceLoadStrategies,
 	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
@@ -281,6 +288,8 @@ export function createServices(
 	});
 	const identities = wrap('IdentityService', new IdentityService(bucket), {
 		get: user,
+		isSuspended: user,
+		setSuspension: user,
 	});
 	const tokens = wrap('TokenService', new TokenService(bucket, identities), {
 		list: user,

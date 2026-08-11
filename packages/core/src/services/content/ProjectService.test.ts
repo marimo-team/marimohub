@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { NotFoundError, PreconditionFailedError } from '../../errors';
+import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
 import { UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
@@ -208,6 +208,55 @@ describe('ProjectService', () => {
 	describe('membership', () => {
 		const MEMBER = UserId.parse('user_member');
 
+		it('projects the latest roster when catalog updates finish out of order', async () => {
+			const project = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			const first = UserId.parse('first_member');
+			const second = UserId.parse('second_member');
+			const realUpdateEntry = catalog.updateProjectEntry.bind(catalog);
+			let raced = false;
+			vi.spyOn(catalog, 'updateProjectEntry').mockImplementation(async (...args) => {
+				if (!raced && args[0] === 'project.members') {
+					raced = true;
+					await projects.addMember(project.id, { user_id: second }, 'viewer', ACTOR);
+				}
+				return realUpdateEntry(...args);
+			});
+
+			await projects.addMember(project.id, { user_id: first }, 'editor', ACTOR);
+
+			const stored = await projects.getProject(project.id);
+			const snapshot = await catalog.getCurrentSnapshot();
+			expect(stored.members).toEqual([
+				{ user_id: ACTOR, role: 'admin' },
+				{ user_id: first, role: 'editor' },
+				{ user_id: second, role: 'viewer' },
+			]);
+			expect(snapshot.projects[0].member_ids).toEqual([ACTOR, first, second]);
+		});
+
+		it('detects a duplicate member added by a concurrent writer', async () => {
+			const project = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
+			const metaKey = paths.project(project.id).meta;
+			const realPut = bucket.put.bind(bucket);
+			let raced = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (!raced && key === metaKey && options?.onlyIfEtagMatches) {
+					raced = true;
+					await projects.addMember(project.id, { email: 'racer@example.com' }, 'viewer', ACTOR);
+				}
+				return realPut(key, value, options);
+			});
+
+			await expect(
+				projects.addMember(project.id, { email: 'racer@example.com' }, 'editor', ACTOR),
+			).rejects.toBeInstanceOf(ConflictError);
+
+			const stored = await projects.getProject(project.id);
+			expect(stored.members.filter((member) => member.email === 'racer@example.com')).toHaveLength(
+				1,
+			);
+		});
+
 		it('adds a member by user id and denormalizes member_ids', async () => {
 			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
 			await projects.addMember(p.id, { user_id: MEMBER }, 'editor', ACTOR);
@@ -286,6 +335,118 @@ describe('ProjectService', () => {
 	});
 
 	describe('updateProject', () => {
+		it('uses the CAS read as the authoritative precondition check', async () => {
+			const created = await projects.createProject({ name: 'Original', description: 'D' }, ACTOR);
+			const metaKey = paths.project(created.id).meta;
+			const realGet = bucket.get.bind(bucket);
+			const realPut = bucket.put.bind(bucket);
+			let metaCommitted = false;
+			let readsBeforeCommit = 0;
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === metaKey && !metaCommitted) readsBeforeCommit++;
+				return realGet(key);
+			});
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				const result = await realPut(key, value, options);
+				if (key === metaKey && options?.onlyIfEtagMatches) metaCommitted = true;
+				return result;
+			});
+
+			await projects.updateProject(created.id, { name: 'Updated' }, ACTOR, created.updated_at);
+
+			expect(readsBeforeCommit).toBe(1);
+		});
+
+		it('projects the latest metadata when catalog updates finish out of order', async () => {
+			const created = await projects.createProject({ name: 'Original', description: 'D' }, ACTOR);
+			const realUpdateEntry = catalog.updateProjectEntry.bind(catalog);
+			let raced = false;
+			vi.spyOn(catalog, 'updateProjectEntry').mockImplementation(async (...args) => {
+				if (!raced && args[0] === 'project.update') {
+					raced = true;
+					await projects.updateProject(created.id, { name: 'Winner' }, ACTOR);
+				}
+				return realUpdateEntry(...args);
+			});
+
+			await projects.updateProject(created.id, { name: 'Delayed' }, ACTOR);
+
+			const stored = await projects.getProject(created.id);
+			const snapshot = await catalog.getCurrentSnapshot();
+			expect(raced).toBe(true);
+			expect(stored.name).toBe('Winner');
+			expect(snapshot.projects[0].name).toBe('Winner');
+		});
+
+		it('does not fail or resurrect a project purged after its metadata commit', async () => {
+			const created = await projects.createProject({ name: 'Original', description: 'D' }, ACTOR);
+			const realUpdateEntry = catalog.updateProjectEntry.bind(catalog);
+			let purged = false;
+			vi.spyOn(catalog, 'updateProjectEntry').mockImplementation(async (...args) => {
+				if (!purged && args[0] === 'project.update') {
+					purged = true;
+					await projects.deleteProject(created.id, ACTOR);
+					await projects.hardDeleteProject(created.id);
+				}
+				return realUpdateEntry(...args);
+			});
+
+			const updated = await projects.updateProject(created.id, { name: 'Delayed' }, ACTOR);
+
+			const snapshot = await catalog.getCurrentSnapshot();
+			expect(updated.name).toBe('Delayed');
+			expect(snapshot.projects[0].status).toBe('deleted');
+		});
+
+		it('returns 412 when If-Match becomes stale during the CAS', async () => {
+			const created = await projects.createProject({ name: 'Original', description: 'D' }, ACTOR);
+			const metaKey = paths.project(created.id).meta;
+			const realPut = bucket.put.bind(bucket);
+			let raced = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (!raced && key === metaKey && options?.onlyIfEtagMatches) {
+					raced = true;
+					const current = await (await bucket.get(metaKey))!.json<any>();
+					await realPut(
+						metaKey,
+						JSON.stringify({ ...current, name: 'Racer', updated_at: '2099-01-01T00:00:00.000Z' }),
+					);
+				}
+				return realPut(key, value, options);
+			});
+
+			await expect(
+				projects.updateProject(created.id, { description: 'Mine' }, ACTOR, created.updated_at),
+			).rejects.toBeInstanceOf(PreconditionFailedError);
+
+			const stored = await projects.getProject(created.id);
+			expect(stored.name).toBe('Racer');
+			expect(stored.description).toBe('D');
+		});
+
+		it('does not resurrect a project deleted during an update', async () => {
+			const created = await projects.createProject({ name: 'Original', description: 'D' }, ACTOR);
+			const metaKey = paths.project(created.id).meta;
+			const realPut = bucket.put.bind(bucket);
+			let raced = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (!raced && key === metaKey && options?.onlyIfEtagMatches) {
+					raced = true;
+					await projects.deleteProject(created.id, ACTOR);
+				}
+				return realPut(key, value, options);
+			});
+
+			await expect(
+				projects.updateProject(created.id, { name: 'Resurrected' }, ACTOR),
+			).rejects.toBeInstanceOf(NotFoundError);
+
+			const stored = await projects.getProject(created.id);
+			const snapshot = await catalog.getCurrentSnapshot();
+			expect(stored.status).toBe('deleted');
+			expect(snapshot.projects[0].status).toBe('deleted');
+		});
+
 		it('updates name and description', async () => {
 			const created = await projects.createProject({ name: 'Old', description: 'old desc' }, ACTOR);
 
@@ -362,6 +523,25 @@ describe('ProjectService', () => {
 	});
 
 	describe('deleteProject (soft-delete)', () => {
+		it('projects its tombstone when hard deletion wins before the catalog write', async () => {
+			const created = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
+			const realUpdateEntry = catalog.updateProjectEntry.bind(catalog);
+			let purged = false;
+			vi.spyOn(catalog, 'updateProjectEntry').mockImplementation(async (...args) => {
+				if (!purged && args[0] === 'project.delete') {
+					purged = true;
+					await projects.hardDeleteProject(created.id);
+				}
+				return realUpdateEntry(...args);
+			});
+
+			await projects.deleteProject(created.id, ACTOR);
+
+			const snapshot = await catalog.getCurrentSnapshot();
+			expect(purged).toBe(true);
+			expect(snapshot.projects[0].status).toBe('deleted');
+		});
+
 		it('marks the project deleted but retains its bytes', async () => {
 			const created = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
 

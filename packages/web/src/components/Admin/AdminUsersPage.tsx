@@ -1,8 +1,20 @@
-import { SearchX, ShieldCheck, Users } from 'lucide-react';
-import { Chip, EmptyState, PageContainer, PageHeader, SearchField } from '@/components/ui';
-import { useAdminUsersQuery } from '@/api/hooks';
+import { Ban, SearchX, ShieldCheck, UserCheck, Users } from 'lucide-react';
+import { toast } from 'sonner';
+import {
+	Button,
+	Chip,
+	ConfirmDialog,
+	EmptyState,
+	PageContainer,
+	PageHeader,
+	SearchField,
+} from '@/components/ui';
+import { useAdminUsersQuery, useSetUserSuspension } from '@/api/hooks';
+import { useAuth } from '@/context/AuthContext';
+import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useSearchField } from '@/hooks/useSearchField';
 import { filterBySearch } from '@/lib/search';
+import type { AdminUser } from '@/types';
 
 const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
 	year: 'numeric',
@@ -17,15 +29,33 @@ function formatTimestamp(value: string): string {
 	return Number.isNaN(date.getTime()) ? value : dateTimeFormatter.format(date);
 }
 
-const ROW_GRID = 'grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto]';
+const ROW_GRID = 'grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto_auto]';
 
 export default function AdminUsersPage() {
 	const search = useSearchField();
+	const { user: currentUser } = useAuth();
 	const { data: users } = useAdminUsersQuery();
+	const setSuspension = useSetUserSuspension();
+	const suspensionDialog = useDialogTarget<AdminUser>();
 	// Trimmed so a whitespace-only query counts as no search (filterBySearch
 	// semantics) — an empty directory then shows its own empty state.
 	const query = search.query.trim();
 	const filtered = filterBySearch(users, query, (u) => `${u.name} ${u.email} ${u.id}`);
+	const target = suspensionDialog.target;
+	const suspending = target?.suspended_at == null;
+
+	const confirmSuspension = () => {
+		if (!target) return;
+		setSuspension.mutate(
+			{ userId: target.id, suspended: suspending },
+			{
+				onSuccess: () => {
+					toast.success(suspending ? `${target.name} suspended` : `${target.name} reactivated`);
+					suspensionDialog.close();
+				},
+			},
+		);
+	};
 
 	return (
 		<PageContainer>
@@ -77,6 +107,7 @@ export default function AdminUsersPage() {
 						>
 							Last active
 						</span>
+						<span className="sr-only">Actions</span>
 					</div>
 					{filtered.map((user) => (
 						<div
@@ -93,6 +124,12 @@ export default function AdminUsersPage() {
 											Super admin
 										</Chip>
 									)}
+									{user.suspended_at && (
+										<Chip>
+											<Ban className="size-3" />
+											Suspended
+										</Chip>
+									)}
 								</span>
 								<span className="truncate text-xs text-muted-foreground">{user.email}</span>
 							</span>
@@ -100,10 +137,54 @@ export default function AdminUsersPage() {
 							<span className="text-right text-xs tabular-nums text-muted-foreground">
 								{formatTimestamp(user.updated_at)}
 							</span>
+							{(() => {
+								// A super admin cannot suspend their own account (the API rejects
+								// it), so disable the action on the signed-in user's own row.
+								// Reactivation stays enabled: a self row is only ever active, but
+								// keep the branch explicit rather than assume records can't exist.
+								// The title rides on the wrapper — react-aria drops it off Button.
+								const isSelfSuspend = user.id === currentUser?.id && !user.suspended_at;
+								return (
+									<span
+										className="inline-flex justify-self-end"
+										title={isSelfSuspend ? 'You cannot suspend your own account' : undefined}
+									>
+										<Button
+											size="sm"
+											variant={user.suspended_at ? 'default' : 'danger'}
+											isDisabled={isSelfSuspend}
+											onPress={() => suspensionDialog.open(user)}
+										>
+											{user.suspended_at ? (
+												<UserCheck className="size-3.5" />
+											) : (
+												<Ban className="size-3.5" />
+											)}
+											{user.suspended_at ? 'Reactivate' : 'Suspend'}
+										</Button>
+									</span>
+								);
+							})()}
 						</div>
 					))}
 				</div>
 			)}
+
+			<ConfirmDialog
+				isOpen={suspensionDialog.isOpen}
+				onClose={suspensionDialog.close}
+				title={`${suspending ? 'Suspend' : 'Reactivate'} ${target?.name ?? 'user'}`}
+				description={
+					suspending
+						? 'This user will be blocked from signing in or using personal access tokens. Running sandbox sessions are not terminated.'
+						: 'This user will be able to sign in and use their personal access tokens again.'
+				}
+				confirmLabel={suspending ? 'Suspend' : 'Reactivate'}
+				pendingLabel={suspending ? 'Suspending…' : 'Reactivating…'}
+				variant={suspending ? 'danger' : 'primary'}
+				isPending={setSuspension.isPending}
+				onConfirm={confirmSuspension}
+			/>
 		</PageContainer>
 	);
 }

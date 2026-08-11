@@ -93,6 +93,7 @@ components:
                 - SERVICE_UNAVAILABLE
                 - RESOURCE_EXHAUSTED
                 - UNAUTHORIZED
+                - USER_SUSPENDED
                 - GONE
                 - PAYLOAD_TOO_LARGE
                 - NO_HTML_SNAPSHOT
@@ -489,6 +490,11 @@ components:
         updated_at:
           type: string
           format: date-time
+        suspended_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
         is_super_admin:
           type: boolean
       required:
@@ -496,6 +502,7 @@ components:
         - email
         - name
         - updated_at
+        - suspended_at
         - is_super_admin
     DeploymentConfig:
       type: object
@@ -1737,6 +1744,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           description: Request body too large
           content:
@@ -1830,6 +1843,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           description: Request body too large
           content:
@@ -1904,6 +1923,12 @@ paths:
                   - data
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2017,7 +2042,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2098,7 +2123,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2183,6 +2208,12 @@ paths:
                   - data
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2283,7 +2314,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2390,7 +2421,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2473,7 +2504,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2609,7 +2640,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2697,7 +2728,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2774,7 +2805,177 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/users/{id}/suspension:
+    put:
+      tags:
+        - Users
+        - Admin
+      summary: Suspend a user
+      description: Blocks the user at authentication time, including personal access
+        tokens. Super-admin only and session-only. A super admin cannot suspend
+        their own account.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            example: user_01HXY00000000000000000000
+          required: true
+          name: id
+          in: path
+          description: The user's identity-provider subject id
+      responses:
+        '200':
+          description: The suspended user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/AdminUser'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Users
+        - Admin
+      summary: Reactivate a suspended user
+      description: Restores authentication for a known user. Super-admin only and
+        session-only.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            example: user_01HXY00000000000000000000
+          required: true
+          name: id
+          in: path
+          description: The user's identity-provider subject id
+      responses:
+        '200':
+          description: The reactivated user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/AdminUser'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
           content:
             application/json:
               schema:
@@ -2845,7 +3046,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -2933,6 +3134,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -3065,7 +3272,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -3213,7 +3420,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -3306,7 +3513,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -3483,7 +3690,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -3581,6 +3788,12 @@ paths:
                   - data
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -3717,7 +3930,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -3811,7 +4024,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -3904,6 +4117,12 @@ paths:
                   - data
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -4008,6 +4227,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
           content:
@@ -4104,6 +4329,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
           content:
@@ -4176,6 +4407,12 @@ paths:
                 type: string
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -4256,6 +4493,12 @@ paths:
                 type: string
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -4349,7 +4592,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -4461,7 +4704,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -4559,6 +4802,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
           content:
@@ -4647,6 +4896,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
           content:
@@ -4725,7 +4980,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -4812,7 +5067,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -4901,7 +5156,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5018,7 +5273,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5132,7 +5387,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5201,6 +5456,12 @@ paths:
                   - data
         '401':
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5293,7 +5554,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5403,7 +5664,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5500,7 +5761,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5621,7 +5882,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5709,7 +5970,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5821,7 +6082,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5908,7 +6169,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -5995,7 +6256,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -6595,7 +6856,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -6691,7 +6952,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -6781,7 +7042,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -6895,7 +7156,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -6976,7 +7237,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -7081,7 +7342,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -7159,7 +7420,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -7270,7 +7531,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -7377,7 +7638,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -7460,7 +7721,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -7528,7 +7789,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:

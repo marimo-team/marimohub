@@ -469,6 +469,7 @@ export const SessionIdParam = NotebookIdParam.extend({
 export const ERROR_CODES = [
 	...DOMAIN_ERROR_CODES,
 	'UNAUTHORIZED',
+	'USER_SUSPENDED',
 	'GONE',
 	'PAYLOAD_TOO_LARGE',
 	'NO_HTML_SNAPSHOT',
@@ -505,7 +506,7 @@ export const SuccessResponseSchema = z
 const ERROR_DESCRIPTIONS: Record<number, string> = {
 	400: 'Bad request',
 	401: 'Authentication required',
-	403: 'Insufficient role',
+	403: 'Access forbidden',
 	404: 'Not found',
 	409: 'Conflict',
 	412: 'Precondition failed (If-Match did not match the current version)',
@@ -535,14 +536,15 @@ export function errorResponses(...codes: number[]) {
 
 /**
  * Errors reachable on any authenticated `/api/v1/*` route regardless of its
- * handler: 401 (the authN guard), 413 (the body-size guard), 422 (request body /
- * path-param validation via the OpenAPIHono `defaultHook`), 500 (the catch-all),
- * and 503 (a transient storage/compute outage). Spread into a route's `responses` alongside its
+ * handler: 401 (the authN guard), 403 (a suspended user), 413 (the body-size
+ * guard), 422 (request body / path-param validation via the OpenAPIHono
+ * `defaultHook`), 500 (the catch-all), and 503 (a transient storage/compute
+ * outage). Spread into a route's `responses` alongside its
  * handler-specific codes so the generated client models them too:
  *   responses: { 200: ..., ...commonErrors(), ...errorResponses(403, 404) }
  */
 export function commonErrors() {
-	return errorResponses(401, 413, 422, 500, 503);
+	return errorResponses(401, 403, 413, 422, 500, 503);
 }
 
 // --- Domain response schemas for OpenAPI docs ---
@@ -851,6 +853,8 @@ export const AdminUserResponseSchema = z
 		 * precise last-seen timestamp.
 		 */
 		updated_at: z.string().openapi({ format: 'date-time' }),
+		/** When access was suspended; null means the user is active. */
+		suspended_at: z.string().openapi({ format: 'date-time' }).nullable(),
 		/** Whether this user matches an entry in MARIMOHUB_SUPER_ADMINS. */
 		is_super_admin: z.boolean(),
 	})

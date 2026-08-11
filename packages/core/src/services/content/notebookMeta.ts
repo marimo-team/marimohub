@@ -98,3 +98,20 @@ export function buildNotebookEntry(
 		key_prefix: keyPrefix,
 	};
 }
+
+export function notebookCatalogPatch(
+	meta: NotebookMeta,
+): Pick<
+	SnapshotNotebookEntry,
+	'title' | 'description' | 'status' | 'updated_at' | 'tags' | 'last_run_at' | 'compute_profile'
+> {
+	return {
+		title: meta.title,
+		description: meta.description,
+		status: meta.status,
+		updated_at: meta.updated_at,
+		tags: meta.tags,
+		last_run_at: meta.last_run_at,
+		compute_profile: meta.compute_profile,
+	};
+}

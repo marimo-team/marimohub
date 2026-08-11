@@ -63,8 +63,8 @@ export class NotFoundError extends DomainError {
 export class ConflictError extends DomainError {
 	readonly code = 'CONFLICT';
 	readonly status = 409;
-	constructor(message = 'Conflict') {
-		super(message);
+	constructor(message = 'Conflict', options?: ErrorOptions) {
+		super(message, options);
 		this.name = 'ConflictError';
 	}
 }

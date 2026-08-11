@@ -15,6 +15,7 @@ import {
 import {
 	acquireSingletonClaim,
 	mutateObject,
+	mutateObjectWithOutcome,
 	releaseSingletonClaim,
 	withCasRetry,
 } from '../catalog/cas';
@@ -107,12 +108,12 @@ export class SessionService {
 	 * heartbeat — its conditional write fails the ETag check, `apply` re-runs against
 	 * the fresh (terminal) state, and no-ops. See `mutateObject` in `./cas`.
 	 */
-	private mutate(
+	private async mutate(
 		projectId: ProjectId,
 		id: SessionId,
 		apply: (session: Session) => Session | null,
 	): Promise<Session> {
-		return mutateObject(
+		const value = await mutateObject(
 			this.bucket,
 			paths.session(projectId, id),
 			(raw) => parseStored(SessionSchema, raw, paths.session(projectId, id)),
@@ -123,6 +124,7 @@ export class SessionService {
 				onExhausted: () => this.metrics.increment('sessions.cas.exhausted'),
 			},
 		);
+		return value;
 	}
 
 	async createSession(input: CreateSessionInput): Promise<Session> {
@@ -677,7 +679,8 @@ export class SessionService {
 	): Promise<{ claimed: boolean; claim: EditorClaim }> {
 		const key = paths.editorClaim(projectId, notebookId);
 		return withCasRetry(
-			async () => {
+			this.bucket,
+			async (cas) => {
 				const obj = await this.bucket.get(key);
 				const next: EditorClaim = {
 					session_id: sessionId,
@@ -685,7 +688,7 @@ export class SessionService {
 					claimed_at: new Date().toISOString(),
 				};
 				if (!obj) {
-					await this.bucket.put(key, JSON.stringify(next), { onlyIfNotExists: true });
+					await cas.put(key, JSON.stringify(next), { onlyIfNotExists: true });
 					return { claimed: true, claim: next };
 				}
 				const current = await readStored(EditorClaimSchema, obj, key);
@@ -706,7 +709,7 @@ export class SessionService {
 						...current,
 						transfer: { ...current.transfer, replacement_session_id: sessionId },
 					};
-					await this.bucket.put(key, JSON.stringify(reservedClaim), {
+					await cas.put(key, JSON.stringify(reservedClaim), {
 						onlyIfEtagMatches: obj.etag,
 					});
 					return { claimed: true, claim: reservedClaim };
@@ -718,7 +721,9 @@ export class SessionService {
 					return { claimed: false, claim: current };
 				}
 				const replacement = { ...current, ...next, transfer: undefined };
-				await this.bucket.put(key, JSON.stringify(replacement), { onlyIfEtagMatches: obj.etag });
+				await cas.put(key, JSON.stringify(replacement), {
+					onlyIfEtagMatches: obj.etag,
+				});
 				return { claimed: true, claim: replacement };
 			},
 			{
@@ -803,7 +808,7 @@ export class SessionService {
 			expectedActivity: 'active' | 'idle' | 'unknown' | 'starting';
 		},
 	): Promise<EditorClaim> {
-		return mutateObject(
+		const value = await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
 			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
@@ -829,12 +834,13 @@ export class SessionService {
 						takeover_id: input.takeoverId,
 						requested_by: input.requestedBy,
 						expected_activity: input.expectedActivity,
-						phase: 'requested',
+						phase: 'requested' as const,
 						requested_at: new Date().toISOString(),
 					},
 				};
 			},
 		);
+		return value;
 	}
 
 	async setTakeoverPhase(
@@ -844,7 +850,7 @@ export class SessionService {
 		phase: 'draining' | 'ready',
 		replacementSessionId?: SessionId,
 	): Promise<EditorClaim> {
-		return mutateObject(
+		const value = await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
 			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
@@ -868,6 +874,7 @@ export class SessionService {
 				};
 			},
 		);
+		return value;
 	}
 
 	async acquireTakeoverDrainLease(
@@ -876,13 +883,11 @@ export class SessionService {
 		takeoverId: string,
 		leaseId: string,
 	): Promise<boolean> {
-		let acquired = false;
-		await mutateObject(
+		const claim = await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
 			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
-				acquired = false;
 				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
 					throw new EditSessionChangedError();
 				}
@@ -891,7 +896,6 @@ export class SessionService {
 					claim.transfer.drain_lease_expires_at &&
 					Date.parse(claim.transfer.drain_lease_expires_at) > Date.now();
 				if (activeLease && claim.transfer.drain_lease_id !== leaseId) return null;
-				acquired = true;
 				if (activeLease) return null;
 				const now = Date.now();
 				return {
@@ -908,7 +912,10 @@ export class SessionService {
 				};
 			},
 		);
-		return acquired;
+		return (
+			claim.transfer?.drain_lease_id === leaseId &&
+			Date.parse(claim.transfer.drain_lease_expires_at ?? '') > Date.now()
+		);
 	}
 
 	async renewTakeoverDrainLease(
@@ -917,13 +924,11 @@ export class SessionService {
 		takeoverId: string,
 		leaseId: string,
 	): Promise<boolean> {
-		let renewed = false;
-		await mutateObject(
+		const { written } = await mutateObjectWithOutcome(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
 			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
-				renewed = false;
 				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
 					throw new EditSessionChangedError();
 				}
@@ -943,7 +948,6 @@ export class SessionService {
 				) {
 					return null;
 				}
-				renewed = true;
 				return {
 					...claim,
 					transfer: {
@@ -955,7 +959,7 @@ export class SessionService {
 				};
 			},
 		);
-		return renewed;
+		return written;
 	}
 
 	async advanceTakeoverDrainLease(
@@ -965,13 +969,11 @@ export class SessionService {
 		leaseId: string,
 		stage: TakeoverDrainStage,
 	): Promise<boolean> {
-		let advanced = false;
-		await mutateObject(
+		const claim = await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
 			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
 			(claim) => {
-				advanced = false;
 				if (claim.transfer?.takeover_id !== takeoverId || claim.transfer.phase !== 'draining') {
 					throw new EditSessionChangedError();
 				}
@@ -989,10 +991,8 @@ export class SessionService {
 					currentStage &&
 					TAKEOVER_DRAIN_STAGE_ORDER[stage] <= TAKEOVER_DRAIN_STAGE_ORDER[currentStage]
 				) {
-					advanced = currentStage === stage;
 					return null;
 				}
-				advanced = true;
 				return {
 					...claim,
 					transfer: {
@@ -1006,7 +1006,11 @@ export class SessionService {
 				};
 			},
 		);
-		return advanced;
+		return (
+			claim.transfer?.drain_lease_id === leaseId &&
+			claim.transfer.drain_lease_stage === stage &&
+			Date.parse(claim.transfer.drain_lease_expires_at ?? '') > Date.now()
+		);
 	}
 
 	async finishTakeoverDrainLease(
@@ -1091,7 +1095,7 @@ export class SessionService {
 		takeoverId: string,
 		replacementSessionId: SessionId,
 	): Promise<EditorClaim> {
-		return mutateObject(
+		const value = await mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
 			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
@@ -1106,12 +1110,13 @@ export class SessionService {
 				return {
 					...claim,
 					session_id: replacementSessionId,
-					sharing: 'exclusive',
+					sharing: 'exclusive' as const,
 					claimed_at: new Date().toISOString(),
 					transfer: undefined,
 				};
 			},
 		);
+		return value;
 	}
 
 	async cancelRequestedTakeover(

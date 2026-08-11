@@ -17,6 +17,7 @@ interface AdminUser {
 	email: string;
 	name: string;
 	updated_at: string;
+	suspended_at: string | null;
 	is_super_admin: boolean;
 }
 
@@ -46,6 +47,7 @@ describe('Admin routes', () => {
 		const { request } = createTestApi({ bucket, userId: ACTOR });
 		await expectError(await request('GET', '/admin/users'), 403, 'FORBIDDEN');
 		await expectError(await request('GET', '/admin/config'), 403, 'FORBIDDEN');
+		await expectError(await request('PUT', `/users/${uid('target')}/suspension`), 403, 'FORBIDDEN');
 	});
 
 	it('rejects a super admin PAT with 403 — admin endpoints are session-only', async () => {
@@ -61,8 +63,13 @@ describe('Admin routes', () => {
 			await session.request('POST', '/me/tokens', { name: 'ci' }),
 			201,
 		);
-		for (const path of ['/api/v1/admin/users', '/api/v1/admin/config']) {
+		for (const path of [
+			'/api/v1/admin/users',
+			'/api/v1/admin/config',
+			`/api/v1/users/${uid('target')}/suspension`,
+		]) {
 			const res = await composed.request(path, {
+				method: path.includes('/suspension') ? 'PUT' : 'GET',
 				headers: { authorization: `Bearer ${token}` },
 			});
 			await expectError(res, 403, 'FORBIDDEN');
@@ -86,6 +93,10 @@ describe('Admin routes', () => {
 		};
 		expect(doc.paths['/api/v1/admin/users'].get.security).toEqual([{ cookieAuth: [] }]);
 		expect(doc.paths['/api/v1/admin/config'].get.security).toEqual([{ cookieAuth: [] }]);
+		expect(doc.paths['/api/v1/users/{id}/suspension'].put.security).toEqual([{ cookieAuth: [] }]);
+		expect(doc.paths['/api/v1/users/{id}/suspension'].delete.security).toEqual([
+			{ cookieAuth: [] },
+		]);
 	});
 
 	describe('GET /admin/users', () => {
@@ -172,6 +183,66 @@ describe('Admin routes', () => {
 			} finally {
 				log.mockRestore();
 			}
+		});
+	});
+
+	describe('user suspension', () => {
+		const target = uid('usr_target');
+
+		async function seedTarget(deps: ReturnType<typeof superAdminApi>['deps']) {
+			await deps.services.identities.upsert({
+				id: target,
+				email: 'target@x.io',
+				name: 'Target User',
+			});
+		}
+
+		it('suspends and reactivates a user and appends audit events', async () => {
+			const { request, deps } = superAdminApi();
+			await seedTarget(deps);
+
+			const suspended = await expectOk<AdminUser>(
+				await request('PUT', `/users/${target}/suspension`),
+			);
+			expect(suspended.suspended_at).toEqual(expect.any(String));
+			expect(await deps.services.identities.isSuspended(target)).toBe(true);
+
+			const active = await expectOk<AdminUser>(
+				await request('DELETE', `/users/${target}/suspension`),
+			);
+			expect(active.suspended_at).toBeNull();
+			expect(await deps.services.identities.isSuspended(target)).toBe(false);
+
+			const today = new Date().toISOString().slice(0, 10);
+			const events = await deps.services.events.getEvents(today);
+			expect(events.map((event) => ({ event: event.event, target: event.target_user_id }))).toEqual(
+				expect.arrayContaining([
+					{ event: 'user.suspended', target },
+					{ event: 'user.unsuspended', target },
+				]),
+			);
+		});
+
+		it('rejects self-suspension', async () => {
+			const { request, deps } = superAdminApi();
+			await request('GET', '/me');
+
+			const error = await expectError(
+				await request('PUT', `/users/${ACTOR}/suspension`),
+				403,
+				'FORBIDDEN',
+			);
+			expect(error.message).toContain('own account');
+			expect(await deps.services.identities.isSuspended(ACTOR)).toBe(false);
+		});
+
+		it('returns 404 for a user absent from the directory', async () => {
+			const { request } = superAdminApi();
+			await expectError(
+				await request('PUT', `/users/${uid('missing')}/suspension`),
+				404,
+				'NOT_FOUND',
+			);
 		});
 	});
 

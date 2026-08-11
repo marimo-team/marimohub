@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { UnavailableError } from '../../errors';
 import { MemoryBucket, uid } from '../../testing';
 import { paths } from '../../paths';
 import { IdentityService } from './IdentityService';
@@ -97,6 +98,291 @@ describe('IdentityService', () => {
 
 		it('returns an empty list when nothing resolves', async () => {
 			expect(await identities.getMany([uid('missing')])).toEqual([]);
+		});
+	});
+
+	describe('suspension', () => {
+		it('loads only the requested identity and caches the active result', async () => {
+			await identities.upsert({ id: uid('target'), email: 'target@x.io', name: 'Target' });
+			await identities.upsert({ id: uid('other'), email: 'other@x.io', name: 'Other' });
+			const checking = new IdentityService(bucket);
+			const get = vi.spyOn(bucket, 'get');
+			const list = vi.spyOn(bucket, 'list');
+
+			expect(await checking.isSuspended(uid('target'))).toBe(false);
+			expect(await checking.isSuspended(uid('target'))).toBe(false);
+
+			expect(list).not.toHaveBeenCalled();
+			expect(get).toHaveBeenCalledTimes(1);
+			expect(get).toHaveBeenCalledWith(paths.identity(uid('target')));
+		});
+
+		it('coalesces concurrent cold checks for the same user', async () => {
+			await identities.upsert({ id: uid('target'), email: 'target@x.io', name: 'Target' });
+			const checking = new IdentityService(bucket);
+			const get = vi.spyOn(bucket, 'get');
+
+			await expect(
+				Promise.all(Array.from({ length: 20 }, () => checking.isSuspended(uid('target')))),
+			).resolves.toEqual(Array.from({ length: 20 }, () => false));
+			expect(get).toHaveBeenCalledTimes(1);
+		});
+
+		it('fails closed on a cold read error, then retries successfully', async () => {
+			await identities.upsert({ id: uid('target'), email: 'target@x.io', name: 'Target' });
+			const checking = new IdentityService(bucket);
+			const originalGet = bucket.get.bind(bucket);
+			const get = vi
+				.spyOn(bucket, 'get')
+				.mockRejectedValueOnce(new Error('bucket unavailable'))
+				.mockImplementation(originalGet);
+
+			await expect(checking.isSuspended(uid('target'))).rejects.toBeInstanceOf(UnavailableError);
+			await expect(checking.isSuspended(uid('target'))).resolves.toBe(false);
+			expect(get).toHaveBeenCalledTimes(2);
+		});
+
+		it('fails closed when the stored identity cannot be parsed', async () => {
+			await bucket.put(paths.identity(uid('target')), '{not valid json');
+
+			await expect(new IdentityService(bucket).isSuspended(uid('target'))).rejects.toBeInstanceOf(
+				UnavailableError,
+			);
+		});
+
+		it('suspends and reactivates a known user', async () => {
+			await identities.upsert({ id: uid('target'), email: 'target@x.io', name: 'Target' });
+
+			const suspended = await identities.setSuspension(uid('target'), true);
+			expect(suspended.suspended_at).toBeTruthy();
+			expect(await identities.isSuspended(uid('target'))).toBe(true);
+
+			const active = await identities.setSuspension(uid('target'), false);
+			expect(active.suspended_at).toBeUndefined();
+			expect(await identities.isSuspended(uid('target'))).toBe(false);
+		});
+
+		it('does not rewrite an identity when suspension state is unchanged', async () => {
+			await identities.upsert({ id: uid('target'), email: 'target@x.io', name: 'Target' });
+			await identities.setSuspension(uid('target'), true);
+			const put = vi.spyOn(bucket, 'put');
+
+			await identities.setSuspension(uid('target'), true);
+			expect(put).not.toHaveBeenCalled();
+
+			await identities.setSuspension(uid('target'), false);
+			expect(put).toHaveBeenCalledTimes(1);
+			await identities.setSuspension(uid('target'), false);
+			expect(put).toHaveBeenCalledTimes(1);
+		});
+
+		it('returns false for users absent from the directory', async () => {
+			expect(await identities.isSuspended(uid('missing'))).toBe(false);
+		});
+
+		it('rejects suspension changes for an unknown user', async () => {
+			await expect(identities.setSuspension(uid('missing'), true)).rejects.toThrow(
+				'User missing not found',
+			);
+		});
+
+		it('preserves suspension when an upsert refreshes profile fields', async () => {
+			await identities.upsert({ id: uid('target'), email: 'old@x.io', name: 'Old Name' });
+			const suspendedAt = (await identities.setSuspension(uid('target'), true)).suspended_at;
+
+			await identities.upsert({ id: uid('target'), email: 'new@x.io', name: 'New Name' });
+
+			expect(await identities.get(uid('target'))).toMatchObject({
+				email: 'new@x.io',
+				name: 'New Name',
+				suspended_at: suspendedAt,
+			});
+		});
+
+		it('does not resurrect a user when another service has a stale directory cache', async () => {
+			await identities.upsert({ id: uid('target'), email: 'old@x.io', name: 'Old Name' });
+			const stale = new IdentityService(bucket);
+			expect(await stale.isSuspended(uid('target'))).toBe(false);
+
+			const suspendedAt = (await identities.setSuspension(uid('target'), true)).suspended_at;
+			expect(await stale.isSuspended(uid('target'))).toBe(false);
+
+			await stale.upsert({ id: uid('target'), email: 'new@x.io', name: 'New Name' });
+			expect(await identities.get(uid('target'))).toMatchObject({
+				email: 'new@x.io',
+				suspended_at: suspendedAt,
+			});
+		});
+
+		it('retries a profile upsert that races with suspension', async () => {
+			await identities.upsert({ id: uid('target'), email: 'old@x.io', name: 'Old Name' });
+			const stale = new IdentityService(bucket);
+			const originalGet = bucket.get.bind(bucket);
+			let releaseRead!: () => void;
+			let readCaptured!: () => void;
+			const release = new Promise<void>((resolve) => {
+				releaseRead = resolve;
+			});
+			const captured = new Promise<void>((resolve) => {
+				readCaptured = resolve;
+			});
+			let intercept = true;
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				const object = await originalGet(key);
+				if (intercept && key === paths.identity(uid('target'))) {
+					intercept = false;
+					readCaptured();
+					await release;
+				}
+				return object;
+			});
+
+			const upsert = stale.upsert({
+				id: uid('target'),
+				email: 'new@x.io',
+				name: 'New Name',
+			});
+			await captured;
+			const suspendedAt = (await identities.setSuspension(uid('target'), true)).suspended_at;
+			releaseRead();
+			await upsert;
+
+			expect(await identities.get(uid('target'))).toMatchObject({
+				email: 'new@x.io',
+				name: 'New Name',
+				suspended_at: suspendedAt,
+			});
+		});
+
+		it('keeps a local suspension that races with a cache refresh', async () => {
+			await identities.upsert({ id: uid('target'), email: 'old@x.io', name: 'Old Name' });
+			const refreshing = new IdentityService(bucket);
+			const originalGet = bucket.get.bind(bucket);
+			let releaseScan!: () => void;
+			let scanCaptured!: () => void;
+			const release = new Promise<void>((resolve) => {
+				releaseScan = resolve;
+			});
+			const captured = new Promise<void>((resolve) => {
+				scanCaptured = resolve;
+			});
+			let intercept = true;
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				const object = await originalGet(key);
+				if (intercept && key === paths.identity(uid('target'))) {
+					intercept = false;
+					scanCaptured();
+					await release;
+				}
+				return object;
+			});
+
+			const check = refreshing.isSuspended(uid('target'));
+			await captured;
+			await refreshing.setSuspension(uid('target'), true);
+			releaseScan();
+
+			expect(await check).toBe(true);
+			expect(await refreshing.isSuspended(uid('target'))).toBe(true);
+		});
+
+		it('serves a stale active result while revalidating, then observes suspension', async () => {
+			vi.useFakeTimers();
+			try {
+				await identities.upsert({ id: uid('target'), email: 'old@x.io', name: 'Old Name' });
+				const checking = new IdentityService(bucket);
+				expect(await checking.isSuspended(uid('target'))).toBe(false);
+
+				await identities.setSuspension(uid('target'), true);
+				vi.advanceTimersByTime(IdentityService.ACTIVE_SUSPENSION_FRESH_MS + 1);
+				expect(await checking.isSuspended(uid('target'))).toBe(false);
+				await vi.waitFor(async () => {
+					expect(await checking.isSuspended(uid('target'))).toBe(true);
+				});
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('fails closed when an active result reaches its hard expiry', async () => {
+			vi.useFakeTimers();
+			try {
+				await identities.upsert({ id: uid('target'), email: 'old@x.io', name: 'Old Name' });
+				const checking = new IdentityService(bucket);
+				expect(await checking.isSuspended(uid('target'))).toBe(false);
+				vi.advanceTimersByTime(IdentityService.ACTIVE_SUSPENSION_MAX_AGE_MS);
+				vi.spyOn(bucket, 'get').mockRejectedValue(new Error('bucket unavailable'));
+
+				await expect(checking.isSuspended(uid('target'))).rejects.toBeInstanceOf(UnavailableError);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('serves a stale active result when background refresh fails and logs the user', async () => {
+			vi.useFakeTimers();
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				await identities.upsert({ id: uid('target'), email: 'old@x.io', name: 'Old Name' });
+				const checking = new IdentityService(bucket);
+				expect(await checking.isSuspended(uid('target'))).toBe(false);
+				const get = vi.spyOn(bucket, 'get').mockRejectedValue(new Error('bucket unavailable'));
+
+				vi.advanceTimersByTime(IdentityService.ACTIVE_SUSPENSION_FRESH_MS + 1);
+				await expect(checking.isSuspended(uid('target'))).resolves.toBe(false);
+				await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(1));
+
+				const event = JSON.parse(log.mock.calls[0][0] as string) as Record<string, unknown>;
+				expect(event).toMatchObject({
+					event: 'identity_suspension_refresh_failed',
+					user_id: uid('target'),
+					error: { name: 'UnavailableError' },
+				});
+				await expect(checking.isSuspended(uid('target'))).resolves.toBe(false);
+				expect(get).toHaveBeenCalledTimes(1);
+			} finally {
+				log.mockRestore();
+				vi.useRealTimers();
+			}
+		});
+
+		it('keeps denying a cached suspension while reactivation revalidates', async () => {
+			vi.useFakeTimers();
+			try {
+				await identities.upsert({ id: uid('target'), email: 'old@x.io', name: 'Old Name' });
+				await identities.setSuspension(uid('target'), true);
+				const checking = new IdentityService(bucket);
+				expect(await checking.isSuspended(uid('target'))).toBe(true);
+
+				await identities.setSuspension(uid('target'), false);
+				vi.advanceTimersByTime(IdentityService.SUSPENDED_FRESH_MS + 1);
+				expect(await checking.isSuspended(uid('target'))).toBe(true);
+				await vi.waitFor(async () => {
+					expect(await checking.isSuspended(uid('target'))).toBe(false);
+				});
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('keeps denying a cached suspension when background refresh fails', async () => {
+			vi.useFakeTimers();
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				await identities.upsert({ id: uid('target'), email: 'old@x.io', name: 'Old Name' });
+				await identities.setSuspension(uid('target'), true);
+				const checking = new IdentityService(bucket);
+				expect(await checking.isSuspended(uid('target'))).toBe(true);
+				vi.spyOn(bucket, 'get').mockRejectedValue(new Error('bucket unavailable'));
+
+				vi.advanceTimersByTime(IdentityService.SUSPENDED_FRESH_MS + 1);
+				await expect(checking.isSuspended(uid('target'))).resolves.toBe(true);
+				await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(1));
+				await expect(checking.isSuspended(uid('target'))).resolves.toBe(true);
+			} finally {
+				log.mockRestore();
+				vi.useRealTimers();
+			}
 		});
 	});
 

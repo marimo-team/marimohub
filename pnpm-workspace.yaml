@@ -39,7 +39,7 @@ catalog:
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
   concurrently: ^10.0.3
-  hono: ^4.12.31
+  hono: ^4.12.34
   jose: ^6.1.3
   jsdom: ^29.1.1
   lucide-react: ^1.17.0
@@ -79,24 +79,21 @@ minimumReleaseAgeExclude:
   # Security fixes take precedence over the release-age cooldown.
   - brace-expansion
   - nanoid
+  - hono@4.12.34
+  - ip-address@10.3.1
+  - js-yaml@3.15.1
+  - js-yaml@4.3.1
+  - linkify-it@5.0.2
   - postcss
+  - protobufjs@7.6.5
+  - react-router@7.18.2
+  - react-router-dom@7.18.2
+  - shell-quote@1.9.0
   - tar
   - undici
-  # Renovate security update: vite@6.4.3
   - vite@6.4.3
-  # Renovate security update: hono@4.12.34
-  - hono@4.12.34
 
 onlyBuiltDependencies: []
-
-overrides:
-  brace-expansion: 5.0.8
-  hono: 4.12.34
-  postcss: 8.5.23
-  tar: 7.5.21
-  vite: 'catalog:'
-  vitepress>vite: ^6.4.3
-  vitest: 'catalog:'
 
 peerDependencyRules:
   allowAny:
