@@ -135,6 +135,32 @@ describe('bootstrap', () => {
 		expect(harness.exit).toHaveBeenCalledWith(0);
 	});
 
+	it('logs a warning and still exits 0 when the drain times out', async () => {
+		const harness = makeHarness(deps, { closeImmediately: false });
+		await bootstrap(BASE_ENV, harness.overrides);
+
+		harness.signals.get('SIGTERM')?.();
+		await vi.advanceTimersByTimeAsync(10_000);
+
+		expect(harness.exit).toHaveBeenCalledWith(0);
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"event":"drain_timeout"'));
+	});
+
+	it('logs an error and exits non-zero when the drain rejects', async () => {
+		vi.mocked(startMaintenance).mockReturnValueOnce(() => {
+			throw new Error('stop failed');
+		});
+		const harness = makeHarness(deps);
+		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+
+		harness.signals.get('SIGTERM')?.();
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"event":"drain_failed"'));
+		expect(harness.exit).toHaveBeenCalledWith(1);
+		expect(harness.exit).not.toHaveBeenCalledWith(0);
+	});
+
 	it('flushes OpenTelemetry during drain', async () => {
 		const shutdown = vi.fn().mockResolvedValue(undefined);
 		const harness = makeHarness(deps, {
