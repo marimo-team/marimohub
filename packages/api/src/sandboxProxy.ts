@@ -11,7 +11,12 @@
  * the Node relay uses to close an established socket.
  */
 import type { MiddlewareHandler } from 'hono';
-import { ForbiddenError, ProxyExposure, verifyProxyToken } from '@marimo-hub/core';
+import {
+	ForbiddenError,
+	ProxyExposure,
+	UnavailableError,
+	verifyProxyToken,
+} from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import { assertSessionAccess, fail } from './shared';
@@ -79,6 +84,32 @@ export async function authorizeProxyRequest(
 			code: 'UNAUTHORIZED',
 			message: 'Authentication required',
 		};
+	}
+
+	// Suspension is enforced at every authenticator call site (the `/api/v1/*`
+	// guard, deep health). A suspended user is denied new kernel traffic on this
+	// request; the running sandbox process is not terminated. Fails closed (503)
+	// when the status cannot be verified, matching the `/api/v1/*` guard. Shared
+	// with the WebSocket forwarder, which consumes this ProxyDecision directly.
+	try {
+		if (await deps.services.identities.isSuspended(user.id)) {
+			return {
+				kind: 'reject',
+				status: 403,
+				code: 'FORBIDDEN',
+				message: 'User account is suspended',
+			};
+		}
+	} catch (err) {
+		if (err instanceof UnavailableError) {
+			return {
+				kind: 'reject',
+				status: 503,
+				code: 'SERVICE_UNAVAILABLE',
+				message: 'Unable to verify account suspension status',
+			};
+		}
+		throw err;
 	}
 
 	let session;

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { AuthProvider } from '@/context/AuthContext';
 import { ErrorBoundary } from '@/components/ui';
 import type { AdminUser } from '@/types';
 import AdminUsersPage from './AdminUsersPage';
@@ -25,12 +26,22 @@ const USERS: AdminUser[] = [
 	},
 ];
 
-function setup(items: AdminUser[] = USERS) {
+// Default to a signed-in user absent from the directory so existing assertions
+// see no self-row; individual tests override to exercise self-suspension.
+function setup(items: AdminUser[] = USERS, currentUserId = 'user-self') {
 	let current = items.map((item) => ({ ...item }));
+	const me = {
+		id: currentUserId,
+		email: `${currentUserId}@example.com`,
+		name: 'Current User',
+		logout_url: null,
+		is_super_admin: true,
+	};
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = String(input);
+			if (url === '/api/v1/me') return jsonOk(me);
 			if (url === '/api/v1/admin/users') return jsonOk({ items: current, next_cursor: null });
 			const match = /^\/api\/v1\/users\/([^/]+)\/suspension$/.exec(url);
 			if (match) {
@@ -49,7 +60,11 @@ function setup(items: AdminUser[] = USERS) {
 			throw new Error(`unexpected fetch: ${url}`);
 		}),
 	);
-	renderWithClient(<AdminUsersPage />);
+	renderWithClient(
+		<AuthProvider>
+			<AdminUsersPage />
+		</AuthProvider>,
+	);
 	return userEvent.setup();
 }
 
@@ -106,6 +121,23 @@ describe('AdminUsersPage', () => {
 		);
 	});
 
+	it('disables self-suspension for the signed-in super admin', async () => {
+		setup(USERS, 'user-ada');
+		await screen.findByText('Ada Lovelace');
+
+		const rows = screen.getAllByTestId('admin-user-row');
+		const selfButton = rows[0].querySelector('button')!;
+		// The self row's Suspend action is disabled once /me resolves; the API would
+		// reject a self-suspension, so the UI never offers the failing confirmation.
+		await waitFor(() => expect(selfButton).toBeDisabled());
+		expect(selfButton.closest('[title]')).toHaveAttribute(
+			'title',
+			'You cannot suspend your own account',
+		);
+		// Another user's row stays actionable.
+		expect(rows[1].querySelector('button')!).toBeEnabled();
+	});
+
 	it('filters by name, email, or id from the search box', async () => {
 		const user = setup();
 		await screen.findByText('Ada Lovelace');
@@ -140,7 +172,9 @@ describe('AdminUsersPage', () => {
 			);
 			renderWithClient(
 				<ErrorBoundary>
-					<AdminUsersPage />
+					<AuthProvider>
+						<AdminUsersPage />
+					</AuthProvider>
 				</ErrorBoundary>,
 			);
 			expect(await screen.findByText('Something went wrong')).toBeInTheDocument();

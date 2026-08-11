@@ -123,6 +123,23 @@ describe('createApi suspended-user enforcement', () => {
 		const { request } = createTestApi({ bucket, deps: { services } });
 		await expectError(await request('GET', '/projects'), 503, 'SERVICE_UNAVAILABLE');
 	});
+
+	// The deep health probe authenticates outside the `/api/v1/*` guard, so it must
+	// enforce suspension on its own (the shallow probe stays unauthenticated).
+	it('rejects a suspended user from the deep health probe', async () => {
+		const bucket = await createInitializedBucket();
+		const { app, deps } = createTestApi({ bucket });
+		await deps.services.identities.upsert({
+			id: ACTOR,
+			email: `${ACTOR}@example.com`,
+			name: 'Suspended User',
+		});
+		await deps.services.identities.setSuspension(ACTOR, true);
+
+		await expectError(await app.request('/api/health?deep=true'), 403, 'USER_SUSPENDED');
+		// The shallow probe never touches auth, so it stays reachable.
+		expect((await app.request('/api/health')).status).toBe(200);
+	});
 });
 
 describe('createApi CSRF guard', () => {

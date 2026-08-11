@@ -3,7 +3,13 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createServices, ProxyExposure, signProxyToken, SubdomainExposure } from '@marimo-hub/core';
+import {
+	createServices,
+	ProxyExposure,
+	signProxyToken,
+	SubdomainExposure,
+	UnavailableError,
+} from '@marimo-hub/core';
 import type { Authenticator, ProjectId, UserId } from '@marimo-hub/core';
 import { ACTOR, makeFakeCompute, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -103,6 +109,27 @@ describe('authorizeProxyRequest', () => {
 	it('rejects a caller without project access with 403', async () => {
 		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(STRANGER));
 		expect(d).toMatchObject({ kind: 'reject', status: 403 });
+	});
+
+	it('rejects a suspended user with 403 and leaves the running session alive', async () => {
+		const d = deps(ACTOR);
+		await d.services.identities.upsert({ id: ACTOR, email: `${ACTOR}@example.com`, name: 'A' });
+		await d.services.identities.setSuspension(ACTOR, true);
+
+		const decision = await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+		expect(decision).toMatchObject({ kind: 'reject', status: 403, code: 'FORBIDDEN' });
+		// The kernel process is not torn down — the session stays running.
+		expect((await createServices(bucket).sessions.getSession(pid, sessionId as never)).status).toBe(
+			'running',
+		);
+	});
+
+	it('fails closed with 503 when suspension status cannot be verified', async () => {
+		const d = deps(ACTOR);
+		vi.spyOn(d.services.identities, 'isSuspended').mockRejectedValue(new UnavailableError('down'));
+
+		const decision = await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+		expect(decision).toMatchObject({ kind: 'reject', status: 503, code: 'SERVICE_UNAVAILABLE' });
 	});
 
 	it('forwards a non-member super admin to the kernel', async () => {

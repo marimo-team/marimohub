@@ -10,6 +10,7 @@ import {
 	SearchField,
 } from '@/components/ui';
 import { useAdminUsersQuery, useSetUserSuspension } from '@/api/hooks';
+import { useAuth } from '@/context/AuthContext';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useSearchField } from '@/hooks/useSearchField';
 import { filterBySearch } from '@/lib/search';
@@ -32,6 +33,7 @@ const ROW_GRID = 'grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto_auto]';
 
 export default function AdminUsersPage() {
 	const search = useSearchField();
+	const { user: currentUser } = useAuth();
 	const { data: users } = useAdminUsersQuery();
 	const setSuspension = useSetUserSuspension();
 	const suspensionDialog = useDialogTarget<AdminUser>();
@@ -135,18 +137,34 @@ export default function AdminUsersPage() {
 							<span className="text-right text-xs tabular-nums text-muted-foreground">
 								{formatTimestamp(user.updated_at)}
 							</span>
-							<Button
-								size="sm"
-								variant={user.suspended_at ? 'default' : 'danger'}
-								onPress={() => suspensionDialog.open(user)}
-							>
-								{user.suspended_at ? (
-									<UserCheck className="size-3.5" />
-								) : (
-									<Ban className="size-3.5" />
-								)}
-								{user.suspended_at ? 'Reactivate' : 'Suspend'}
-							</Button>
+							{(() => {
+								// A super admin cannot suspend their own account (the API rejects
+								// it), so disable the action on the signed-in user's own row.
+								// Reactivation stays enabled: a self row is only ever active, but
+								// keep the branch explicit rather than assume records can't exist.
+								// The title rides on the wrapper — react-aria drops it off Button.
+								const isSelfSuspend = user.id === currentUser?.id && !user.suspended_at;
+								return (
+									<span
+										className="inline-flex justify-self-end"
+										title={isSelfSuspend ? 'You cannot suspend your own account' : undefined}
+									>
+										<Button
+											size="sm"
+											variant={user.suspended_at ? 'default' : 'danger'}
+											isDisabled={isSelfSuspend}
+											onPress={() => suspensionDialog.open(user)}
+										>
+											{user.suspended_at ? (
+												<UserCheck className="size-3.5" />
+											) : (
+												<Ban className="size-3.5" />
+											)}
+											{user.suspended_at ? 'Reactivate' : 'Suspend'}
+										</Button>
+									</span>
+								);
+							})()}
 						</div>
 					))}
 				</div>
