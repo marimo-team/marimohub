@@ -507,6 +507,109 @@ describe('NotebookService', () => {
 	});
 
 	describe('updateNotebook', () => {
+		it('merges a concurrent metadata update after retrying the CAS', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Original', description: 'Original', code: 'v1' },
+				ACTOR,
+			);
+			const metaKey = paths.project(projectId).notebook(created.id).meta;
+			const realPut = bucket.put.bind(bucket);
+			let raced = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (!raced && key === metaKey && options?.onlyIfEtagMatches) {
+					raced = true;
+					await notebooks.updateNotebook(projectId, created.id, { title: 'Racer' }, ACTOR);
+				}
+				return realPut(key, value, options);
+			});
+
+			await notebooks.updateNotebook(projectId, created.id, { description: 'Mine' }, ACTOR);
+
+			const stored = await (await bucket.get(metaKey))!.json<any>();
+			expect(raced).toBe(true);
+			expect(stored.title).toBe('Racer');
+			expect(stored.description).toBe('Mine');
+		});
+
+		it('returns 412 when If-Match becomes stale during the CAS', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Original', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const metaKey = paths.project(projectId).notebook(created.id).meta;
+			const realPut = bucket.put.bind(bucket);
+			let raced = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (!raced && key === metaKey && options?.onlyIfEtagMatches) {
+					raced = true;
+					const current = await (await bucket.get(metaKey))!.json<any>();
+					await realPut(
+						metaKey,
+						JSON.stringify({ ...current, title: 'Racer', updated_at: '2099-01-01T00:00:00.000Z' }),
+					);
+				}
+				return realPut(key, value, options);
+			});
+
+			await expect(
+				notebooks.updateNotebook(
+					projectId,
+					created.id,
+					{ description: 'Mine' },
+					ACTOR,
+					created.updated_at,
+				),
+			).rejects.toBeInstanceOf(PreconditionFailedError);
+
+			const stored = await (await bucket.get(metaKey))!.json<any>();
+			expect(stored.title).toBe('Racer');
+			expect(stored.description).toBe('D');
+		});
+
+		it('does not resurrect a notebook deleted during an update', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const metaKey = paths.project(projectId).notebook(created.id).meta;
+			const realPut = bucket.put.bind(bucket);
+			let raced = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (!raced && key === metaKey && options?.onlyIfEtagMatches) {
+					raced = true;
+					await notebooks.deleteNotebook(projectId, created.id, ACTOR);
+				}
+				return realPut(key, value, options);
+			});
+
+			await expect(
+				notebooks.updateNotebook(projectId, created.id, { title: 'Resurrected' }, ACTOR),
+			).rejects.toBeInstanceOf(NotFoundError);
+
+			const stored = await (await bucket.get(metaKey))!.json<any>();
+			const snapshot = await catalog.getCurrentSnapshot();
+			const project = snapshot.projects.find((entry) => entry.id === projectId)!;
+			expect(stored.status).toBe('deleted');
+			expect(project.notebooks[0].status).toBe('deleted');
+			expect(project.notebook_count).toBe(0);
+		});
+
+		it('returns 404 when updating an already-deleted notebook', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			await notebooks.deleteNotebook(projectId, created.id, ACTOR);
+
+			await expect(
+				notebooks.updateNotebook(projectId, created.id, { title: 'Resurrected' }, ACTOR),
+			).rejects.toBeInstanceOf(NotFoundError);
+		});
+
 		it('rejects a stale expectedVersion with PreconditionFailedError', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,

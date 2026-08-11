@@ -31,7 +31,7 @@ import type {
 	Version,
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
-import { mutateObject } from '../catalog/cas';
+import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
 import { buildNotebookEntry, buildNotebookMeta, buildVersion, localSource } from './notebookMeta';
 import { SyncedNotebookService } from './SyncedNotebookService';
 import { deleteByPrefix, listAllKeys, listAllObjects, listAllPrefixes } from '../catalog/storage';
@@ -366,30 +366,42 @@ export class NotebookService {
 		expectedVersion?: string,
 	): Promise<NotebookMeta> {
 		const { meta: existing, source } = detail;
+		// Preserve stale If-Match precedence for remote-source content updates; the CAS
+		// callback repeats the authoritative check against the latest metadata.
 		assertVersionMatch(existing.updated_at, expectedVersion);
 		if (source.type !== 'local' && (input.code !== undefined || input.deps !== undefined)) {
 			throw new ConflictError('Remote-backed notebook source is updated only by sync');
 		}
-		const now = new Date().toISOString();
 
-		const updated: NotebookMeta = {
-			...existing,
-			title: input.title ?? existing.title,
-			description: input.description ?? existing.description,
-			tags: input.tags ?? existing.tags,
-			// null clears back to the deployment default (the key is dropped from
-			// the written JSON); undefined leaves the stored choice as-is.
-			base_image: input.base_image === null ? undefined : (input.base_image ?? existing.base_image),
-			compute_profile:
-				input.compute_profile === null
-					? undefined
-					: (input.compute_profile ?? existing.compute_profile),
-			updated_at: now,
-		};
-
-		// Write updated meta
 		const nb = paths.project(projectId).notebook(notebookId);
-		await this.bucket.put(nb.meta, JSON.stringify(updated));
+		const updated = await mutateObject(
+			this.bucket,
+			nb.meta,
+			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
+			(current) => {
+				assertVersionMatch(current.updated_at, expectedVersion);
+				if (current.status === 'deleted') {
+					throw new NotFoundError(`Notebook ${notebookId} not found`);
+				}
+				return {
+					...current,
+					title: input.title ?? current.title,
+					description: input.description ?? current.description,
+					tags: input.tags ?? current.tags,
+					// null clears back to the deployment default (the key is dropped from
+					// the written JSON); undefined leaves the stored choice as-is.
+					base_image:
+						input.base_image === null ? undefined : (input.base_image ?? current.base_image),
+					compute_profile:
+						input.compute_profile === null
+							? undefined
+							: (input.compute_profile ?? current.compute_profile),
+					updated_at: new Date().toISOString(),
+				};
+			},
+			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
+		);
+		const now = updated.updated_at;
 
 		if (input.readme !== undefined) {
 			await this.bucket.put(nb.readme, input.readme);
@@ -657,23 +669,24 @@ export class NotebookService {
 		actor: UserId,
 		expectedVersion?: string,
 	): Promise<void> {
-		const { meta } = await this.getNotebook(projectId, notebookId);
-		assertVersionMatch(meta.updated_at, expectedVersion);
-		// Idempotent: a notebook already soft-deleted is left untouched, so a repeated
-		// delete (retry / double-click) cannot decrement notebook_count twice.
-		if (meta.status === 'deleted') {
-			return;
-		}
-		const now = new Date().toISOString();
-
-		// Soft-delete: update status in meta.json
-		const updated: NotebookMeta = {
-			...meta,
-			status: 'deleted',
-			updated_at: now,
-		};
 		const nb = paths.project(projectId).notebook(notebookId);
-		await this.bucket.put(nb.meta, JSON.stringify(updated));
+		const { value: updated, written } = await mutateObjectWithOutcome(
+			this.bucket,
+			nb.meta,
+			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
+			(current) => {
+				assertVersionMatch(current.updated_at, expectedVersion);
+				if (current.status === 'deleted') return null;
+				return {
+					...current,
+					status: 'deleted' as const,
+					updated_at: new Date().toISOString(),
+				};
+			},
+			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
+		);
+		if (!written) return;
+		const now = updated.updated_at;
 
 		// Soft-delete in snapshot
 		await this.catalog.updateNotebookEntry(

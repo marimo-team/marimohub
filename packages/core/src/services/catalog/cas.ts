@@ -1,4 +1,4 @@
-import type { Bucket } from '../../ports/bucket';
+import type { Bucket, BucketObject, BucketPutOptions } from '../../ports/bucket';
 import { sleep } from '../../duration';
 import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
 import { logOperationalError } from '../../operationalLog';
@@ -18,19 +18,47 @@ export interface CasRetryOptions {
 	backoffMs?: (attempt: number) => number;
 	/** Run at the start of each attempt (e.g. bump a metrics counter). */
 	onAttempt?: (attempt: number) => void;
-	/** Run when an attempt loses the race (a `PreconditionFailedError`). */
+	/** Run when a conditional write through `CasWriter` loses the race. */
 	onConflict?: (attempt: number) => void;
 	/** Run once when all attempts are exhausted, before throwing `ConflictError`. */
 	onExhausted?: () => void;
 }
 
+type CasPutOptions = Omit<BucketPutOptions, 'onlyIfEtagMatches' | 'onlyIfNotExists'> &
+	(
+		| { onlyIfEtagMatches: string; onlyIfNotExists?: never }
+		| { onlyIfEtagMatches?: never; onlyIfNotExists: true }
+	);
+
+export interface CasWriter {
+	put(key: string, value: string | Uint8Array, options: CasPutOptions): Promise<BucketObject>;
+}
+
+class CasWriteConflictError extends Error {
+	constructor(precondition: PreconditionFailedError) {
+		super(precondition.message);
+		this.name = 'CasWriteConflictError';
+	}
+}
+
+const casWriterFor = (bucket: Bucket): CasWriter => ({
+	async put(key, value, options) {
+		try {
+			return await bucket.put(key, value, options);
+		} catch (err) {
+			if (err instanceof PreconditionFailedError) throw new CasWriteConflictError(err);
+			throw err;
+		}
+	},
+});
+
 /**
- * Retry a CAS `attempt` with backoff. `attempt` throws `PreconditionFailedError` to
- * signal a losing race (retried); any other error propagates. Throws
- * `ConflictError` once retries are exhausted.
+ * Retry conditional writes made through `CasWriter` with backoff. Errors thrown
+ * directly by the attempt propagate, including client-facing precondition errors.
  */
 export async function withCasRetry<T>(
-	attempt: () => Promise<T>,
+	bucket: Bucket,
+	attempt: (writer: CasWriter) => Promise<T>,
 	options: CasRetryOptions = {},
 ): Promise<T> {
 	const {
@@ -40,12 +68,13 @@ export async function withCasRetry<T>(
 		onConflict,
 		onExhausted,
 	} = options;
+	const writer = casWriterFor(bucket);
 	for (let i = 0; i < retries; i++) {
 		onAttempt?.(i);
 		try {
-			return await attempt();
+			return await attempt(writer);
 		} catch (err) {
-			if (err instanceof PreconditionFailedError) {
+			if (err instanceof CasWriteConflictError) {
 				onConflict?.(i);
 				await sleep(backoffMs(i));
 				continue;
@@ -92,31 +121,35 @@ export async function acquireSingletonClaim(
 	holder: string,
 ): Promise<{ acquired: boolean; holder: string }> {
 	const body = cfg.serialize(holder);
-	return withCasRetry(async () => {
-		const existing = await cfg.bucket.get(cfg.key);
-		if (!existing) {
-			await cfg.bucket.put(cfg.key, body, { onlyIfNotExists: true });
+	return withCasRetry(
+		cfg.bucket,
+		async (cas) => {
+			const existing = await cfg.bucket.get(cfg.key);
+			if (!existing) {
+				await cas.put(cfg.key, body, { onlyIfNotExists: true });
+				return { acquired: true, holder };
+			}
+			let current: string | null | undefined;
+			try {
+				current = cfg.parseHolder(await readStoredJson(existing, cfg.key));
+			} catch (err) {
+				logOperationalError(
+					'corrupt_singleton_claim_replaced',
+					{ operation: 'singleton_claim.acquire', object: cfg.key },
+					err,
+				);
+				// Corrupt claim — stale by definition; replaced below.
+			}
+			if (current === holder) return { acquired: true, holder };
+			if (current && (await cfg.isHolderLive(current))) {
+				return { acquired: false, holder: current };
+			}
+			// CAS the replacement so two concurrent stale-claim replacers can't both win.
+			await cas.put(cfg.key, body, { onlyIfEtagMatches: existing.etag });
 			return { acquired: true, holder };
-		}
-		let current: string | null | undefined;
-		try {
-			current = cfg.parseHolder(await readStoredJson(existing, cfg.key));
-		} catch (err) {
-			logOperationalError(
-				'corrupt_singleton_claim_replaced',
-				{ operation: 'singleton_claim.acquire', object: cfg.key },
-				err,
-			);
-			// Corrupt claim — stale by definition; replaced below.
-		}
-		if (current === holder) return { acquired: true, holder };
-		if (current && (await cfg.isHolderLive(current))) {
-			return { acquired: false, holder: current };
-		}
-		// CAS the replacement so two concurrent stale-claim replacers can't both win.
-		await cfg.bucket.put(cfg.key, body, { onlyIfEtagMatches: existing.etag });
-		return { acquired: true, holder };
-	}, cfg.retry);
+		},
+		cfg.retry,
+	);
 }
 
 /**
@@ -155,10 +188,37 @@ export async function releaseSingletonClaim(
 	}
 }
 
+export interface ObjectMutationOutcome<T> {
+	value: T;
+	written: boolean;
+}
+
+/** Use when a caller must distinguish a committed write from an unchanged value. */
+export async function mutateObjectWithOutcome<T>(
+	bucket: Bucket,
+	key: string,
+	parse: (raw: unknown) => T,
+	apply: (current: T) => T | null,
+	options: CasRetryOptions & { notFound?: () => Error } = {},
+): Promise<ObjectMutationOutcome<T>> {
+	return withCasRetry(
+		bucket,
+		async (cas) => {
+			const obj = await bucket.get(key);
+			if (!obj) throw options.notFound?.() ?? new NotFoundError(`Object ${key} not found`);
+			const current = parse(await readStoredJson(obj, key));
+			const next = apply(current);
+			if (next === null) return { value: current, written: false };
+			await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: obj.etag });
+			return { value: next, written: true };
+		},
+		options,
+	);
+}
+
 /**
- * Atomic read-modify-write of one JSON object via CAS. `apply` returns the next
- * value, or `null` to skip the write. On a losing race `apply` re-runs against the
- * fresh value (so it can no-op rather than clobber a concurrent writer).
+ * Atomic read-modify-write of one JSON object. On a losing race, `apply` re-runs
+ * against the fresh value and the committed or unchanged value is returned.
  */
 export async function mutateObject<T>(
 	bucket: Bucket,
@@ -167,13 +227,5 @@ export async function mutateObject<T>(
 	apply: (current: T) => T | null,
 	options: CasRetryOptions & { notFound?: () => Error } = {},
 ): Promise<T> {
-	return withCasRetry(async () => {
-		const obj = await bucket.get(key);
-		if (!obj) throw options.notFound?.() ?? new NotFoundError(`Object ${key} not found`);
-		const current = parse(await readStoredJson(obj, key));
-		const next = apply(current);
-		if (!next) return current;
-		await bucket.put(key, JSON.stringify(next), { onlyIfEtagMatches: obj.etag });
-		return next;
-	}, options);
+	return (await mutateObjectWithOutcome(bucket, key, parse, apply, options)).value;
 }

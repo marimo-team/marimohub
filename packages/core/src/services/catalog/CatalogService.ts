@@ -8,6 +8,7 @@ import { paths } from '../../paths';
 import { CURRENT_SNAPSHOT_VERSION, CatalogSchema, readStored, SnapshotSchema } from '../../schema';
 import type { Catalog, Snapshot, SnapshotNotebookEntry, SnapshotProjectEntry } from '../../schema';
 import { withCasRetry } from './cas';
+import type { CasRetryOptions } from './cas';
 import type { EventService } from './EventService';
 
 /**
@@ -33,6 +34,8 @@ export class CatalogService {
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
 		private events?: EventService,
+		/** Retry timing override; metrics hooks remain owned by this service. */
+		private casRetry?: Pick<CasRetryOptions, 'retries' | 'backoffMs'>,
 	) {}
 
 	async initialize(actor: UserId): Promise<Snapshot> {
@@ -115,7 +118,8 @@ export class CatalogService {
 		// snapshot, and conditionally swap the catalog pointer onto it. The retry
 		// loop / backoff / conflict accounting lives in `withCasRetry`.
 		const snapshot = await withCasRetry(
-			async () => {
+			this.bucket,
+			async (cas) => {
 				const catalogObj = await this.bucket.get(paths.catalog);
 				if (!catalogObj) {
 					throw new NotInitializedError('Catalog not found — call initialize() first');
@@ -163,7 +167,7 @@ export class CatalogService {
 				};
 
 				try {
-					await this.bucket.put(paths.catalog, JSON.stringify(newCatalog), {
+					await cas.put(paths.catalog, JSON.stringify(newCatalog), {
 						onlyIfEtagMatches: catalogEtag,
 					});
 					return newSnapshot;
@@ -171,7 +175,7 @@ export class CatalogService {
 					// The catalog swap failed (lost the race, or a transient error), so the
 					// snapshot we just wrote is unreferenced. Delete it (best-effort) so a
 					// failed attempt never leaves an orphan a prefix-listing could mistake
-					// for the head, then rethrow (withCasRetry retries a PreconditionFailed).
+					// for the head, then rethrow (the CAS writer marks a lost race for retry).
 					//
 					// INVARIANT (corruption safety): `newSnapshotId` was created in this
 					// attempt and the catalog never pointed at it, so this only ever deletes
@@ -181,6 +185,7 @@ export class CatalogService {
 				}
 			},
 			{
+				...this.casRetry,
 				onAttempt: () => this.metrics.increment('catalog.cas.attempt'),
 				onConflict: () => this.metrics.increment('catalog.cas.conflict'),
 				onExhausted: () => this.metrics.increment('catalog.cas.exhausted'),

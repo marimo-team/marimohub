@@ -9,13 +9,16 @@ import type { Snapshot } from '../../schema';
 import { CatalogService } from './CatalogService';
 import { EventService } from './EventService';
 
+// Exhaustion tests should not spend 750 ms in production backoff timers.
+const ZERO_BACKOFF = { backoffMs: () => 0 };
+
 describe('CatalogService', () => {
 	let bucket: MemoryBucket;
 	let catalog: CatalogService;
 
 	beforeEach(async () => {
 		bucket = new MemoryBucket();
-		catalog = new CatalogService(bucket);
+		catalog = new CatalogService(bucket, noopMetrics, undefined, ZERO_BACKOFF);
 	});
 
 	describe('initialize', () => {
@@ -343,7 +346,12 @@ describe('CatalogService', () => {
 	describe('metrics', () => {
 		it('emits CAS conflict + exhausted counters under contention', async () => {
 			const increment = vi.fn();
-			const instrumented = new CatalogService(bucket, { increment, gauge: vi.fn() });
+			const instrumented = new CatalogService(
+				bucket,
+				{ increment, gauge: vi.fn() },
+				undefined,
+				ZERO_BACKOFF,
+			);
 			await instrumented.initialize(ACTOR);
 
 			// Always fail the conditional catalog swap.
