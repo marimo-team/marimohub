@@ -6360,7 +6360,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -6485,7 +6485,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -6624,7 +6624,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:
@@ -6750,7 +6750,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Insufficient role
+          description: Access forbidden
           content:
             application/json:
               schema:

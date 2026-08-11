@@ -5418,7 +5418,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5541,7 +5541,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5675,7 +5675,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5799,7 +5799,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
