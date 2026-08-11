@@ -90,7 +90,7 @@ minimumReleaseAgeExclude:
 onlyBuiltDependencies: []
 
 overrides:
-  brace-expansion: 5.0.8
+  brace-expansion: 5.0.9
   hono: 4.12.34
   postcss: 8.5.23
   tar: 7.5.21
