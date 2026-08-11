@@ -4,7 +4,7 @@ import { MARIMO_PORT } from '../../constants';
 import type { SessionMode } from '../../constants';
 import { Millis } from '../../duration';
 import { UnavailableError } from '../../errors';
-import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
+import type { NotebookId, ProjectId, SandboxId, UserId, VersionId } from '../../ids';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { paths } from '../../paths';
@@ -138,6 +138,8 @@ export interface ProvisionOptions {
 	 * `versions/{vid}/workspace/` prefix instead.
 	 */
 	workspacePrefix?: string;
+	/** Immutable local version whose source files must overlay the workspace cache. */
+	sourceVersionId?: VersionId;
 }
 
 export interface ProvisionResult {
@@ -328,6 +330,7 @@ export class SandboxProvisioner {
 				sw,
 			);
 		const injectSessionEnv = () => this.injectSessionEnv(sandbox, options, sw);
+		const seedLocalSource = () => this.seedLocalSource(sandbox, options, mountPath);
 		const startMarimoKernel = () => this.startMarimoKernel(sandbox, options, mountPath, sw);
 		const exposeKernel = () => this.exposeKernel(sandbox, options, sw);
 
@@ -349,6 +352,7 @@ export class SandboxProvisioner {
 			async start() {
 				await this.$.load;
 				await this.$.inject;
+				await seedLocalSource();
 				await startMarimoKernel();
 			},
 			async expose() {
@@ -402,6 +406,42 @@ export class SandboxProvisioner {
 			mountPath,
 			workspacePrefix,
 		});
+	}
+
+	private async seedLocalSource(
+		sandbox: SandboxInstance,
+		options: ProvisionOptions,
+		mountPath: string,
+	): Promise<void> {
+		if (!options.sourceVersionId) return;
+		if (!options.bucketHandle) {
+			throw provisionFailure(
+				'restoring the committed notebook source',
+				new Error('bucket handle is required to read the authoritative version'),
+			);
+		}
+
+		const ver = paths
+			.project(options.projectId)
+			.notebook(options.notebookId)
+			.version(options.sourceVersionId);
+		const [code, deps] = await Promise.all([
+			options.bucketHandle.get(ver.code),
+			options.bucketHandle.get(ver.deps),
+		]);
+		if (!code) {
+			throw provisionFailure(
+				'restoring the committed notebook source',
+				new Error(`version ${options.sourceVersionId} has no notebook.py`),
+			);
+		}
+		await sandbox.writeFiles([
+			{ path: `${mountPath}/notebook.py`, content: await code.bytes() },
+			{
+				path: `${mountPath}/pyproject.toml`,
+				content: deps ? await deps.bytes() : new Uint8Array(),
+			},
+		]);
 	}
 
 	private async injectSessionEnv(
@@ -588,10 +628,9 @@ export class SandboxProvisioner {
 	 *
 	 * The read-back is unconditional for local notebooks: interactive edits still
 	 * need an immutable version, even when the sandbox wrote through a mounted
-	 * bucket. `NotebookService.commitSession` owns the source files
-	 * (`workspace/notebook.py` + `workspace/pyproject.toml`) and the immutable
-	 * `versions/{vid}/` record; `captureWorkspace` excludes those, so there is no
-	 * double-write. All capture steps are best-effort — failures are logged but
+	 * bucket. `NotebookService.commitSession` owns the immutable source version;
+	 * `captureWorkspace` excludes source files, so there is no double-write. All
+	 * capture steps are best-effort — failures are logged but
 	 * never block sandbox destruction, since a lingering sandbox is the more
 	 * expensive failure.
 	 *

@@ -56,6 +56,7 @@ describe('paths', () => {
 		const ver = paths.project(pid).notebook(nid).version(vid);
 		expect(ver).toMatchInlineSnapshot(`
 			{
+			  "capture": [Function],
 			  "code": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/notebook.py",
 			  "deps": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/pyproject.toml",
 			  "html": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/notebook.html",
@@ -65,6 +66,10 @@ describe('paths', () => {
 			  "workspacePrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/workspace/",
 			}
 		`);
+		expect(ver.capture(vid)).toEqual({
+			html: `${ver.workspacePrefix.slice(0, -'workspace/'.length)}captures/${vid}/notebook.html`,
+			session: `${ver.workspacePrefix.slice(0, -'workspace/'.length)}captures/${vid}/session.json`,
+		});
 	});
 
 	it('identity() encodes a user id so a "/" or ".." segment cannot escape the identities prefix', () => {

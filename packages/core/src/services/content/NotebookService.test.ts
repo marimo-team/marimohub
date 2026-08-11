@@ -859,7 +859,9 @@ describe('NotebookService', () => {
 
 			const nb = paths.project(projectId).notebook(created.id);
 
-			const depsObj = await bucket.get(nb.deps);
+			const current = await notebooks.getNotebook(projectId, created.id);
+			if (current.source.type !== 'local') throw new Error('Expected local source');
+			const depsObj = await bucket.get(nb.version(current.source.current_version_id).deps);
 			expect(await depsObj!.text()).toBe(newDeps);
 
 			const versions = await notebooks.listVersions(projectId, created.id);
@@ -913,9 +915,7 @@ describe('NotebookService', () => {
 						{ code: `v${i}`, message: `save ${i}` },
 						ACTOR,
 					);
-					const source = await (await bucket.get(
-						paths.project(projectId).notebook(created.id).source,
-					))!.json<{ current_version_id: string }>();
+					const { source } = await notebooks.getNotebook(projectId, created.id);
 					currentVid = source.current_version_id as typeof currentVid;
 				}
 			} finally {
@@ -1380,6 +1380,124 @@ describe('NotebookService', () => {
 	});
 
 	describe('commitSession', () => {
+		it('rejects a stale head CAS after another holder commits', async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const nb = paths.project(projectId).notebook(created.id);
+			const realPut = bucket.put.bind(bucket);
+			let headPutReached!: () => void;
+			let releaseHeadPut!: () => void;
+			const atHeadPut = new Promise<void>((resolve) => {
+				headPutReached = resolve;
+			});
+			const headPutGate = new Promise<void>((resolve) => {
+				releaseHeadPut = resolve;
+			});
+			let gated = false;
+			const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (key === nb.meta && options?.onlyIfEtagMatches && !gated) {
+					gated = true;
+					headPutReached();
+					await headPutGate;
+				}
+				return realPut(key, value, options);
+			});
+
+			const stale = notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
+			const staleRejected = expect(stale).rejects.toBeInstanceOf(ConflictError);
+			try {
+				await atHeadPut;
+				vi.setSystemTime(new Date('2026-01-01T00:10:00.001Z'));
+				const winner = await notebooks.commitSession(projectId, created.id, { code: 'v3' }, ACTOR);
+				releaseHeadPut();
+				await vi.advanceTimersByTimeAsync(50);
+
+				await staleRejected;
+				expect(await notebooks.getNotebookContent(projectId, created.id)).toBe('v3');
+				expect((await notebooks.getNotebook(projectId, created.id)).source.current_version_id).toBe(
+					winner!.versionId,
+				);
+				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(2);
+			} finally {
+				releaseHeadPut();
+				await Promise.allSettled([stale]);
+				putSpy.mockRestore();
+				vi.useRealTimers();
+			}
+		});
+
+		it('does not publish or leak an unchanged capture after lease takeover', async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const nb = paths.project(projectId).notebook(created.id);
+			const detail = await notebooks.getNotebook(projectId, created.id);
+			if (detail.source.type !== 'local') throw new Error('Expected local source');
+			const currentVersionId = detail.source.current_version_id;
+			const ver = nb.version(currentVersionId);
+			const realPut = bucket.put.bind(bucket);
+			let descriptorPutReached!: () => void;
+			let releaseDescriptorPut!: () => void;
+			const atDescriptorPut = new Promise<void>((resolve) => {
+				descriptorPutReached = resolve;
+			});
+			const descriptorPutGate = new Promise<void>((resolve) => {
+				releaseDescriptorPut = resolve;
+			});
+			let gated = false;
+			const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (key === ver.meta && options?.onlyIfEtagMatches && !gated) {
+					gated = true;
+					descriptorPutReached();
+					await descriptorPutGate;
+				}
+				return realPut(key, value, options);
+			});
+
+			const stale = notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'v1', html: '<html>stale</html>' },
+				ACTOR,
+			);
+			const staleRejected = expect(stale).rejects.toBeInstanceOf(ConflictError);
+			try {
+				await atDescriptorPut;
+				vi.setSystemTime(new Date('2026-01-01T00:10:00.001Z'));
+				await notebooks.commitSession(
+					projectId,
+					created.id,
+					{ code: 'v1', html: '<html>winner</html>' },
+					ACTOR,
+				);
+				releaseDescriptorPut();
+				await vi.advanceTimersByTimeAsync(50);
+
+				await staleRejected;
+				const snapshot = await notebooks.getLatestHtmlSnapshot(projectId, created.id);
+				expect(snapshot?.html).toBe('<html>winner</html>');
+				const captures = await listAllKeys(
+					bucket,
+					`${nb.base}/versions/${currentVersionId}/captures/`,
+				);
+				expect(captures.filter((key) => key.endsWith('/notebook.html'))).toHaveLength(1);
+			} finally {
+				releaseDescriptorPut();
+				await Promise.allSettled([stale]);
+				putSpy.mockRestore();
+				vi.useRealTimers();
+			}
+		});
+
 		it('serializes a delete before a racing session commit', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
@@ -1601,7 +1719,6 @@ describe('NotebookService', () => {
 			});
 			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 			const commit = notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
-			const commitRejected = expect(commit).rejects.toBeInstanceOf(ConflictError);
 			let finishRenewal: (() => void) | undefined;
 			let putSpy: { mockRestore(): void } | undefined;
 			let timerAdvance: ReturnType<typeof vi.advanceTimersByTimeAsync> | undefined;
@@ -1642,7 +1759,7 @@ describe('NotebookService', () => {
 				finishRenewal?.();
 				await timerAdvance;
 
-				await commitRejected;
+				expect(await commit).toBeNull();
 				expect(await (await bucket.get(nb.code))!.text()).toBe('v1');
 				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(1);
 			} finally {
@@ -1748,7 +1865,7 @@ describe('NotebookService', () => {
 			}
 		});
 
-		it('cuts a new version from changed code and updates the live notebook + source', async () => {
+		it('cuts a new version from changed code and advances the authoritative head', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
 				{ title: 'NB', description: 'D', code: 'v1', deps: '[project]\nname="a"' },
@@ -1766,10 +1883,9 @@ describe('NotebookService', () => {
 			expect(result).not.toBeNull();
 			expect(result!.newVersion).toBe(true);
 
-			// Two versions now; live code/source advanced to the new one.
+			// Two versions now; committed reads and the public source advance atomically.
 			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(2);
-			const nb = paths.project(projectId).notebook(created.id);
-			expect(await (await bucket.get(nb.code))!.text()).toBe('v2 # edited');
+			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe('v2 # edited');
 			const after = await notebooks.getNotebook(projectId, created.id);
 			expect(after.source.type).toBe('local');
 			expect((after.source as { current_version_id: string }).current_version_id).not.toBe(
@@ -1855,16 +1971,50 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 
-			// No new version, but the HTML landed in the current version's folder and
-			// its version.json was patched with the descriptor.
+			// No new version, but version.json points to this capture's immutable artifact.
 			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(1);
 			const ver = paths
 				.project(projectId)
 				.notebook(created.id)
 				.version(currentVid as any);
-			expect(await (await bucket.get(ver.html))!.text()).toBe('<html>rendered</html>');
 			const version = (await (await bucket.get(ver.meta))!.json()) as any;
 			expect(version.html_snapshot).toBeTruthy();
+			const capture = ver.capture(version.html_snapshot.capture_id);
+			expect(await (await bucket.get(capture.html))!.text()).toBe('<html>rendered</html>');
+		});
+
+		it('removes a superseded immutable capture after publishing its replacement', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const detail = await notebooks.getNotebook(projectId, created.id);
+			if (detail.source.type !== 'local') throw new Error('Expected local source');
+			const ver = paths
+				.project(projectId)
+				.notebook(created.id)
+				.version(detail.source.current_version_id);
+
+			await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'v1', html: '<html>first</html>' },
+				ACTOR,
+			);
+			const first = (await (await bucket.get(ver.meta))!.json()) as any;
+			const firstKey = ver.capture(first.html_snapshot.capture_id).html;
+			await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'v1', html: '<html>second</html>' },
+				ACTOR,
+			);
+
+			expect(await bucket.get(firstKey)).toBeNull();
+			expect((await notebooks.getLatestHtmlSnapshot(projectId, created.id))?.html).toBe(
+				'<html>second</html>',
+			);
 		});
 
 		it('retries the descriptor attach on a losing CAS race instead of dropping the winner', async () => {
@@ -1956,8 +2106,12 @@ describe('NotebookService', () => {
 
 			expect(result!.newVersion).toBe(true);
 			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(2);
+			const detail = await notebooks.getNotebook(projectId, created.id);
+			if (detail.source.type !== 'local') throw new Error('Expected local source');
 			const nb = paths.project(projectId).notebook(created.id);
-			expect(await (await bucket.get(nb.deps))!.text()).toBe('new-deps');
+			expect(
+				await (await bucket.get(nb.version(detail.source.current_version_id).deps))!.text(),
+			).toBe('new-deps');
 		});
 
 		it('compares against the version snapshot, not the live notebook (mounted-bucket case)', async () => {

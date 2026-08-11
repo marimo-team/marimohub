@@ -843,6 +843,8 @@ app.openapi(createSession, async (c) => {
 	const workspacePrefix = syncedVersionId
 		? paths.project(pid).notebook(nid).version(syncedVersionId).workspacePrefix
 		: undefined;
+	const localVersionId =
+		notebook.source.type === 'local' ? notebook.source.current_version_id : undefined;
 	// Staleness provenance: a session that serves a frozen snapshot — a
 	// non-persisting mode (`app`), or any mode on a synced source (a read-only
 	// mirror, even under `edit`) — is stamped with the head committed version it
@@ -1223,6 +1225,7 @@ app.openapi(createSession, async (c) => {
 								? 'copy-only'
 								: workspacePolicy.loadMode,
 						workspacePrefix,
+						sourceVersionId: localVersionId,
 					});
 					({ url, usedFallback } = provisionResult);
 					// Per-phase durations onto the session_provision event.

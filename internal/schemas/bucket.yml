@@ -134,7 +134,7 @@ paths:
         '204':
           description: Stored.
   /projects/{pid}/notebooks/{nid}/meta.json:
-    summary: Notebook metadata record.
+    summary: Notebook metadata and authoritative local content/deletion head.
     parameters:
       - name: pid
         in: path
@@ -146,7 +146,8 @@ paths:
         required: true
         schema:
           type: string
-    x-mutability: last-writer-wins
+    x-mutability: cas
+    x-owner: NotebookService
     get:
       operationId: read_projects_notebooks_meta_json
       summary: Read NotebookMeta
@@ -174,7 +175,7 @@ paths:
         '204':
           description: Stored.
   /projects/{pid}/notebooks/{nid}/source.json:
-    summary: 'Notebook source descriptor: local head pointer or git-sync state.'
+    summary: 'Notebook source descriptor: local bootstrap pointer or git-sync state.'
     parameters:
       - name: pid
         in: path
@@ -1016,6 +1017,8 @@ components:
           type: string
         project_id:
           type: string
+        content_version_id:
+          type: string
         title:
           type: string
         description:
@@ -1209,6 +1212,8 @@ components:
               type: integer
               minimum: 0
               maximum: 9007199254740991
+            capture_id:
+              type: string
           required:
             - captured_at
             - size_bytes
@@ -1223,6 +1228,8 @@ components:
               type: integer
               minimum: 0
               maximum: 9007199254740991
+            capture_id:
+              type: string
           required:
             - captured_at
             - size_bytes

@@ -121,15 +121,15 @@ s3-bucket/
         │           └── {000001}.json       ← immutable config version (create-if-absent)
         └── notebooks/
             └── {notebook-id}/
-                ├── meta.json               ← notebook metadata (title, author, tags…)
+                ├── meta.json               ← metadata + local content/deletion CAS head
                 ├── README.md               ← human description
                 ├── source.json             ← `local` or push-synced `git` source metadata
                 ├── _session_commit_lock.json ← session-commit/delete CAS lease
                 ├── integration_sync_token.json ← Git-sync token hash (Git sources only)
                 ├── fs_snapshot.json        ← optional provider filesystem-snapshot pointer
-                ├── workspace/              ← local sources only: latest sandbox workspace
-                │   ├── notebook.py          ← latest local code
-                │   ├── pyproject.toml      ← latest local dependencies
+                ├── workspace/              ← local sources only: runtime-file mirror
+                │   ├── notebook.py          ← legacy source cache (not authoritative)
+                │   ├── pyproject.toml      ← legacy dependency cache (not authoritative)
                 │   └── data/cars.csv       ← optional persisted runtime file
                 └── versions/
                     └── {version-id}/
@@ -138,19 +138,22 @@ s3-bucket/
                         ├── pyproject.toml      ← local dependency snapshot
                         ├── workspace/          ← Git sources only: complete pushed tree
                         ├── notebook.html       ← optional snapshot (see below)
-                        └── session.json        ← optional snapshot (see below)
+                        ├── session.json        ← optional snapshot (see below)
+                        └── captures/{capture-id}/
+                            ├── notebook.html   ← replaceable unchanged-version capture
+                            └── session.json
 ```
 
 ### 3.1.1 Local and Git workspaces
 
-For a `local` source, the notebook-level `workspace/` folder is the latest
-mirror of the sandbox working directory. It contains `notebook.py` and
-`pyproject.toml`. It can also contain runtime files when
-`MARIMOHUB_PERSIST_WORKSPACE=workspace`.
+For a `local` source, immutable version folders hold the committed
+`notebook.py` and `pyproject.toml`. `meta.content_version_id` selects the
+committed version. The notebook-level `workspace/` folder is a non-authoritative
+runtime-file mirror; old notebooks can also contain legacy source-file caches.
 
-- **Latest-only and non-versioned.** `workspace/` is overwritten in place on each save/teardown and is **never** touched by version pruning. The immutable per-version record lives under `versions/{vid}/` (§4.7).
-- **Runtime files are opt-in.** Under the default `MARIMOHUB_PERSIST_WORKSPACE=source`, `workspace/` contains only `notebook.py` + `pyproject.toml`. Under `workspace`, the sandbox's non-source files are captured here on teardown and restored on the next session (§8).
-- **The mount is rooted at `workspace/`.** When a sandbox mounts the bucket, the working dir maps to `workspace/`. Because `meta.json` / `README.md` / `source.json` / `versions/` sit **outside** `workspace/`, control metadata is never exposed to user code in the sandbox.
+- **Latest-only and non-versioned.** Runtime files under `workspace/` are overwritten in place on teardown and are never touched by version pruning.
+- **Runtime files are opt-in.** Under the default `MARIMOHUB_PERSIST_WORKSPACE=source`, no runtime files are captured. Under `workspace`, non-source files are mirrored here (§8).
+- **Local sessions seed from the head.** Provision loads the runtime mirror through the configured mount-or-copy path, then overlays source files from `meta.content_version_id`. A delayed write to a legacy workspace cache therefore cannot replace committed source.
 
 For a `git` source, each push writes a complete tree under
 `versions/{vid}/workspace/`. The source pointer selects one immutable version.
@@ -159,47 +162,48 @@ selected version and cannot write changes back.
 
 ### 3.2 Complete Path Reference
 
-| Path                                                           | Type     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| -------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `_system/catalog.json`                                         | JSON     | Single entry point. Points to the current snapshot. This is the only mutable content pointer.                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `_system/snapshots/{id}.json`                                  | JSON     | Immutable index snapshot. Lists all projects and notebooks with metadata. Written once, never modified.                                                                                                                                                                                                                                                                                                                                                                                                |
-| `_system/sessions/{pid}/{sid}.json`                            | JSON     | Live session record, partitioned by project so a project-scoped read lists only `_system/sessions/{pid}/`. Created on notebook open, updated by heartbeat, and retired by an explicit stop or lifecycle deadline. Closing a browser tab does not immediately delete it.                                                                                                                                                                                                                                |
-| `_system/apps/{pid}/{nid}.json`                                | JSON     | Per-notebook app-singleton claim: names the app session that owns the notebook's shared app sandbox. Written create-if-absent by the create saga, replaced via ETag CAS when stale, CAS'd to a free marker (`session_id: null`) on teardown. All writes go through `SessionService.claimApp`/`releaseApp`. See §4.8.1.                                                                                                                                                                                 |
-| `_system/editors/{pid}/{nid}.json`                             | JSON     | Per-notebook persistent-editor claim. Records the shared/exclusive mode, names the only session allowed to save, and records idempotent takeover phases. All writes go through `SessionService`. See §4.8.2.                                                                                                                                                                                                                                                                                           |
-| `_system/identities/{user-id}.json`                            | JSON     | User display identity (`{ id, email, name, picture_url? }`). Updated on each authenticated request with last-writer-wins. Resolves opaque `author`/`user_id` IDs to a person.                                                                                                                                                                                                                                                                                                                          |
-| `_system/tokens/{token-id}.json`                               | JSON     | Personal access token record (`{ id, user_id, name, hash, … }`) keyed by the ULID embedded in the presented `mhub_pat_` bearer, so verification is a single GET. Stores only the SHA-256 of the secret. Mutable, last-writer-wins (coarse `last_used_at` refresh); revocation deletes the object. See §4.11.                                                                                                                                                                                           |
-| `_system/events/{YYYY-MM-DD}/{event-id}.json`                  | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
-| `_system/idempotency/{digest}.json`                            | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
-| `_system/reconcile/orphans/{sandbox-id}.json`                  | JSON     | First-seen Unix timestamp for an active sandbox that has no session record and no provider creation time. The reconciler creates and deletes these markers.                                                                                                                                                                                                                                                                                                                                            |
-| `_system/_maintenance.lock`                                    | JSON     | Advisory lease for snapshot and event retention. `MaintenanceLock` owns this key.                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `_system/_session_lifecycle.lock`                              | JSON     | Advisory lease for the session lifecycle and reconciliation sweep. The lifecycle loop owns this key.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `projects/{pid}/project.json`                                  | JSON     | Project metadata: name, description, owner, members, tags.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `projects/{pid}/integrations/{iid}/integration.json`           | JSON     | Integration head: kind, instance name, `enabled`, and the `current_version` pointer. CAS-managed via ETag `mutateObject` — written only by `ProjectIntegrationsStore` (a version bump must be atomic against a concurrent edit). See §4.12.                                                                                                                                                                                                                                                            |
-| `projects/{pid}/integrations/{iid}/versions/{n}.json`          | JSON     | Immutable integration config version, keyed by zero-padded number so key order matches version order. Written create-if-absent. Secret fields contain managed ciphertext envelopes or external reference markers, never resolved plaintext. Sessions pin these version numbers, so history is never rewritten.                                                                                                                                                                                         |
-| `projects/{pid}/integrations/_names/{name}.json`               | JSON     | Per-name singleton claim (`{ integration_id, claimed_at }`) anchoring integration-name uniqueness — the same claim class as the app claim, written only by `ProjectIntegrationsStore` via `acquireSingletonClaim`/`releaseSingletonClaim`. See §4.12.                                                                                                                                                                                                                                                  |
-| `_system/integrations/{iid}/integration.json`                  | JSON     | Organization-wide integration head. It has the same fields as a project integration head, except it has no `project_id`. `OrgIntegrationsStore` is its only writer. See §4.12.                                                                                                                                                                                                                                                                                                                         |
-| `_system/integrations/{iid}/versions/{n}.json`                 | JSON     | Immutable organization-wide configuration version. It follows the same create-if-absent and secret-handling rules as a project integration version.                                                                                                                                                                                                                                                                                                                                                    |
-| `_system/integrations/_names/{name}.json`                      | JSON     | Organization-wide name claim. Claims are unique within this tier, so a project integration can use the same name.                                                                                                                                                                                                                                                                                                                                                                                      |
-| `projects/{pid}/notebooks/{nid}/meta.json`                     | JSON     | Notebook metadata: title, description, status, author, tags, last_run_at. Never contains code or paths.                                                                                                                                                                                                                                                                                                                                                                                                |
-| `projects/{pid}/notebooks/{nid}/README.md`                     | Markdown | Human-readable description and usage notes.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `projects/{pid}/notebooks/{nid}/source.json`                   | JSON     | Typed source record. `local` stores the current version pointer. `git` stores Git coordinates, sync state, and the current pushed version.                                                                                                                                                                                                                                                                                                                                                             |
-| `projects/{pid}/notebooks/{nid}/_session_commit_lock.json`     | JSON     | Ten-minute CAS lease owned by `NotebookService`. Session commit and delete hold it while changing notebook objects, renewing it every minute until the operation finishes. An expired lease can be replaced so a crashed holder cannot block the notebook permanently. Replicas must have reasonably synchronized clocks; a continuous storage outage lasting through the lease can still prevent renewal. Legacy records without `expires_at` expire ten minutes after their bucket upload time.      |
-| `projects/{pid}/notebooks/{nid}/integration_sync_token.json`   | JSON     | Git-sync credential for one notebook. The record stores a token hash, not the plaintext token. Present only for Git-synced notebooks.                                                                                                                                                                                                                                                                                                                                                                  |
-| `projects/{pid}/notebooks/{nid}/fs_snapshot.json`              | JSON     | **Optional.** Pointer to the notebook's current CoreWeave-native filesystem snapshot (`{ snapshot_id, captured_at, owner_user_id }`). Mutable, last-writer-wins, written only by the teardown snapshot path. Exclusive editors restore snapshots only for the same owner; shared editors may restore across starters. Present only under `MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT=true`. **Not recommended alongside `MARIMOHUB_PERSIST_WORKSPACE=workspace`** — the two double-persist state. |
-| `projects/{pid}/notebooks/{nid}/workspace/notebook.py`         | Python   | Latest local notebook code. Present only for a `local` source.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `projects/{pid}/notebooks/{nid}/workspace/pyproject.toml`      | TOML     | Latest local Python dependency manifest. Present only for a `local` source.                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `projects/{pid}/notebooks/{nid}/workspace/{path}`              | any      | Runtime files mirrored from a local notebook sandbox. Present only under `MARIMOHUB_PERSIST_WORKSPACE=workspace`. Latest-only and non-versioned.                                                                                                                                                                                                                                                                                                                                                       |
-| `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.py`    | Python   | Immutable version snapshot of the code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `projects/{pid}/notebooks/{nid}/versions/{vid}/pyproject.toml` | TOML     | Dependency snapshot at time of version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `projects/{pid}/notebooks/{nid}/versions/{vid}/version.json`   | JSON     | Version metadata: saved_at, author, message, parent_id, optional snapshot descriptors.                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace/`     | any      | Complete immutable tree from one Git push. Present only for a `git` source version.                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.html`  | HTML     | **Optional.** Rendered HTML snapshot, copied from `__marimo__/notebook.html` on session teardown. Immutable once written.                                                                                                                                                                                                                                                                                                                                                                              |
-| `projects/{pid}/notebooks/{nid}/versions/{vid}/session.json`   | JSON     | **Optional.** marimo session state (cell outputs), copied from `__marimo__/session/{notebook}.py.json` on teardown. Immutable.                                                                                                                                                                                                                                                                                                                                                                         |
+| Path                                                             | Type     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `_system/catalog.json`                                           | JSON     | Single entry point. Points to the current catalog snapshot; the only mutable pointer in that snapshot chain.                                                                                                                                                                                                                                                                                                                                                                                           |
+| `_system/snapshots/{id}.json`                                    | JSON     | Immutable index snapshot. Lists all projects and notebooks with metadata. Written once, never modified.                                                                                                                                                                                                                                                                                                                                                                                                |
+| `_system/sessions/{pid}/{sid}.json`                              | JSON     | Live session record, partitioned by project so a project-scoped read lists only `_system/sessions/{pid}/`. Created on notebook open, updated by heartbeat, and retired by an explicit stop or lifecycle deadline. Closing a browser tab does not immediately delete it.                                                                                                                                                                                                                                |
+| `_system/apps/{pid}/{nid}.json`                                  | JSON     | Per-notebook app-singleton claim: names the app session that owns the notebook's shared app sandbox. Written create-if-absent by the create saga, replaced via ETag CAS when stale, CAS'd to a free marker (`session_id: null`) on teardown. All writes go through `SessionService.claimApp`/`releaseApp`. See §4.8.1.                                                                                                                                                                                 |
+| `_system/editors/{pid}/{nid}.json`                               | JSON     | Per-notebook persistent-editor claim. Records the shared/exclusive mode, names the only session allowed to save, and records idempotent takeover phases. All writes go through `SessionService`. See §4.8.2.                                                                                                                                                                                                                                                                                           |
+| `_system/identities/{user-id}.json`                              | JSON     | User display identity (`{ id, email, name, picture_url? }`). Updated on each authenticated request with last-writer-wins. Resolves opaque `author`/`user_id` IDs to a person.                                                                                                                                                                                                                                                                                                                          |
+| `_system/tokens/{token-id}.json`                                 | JSON     | Personal access token record (`{ id, user_id, name, hash, … }`) keyed by the ULID embedded in the presented `mhub_pat_` bearer, so verification is a single GET. Stores only the SHA-256 of the secret. Mutable, last-writer-wins (coarse `last_used_at` refresh); revocation deletes the object. See §4.11.                                                                                                                                                                                           |
+| `_system/events/{YYYY-MM-DD}/{event-id}.json`                    | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
+| `_system/idempotency/{digest}.json`                              | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
+| `_system/reconcile/orphans/{sandbox-id}.json`                    | JSON     | First-seen Unix timestamp for an active sandbox that has no session record and no provider creation time. The reconciler creates and deletes these markers.                                                                                                                                                                                                                                                                                                                                            |
+| `_system/_maintenance.lock`                                      | JSON     | Advisory lease for snapshot and event retention. `MaintenanceLock` owns this key.                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `_system/_session_lifecycle.lock`                                | JSON     | Advisory lease for the session lifecycle and reconciliation sweep. The lifecycle loop owns this key.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `projects/{pid}/project.json`                                    | JSON     | Project metadata: name, description, owner, members, tags.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `projects/{pid}/integrations/{iid}/integration.json`             | JSON     | Integration head: kind, instance name, `enabled`, and the `current_version` pointer. CAS-managed via ETag `mutateObject` — written only by `ProjectIntegrationsStore` (a version bump must be atomic against a concurrent edit). See §4.12.                                                                                                                                                                                                                                                            |
+| `projects/{pid}/integrations/{iid}/versions/{n}.json`            | JSON     | Immutable integration config version, keyed by zero-padded number so key order matches version order. Written create-if-absent. Secret fields contain managed ciphertext envelopes or external reference markers, never resolved plaintext. Sessions pin these version numbers, so history is never rewritten.                                                                                                                                                                                         |
+| `projects/{pid}/integrations/_names/{name}.json`                 | JSON     | Per-name singleton claim (`{ integration_id, claimed_at }`) anchoring integration-name uniqueness — the same claim class as the app claim, written only by `ProjectIntegrationsStore` via `acquireSingletonClaim`/`releaseSingletonClaim`. See §4.12.                                                                                                                                                                                                                                                  |
+| `_system/integrations/{iid}/integration.json`                    | JSON     | Organization-wide integration head. It has the same fields as a project integration head, except it has no `project_id`. `OrgIntegrationsStore` is its only writer. See §4.12.                                                                                                                                                                                                                                                                                                                         |
+| `_system/integrations/{iid}/versions/{n}.json`                   | JSON     | Immutable organization-wide configuration version. It follows the same create-if-absent and secret-handling rules as a project integration version.                                                                                                                                                                                                                                                                                                                                                    |
+| `_system/integrations/_names/{name}.json`                        | JSON     | Organization-wide name claim. Claims are unique within this tier, so a project integration can use the same name.                                                                                                                                                                                                                                                                                                                                                                                      |
+| `projects/{pid}/notebooks/{nid}/meta.json`                       | JSON     | Notebook metadata plus the optional internal `content_version_id`. Status and this local-version pointer form one CAS head, which atomically orders saves against deletion.                                                                                                                                                                                                                                                                                                                            |
+| `projects/{pid}/notebooks/{nid}/README.md`                       | Markdown | Human-readable description and usage notes.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `projects/{pid}/notebooks/{nid}/source.json`                     | JSON     | Typed source record. A local pointer bootstraps older records that lack `meta.content_version_id`; Git records store coordinates, sync state, and the current pushed version.                                                                                                                                                                                                                                                                                                                          |
+| `projects/{pid}/notebooks/{nid}/_session_commit_lock.json`       | JSON     | Ten-minute CAS lease owned by `NotebookService`. Session commit and delete hold it while changing notebook objects, renewing it every minute until the operation finishes. An expired lease can be replaced so a crashed holder cannot block the notebook permanently. Replicas must have reasonably synchronized clocks; a continuous storage outage lasting through the lease can still prevent renewal. Legacy records without `expires_at` expire ten minutes after their bucket upload time.      |
+| `projects/{pid}/notebooks/{nid}/integration_sync_token.json`     | JSON     | Git-sync credential for one notebook. The record stores a token hash, not the plaintext token. Present only for Git-synced notebooks.                                                                                                                                                                                                                                                                                                                                                                  |
+| `projects/{pid}/notebooks/{nid}/fs_snapshot.json`                | JSON     | **Optional.** Pointer to the notebook's current CoreWeave-native filesystem snapshot (`{ snapshot_id, captured_at, owner_user_id }`). Mutable, last-writer-wins, written only by the teardown snapshot path. Exclusive editors restore snapshots only for the same owner; shared editors may restore across starters. Present only under `MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT=true`. **Not recommended alongside `MARIMOHUB_PERSIST_WORKSPACE=workspace`** — the two double-persist state. |
+| `projects/{pid}/notebooks/{nid}/workspace/notebook.py`           | Python   | Legacy local source cache. Committed reads and session provisioning use the version selected by `meta.content_version_id`.                                                                                                                                                                                                                                                                                                                                                                             |
+| `projects/{pid}/notebooks/{nid}/workspace/pyproject.toml`        | TOML     | Legacy local dependency cache; not authoritative.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `projects/{pid}/notebooks/{nid}/workspace/{path}`                | any      | Runtime files mirrored from a local notebook sandbox. Present only under `MARIMOHUB_PERSIST_WORKSPACE=workspace`. Latest-only and non-versioned.                                                                                                                                                                                                                                                                                                                                                       |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.py`      | Python   | Immutable version snapshot of the code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/pyproject.toml`   | TOML     | Dependency snapshot at time of version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/version.json`     | JSON     | Version metadata: saved_at, author, message, parent_id, optional snapshot descriptors.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace/`       | any      | Complete immutable tree from one Git push. Present only for a `git` source version.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.html`    | HTML     | **Optional.** Rendered HTML snapshot, copied from `__marimo__/notebook.html` on session teardown. Immutable once written.                                                                                                                                                                                                                                                                                                                                                                              |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/session.json`     | JSON     | **Optional.** marimo session state (cell outputs), copied from `__marimo__/session/{notebook}.py.json` on teardown. Immutable.                                                                                                                                                                                                                                                                                                                                                                         |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/captures/{cid}/*` | any      | Immutable capture objects used when a teardown replaces snapshots on an unchanged version. `version.json` publishes one capture generation with CAS.                                                                                                                                                                                                                                                                                                                                                   |
 
-Session-commit lease guards await an in-flight renewal and verify ownership and
-local expiry before each protected write boundary. The bucket port cannot cancel
-or fence a write already sent to storage, so a process pause during that write
-remains outside the lease's guarantee.
+The renewable lease limits ordinary overlap. Correctness comes from the
+same-object CAS commit points: local saves and deletion both update `meta.json`,
+while unchanged snapshot replacement CAS-updates `version.json`. A stale holder
+can leave only an unreferenced immutable object, which cleanup can safely remove.
 
 ---
 
@@ -285,12 +289,14 @@ field controls how the service reads the structure.
 
 ### 4.4 `projects/{pid}/notebooks/{nid}/meta.json`
 
-Contains only notebook-level concerns. No code, no paths, no source details — those live in `source.json` and `workspace/`. This is what the API returns when a user views a notebook listing.
+Contains notebook-level concerns and the internal local-content head. The API
+projection omits `content_version_id`.
 
 ```json
 {
 	"id": "nb-5g43rv2s9pfw8w4d",
 	"project_id": "proj-7h2k9qm4xz7rp3w8",
+	"content_version_id": "ver_01ARZ3NDEKTSV4RRFFQ69G5FAV",
 	"title": "Revenue Analysis",
 	"description": "Monthly revenue breakdown by region",
 	"status": "active",
@@ -310,8 +316,9 @@ Contains only notebook-level concerns. No code, no paths, no source details — 
 
 ### 4.5 `source.json`
 
-The source record selects a local workspace or an immutable Git-synced
-workspace. A local source uses this shape:
+The source record selects local or Git behavior. For local notebooks,
+`current_version_id` is the bootstrap pointer for records created before
+`meta.content_version_id`; committed reads prefer the meta head.
 
 ```json
 {
@@ -328,8 +335,8 @@ first push.
 ### 4.6 Source types
 
 `source.json` is a discriminated union on `type`. The current schema supports
-`local` and `git` records. A `local` record points to the current version in the
-bucket. A `git` record stores Git coordinates and the state of the last push.
+`local` and `git` records. A Git record stores Git coordinates and the state of
+the last push.
 
 The hub does not fetch a `git` source from GitHub. An external workflow sends
 the workspace to `/api/sync/git/v1` with a notebook-scoped sync token. The hub
@@ -347,17 +354,30 @@ See the [sync guide](../docs/syncing.md) for the API and token lifecycle.
 	"author": "user_abc123",
 	"message": "Add regional breakdown by Q",
 	"parent_id": "ver_01ARZ3NDEKTSV4RRFFQ69G5FA0",
-	"html_snapshot": { "captured_at": "2025-03-05T14:40:00Z", "size_bytes": 524288 },
-	"session_snapshot": { "captured_at": "2025-03-05T14:40:00Z", "size_bytes": 81920 }
+	"html_snapshot": {
+		"captured_at": "2025-03-05T14:40:00Z",
+		"size_bytes": 524288,
+		"capture_id": "ver_01ARZ3NDEKTSV4RRFFQ69G5FB0"
+	},
+	"session_snapshot": {
+		"captured_at": "2025-03-05T14:40:00Z",
+		"size_bytes": 81920,
+		"capture_id": "ver_01ARZ3NDEKTSV4RRFFQ69G5FB0"
+	}
 }
 ```
 
-Versions are immutable once written. A local save writes a new version, updates
-`source.current_version_id`, and updates the notebook-level workspace. A Git
-push writes the complete workspace inside the new version, then advances the
+Version folders are immutable once published. A local save writes a new folder,
+then CAS-updates `meta.content_version_id`; that CAS is the commit point. A Git
+push writes the complete workspace inside the new version, then advances its
 source pointer with CAS.
 
-**Optional snapshot descriptors.** `html_snapshot` and `session_snapshot` record the _presence and metadata_ of a rendered HTML snapshot (`notebook.html`) and a marimo session state file (`session.json`) sitting alongside the code in the version folder. They carry `captured_at` and `size_bytes` — **never a storage path** (clients address notebooks by ID, §13). Each field is **absent** when that artifact wasn't captured; both are written only on session teardown (§8) and only if marimo actually produced the source file, so most versions have neither. Adding these optional fields is forward-tolerant — a reader that doesn't know them ignores them — so it requires no breaking migration of existing `version.json` objects.
+**Optional snapshot descriptors.** `html_snapshot` and `session_snapshot` record
+`captured_at` and `size_bytes`. An internal `capture_id` selects an immutable
+object below `captures/{capture_id}/`; it is omitted from API responses. Legacy
+descriptors without that field use the fixed `notebook.html` / `session.json`
+paths. Unchanged-version replacement writes a new capture first and then
+CAS-publishes its descriptor, so a losing writer can delete only its own objects.
 
 ### 4.8 `_system/sessions/{pid}/{sid}.json`
 
@@ -655,10 +675,10 @@ A notebook's `source.json` declares where its code lives. The service reads
 `source.type` and selects the correct load path. The snapshot index,
 `meta.json`, versioning, and session model do not depend on the source type.
 
-| `source.type` | Code location               | Write path                                      |
-| ------------- | --------------------------- | ----------------------------------------------- |
-| `local`       | Notebook-level `workspace/` | The API and session teardown save the workspace |
-| `git`         | `versions/{vid}/workspace/` | An external workflow pushes a complete revision |
+| `source.type` | Code location                         | Write path                                             |
+| ------------- | ------------------------------------- | ------------------------------------------------------ |
+| `local`       | `versions/{meta.content_version_id}/` | API and teardown publish a version through `meta.json` |
+| `git`         | `versions/{vid}/workspace/`           | An external workflow pushes a complete revision        |
 
 Both source types keep files in the bucket. A `git` source has
 `provider: "github"` and `sync_mode: "push"`. Its `current_version_id` selects
@@ -691,7 +711,7 @@ GET projects/{pid}/notebooks/{nid}/source.json
 
 // Step 2: Resolve code based on source.type
 if source.type === "local":
-  GET projects/{pid}/notebooks/{nid}/workspace/notebook.py
+  GET projects/{pid}/notebooks/{nid}/versions/{meta.content_version_id}/notebook.py
 if source.type === "git" and source.current_version_id === null:
   return NOT_FOUND (the synced notebook has not been synced)
 if source.type === "git":
@@ -705,36 +725,41 @@ this path exists in the immutable workspace before it updates
 
 ### 7.3 Write: Create or Update a Local Notebook
 
-Every write follows the same atomic sequence. Steps 1–2 are safe to retry independently. Step 5 is the commit.
+A local content update writes an immutable candidate and publishes it through
+the notebook head. Metadata-only updates use the same `meta.json` CAS without a
+new version.
 
 ```
-// Step 1: Write notebook content files
-PUT projects/{pid}/notebooks/{nid}/meta.json
-PUT projects/{pid}/notebooks/{nid}/README.md
-PUT projects/{pid}/notebooks/{nid}/source.json
-PUT projects/{pid}/notebooks/{nid}/workspace/notebook.py       // local only
-PUT projects/{pid}/notebooks/{nid}/workspace/pyproject.toml
+// Step 1: Read meta.json and retain its current local head.
+GET projects/{pid}/notebooks/{nid}/meta.json
 
-// Step 2: Write immutable version snapshot
-PUT projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.py
-PUT projects/{pid}/notebooks/{nid}/versions/{vid}/pyproject.toml
-PUT projects/{pid}/notebooks/{nid}/versions/{vid}/version.json
+// Step 2: Write a unique immutable candidate (create-if-absent).
+PUT projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.py       If-None-Match: *
+PUT projects/{pid}/notebooks/{nid}/versions/{vid}/pyproject.toml   If-None-Match: *
+PUT projects/{pid}/notebooks/{nid}/versions/{vid}/version.json     If-None-Match: *
+PUT projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.html    If-None-Match: * // if captured
+PUT projects/{pid}/notebooks/{nid}/versions/{vid}/session.json     If-None-Match: * // if captured
 
-// Step 3: Read catalog + current snapshot
+// Step 3: Publish the candidate. The callback rejects a changed head or deleted status.
+PUT projects/{pid}/notebooks/{nid}/meta.json  If-Match: {meta_etag}
+
+// If the head changed, delete only this attempt's unique version folder.
+
+// Step 4: Read catalog + current snapshot
 GET _system/catalog.json  →  save ETag as current_etag
 GET _system/snapshots/{current_snapshot_id}.json
 
-// Step 4: Write new snapshot
+// Step 5: Write new snapshot
 PUT _system/snapshots/{new_snapshot_id}.json
 
-// Step 5: Atomic catalog swap (conditional PUT)
+// Step 6: Atomic catalog swap (conditional PUT)
 PUT _system/catalog.json  If-Match: {current_etag}
 
 // If 412 Precondition Failed:
 //   DELETE _system/snapshots/{new_snapshot_id}.json   ← remove the orphan
 //   then retry from Step 3
 
-// Step 6: Write event object (best-effort, non-blocking)
+// Step 7: Write event object (best-effort, non-blocking)
 PUT _system/events/{today}/{event-id}.json
 ```
 
@@ -742,17 +767,20 @@ A Git sync uses a different content write. It writes the uploaded tree under a
 new `versions/{vid}/workspace/` prefix. It then advances
 `source.current_version_id` with ETag CAS. See §4.6.
 
-> **Conflict Safety:** If two writers race on Step 5, one receives `412 Precondition Failed` and retries from Step 3. Steps 1–2 are idempotent — re-running them on retry is safe; the content files are already written before the conflict window opens. The loser also deletes the snapshot it wrote in Step 4 before retrying, so a failed attempt never leaves an orphan. Note that the content files in Step 1 are written _before and outside_ the conditional swap: two concurrent saves to the **same** notebook are last-writer-wins on the live `workspace/notebook.py`, while the immutable `versions/{vid}/` objects remain the authoritative per-version record.
+> **Conflict safety:** Local saves and deletion CAS the same `meta.json` object.
+> Exactly one operation wins a given ETag. A stale save cannot publish after a
+> newer save or tombstone, even if its storage request was paused beyond the
+> lease. Catalog projection happens only after the notebook head commits.
 
 ### 7.4 Delete: Remove a Notebook
 
 ```
-// Step 1: Soft-delete — mark status: 'deleted' in new snapshot
-//   All objects remain intact for 30-day grace period
+// Step 1: CAS meta.json to status: 'deleted'. This is atomic against local saves.
 
-// Step 2: Atomic catalog swap (same as 7.3 Steps 3–5)
+// Step 2: Project the tombstone into a new catalog snapshot.
+// All notebook objects remain intact for the 30-day grace period.
 
-// Step 3 (deferred, after grace period): Hard delete
+// Step 3 (deferred, after grace period): hard delete
 DELETE projects/{pid}/notebooks/{nid}/meta.json
 DELETE projects/{pid}/notebooks/{nid}/README.md
 DELETE projects/{pid}/notebooks/{nid}/source.json
@@ -800,9 +828,10 @@ v1 takes the second lever: heartbeat persistence is **coalesced to at most once 
 
 ### Versioning and snapshots on teardown
 
-This write-back path applies to persistent sessions on local notebooks. A user
-edits the live workspace. The sandbox can mount that workspace or copy it back
-during teardown. Neither path creates an immutable version during the session.
+This write-back path applies to persistent sessions on local notebooks. The
+sandbox loads runtime files through mount-or-copy, then receives source overlaid
+from the authoritative immutable version. No version is created during the
+session.
 
 Teardown creates a version from the final local workspace. It can attach the
 optional `__marimo__/notebook.html` and
@@ -817,30 +846,28 @@ On teardown, **before destroying the sandbox**, the service:
 ```
 // During SandboxProvisioner.teardown, before sandbox.destroy():
 
-// 1. Always read the final notebook back (not only in the mount-fallback case),
-//    so the live workspace/notebook.py is persisted and the session's edits are captured.
+// 1. Read final source and optional marimo artifacts from the sandbox.
 read notebook.py, pyproject.toml from the sandbox workspace
-PUT projects/{pid}/notebooks/{nid}/workspace/notebook.py       // live code
-PUT projects/{pid}/notebooks/{nid}/workspace/pyproject.toml    // live deps
 
-// 2. Cut a new version IF the content changed since current_version_id
+// 2. Cut a candidate version IF content changed since meta.content_version_id
 //    (skip when unchanged, so a read-only session creates no spurious version).
 if content != current version:
   vid = ver_{ulid}
-  PUT versions/{vid}/notebook.py
-  PUT versions/{vid}/pyproject.toml
-  PUT versions/{vid}/version.json        // message e.g. "Session edits", author = session user
-  update source.json.current_version_id = vid
+  PUT versions/{vid}/notebook.py       If-None-Match: *
+  PUT versions/{vid}/pyproject.toml   If-None-Match: *
+  PUT versions/{vid}/version.json     If-None-Match: *
+  CAS meta.json.content_version_id = vid   // publish; status must still be active
   prune to MAX_VERSIONS (§7.3)
 else:
-  vid = current_version_id
+  vid = meta.content_version_id
 
-// 3. Copy marimo's optional artifacts into THAT version's folder (best-effort).
-if exists __marimo__/notebook.html:
-  PUT versions/{vid}/notebook.html   Content-Type: text/html
-if exists __marimo__/session/{notebook}.py.json:
-  PUT versions/{vid}/session.json    Content-Type: application/json
-patch versions/{vid}/version.json with html_snapshot / session_snapshot descriptors (§4.7)
+// 3. For unchanged content only, attach optional artifacts to a unique capture.
+if content == current version:
+  if exists __marimo__/notebook.html:
+    PUT versions/{vid}/captures/{cid}/notebook.html   If-None-Match: *
+  if exists __marimo__/session/{notebook}.py.json:
+    PUT versions/{vid}/captures/{cid}/session.json    If-None-Match: *
+  CAS version.json with capture descriptors (§4.7)
 
 // 4. Capture the rest of the workspace IF PERSIST_WORKSPACE=workspace (best-effort).
 //    Source files (notebook.py / pyproject.toml) and __marimo__/ are excluded —
@@ -854,22 +881,31 @@ if PERSIST_WORKSPACE == "workspace":
 // 5. Emit notebook.update (version) + best-effort notebook.snapshot (artifacts).
 ```
 
-Steps 1–2 (the version cut) own the source files and are the durable record of the session's edits; step 4 captures the rest of the working dir into `workspace/` and is covered below. The HTML/session step is a **copy, not an export** — no `marimo export` command runs; teardown only persists files marimo already wrote. This extends the `SandboxProvisioner.teardown` → `commitSession` flow (which reads `notebook.py`/`pyproject.toml` back) by routing the persist through the versioning service so a version is cut.
+Steps 1–2 own committed source; step 4 captures runtime files. The HTML/session
+step is a copy, not an export. A failed head CAS removes the unpublished
+candidate version. A failed descriptor CAS removes only that attempt's unique
+capture objects.
 
-The version cut (steps 1–2) is the **durable record of the session's edits**, so a hard failure there should surface as a teardown error. The artifact copy (step 3) is purely additive and **best-effort/non-fatal** (mirroring version pruning, §7.3): a missing or unreadable `__marimo__` file just means that version has no snapshot. Snapshots are therefore sparse — a version has one only if (a) it was cut by a torn-down session and (b) marimo produced the file — and `version.json` records which (if any) are present.
+The version cut is the durable record of session edits. Missing or unreadable
+`__marimo__` files are omitted before `commitSession`; `version.json` records
+which supplied captures were committed.
 
-> Because steps 1–3 target the **same** new version, the saved code, its rendered HTML, and the session outputs are coherent: the `notebook.html` was rendered from exactly the `notebook.py` stored beside it. This is the key reason teardown cuts the version _before_ attaching the snapshots, rather than pinning them onto a stale `current_version_id`.
+> The changed-content path publishes code and captures through one new version.
+> The unchanged path attaches a capture only after comparing against the current
+> version, then CAS-publishes the descriptor on that version.
 
 ### Workspace persistence & restore
 
 `MARIMOHUB_PERSIST_WORKSPACE` (`source` (default) | `workspace`) controls whether the sandbox's **non-source runtime files** survive a session. It governs step 4 of teardown above and the restore on the next provision.
 
-| Mode        | What `workspace/` holds                                    | Capture (teardown)                                                        | Restore (provision)                      |
-| ----------- | ---------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------- |
-| `source`    | `notebook.py` + `pyproject.toml` only                      | source files only (via the version cut)                                   | brings back exactly the source           |
-| `workspace` | source files **plus** runtime files (e.g. `data/cars.csv`) | source files via the version cut, then mirror the rest of the working dir | brings back source **and** runtime files |
+| Mode        | What `workspace/` holds                     | Capture (teardown)                         | Restore (provision)                                   |
+| ----------- | ------------------------------------------- | ------------------------------------------ | ----------------------------------------------------- |
+| `source`    | No runtime files                            | Source goes only to the immutable version  | Authoritative source overlay                          |
+| `workspace` | Runtime files (for example `data/cars.csv`) | Mirrors non-source files into `workspace/` | Runtime mount/copy, then authoritative source overlay |
 
-- **Restore is unconditional.** On provision, the contents of `workspace/` are loaded into the sandbox working dir before marimo starts. Because `workspace/` reflects whatever was last captured, no mode branch is needed — `source` mode simply has only the two source files to restore.
+- **Restore is authoritative.** Local provision loads `workspace/`, then writes
+  `notebook.py` and `pyproject.toml` from the version selected by
+  `meta.content_version_id` before marimo starts.
 - **Capture is mode-gated and binary-safe.** Under `workspace`, every runtime file under the working dir (excluding `notebook.py`, `pyproject.toml`, `__marimo__/`, and regenerable Python artifacts `.venv/` / `__pycache__/`) is mirrored into `workspace/` byte-for-byte, so parquet, images, and `.db` files round-trip — not just UTF-8 text. **Mirror deletes** keep `workspace/` accurate: any `workspace/` object (other than the source files) no longer present in the sandbox is removed, which also cleans up stale data if a notebook is changed from `workspace` back to `source`.
 - **Caps.** Capture is bounded by a max total-bytes and max file-count limit; a file skipped because it would exceed the cap is logged (`console.warn`), never silently truncated.
 - **`workspace/` is never pruned.** Version pruning (§11) only reaps `versions/{vid}/`; the latest-only `workspace/` mirror is untouched.
@@ -950,7 +986,7 @@ configured process or platform log destination. The bucket has no
 | Retention                   | Keep snapshots for 90 days (with a floor of the N most recent), then delete via the maintenance cron — `MaintenanceService.expireSnapshots` (`packages/core/src/services/catalog/MaintenanceService.ts`). Every commit writes a new snapshot, so without this the bucket grows without bound (the Iceberg "snapshot-expiry" problem). |
 | Recovery                    | Find the snapshot with the right point in time **by `created_at` / object `uploaded`, not by key order** (§5), write it as a new snapshot with a new ID, then CAS-swap `catalog.json`. See [`operations.md`](./operations.md) §2 for the full procedure.                                                                              |
 | Compaction                  | Not needed at this scale. If snapshot exceeds 1MB, split into per-project manifest files referenced by the snapshot instead of embedded.                                                                                                                                                                                              |
-| Emergency rollback          | GET any previous snapshot → PUT as new snapshot → CAS `catalog.json`. Restores the **index** in 3 calls. This does _not_ restore notebook content — `workspace/notebook.py` is overwritten in place on each save, so to roll back code you must also restore the relevant immutable `versions/{vid}/` objects.                        |
+| Emergency rollback          | GET any previous snapshot → PUT as new snapshot → CAS `catalog.json`. This restores the index only. Local code rollback creates a new version from the desired immutable `versions/{vid}/` record.                                                                                                                                    |
 | Snapshot size at full scale | ~200KB (200 bytes × 1,000 notebooks)                                                                                                                                                                                                                                                                                                  |
 | Version-folder artifacts    | The HTML/session snapshots (§8) live **inside** the immutable `versions/{vid}/` folder, not in `_system/snapshots/`. They need no separate retention job: `NotebookService.pruneVersions` deletes the whole version prefix when it ages out of `MAX_VERSIONS`, reaping `notebook.html` / `session.json` along with the code.          |
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Millis } from '../../duration';
-import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
+import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import { paths } from '../../paths';
 import {
 	ACTOR,
@@ -592,6 +592,35 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/my_app.py'");
 		});
 
+		it('seeds local source from the authoritative immutable version', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const bucketHandle = new MemoryBucket();
+			const nb = paths.project(projectId).notebook(notebookId);
+			const versionId = createVersionId();
+			await Promise.all([
+				bucketHandle.put(nb.code, 'stale cache'),
+				bucketHandle.put(nb.version(versionId).code, 'committed code'),
+				bucketHandle.put(nb.version(versionId).deps, '[project]'),
+			]);
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				sourceVersionId: versionId,
+			});
+
+			expect(calls.mountBucket).toHaveLength(1);
+			const notebook = calls.writeFiles
+				.flat()
+				.find((file) => file.path === `${MOUNT_PATH}/notebook.py`);
+			expect(new TextDecoder().decode(notebook?.content as Uint8Array)).toBe('committed code');
+		});
+
 		it('uses the injected workspace loader selected by workspaceLoadMode', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const selected: string[] = [];
@@ -708,11 +737,14 @@ describe('SandboxProvisioner', () => {
 			expect(calls.readFile).toContain(`${MOUNT_PATH}/__marimo__/notebook.html`);
 			expect(calls.readFile).toContain(`${MOUNT_PATH}/__marimo__/session/notebook.py.json`);
 
-			expect(await (await env.bucket.get(nb.code))?.text()).toBe('print(2)  # edited');
+			expect(await env.notebooks.getNotebookContent(project.id, created.id)).toBe(
+				'print(2)  # edited',
+			);
 
-			// A new version was cut (initial + this one) and source points at it.
+			// A new version was cut (initial + this one) and the head points at it.
 			expect(await env.notebooks.listVersions(project.id, created.id)).toHaveLength(2);
-			const source = await (await env.bucket.get(nb.source))!.json<any>();
+			const { source } = await env.notebooks.getNotebook(project.id, created.id);
+			if (source.type !== 'local') throw new Error('Expected local source');
 			const ver = nb.version(source.current_version_id);
 
 			// HTML + session snapshots landed in that version's folder, with descriptors.

@@ -24,7 +24,9 @@ import {
 	SourceSchema,
 	VersionIdSchema,
 	toPublicNotebookEntry,
+	toPublicNotebookMeta,
 	toPublicProjectEntry,
+	toPublicVersion,
 } from './schema';
 import {
 	makeCatalog,
@@ -395,6 +397,41 @@ describe('SnapshotProjectEntrySchema (rolling-deploy tolerance)', () => {
 });
 
 describe('toPublic* strippers', () => {
+	it('strips internal notebook-head and capture fields', () => {
+		const versionId = createVersionId();
+		const notebookId = createNotebookId();
+		const meta = {
+			schema_version: 1,
+			id: notebookId,
+			project_id: createProjectId(),
+			content_version_id: versionId,
+			title: 'Notebook',
+			description: '',
+			status: 'active' as const,
+			author: ACTOR,
+			created_at: NOW,
+			updated_at: NOW,
+			last_run_at: null,
+			tags: [],
+		};
+		const version = {
+			schema_version: 1,
+			version_id: versionId,
+			notebook_id: notebookId,
+			saved_at: NOW,
+			author: ACTOR,
+			message: 'Save',
+			parent_id: null,
+			html_snapshot: { captured_at: NOW, size_bytes: 10, capture_id: createVersionId() },
+		};
+
+		expect(toPublicNotebookMeta(meta)).not.toHaveProperty('content_version_id');
+		expect(toPublicVersion(version).html_snapshot).toEqual({
+			captured_at: NOW,
+			size_bytes: 10,
+		});
+	});
+
 	it('strips key_prefix from a notebook entry', () => {
 		const pid = createProjectId();
 		const entry = makeSnapshotNotebookEntry(pid);

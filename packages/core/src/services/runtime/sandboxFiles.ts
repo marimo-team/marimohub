@@ -72,8 +72,8 @@ function batchByBytes<T extends { size: number }>(items: readonly T[], maxBytes:
  * Workspace-relative paths the capture/restore path leaves alone. Entries ending
  * in `/` are directory names matched at any depth; the rest are exact root files.
  * `notebook.py` / `pyproject.toml` are the source files — owned by
- * `NotebookService.commitSession`, which writes them into `workspace/` and into
- * the immutable `versions/{vid}/` record. `__marimo__/` holds marimo's rendered
+ * `NotebookService.commitSession`, which publishes them through an immutable
+ * `versions/{vid}/` record. `__marimo__/` holds marimo's rendered
  * HTML / session snapshots, which are versioned separately. `.venv/` and
  * `__pycache__/` are regenerable Python build/env artifacts (uv resolves the venv
  * beside the notebook) — large, churny, and pointless to persist. Everything else

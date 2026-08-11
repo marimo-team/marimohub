@@ -20,6 +20,7 @@ export interface VersionPaths {
 	html: string;
 	/** Optional marimo session-state snapshot captured on teardown (`session.json`). */
 	session: string;
+	capture: (captureId: VersionId) => { html: string; session: string };
 }
 
 export interface NotebookPaths {
@@ -40,7 +41,8 @@ export interface NotebookPaths {
 	fsSnapshot: string;
 	/**
 	 * Prefix of the `workspace/` folder: `projects/{pid}/notebooks/{nid}/workspace/`.
-	 * `workspace/` is the latest-only mirror of the sandbox working directory.
+	 * `workspace/` is the latest-only runtime-file mirror. Local committed source
+	 * lives in the version selected by `meta.content_version_id`.
 	 */
 	workspacePrefix: string;
 	/** Key for a file at `rel` inside `workspace/`, e.g. `workspaceFile('data/cars.csv')`. */
@@ -89,6 +91,10 @@ function versionPaths(base: string, vid: VersionId): VersionPaths {
 		workspaceFile: (rel: string) => `${workspace}/${rel}`,
 		html: `${prefix}/notebook.html`,
 		session: `${prefix}/session.json`,
+		capture: (captureId: VersionId) => ({
+			html: `${prefix}/captures/${captureId}/notebook.html`,
+			session: `${prefix}/captures/${captureId}/session.json`,
+		}),
 	};
 }
 
@@ -103,9 +109,8 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 		sessionCommitLock: `${base}/_session_commit_lock.json`,
 		integrationSyncToken: `${base}/integration_sync_token.json`,
 		fsSnapshot: `${base}/fs_snapshot.json`,
-		// workspace/ = latest-only mirror of the sandbox working dir.
-		// notebook.py + pyproject.toml are the always-present source files;
-		// everything else is present only under PERSIST_WORKSPACE=workspace.
+		// workspace/ is the latest-only runtime mirror. Older notebooks may still
+		// carry non-authoritative notebook.py and pyproject.toml caches here.
 		workspacePrefix: `${workspace}/`,
 		workspaceFile: (rel: string) => `${workspace}/${rel}`,
 		code: `${workspace}/notebook.py`,

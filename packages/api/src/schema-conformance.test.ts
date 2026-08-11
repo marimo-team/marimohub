@@ -77,7 +77,6 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 
 	// Response shapes that omit exactly `schema_version` (internal persistence field).
 	const omitsSchemaVersion: [string, unknown, unknown][] = [
-		['NotebookMeta', NotebookMetaResponseSchema, CoreNotebookMetaSchema],
 		['NotebookVersion', NotebookVersionResponseSchema, CoreVersionSchema],
 		['LocalSource', LocalSourceResponseSchema, CoreLocalSourceSchema],
 		['GitSource', GitSourceResponseSchema, CoreGitSourceSchema],
@@ -87,6 +86,15 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		const coreKeys = shapeKeys(core);
 		expect(coreKeys.filter((k) => k !== 'schema_version')).toEqual(shapeKeys(api));
 		expect(coreKeys).toContain('schema_version');
+	});
+
+	it('NotebookMeta omits its persistence-only fields', () => {
+		const coreKeys = shapeKeys(CoreNotebookMetaSchema);
+		const internal = ['schema_version', 'content_version_id'];
+		expect(coreKeys.filter((key) => !internal.includes(key))).toEqual(
+			shapeKeys(NotebookMetaResponseSchema),
+		);
+		expect(coreKeys).toEqual(expect.arrayContaining(internal));
 	});
 
 	// Project omits `schema_version` and adds the request-scoped `your_role`.

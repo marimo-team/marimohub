@@ -382,6 +382,9 @@ export const NotebookMetaSchema = z.object({
 	schema_version: SchemaVersionSchema,
 	id: NotebookIdSchema,
 	project_id: ProjectIdSchema,
+	// The authoritative local-content head. Older records fall back to
+	// source.json until their next content commit.
+	content_version_id: VersionIdSchema.optional(),
 	title: z.string(),
 	description: z.string(),
 	status: z.enum(NOTEBOOK_STATUSES),
@@ -402,9 +405,13 @@ export const NotebookMetaSchema = z.object({
 
 export type NotebookMeta = z.infer<typeof NotebookMetaSchema>;
 
-export type PublicNotebookMeta = Omit<NotebookMeta, 'schema_version'>;
+export type PublicNotebookMeta = Omit<NotebookMeta, 'schema_version' | 'content_version_id'>;
 export function toPublicNotebookMeta(meta: NotebookMeta): PublicNotebookMeta {
-	const { schema_version: _schema_version, ...rest } = meta;
+	const {
+		schema_version: _schema_version,
+		content_version_id: _content_version_id,
+		...rest
+	} = meta;
 	return rest;
 }
 
@@ -467,6 +474,8 @@ export function toPublicSource(source: Source): PublicSource {
 export const SnapshotDescriptorSchema = z.object({
 	captured_at: z.iso.datetime(),
 	size_bytes: z.number().int().nonnegative(),
+	/** Internal immutable artifact generation; absent on legacy fixed-path snapshots. */
+	capture_id: VersionIdSchema.optional(),
 });
 
 export type SnapshotDescriptor = z.infer<typeof SnapshotDescriptorSchema>;
@@ -491,10 +500,27 @@ export const VersionSchema = z.object({
 
 export type Version = z.infer<typeof VersionSchema>;
 
-export type PublicVersion = Omit<Version, 'schema_version'>;
+export type PublicSnapshotDescriptor = Omit<SnapshotDescriptor, 'capture_id'>;
+export type PublicVersion = Omit<
+	Version,
+	'schema_version' | 'html_snapshot' | 'session_snapshot'
+> & {
+	html_snapshot?: PublicSnapshotDescriptor;
+	session_snapshot?: PublicSnapshotDescriptor;
+};
 export function toPublicVersion(version: Version): PublicVersion {
-	const { schema_version: _schema_version, ...rest } = version;
-	return rest;
+	const { schema_version: _schema_version, html_snapshot, session_snapshot, ...rest } = version;
+	const publicDescriptor = (
+		descriptor: SnapshotDescriptor | undefined,
+	): PublicSnapshotDescriptor | undefined => {
+		if (!descriptor) return undefined;
+		return { captured_at: descriptor.captured_at, size_bytes: descriptor.size_bytes };
+	};
+	return {
+		...rest,
+		...(html_snapshot ? { html_snapshot: publicDescriptor(html_snapshot) } : {}),
+		...(session_snapshot ? { session_snapshot: publicDescriptor(session_snapshot) } : {}),
+	};
 }
 
 // --- Filesystem snapshot ---
