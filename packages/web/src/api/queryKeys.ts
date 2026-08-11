@@ -24,6 +24,8 @@ export const browseKeys = {
 	all: ['browse'] as const,
 	capability: (projectId: string, integrationId: string) =>
 		[...browseKeys.all, projectId, integrationId, 'capability'] as const,
+	/** Colocated with the key shape above so a change cannot silently break it. */
+	isCapability: (key: readonly unknown[]) => key[0] === 'browse' && key[3] === 'capability',
 	namespaces: (projectId: string, integrationId: string, parent: readonly string[]) =>
 		[...browseKeys.all, projectId, integrationId, 'namespaces', parent] as const,
 	tables: (projectId: string, integrationId: string, namespace: readonly string[]) =>

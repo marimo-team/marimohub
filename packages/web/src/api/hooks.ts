@@ -641,6 +641,13 @@ export async function refreshBrowseQueries(queryClient: QueryClient): Promise<vo
 	const freshRound: typeof active = [];
 	const overflow: typeof active = [];
 	for (const query of active) {
+		// Capability lookups never carry `fresh` (that route is uncached
+		// server-side), so charging them would waste budget slots on requests
+		// that spend nothing — they just ride the plain round below.
+		if (browseKeys.isCapability(query.queryKey)) {
+			overflow.push(query);
+			continue;
+		}
 		const cost = refetchCost(query);
 		if (cost <= remaining) {
 			remaining -= cost;

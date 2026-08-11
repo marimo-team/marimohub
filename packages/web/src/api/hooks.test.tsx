@@ -5,6 +5,7 @@ import { browseKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys'
 import {
 	refreshBrowseQueries,
 	resetBrowseRefreshBudgetForTests,
+	useBrowseCapabilityQuery,
 	useBrowseTablesQuery,
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
@@ -676,7 +677,7 @@ describe('refreshBrowseQueries budget', () => {
 		expect(urlsOf(fetchMock).filter((url) => url.includes('fresh=true'))).toHaveLength(2);
 	});
 
-	it('the rolling window stops adding fresh once 30 page fetches are spent', async () => {
+	it('the rolling window stops adding fresh at 30 page fetches, then replenishes', async () => {
 		const fetchMock = stubFetch(async () => jsonOk({ items: ['orders'], next_cursor: null }));
 		const { result, client } = renderHookWithClient(
 			() => useBrowseTablesQuery(PID, 'int-1', ['sales']),
@@ -694,5 +695,38 @@ describe('refreshBrowseQueries budget', () => {
 		await refreshBrowseQueries(client);
 		expect(fetchMock).toHaveBeenCalled();
 		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(false);
+
+		// ROLLING, not a hard cap: once the window passes, the allowance returns.
+		const realNow = Date.now.bind(Date);
+		vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 61_000);
+		fetchMock.mockClear();
+		await refreshBrowseQueries(client);
+		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(true);
+	});
+
+	it('capability lookups ride along without spending fresh budget', async () => {
+		const fetchMock = stubFetch(async (url) =>
+			String(url).includes('/browse/tables')
+				? jsonOk({ items: ['orders'], next_cursor: null })
+				: jsonOk({ metadata: true, preview: false }),
+		);
+		const { result, client } = renderHookWithClient(
+			() => ({
+				capability: useBrowseCapabilityQuery(PID, 'int-1'),
+				tables: useBrowseTablesQuery(PID, 'int-1', ['sales']),
+			}),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.tables.data).toBeDefined());
+
+		fetchMock.mockClear();
+		// If the capability lookup were charged, only ~15 of these table
+		// refetches could carry fresh before the mirror ran dry.
+		for (let i = 0; i < 30; i++) {
+			await refreshBrowseQueries(client);
+		}
+		const urls = urlsOf(fetchMock);
+		expect(urls.filter((url) => url.includes('fresh=true')).length).toBe(30);
+		expect(urls.some((url) => url.endsWith('/browse'))).toBe(true);
 	});
 });
