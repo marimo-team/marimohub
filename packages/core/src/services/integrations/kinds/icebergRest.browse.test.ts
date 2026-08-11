@@ -462,3 +462,68 @@ function oauthConfig() {
 		},
 	});
 }
+
+describe('iceberg_rest browse URI and scoping', () => {
+	it('preserves the configured query string (tenant routing) on catalog routes', async () => {
+		const requested: string[] = [];
+		const probe = fakeCatalog(
+			{
+				'/api/catalog/v1/config': CONFIG_RESPONSE,
+				'/api/catalog/v1/demo/namespaces/sales/tables': { identifiers: [] },
+			},
+			requested,
+		);
+
+		await browse.listTables(
+			config({ uri: 'https://catalog.internal/api/catalog?tenant=acme' }),
+			probe,
+			['sales'],
+			{ limit: 10 },
+		);
+
+		for (const url of requested) {
+			expect(new URL(url).searchParams.get('tenant')).toBe('acme');
+		}
+	});
+
+	it('drops identifiers scoped to a different namespace, keeps ones without any', async () => {
+		const probe = fakeCatalog({
+			'/api/catalog/v1/config': CONFIG_RESPONSE,
+			'/api/catalog/v1/demo/namespaces/sales/tables': {
+				identifiers: [
+					{ namespace: ['sales'], name: 'orders' },
+					{ namespace: ['hr'], name: 'salaries' },
+					{ name: 'bare' },
+				],
+			},
+		});
+
+		const page = await browse.listTables(config(), probe, ['sales'], { limit: 10 });
+
+		expect(page.items).toEqual(['orders', 'bare']);
+	});
+
+	it('renders format-v1 partitioning from the flat singular partition-spec', async () => {
+		const probe = fakeCatalog({
+			'/api/catalog/v1/config': CONFIG_RESPONSE,
+			'/api/catalog/v1/demo/namespaces/sales/tables/v1part': {
+				metadata: {
+					'format-version': 1,
+					schema: {
+						fields: [
+							{ id: 1, name: 'id', required: true, type: 'long' },
+							{ id: 2, name: 'ts', required: false, type: 'timestamptz' },
+						],
+					},
+					'partition-spec': [
+						{ 'source-id': 2, 'field-id': 1000, name: 'ts_day', transform: 'day' },
+					],
+				},
+			},
+		});
+
+		const schema = await browse.getTableSchema(config(), probe, ['sales'], 'v1part');
+
+		expect(schema.partitioning).toEqual(['day(ts)']);
+	});
+});

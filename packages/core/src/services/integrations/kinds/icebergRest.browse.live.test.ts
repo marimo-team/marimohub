@@ -1,7 +1,7 @@
 import { describe, it } from 'vitest';
 import { browseContract, fetchProbe } from '../../../testing/browseContract';
 import type { BrowseContractFixture } from '../../../testing/browseContract';
-import { icebergRest } from './icebergRest';
+import { icebergRest, resolveNamespaceSeparator } from './icebergRest';
 
 /**
  * Live conformance for `iceberg_rest`, e.g.
@@ -48,8 +48,13 @@ if (uri) {
 			overrides?: Record<string, unknown>;
 			defaults?: Record<string, unknown>;
 		};
-		const declared = serverConfig.overrides?.['namespace-separator'];
-		if (typeof declared === 'string' && declared !== '') sep = declared;
+		// The client under test resolves the separator through the same function,
+		// so seeding and browsing always address identical routes.
+		sep = resolveNamespaceSeparator(
+			config.rest.namespace_separator,
+			serverConfig.overrides,
+			serverConfig.defaults,
+		);
 		const prefix = [serverConfig.overrides?.prefix, serverConfig.defaults?.prefix].find(
 			(value): value is string => typeof value === 'string' && value !== '',
 		);

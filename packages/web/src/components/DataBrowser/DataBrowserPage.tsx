@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -148,6 +148,23 @@ export default function DataBrowserPage() {
 		}
 		return initial;
 	});
+	// The initializer covers only the first mount; in-app deep links and
+	// back/forward navigation change `ns` while the page stays mounted, and the
+	// selected table's ancestry must open then too. Additive — a user's own
+	// collapses elsewhere in the tree are kept.
+	const nsParam = searchParams.get('ns');
+	useEffect(() => {
+		const parts = splitNs(nsParam);
+		if (parts.length === 0) return;
+		setExpanded((prev) => {
+			const next = new Set(prev);
+			for (let i = 1; i <= parts.length; i++) {
+				next.add(`${iid}:${parts.slice(0, i).join(NS_JOIN)}`);
+			}
+			return next;
+		});
+	}, [iid, nsParam]);
+
 	const isExpanded = (namespace: string[]) => expanded.has(`${iid}:${namespace.join(NS_JOIN)}`);
 	const toggleExpanded = (namespace: string[]) => {
 		const key = `${iid}:${namespace.join(NS_JOIN)}`;

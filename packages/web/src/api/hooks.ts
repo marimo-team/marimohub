@@ -596,19 +596,42 @@ const BROWSE_SCHEMA_STALE_MS = 300_000;
 
 /**
  * While a refresh round is in flight, browse lookups carry `fresh=true`, which
- * makes the server bypass its own metadata cache (and refresh it). Scoped to
- * the awaited invalidation so ordinary navigation stays cache-friendly.
+ * makes the server bypass its own metadata cache (and refresh it). A counter,
+ * not a boolean, so overlapping rounds cannot reset each other's flag.
  */
-let bypassBrowseCache = false;
-const freshQuery = () => (bypassBrowseCache ? { fresh: 'true' as const } : {});
+let bypassBrowseCache = 0;
+const freshQuery = () => (bypassBrowseCache > 0 ? { fresh: 'true' as const } : {});
 
+/**
+ * The fresh budget is 30 ops/min/user; a large expanded tree refreshed in one
+ * parallel burst would blow it and litter the tree with 429s.
+ */
+const MAX_FRESH_REFETCHES = 15;
+
+/**
+ * Refresh the browse view. Mounted queries refetch with `fresh=true`
+ * SEQUENTIALLY, bounded by the fresh budget (any overflow refetches without
+ * the flag — server-cached, still current within its TTL). Unmounted results
+ * (collapsed nodes, other integrations) cannot be refetched, so they are
+ * dropped outright: their next expansion fetches instead of replaying a stale
+ * client entry.
+ */
 export async function refreshBrowseQueries(queryClient: QueryClient): Promise<void> {
-	bypassBrowseCache = true;
+	queryClient.removeQueries({ queryKey: browseKeys.all, type: 'inactive' });
+	const active = queryClient.getQueryCache().findAll({ queryKey: browseKeys.all, type: 'active' });
+	const freshRound = active.slice(0, MAX_FRESH_REFETCHES);
+	const overflow = active.slice(MAX_FRESH_REFETCHES);
+	bypassBrowseCache += 1;
 	try {
-		await queryClient.invalidateQueries({ queryKey: browseKeys.all, refetchType: 'active' });
+		for (const query of freshRound) {
+			await queryClient.refetchQueries({ queryKey: query.queryKey, exact: true });
+		}
 	} finally {
-		bypassBrowseCache = false;
+		bypassBrowseCache -= 1;
 	}
+	await Promise.all(
+		overflow.map((query) => queryClient.refetchQueries({ queryKey: query.queryKey, exact: true })),
+	);
 }
 
 export function useBrowseCapabilityQuery(projectId: string, integrationId: string, enabled = true) {

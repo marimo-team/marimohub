@@ -37,13 +37,16 @@ export function makeIntegrations(
 		);
 	}
 	const secretSources = makeSecretSources(env);
+	// Parsed once so both probes interpret the same validated policy — neither
+	// depends on the other having rejected an invalid value first.
+	const policy = probePolicy(env);
 	const options = {
 		bucket,
 		registry: defaultRegistry(),
 		codec: secretSources.codec,
 		resolvers: secretSources.resolvers,
-		probe: makeProbe(env),
-		browseProbe: makeBrowseProbe(env, dataBrowser),
+		probe: makeProbe(policy),
+		browseProbe: makeBrowseProbe(policy, dataBrowser),
 		metrics,
 	};
 	return {
@@ -85,33 +88,36 @@ function dataBrowserSetting(env: Env): 'off' | 'metadata' {
  * single user tops out around 90 — the process-wide allowance cannot be
  * exhausted by one editor.
  */
-function makeBrowseProbe(env: Env, dataBrowser: 'off' | 'metadata'): IntegrationProbe | undefined {
+function makeBrowseProbe(
+	policy: ProbePolicy,
+	dataBrowser: 'off' | 'metadata',
+): IntegrationProbe | undefined {
 	if (dataBrowser === 'off') return undefined;
-	const probe = env.MARIMOHUB_INTEGRATIONS_PROBE?.trim().toLowerCase();
-	if (probe === 'off') {
+	if (policy === 'off') {
 		throw new ConfigError(
 			'MARIMOHUB_DATA_BROWSER requires a probe: set MARIMOHUB_INTEGRATIONS_PROBE to guarded or private.',
 			{ variable: 'MARIMOHUB_DATA_BROWSER', docs: 'docs/integrations.md' },
 		);
 	}
 	return createGuardedProbe({
-		allowPrivate: probe === 'private',
+		allowPrivate: policy === 'private',
 		maxResponseBytes: 1024 * 1024,
 		maxProbesPerMinute: 240,
 	});
 }
 
-function makeProbe(env: Env): IntegrationProbe | undefined {
+type ProbePolicy = 'guarded' | 'private' | 'off';
+
+function probePolicy(env: Env): ProbePolicy {
 	const setting = env.MARIMOHUB_INTEGRATIONS_PROBE?.trim().toLowerCase();
 	switch (setting) {
 		case undefined:
 		case '':
 		case 'guarded':
-			return createGuardedProbe();
+			return 'guarded';
 		case 'private':
-			return createGuardedProbe({ allowPrivate: true });
 		case 'off':
-			return undefined;
+			return setting;
 		default:
 			throw new ConfigError(
 				`Unknown MARIMOHUB_INTEGRATIONS_PROBE: ${env.MARIMOHUB_INTEGRATIONS_PROBE} ` +
@@ -119,4 +125,9 @@ function makeProbe(env: Env): IntegrationProbe | undefined {
 				{ variable: 'MARIMOHUB_INTEGRATIONS_PROBE', docs: 'docs/integrations.md' },
 			);
 	}
+}
+
+function makeProbe(policy: ProbePolicy): IntegrationProbe | undefined {
+	if (policy === 'off') return undefined;
+	return createGuardedProbe({ allowPrivate: policy === 'private' });
 }

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Route, Routes, useLocation } from 'react-router-dom';
+import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import DataBrowserPage from './DataBrowserPage';
 import type { IntegrationEntry, IntegrationKind } from '@/types';
 import { installMatchMedia, renderWithClient } from '@/test/render';
@@ -129,6 +129,16 @@ function LocationProbe() {
 	return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
 }
 
+/** Simulates an in-app deep link arriving while the page is already mounted. */
+function DeepLink({ to }: { to: string }) {
+	const navigate = useNavigate();
+	return (
+		<button type="button" data-testid="deeplink" onClick={() => void navigate(to)}>
+			deeplink
+		</button>
+	);
+}
+
 function setup(route: string, fetchOpts?: Parameters<typeof makeFetch>[0]) {
 	installMatchMedia();
 	const fetchImpl = makeFetch(fetchOpts);
@@ -139,6 +149,7 @@ function setup(route: string, fetchOpts?: Parameters<typeof makeFetch>[0]) {
 				<Route path="/projects/:pid/data/:iid" element={<DataBrowserPage />} />
 			</Routes>
 			<LocationProbe />
+			<DeepLink to={`/projects/${PID}/data/${IID}?ns=sales&table=orders`} />
 		</>,
 		{ route },
 	);
@@ -164,6 +175,21 @@ describe('DataBrowserPage', () => {
 		expect(screen.getByText('s3://warehouse/sales/orders')).toBeInTheDocument();
 		expect(screen.getByText('day(ts)')).toBeInTheDocument();
 		expect(screen.getByText(/load_catalog/)).toBeInTheDocument();
+	});
+
+	it('expands the ancestry when a deep link arrives while already mounted', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}`);
+
+		const namespace = await screen.findByTestId('browse-namespace');
+		expect(namespace).toHaveAttribute('aria-expanded', 'false');
+
+		await user.click(screen.getByTestId('deeplink'));
+
+		await waitFor(() => {
+			expect(screen.getByTestId('browse-namespace')).toHaveAttribute('aria-expanded', 'true');
+		});
+		expect(await screen.findByTestId('browse-table')).toHaveAttribute('aria-current', 'true');
 	});
 
 	it('writes the selection into the URL when a table is clicked', async () => {

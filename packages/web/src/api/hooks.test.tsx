@@ -3,6 +3,8 @@ import { act, waitFor } from '@testing-library/react';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import { browseKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 import {
+	refreshBrowseQueries,
+	useBrowseTablesQuery,
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
 	useEditorSessionQuery,
@@ -608,5 +610,34 @@ describe('useEditorSessionQuery', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe('refreshBrowseQueries', () => {
+	it('freshly refetches mounted queries, drops unmounted ones, then clears the flag', async () => {
+		const fetchMock = stubFetch(async () => jsonOk({ items: ['orders'], next_cursor: null }));
+		const { result, client } = renderHookWithClient(
+			() => useBrowseTablesQuery(PID, 'int-1', ['sales']),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.data).toBeDefined());
+
+		// A result whose component has unmounted (a collapsed tree node).
+		client.setQueryData(browseKeys.schema(PID, 'int-1', ['sales'], 'orders'), { columns: [] });
+
+		fetchMock.mockClear();
+		await refreshBrowseQueries(client);
+
+		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(true);
+		expect(
+			client.getQueryState(browseKeys.schema(PID, 'int-1', ['sales'], 'orders')),
+		).toBeUndefined();
+
+		// The bypass flag must not leak past the round.
+		fetchMock.mockClear();
+		await act(async () => {
+			await result.current.refetch();
+		});
+		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(false);
 	});
 });

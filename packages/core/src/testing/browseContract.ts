@@ -63,19 +63,29 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
 			if (fixture) await opts.teardown?.(fixture)?.catch(() => {});
 		});
 
-		/** Follows cursors to exhaustion, guarding against non-advancing servers. */
+		/**
+		 * Follows cursors to exhaustion. Termination comes from PROGRESS, not a
+		 * small page budget — a shared live catalog can legitimately hold hundreds
+		 * of entries: a repeated cursor is a cycle, and the large ceiling is only a
+		 * runaway backstop.
+		 */
 		const listAll = async <T>(
 			load: (cursor: string | undefined) => Promise<{ items: T[]; next_cursor: string | null }>,
 		): Promise<T[]> => {
 			const items: T[] = [];
+			const seen = new Set<string>();
 			let cursor: string | undefined;
-			for (let i = 0; i < 20; i++) {
+			for (let i = 0; i < 1000; i++) {
 				const page = await load(cursor);
 				items.push(...page.items);
 				if (page.next_cursor === null) return items;
+				if (seen.has(page.next_cursor)) {
+					throw new Error('pagination cycled without terminating');
+				}
+				seen.add(page.next_cursor);
 				cursor = page.next_cursor;
 			}
-			throw new Error('pagination did not terminate within 20 pages');
+			throw new Error('pagination did not terminate within 1000 pages');
 		};
 
 		const limit = () => opts.pageLimit ?? 2;

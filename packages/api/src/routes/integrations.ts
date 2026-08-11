@@ -371,6 +371,12 @@ const NAMESPACE_JOINER = '\u001f';
 const NamespaceQueryValue = z
 	.string()
 	.min(1)
+	// A leading/trailing/doubled joiner splits into empty identifier parts,
+	// which no catalog can hold — refuse here (422) instead of spending a probe
+	// call on a guaranteed upstream 404.
+	.refine((value) => value.split(NAMESPACE_JOINER).every((part) => part !== ''), {
+		message: 'Namespace parts must be non-empty.',
+	})
 	.openapi({
 		param: { name: 'namespace', in: 'query' },
 		description: 'Namespace parts joined by U+001F (percent-encoded as %1F).',
@@ -713,9 +719,12 @@ async function assertBrowsable(
  * Per-replica TTL cache over successful browse results, so tree navigation
  * does not re-spend probe budget on every expansion. Bounded: expired entries
  * are dropped when full, then oldest-inserted. Only cache misses consume the
- * caller's browse budget.
+ * caller's browse budget, and concurrent misses for one key share a single
+ * in-flight load (and its one budget charge) — a lazy tree expansion fans in
+ * identical lookups faster than the first can populate the cache.
  */
 const browseCache = new Map<string, { expiresAt: number; value: unknown }>();
+const inflightBrowse = new Map<string, Promise<unknown>>();
 
 async function cachedBrowse<T>(
 	key: string,
@@ -726,19 +735,29 @@ async function cachedBrowse<T>(
 	const now = Date.now();
 	const hit = fresh ? undefined : browseCache.get(key);
 	if (hit && hit.expiresAt > now) return hit.value as T;
-	const value = await load();
-	if (browseCache.size >= BROWSE_CACHE_MAX_ENTRIES) {
-		for (const [cachedKey, entry] of browseCache) {
-			if (entry.expiresAt <= now) browseCache.delete(cachedKey);
+	const pending = fresh ? undefined : inflightBrowse.get(key);
+	if (pending) return pending as Promise<T>;
+	const promise = (async () => {
+		const value = await load();
+		if (browseCache.size >= BROWSE_CACHE_MAX_ENTRIES) {
+			for (const [cachedKey, entry] of browseCache) {
+				if (entry.expiresAt <= now) browseCache.delete(cachedKey);
+			}
+			while (browseCache.size >= BROWSE_CACHE_MAX_ENTRIES) {
+				const oldest = browseCache.keys().next().value;
+				if (oldest === undefined) break;
+				browseCache.delete(oldest);
+			}
 		}
-		while (browseCache.size >= BROWSE_CACHE_MAX_ENTRIES) {
-			const oldest = browseCache.keys().next().value;
-			if (oldest === undefined) break;
-			browseCache.delete(oldest);
-		}
+		browseCache.set(key, { expiresAt: Date.now() + ttlMs, value });
+		return value;
+	})();
+	inflightBrowse.set(key, promise);
+	try {
+		return await promise;
+	} finally {
+		inflightBrowse.delete(key);
 	}
-	browseCache.set(key, { expiresAt: now + ttlMs, value });
-	return value;
 }
 
 function requireOrgIntegrations(deps: ApiDeps): OrgIntegrationsService {

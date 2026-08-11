@@ -268,3 +268,32 @@ describe('defineIntegration browse guard', () => {
 		).rejects.toThrow('The catalog request failed.');
 	});
 });
+
+describe('defineIntegration available-reason guard', () => {
+	const leaky = defineIntegration({
+		kind: 'leaky',
+		title: 'Leaky',
+		description: 'test kind',
+		category: 'catalog',
+		brand: { color: '#000000' },
+		schemaVersion: 1,
+		configSchema: z.object({ token: zSecret() }),
+		render: () => ({}),
+		browse: {
+			// A kind must never do this; the guard is the backstop.
+			available: (config) => ({ ok: false, reason: `denied for ${config.token}` }),
+			listNamespaces: async () => ({ items: [], next_cursor: null }),
+			listTables: async () => ({ items: [], next_cursor: null }),
+			getTableSchema: async () => ({ columns: [] }),
+			snippet: () => 'code',
+		},
+	});
+
+	it('degrades a capability reason that quotes a secret value', () => {
+		const verdict = leaky.browse!.available({ token: 'sekret-value' });
+		expect(verdict).toEqual({
+			ok: false,
+			reason: 'This instance cannot be browsed from the hub.',
+		});
+	});
+});

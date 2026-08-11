@@ -199,9 +199,12 @@ export function defineIntegration<S extends z.ZodType>(
  * throw, so the boundary sits on the error path. A non-`DomainError` throw is a
  * transport's own text (untrusted wholesale) and becomes a generic failure; a
  * `DomainError` is kind-authored, but its message is still checked against the
- * config's secret values before it may cross to a response.
+ * config's secret values before it may cross to a response. `available`'s
+ * `reason` reaches responses too, so it gets the same echo check; `snippet`
+ * never sees the config and needs none.
  */
 function guardedBrowse<C>(browse: BrowseCapability<C>, pathsOf: () => SecretPath[]) {
+	const available = browse.available.bind(browse);
 	const guard = <A extends unknown[], R>(
 		op: (config: C, probe: IntegrationProbe, ...args: A) => Promise<R>,
 	) => {
@@ -217,7 +220,13 @@ function guardedBrowse<C>(browse: BrowseCapability<C>, pathsOf: () => SecretPath
 		};
 	};
 	return {
-		available: browse.available.bind(browse),
+		available(config) {
+			const verdict = available(config);
+			if (!verdict.ok && echoesSecret(verdict.reason, config, pathsOf())) {
+				return { ok: false, reason: 'This instance cannot be browsed from the hub.' };
+			}
+			return verdict;
+		},
 		snippet: browse.snippet.bind(browse),
 		listNamespaces: guard(browse.listNamespaces.bind(browse)),
 		listTables: guard(browse.listTables.bind(browse)),

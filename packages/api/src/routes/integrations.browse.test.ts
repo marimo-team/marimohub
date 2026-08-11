@@ -338,9 +338,37 @@ describe('Data browser routes', () => {
 			`${base}/tables`,
 			`${base}/tables?namespace=s&fresh=nah`,
 			`${base}/schema?namespace=s`,
+			// Empty identifier parts (bare/leading/trailing joiner) — no catalog
+			// can hold them, so they must not spend an upstream request.
+			`${base}/tables?namespace=%1F`,
+			`${base}/tables?namespace=s%1F`,
+			`${base}/namespaces?parent=%1Fs`,
 		]) {
 			await expectError(await request('GET', bad), 422, 'VALIDATION_ERROR');
 		}
+	});
+
+	it('concurrent identical lookups share one upstream load and one budget charge', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const url = `/projects/${pid}/integrations/${created.id}/browse/tables?namespace=fanin`;
+
+		let storeCalls = 0;
+		const original = deps.integrations.browseTables.bind(deps.integrations);
+		deps.integrations.browseTables = (async (...args: Parameters<typeof original>) => {
+			storeCalls += 1;
+			// Hold the load open so the other requests arrive while it is in flight.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			return original(...args);
+		}) as typeof original;
+
+		const responses = await Promise.all([
+			request('GET', url),
+			request('GET', url),
+			request('GET', url),
+		]);
+		for (const res of responses) expect(res.status).toBe(200);
+		expect(storeCalls).toBe(1);
 	});
 
 	it('maps an upstream outage to 503 and never caches the failure', async () => {

@@ -351,7 +351,16 @@ export const icebergRest = defineIntegration({
 			const identifiers = (asRecord(body)?.identifiers ?? []) as unknown;
 			const items = Array.isArray(identifiers)
 				? identifiers
-						.map((identifier) => asRecord(identifier)?.name)
+						.map(asRecord)
+						// A mis-scoped listing (separator drift) must not surface another
+						// namespace's tables; identifiers without a namespace are kept —
+						// some servers omit the field on this route.
+						.filter((identifier) => {
+							const ns = identifier?.namespace;
+							if (!Array.isArray(ns)) return true;
+							return ns.length === namespace.length && namespace.every((part, i) => ns[i] === part);
+						})
+						.map((identifier) => identifier?.name)
 						.filter((name): name is string => typeof name === 'string' && name !== '')
 				: [];
 			return {
@@ -473,21 +482,32 @@ const SAFE_SEPARATOR = /^(?:%[0-9A-Fa-f]{2}|[.\-_~])$/;
  * free-form for the sandbox render — must pass {@link SAFE_SEPARATOR}: a
  * value like `/` would restructure the catalog path. Nothing safe declared
  * falls back to the spec's `%1F`.
+ *
+ * Exported so the live conformance seeding resolves the separator with the
+ * exact rules the client under test applies.
  */
-function effectiveSeparator(
-	config: IcebergRestConfig,
+export function resolveNamespaceSeparator(
+	configured: string,
 	overrides: Record<string, unknown> | undefined,
 	defaults: Record<string, unknown> | undefined,
 ): string {
 	const candidates = [
 		overrides?.['namespace-separator'],
-		config.rest.namespace_separator,
+		configured,
 		defaults?.['namespace-separator'],
 	];
 	for (const value of candidates) {
 		if (typeof value === 'string' && SAFE_SEPARATOR.test(value)) return value;
 	}
 	return '%1F';
+}
+
+function effectiveSeparator(
+	config: IcebergRestConfig,
+	overrides: Record<string, unknown> | undefined,
+	defaults: Record<string, unknown> | undefined,
+): string {
+	return resolveNamespaceSeparator(config.rest.namespace_separator, overrides, defaults);
 }
 
 async function catalogGet(
@@ -497,7 +517,8 @@ async function catalogGet(
 ): Promise<unknown> {
 	const url = new URL(catalog.config.uri);
 	url.hash = '';
-	url.search = '';
+	// The configured URI's query string is kept: some catalogs route tenants
+	// through it, and dropping it would 404 every request past /v1/config.
 	const prefixPart = catalog.prefix
 		? `/${catalog.prefix.split('/').map(encodeURIComponent).join('/')}`
 		: '';
@@ -657,9 +678,12 @@ function partitionFields(
 	const spec = Array.isArray(specs)
 		? (specs.map(asRecord).find((s) => s?.['spec-id'] === defaultSpecId) ?? asRecord(specs.at(-1)))
 		: undefined;
-	if (!Array.isArray(spec?.fields)) return [];
+	let fields = Array.isArray(spec?.fields) ? spec.fields : undefined;
+	// Format-v1 metadata carries the fields as a flat singular `partition-spec`.
+	fields ??= Array.isArray(metadata?.['partition-spec']) ? metadata['partition-spec'] : undefined;
+	if (!fields) return [];
 	const rendered: string[] = [];
-	for (const field of spec.fields.map(asRecord)) {
+	for (const field of fields.map(asRecord)) {
 		if (field === undefined) continue;
 		const source = columnNamesById.get(field['source-id']);
 		const name = source ?? (typeof field.name === 'string' ? field.name : undefined);
