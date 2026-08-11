@@ -66,6 +66,21 @@ interface Selection {
 	table: string;
 }
 
+/** The set plus every ancestor of `ns`; returns `prev` unchanged when there is nothing to add. */
+function expandedWithAncestry(
+	prev: Set<string>,
+	iid: string | undefined,
+	ns: string | null,
+): Set<string> {
+	const parts = splitNs(ns);
+	if (parts.length === 0) return prev;
+	const next = new Set(prev);
+	for (let i = 1; i <= parts.length; i++) {
+		next.add(`${iid}:${parts.slice(0, i).join(NS_JOIN)}`);
+	}
+	return next;
+}
+
 /** A marimo notebook seeded with the table's load snippet as its data cell. */
 function seededNotebookCode(heading: string, snippet: string): string {
 	const cellBody = snippet
@@ -139,30 +154,16 @@ export default function DataBrowserPage() {
 
 	// Deep links auto-expand the selected namespace's ancestry; everything else
 	// starts collapsed. Keys are iid-scoped so two integrations sharing names
-	// cannot cross-expand.
-	const [expanded, setExpanded] = useState<Set<string>>(() => {
-		const initial = new Set<string>();
-		const parts = splitNs(searchParams.get('ns'));
-		for (let i = 1; i <= parts.length; i++) {
-			initial.add(`${iid}:${parts.slice(0, i).join(NS_JOIN)}`);
-		}
-		return initial;
-	});
-	// The initializer covers only the first mount; in-app deep links and
-	// back/forward navigation change `ns` while the page stays mounted, and the
-	// selected table's ancestry must open then too. Additive — a user's own
-	// collapses elsewhere in the tree are kept.
+	// cannot cross-expand. The initializer covers the first mount; the effect
+	// re-applies the same walk when in-app deep links or back/forward
+	// navigation change `ns` while the page stays mounted. Additive — a user's
+	// own collapses elsewhere in the tree are kept.
 	const nsParam = searchParams.get('ns');
+	const [expanded, setExpanded] = useState<Set<string>>(() =>
+		expandedWithAncestry(new Set(), iid, nsParam),
+	);
 	useEffect(() => {
-		const parts = splitNs(nsParam);
-		if (parts.length === 0) return;
-		setExpanded((prev) => {
-			const next = new Set(prev);
-			for (let i = 1; i <= parts.length; i++) {
-				next.add(`${iid}:${parts.slice(0, i).join(NS_JOIN)}`);
-			}
-			return next;
-		});
+		setExpanded((prev) => expandedWithAncestry(prev, iid, nsParam));
 	}, [iid, nsParam]);
 
 	const isExpanded = (namespace: string[]) => expanded.has(`${iid}:${namespace.join(NS_JOIN)}`);

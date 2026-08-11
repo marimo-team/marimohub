@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import { browseKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 import {
 	refreshBrowseQueries,
+	resetBrowseRefreshBudgetForTests,
 	useBrowseTablesQuery,
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
@@ -614,6 +615,10 @@ describe('useEditorSessionQuery', () => {
 });
 
 describe('refreshBrowseQueries', () => {
+	beforeEach(() => {
+		resetBrowseRefreshBudgetForTests();
+	});
+
 	it('freshly refetches mounted queries, drops unmounted ones, then clears the flag', async () => {
 		const fetchMock = stubFetch(async () => jsonOk({ items: ['orders'], next_cursor: null }));
 		const { result, client } = renderHookWithClient(
@@ -638,6 +643,56 @@ describe('refreshBrowseQueries', () => {
 		await act(async () => {
 			await result.current.refetch();
 		});
+		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(false);
+	});
+});
+
+describe('refreshBrowseQueries budget', () => {
+	beforeEach(() => {
+		resetBrowseRefreshBudgetForTests();
+	});
+
+	it('refetches every retained page of an infinite query, each fresh', async () => {
+		const fetchMock = stubFetch(async (url) => {
+			const cursor = new URL(String(url), 'http://test.local').searchParams.get('cursor');
+			return cursor === null
+				? jsonOk({ items: ['orders'], next_cursor: 'p2' })
+				: jsonOk({ items: ['refunds'], next_cursor: null });
+		});
+		const { result, client } = renderHookWithClient(
+			() => useBrowseTablesQuery(PID, 'int-1', ['sales']),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+		await act(async () => {
+			await result.current.fetchNextPage();
+		});
+		await waitFor(() => expect(result.current.data?.pages).toHaveLength(2));
+
+		fetchMock.mockClear();
+		await refreshBrowseQueries(client);
+
+		// Two pages retained → two page fetches, both bypassing the server cache.
+		expect(urlsOf(fetchMock).filter((url) => url.includes('fresh=true'))).toHaveLength(2);
+	});
+
+	it('the rolling window stops adding fresh once 30 page fetches are spent', async () => {
+		const fetchMock = stubFetch(async () => jsonOk({ items: ['orders'], next_cursor: null }));
+		const { result, client } = renderHookWithClient(
+			() => useBrowseTablesQuery(PID, 'int-1', ['sales']),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.data).toBeDefined());
+
+		for (let i = 0; i < 30; i++) {
+			await refreshBrowseQueries(client);
+		}
+		const freshCount = urlsOf(fetchMock).filter((url) => url.includes('fresh=true')).length;
+		expect(freshCount).toBe(30);
+
+		fetchMock.mockClear();
+		await refreshBrowseQueries(client);
+		expect(fetchMock).toHaveBeenCalled();
 		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(false);
 	});
 });

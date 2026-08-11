@@ -293,7 +293,7 @@ describe('defineIntegration available-reason guard', () => {
 		const verdict = leaky.browse!.available({ token: 'sekret-value' });
 		expect(verdict).toEqual({
 			ok: false,
-			reason: 'This instance cannot be browsed from the hub.',
+			reason: 'this instance cannot be browsed from the hub',
 		});
 	});
 });

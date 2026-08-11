@@ -348,7 +348,9 @@ describe('Data browser routes', () => {
 		}
 	});
 
-	it('concurrent identical lookups share one upstream load and one budget charge', async () => {
+	// Each caller still pays its own budget for the miss; only the upstream
+	// probe traffic is shared.
+	it('concurrent identical lookups share one upstream load', async () => {
 		const pid = await createProject();
 		const created = await createBrowsable(pid);
 		const url = `/projects/${pid}/integrations/${created.id}/browse/tables?namespace=fanin`;

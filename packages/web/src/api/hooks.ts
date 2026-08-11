@@ -603,28 +603,60 @@ let bypassBrowseCache = 0;
 const freshQuery = () => (bypassBrowseCache > 0 ? { fresh: 'true' as const } : {});
 
 /**
- * The fresh budget is 30 ops/min/user; a large expanded tree refreshed in one
- * parallel burst would blow it and litter the tree with 429s.
+ * Client-side mirror of the server's 30 fresh ops/min/user budget, spent in
+ * PAGE fetches — refetching an infinite query re-fetches every retained page.
+ * Rolling: repeated refreshes within the window share the allowance instead
+ * of resetting it, so mashing Refresh cannot fill the tree with 429s.
  */
-const MAX_FRESH_REFETCHES = 15;
+const FRESH_BUDGET_PER_MINUTE = 30;
+const FRESH_WINDOW_MS = 60_000;
+const freshSpend: number[] = [];
+
+/** Test hook: forgets fresh-refresh spend so suites stay order-independent. */
+export function resetBrowseRefreshBudgetForTests(): void {
+	freshSpend.length = 0;
+}
+
+/** Server operations a refetch of this query costs (one per retained page). */
+function refetchCost(query: { state: { data?: unknown } }): number {
+	const data = query.state.data as { pages?: unknown[] } | undefined;
+	return Array.isArray(data?.pages) ? Math.max(data.pages.length, 1) : 1;
+}
 
 /**
  * Refresh the browse view. Mounted queries refetch with `fresh=true`
- * SEQUENTIALLY, bounded by the fresh budget (any overflow refetches without
- * the flag — server-cached, still current within its TTL). Unmounted results
- * (collapsed nodes, other integrations) cannot be refetched, so they are
- * dropped outright: their next expansion fetches instead of replaying a stale
- * client entry.
+ * SEQUENTIALLY while their page cost fits the remaining rolling budget; the
+ * overflow refetches without the flag (server-cached, still current within
+ * its TTL). Unmounted results (collapsed nodes, other integrations) cannot be
+ * refetched, so they are dropped outright: their next expansion fetches
+ * instead of replaying a stale client entry.
  */
 export async function refreshBrowseQueries(queryClient: QueryClient): Promise<void> {
 	queryClient.removeQueries({ queryKey: browseKeys.all, type: 'inactive' });
 	const active = queryClient.getQueryCache().findAll({ queryKey: browseKeys.all, type: 'active' });
-	const freshRound = active.slice(0, MAX_FRESH_REFETCHES);
-	const overflow = active.slice(MAX_FRESH_REFETCHES);
+
+	const now = Date.now();
+	while (freshSpend.length > 0 && now - freshSpend[0] >= FRESH_WINDOW_MS) freshSpend.shift();
+	let remaining = FRESH_BUDGET_PER_MINUTE - freshSpend.length;
+	const freshRound: typeof active = [];
+	const overflow: typeof active = [];
+	for (const query of active) {
+		const cost = refetchCost(query);
+		if (cost <= remaining) {
+			remaining -= cost;
+			freshRound.push(query);
+		} else {
+			overflow.push(query);
+		}
+	}
+
 	bypassBrowseCache += 1;
 	try {
 		for (const query of freshRound) {
+			const cost = refetchCost(query);
 			await queryClient.refetchQueries({ queryKey: query.queryKey, exact: true });
+			const at = Date.now();
+			for (let i = 0; i < cost; i++) freshSpend.push(at);
 		}
 	} finally {
 		bypassBrowseCache -= 1;

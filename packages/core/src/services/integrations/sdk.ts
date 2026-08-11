@@ -223,7 +223,9 @@ function guardedBrowse<C>(browse: BrowseCapability<C>, pathsOf: () => SecretPath
 		available(config) {
 			const verdict = available(config);
 			if (!verdict.ok && echoesSecret(verdict.reason, config, pathsOf())) {
-				return { ok: false, reason: 'This instance cannot be browsed from the hub.' };
+				// No terminal punctuation: reasons get embedded in sentences
+				// ("… cannot be browsed: <reason>.") by the store and the API.
+				return { ok: false, reason: 'this instance cannot be browsed from the hub' };
 			}
 			return verdict;
 		},

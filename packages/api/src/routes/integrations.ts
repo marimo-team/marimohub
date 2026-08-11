@@ -718,10 +718,9 @@ async function assertBrowsable(
 /**
  * Per-replica TTL cache over successful browse results, so tree navigation
  * does not re-spend probe budget on every expansion. Bounded: expired entries
- * are dropped when full, then oldest-inserted. Only cache misses consume the
- * caller's browse budget, and concurrent misses for one key share a single
- * in-flight load (and its one budget charge) — a lazy tree expansion fans in
- * identical lookups faster than the first can populate the cache.
+ * are dropped when full, then oldest-inserted. Concurrent misses for one key
+ * share a single upstream load — a lazy tree expansion fans in identical
+ * lookups faster than the first can populate the cache.
  */
 const browseCache = new Map<string, { expiresAt: number; value: unknown }>();
 const inflightBrowse = new Map<string, Promise<unknown>>();
@@ -730,11 +729,16 @@ async function cachedBrowse<T>(
 	key: string,
 	ttlMs: number,
 	fresh: boolean,
+	charge: () => void,
 	load: () => Promise<T>,
 ): Promise<T> {
 	const now = Date.now();
 	const hit = fresh ? undefined : browseCache.get(key);
 	if (hit && hit.expiresAt > now) return hit.value as T;
+	// Every consumer of a miss pays its own budget BEFORE creating or joining
+	// the shared load: an exhausted user 429s alone (never poisoning the shared
+	// promise for others), and piggybacking on someone else's load is not free.
+	charge();
 	const pending = fresh ? undefined : inflightBrowse.get(key);
 	if (pending) return pending as Promise<T>;
 	const promise = (async () => {
@@ -756,7 +760,9 @@ async function cachedBrowse<T>(
 	try {
 		return await promise;
 	} finally {
-		inflightBrowse.delete(key);
+		// A fresh load may have replaced this entry mid-flight; deleting blindly
+		// would drop the newer promise and re-run its upstream fetch.
+		if (inflightBrowse.get(key) === promise) inflightBrowse.delete(key);
 	}
 }
 
@@ -1064,10 +1070,8 @@ app.openapi(browseNamespaces, async (c) => {
 		JSON.stringify([pid, iid, stateToken, 'namespaces', request]),
 		BROWSE_LIST_TTL_MS,
 		fresh === 'true',
-		() => {
-			browseBudget.assert(user.id);
-			return integrations.browseNamespaces(pid, iid, request);
-		},
+		() => browseBudget.assert(user.id),
+		() => integrations.browseNamespaces(pid, iid, request),
 	);
 	return c.json({ success: true, data }, 200);
 });
@@ -1085,10 +1089,8 @@ app.openapi(browseTables, async (c) => {
 		JSON.stringify([pid, iid, stateToken, 'tables', namespace, request]),
 		BROWSE_LIST_TTL_MS,
 		fresh === 'true',
-		() => {
-			browseBudget.assert(user.id);
-			return integrations.browseTables(pid, iid, splitNamespace(namespace), request);
-		},
+		() => browseBudget.assert(user.id),
+		() => integrations.browseTables(pid, iid, splitNamespace(namespace), request),
 	);
 	return c.json({ success: true, data }, 200);
 });
@@ -1105,10 +1107,8 @@ app.openapi(browseTableSchema, async (c) => {
 		JSON.stringify([pid, iid, stateToken, 'schema', namespace, table]),
 		BROWSE_SCHEMA_TTL_MS,
 		fresh === 'true',
-		() => {
-			browseBudget.assert(user.id);
-			return integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table);
-		},
+		() => browseBudget.assert(user.id),
+		() => integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table),
 	);
 	return c.json({ success: true, data }, 200);
 });
