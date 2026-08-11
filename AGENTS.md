@@ -104,6 +104,8 @@ ETag compare-and-swap (conditional PUT) with retries.
 
 These CAS-managed records also have one writer each:
 
+- `NotebookService` owns each session-commit lock at
+  `projects/{pid}/notebooks/{nid}/_session_commit_lock.json`.
 - `SessionService` owns each editor claim at
   `_system/editors/{pid}/{nid}.json`.
 - `SessionService.claimApp`/`releaseApp` owns each app claim at

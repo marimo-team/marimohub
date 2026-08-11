@@ -22,6 +22,7 @@ import {
 	IntegrationVersionRecordSchema,
 	NotebookMetaSchema,
 	ProjectSchema,
+	SessionCommitLockSchema,
 	SessionSchema,
 	SnapshotSchema,
 	SourceSchema,
@@ -107,6 +108,15 @@ const OBJECTS: BucketObject[] = [
 		schema: SourceSchema,
 		summary: 'Notebook source descriptor: local head pointer or git-sync state.',
 		mutability: 'last-writer-wins',
+		tag: 'notebook',
+	},
+	{
+		name: 'SessionCommitLock',
+		key: notebook.sessionCommitLock,
+		schema: SessionCommitLockSchema,
+		summary: 'Serializes session commit and notebook deletion.',
+		mutability: 'cas',
+		owner: 'NotebookService',
 		tag: 'notebook',
 	},
 	{

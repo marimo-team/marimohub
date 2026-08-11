@@ -2,8 +2,13 @@ import { all } from 'better-all';
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import { Millis } from '../../duration';
-import { assertVersionMatch, ConflictError, NotFoundError } from '../../errors';
+import { Millis, sleep } from '../../duration';
+import {
+	assertVersionMatch,
+	ConflictError,
+	NotFoundError,
+	PreconditionFailedError,
+} from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR, VersionId } from '../../ids';
 import { remoteWorkspaceEntry } from '../../integrations/remoteWorkspace';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
@@ -17,6 +22,7 @@ import {
 	NotebookMetaSchema,
 	parseStored,
 	readStored,
+	SessionCommitLockSchema,
 	SourceSchema,
 	toPublicNotebookEntry,
 	VersionSchema,
@@ -31,7 +37,7 @@ import type {
 	Version,
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
-import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
+import { mutateObject, mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
 import {
 	buildNotebookEntry,
 	buildNotebookMeta,
@@ -53,6 +59,9 @@ export const MAX_VERSIONS = 50;
 
 /** Grace period before a soft-deleted notebook's storage is purged by the GC sweep. */
 export const DEFAULT_DELETED_NOTEBOOK_RETENTION_MS = Millis.days(30);
+
+const SESSION_COMMIT_LOCK_WAIT_MS = Millis.seconds(30);
+const SESSION_COMMIT_LOCK_POLL_MS = Millis.of(25);
 
 export interface CreateNotebookInput {
 	title: string;
@@ -494,6 +503,62 @@ export class NotebookService {
 		);
 	}
 
+	private async acquireSessionCommitLock(
+		key: string,
+		holder: string,
+		notebookId: NotebookId,
+	): Promise<string> {
+		const deadline = Date.now() + SESSION_COMMIT_LOCK_WAIT_MS;
+		for (;;) {
+			const etag = await withCasRetry(this.bucket, async (cas) => {
+				const obj = await this.bucket.get(key);
+				if (!obj) {
+					const created = await cas.put(key, JSON.stringify({ schema_version: 1, holder }), {
+						onlyIfNotExists: true,
+					});
+					return created.etag;
+				}
+				const current = await readStored(SessionCommitLockSchema, obj, key);
+				if (current.holder !== null) return null;
+				const acquired = await cas.put(key, JSON.stringify({ ...current, holder }), {
+					onlyIfEtagMatches: obj.etag,
+				});
+				return acquired.etag;
+			});
+			if (etag !== null) return etag;
+			if (Date.now() >= deadline) {
+				throw new ConflictError(`Notebook ${notebookId} is busy with another write`);
+			}
+			await sleep(SESSION_COMMIT_LOCK_POLL_MS);
+		}
+	}
+
+	private async withSessionCommitLock<T>(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		operation: () => Promise<T>,
+	): Promise<T> {
+		const nb = paths.project(projectId).notebook(notebookId);
+		const key = nb.sessionCommitLock;
+		const holder = createVersionId();
+		const etag = await this.acquireSessionCommitLock(key, holder, notebookId);
+		try {
+			return await operation();
+		} finally {
+			await this.releaseSessionCommitLock(key, etag);
+		}
+	}
+
+	private async releaseSessionCommitLock(key: string, etag: string): Promise<void> {
+		try {
+			await this.bucket.put(key, JSON.stringify({ schema_version: 1, holder: null }), {
+				onlyIfEtagMatches: etag,
+			});
+		} catch (err) {
+			if (!(err instanceof PreconditionFailedError)) throw err;
+		}
+	}
+
 	/**
 	 * Commit a session's final state on teardown: cut a new version from the
 	 * notebook files read back out of the sandbox, then attach marimo's optional
@@ -514,9 +579,20 @@ export class NotebookService {
 		input: CommitSessionInput,
 		actor: UserId,
 	): Promise<CommitSessionResult | null> {
+		if (input.code === undefined) return null;
+		const commitInput = { ...input, code: input.code };
+		return this.withSessionCommitLock(projectId, notebookId, () =>
+			this.commitSessionWithLock(projectId, notebookId, commitInput, actor),
+		);
+	}
+
+	private async commitSessionWithLock(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		input: CommitSessionInput & { code: string },
+		actor: UserId,
+	): Promise<CommitSessionResult | null> {
 		const { meta, source } = await this.getNotebook(projectId, notebookId);
-		// A tombstoned notebook must not gain versions: they would be untracked
-		// orphans after the GC subtree wipe. Delete-then-save races land here.
 		if (meta.status === 'deleted') {
 			return null;
 		}
@@ -524,11 +600,6 @@ export class NotebookService {
 		if (source.type !== 'local') {
 			return null;
 		}
-		// No code read back (sandbox unreadable / file missing) — nothing to version.
-		if (input.code === undefined) {
-			return null;
-		}
-
 		const nb = paths.project(projectId).notebook(notebookId);
 		const now = new Date().toISOString();
 
@@ -666,6 +737,17 @@ export class NotebookService {
 	}
 
 	async deleteNotebook(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		actor: UserId,
+		expectedVersion?: string,
+	): Promise<void> {
+		return this.withSessionCommitLock(projectId, notebookId, () =>
+			this.deleteNotebookWithLock(projectId, notebookId, actor, expectedVersion),
+		);
+	}
+
+	private async deleteNotebookWithLock(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		actor: UserId,

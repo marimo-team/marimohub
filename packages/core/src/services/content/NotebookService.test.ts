@@ -1380,6 +1380,121 @@ describe('NotebookService', () => {
 	});
 
 	describe('commitSession', () => {
+		it('serializes a delete before a racing session commit', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const nb = paths.project(projectId).notebook(created.id);
+			const realPut = bucket.put.bind(bucket);
+			const realGet = bucket.get.bind(bucket);
+			let tombstoneReached!: () => void;
+			let writeTombstone!: () => void;
+			let commitTriedLock!: () => void;
+			let lockGets = 0;
+			const atTombstone = new Promise<void>((resolve) => {
+				tombstoneReached = resolve;
+			});
+			const tombstoneGate = new Promise<void>((resolve) => {
+				writeTombstone = resolve;
+			});
+			const atCommitLock = new Promise<void>((resolve) => {
+				commitTriedLock = resolve;
+			});
+			const getSpy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === nb.sessionCommitLock && ++lockGets === 2) commitTriedLock();
+				return realGet(key);
+			});
+			const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (
+					key === nb.meta &&
+					typeof value === 'string' &&
+					(JSON.parse(value) as { status?: string }).status === 'deleted'
+				) {
+					tombstoneReached();
+					await tombstoneGate;
+				}
+				return realPut(key, value, options);
+			});
+
+			const deletion = notebooks.deleteNotebook(projectId, created.id, ACTOR);
+			await atTombstone;
+			const commit = notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'edited-after-delete-started' },
+				ACTOR,
+			);
+			await atCommitLock;
+			try {
+				writeTombstone();
+				const [, result] = await Promise.all([deletion, commit]);
+				expect(result).toBeNull();
+				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(1);
+			} finally {
+				writeTombstone();
+				await Promise.allSettled([deletion, commit]);
+				putSpy.mockRestore();
+				getSpy.mockRestore();
+			}
+		});
+
+		it('serializes a session commit before a racing delete', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const nb = paths.project(projectId).notebook(created.id);
+			const realPut = bucket.put.bind(bucket);
+			const realGet = bucket.get.bind(bucket);
+			let versionWriteReached!: () => void;
+			let finishVersionWrite!: () => void;
+			let deleteTriedLock!: () => void;
+			let lockGets = 0;
+			const atVersionWrite = new Promise<void>((resolve) => {
+				versionWriteReached = resolve;
+			});
+			const versionWriteGate = new Promise<void>((resolve) => {
+				finishVersionWrite = resolve;
+			});
+			const atDeleteLock = new Promise<void>((resolve) => {
+				deleteTriedLock = resolve;
+			});
+			const getSpy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === nb.sessionCommitLock && ++lockGets === 2) deleteTriedLock();
+				return realGet(key);
+			});
+			const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (key.endsWith('/version.json') && key.startsWith(`${nb.base}/versions/`)) {
+					versionWriteReached();
+					await versionWriteGate;
+				}
+				return realPut(key, value, options);
+			});
+
+			const commit = notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
+			await atVersionWrite;
+			const deletion = notebooks.deleteNotebook(projectId, created.id, ACTOR);
+			await atDeleteLock;
+
+			try {
+				const beforeRelease = await notebooks.getNotebook(projectId, created.id);
+				expect(beforeRelease.meta.status).toBe('active');
+				finishVersionWrite();
+				const [commitResult] = await Promise.all([commit, deletion]);
+				expect(commitResult?.newVersion).toBe(true);
+				expect((await notebooks.getNotebook(projectId, created.id)).meta.status).toBe('deleted');
+				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(2);
+			} finally {
+				finishVersionWrite();
+				await Promise.allSettled([commit, deletion]);
+				putSpy.mockRestore();
+				getSpy.mockRestore();
+			}
+		});
+
 		it('cuts a new version from changed code and updates the live notebook + source', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,

@@ -359,6 +359,15 @@ export function toPublicProject(project: Project): PublicProject {
 	return rest;
 }
 
+// --- Session commit lock ---
+
+export const SessionCommitLockSchema = z.object({
+	schema_version: z.literal(1),
+	holder: z.string().nullable(),
+});
+
+export type SessionCommitLock = z.infer<typeof SessionCommitLockSchema>;
+
 // --- Notebook meta ---
 
 export const RuntimeSchema = z.object({

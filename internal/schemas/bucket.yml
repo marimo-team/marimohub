@@ -213,6 +213,47 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/notebooks/{nid}/_session_commit_lock.json:
+    summary: Serializes session commit and notebook deletion.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: NotebookService
+    get:
+      operationId: read_projects_notebooks_session_commit_lock_json
+      summary: Read SessionCommitLock
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionCommitLock'
+    put:
+      operationId: write_projects_notebooks_session_commit_lock_json
+      summary: Write SessionCommitLock
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCommitLock'
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/versions/{vid}/version.json:
     summary: Immutable saved-version record beside the version folder.
     parameters:
@@ -1115,6 +1156,19 @@ components:
             - current_version_id
             - commit
             - last_synced_at
+    SessionCommitLock:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        holder:
+          anyOf:
+            - type: string
+            - type: 'null'
+      required:
+        - schema_version
+        - holder
     Version:
       type: object
       properties:

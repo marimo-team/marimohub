@@ -28,6 +28,7 @@ export interface NotebookPaths {
 	meta: string;
 	readme: string;
 	source: string;
+	sessionCommitLock: string;
 	integrationSyncToken: string;
 	/**
 	 * Pointer to the notebook's current CoreWeave-native filesystem snapshot
@@ -99,6 +100,7 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 		meta: `${base}/meta.json`,
 		readme: `${base}/README.md`,
 		source: `${base}/source.json`,
+		sessionCommitLock: `${base}/_session_commit_lock.json`,
 		integrationSyncToken: `${base}/integration_sync_token.json`,
 		fsSnapshot: `${base}/fs_snapshot.json`,
 		// workspace/ = latest-only mirror of the sandbox working dir.
