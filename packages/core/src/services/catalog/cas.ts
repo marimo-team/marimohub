@@ -195,13 +195,19 @@ export interface ObjectMutationOutcome<T> {
 	written: boolean;
 }
 
+export interface ObjectMutationOptions extends CasRetryOptions {
+	/** Run after computing the mutation and immediately before its conditional write. */
+	beforeWrite?: () => void | Promise<void>;
+	notFound?: () => Error;
+}
+
 /** Use when a caller must distinguish a committed write from an unchanged value. */
 export async function mutateObjectWithOutcome<T>(
 	bucket: Bucket,
 	key: string,
 	parse: (raw: unknown) => T,
 	apply: (current: T) => T | null,
-	options: CasRetryOptions & { notFound?: () => Error } = {},
+	options: ObjectMutationOptions = {},
 ): Promise<ObjectMutationOutcome<T>> {
 	return withCasRetry(
 		bucket,
@@ -211,6 +217,7 @@ export async function mutateObjectWithOutcome<T>(
 			const current = parse(await readStoredJson(obj, key));
 			const next = apply(current);
 			if (next === null) return { value: current, written: false };
+			if (options.beforeWrite) await options.beforeWrite();
 			await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: obj.etag });
 			return { value: next, written: true };
 		},
@@ -227,7 +234,7 @@ export async function mutateObject<T>(
 	key: string,
 	parse: (raw: unknown) => T,
 	apply: (current: T) => T | null,
-	options: CasRetryOptions & { notFound?: () => Error } = {},
+	options: ObjectMutationOptions = {},
 ): Promise<T> {
 	return (await mutateObjectWithOutcome(bucket, key, parse, apply, options)).value;
 }

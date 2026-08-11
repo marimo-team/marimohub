@@ -196,6 +196,11 @@ selected version and cannot write changes back.
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.html`  | HTML     | **Optional.** Rendered HTML snapshot, copied from `__marimo__/notebook.html` on session teardown. Immutable once written.                                                                                                                                                                                                                                                                                                                                                                              |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/session.json`   | JSON     | **Optional.** marimo session state (cell outputs), copied from `__marimo__/session/{notebook}.py.json` on teardown. Immutable.                                                                                                                                                                                                                                                                                                                                                                         |
 
+Session-commit lease guards await an in-flight renewal and verify ownership and
+local expiry before each protected write boundary. The bucket port cannot cancel
+or fence a write already sent to storage, so a process pause during that write
+remains outside the lease's guarantee.
+
 ---
 
 ## 4. File Schemas

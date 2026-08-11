@@ -145,6 +145,30 @@ describe('mutateObject', () => {
 		expect(JSON.parse(await (await bucket.get('k'))!.text())).toEqual({ n: 2 });
 	});
 
+	it('awaits the beforeWrite guard', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('k', JSON.stringify({ n: 1 }));
+		let guardReached!: () => void;
+		let releaseGuard!: () => void;
+		const atGuard = new Promise<void>((resolve) => {
+			guardReached = resolve;
+		});
+		const guardGate = new Promise<void>((resolve) => {
+			releaseGuard = resolve;
+		});
+		const mutation = mutateObject(bucket, 'k', parse, (cur) => ({ n: cur.n + 1 }), {
+			beforeWrite: async () => {
+				guardReached();
+				await guardGate;
+			},
+		});
+
+		await atGuard;
+		expect(await (await bucket.get('k'))!.json()).toEqual({ n: 1 });
+		releaseGuard();
+		await expect(mutation).resolves.toEqual({ n: 2 });
+	});
+
 	it('skips the write when apply returns null (no-op)', async () => {
 		const bucket = new MemoryBucket();
 		const before = await bucket.put('k', JSON.stringify({ n: 1 }));

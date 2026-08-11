@@ -67,7 +67,12 @@ const SESSION_COMMIT_LOCK_RENEW_MS = Millis.minutes(1);
 
 interface SessionCommitLease {
 	etag: string;
+	expiresAt: number;
+	renewal?: Promise<void>;
+	renewalError?: unknown;
 }
+
+type SessionCommitLeaseGuard = () => Promise<void>;
 
 export interface CreateNotebookInput {
 	title: string;
@@ -513,36 +518,37 @@ export class NotebookService {
 		key: string,
 		holder: string,
 		notebookId: NotebookId,
-	): Promise<string> {
+	): Promise<SessionCommitLease> {
 		const deadline = Date.now() + SESSION_COMMIT_LOCK_WAIT_MS;
 		for (;;) {
-			const etag = await withCasRetry(this.bucket, async (cas) => {
+			const lease = await withCasRetry(this.bucket, async (cas) => {
 				const now = Date.now();
+				const expiresAt = now + SESSION_COMMIT_LOCK_LEASE_MS;
 				const body = JSON.stringify({
 					schema_version: 1,
 					holder,
-					expires_at: new Date(now + SESSION_COMMIT_LOCK_LEASE_MS).toISOString(),
+					expires_at: new Date(expiresAt).toISOString(),
 				});
 				const obj = await this.bucket.get(key);
 				if (!obj) {
 					const created = await cas.put(key, body, {
 						onlyIfNotExists: true,
 					});
-					return created.etag;
+					return { etag: created.etag, expiresAt };
 				}
 				const current = await readStored(SessionCommitLockSchema, obj, key);
 				// Give pre-lease records a grace period during rolling upgrades instead of
 				// immediately stealing a lock that an older replica may still hold.
-				const expiresAt = current.expires_at
+				const currentExpiresAt = current.expires_at
 					? Date.parse(current.expires_at)
 					: obj.uploaded.getTime() + SESSION_COMMIT_LOCK_LEASE_MS;
-				if (current.holder !== null && expiresAt > now) return null;
+				if (current.holder !== null && currentExpiresAt > now) return null;
 				const acquired = await cas.put(key, body, {
 					onlyIfEtagMatches: obj.etag,
 				});
-				return acquired.etag;
+				return { etag: acquired.etag, expiresAt };
 			});
-			if (etag !== null) return etag;
+			if (lease !== null) return lease;
 			if (Date.now() >= deadline) {
 				throw new ConflictError(`Notebook ${notebookId} is busy with another write`);
 			}
@@ -553,15 +559,29 @@ export class NotebookService {
 	private async withSessionCommitLock<T>(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		operation: () => Promise<T>,
+		operation: (assertLeaseHeld: SessionCommitLeaseGuard) => Promise<T>,
 	): Promise<T> {
 		const nb = paths.project(projectId).notebook(notebookId);
 		const key = nb.sessionCommitLock;
 		const holder = createVersionId();
-		const lease = { etag: await this.acquireSessionCommitLock(key, holder, notebookId) };
+		const lease = await this.acquireSessionCommitLock(key, holder, notebookId);
+		const assertLeaseHeld = async () => {
+			await lease.renewal;
+			if (lease.renewalError !== undefined) {
+				throw new ConflictError(`Notebook ${notebookId} write lease was lost`, {
+					cause: lease.renewalError,
+				});
+			}
+			if (Date.now() >= lease.expiresAt) {
+				throw new ConflictError(`Notebook ${notebookId} write lease expired`);
+			}
+		};
 		const stopRenewing = this.startSessionCommitLockRenewal(key, holder, lease);
 		try {
-			return await operation();
+			const result = await operation(assertLeaseHeld);
+			await stopRenewing();
+			await assertLeaseHeld();
+			return result;
 		} finally {
 			await stopRenewing();
 			await this.releaseSessionCommitLock(key, lease.etag);
@@ -573,25 +593,27 @@ export class NotebookService {
 		holder: string,
 		lease: SessionCommitLease,
 	): () => Promise<void> {
-		let inFlight: Promise<void> | undefined;
 		const timer = setInterval(() => {
-			if (inFlight) return;
-			inFlight = this.renewSessionCommitLock(key, holder, lease)
+			if (lease.renewal) return;
+			lease.renewal = this.renewSessionCommitLock(key, holder, lease)
 				.catch((err) => {
 					logOperationalError(
 						'notebook_session_commit_lock_renewal_failed',
 						{ operation: 'notebook.session_commit_lock.renew', object: key },
 						err,
 					);
-					if (err instanceof PreconditionFailedError) clearInterval(timer);
+					if (err instanceof PreconditionFailedError) {
+						lease.renewalError = err;
+						clearInterval(timer);
+					}
 				})
 				.finally(() => {
-					inFlight = undefined;
+					lease.renewal = undefined;
 				});
 		}, SESSION_COMMIT_LOCK_RENEW_MS);
 		return async () => {
 			clearInterval(timer);
-			await inFlight;
+			await lease.renewal;
 		};
 	}
 
@@ -600,16 +622,18 @@ export class NotebookService {
 		holder: string,
 		lease: SessionCommitLease,
 	): Promise<void> {
+		const expiresAt = Date.now() + SESSION_COMMIT_LOCK_LEASE_MS;
 		const renewed = await this.bucket.put(
 			key,
 			JSON.stringify({
 				schema_version: 1,
 				holder,
-				expires_at: new Date(Date.now() + SESSION_COMMIT_LOCK_LEASE_MS).toISOString(),
+				expires_at: new Date(expiresAt).toISOString(),
 			}),
 			{ onlyIfEtagMatches: lease.etag },
 		);
 		lease.etag = renewed.etag;
+		lease.expiresAt = expiresAt;
 	}
 
 	private async releaseSessionCommitLock(key: string, etag: string): Promise<void> {
@@ -651,8 +675,8 @@ export class NotebookService {
 	): Promise<CommitSessionResult | null> {
 		if (input.code === undefined) return null;
 		const commitInput = { ...input, code: input.code };
-		return this.withSessionCommitLock(projectId, notebookId, () =>
-			this.commitSessionWithLock(projectId, notebookId, commitInput, actor),
+		return this.withSessionCommitLock(projectId, notebookId, (assertLeaseHeld) =>
+			this.commitSessionWithLock(projectId, notebookId, commitInput, actor, assertLeaseHeld),
 		);
 	}
 
@@ -661,6 +685,7 @@ export class NotebookService {
 		notebookId: NotebookId,
 		input: CommitSessionInput & { code: string },
 		actor: UserId,
+		assertLeaseHeld: SessionCommitLeaseGuard,
 	): Promise<CommitSessionResult | null> {
 		const { meta, source } = await this.getNotebook(projectId, notebookId);
 		if (meta.status === 'deleted') {
@@ -720,6 +745,7 @@ export class NotebookService {
 			const newSource = localSource(versionId);
 
 			const ver = nb.version(versionId);
+			await assertLeaseHeld();
 			await Promise.all([
 				// Live notebook files reflect the session's final state.
 				this.bucket.put(nb.code, input.code),
@@ -740,8 +766,9 @@ export class NotebookService {
 						]
 					: []),
 			]);
+			await assertLeaseHeld();
 
-			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
+			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId, assertLeaseHeld);
 		} else if (htmlDescriptor || sessionDescriptor) {
 			// Unchanged code: attach the fresh snapshots to the existing current version.
 			// This additively patches that version.json (adds optional descriptor
@@ -753,6 +780,7 @@ export class NotebookService {
 			// rather than write sidecar files we can never record a descriptor for.
 			const ver = nb.version(versionId);
 			const metaObj = await this.bucket.get(ver.meta);
+			await assertLeaseHeld();
 			if (metaObj) {
 				await Promise.all([
 					...(input.html !== undefined
@@ -782,6 +810,7 @@ export class NotebookService {
 							...(htmlDescriptor ? { html_snapshot: htmlDescriptor } : {}),
 							...(sessionDescriptor ? { session_snapshot: sessionDescriptor } : {}),
 						}),
+						{ beforeWrite: assertLeaseHeld },
 					);
 				} catch (err) {
 					// version.json deleted between the read above and the CAS write
@@ -812,8 +841,8 @@ export class NotebookService {
 		actor: UserId,
 		expectedVersion?: string,
 	): Promise<void> {
-		return this.withSessionCommitLock(projectId, notebookId, () =>
-			this.deleteNotebookWithLock(projectId, notebookId, actor, expectedVersion),
+		return this.withSessionCommitLock(projectId, notebookId, (assertLeaseHeld) =>
+			this.deleteNotebookWithLock(projectId, notebookId, actor, expectedVersion, assertLeaseHeld),
 		);
 	}
 
@@ -821,7 +850,8 @@ export class NotebookService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		actor: UserId,
-		expectedVersion?: string,
+		expectedVersion: string | undefined,
+		assertLeaseHeld: SessionCommitLeaseGuard,
 	): Promise<void> {
 		const nb = paths.project(projectId).notebook(notebookId);
 		const { value: updated, written } = await mutateObjectWithOutcome(
@@ -837,7 +867,10 @@ export class NotebookService {
 					updated_at: new Date().toISOString(),
 				};
 			},
-			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
+			{
+				beforeWrite: assertLeaseHeld,
+				notFound: () => new NotFoundError(`Notebook ${notebookId} not found`),
+			},
 		);
 		if (!written) return;
 
@@ -1004,6 +1037,7 @@ export class NotebookService {
 		notebookId: NotebookId,
 		max: number,
 		keep: VersionId,
+		beforeDelete?: SessionCommitLeaseGuard,
 	): Promise<void> {
 		try {
 			const nb = paths.project(projectId).notebook(notebookId);
@@ -1028,6 +1062,7 @@ export class NotebookService {
 			const keysToDelete = keyLists.flat();
 
 			if (keysToDelete.length > 0) {
+				if (beforeDelete) await beforeDelete();
 				await this.bucket.delete(keysToDelete);
 			}
 		} catch (err) {

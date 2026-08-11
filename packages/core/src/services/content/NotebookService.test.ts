@@ -1570,6 +1570,93 @@ describe('NotebookService', () => {
 			}
 		});
 
+		it('does not write session state while a losing lease renewal is in flight', async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const before = await notebooks.getNotebook(projectId, created.id);
+			if (before.source.type !== 'local') throw new Error('Expected a local notebook');
+			const nb = paths.project(projectId).notebook(created.id);
+			const currentCode = nb.version(before.source.current_version_id).code;
+			const realGet = bucket.get.bind(bucket);
+			const realPut = bucket.put.bind(bucket);
+			let versionReadReached!: () => void;
+			let finishVersionRead!: () => void;
+			const atVersionRead = new Promise<void>((resolve) => {
+				versionReadReached = resolve;
+			});
+			const versionReadGate = new Promise<void>((resolve) => {
+				finishVersionRead = resolve;
+			});
+			const getSpy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === currentCode) {
+					versionReadReached();
+					await versionReadGate;
+				}
+				return realGet(key);
+			});
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const commit = notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
+			const commitRejected = expect(commit).rejects.toBeInstanceOf(ConflictError);
+			let finishRenewal: (() => void) | undefined;
+			let putSpy: { mockRestore(): void } | undefined;
+			let timerAdvance: ReturnType<typeof vi.advanceTimersByTimeAsync> | undefined;
+
+			try {
+				await atVersionRead;
+				const originalLock = await (await realGet(nb.sessionCommitLock))!.json<{
+					holder: string;
+				}>();
+				let renewalReached!: () => void;
+				const atRenewal = new Promise<void>((resolve) => {
+					renewalReached = resolve;
+				});
+				const renewalGate = new Promise<void>((resolve) => {
+					finishRenewal = resolve;
+				});
+				putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+					if (
+						key === nb.sessionCommitLock &&
+						options?.onlyIfEtagMatches &&
+						typeof value === 'string' &&
+						(JSON.parse(value) as { holder?: string }).holder === originalLock.holder
+					) {
+						renewalReached();
+						await renewalGate;
+					}
+					return realPut(key, value, options);
+				});
+				timerAdvance = vi.advanceTimersByTimeAsync(60 * 1000);
+				await atRenewal;
+				vi.setSystemTime(new Date('2026-01-01T00:10:00.001Z'));
+				await notebooks.deleteNotebook(projectId, created.id, ACTOR);
+				// Let the commit reach its write boundary while its renewal is still pending.
+				finishVersionRead();
+				await Promise.resolve();
+				await Promise.resolve();
+				await Promise.resolve();
+				finishRenewal?.();
+				await timerAdvance;
+
+				await commitRejected;
+				expect(await (await bucket.get(nb.code))!.text()).toBe('v1');
+				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(1);
+			} finally {
+				finishVersionRead();
+				finishRenewal?.();
+				await timerAdvance;
+				await Promise.allSettled([commit]);
+				getSpy.mockRestore();
+				putSpy?.mockRestore();
+				log.mockRestore();
+				vi.useRealTimers();
+			}
+		});
+
 		it('takes over an expired session commit lease', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,

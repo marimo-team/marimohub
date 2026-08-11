@@ -102,6 +102,7 @@ export {
 	withCasRetry,
 	type CasRetryOptions,
 	type CasWriter,
+	type ObjectMutationOptions,
 	type ObjectMutationOutcome,
 } from './catalog/cas';
 export {
