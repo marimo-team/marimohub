@@ -20,6 +20,18 @@ export const projectKeys = {
 		[...projectKeys.all, 'integrations', projectId, integrationId] as const,
 };
 
+export const browseKeys = {
+	all: ['browse'] as const,
+	capability: (projectId: string, integrationId: string) =>
+		[...browseKeys.all, projectId, integrationId, 'capability'] as const,
+	namespaces: (projectId: string, integrationId: string, parent: readonly string[]) =>
+		[...browseKeys.all, projectId, integrationId, 'namespaces', parent] as const,
+	tables: (projectId: string, integrationId: string, namespace: readonly string[]) =>
+		[...browseKeys.all, projectId, integrationId, 'tables', namespace] as const,
+	schema: (projectId: string, integrationId: string, namespace: readonly string[], table: string) =>
+		[...browseKeys.all, projectId, integrationId, 'schema', namespace, table] as const,
+};
+
 export const integrationKeys = {
 	/** Deployment-wide catalog; kind schemas are static for a deployment. */
 	kinds: () => ['integration-kinds'] as const,

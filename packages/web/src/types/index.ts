@@ -23,6 +23,10 @@ import type {
 	IntegrationEntry as ClientIntegrationEntry,
 	IntegrationDetail as ClientIntegrationDetail,
 	IntegrationTestResult as ClientIntegrationTestResult,
+	IntegrationBrowseCapability as ClientIntegrationBrowseCapability,
+	IntegrationBrowseNamespacePage as ClientIntegrationBrowseNamespacePage,
+	IntegrationBrowseTablePage as ClientIntegrationBrowseTablePage,
+	IntegrationTableSchema as ClientIntegrationTableSchema,
 	ResolvedUser as ClientResolvedUser,
 	ApiToken as ClientApiToken,
 	ApiTokenCreated as ClientApiTokenCreated,
@@ -67,6 +71,12 @@ export type IntegrationEntry = ClientIntegrationEntry;
 export type IntegrationDetail = ClientIntegrationDetail;
 /** Outcome of the integration "Test" probe. */
 export type IntegrationTestResult = ClientIntegrationTestResult;
+/** Whether one integration instance can be browsed (and why not). */
+export type IntegrationBrowseCapability = ClientIntegrationBrowseCapability;
+export type IntegrationBrowseNamespacePage = ClientIntegrationBrowseNamespacePage;
+export type IntegrationBrowseTablePage = ClientIntegrationBrowseTablePage;
+/** Columns, partitioning, and load snippet for a browsed table. */
+export type IntegrationTableSchema = ClientIntegrationTableSchema;
 /** A resolved user identity ({ id, email, name }) from `GET /api/v1/users`. */
 export type ResolvedUser = ClientResolvedUser;
 /** A personal access token's metadata (never the secret). */

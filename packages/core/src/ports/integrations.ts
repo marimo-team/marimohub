@@ -71,6 +71,8 @@ export interface KindDescriptor {
 	ui_hints: UiHints;
 	/** Whether this deployment can run the kind's connectivity probe. */
 	supports_test: boolean;
+	/** Whether this deployment can browse the kind's catalog metadata. */
+	supports_browse: boolean;
 	secret_sources: IntegrationSecretSources;
 	/** Informational package requirements for notebook code. */
 	requirements: string[];
@@ -81,6 +83,70 @@ export interface TestResult {
 	ok: boolean;
 	latency_ms?: number;
 	details?: string;
+}
+
+/**
+ * One page of read-only catalog metadata. `next_cursor` is the upstream
+ * pagination token passed through opaquely; null on the last page.
+ */
+export interface BrowsePage<T> {
+	items: T[];
+	next_cursor: string | null;
+}
+
+export interface BrowsePageRequest {
+	limit: number;
+	cursor?: string;
+}
+
+export interface BrowseNamespacesRequest extends BrowsePageRequest {
+	/** List namespaces nested under this one; absent lists the roots. */
+	parent?: string[];
+}
+
+export interface TableColumn {
+	name: string;
+	type: string;
+	nullable: boolean;
+	comment?: string;
+}
+
+export interface TableSchema {
+	columns: TableColumn[];
+	/** Partition fields, e.g. `region` or `day(ts)`. */
+	partitioning?: string[];
+	/** Ready-to-paste notebook code that loads this table via the integration. */
+	snippet?: string;
+	/** Table root location, e.g. `s3://warehouse/sales/orders`. */
+	location?: string;
+	/** Table format version (Iceberg: 1, 2, or 3). */
+	format_version?: number;
+	/** Facts from the table's current snapshot, when the catalog reports one. */
+	current_snapshot?: {
+		committed_at?: string;
+		total_records?: number;
+		total_data_size_bytes?: number;
+	};
+}
+
+/**
+ * Whether one stored instance can be browsed from the hub. Kind support alone
+ * is not enough: the verdict depends on the instance config (auth method, TLS
+ * material) and on the deployment having browsing wired.
+ */
+export interface BrowseCapabilityResult {
+	metadata: boolean;
+	reason?: string;
+	/**
+	 * The resolved head's config version and last-write time. Callers that
+	 * cache browse results key on BOTH: the version invalidates on config
+	 * edits, `updated_at` on head-only writes (a rename changes the snippet an
+	 * instance renders without bumping the version). Required — an
+	 * implementation that omitted them would let cached results outlive the
+	 * state they were computed from. Not exposed over the API.
+	 */
+	current_version: number;
+	updated_at: string;
 }
 
 /** The only network path allowed to integration probes; implementations enforce egress policy. */

@@ -73,6 +73,7 @@ export class IntegrationRegistry {
 			json_schema: this.jsonSchema(kind),
 			ui_hints: def.uiHints ?? {},
 			supports_test: def.testConnection !== undefined,
+			supports_browse: def.browse !== undefined,
 			secret_sources: { inline: false, references: [] },
 			requirements: def.requirements ?? [],
 		};

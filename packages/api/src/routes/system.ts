@@ -96,6 +96,10 @@ app.openapi(capabilitiesRoute, (c) => {
 	return ok(c, {
 		federation: { available: Boolean(deps.wif) },
 		integrations: { available: Boolean(deps.integrations) },
+		data_browser: {
+			available: Boolean(deps.dataBrowser),
+			preview: deps.dataBrowser?.preview ?? false,
+		},
 		// createApi defaults this; the fallback satisfies the optional type for
 		// direct callers (mirrors the sandbox.exposure pattern).
 		viewer_mode: deps.policy.viewerMode ?? 'static',

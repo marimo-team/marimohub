@@ -19,6 +19,10 @@ import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import type {
+	BrowseCapabilityResult,
+	BrowseNamespacesRequest,
+	BrowsePage,
+	BrowsePageRequest,
 	CopyIntegrationOptions,
 	CreateIntegrationInput,
 	IntegrationDetail,
@@ -31,6 +35,7 @@ import type {
 	KindDescriptor,
 	SessionRender,
 	SessionRenderContext,
+	TableSchema,
 	TestIntegrationRequest,
 	TestResult,
 	UpdateIntegrationInput,
@@ -62,6 +67,7 @@ import {
 	findStraySecretBoxes,
 	configForCopy,
 	openConfig,
+	parseStoredWithPlaceholders,
 	redactConfig,
 	sealConfig,
 	validateStoredConfig,
@@ -183,6 +189,12 @@ export interface IntegrationsStoreOptions {
 	 * The only network path exposed to kind probes; implementations enforce egress policy.
 	 */
 	probe?: IntegrationProbe;
+	/**
+	 * Egress path for catalog browsing, wired only when the data browser is
+	 * enabled. Separate from `probe` so browse traffic (several calls per tree
+	 * expansion) has its own budget and response cap; absence disables browsing.
+	 */
+	browseProbe?: IntegrationProbe;
 	/** Injectable clock for deterministic tests. */
 	now?: () => string;
 	metrics?: Metrics;
@@ -198,6 +210,7 @@ class ScopedIntegrationsStore {
 	private readonly codec?: ManagedSecretCodec;
 	private readonly resolvers: Map<string, SecretResolver>;
 	private readonly probe?: IntegrationProbe;
+	private readonly browseProbe?: IntegrationProbe;
 	private readonly now: () => string;
 	private readonly metrics: Metrics;
 
@@ -209,17 +222,21 @@ class ScopedIntegrationsStore {
 			(options.resolvers ?? []).map((resolver) => [resolver.backend, resolver]),
 		);
 		this.probe = options.probe;
+		this.browseProbe = options.browseProbe;
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.metrics = options.metrics ?? noopMetrics;
 	}
 
 	listKinds(): KindDescriptor[] {
-		// A deployment without a guarded probe must not advertise the Test action.
+		// A deployment without a guarded probe must not advertise the Test action;
+		// same for browsing and its own probe.
 		const testable = this.probe !== undefined;
+		const browsable = this.browseProbe !== undefined;
 		const secret_sources = this.secretSources();
 		return this.registry.describeAll().map((descriptor) => ({
 			...descriptor,
 			supports_test: testable && descriptor.supports_test,
+			supports_browse: browsable && descriptor.supports_browse,
 			secret_sources,
 		}));
 	}
@@ -698,6 +715,130 @@ class ScopedIntegrationsStore {
 			);
 		}
 		return def.testConnection(parsed.data, probe);
+	}
+
+	/**
+	 * The instance-level browse verdict. Evaluated on a placeholder-substituted
+	 * parse of the stored config — the verdict depends only on non-secret fields
+	 * (auth method, TLS material), so it must not pay for secret resolution.
+	 */
+	async browseCapability(
+		scope: IntegrationScope,
+		id: IntegrationId,
+	): Promise<BrowseCapabilityResult> {
+		const head = await this.getHead(scope, id);
+		const state = { current_version: head.current_version, updated_at: head.updated_at };
+		const def = this.registry.get(head.kind);
+		if (!def.browse) {
+			return {
+				metadata: false,
+				...state,
+				reason: `Integration kind "${head.kind}" does not support browsing.`,
+			};
+		}
+		if (!this.browseProbe) {
+			return {
+				metadata: false,
+				...state,
+				reason: 'Data browsing is not enabled on this deployment.',
+			};
+		}
+		if (!head.enabled) {
+			return { metadata: false, ...state, reason: `Integration "${head.name}" is disabled.` };
+		}
+		const { config } = await this.loadCurrent(scope, head);
+		const parsed = parseStoredWithPlaceholders({
+			schema: def.configSchema,
+			paths: this.registry.secretPathsOf(head.kind),
+			stored: config,
+		});
+		if (parsed === undefined) {
+			return {
+				metadata: false,
+				...state,
+				reason: `The stored config no longer matches kind "${head.kind}" — edit and re-save it.`,
+			};
+		}
+		const verdict = def.browse.available(parsed);
+		return verdict.ok
+			? { metadata: true, ...state }
+			: { metadata: false, ...state, reason: verdict.reason };
+	}
+
+	async browseNamespaces(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		request: BrowseNamespacesRequest,
+	): Promise<BrowsePage<string[]>> {
+		const { browse, config, probe } = await this.openBrowse(scope, id);
+		return browse.listNamespaces(config, probe, request);
+	}
+
+	async browseTables(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		namespace: string[],
+		request: BrowsePageRequest,
+	): Promise<BrowsePage<string>> {
+		const { browse, config, probe } = await this.openBrowse(scope, id);
+		return browse.listTables(config, probe, namespace, request);
+	}
+
+	async browseTableSchema(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		namespace: string[],
+		table: string,
+	): Promise<TableSchema> {
+		const { head, browse, config, probe } = await this.openBrowse(scope, id);
+		const schema = await browse.getTableSchema(config, probe, namespace, table);
+		return { ...schema, snippet: browse.snippet(head.name, namespace, table) };
+	}
+
+	/**
+	 * Shared preamble of every browse op: load, migrate, decrypt, re-validate,
+	 * and gate — the same path `test('stored')` walks. Read-only throughout;
+	 * browsing writes nothing to the bucket.
+	 */
+	private async openBrowse(scope: IntegrationScope, id: IntegrationId) {
+		const head = await this.getHead(scope, id);
+		const probe = this.browseProbe;
+		if (!probe) {
+			throw new ValidationError('Data browsing is not enabled on this deployment.');
+		}
+		if (!head.enabled) {
+			throw new ValidationError(`Integration "${head.name}" is disabled.`);
+		}
+		const { def, config } = await this.loadCurrent(scope, head);
+		if (!def.browse) {
+			throw new ValidationError(`Integration kind "${head.kind}" does not support browsing.`);
+		}
+		const resolved = await this.open(scope, head.id, def, config);
+		// Never surface the Zod issues here — the resolved config is plaintext.
+		const parsed = def.configSchema.safeParse(resolved);
+		if (!parsed.success) {
+			throw new ValidationError(
+				`Stored config no longer matches kind "${def.kind}" — edit and re-save it.`,
+			);
+		}
+		const verdict = def.browse.available(parsed.data);
+		if (!verdict.ok) {
+			throw new ValidationError(`Integration "${head.name}" cannot be browsed: ${verdict.reason}.`);
+		}
+		return { head, browse: def.browse, config: parsed.data, probe };
+	}
+
+	/** `getHead`, but absence (or a tombstone) reads as undefined instead of a 404. */
+	async findHead(
+		scope: IntegrationScope,
+		id: IntegrationId,
+	): Promise<IntegrationRecord | undefined> {
+		try {
+			return await this.getHead(scope, id);
+		} catch (err) {
+			if (err instanceof NotFoundError) return undefined;
+			throw err;
+		}
 	}
 
 	/**
@@ -1208,6 +1349,63 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 			options,
 			actor,
 		);
+	}
+
+	browseCapability(projectId: ProjectId, id: IntegrationId): Promise<BrowseCapabilityResult> {
+		return this.withBrowseScope(projectId, id, (scope) => this.store.browseCapability(scope, id));
+	}
+
+	browseNamespaces(
+		projectId: ProjectId,
+		id: IntegrationId,
+		request: BrowseNamespacesRequest,
+	): Promise<BrowsePage<string[]>> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseNamespaces(scope, id, request),
+		);
+	}
+
+	browseTables(
+		projectId: ProjectId,
+		id: IntegrationId,
+		namespace: string[],
+		request: BrowsePageRequest,
+	): Promise<BrowsePage<string>> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseTables(scope, id, namespace, request),
+		);
+	}
+
+	browseTableSchema(
+		projectId: ProjectId,
+		id: IntegrationId,
+		namespace: string[],
+		table: string,
+	): Promise<TableSchema> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseTableSchema(scope, id, namespace, table),
+		);
+	}
+
+	/**
+	 * Browse reaches the merged view members already have — project instances
+	 * plus inherited org ones — unlike `get`/`test`, which stay project-scope.
+	 * The id resolves project-first; an org instance shadowed by a same-name
+	 * project one reads as absent, matching what `resolveForSession` renders.
+	 */
+	private async withBrowseScope<T>(
+		projectId: ProjectId,
+		id: IntegrationId,
+		run: (scope: IntegrationScope) => Promise<T>,
+	): Promise<T> {
+		const scope = projectScope(projectId);
+		if (await this.store.findHead(scope, id)) return run(scope);
+		const org = await this.store.findHead(ORG_SCOPE, id);
+		if (org) {
+			const project = await this.store.listHeads(scope);
+			if (!project.some((h) => h.name === org.name)) return run(ORG_SCOPE);
+		}
+		throw new NotFoundError(`Integration ${id} not found`);
 	}
 
 	async resolveForSession(

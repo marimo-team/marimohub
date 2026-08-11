@@ -1,10 +1,14 @@
 import { z } from 'zod';
-import { DomainError } from '../../errors';
+import { DomainError, UnavailableError } from '../../errors';
 import type {
+	BrowseNamespacesRequest,
+	BrowsePage,
+	BrowsePageRequest,
 	IntegrationCategory,
 	IntegrationProbe,
 	KindBrand,
 	ProbeRequestInit,
+	TableSchema,
 	TestResult,
 	UiHints,
 } from '../../ports/integrations';
@@ -42,6 +46,39 @@ export interface RenderOutput {
 	env?: Record<string, string>;
 	/** User-safe metadata copied into this instance's manifest entry. */
 	manifestExtra?: Record<string, unknown>;
+}
+
+/**
+ * Read-only catalog browsing for kinds with an HTTP-native metadata API.
+ * Every op is metadata-only and GET-shaped against the upstream; nothing here
+ * may write. Like `testConnection`, ALL network access goes through `probe`.
+ */
+export interface BrowseCapability<C> {
+	/**
+	 * Instance-level gate (auth method, TLS material, …) mirroring the
+	 * short-circuits `testConnection` applies. Evaluated on a config whose
+	 * secret fields may be placeholders — never inspect secret values here.
+	 */
+	available(config: C): { ok: true } | { ok: false; reason: string };
+	listNamespaces(
+		config: C,
+		probe: IntegrationProbe,
+		request: BrowseNamespacesRequest,
+	): Promise<BrowsePage<string[]>>;
+	listTables(
+		config: C,
+		probe: IntegrationProbe,
+		namespace: string[],
+		request: BrowsePageRequest,
+	): Promise<BrowsePage<string>>;
+	getTableSchema(
+		config: C,
+		probe: IntegrationProbe,
+		namespace: string[],
+		table: string,
+	): Promise<TableSchema>;
+	/** Notebook code that loads the table through this instance's rendered config. */
+	snippet(instanceName: string, namespace: string[], table: string): string;
 }
 
 /** Complete contract for one registered integration kind. */
@@ -94,6 +131,13 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	 */
 	testConnection?(config: z.infer<S>, probe: IntegrationProbe): Promise<TestResult>;
 	/**
+	 * Optional read-only catalog browsing (namespaces → tables → schema).
+	 * `defineIntegration` wraps every op so a thrown transport error is replaced
+	 * by a generic failure and a `DomainError` that quotes secret material is
+	 * degraded to a generic one — the same posture as `testConnection`.
+	 */
+	browse?: BrowseCapability<z.infer<S>>;
+	/**
 	 * Upgrade a stored config from an older `schemaVersion`. Chainable per step.
 	 * Operates on the STORED shape (secret fields are `{ $secret: … }` boxes) and
 	 * must carry those boxes through untouched. It may NOT move a `zSecret` field
@@ -109,39 +153,76 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 
 /**
  * Preserves schema inference across a complete integration definition, and wraps
- * `testConnection` in the secret guard below.
+ * `testConnection` and `browse` in the secret guards below.
  */
 export function defineIntegration<S extends z.ZodType>(
 	def: IntegrationDefinition<S>,
 ): IntegrationDefinition<S> {
 	const testConnection = def.testConnection?.bind(def);
-	if (!testConnection) return def;
+	if (!testConnection && !def.browse) return def;
 	let paths: SecretPath[] | undefined;
+	const pathsOf = () =>
+		(paths ??= secretPaths(
+			z.toJSONSchema(def.configSchema, { io: 'input' }) as Record<string, unknown>,
+		));
 	return {
 		...def,
-		async testConnection(config, probe) {
-			let result: TestResult;
-			try {
-				result = await testConnection(config, probe);
-			} catch (err) {
-				// A throw means the kind never reached its own sanitizer, so its text is
-				// untrusted wholesale — it can quote material this schema never marked (a
-				// probe URL with userinfo, a closed-over token) that the echo guard below
-				// would not catch. Drop it and report the generic failure.
-				//
-				// `DomainError` stays the deliberate rejection path (`ValidationError` →
-				// 422, a budget → 429): converting one would answer 200 with a failure
-				// detail for a request the API meant to refuse. Their messages are ours,
-				// not a transport's.
-				if (err instanceof DomainError) throw err;
-				result = { ok: false, details: probeErrorDetails(err, true) };
-			}
-			paths ??= secretPaths(
-				z.toJSONSchema(def.configSchema, { io: 'input' }) as Record<string, unknown>,
-			);
-			return withoutSecretEcho(result, config, paths);
-		},
+		...(testConnection
+			? {
+					async testConnection(config, probe) {
+						let result: TestResult;
+						try {
+							result = await testConnection(config, probe);
+						} catch (err) {
+							// A throw means the kind never reached its own sanitizer, so its text is
+							// untrusted wholesale — it can quote material this schema never marked (a
+							// probe URL with userinfo, a closed-over token) that the echo guard below
+							// would not catch. Drop it and report the generic failure.
+							//
+							// `DomainError` stays the deliberate rejection path (`ValidationError` →
+							// 422, a budget → 429): converting one would answer 200 with a failure
+							// detail for a request the API meant to refuse. Their messages are ours,
+							// not a transport's.
+							if (err instanceof DomainError) throw err;
+							result = { ok: false, details: probeErrorDetails(err, true) };
+						}
+						return withoutSecretEcho(result, config, pathsOf());
+					},
+				}
+			: {}),
+		...(def.browse ? { browse: guardedBrowse(def.browse, pathsOf) } : {}),
 	};
+}
+
+/**
+ * The browse counterpart of the `testConnection` guard: ops return data or
+ * throw, so the boundary sits on the error path. A non-`DomainError` throw is a
+ * transport's own text (untrusted wholesale) and becomes a generic failure; a
+ * `DomainError` is kind-authored, but its message is still checked against the
+ * config's secret values before it may cross to a response.
+ */
+function guardedBrowse<C>(browse: BrowseCapability<C>, pathsOf: () => SecretPath[]) {
+	const guard = <A extends unknown[], R>(
+		op: (config: C, probe: IntegrationProbe, ...args: A) => Promise<R>,
+	) => {
+		return async (config: C, probe: IntegrationProbe, ...args: A): Promise<R> => {
+			try {
+				return await op(config, probe, ...args);
+			} catch (err) {
+				if (err instanceof DomainError && !echoesSecret(err.message, config, pathsOf())) {
+					throw err;
+				}
+				throw new UnavailableError('The catalog request failed.');
+			}
+		};
+	};
+	return {
+		available: browse.available.bind(browse),
+		snippet: browse.snippet.bind(browse),
+		listNamespaces: guard(browse.listNamespaces.bind(browse)),
+		listTables: guard(browse.listTables.bind(browse)),
+		getTableSchema: guard(browse.getTableSchema.bind(browse)),
+	} satisfies BrowseCapability<C>;
 }
 
 /**
@@ -154,15 +235,19 @@ export function defineIntegration<S extends z.ZodType>(
 function withoutSecretEcho(result: TestResult, config: unknown, paths: SecretPath[]): TestResult {
 	const { details } = result;
 	if (details === undefined || details === '') return result;
-	const echoes = collectSecretValues(config, paths).some((value) =>
-		secretForms(value).some((form) => details.includes(form)),
-	);
-	if (!echoes) return result;
+	if (!echoesSecret(details, config, paths)) return result;
 	// The substring match stays deliberately blunt (a short secret matches an
 	// innocuous detail by chance), so the replacement tracks the result's own
 	// `ok` instead of asserting failure: a false positive then costs detail, not
 	// correctness.
 	return { ...result, details: result.ok ? 'connected' : 'request failed' };
+}
+
+/** Whether `text` quotes any schema-marked secret value, in any transport form. */
+function echoesSecret(text: string, config: unknown, paths: SecretPath[]): boolean {
+	return collectSecretValues(config, paths).some((value) =>
+		secretForms(value).some((form) => text.includes(form)),
+	);
 }
 
 /**

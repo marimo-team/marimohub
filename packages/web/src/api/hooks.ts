@@ -5,6 +5,7 @@ import {
 	useMutation,
 	keepPreviousData,
 } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from './client';
 import { useApiMutation, useInvalidate } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
@@ -16,6 +17,7 @@ import {
 	sessionKeys,
 	systemKeys,
 	integrationKeys,
+	browseKeys,
 	auditKeys,
 	adminKeys,
 } from './queryKeys';
@@ -381,7 +383,10 @@ async function listAllIntegrations(scope: IntegrationsScope): Promise<Integratio
 
 /**
  * Keys stale after any mutation in the scope. Org changes also invalidate every
- * project's list — inherited entries are embedded there.
+ * project's list — inherited entries are embedded there. Browse results are
+ * derived from the mutated config (names, capability, snippets), so they go
+ * stale too: project-wide for a project mutation, everywhere for an org one
+ * (inherited instances are browsable from every project).
  */
 function integrationsInvalidations(scope: IntegrationsScope, integrationId?: string) {
 	const detail =
@@ -393,8 +398,8 @@ function integrationsInvalidations(scope: IntegrationsScope, integrationId?: str
 						: projectKeys.integration(scope.pid, integrationId),
 				];
 	return scope === 'org'
-		? [integrationKeys.org(), [...projectKeys.all, 'integrations'], ...detail]
-		: [projectKeys.integrations(scope.pid), ...detail];
+		? [integrationKeys.org(), [...projectKeys.all, 'integrations'], browseKeys.all, ...detail]
+		: [projectKeys.integrations(scope.pid), [...browseKeys.all, scope.pid], ...detail];
 }
 
 /** Returns `null` when integrations are disabled for this deployment. */
@@ -573,6 +578,128 @@ export function useTestIntegration(scope: IntegrationsScope) {
 							params: { path: { pid: scope.pid } },
 							body,
 						}),
+			),
+	});
+}
+
+// Data browser (read-only catalog metadata over an integration)
+
+/**
+ * Multi-part namespaces ride in one query param, parts joined by U+001F — the
+ * separator the API defines, so namespace parts containing dots round-trip.
+ */
+const NAMESPACE_JOINER = '\u001f';
+
+/** Server-side TTLs are 60s (lists) / 300s (schemas); mirror them client-side. */
+const BROWSE_LIST_STALE_MS = 60_000;
+const BROWSE_SCHEMA_STALE_MS = 300_000;
+
+/**
+ * While a refresh round is in flight, browse lookups carry `fresh=true`, which
+ * makes the server bypass its own metadata cache (and refresh it). Scoped to
+ * the awaited invalidation so ordinary navigation stays cache-friendly.
+ */
+let bypassBrowseCache = false;
+const freshQuery = () => (bypassBrowseCache ? { fresh: 'true' as const } : {});
+
+export async function refreshBrowseQueries(queryClient: QueryClient): Promise<void> {
+	bypassBrowseCache = true;
+	try {
+		await queryClient.invalidateQueries({ queryKey: browseKeys.all, refetchType: 'active' });
+	} finally {
+		bypassBrowseCache = false;
+	}
+}
+
+export function useBrowseCapabilityQuery(projectId: string, integrationId: string, enabled = true) {
+	return useQuery({
+		queryKey: browseKeys.capability(projectId, integrationId),
+		enabled,
+		staleTime: BROWSE_LIST_STALE_MS,
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse', {
+					params: { path: { pid: projectId, iid: integrationId } },
+				}),
+			),
+	});
+}
+
+export function useBrowseNamespacesQuery(
+	projectId: string,
+	integrationId: string,
+	parent: readonly string[],
+	enabled = true,
+) {
+	return useInfiniteQuery({
+		queryKey: browseKeys.namespaces(projectId, integrationId, parent),
+		enabled,
+		staleTime: BROWSE_LIST_STALE_MS,
+		initialPageParam: null as string | null,
+		queryFn: ({ pageParam }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/namespaces', {
+					params: {
+						path: { pid: projectId, iid: integrationId },
+						query: {
+							...(parent.length > 0 ? { parent: parent.join(NAMESPACE_JOINER) } : {}),
+							...(pageParam ? { cursor: pageParam } : {}),
+							...freshQuery(),
+						},
+					},
+				}),
+			),
+		getNextPageParam: (lastPage) => lastPage.next_cursor,
+	});
+}
+
+export function useBrowseTablesQuery(
+	projectId: string,
+	integrationId: string,
+	namespace: readonly string[],
+	enabled = true,
+) {
+	return useInfiniteQuery({
+		queryKey: browseKeys.tables(projectId, integrationId, namespace),
+		enabled,
+		staleTime: BROWSE_LIST_STALE_MS,
+		initialPageParam: null as string | null,
+		queryFn: ({ pageParam }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/tables', {
+					params: {
+						path: { pid: projectId, iid: integrationId },
+						query: {
+							namespace: namespace.join(NAMESPACE_JOINER),
+							...(pageParam ? { cursor: pageParam } : {}),
+							...freshQuery(),
+						},
+					},
+				}),
+			),
+		getNextPageParam: (lastPage) => lastPage.next_cursor,
+	});
+}
+
+export function useBrowseTableSchemaQuery(
+	projectId: string,
+	integrationId: string,
+	namespace: readonly string[],
+	table: string,
+	enabled = true,
+) {
+	return useQuery({
+		queryKey: browseKeys.schema(projectId, integrationId, namespace, table),
+		enabled,
+		staleTime: BROWSE_SCHEMA_STALE_MS,
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/schema', {
+					params: {
+						path: { pid: projectId, iid: integrationId },
+						query: { namespace: namespace.join(NAMESPACE_JOINER), table, ...freshQuery() },
+					},
+				}),
 			),
 	});
 }

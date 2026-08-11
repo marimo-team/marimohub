@@ -1,5 +1,9 @@
 import type { IntegrationId, ProjectId, UserId } from '../../ids';
 import type {
+	BrowseCapabilityResult,
+	BrowseNamespacesRequest,
+	BrowsePage,
+	BrowsePageRequest,
 	CopyIntegrationOptions,
 	CreateIntegrationInput,
 	IntegrationDetail,
@@ -10,6 +14,7 @@ import type {
 	KindDescriptor,
 	SessionRender,
 	SessionRenderContext,
+	TableSchema,
 	TestIntegrationRequest,
 	TestResult,
 	UpdateIntegrationInput,
@@ -41,6 +46,29 @@ export interface ProjectIntegrationsService {
 		page?: IntegrationVersionPageRequest,
 	): Promise<IntegrationVersionPage>;
 	test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult>;
+	/**
+	 * Read-only catalog browsing. Unlike `get`/`test`, the id resolves
+	 * project-first, then the inherited org tier (shadowed org instances read
+	 * as absent) — the merged view members already have.
+	 */
+	browseCapability(projectId: ProjectId, id: IntegrationId): Promise<BrowseCapabilityResult>;
+	browseNamespaces(
+		projectId: ProjectId,
+		id: IntegrationId,
+		request: BrowseNamespacesRequest,
+	): Promise<BrowsePage<string[]>>;
+	browseTables(
+		projectId: ProjectId,
+		id: IntegrationId,
+		namespace: string[],
+		request: BrowsePageRequest,
+	): Promise<BrowsePage<string>>;
+	browseTableSchema(
+		projectId: ProjectId,
+		id: IntegrationId,
+		namespace: string[],
+		table: string,
+	): Promise<TableSchema>;
 	copy(
 		sourceProjectId: ProjectId,
 		id: IntegrationId,

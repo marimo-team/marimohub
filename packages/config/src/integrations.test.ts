@@ -93,3 +93,61 @@ describe('makeIntegrations', () => {
 		});
 	});
 });
+
+describe('makeIntegrations data browser', () => {
+	it('is off by default; metadata wires the capability and browse support', () => {
+		const dark = makeIntegrations({ MARIMOHUB_INTEGRATIONS: 'on' }, new MemoryBucket());
+		expect(dark.dataBrowser).toBeUndefined();
+		expect(dark.integrations?.listKinds().every((k) => !k.supports_browse)).toBe(true);
+
+		expect(
+			makeIntegrations(
+				{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'off' },
+				new MemoryBucket(),
+			).dataBrowser,
+		).toBeUndefined();
+
+		const wired = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'metadata' },
+			new MemoryBucket(),
+		);
+		expect(wired.dataBrowser).toEqual({ preview: false });
+		expect(wired.integrations?.listKinds().some((k) => k.supports_browse)).toBe(true);
+	});
+
+	it('refuses to enable browsing without integrations', () => {
+		expect(() =>
+			makeIntegrations({ MARIMOHUB_DATA_BROWSER: 'metadata' }, new MemoryBucket()),
+		).toThrow(/MARIMOHUB_INTEGRATIONS=on/);
+		expect(() =>
+			makeIntegrations(
+				{ MARIMOHUB_INTEGRATIONS: 'off', MARIMOHUB_DATA_BROWSER: 'metadata' },
+				new MemoryBucket(),
+			),
+		).toThrow(ConfigError);
+	});
+
+	it('refuses to enable browsing without a probe', () => {
+		expect(() =>
+			makeIntegrations(
+				{
+					MARIMOHUB_INTEGRATIONS: 'on',
+					MARIMOHUB_INTEGRATIONS_PROBE: 'off',
+					MARIMOHUB_DATA_BROWSER: 'metadata',
+				},
+				new MemoryBucket(),
+			),
+		).toThrow(/probe/);
+	});
+
+	it('rejects unknown values, including the reserved `full`', () => {
+		for (const value of ['full', 'bogus']) {
+			expect(() =>
+				makeIntegrations(
+					{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: value },
+					new MemoryBucket(),
+				),
+			).toThrow(/supported: off, metadata/);
+		}
+	});
+});

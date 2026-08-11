@@ -317,6 +317,12 @@ export interface ApiDeps {
 	 */
 	orgIntegrations?: OrgIntegrationsService;
 	/**
+	 * Read-only data browsing over integrations (MARIMOHUB_DATA_BROWSER).
+	 * Absent disables the browse routes (404). `preview` stays false until
+	 * sandbox-executed row preview ships.
+	 */
+	dataBrowser?: { preview: boolean };
+	/**
 	 * Build/deploy identity surfaced read-only by `GET /api/v1/version` (the UI's
 	 * footer info popover). Baked into the image at build time and read from env
 	 * at composition. Undefined in dev and the Workers entrypoint, where the route

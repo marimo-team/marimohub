@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { ValidationError } from '../../errors';
+import { NotFoundError, ValidationError } from '../../errors';
 import type { IntegrationProbe } from '../../ports/integrations';
 import { trino } from './kinds/trino';
 import { basicAuthHeader, defineIntegration, envSegment, probeErrorDetails } from './sdk';
@@ -217,5 +217,54 @@ describe('sdk helpers', () => {
 	it('encodes non-Latin-1 basic credentials and normalizes env segments', () => {
 		expect(basicAuthHeader('césar', 'pässwörd')).toBe('Basic Y8Opc2FyOnDDpHNzd8O2cmQ=');
 		expect(envSegment('my-warehouse')).toBe('MY_WAREHOUSE');
+	});
+});
+
+describe('defineIntegration browse guard', () => {
+	const browsy = defineIntegration({
+		kind: 'browsy',
+		title: 'Browsy',
+		description: 'test kind',
+		category: 'catalog',
+		brand: { color: '#000000' },
+		schemaVersion: 1,
+		configSchema: z.object({ token: zSecret() }),
+		render: () => ({}),
+		browse: {
+			available: () => ({ ok: true }),
+			async listNamespaces(_config, probe) {
+				await probe.fetch('https://catalog.example/v1/namespaces');
+				return { items: [], next_cursor: null };
+			},
+			async listTables(config) {
+				throw new ValidationError(`catalog denied access for ${config.token}`);
+			},
+			async getTableSchema() {
+				throw new NotFoundError('The catalog reports no such namespace or table.');
+			},
+			snippet: () => 'code',
+		},
+	});
+	const config = { token: 'sekret-value' };
+
+	it('replaces a thrown transport error with a generic failure', async () => {
+		const probe: IntegrationProbe = {
+			fetch: () => Promise.reject(new Error(`401 for Bearer ${config.token}`)),
+		};
+		await expect(browsy.browse!.listNamespaces(config, probe, { limit: 10 })).rejects.toThrow(
+			'The catalog request failed.',
+		);
+	});
+
+	it('passes a clean DomainError through untouched', async () => {
+		await expect(browsy.browse!.getTableSchema(config, unusedProbe(), [], 't')).rejects.toThrow(
+			'The catalog reports no such namespace or table.',
+		);
+	});
+
+	it('degrades a DomainError whose message quotes a secret value', async () => {
+		await expect(
+			browsy.browse!.listTables(config, unusedProbe(), [], { limit: 10 }),
+		).rejects.toThrow('The catalog request failed.');
 	});
 });

@@ -144,6 +144,16 @@ components:
               type: boolean
           required:
             - available
+        data_browser:
+          type: object
+          properties:
+            available:
+              type: boolean
+            preview:
+              type: boolean
+          required:
+            - available
+            - preview
         viewer_mode:
           type: string
           enum:
@@ -222,6 +232,7 @@ components:
       required:
         - federation
         - integrations
+        - data_browser
         - viewer_mode
         - viewer_session_modes
         - editor_sandbox_sharing
@@ -1234,6 +1245,8 @@ components:
                 type: string
         supports_test:
           type: boolean
+        supports_browse:
+          type: boolean
         secret_sources:
           type: object
           properties:
@@ -1283,6 +1296,7 @@ components:
         - json_schema
         - ui_hints
         - supports_test
+        - supports_browse
         - secret_sources
         - requirements
     IntegrationPage:
@@ -1455,6 +1469,90 @@ components:
             - source
             - id
           additionalProperties: false
+    IntegrationBrowseCapability:
+      type: object
+      properties:
+        metadata:
+          type: boolean
+        preview:
+          type: boolean
+        reason:
+          type: string
+      required:
+        - metadata
+        - preview
+    IntegrationBrowseNamespacePage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
+    IntegrationBrowseTablePage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: string
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
+    IntegrationTableSchema:
+      type: object
+      properties:
+        columns:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+              nullable:
+                type: boolean
+              comment:
+                type: string
+            required:
+              - name
+              - type
+              - nullable
+        partitioning:
+          type: array
+          items:
+            type: string
+        snippet:
+          type: string
+        location:
+          type: string
+        format_version:
+          type: integer
+        current_snapshot:
+          type: object
+          properties:
+            committed_at:
+              type: string
+              format: date-time
+            total_records:
+              type: number
+            total_data_size_bytes:
+              type: number
+      required:
+        - columns
     User:
       type: object
       properties:
@@ -5887,6 +5985,500 @@ paths:
                       - true
                   data:
                     $ref: '#/components/schemas/IntegrationTestResult'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse:
+    get:
+      tags:
+        - Integrations
+      summary: Whether this integration instance can be browsed (editor or above)
+      description: Browse routes resolve the id against the project tier first, then
+        the inherited org tier; a shadowed org instance reads as absent. All
+        browse operations are strictly read-only against the upstream.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+      responses:
+        '200':
+          description: Instance browse capability
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationBrowseCapability'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/namespaces:
+    get:
+      tags:
+        - Integrations
+      summary: List catalog namespaces (editor or above)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            maximum: 500
+            default: 100
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: string
+            enum:
+              - 'true'
+              - 'false'
+            example: 'false'
+          required: false
+          name: fresh
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            description: Namespace parts joined by U+001F (percent-encoded as %1F).
+            example: sales
+          required: false
+          description: Namespace parts joined by U+001F (percent-encoded as %1F).
+          name: parent
+          in: query
+      responses:
+        '200':
+          description: Namespaces, with upstream pagination passed through
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationBrowseNamespacePage'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/tables:
+    get:
+      tags:
+        - Integrations
+      summary: List tables in a namespace (editor or above)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+            maximum: 500
+            default: 100
+            example: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: string
+            enum:
+              - 'true'
+              - 'false'
+            example: 'false'
+          required: false
+          name: fresh
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            description: Namespace parts joined by U+001F (percent-encoded as %1F).
+            example: sales
+          required: true
+          description: Namespace parts joined by U+001F (percent-encoded as %1F).
+          name: namespace
+          in: query
+      responses:
+        '200':
+          description: Table names, with upstream pagination passed through
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationBrowseTablePage'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/schema:
+    get:
+      tags:
+        - Integrations
+      summary: Get a table's schema (editor or above)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            description: Namespace parts joined by U+001F (percent-encoded as %1F).
+            example: sales
+          required: true
+          description: Namespace parts joined by U+001F (percent-encoded as %1F).
+          name: namespace
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            example: orders
+          required: true
+          name: table
+          in: query
+        - schema:
+            type: string
+            enum:
+              - 'true'
+              - 'false'
+            example: 'false'
+          required: false
+          name: fresh
+          in: query
+      responses:
+        '200':
+          description: Column names, types, and partitioning
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationTableSchema'
                 required:
                   - success
                   - data

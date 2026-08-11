@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
-import { notebookKeys, projectKeys, sessionKeys } from './queryKeys';
+import { browseKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 import {
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
@@ -453,8 +453,26 @@ describe('useUpdateIntegration conflict recovery', () => {
 
 		expect(invalidatedKeys(spy)).toEqual([
 			projectKeys.integrations(PID),
+			[...browseKeys.all, PID],
 			projectKeys.integration(PID, 'int-1'),
 		]);
+	});
+
+	// Browse results embed the config and name (capability, snippets), so a
+	// successful edit must drop them project-wide — a rename would otherwise
+	// keep serving snippets that load the old instance name.
+	it('a successful update also drops the project browse results', async () => {
+		stubFetch(async () => jsonOk({ id: 'int-1', name: 'renamed' }));
+
+		const { result, client } = renderHookWithClient(() => useUpdateIntegration(scope), {
+			toaster: false,
+		});
+		const spy = vi.spyOn(client, 'invalidateQueries');
+		await act(async () => {
+			await result.current.mutateAsync({ id: 'int-1', etag: 'W/"1"', name: 'renamed' });
+		});
+
+		expect(invalidatedKeys(spy)).toContainEqual([...browseKeys.all, PID]);
 	});
 
 	it('leaves the cache alone on non-conflict failures', async () => {

@@ -1,0 +1,55 @@
+name: Catalog conformance
+
+# Live `browseContract` suites (@marimo-hub/core/testing/browse-contract)
+# against real catalog/engine servers. Each suite gates itself on its
+# MARIMOHUB_TEST_* env var and stays skipped in the ordinary CI test job; this
+# workflow starts the servers and turns them on. To cover a new kind, start
+# its server below and add its env var to the test step.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  catalog-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 0.1.24
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+
+      # Iceberg REST: the Apache reference catalog (the image PyIceberg itself
+      # tests against). 1.10.0 declares no namespace-separator override,
+      # exercising the client's %1F default; the browse client adapts to either.
+      - name: Start catalog servers
+        run: |
+          docker run -d --name iceberg-rest -p 18181:8181 \
+            -e CATALOG_WAREHOUSE=file:///tmp/warehouse \
+            apache/iceberg-rest-fixture:1.10.0
+
+      - name: Wait for catalog servers
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18181/v1/config && break
+            sleep 1; [ "$i" = 30 ] && exit 1
+          done
+
+      - name: Browse contracts against the live servers
+        env:
+          MARIMOHUB_TEST_ICEBERG_REST_URI: http://127.0.0.1:18181
+        run: vp run --no-cache --filter @marimo-hub/core --fail-if-no-match test
