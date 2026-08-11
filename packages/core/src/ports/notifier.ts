@@ -36,7 +36,10 @@ export function reduceNotificationDeliveryResults(
 		return failures.length > 0 || outcomes.includes('partial') ? 'partial' : 'delivered';
 	}
 	if (failures.length > 0) {
-		if (failures.length === 1) throw failures[0]?.reason;
+		if (failures.length === 1) {
+			const reason = failures[0].reason;
+			throw reason === undefined ? new Error(failureMessage) : reason;
+		}
 		throw new AggregateError(
 			failures.map((result) => result.reason),
 			failureMessage,

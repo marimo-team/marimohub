@@ -7,6 +7,7 @@ import {
 	NotificationSchema,
 	notificationRouter,
 	recipientFromIdentity,
+	reduceNotificationDeliveryResults,
 	resolveMemberRecipient,
 } from '.';
 import { ids, makeProject, uid } from './testing/fixtures';
@@ -259,6 +260,15 @@ describe('fanOutNotifier', () => {
 		await expect(
 			fanOutNotifier([{ name: 'smtp', notifier: failed }]).deliver(notification),
 		).rejects.toBe(failure);
+	});
+
+	it('uses the failure message when one adapter rejects without a reason', () => {
+		expect(() =>
+			reduceNotificationDeliveryResults(
+				[{ status: 'rejected', reason: undefined }],
+				'No notification adapter delivered',
+			),
+		).toThrow('No notification adapter delivered');
 	});
 
 	it('records an intentional adapter skip without counting a delivery', async () => {
