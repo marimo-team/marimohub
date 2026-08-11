@@ -8,7 +8,7 @@ import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
 import { E2bCompute } from '@marimo-hub/compute-e2b';
 import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
-import { parseBool, parseIntEnv, parseList, requiredVar } from './env';
+import { parseBool, parseEnum, parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import { CONFIG_SPEC } from './spec';
@@ -20,6 +20,23 @@ const COMPUTE_BACKENDS = (
 	.map((b) => b.selectorValue)
 	.filter(Boolean)
 	.join(', ');
+
+const COMPUTE_BACKEND_VALUES = [
+	...(CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? [])
+		.map((b) => b.selectorValue)
+		.filter((v): v is string => Boolean(v)),
+	// Wiring-level aliases the registry does not list as first-class backends.
+	'noop',
+	'cloudflare',
+];
+
+export function computeBackend(env: Env): string | undefined {
+	return parseEnum(env, 'MARIMOHUB_COMPUTE_BACKEND', {
+		allowed: COMPUTE_BACKEND_VALUES,
+		remediation: `Set it to one of: ${COMPUTE_BACKENDS}.`,
+		docs: 'docs/configuration.md',
+	});
+}
 
 /** Parse a `"start-end"` port range (e.g. `2718-2723`); undefined if unset. */
 function parsePortRange(value: string | undefined): { start: number; end: number } | undefined {
@@ -110,7 +127,7 @@ export function resolveLifetimeBackstop(
  * backends with no image concept (local/none/noop).
  */
 export function resolveSandboxImages(env: Env): string[] {
-	switch (env.MARIMOHUB_COMPUTE_BACKEND) {
+	switch (computeBackend(env)) {
 		case undefined:
 		case 'local':
 		case 'none':
@@ -135,7 +152,7 @@ export function resolveSandboxImages(env: Env): string[] {
  */
 export function usesSandboxNativeObjectStorage(env: Env): boolean {
 	return (
-		env.MARIMOHUB_COMPUTE_BACKEND === 'coreweave' &&
+		computeBackend(env) === 'coreweave' &&
 		parseList(env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS) !== undefined
 	);
 }
@@ -150,10 +167,14 @@ function parseObjectStoragePermission(env: Env): 'read' | 'read-write' | undefin
 }
 
 export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
-	const backend = requiredVar(env, 'MARIMOHUB_COMPUTE_BACKEND', {
-		remediation: `Set it to one of: ${COMPUTE_BACKENDS}.`,
-		docs: 'docs/configuration.md',
-	});
+	const backend = computeBackend(env);
+	if (!backend) {
+		throw new ConfigError('Missing required env var: MARIMOHUB_COMPUTE_BACKEND', {
+			variable: 'MARIMOHUB_COMPUTE_BACKEND',
+			remediation: `Set it to one of: ${COMPUTE_BACKENDS}.`,
+			docs: 'docs/configuration.md',
+		});
+	}
 	// Each provider is constructed with the DEFAULT image (first of the list); a
 	// notebook's non-default choice rides in per-create via CreateSandboxOptions.
 	const defaultImage = parseList(env.MARIMOHUB_COMPUTE_IMAGE)?.[0];

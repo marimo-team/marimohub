@@ -163,7 +163,7 @@ describe('createFromEnv auth backend selection', () => {
 
 	it('throws on an unknown backend', () => {
 		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_AUTH_BACKEND: 'bogus' })).toThrow(
-			/Unknown MARIMOHUB_AUTH_BACKEND/,
+			/Invalid MARIMOHUB_AUTH_BACKEND: bogus/,
 		);
 	});
 
@@ -453,7 +453,7 @@ describe('createFromEnv default role', () => {
 	it('resolves exclusive CoreWeave user homes from canonical email', () => {
 		const deps = createFromEnv({
 			...baseEnv,
-			MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+			MARIMOHUB_COMPUTE_BACKEND: ' CoreWeave ',
 			MARIMOHUB_COMPUTE_COREWEAVE_API_KEY: 'key',
 			MARIMOHUB_COMPUTE_COREWEAVE_USER_HOME_PROFILE: 'marimohub-user-home',
 			MARIMOHUB_EDITOR_SANDBOX_SHARING: 'exclusive',

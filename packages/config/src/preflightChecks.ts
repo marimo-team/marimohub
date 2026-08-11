@@ -16,8 +16,11 @@
  */
 import type { ApiDeps } from '@marimo-hub/api';
 import type { CheckOutcome, PreflightCheck } from '@marimo-hub/core';
+import { authBackend } from './auth';
+import { computeBackend } from './compute';
 import type { Env } from './env';
 import { checkSandboxHostIsolation } from './hostIsolation';
+import { storageBackend } from './storage';
 
 const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -41,7 +44,7 @@ async function fetchWithTimeout(
 }
 
 async function checkStorage(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
-	const backend = env.MARIMOHUB_STORAGE_BACKEND ?? 's3';
+	const backend = storageBackend(env);
 	const bucket = deps.bucket as {
 		verifyConditionalWrites?: () => Promise<void>;
 		casScope?: 'process' | 'global';
@@ -87,7 +90,7 @@ async function checkStorage(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
 }
 
 async function checkAuth(env: Env): Promise<CheckOutcome> {
-	const backend = env.MARIMOHUB_AUTH_BACKEND;
+	const backend = authBackend(env);
 	if (backend !== 'oidc') {
 		return { status: 'skipped', message: `${backend ?? 'unset'} backend: no discovery probe` };
 	}
@@ -134,7 +137,7 @@ function checkIsolation(env: Env, deps: ApiDeps): CheckOutcome {
 
 function checkSandboxConfig(env: Env, deps: ApiDeps): CheckOutcome {
 	const mode = deps.sandbox.exposure?.mode ?? 'subdomain';
-	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset';
+	const backend = computeBackend(env) ?? 'unset';
 	const issues: string[] = [];
 	if (
 		mode === 'subdomain' &&
@@ -177,7 +180,7 @@ async function checkWif(deps: ApiDeps): Promise<CheckOutcome> {
 }
 
 async function checkCompute(env: Env, deps: ApiDeps): Promise<CheckOutcome> {
-	const backend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset';
+	const backend = computeBackend(env) ?? 'unset';
 	// Optional, duck-typed: adapters may expose a cheap reachability probe. We never
 	// invent a heavy vendor call here — if none is exposed, credentials are validated
 	// lazily on the first session.
@@ -228,7 +231,7 @@ function computeRemediation(backend: string, message: string): string {
  */
 async function checkObjectStorageWif(env: Env): Promise<CheckOutcome> {
 	const buckets = env.MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS;
-	if (env.MARIMOHUB_COMPUTE_BACKEND !== 'coreweave' || !buckets) {
+	if (computeBackend(env) !== 'coreweave' || !buckets) {
 		return { status: 'skipped', message: 'sandbox-native object storage not configured' };
 	}
 	const base = (env.MARIMOHUB_COMPUTE_COREWEAVE_BASE_URL ?? 'https://api.cwsandbox.com').replace(

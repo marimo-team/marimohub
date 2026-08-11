@@ -19,6 +19,18 @@ describe('makeStorage backend selection', () => {
 		expect(makeStorage({ MARIMOHUB_STORAGE_S3_BUCKET: 'b' })).toBeInstanceOf(S3Storage);
 	});
 
+	it('folds and trims the s3 backend selector', () => {
+		expect(
+			makeStorage({ MARIMOHUB_STORAGE_BACKEND: ' S3 ', MARIMOHUB_STORAGE_S3_BUCKET: 'b' }),
+		).toBeInstanceOf(S3Storage);
+	});
+
+	it('treats an empty backend as the s3 default', () => {
+		expect(
+			makeStorage({ MARIMOHUB_STORAGE_BACKEND: '', MARIMOHUB_STORAGE_S3_BUCKET: 'b' }),
+		).toBeInstanceOf(S3Storage);
+	});
+
 	it('builds a GcsStorage for the gcs backend', () => {
 		expect(
 			makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'gcs', MARIMOHUB_STORAGE_GCS_BUCKET: 'b' }),
@@ -116,19 +128,10 @@ describe('makeStorage backend selection', () => {
 		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'r2' })).toThrow(ConfigError);
 	});
 
-	it('throws on an unknown backend', () => {
-		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'bogus' })).toThrow(
-			/Unknown MARIMOHUB_STORAGE_BACKEND/,
+	it('rejects an unknown backend and lists the accepted values', () => {
+		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'sqlite' })).toThrow(
+			/Invalid MARIMOHUB_STORAGE_BACKEND: sqlite \(expected s3, gcs, azure, fs, memory, r2\)/,
 		);
-	});
-
-	// `env.MARIMOHUB_STORAGE_BACKEND ?? 's3'` only coalesces null/undefined, so an
-	// explicit empty string is NOT treated as unset — it falls through to the
-	// unknown-backend error rather than defaulting to s3.
-	it('rejects an empty-string backend (does not default to s3)', () => {
-		expect(() =>
-			makeStorage({ MARIMOHUB_STORAGE_BACKEND: '', MARIMOHUB_STORAGE_S3_BUCKET: 'b' }),
-		).toThrow(/Unknown MARIMOHUB_STORAGE_BACKEND/);
 	});
 
 	// A partially-configured static credential (key id without the matching secret)

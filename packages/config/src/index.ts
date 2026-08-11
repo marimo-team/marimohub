@@ -32,9 +32,9 @@ import type {
 } from '@marimo-hub/core';
 import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
 import { makeAi } from './ai';
-import { makeAuth } from './auth';
+import { authBackend, makeAuth } from './auth';
 import { buildConfigSummary } from './configSummary';
-import { makeCompute, resolveSandboxImages } from './compute';
+import { computeBackend, makeCompute, resolveSandboxImages } from './compute';
 import {
 	parseComputeProfileOverride,
 	parseComputeProfiles,
@@ -43,7 +43,7 @@ import {
 	unsupportedBackendNotice,
 } from './computeProfiles';
 import { makeIntegrations } from './integrations';
-import { makeStorage, makeSandboxBucketConfig } from './storage';
+import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
 import { parseEnum, parseEnumOr, parseIntEnv, parseList } from './env';
@@ -326,8 +326,8 @@ export function createFromEnv(
 	const sessionLifetime = parseSessionLifetime(env);
 	const sandboxImages = resolveSandboxImages(env);
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
-	const computeBackend = env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset';
-	const profilesSupported = supportsComputeProfiles(computeBackend);
+	const computeBackendValue = computeBackend(env) ?? 'unset';
+	const profilesSupported = supportsComputeProfiles(computeBackendValue);
 	const computeResources = profilesSupported ? resolveResources(computeProfiles) : {};
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
@@ -335,13 +335,13 @@ export function createFromEnv(
 	const editorSandboxSharing = parseEditorSandboxSharing(env);
 	const userHome = makeSandboxUserHome(env, editorSandboxSharing);
 	const profileNotice = unsupportedBackendNotice(
-		computeBackend,
+		computeBackendValue,
 		computeProfiles,
 		computeProfileOverride,
 	);
-	if (profileNotice && !warnedUnsupportedProfileBackends.has(computeBackend)) {
+	if (profileNotice && !warnedUnsupportedProfileBackends.has(computeBackendValue)) {
 		console.warn(profileNotice);
-		warnedUnsupportedProfileBackends.add(computeBackend);
+		warnedUnsupportedProfileBackends.add(computeBackendValue);
 	}
 	const services = createServices(bucket, metrics, { tracing: options?.tracing });
 	const deps: ApiDeps = {
@@ -415,10 +415,10 @@ export function createFromEnv(
 			replica: env.HOSTNAME,
 			node: process.version,
 			backends: {
-				storage: env.MARIMOHUB_STORAGE_BACKEND ?? 's3',
+				storage: storageBackend(env),
 				// Always set: makeCompute above threw if it was missing.
-				compute: env.MARIMOHUB_COMPUTE_BACKEND ?? 'unset',
-				auth: env.MARIMOHUB_AUTH_BACKEND ?? 'unset',
+				compute: computeBackend(env) ?? 'unset',
+				auth: authBackend(env) ?? 'unset',
 			},
 		},
 	};

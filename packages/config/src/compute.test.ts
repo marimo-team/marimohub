@@ -52,6 +52,12 @@ describe('makeCompute backend selection', () => {
 		expect(makeCompute(modalEnv)).toBeInstanceOf(ModalCompute);
 	});
 
+	it('folds a mixed-case modal backend selector', () => {
+		expect(makeCompute({ ...modalEnv, MARIMOHUB_COMPUTE_BACKEND: 'Modal' })).toBeInstanceOf(
+			ModalCompute,
+		);
+	});
+
 	it('sets the Modal idle fallback to 1.5x the graceful session timeout', () => {
 		expect(
 			configOf(makeCompute(modalEnv, { sessionIdleTimeoutMs: Millis.minutes(30) })).idleFallbackMs,
@@ -113,9 +119,15 @@ describe('makeCompute fail-fast', () => {
 		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'cloudflare' })).toThrow(ConfigError);
 	});
 
-	it('throws on an unknown backend', () => {
-		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'bogus' })).toThrow(
-			/Unknown MARIMOHUB_COMPUTE_BACKEND/,
+	it('preserves the missing-backend error for an empty selector', () => {
+		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: '' })).toThrow(
+			/Missing required env var: MARIMOHUB_COMPUTE_BACKEND/,
+		);
+	});
+
+	it('rejects an unknown backend with the shared enum error', () => {
+		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'firecracker' })).toThrow(
+			/Invalid MARIMOHUB_COMPUTE_BACKEND: firecracker/,
 		);
 	});
 

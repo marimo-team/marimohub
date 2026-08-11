@@ -3,9 +3,24 @@ import { createOidcAuth } from '@marimo-hub/auth-oidc';
 import type { EmailVerificationPolicy, OidcGroupPolicy } from '@marimo-hub/auth-oidc';
 import { DevAuthenticator } from '@marimo-hub/auth-dev';
 import type { Hono } from 'hono';
-import { parseEnumOr, parseList, requiredVar } from './env';
+import { parseEnum, parseEnumOr, parseList, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
+import { CONFIG_SPEC } from './spec';
+
+const AUTH_BACKEND_VALUES = (
+	CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_AUTH_BACKEND')?.backends ?? []
+)
+	.map((b) => b.selectorValue)
+	.filter((v): v is string => Boolean(v));
+
+export function authBackend(env: Env): string | undefined {
+	return parseEnum(env, 'MARIMOHUB_AUTH_BACKEND', {
+		allowed: AUTH_BACKEND_VALUES,
+		remediation: 'Set it to oidc (production), cloudflare-access (Workers), or dev (local only).',
+		docs: 'docs/configuration.md#auth',
+	});
+}
 
 /**
  * Comma-separated email-domain allowlist for OIDC login (e.g. `marimo.io`).
@@ -153,7 +168,7 @@ function parseGroupPolicy(env: Env): OidcGroupPolicy | undefined {
 }
 
 export function makeAuth(env: Env): { authenticator: Authenticator; authRoutes?: Hono } {
-	const backend = env.MARIMOHUB_AUTH_BACKEND;
+	const backend = authBackend(env);
 	if (!backend) {
 		throw new ConfigError(
 			'MARIMOHUB_AUTH_BACKEND must be set explicitly. Refusing to start: an unset auth backend ' +
