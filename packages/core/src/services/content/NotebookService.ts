@@ -63,6 +63,11 @@ export const DEFAULT_DELETED_NOTEBOOK_RETENTION_MS = Millis.days(30);
 const SESSION_COMMIT_LOCK_WAIT_MS = Millis.seconds(30);
 const SESSION_COMMIT_LOCK_POLL_MS = Millis.of(25);
 const SESSION_COMMIT_LOCK_LEASE_MS = Millis.minutes(10);
+const SESSION_COMMIT_LOCK_RENEW_MS = Millis.minutes(1);
+
+interface SessionCommitLease {
+	etag: string;
+}
 
 export interface CreateNotebookInput {
 	title: string;
@@ -553,12 +558,58 @@ export class NotebookService {
 		const nb = paths.project(projectId).notebook(notebookId);
 		const key = nb.sessionCommitLock;
 		const holder = createVersionId();
-		const etag = await this.acquireSessionCommitLock(key, holder, notebookId);
+		const lease = { etag: await this.acquireSessionCommitLock(key, holder, notebookId) };
+		const stopRenewing = this.startSessionCommitLockRenewal(key, holder, lease);
 		try {
 			return await operation();
 		} finally {
-			await this.releaseSessionCommitLock(key, etag);
+			await stopRenewing();
+			await this.releaseSessionCommitLock(key, lease.etag);
 		}
+	}
+
+	private startSessionCommitLockRenewal(
+		key: string,
+		holder: string,
+		lease: SessionCommitLease,
+	): () => Promise<void> {
+		let inFlight: Promise<void> | undefined;
+		const timer = setInterval(() => {
+			if (inFlight) return;
+			inFlight = this.renewSessionCommitLock(key, holder, lease)
+				.catch((err) => {
+					logOperationalError(
+						'notebook_session_commit_lock_renewal_failed',
+						{ operation: 'notebook.session_commit_lock.renew', object: key },
+						err,
+					);
+					if (err instanceof PreconditionFailedError) clearInterval(timer);
+				})
+				.finally(() => {
+					inFlight = undefined;
+				});
+		}, SESSION_COMMIT_LOCK_RENEW_MS);
+		return async () => {
+			clearInterval(timer);
+			await inFlight;
+		};
+	}
+
+	private async renewSessionCommitLock(
+		key: string,
+		holder: string,
+		lease: SessionCommitLease,
+	): Promise<void> {
+		const renewed = await this.bucket.put(
+			key,
+			JSON.stringify({
+				schema_version: 1,
+				holder,
+				expires_at: new Date(Date.now() + SESSION_COMMIT_LOCK_LEASE_MS).toISOString(),
+			}),
+			{ onlyIfEtagMatches: lease.etag },
+		);
+		lease.etag = renewed.etag;
 	}
 
 	private async releaseSessionCommitLock(key: string, etag: string): Promise<void> {

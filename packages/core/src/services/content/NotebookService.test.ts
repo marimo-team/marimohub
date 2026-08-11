@@ -1495,6 +1495,81 @@ describe('NotebookService', () => {
 			}
 		});
 
+		it('renews the lease while a protected commit is still running', async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const nb = paths.project(projectId).notebook(created.id);
+			const realPut = bucket.put.bind(bucket);
+			let versionWriteReached!: () => void;
+			let finishVersionWrite!: () => void;
+			const atVersionWrite = new Promise<void>((resolve) => {
+				versionWriteReached = resolve;
+			});
+			const versionWriteGate = new Promise<void>((resolve) => {
+				finishVersionWrite = resolve;
+			});
+			const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (key.endsWith('/version.json') && key.startsWith(`${nb.base}/versions/`)) {
+					versionWriteReached();
+					await versionWriteGate;
+				}
+				return realPut(key, value, options);
+			});
+			const commit = notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
+			let deletion: Promise<void> | undefined;
+			let getSpy: { mockRestore(): void } | undefined;
+
+			try {
+				await atVersionWrite;
+				const original = await (await bucket.get(nb.sessionCommitLock))!.json<{
+					holder: string;
+					expires_at: string;
+				}>();
+
+				await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1);
+
+				const renewed = await (await bucket.get(nb.sessionCommitLock))!.json<{
+					holder: string;
+					expires_at: string;
+				}>();
+				expect(renewed.holder).toBe(original.holder);
+				expect(Date.parse(renewed.expires_at)).toBeGreaterThan(Date.now());
+
+				const realGet = bucket.get.bind(bucket);
+				let deleteTriedLock!: () => void;
+				const atDeleteLock = new Promise<void>((resolve) => {
+					deleteTriedLock = resolve;
+				});
+				getSpy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+					if (key === nb.sessionCommitLock) deleteTriedLock();
+					return realGet(key);
+				});
+				deletion = notebooks.deleteNotebook(projectId, created.id, ACTOR);
+				await atDeleteLock;
+				await Promise.resolve();
+				expect((await notebooks.getNotebook(projectId, created.id)).meta.status).toBe('active');
+
+				finishVersionWrite();
+				await commit;
+				await vi.advanceTimersByTimeAsync(25);
+				await deletion;
+				expect((await notebooks.getNotebook(projectId, created.id)).meta.status).toBe('deleted');
+			} finally {
+				finishVersionWrite();
+				await Promise.allSettled([commit]);
+				await vi.runOnlyPendingTimersAsync();
+				if (deletion) await Promise.allSettled([deletion]);
+				getSpy?.mockRestore();
+				putSpy.mockRestore();
+				vi.useRealTimers();
+			}
+		});
+
 		it('takes over an expired session commit lease', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
