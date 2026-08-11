@@ -301,6 +301,9 @@ importers:
       hono:
         specifier: 'catalog:'
         version: 4.12.31
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
     devDependencies:
       '@marimo-hub/tsconfig':
         specifier: workspace:*
