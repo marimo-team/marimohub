@@ -22,6 +22,7 @@ import {
 import type { AuditLogFilters } from './queryKeys';
 import type {
 	AssignableProjectRole,
+	AdminUser,
 	IntegrationEntry,
 	NotebookDetail,
 	ResolvedUser,
@@ -179,6 +180,24 @@ export function useAdminUsersQuery() {
 		queryKey: adminKeys.users(),
 		queryFn: async () => (await apiData(apiClient.GET('/api/v1/admin/users'))).items,
 	});
+}
+
+export function useSetUserSuspension() {
+	return useApiMutation(
+		({ userId, suspended }: { userId: string; suspended: boolean }): Promise<AdminUser> =>
+			suspended
+				? apiData(
+						apiClient.PUT('/api/v1/users/{id}/suspension', {
+							params: { path: { id: userId } },
+						}),
+					)
+				: apiData(
+						apiClient.DELETE('/api/v1/users/{id}/suspension', {
+							params: { path: { id: userId } },
+						}),
+					),
+		() => [adminKeys.users()],
+	);
 }
 
 /** The deployment's configuration, grouped per the config spec, secrets redacted server-side. */

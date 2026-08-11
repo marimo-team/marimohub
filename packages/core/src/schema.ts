@@ -33,7 +33,7 @@ import {
 // Normalizing a forward-read object to the in-memory shape is the job of the
 // upgrade seam (see `upgradeSnapshot` in CatalogService), not the parser.
 //
-// The mutable, last-writer-wins objects (Session, Identity, FsSnapshot) carry NO
+// Mutable operational objects (Session, Identity, FsSnapshot) carry NO
 // `schema_version`: they are rewritten constantly or reaped, so they never need a
 // migration and evolve safely through optional fields + zod defaults instead. The
 // catalog pointer is its own case — a strict `version` literal, migrated in place
@@ -723,14 +723,14 @@ export type EditorClaim = z.infer<typeof EditorClaimSchema>;
 // A directory record mapping a stable user id (the auth `sub`) to its current
 // human-readable identity. Upserted on every authenticated request (throttled),
 // so it never goes stale: opaque ids stored as `author`/`user_id` foreign keys
-// are resolved against this directory at read time. These are the one class of
-// mutable, last-writer-wins per-user objects — distinct from the immutable
-// content store and the CAS-guarded catalog pointer.
+// are resolved against this directory at read time. IdentityService owns these
+// mutable per-user records and updates them with ETag compare-and-swap.
 export const IdentitySchema = z.object({
 	id: UserIdSchema,
 	email: z.string(),
 	name: z.string(),
 	picture_url: z.url({ protocol: /^https$/ }).optional(),
+	suspended_at: z.iso.datetime().optional(),
 	updated_at: z.iso.datetime(),
 });
 
@@ -755,7 +755,7 @@ export const TokenSchema = z.looseObject({
 	hash: z.string(),
 	created_at: z.iso.datetime(),
 	expires_at: z.iso.datetime().optional(),
-	/** Daily-coalesced usage marker (last-writer-wins, like the identity directory). */
+	/** Daily-coalesced usage marker; concurrent touches are intentionally last-writer-wins. */
 	last_used_at: z.iso.datetime().optional(),
 });
 

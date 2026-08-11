@@ -200,7 +200,8 @@ const OBJECTS: BucketObject[] = [
 		key: template(paths.identity(UID)),
 		schema: IdentitySchema,
 		summary: 'User directory record mapping the auth sub to its display identity.',
-		mutability: 'last-writer-wins',
+		mutability: 'cas',
+		owner: 'IdentityService',
 		tag: 'auth',
 	},
 	{

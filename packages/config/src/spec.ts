@@ -993,7 +993,8 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'`@` matches only the login email, case-insensitively (trusting the email ' +
 							'the auth provider asserts); any other entry matches only the user id, ' +
 							'exactly. A personal access token minted by a super admin carries the same ' +
-							'power. Unset: no super admins.',
+							'power. Super admins can suspend and reactivate users from the admin users ' +
+							'page. Unset: no super admins.',
 						example: 'admin@example.com,user_01HXY00000000000000000000',
 					},
 					{

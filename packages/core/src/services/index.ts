@@ -288,6 +288,8 @@ export function createServices(
 	});
 	const identities = wrap('IdentityService', new IdentityService(bucket), {
 		get: user,
+		isSuspended: user,
+		setSuspension: user,
 	});
 	const tokens = wrap('TokenService', new TokenService(bucket, identities), {
 		list: user,

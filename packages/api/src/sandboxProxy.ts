@@ -11,7 +11,12 @@
  * the Node relay uses to close an established socket.
  */
 import type { MiddlewareHandler } from 'hono';
-import { ForbiddenError, ProxyExposure, verifyProxyToken } from '@marimo-hub/core';
+import {
+	ForbiddenError,
+	ProxyExposure,
+	UnavailableError,
+	verifyProxyToken,
+} from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import { assertSessionAccess, fail } from './shared';
@@ -22,7 +27,13 @@ export type ProxyDecision =
 	| {
 			kind: 'reject';
 			status: 401 | 403 | 404 | 410 | 503;
-			code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'GONE' | 'SERVICE_UNAVAILABLE';
+			code:
+				| 'UNAUTHORIZED'
+				| 'USER_SUSPENDED'
+				| 'FORBIDDEN'
+				| 'NOT_FOUND'
+				| 'GONE'
+				| 'SERVICE_UNAVAILABLE';
 			message: string;
 	  }
 	| {
@@ -79,6 +90,29 @@ export async function authorizeProxyRequest(
 			code: 'UNAUTHORIZED',
 			message: 'Authentication required',
 		};
+	}
+
+	// Proxy traffic bypasses the API auth middleware, so both HTTP and WebSocket
+	// forwarding enforce suspension here.
+	try {
+		if (await deps.services.identities.isSuspended(user.id)) {
+			return {
+				kind: 'reject',
+				status: 403,
+				code: 'USER_SUSPENDED',
+				message: 'User account is suspended',
+			};
+		}
+	} catch (err) {
+		if (err instanceof UnavailableError) {
+			return {
+				kind: 'reject',
+				status: 503,
+				code: 'SERVICE_UNAVAILABLE',
+				message: 'Unable to verify account suspension status',
+			};
+		}
+		throw err;
 	}
 
 	let session;
