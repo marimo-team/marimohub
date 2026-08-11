@@ -1,6 +1,7 @@
 import { BadRequestError } from '@marimo-hub/core';
 import type { EditorSandboxSharing } from '@marimo-hub/core';
 import type { SandboxUserHomeResolver } from '@marimo-hub/api';
+import { computeBackend } from './compute';
 import { parseList } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -32,7 +33,7 @@ export function makeSandboxUserHome(
 ): SandboxUserHomeResolver | undefined {
 	const profiles = parseList(env[COREWEAVE_USER_HOME_PROFILE]);
 	if (!profiles) return undefined;
-	if (env.MARIMOHUB_COMPUTE_BACKEND !== 'coreweave') {
+	if (computeBackend(env) !== 'coreweave') {
 		throw new ConfigError(`${COREWEAVE_USER_HOME_PROFILE} requires the coreweave backend`, {
 			variable: COREWEAVE_USER_HOME_PROFILE,
 			remediation: 'Set MARIMOHUB_COMPUTE_BACKEND=coreweave or remove the user-home profile.',

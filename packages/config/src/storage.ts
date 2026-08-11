@@ -6,9 +6,34 @@ import { AzureStorage } from '@marimo-hub/storage-azure';
 import { S3Storage } from '@marimo-hub/storage-s3';
 import { GcsStorage } from '@marimo-hub/storage-gcs';
 import { FsStorage } from '@marimo-hub/storage-fs';
-import { parseBool, requiredVar } from './env';
+import { parseBool, parseEnumOr, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
+import { CONFIG_SPEC } from './spec';
+
+const STORAGE_CONFIG = CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_STORAGE_BACKEND');
+if (!STORAGE_CONFIG?.selectorDefault) {
+	throw new Error('Storage CONFIG_SPEC must define selectorDefault');
+}
+
+export const DEFAULT_STORAGE_BACKEND = STORAGE_CONFIG.selectorDefault;
+
+const STORAGE_BACKEND_VALUES = STORAGE_CONFIG.backends
+	.map((b) => b.selectorValue)
+	.filter((v): v is string => Boolean(v));
+
+export function storageBackend(env: Env): string {
+	return parseEnumOr(
+		env,
+		'MARIMOHUB_STORAGE_BACKEND',
+		STORAGE_BACKEND_VALUES,
+		DEFAULT_STORAGE_BACKEND,
+		{
+			remediation: 'Supported backends: s3, gcs, azure, fs, memory (dev), r2 (Workers).',
+			docs: 'docs/configuration.md#storage',
+		},
+	);
+}
 
 function s3Credentials(env: Env) {
 	return env.MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID && env.MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY
@@ -20,7 +45,7 @@ function s3Credentials(env: Env) {
 }
 
 export function makeStorage(env: Env): Bucket {
-	const backend = env.MARIMOHUB_STORAGE_BACKEND ?? 's3';
+	const backend = storageBackend(env);
 	switch (backend) {
 		case 's3':
 			// Static creds are all-or-nothing. If only one half is set, silently

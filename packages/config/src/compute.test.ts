@@ -14,6 +14,16 @@ import {
 } from './compute';
 import { ConfigError } from './errors';
 
+function getConfigError(run: () => unknown): ConfigError {
+	try {
+		run();
+	} catch (error) {
+		expect(error).toBeInstanceOf(ConfigError);
+		return error as ConfigError;
+	}
+	throw new Error('Expected configuration to fail');
+}
+
 /** Peek at a provider's private constructor config (test-only). */
 const configOf = (provider: unknown) =>
 	(
@@ -50,6 +60,12 @@ describe('makeCompute backend selection', () => {
 
 	it('selects modal', () => {
 		expect(makeCompute(modalEnv)).toBeInstanceOf(ModalCompute);
+	});
+
+	it('folds a mixed-case modal backend selector', () => {
+		expect(makeCompute({ ...modalEnv, MARIMOHUB_COMPUTE_BACKEND: 'Modal' })).toBeInstanceOf(
+			ModalCompute,
+		);
 	});
 
 	it('sets the Modal idle fallback to 1.5x the graceful session timeout', () => {
@@ -113,10 +129,20 @@ describe('makeCompute fail-fast', () => {
 		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'cloudflare' })).toThrow(ConfigError);
 	});
 
-	it('throws on an unknown backend', () => {
-		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'bogus' })).toThrow(
-			/Unknown MARIMOHUB_COMPUTE_BACKEND/,
+	it('preserves the missing-backend error for an empty selector', () => {
+		expect(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: '' })).toThrow(
+			/Missing required env var: MARIMOHUB_COMPUTE_BACKEND/,
 		);
+	});
+
+	it('rejects an unknown backend with the shared enum error', () => {
+		const error = getConfigError(() => makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'firecracker' }));
+
+		expect(error.message).toMatch(/Invalid MARIMOHUB_COMPUTE_BACKEND: firecracker/);
+		for (const alias of ['noop', 'cloudflare']) {
+			expect(error.message).toContain(alias);
+			expect(error.opts.remediation).toContain(alias);
+		}
 	});
 
 	it('requires the modal token id', () => {

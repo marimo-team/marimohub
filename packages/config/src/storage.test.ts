@@ -7,16 +7,43 @@ import { AzureStorage } from '@marimo-hub/storage-azure';
 import { S3Storage } from '@marimo-hub/storage-s3';
 import { GcsStorage } from '@marimo-hub/storage-gcs';
 import { FsStorage } from '@marimo-hub/storage-fs';
-import { makeStorage, makeSandboxBucketConfig } from './storage';
+import {
+	DEFAULT_STORAGE_BACKEND,
+	makeStorage,
+	makeSandboxBucketConfig,
+	storageBackend,
+} from './storage';
 import { ConfigError } from './errors';
+import { CONFIG_SPEC } from './spec';
 
 describe('makeStorage backend selection', () => {
 	it('defaults to s3 and requires the bucket name', () => {
 		expect(() => makeStorage({})).toThrow(/MARIMOHUB_STORAGE_S3_BUCKET/);
 	});
 
+	it('derives the runtime default from the config registry', () => {
+		const configuredDefault = CONFIG_SPEC.find(
+			(group) => group.selector === 'MARIMOHUB_STORAGE_BACKEND',
+		)?.selectorDefault;
+
+		expect(DEFAULT_STORAGE_BACKEND).toBe(configuredDefault);
+		expect(storageBackend({})).toBe(configuredDefault);
+	});
+
 	it('builds an S3Storage when the bucket is set', () => {
 		expect(makeStorage({ MARIMOHUB_STORAGE_S3_BUCKET: 'b' })).toBeInstanceOf(S3Storage);
+	});
+
+	it('folds and trims the s3 backend selector', () => {
+		expect(
+			makeStorage({ MARIMOHUB_STORAGE_BACKEND: ' S3 ', MARIMOHUB_STORAGE_S3_BUCKET: 'b' }),
+		).toBeInstanceOf(S3Storage);
+	});
+
+	it('treats an empty backend as the s3 default', () => {
+		expect(
+			makeStorage({ MARIMOHUB_STORAGE_BACKEND: '', MARIMOHUB_STORAGE_S3_BUCKET: 'b' }),
+		).toBeInstanceOf(S3Storage);
 	});
 
 	it('builds a GcsStorage for the gcs backend', () => {
@@ -116,19 +143,10 @@ describe('makeStorage backend selection', () => {
 		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'r2' })).toThrow(ConfigError);
 	});
 
-	it('throws on an unknown backend', () => {
-		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'bogus' })).toThrow(
-			/Unknown MARIMOHUB_STORAGE_BACKEND/,
+	it('rejects an unknown backend and lists the accepted values', () => {
+		expect(() => makeStorage({ MARIMOHUB_STORAGE_BACKEND: 'sqlite' })).toThrow(
+			/Invalid MARIMOHUB_STORAGE_BACKEND: sqlite \(expected s3, gcs, azure, fs, memory, r2\)/,
 		);
-	});
-
-	// `env.MARIMOHUB_STORAGE_BACKEND ?? 's3'` only coalesces null/undefined, so an
-	// explicit empty string is NOT treated as unset — it falls through to the
-	// unknown-backend error rather than defaulting to s3.
-	it('rejects an empty-string backend (does not default to s3)', () => {
-		expect(() =>
-			makeStorage({ MARIMOHUB_STORAGE_BACKEND: '', MARIMOHUB_STORAGE_S3_BUCKET: 'b' }),
-		).toThrow(/Unknown MARIMOHUB_STORAGE_BACKEND/);
 	});
 
 	// A partially-configured static credential (key id without the matching secret)

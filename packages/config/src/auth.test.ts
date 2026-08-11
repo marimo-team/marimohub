@@ -40,17 +40,21 @@ describe('makeAuth selector errors', () => {
 		expect(error.format()).toContain('MARIMOHUB_AUTH_BACKEND');
 	});
 
-	it('rejects an unknown backend and lists the supported values', () => {
-		const error = getConfigError(() => makeAuth({ MARIMOHUB_AUTH_BACKEND: 'oauth' }));
+	it('still requires an explicit backend when the selector is empty', () => {
+		expect(() => makeAuth({ MARIMOHUB_AUTH_BACKEND: '' })).toThrow(/must be set explicitly/);
+	});
 
-		expect(error.message).toBe('Unknown MARIMOHUB_AUTH_BACKEND: oauth');
+	it('rejects an unknown backend and lists the supported values', () => {
+		const error = getConfigError(() => makeAuth({ MARIMOHUB_AUTH_BACKEND: 'basic' }));
+
+		expect(error.message).toMatch(/Invalid MARIMOHUB_AUTH_BACKEND: basic/);
 		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_BACKEND');
-		expect(error.opts.remediation).toContain('oidc, cloudflare-access, dev');
+		expect(error.message).toContain('expected oidc, dev, cloudflare-access');
 	});
 
 	it('still supports the explicit local-development backend', async () => {
 		const { authenticator, authRoutes } = makeAuth({
-			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_AUTH_BACKEND: 'DEV',
 			MARIMOHUB_AUTH_DEV_USER_ID: 'local-user',
 			MARIMOHUB_AUTH_DEV_EMAIL: 'local@example.com',
 			MARIMOHUB_AUTH_DEV_NAME: 'Local User',

@@ -18,10 +18,8 @@ import { CONFIG_SPEC } from './spec';
 export function buildConfigSummary(env: Env): ConfigSummary {
 	return {
 		groups: CONFIG_SPEC.map((group) => {
-			// Fold the selector like the most lenient wiring does (exposure/AI
-			// accept any casing), so the directory tracks the backend actually
-			// selected. The strict selectors (storage/compute/auth) reject non-
-			// canonical casing at boot, so folding can never diverge from them.
+			// Fold the selector exactly like the wiring does: every selector validates
+			// through parseEnum, so the directory tracks the backend actually selected.
 			const backend = group.selector
 				? (readFolded(env, group.selector) ?? group.selectorDefault ?? 'unset')
 				: null;
