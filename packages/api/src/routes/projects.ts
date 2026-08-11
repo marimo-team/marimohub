@@ -380,23 +380,33 @@ app.openapi(addMember, async (c) => {
 		body.role,
 		user.id,
 	);
-	const notificationMember: ProjectMember =
-		'user_id' in member
-			? { user_id: member.user_id, role: body.role }
-			: { email: member.email, role: body.role };
-	const recipient = resolveMemberRecipient(notificationMember, memberIdentity);
-	const kind = notificationMember.email ? 'member.invited' : 'member.added';
-	scheduleNotification(deps, kind, { project_id: pid, user: user.id }, () =>
-		notificationRouter.render({
-			kind,
-			project,
-			member: notificationMember,
-			recipient,
-			actor: user,
-			mutationId,
-			baseUrl: deps.sandbox.appBaseUrl,
-		}),
-	);
+	if ('user_id' in member) {
+		const notificationMember = { user_id: member.user_id, role: body.role };
+		scheduleNotification(deps, 'member.added', { project_id: pid, user: user.id }, () =>
+			notificationRouter.render({
+				kind: 'member.added',
+				project,
+				member: notificationMember,
+				recipient: resolveMemberRecipient(notificationMember, memberIdentity),
+				actor: user,
+				mutationId,
+				baseUrl: deps.sandbox.appBaseUrl,
+			}),
+		);
+	} else {
+		const notificationMember = { email: member.email, role: body.role };
+		scheduleNotification(deps, 'member.invited', { project_id: pid, user: user.id }, () =>
+			notificationRouter.render({
+				kind: 'member.invited',
+				project,
+				member: notificationMember,
+				recipient: resolveMemberRecipient(notificationMember, memberIdentity),
+				actor: user,
+				mutationId,
+				baseUrl: deps.sandbox.appBaseUrl,
+			}),
+		);
+	}
 	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 201);
 });
 

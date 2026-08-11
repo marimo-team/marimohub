@@ -40,13 +40,14 @@ export class SlackNotifier implements Notifier {
 	}
 
 	async deliver(notification: Notification): Promise<NotificationDeliveryOutcome> {
+		if (notification.audience !== 'broadcast') return 'skipped';
 		const parts = [`*${escapeSlackText(notification.title)}*`, escapeSlackText(notification.body)];
 		if (notification.link) parts.push(escapeSlackText(notification.link));
 		try {
 			await this.fetcher(this.webhookUrl, {
 				method: 'POST',
 				body: { text: parts.join('\n'), unfurl_links: false, unfurl_media: false },
-				retry: 1,
+				retry: 0,
 				timeout: 10_000,
 			});
 			return 'delivered';

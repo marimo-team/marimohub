@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing';
+import { BROADCAST_NOTIFICATION_FIXTURE, NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing';
 import { SmtpNotifier } from './index';
 
 describe('SmtpNotifier', () => {
@@ -21,7 +21,7 @@ describe('SmtpNotifier', () => {
 		});
 	});
 
-	it('uses the administrator recipients for a deployment notification', async () => {
+	it('uses the administrator recipients for a broadcast notification', async () => {
 		const sendMail = vi.fn(async () => ({}));
 		const notifier = new SmtpNotifier({
 			url: 'smtp://smtp.example.com:587',
@@ -29,15 +29,28 @@ describe('SmtpNotifier', () => {
 			adminTo: ['ops@example.com'],
 			mailer: { sendMail },
 		});
-		await expect(notifier.deliver({ ...NOTIFICATION_FIXTURE, recipients: [] })).resolves.toBe(
-			'delivered',
-		);
+		await expect(notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE)).resolves.toBe('delivered');
 		expect(sendMail).toHaveBeenCalledWith(
 			expect.objectContaining({ to: [{ address: 'ops@example.com' }] }),
 		);
 	});
 
-	it('skips a notification when it has no recipient or administrator fallback', async () => {
+	it('does not send a personal notification to administrator recipients', async () => {
+		const sendMail = vi.fn(async () => ({}));
+		const notifier = new SmtpNotifier({
+			url: 'smtp://smtp.example.com:587',
+			from: 'hub@example.com',
+			adminTo: ['ops@example.com'],
+			mailer: { sendMail },
+		});
+
+		await expect(notifier.deliver({ ...NOTIFICATION_FIXTURE, recipients: [] })).resolves.toBe(
+			'skipped',
+		);
+		expect(sendMail).not.toHaveBeenCalled();
+	});
+
+	it('skips a broadcast notification without administrator recipients', async () => {
 		const sendMail = vi.fn(async () => ({}));
 		const notifier = new SmtpNotifier({
 			url: 'smtp://smtp.example.com:587',
@@ -45,9 +58,7 @@ describe('SmtpNotifier', () => {
 			mailer: { sendMail },
 		});
 
-		await expect(notifier.deliver({ ...NOTIFICATION_FIXTURE, recipients: [] })).resolves.toBe(
-			'skipped',
-		);
+		await expect(notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE)).resolves.toBe('skipped');
 		expect(sendMail).not.toHaveBeenCalled();
 	});
 
@@ -60,6 +71,17 @@ describe('SmtpNotifier', () => {
 					mailer: { sendMail: vi.fn() },
 				}),
 		).toThrow('Invalid SMTP URL protocol');
+	});
+
+	it('rejects a transport URL without a hostname', () => {
+		expect(
+			() =>
+				new SmtpNotifier({
+					url: 'smtp://',
+					from: 'hub@example.com',
+					mailer: { sendMail: vi.fn() },
+				}),
+		).toThrow('hostname is required');
 	});
 
 	it.each([

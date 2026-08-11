@@ -412,7 +412,9 @@ describe('Project member routes', () => {
 			kind: 'member.invited',
 			recipients: [{ email: 'newbie@example.com' }],
 		});
-		expect(notifier.deliveries[0]?.dedupe_key).toMatch(/^member\.invited:snap-[0-9a-z]{16}$/);
+		expect(notifier.deliveries[0]?.dedupe_key).toMatch(
+			/^member\.invited:snap-[0-9a-z]{16}:personal$/,
+		);
 
 		// The invitee signs in (stub auth email is `${userId}@example.com`) and is
 		// recognized by email: role gates and members-only visibility both pass.

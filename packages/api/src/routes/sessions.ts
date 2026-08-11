@@ -682,15 +682,12 @@ app.openapi(takeoverEditorSession, async (c) => {
 		});
 		observer.tag('phase', claim.transfer?.phase ?? 'changed');
 		await audit('session.takeover.request');
-		const notifyTakeover = (holderUserId?: UserId) =>
+		const notifyTakeover = (holderUserId: UserId) =>
 			scheduleNotification(
 				deps,
 				'session.takeover',
 				{ project_id: pid, notebook_id: nid, takeover_id: body.takeover_id },
 				async () => {
-					const displacedUserId =
-						holderUserId ??
-						(await deps.services.sessions.getSession(pid, body.expected_holder_session_id)).user_id;
 					return notificationRouter.render({
 						kind: 'session.takeover',
 						project: subject.project,
@@ -698,7 +695,8 @@ app.openapi(takeoverEditorSession, async (c) => {
 						projectId: pid,
 						notebookId: nid,
 						takeoverId: body.takeover_id,
-						recipient: recipientFromIdentity(await deps.services.identities.get(displacedUserId)),
+						displacedUserId: holderUserId,
+						recipient: recipientFromIdentity(await deps.services.identities.get(holderUserId)),
 						actor: user,
 						baseUrl: deps.sandbox.appBaseUrl,
 					});

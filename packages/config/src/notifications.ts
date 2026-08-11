@@ -1,9 +1,9 @@
 import {
 	filterNotifier,
 	fanOutNotifier,
+	NOTIFICATION_KINDS,
 	noopMetrics,
 	noopNotifier,
-	SYNC_NOTIFICATION_KINDS,
 } from '@marimo-hub/core';
 import type { Metrics, NamedNotifier, Notifier } from '@marimo-hub/core';
 import { SlackNotifier } from '@marimo-hub/notify-slack';
@@ -32,50 +32,61 @@ export function notificationBackends(env: Env): NotificationBackend[] {
 	return [...new Set(values)] as NotificationBackend[];
 }
 
-function enabledKinds(env: Env): Set<string> {
-	const configured = parseList(env.MARIMOHUB_NOTIFY_KINDS);
-	if (!configured) return new Set(SYNC_NOTIFICATION_KINDS);
-	const known = new Set<string>(SYNC_NOTIFICATION_KINDS);
+const BACKEND_KIND_VARIABLES: Record<NotificationBackend, string> = {
+	smtp: 'MARIMOHUB_NOTIFY_SMTP_KINDS',
+	slack: 'MARIMOHUB_NOTIFY_SLACK_KINDS',
+	webhook: 'MARIMOHUB_NOTIFY_WEBHOOK_KINDS',
+};
+
+function parseKinds(env: Env, variable: string, fallback: ReadonlySet<string>): Set<string> {
+	const configured = parseList(env[variable]);
+	if (!configured) return new Set(fallback);
+	if (configured.length === 1 && configured[0]?.toLowerCase() === 'none') return new Set();
+	const known = new Set<string>(NOTIFICATION_KINDS);
 	const unsupported = configured.filter((kind) => !known.has(kind));
 	if (unsupported.length > 0) {
 		throw new ConfigError(
-			`Invalid MARIMOHUB_NOTIFY_KINDS: ${unsupported.join(', ')} ` +
-				`(expected ${SYNC_NOTIFICATION_KINDS.join(', ')})`,
-			{ variable: 'MARIMOHUB_NOTIFY_KINDS', docs: 'docs/notifications.md' },
+			`Invalid ${variable}: ${unsupported.join(', ')} ` +
+				`(expected ${NOTIFICATION_KINDS.join(', ')}, or none)`,
+			{ variable, docs: 'docs/notifications.md' },
 		);
 	}
 	return new Set(configured);
 }
 
+export function notificationKindsForBackend(env: Env, backend: NotificationBackend): Set<string> {
+	const globalKinds = parseKinds(env, 'MARIMOHUB_NOTIFY_KINDS', new Set(NOTIFICATION_KINDS));
+	return parseKinds(env, BACKEND_KIND_VARIABLES[backend], globalKinds);
+}
+
 export function makeNotifier(env: Env, metrics?: Metrics): Notifier {
 	const targets: NamedNotifier[] = notificationBackends(env).map((backend) => {
+		let notifier: Notifier;
 		switch (backend) {
 			case 'smtp':
-				return {
-					name: backend,
-					notifier: new SmtpNotifier({
-						url: required(env, 'MARIMOHUB_NOTIFY_SMTP_URL'),
-						from: required(env, 'MARIMOHUB_NOTIFY_SMTP_FROM'),
-						adminTo: parseList(env.MARIMOHUB_NOTIFY_SMTP_ADMIN_TO),
-					}),
-				};
+				notifier = new SmtpNotifier({
+					url: required(env, 'MARIMOHUB_NOTIFY_SMTP_URL'),
+					from: required(env, 'MARIMOHUB_NOTIFY_SMTP_FROM'),
+					adminTo: parseList(env.MARIMOHUB_NOTIFY_SMTP_ADMIN_TO),
+				});
+				break;
 			case 'slack':
-				return {
-					name: backend,
-					notifier: new SlackNotifier({
-						webhookUrl: required(env, 'MARIMOHUB_NOTIFY_SLACK_WEBHOOK_URL'),
-					}),
-				};
+				notifier = new SlackNotifier({
+					webhookUrl: required(env, 'MARIMOHUB_NOTIFY_SLACK_WEBHOOK_URL'),
+				});
+				break;
 			case 'webhook':
-				return {
-					name: backend,
-					notifier: new WebhookNotifier({
-						url: required(env, 'MARIMOHUB_NOTIFY_WEBHOOK_URL'),
-						secret: required(env, 'MARIMOHUB_NOTIFY_WEBHOOK_SECRET'),
-					}),
-				};
+				notifier = new WebhookNotifier({
+					url: required(env, 'MARIMOHUB_NOTIFY_WEBHOOK_URL'),
+					secret: required(env, 'MARIMOHUB_NOTIFY_WEBHOOK_SECRET'),
+				});
+				break;
 		}
+		return {
+			name: backend,
+			notifier: filterNotifier(notifier, notificationKindsForBackend(env, backend)),
+		};
 	});
 	if (targets.length === 0) return noopNotifier;
-	return filterNotifier(fanOutNotifier(targets, metrics ?? noopMetrics), enabledKinds(env));
+	return fanOutNotifier(targets, metrics ?? noopMetrics);
 }

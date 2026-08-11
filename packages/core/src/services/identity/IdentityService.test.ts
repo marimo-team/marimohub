@@ -38,6 +38,15 @@ describe('IdentityService', () => {
 			});
 		});
 
+		it('rejects an invalid provider email before writing the record', async () => {
+			const put = vi.spyOn(bucket, 'put');
+
+			await expect(
+				identities.upsert({ id: uid('sub-invalid-email'), email: 'not-an-email' }),
+			).rejects.toThrow('Invalid email address');
+			expect(put).not.toHaveBeenCalled();
+		});
+
 		it('skips re-writing when the identity is unchanged since last write', async () => {
 			const put = vi.spyOn(bucket, 'put');
 			const user = { id: uid('sub-3'), email: 'ada@x.io', name: 'Ada' };

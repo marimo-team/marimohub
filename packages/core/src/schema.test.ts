@@ -69,6 +69,17 @@ describe('IdentitySchema', () => {
 	])('rejects a %s profile-picture URL', (_label, pictureUrl) => {
 		expect(IdentitySchema.safeParse({ ...identity, picture_url: pictureUrl }).success).toBe(false);
 	});
+
+	it('accepts a provider-valid address without a public DNS suffix', () => {
+		expect(IdentitySchema.safeParse({ ...identity, email: 'user@localhost' }).success).toBe(true);
+	});
+
+	it.each(['not-an-email', 'user @example.com', 'user@example.com\nBcc: other@example.com'])(
+		'rejects the invalid email %j',
+		(email) => {
+			expect(IdentitySchema.safeParse({ ...identity, email }).success).toBe(false);
+		},
+	);
 });
 
 describe('parseStored', () => {
@@ -346,6 +357,12 @@ describe('ProjectMemberSchema', () => {
 			ProjectMemberSchema.safeParse({ user_id: 'user_a', email: 'a@x.io', role: 'editor' }).success,
 		).toBe(false);
 		expect(ProjectMemberSchema.safeParse({ role: 'editor' }).success).toBe(false);
+	});
+
+	it('rejects an invalid pending-invite email', () => {
+		expect(ProjectMemberSchema.safeParse({ email: 'not-an-email', role: 'viewer' }).success).toBe(
+			false,
+		);
 	});
 });
 

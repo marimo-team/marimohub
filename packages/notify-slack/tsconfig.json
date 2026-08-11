@@ -1,4 +1,4 @@
 {
-	"extends": "@marimo-hub/tsconfig/base.json",
+	"extends": "@marimo-hub/tsconfig/library.json",
 	"include": ["src"]
 }

@@ -31,6 +31,7 @@ function smtpUrl(value: string): string {
 	if (url.protocol !== 'smtp:' && url.protocol !== 'smtps:') {
 		throw new Error('Invalid SMTP URL protocol');
 	}
+	if (!url.hostname) throw new Error('Invalid SMTP URL: hostname is required');
 	return value;
 }
 
@@ -59,7 +60,7 @@ export class SmtpNotifier implements Notifier {
 	async deliver(notification: Notification): Promise<NotificationDeliveryOutcome> {
 		rejectHeaderBreaks(notification.title, 'notification title');
 		const recipients: { address: string; name?: string }[] =
-			notification.recipients.length > 0
+			notification.audience === 'personal'
 				? notification.recipients.map((recipient) => ({
 						address: recipient.email,
 						...(recipient.name ? { name: recipient.name } : {}),

@@ -252,6 +252,10 @@ export interface ConfigSummary {
 	}[];
 }
 
+export interface BackgroundTaskScheduler {
+	defer(task: Promise<unknown>): void;
+}
+
 /**
  * Everything the API needs, injected at composition time. This replaces the
  * Cloudflare-specific `Bindings: Env` coupling — routes read it from the Hono
@@ -265,6 +269,8 @@ export interface ApiDeps {
 	authenticator: Authenticator;
 	/** Outbound notification channel. `createApi` supplies a no-op when absent. */
 	notifier?: Notifier;
+	/** Keep non-critical work alive after the response, for example with Workers `waitUntil`. */
+	backgroundTasks?: BackgroundTaskScheduler;
 	/**
 	 * Probe a reused `running` session's kernel on reconnect. A `dead` result (the
 	 * sandbox is alive but marimo exited) retires the wedged session and provisions

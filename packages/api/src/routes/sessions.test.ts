@@ -372,10 +372,10 @@ describe('Session routes', () => {
 			acknowledge_disruption: true,
 		};
 		await expectOk(await exclusiveOther('POST', editorSessionPath('/takeover'), takeoverRequest));
-		await vi.waitFor(() => expect(notifier.deliveries).toHaveLength(1));
+		await vi.waitFor(() => expect(notifier.deliveries).toHaveLength(2));
 		await expectOk(await exclusiveOther('POST', editorSessionPath('/takeover'), takeoverRequest));
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(notifier.attempts).toBe(1);
+		expect(notifier.attempts).toBe(2);
 		const replacement = await expectOk<ApiSession>(await exclusiveOther('POST', sessionsPath()));
 		expect(replacement.user_id).toBe(STRANGER);
 		expect(replacement.session_id).not.toBe(persistent.session_id);
@@ -387,10 +387,17 @@ describe('Session routes', () => {
 		expect(discarded.status).toBe('terminated');
 		expect(notifier.deliveries[0]).toMatchObject({
 			kind: 'session.takeover',
+			audience: 'personal',
 			title: 'Your editor session was taken over',
 			recipients: [{ userId: ACTOR, email: `${ACTOR}@example.com` }],
 			context: { pid, nid, takeover_id: 'takeover-test-1' },
-			dedupe_key: 'session.takeover:takeover-test-1',
+			dedupe_key: 'session.takeover:takeover-test-1:personal',
+		});
+		expect(notifier.deliveries[1]).toMatchObject({
+			kind: 'session.takeover',
+			audience: 'broadcast',
+			recipients: [],
+			dedupe_key: 'session.takeover:takeover-test-1:broadcast',
 		});
 	});
 
@@ -410,8 +417,9 @@ describe('Session routes', () => {
 				acknowledge_disruption: true,
 			}),
 		);
-		await vi.waitFor(() => expect(notifier.attempts).toBe(1));
-		expect(notifier.deliveries).toHaveLength(0);
+		await vi.waitFor(() => expect(notifier.attempts).toBe(2));
+		expect(notifier.deliveries).toHaveLength(1);
+		expect(notifier.deliveries[0]?.audience).toBe('broadcast');
 	});
 
 	it('does not offer takeover when a claim names a terminal session', async () => {

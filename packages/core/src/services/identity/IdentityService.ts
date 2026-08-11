@@ -93,14 +93,14 @@ export class IdentityService {
 		const record = await withCasRetry(this.bucket, async (cas) => {
 			const obj = await this.bucket.get(key);
 			const existing = obj ? await readStored(IdentitySchema, obj, key) : null;
-			const next: Identity = {
+			const next = IdentitySchema.parse({
 				id: user.id,
 				email: user.email,
 				name,
 				...(user.pictureUrl ? { picture_url: user.pictureUrl } : {}),
 				...(existing?.suspended_at ? { suspended_at: existing.suspended_at } : {}),
 				updated_at: new Date().toISOString(),
-			};
+			});
 			await cas.put(
 				key,
 				JSON.stringify(next),

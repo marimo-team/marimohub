@@ -1,13 +1,14 @@
 import type { Metrics } from './metrics';
 import { noopMetrics } from './metrics';
-import type { Notification } from '../schema';
+import type { Notification } from '../notifications';
 
-export type NotificationDeliveryOutcome = 'delivered' | 'skipped';
+export type NotificationDeliveryOutcome = 'delivered' | 'partial' | 'skipped';
 
 export interface Notifier {
 	/**
-	 * Return `skipped` only when the adapter has no delivery target. Throw when an
-	 * attempted delivery fails. Receivers must use `dedupe_key` as the idempotency key.
+	 * Return `skipped` only when the adapter has no delivery target. Composite
+	 * notifiers return `partial` when some targets fail. Throw when no target
+	 * delivers. Receivers must use `dedupe_key` as the idempotency key.
 	 */
 	deliver(notification: Notification): Promise<NotificationDeliveryOutcome>;
 }
@@ -45,10 +46,13 @@ export function fanOutNotifier(targets: NamedNotifier[], metrics: Metrics = noop
 					}
 				}),
 			);
-			if (results.some((result) => result.status === 'fulfilled' && result.value === 'delivered')) {
-				return 'delivered';
-			}
 			const failures = results.filter((result) => result.status === 'rejected');
+			const outcomes = results
+				.filter((result) => result.status === 'fulfilled')
+				.map((result) => result.value);
+			if (outcomes.some((outcome) => outcome === 'delivered' || outcome === 'partial')) {
+				return failures.length > 0 || outcomes.includes('partial') ? 'partial' : 'delivered';
+			}
 			if (failures.length > 0) {
 				throw new AggregateError(
 					failures.map((result) => result.reason),

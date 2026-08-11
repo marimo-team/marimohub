@@ -292,6 +292,23 @@ export const SnapshotSchema = z.looseObject({
 
 export type Snapshot = z.infer<typeof SnapshotSchema>;
 
+// --- Email addresses ---
+
+// Match the trusted IdP boundary: some providers issue addresses such as
+// `user@localhost` that z.email rejects. Transport-unsafe input still fails.
+export const EmailAddressSchema = z.string().refine(
+	(value) => {
+		if (value.length > 320 || /\s/.test(value)) return false;
+		for (const character of value) {
+			const code = character.charCodeAt(0);
+			if (code <= 31 || code === 127) return false;
+		}
+		const at = value.lastIndexOf('@');
+		return at > 0 && at < value.length - 1;
+	},
+	{ message: 'Invalid email address' },
+);
+
 // --- Project ---
 
 // A member is either a known user (by id) or a pending email invite: someone
@@ -303,7 +320,7 @@ export type Snapshot = z.infer<typeof SnapshotSchema>;
 export const ProjectMemberSchema = z
 	.object({
 		user_id: UserIdSchema.optional(),
-		email: z.string().toLowerCase().optional(),
+		email: EmailAddressSchema.transform((email) => email.toLowerCase()).optional(),
 		role: z.enum(ROLES),
 	})
 	.refine((m) => (m.user_id === undefined) !== (m.email === undefined), {
@@ -727,7 +744,7 @@ export type EditorClaim = z.infer<typeof EditorClaimSchema>;
 // mutable per-user records and updates them with ETag compare-and-swap.
 export const IdentitySchema = z.object({
 	id: UserIdSchema,
-	email: z.string(),
+	email: EmailAddressSchema,
 	name: z.string(),
 	picture_url: z.url({ protocol: /^https$/ }).optional(),
 	suspended_at: z.iso.datetime().optional(),
@@ -791,26 +808,3 @@ export const EventSchema = z.looseObject({
 });
 
 export type Event = z.infer<typeof EventSchema>;
-
-// --- Notification ---
-
-export const NotificationRecipientSchema = z.object({
-	userId: UserIdSchema.optional(),
-	email: z.email(),
-	name: z.string().min(1).optional(),
-});
-
-export type NotificationRecipient = z.infer<typeof NotificationRecipientSchema>;
-
-export const NotificationSchema = z.object({
-	kind: z.string().min(1),
-	severity: z.enum(['info', 'warning', 'error']),
-	title: z.string().min(1),
-	body: z.string().min(1),
-	link: z.url().optional(),
-	recipients: z.array(NotificationRecipientSchema),
-	context: z.record(z.string(), z.string()),
-	dedupe_key: z.string().min(1),
-});
-
-export type Notification = z.infer<typeof NotificationSchema>;
