@@ -791,3 +791,26 @@ export const EventSchema = z.looseObject({
 });
 
 export type Event = z.infer<typeof EventSchema>;
+
+// --- Notification ---
+
+export const NotificationRecipientSchema = z.object({
+	userId: UserIdSchema.optional(),
+	email: z.email(),
+	name: z.string().min(1).optional(),
+});
+
+export type NotificationRecipient = z.infer<typeof NotificationRecipientSchema>;
+
+export const NotificationSchema = z.object({
+	kind: z.string().min(1),
+	severity: z.enum(['info', 'warning', 'error']),
+	title: z.string().min(1),
+	body: z.string().min(1),
+	link: z.url().optional(),
+	recipients: z.array(NotificationRecipientSchema),
+	context: z.record(z.string(), z.string()),
+	dedupe_key: z.string().min(1),
+});
+
+export type Notification = z.infer<typeof NotificationSchema>;

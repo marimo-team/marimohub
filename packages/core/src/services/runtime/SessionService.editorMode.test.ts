@@ -296,6 +296,8 @@ describe('SessionService editor claims', () => {
 			}),
 		).rejects.toMatchObject({ code: 'EDIT_SESSION_CHANGED' });
 		await sessions.setTakeoverPhase(projectId, notebookId, 'takeover-1', 'ready');
+		const readyRetry = await sessions.reserveTakeover(projectId, notebookId, request);
+		expect(readyRetry.transfer?.phase).toBe('ready');
 		const failedReplacement = await running(USER_B);
 		const firstAttempt = await sessions.claimEditor(
 			projectId,

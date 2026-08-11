@@ -25,11 +25,13 @@ import {
 	marimoSharingDisabled,
 	mintAiSessionToken,
 	NotFoundError,
+	notificationRouter,
 	paths,
 	requireRole,
 	roleAtLeast,
 	resolveBaseImage,
 	resolveRestoreSnapshot,
+	recipientFromIdentity,
 	ResourceExhaustedError,
 	saga,
 	MODE_POLICY,
@@ -52,6 +54,7 @@ import {
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
 import { appendAudit, errorMetadata, logEvent } from '../log';
+import { scheduleNotification } from '../notifications';
 import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
 	assertSessionAccess,
@@ -663,9 +666,10 @@ app.openapi(takeoverEditorSession, async (c) => {
 		requireRole(project, user, 'editor', deps.policy);
 		const notebook = await deps.services.notebooks.getNotebook(pid, nid);
 		if (notebook.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
+		return { project, notebook };
 	};
 	try {
-		await assertAccess();
+		const subject = await assertAccess();
 		const currentClaim = await deps.services.sessions.getEditorClaim(pid, nid);
 		if (effectiveEditorSharing(currentClaim, deps.policy.editorSandboxSharing) !== 'exclusive') {
 			throw new ConflictError('Takeover is only available in exclusive editor mode');
@@ -678,6 +682,28 @@ app.openapi(takeoverEditorSession, async (c) => {
 		});
 		observer.tag('phase', claim.transfer?.phase ?? 'changed');
 		await audit('session.takeover.request');
+		const notifyTakeover = (holderUserId?: UserId) =>
+			scheduleNotification(
+				deps,
+				'session.takeover',
+				{ project_id: pid, notebook_id: nid, takeover_id: body.takeover_id },
+				async () => {
+					const displacedUserId =
+						holderUserId ??
+						(await deps.services.sessions.getSession(pid, body.expected_holder_session_id)).user_id;
+					return notificationRouter.render({
+						kind: 'session.takeover',
+						project: subject.project,
+						notebookTitle: subject.notebook.meta.title,
+						projectId: pid,
+						notebookId: nid,
+						takeoverId: body.takeover_id,
+						recipient: recipientFromIdentity(await deps.services.identities.get(displacedUserId)),
+						actor: user,
+						baseUrl: deps.sandbox.appBaseUrl,
+					});
+				},
+			);
 		if (claim.transfer?.phase === 'ready') {
 			await audit('session.takeover.success');
 			return c.json({ success: true }, 200);
@@ -692,6 +718,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 				);
 				if (!completed) throw new ConflictError('Another request owns the takeover drain lease');
 				await audit('session.takeover.success');
+				notifyTakeover(holder.user_id);
 				return c.json({ success: true }, 200);
 			} catch (err) {
 				if (err instanceof ConflictError) throw err;
@@ -759,6 +786,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 			);
 		}
 		await audit('session.takeover.success');
+		notifyTakeover(holder.user_id);
 		return c.json({ success: true }, 200);
 	} catch (err) {
 		failed = true;

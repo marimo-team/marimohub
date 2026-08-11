@@ -14,6 +14,7 @@ import {
 	makeFakeCompute,
 	makeFakeSandbox,
 	makeSession,
+	MemoryNotifier,
 	uid,
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -351,9 +352,11 @@ describe('Session routes', () => {
 	it('reports exclusive ownership and completes a warned takeover before replacement', async () => {
 		const ownerCompute = makeFakeCompute();
 		const otherCompute = makeFakeCompute();
+		const notifier = new MemoryNotifier();
 		const exclusiveOwner = exclusiveApi(ACTOR, ownerCompute);
 		const exclusiveOther = exclusiveApi(STRANGER, otherCompute, {
 			policy: { maxConcurrentSessionsPerUser: 1 },
+			notifier,
 		});
 		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
 		const temporary = await expectOk<ApiSession>(
@@ -362,14 +365,17 @@ describe('Session routes', () => {
 		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
 		expect(state.holder?.user_id).toBe(ACTOR);
 		expect(state.can_take_over).toBe(true);
-		await expectOk(
-			await exclusiveOther('POST', editorSessionPath('/takeover'), {
-				takeover_id: 'takeover-test-1',
-				expected_holder_session_id: persistent.session_id,
-				expected_activity: state.holder!.activity.state,
-				acknowledge_disruption: true,
-			}),
-		);
+		const takeoverRequest = {
+			takeover_id: 'takeover-test-1',
+			expected_holder_session_id: persistent.session_id,
+			expected_activity: state.holder!.activity.state,
+			acknowledge_disruption: true,
+		};
+		await expectOk(await exclusiveOther('POST', editorSessionPath('/takeover'), takeoverRequest));
+		await vi.waitFor(() => expect(notifier.deliveries).toHaveLength(1));
+		await expectOk(await exclusiveOther('POST', editorSessionPath('/takeover'), takeoverRequest));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(notifier.attempts).toBe(1);
 		const replacement = await expectOk<ApiSession>(await exclusiveOther('POST', sessionsPath()));
 		expect(replacement.user_id).toBe(STRANGER);
 		expect(replacement.session_id).not.toBe(persistent.session_id);
@@ -379,6 +385,33 @@ describe('Session routes', () => {
 		expect(old.ended_by_user_id).toBe(STRANGER);
 		const discarded = await createServices(bucket).sessions.getSession(pid, temporary.session_id);
 		expect(discarded.status).toBe('terminated');
+		expect(notifier.deliveries[0]).toMatchObject({
+			kind: 'session.takeover',
+			title: 'Your editor session was taken over',
+			recipients: [{ userId: ACTOR, email: `${ACTOR}@example.com` }],
+			context: { pid, nid, takeover_id: 'takeover-test-1' },
+			dedupe_key: 'session.takeover:takeover-test-1',
+		});
+	});
+
+	it('does not fail a takeover when notification delivery fails', async () => {
+		const notifier = new MemoryNotifier();
+		notifier.failNext();
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const exclusiveOther = exclusiveApi(STRANGER, makeFakeCompute(), { notifier });
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+
+		await expectOk(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-notify-failure',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
+		);
+		await vi.waitFor(() => expect(notifier.attempts).toBe(1));
+		expect(notifier.deliveries).toHaveLength(0);
 	});
 
 	it('does not offer takeover when a claim names a terminal session', async () => {

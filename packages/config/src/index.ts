@@ -43,6 +43,7 @@ import {
 	unsupportedBackendNotice,
 } from './computeProfiles';
 import { makeIntegrations } from './integrations';
+import { makeNotifier } from './notifications';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
@@ -347,6 +348,7 @@ export function createFromEnv(
 	const deps: ApiDeps = {
 		services,
 		bucket,
+		notifier: makeNotifier(env, metrics),
 		// Provider-side limits trail the graceful lifecycle deadlines: Modal idle by
 		// 1.5× and CoreWeave/E2B lifetime by 2×.
 		compute: makeCompute(env, {

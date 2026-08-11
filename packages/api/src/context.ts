@@ -12,6 +12,7 @@ import type {
 	ProjectIntegrationsService,
 	KernelProbe,
 	Millis,
+	Notifier,
 	OrgIntegrationsService,
 	PreflightReport,
 	SandboxExposure,
@@ -262,6 +263,8 @@ export interface ApiDeps {
 	bucket: Bucket;
 	compute: SandboxProvider;
 	authenticator: Authenticator;
+	/** Outbound notification channel. `createApi` supplies a no-op when absent. */
+	notifier?: Notifier;
 	/**
 	 * Probe a reused `running` session's kernel on reconnect. A `dead` result (the
 	 * sandbox is alive but marimo exited) retires the wedged session and provisions

@@ -77,8 +77,8 @@ export function renderConfigDocs(spec: ConfigGroup[]): string {
 		'# Configuration reference',
 		'',
 		'Every marimohub configuration variable, grouped by category and backend. ' +
-			'Each category has a `*_BACKEND` selector that chooses an adapter; only that ' +
-			"backend's variables are read.",
+			'A category can use a selector or document variables that apply together. ' +
+			'Notifications use a comma-separated backend list for fan-out.',
 		'',
 		'🔒 marks a sensitive value (a secret).',
 		'',
