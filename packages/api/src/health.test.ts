@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { UnavailableError } from '@marimo-hub/core';
 import type { PreflightReport } from '@marimo-hub/core';
 import { createTestApi } from './testing';
 
@@ -47,10 +48,59 @@ describe('GET /api/health', () => {
 		expect(((await res.json()) as { status: string }).status).toBe('degraded');
 	});
 
+	it('deep health preserves diagnostics when the suspension lookup is unavailable', async () => {
+		const failing = report({
+			ok: false,
+			checks: [{ name: 'storage', status: 'fail', message: 'unreachable' }],
+		});
+		const preflight = vi.fn(async () => failing);
+		const { app, deps } = createTestApi({ deps: { preflight } });
+		vi.spyOn(deps.services.identities, 'isSuspended').mockRejectedValue(
+			new UnavailableError('Unable to verify account suspension status'),
+		);
+
+		const res = await app.request('/api/health?deep=true');
+
+		expect(res.status).toBe(503);
+		expect(await res.json()).toEqual({
+			status: 'degraded',
+			checks: [
+				{
+					name: 'identity.suspension',
+					status: 'fail',
+					message: 'Unable to verify account suspension status',
+				},
+				...failing.checks,
+			],
+		});
+		expect(preflight).toHaveBeenCalledOnce();
+	});
+
 	it('deep health reports unavailable when preflight is not wired', async () => {
 		const { app } = createTestApi();
 		const res = await app.request('/api/health?deep=true');
 		expect(res.status).toBe(200);
 		expect(((await res.json()) as { status: string }).status).toBe('unavailable');
+	});
+
+	it('deep health reports the suspension failure when preflight is not wired', async () => {
+		const { app, deps } = createTestApi();
+		vi.spyOn(deps.services.identities, 'isSuspended').mockRejectedValue(
+			new UnavailableError('Unable to verify account suspension status'),
+		);
+
+		const res = await app.request('/api/health?deep=true');
+
+		expect(res.status).toBe(503);
+		expect(await res.json()).toEqual({
+			status: 'unavailable',
+			checks: [
+				{
+					name: 'identity.suspension',
+					status: 'fail',
+					message: 'Unable to verify account suspension status',
+				},
+			],
+		});
 	});
 });

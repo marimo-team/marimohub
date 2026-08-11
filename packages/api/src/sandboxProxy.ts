@@ -27,7 +27,13 @@ export type ProxyDecision =
 	| {
 			kind: 'reject';
 			status: 401 | 403 | 404 | 410 | 503;
-			code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'GONE' | 'SERVICE_UNAVAILABLE';
+			code:
+				| 'UNAUTHORIZED'
+				| 'USER_SUSPENDED'
+				| 'FORBIDDEN'
+				| 'NOT_FOUND'
+				| 'GONE'
+				| 'SERVICE_UNAVAILABLE';
 			message: string;
 	  }
 	| {
@@ -86,17 +92,14 @@ export async function authorizeProxyRequest(
 		};
 	}
 
-	// Suspension is enforced at every authenticator call site (the `/api/v1/*`
-	// guard, deep health). A suspended user is denied new kernel traffic on this
-	// request; the running sandbox process is not terminated. Fails closed (503)
-	// when the status cannot be verified, matching the `/api/v1/*` guard. Shared
-	// with the WebSocket forwarder, which consumes this ProxyDecision directly.
+	// Proxy traffic bypasses the API auth middleware, so both HTTP and WebSocket
+	// forwarding enforce suspension here.
 	try {
 		if (await deps.services.identities.isSuspended(user.id)) {
 			return {
 				kind: 'reject',
 				status: 403,
-				code: 'FORBIDDEN',
+				code: 'USER_SUSPENDED',
 				message: 'User account is suspended',
 			};
 		}

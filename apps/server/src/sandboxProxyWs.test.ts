@@ -120,6 +120,28 @@ describe('attachSandboxProxyUpgrade', () => {
 		expect(out.text()).toMatch(/^HTTP\/1\.1 403/);
 	});
 
+	it('rejects a suspended user with the suspension-specific WebSocket status', async () => {
+		const { deps, token } = await runningProxySession(
+			'http://127.0.0.1:1',
+			new Date(Date.now() + 60_000).toISOString(),
+		);
+		await deps.services.identities.upsert({
+			id: ACTOR,
+			email: `${ACTOR}@example.com`,
+			name: 'Actor',
+		});
+		await deps.services.identities.setSuspension(ACTOR, true);
+		const server = fakeUpgradeServer();
+		attachSandboxProxyUpgrade(server, deps);
+		const socket = new PassThrough();
+		const out = collect(socket);
+
+		server.listeners[0](fakeIncomingMessage(`/proxy/${token}/`), socket, Buffer.alloc(0));
+
+		await vi.waitFor(() => expect(socket.destroyed).toBe(true));
+		expect(out.text()).toMatch(/^HTTP\/1\.1 403 USER_SUSPENDED/);
+	});
+
 	it('rejects when authorization expires between request validation and the upstream dial', async () => {
 		const now = Date.now();
 		const deadline = now + 1000;

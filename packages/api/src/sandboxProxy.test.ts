@@ -117,7 +117,7 @@ describe('authorizeProxyRequest', () => {
 		await d.services.identities.setSuspension(ACTOR, true);
 
 		const decision = await authorizeProxyRequest(req(`/proxy/${token}/`), d);
-		expect(decision).toMatchObject({ kind: 'reject', status: 403, code: 'FORBIDDEN' });
+		expect(decision).toMatchObject({ kind: 'reject', status: 403, code: 'USER_SUSPENDED' });
 		// The kernel process is not torn down — the session stays running.
 		expect((await createServices(bucket).sessions.getSession(pid, sessionId as never)).status).toBe(
 			'running',

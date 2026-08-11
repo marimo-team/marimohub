@@ -9,6 +9,7 @@ import {
 	MAX_REQUEST_BYTES,
 	probeKernelLiveness,
 	SubdomainExposure,
+	UnavailableError,
 } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
 import { describeError, errorMetadata, logEvent } from './log';
@@ -226,18 +227,35 @@ export function createApi(rawDeps: ApiDeps) {
 		if (c.req.query('deep') !== 'true') return c.json({ status: 'ok' });
 		const user = await deps.authenticator.authenticate(c.req.raw);
 		if (!user) return fail(c, 'UNAUTHORIZED', 'Authentication required', 401);
-		// Suspension is enforced at every authenticator call site, not just the
-		// `/api/v1/*` guard below (isSuspended fails closed → 503 on a storage outage).
-		if (await deps.services.identities.isSuspended(user.id)) {
-			return fail(c, 'USER_SUSPENDED', 'User account is suspended', 403);
+		let suspensionUnavailable = false;
+		try {
+			if (await deps.services.identities.isSuspended(user.id)) {
+				return fail(c, 'USER_SUSPENDED', 'User account is suspended', 403);
+			}
+		} catch (err) {
+			if (!(err instanceof UnavailableError)) throw err;
+			suspensionUnavailable = true;
 		}
+		const suspensionChecks = suspensionUnavailable
+			? [
+					{
+						name: 'identity.suspension',
+						status: 'fail' as const,
+						message: 'Unable to verify account suspension status',
+					},
+				]
+			: [];
 		if (!deps.preflight) {
-			return c.json({ status: 'unavailable', checks: [] }, 200);
+			return c.json(
+				{ status: 'unavailable', checks: suspensionChecks },
+				suspensionUnavailable ? 503 : 200,
+			);
 		}
 		const report = await deps.preflight();
+		const ok = report.ok && !suspensionUnavailable;
 		return c.json(
-			{ status: report.ok ? 'ok' : 'degraded', checks: report.checks },
-			report.ok ? 200 : 503,
+			{ status: ok ? 'ok' : 'degraded', checks: [...suspensionChecks, ...report.checks] },
+			ok ? 200 : 503,
 		);
 	});
 
@@ -318,10 +336,6 @@ export function createApi(rawDeps: ApiDeps) {
 		if (!user) {
 			return fail(c, 'UNAUTHORIZED', 'Authentication required', 401);
 		}
-		// Suspension is enforced at every authenticator call site (deep health above,
-		// the sandbox proxy). A suspended PAT already resolves to null in the token
-		// authenticator; this rejects a suspended browser session, and fails closed
-		// (→ 503) when the status cannot be verified.
 		if (await deps.services.identities.isSuspended(user.id)) {
 			return fail(c, 'USER_SUSPENDED', 'User account is suspended', 403);
 		}
