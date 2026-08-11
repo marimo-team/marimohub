@@ -150,6 +150,30 @@ describe('CatalogService', () => {
 			expect(result.projects[0].name).toBe('New');
 		});
 
+		it('awaits an asynchronous mutation', async () => {
+			const result = await catalog.mutateSnapshot('test.async', ACTOR, async (snapshot) => {
+				await Promise.resolve();
+				return {
+					...snapshot,
+					projects: [
+						{
+							id: 'proj-7h2k9qm4xz7rp3w8' as any,
+							name: 'Async',
+							description: '',
+							owner: ACTOR,
+							status: 'active',
+							created_at: new Date().toISOString(),
+							updated_at: new Date().toISOString(),
+							notebook_count: 0,
+							notebooks: [],
+						},
+					],
+				};
+			});
+
+			expect(result.projects[0].name).toBe('Async');
+		});
+
 		it('preserves snapshot chain — previous_snapshot_id is set', async () => {
 			const before = await catalog.getCurrentSnapshot();
 			await catalog.mutateSnapshot('test', ACTOR, (s) => s);

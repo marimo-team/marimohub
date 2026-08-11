@@ -19,9 +19,9 @@ export interface CasRetryOptions {
 	/** Run at the start of each attempt (e.g. bump a metrics counter). */
 	onAttempt?: (attempt: number) => void;
 	/** Run when a conditional write through `CasWriter` loses the race. */
-	onConflict?: (attempt: number) => void;
+	onConflict?: (attempt: number, error: PreconditionFailedError) => void;
 	/** Run once when all attempts are exhausted, before throwing `ConflictError`. */
-	onExhausted?: () => void;
+	onExhausted?: (error: PreconditionFailedError | undefined) => void;
 }
 
 type CasPutOptions = Omit<BucketPutOptions, 'onlyIfEtagMatches' | 'onlyIfNotExists'> &
@@ -35,8 +35,8 @@ export interface CasWriter {
 }
 
 class CasWriteConflictError extends Error {
-	constructor(precondition: PreconditionFailedError) {
-		super(precondition.message);
+	constructor(readonly precondition: PreconditionFailedError) {
+		super(precondition.message, { cause: precondition });
 		this.name = 'CasWriteConflictError';
 	}
 }
@@ -69,21 +69,23 @@ export async function withCasRetry<T>(
 		onExhausted,
 	} = options;
 	const writer = casWriterFor(bucket);
+	let lastConflict: PreconditionFailedError | undefined;
 	for (let i = 0; i < retries; i++) {
 		onAttempt?.(i);
 		try {
 			return await attempt(writer);
 		} catch (err) {
 			if (err instanceof CasWriteConflictError) {
-				onConflict?.(i);
+				lastConflict = err.precondition;
+				onConflict?.(i, err.precondition);
 				await sleep(backoffMs(i));
 				continue;
 			}
 			throw err;
 		}
 	}
-	onExhausted?.();
-	throw new ConflictError('Write conflict: max retries exceeded');
+	onExhausted?.(lastConflict);
+	throw new ConflictError('Write conflict: max retries exceeded', { cause: lastConflict });
 }
 
 export interface SingletonClaimConfig {

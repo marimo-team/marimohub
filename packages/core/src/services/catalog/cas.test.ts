@@ -44,21 +44,67 @@ describe('withCasRetry', () => {
 	it('throws ConflictError once retries are exhausted', async () => {
 		const bucket = new MemoryBucket();
 		await bucket.put('k', 'seed');
+		const precondition = new PreconditionFailedError('lost race');
+		vi.spyOn(bucket, 'put').mockRejectedValue(precondition);
+		const onConflict = vi.fn();
 		const onExhausted = vi.fn();
+		const result = withCasRetry(
+			bucket,
+			async (cas) => {
+				return cas.put('k', 'loser', { onlyIfEtagMatches: 'stale' });
+			},
+			{
+				retries: 3,
+				backoffMs: () => 0,
+				onConflict,
+				onExhausted,
+			},
+		);
+		await expect(result).rejects.toMatchObject({
+			name: 'ConflictError',
+			cause: precondition,
+		});
+		expect(onConflict).toHaveBeenNthCalledWith(1, 0, precondition);
+		expect(onConflict).toHaveBeenNthCalledWith(2, 1, precondition);
+		expect(onConflict).toHaveBeenNthCalledWith(3, 2, precondition);
+		expect(onExhausted).toHaveBeenCalledOnce();
+		expect(onExhausted).toHaveBeenCalledWith(precondition);
+	});
+
+	it('does not attach a cause when zero retries run', async () => {
+		const bucket = new MemoryBucket();
+		const onExhausted = vi.fn();
+		const attempt = vi.fn();
+		const result = withCasRetry(bucket, attempt, { retries: 0, onExhausted });
+
+		await expect(result).rejects.toSatisfy(
+			(error: unknown) => error instanceof ConflictError && error.cause === undefined,
+		);
+		expect(attempt).not.toHaveBeenCalled();
+		expect(onExhausted).toHaveBeenCalledWith(undefined);
+	});
+
+	it('keeps callback-thrown preconditions out of conflict hooks', async () => {
+		const bucket = new MemoryBucket();
+		const precondition = new PreconditionFailedError('stale client version');
+		const onConflict = vi.fn();
+		const onExhausted = vi.fn();
+
 		await expect(
 			withCasRetry(
 				bucket,
-				async (cas) => {
-					return cas.put('k', 'loser', { onlyIfEtagMatches: 'stale' });
+				async () => {
+					throw precondition;
 				},
 				{
-					retries: 3,
 					backoffMs: () => 0,
+					onConflict,
 					onExhausted,
 				},
 			),
-		).rejects.toBeInstanceOf(ConflictError);
-		expect(onExhausted).toHaveBeenCalledTimes(1);
+		).rejects.toBe(precondition);
+		expect(onConflict).not.toHaveBeenCalled();
+		expect(onExhausted).not.toHaveBeenCalled();
 	});
 
 	it('propagates a non-precondition error immediately (no retry)', async () => {

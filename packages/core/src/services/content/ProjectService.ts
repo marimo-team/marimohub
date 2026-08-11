@@ -20,6 +20,7 @@ import type {
 	ProjectMember,
 	PublicProjectEntry,
 	Snapshot,
+	SnapshotProjectEntry,
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
@@ -102,6 +103,25 @@ export class ProjectService {
 		return readStored(ProjectSchema, obj, paths.project(id).meta);
 	}
 
+	private async loadProjectCatalogPatch(
+		id: ProjectId,
+		entry: SnapshotProjectEntry,
+	): Promise<Partial<SnapshotProjectEntry>> {
+		const project = await this.getProject(id);
+		return {
+			name: project.name,
+			description: project.description,
+			status: project.status,
+			updated_at: entry.updated_at >= project.updated_at ? entry.updated_at : project.updated_at,
+			member_ids: project.members.flatMap((member) =>
+				member.user_id !== undefined ? [member.user_id] : [],
+			),
+			member_emails: project.members.flatMap((member) =>
+				member.email !== undefined ? [member.email] : [],
+			),
+		};
+	}
+
 	async createProject(input: CreateProjectInput, actor: UserId): Promise<Project> {
 		const id = createProjectId();
 		const now = new Date().toISOString();
@@ -167,8 +187,6 @@ export class ProjectService {
 		actor: UserId,
 		expectedVersion?: string,
 	): Promise<Project> {
-		const existing = await this.getProject(id);
-		assertVersionMatch(existing.updated_at, expectedVersion);
 		const key = paths.project(id).meta;
 
 		const updated = await mutateObject(
@@ -191,13 +209,10 @@ export class ProjectService {
 			},
 			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
 		);
-		const now = updated.updated_at;
 
-		await this.catalog.updateProjectEntry('project.update', actor, id, () => ({
-			name: updated.name,
-			description: updated.description,
-			updated_at: now,
-		}));
+		await this.catalog.updateProjectEntry('project.update', actor, id, (entry) =>
+			this.loadProjectCatalogPatch(id, entry),
+		);
 
 		return updated;
 	}
@@ -309,12 +324,9 @@ export class ProjectService {
 			},
 			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
 		);
-		const now = updated.updated_at;
-		await this.catalog.updateProjectEntry('project.members', actor, id, () => ({
-			updated_at: now,
-			member_ids: updated.members.flatMap((m) => (m.user_id !== undefined ? [m.user_id] : [])),
-			member_emails: updated.members.flatMap((m) => (m.email !== undefined ? [m.email] : [])),
-		}));
+		await this.catalog.updateProjectEntry('project.members', actor, id, (entry) =>
+			this.loadProjectCatalogPatch(id, entry),
+		);
 		return updated;
 	}
 
@@ -326,7 +338,7 @@ export class ProjectService {
 	 */
 	async deleteProject(id: ProjectId, actor: UserId, expectedVersion?: string): Promise<void> {
 		const key = paths.project(id).meta;
-		const { value: updated, written } = await mutateObjectWithOutcome(
+		const { written } = await mutateObjectWithOutcome(
 			this.bucket,
 			key,
 			(raw) => parseStored(ProjectSchema, raw, key),
@@ -342,15 +354,13 @@ export class ProjectService {
 			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
 		);
 		if (!written) return;
-		const now = updated.updated_at;
 
 		// Soft-delete in the snapshot: keep the entry (and its nested notebooks) so
 		// the GC sweep can find and purge it later, but mark it deleted so it drops
 		// out of listProjects immediately.
-		await this.catalog.updateProjectEntry('project.delete', actor, id, () => ({
-			status: 'deleted' as const,
-			updated_at: now,
-		}));
+		await this.catalog.updateProjectEntry('project.delete', actor, id, (entry) =>
+			this.loadProjectCatalogPatch(id, entry),
+		);
 	}
 
 	/**

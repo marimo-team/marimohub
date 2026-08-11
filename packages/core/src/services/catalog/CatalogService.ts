@@ -11,6 +11,8 @@ import { withCasRetry } from './cas';
 import type { CasRetryOptions } from './cas';
 import type { EventService } from './EventService';
 
+type Awaitable<T> = T | Promise<T>;
+
 /**
  * Lazy-migration seam for snapshots. The read schema is forward-tolerant (it
  * accepts any `schema_version`), so a snapshot written by a newer replica parses
@@ -108,10 +110,14 @@ export class CatalogService {
 		);
 	}
 
+	/**
+	 * `mutateFn` runs inside each catalog CAS attempt and may be asynchronous. It
+	 * must be safe to run again after a lost pointer race.
+	 */
 	async mutateSnapshot(
 		operation: string,
 		actor: UserId,
-		mutateFn: (snapshot: Snapshot) => Snapshot,
+		mutateFn: (snapshot: Snapshot) => Awaitable<Snapshot>,
 		context?: Record<string, unknown>,
 	): Promise<Snapshot> {
 		// One CAS attempt: read the catalog + its current snapshot, write a new
@@ -140,7 +146,7 @@ export class CatalogService {
 				const newSnapshotId = createSnapshotId();
 				const now = new Date().toISOString();
 
-				const mutated = mutateFn(currentSnapshot);
+				const mutated = await mutateFn(currentSnapshot);
 				const newSnapshot: Snapshot = {
 					...mutated,
 					snapshot_id: newSnapshotId,
@@ -207,22 +213,29 @@ export class CatalogService {
 	 * CAS-mutate the snapshot to patch a single project's summary entry. `patch`
 	 * receives the matched entry and returns the fields to merge; a project that
 	 * doesn't match is left untouched (and if none matches, the snapshot is
-	 * rewritten unchanged).
+	 * rewritten unchanged). Async patches run again when the catalog CAS retries.
 	 */
 	updateProjectEntry(
 		operation: string,
 		actor: UserId,
 		projectId: ProjectId,
-		patch: (project: SnapshotProjectEntry) => Partial<SnapshotProjectEntry>,
+		patch: (project: SnapshotProjectEntry) => Awaitable<Partial<SnapshotProjectEntry>>,
 		context: Record<string, unknown> = { project_id: projectId },
 	): Promise<Snapshot> {
 		return this.mutateSnapshot(
 			operation,
 			actor,
-			(snap) => ({
-				...snap,
-				projects: snap.projects.map((p) => (p.id === projectId ? { ...p, ...patch(p) } : p)),
-			}),
+			async (snap) => {
+				const project = snap.projects.find((entry) => entry.id === projectId);
+				if (project === undefined) return snap;
+				const projectPatch = await patch(project);
+				return {
+					...snap,
+					projects: snap.projects.map((entry) =>
+						entry.id === projectId ? { ...entry, ...projectPatch } : entry,
+					),
+				};
+			},
 			context,
 		);
 	}
@@ -254,25 +267,38 @@ export class CatalogService {
 	/**
 	 * CAS-mutate the snapshot to patch a single notebook entry within its project.
 	 * `patch` returns the notebook fields to merge; the optional `projectPatch`
-	 * merges project-level fields (e.g. `updated_at`, `notebook_count`) in the same
-	 * write. A notebook that doesn't match is left untouched.
+	 * merges other project-level fields (e.g. `notebook_count`) in the same write.
+	 * A patched notebook `updated_at` automatically advances the project's aggregate
+	 * timestamp. A notebook that doesn't match is left untouched.
 	 */
 	updateNotebookEntry(
 		operation: string,
 		actor: UserId,
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		patch: (notebook: SnapshotNotebookEntry) => Partial<SnapshotNotebookEntry>,
-		projectPatch?: (project: SnapshotProjectEntry) => Partial<SnapshotProjectEntry>,
+		patch: (notebook: SnapshotNotebookEntry) => Awaitable<Partial<SnapshotNotebookEntry>>,
+		projectPatch?: (project: SnapshotProjectEntry) => Awaitable<Partial<SnapshotProjectEntry>>,
 	): Promise<Snapshot> {
 		return this.updateProjectEntry(
 			operation,
 			actor,
 			projectId,
-			(p) => ({
-				...projectPatch?.(p),
-				notebooks: p.notebooks.map((n) => (n.id === notebookId ? { ...n, ...patch(n) } : n)),
-			}),
+			async (p) => {
+				const notebook = p.notebooks.find((entry) => entry.id === notebookId);
+				const notebookPatch = notebook === undefined ? undefined : await patch(notebook);
+				const updatedAt = notebookPatch?.updated_at;
+				return {
+					updated_at:
+						updatedAt !== undefined && updatedAt > p.updated_at ? updatedAt : p.updated_at,
+					...(await projectPatch?.(p)),
+					notebooks:
+						notebookPatch === undefined
+							? p.notebooks
+							: p.notebooks.map((entry) =>
+									entry.id === notebookId ? { ...entry, ...notebookPatch } : entry,
+								),
+				};
+			},
 			{ project_id: projectId, notebook_id: notebookId },
 		);
 	}

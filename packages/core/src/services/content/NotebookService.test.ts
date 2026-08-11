@@ -507,6 +507,34 @@ describe('NotebookService', () => {
 	});
 
 	describe('updateNotebook', () => {
+		it('projects the latest metadata when catalog updates finish out of order', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Original', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const realUpdateEntry = catalog.updateNotebookEntry.bind(catalog);
+			let raced = false;
+			vi.spyOn(catalog, 'updateNotebookEntry').mockImplementation(async (...args) => {
+				if (!raced && args[0] === 'notebook.update') {
+					raced = true;
+					await notebooks.updateNotebook(projectId, created.id, { title: 'Winner' }, ACTOR);
+				}
+				return realUpdateEntry(...args);
+			});
+
+			await notebooks.updateNotebook(projectId, created.id, { title: 'Delayed' }, ACTOR);
+
+			const stored = (await notebooks.getNotebook(projectId, created.id)).meta;
+			const snapshot = await catalog.getCurrentSnapshot();
+			const listed = snapshot.projects[0].notebooks[0];
+			expect(raced).toBe(true);
+			expect(stored.title).toBe('Winner');
+			expect(listed.title).toBe('Winner');
+			expect(listed.updated_at).toBe(stored.updated_at);
+			expect(snapshot.projects[0].updated_at).toBe(stored.updated_at);
+		});
+
 		it('merges a concurrent metadata update after retrying the CAS', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,

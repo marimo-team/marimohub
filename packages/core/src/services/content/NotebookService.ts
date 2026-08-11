@@ -32,7 +32,13 @@ import type {
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
-import { buildNotebookEntry, buildNotebookMeta, buildVersion, localSource } from './notebookMeta';
+import {
+	buildNotebookEntry,
+	buildNotebookMeta,
+	buildVersion,
+	localSource,
+	notebookCatalogPatch,
+} from './notebookMeta';
 import { SyncedNotebookService } from './SyncedNotebookService';
 import { deleteByPrefix, listAllKeys, listAllObjects, listAllPrefixes } from '../catalog/storage';
 
@@ -142,6 +148,13 @@ export class NotebookService {
 		const readme = readmeObj ? await readmeObj.text() : null;
 
 		return { meta, readme, source };
+	}
+
+	private async loadNotebookCatalogPatch(projectId: ProjectId, notebookId: NotebookId) {
+		const key = paths.project(projectId).notebook(notebookId).meta;
+		const obj = await this.bucket.get(key);
+		if (!obj) throw new NotFoundError(`Notebook ${notebookId} not found`);
+		return notebookCatalogPatch(await readStored(NotebookMetaSchema, obj, key));
 	}
 
 	async getNotebookContent(projectId: ProjectId, notebookId: NotebookId): Promise<string> {
@@ -443,19 +456,8 @@ export class NotebookService {
 			await this.pruneVersions(projectId, notebookId, MAX_VERSIONS, versionId);
 		}
 
-		await this.catalog.updateNotebookEntry(
-			'notebook.update',
-			actor,
-			projectId,
-			notebookId,
-			() => ({
-				title: updated.title,
-				description: updated.description,
-				tags: updated.tags,
-				compute_profile: updated.compute_profile,
-				updated_at: now,
-			}),
-			() => ({ updated_at: now }),
+		await this.catalog.updateNotebookEntry('notebook.update', actor, projectId, notebookId, () =>
+			this.loadNotebookCatalogPatch(projectId, notebookId),
 		);
 
 		return updated;
@@ -670,7 +672,7 @@ export class NotebookService {
 		expectedVersion?: string,
 	): Promise<void> {
 		const nb = paths.project(projectId).notebook(notebookId);
-		const { value: updated, written } = await mutateObjectWithOutcome(
+		const { written } = await mutateObjectWithOutcome(
 			this.bucket,
 			nb.meta,
 			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
@@ -686,7 +688,6 @@ export class NotebookService {
 			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
 		);
 		if (!written) return;
-		const now = updated.updated_at;
 
 		// Soft-delete in snapshot
 		await this.catalog.updateNotebookEntry(
@@ -694,8 +695,10 @@ export class NotebookService {
 			actor,
 			projectId,
 			notebookId,
-			() => ({ status: 'deleted' as const, updated_at: now }),
-			(p) => ({ updated_at: now, notebook_count: Math.max(0, p.notebook_count - 1) }),
+			() => this.loadNotebookCatalogPatch(projectId, notebookId),
+			(p) => ({
+				notebook_count: Math.max(0, p.notebook_count - 1),
+			}),
 		);
 
 		// Drop the app-singleton claim: a deleted notebook's id never recurs, so
