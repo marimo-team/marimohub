@@ -31,6 +31,15 @@ export async function openProject(page: Page, name: string): Promise<void> {
 	await expect(page.getByRole('heading', { name })).toBeVisible();
 }
 
+export async function createAndOpenProject(
+	page: Page,
+	name: string,
+	description?: string,
+): Promise<void> {
+	await createProject(page, name, description);
+	await openProject(page, name);
+}
+
 export async function editProjectName(page: Page, nextName: string): Promise<void> {
 	await page.getByRole('button', { name: 'Edit project' }).click();
 	await page.getByLabel('Project Name').fill(nextName);

@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
-	createProject,
-	openProject,
+	createAndOpenProject,
 	createNotebook,
 	deleteNotebook,
 	notebookRow,
@@ -12,8 +11,7 @@ test('notebook lifecycle: create, list, delete', async ({ page }) => {
 	const project = uniqueName('proj');
 	const notebook = uniqueName('nb');
 
-	await createProject(page, project);
-	await openProject(page, project);
+	await createAndOpenProject(page, project);
 
 	// CRUD only — we don't open the notebook, since running a kernel needs compute.
 	await createNotebook(page, notebook);
