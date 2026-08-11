@@ -78,7 +78,10 @@ describe('scheduleNotification', () => {
 
 	it('logs a delivery failure without exposing the provider error message', async () => {
 		const deliver = vi.fn(async () => {
-			throw new Error('https://hooks.example.com/services/secret');
+			throw Object.assign(new Error('https://hooks.example.com/services/secret'), {
+				code: 'ECONNRESET',
+				status: 503,
+			});
 		});
 		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 
@@ -96,7 +99,11 @@ describe('scheduleNotification', () => {
 			event: 'notification_delivery_failed',
 			notification_kind: 'member.invited',
 			request_id: 'request-1',
-			error: { error_name: 'AggregateError' },
+			error: {
+				error_name: 'Error',
+				error_code: 'ECONNRESET',
+				error_status: 503,
+			},
 		});
 		expect(log.mock.calls[0]?.[0]).not.toContain('secret');
 	});

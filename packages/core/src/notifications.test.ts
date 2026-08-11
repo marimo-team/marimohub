@@ -248,6 +248,19 @@ describe('fanOutNotifier', () => {
 		).rejects.toThrow('No notification adapter delivered');
 	});
 
+	it('preserves the original error when one adapter fails', async () => {
+		const failure = Object.assign(new Error('offline'), { code: 'ECONNRESET' });
+		const failed: Notifier = {
+			deliver: async () => {
+				throw failure;
+			},
+		};
+
+		await expect(
+			fanOutNotifier([{ name: 'smtp', notifier: failed }]).deliver(notification),
+		).rejects.toBe(failure);
+	});
+
 	it('records an intentional adapter skip without counting a delivery', async () => {
 		const skipped: Notifier = { deliver: vi.fn(async () => 'skipped' as const) };
 		const metrics: Metrics = { increment: vi.fn(), gauge: vi.fn() };
@@ -279,7 +292,7 @@ describe('fanOutNotifier', () => {
 				{ name: 'smtp', notifier: skipped },
 				{ name: 'webhook', notifier: failed },
 			]).deliver(notification),
-		).rejects.toThrow('No notification adapter delivered');
+		).rejects.toThrow('offline');
 	});
 
 	it('filters disabled kinds', async () => {
