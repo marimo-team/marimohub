@@ -13,14 +13,6 @@ import type { Env } from './env';
 import { ConfigError } from './errors';
 import { CONFIG_SPEC } from './spec';
 
-/** The selectable compute backends, from the spec (the docs/wizard source of truth). */
-const COMPUTE_BACKENDS = (
-	CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? []
-)
-	.map((b) => b.selectorValue)
-	.filter(Boolean)
-	.join(', ');
-
 const COMPUTE_BACKEND_VALUES = [
 	...(CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? [])
 		.map((b) => b.selectorValue)
@@ -29,6 +21,7 @@ const COMPUTE_BACKEND_VALUES = [
 	'noop',
 	'cloudflare',
 ];
+const COMPUTE_BACKENDS = COMPUTE_BACKEND_VALUES.join(', ');
 
 export function computeBackend(env: Env): string | undefined {
 	return parseEnum(env, 'MARIMOHUB_COMPUTE_BACKEND', {

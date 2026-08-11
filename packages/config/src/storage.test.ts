@@ -7,12 +7,27 @@ import { AzureStorage } from '@marimo-hub/storage-azure';
 import { S3Storage } from '@marimo-hub/storage-s3';
 import { GcsStorage } from '@marimo-hub/storage-gcs';
 import { FsStorage } from '@marimo-hub/storage-fs';
-import { makeStorage, makeSandboxBucketConfig } from './storage';
+import {
+	DEFAULT_STORAGE_BACKEND,
+	makeStorage,
+	makeSandboxBucketConfig,
+	storageBackend,
+} from './storage';
 import { ConfigError } from './errors';
+import { CONFIG_SPEC } from './spec';
 
 describe('makeStorage backend selection', () => {
 	it('defaults to s3 and requires the bucket name', () => {
 		expect(() => makeStorage({})).toThrow(/MARIMOHUB_STORAGE_S3_BUCKET/);
+	});
+
+	it('derives the runtime default from the config registry', () => {
+		const configuredDefault = CONFIG_SPEC.find(
+			(group) => group.selector === 'MARIMOHUB_STORAGE_BACKEND',
+		)?.selectorDefault;
+
+		expect(DEFAULT_STORAGE_BACKEND).toBe(configuredDefault);
+		expect(storageBackend({})).toBe(configuredDefault);
 	});
 
 	it('builds an S3Storage when the bucket is set', () => {

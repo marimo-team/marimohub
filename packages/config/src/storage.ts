@@ -11,11 +11,14 @@ import type { Env } from './env';
 import { ConfigError } from './errors';
 import { CONFIG_SPEC } from './spec';
 
-export const DEFAULT_STORAGE_BACKEND = 's3';
+const STORAGE_CONFIG = CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_STORAGE_BACKEND');
+if (!STORAGE_CONFIG?.selectorDefault) {
+	throw new Error('Storage CONFIG_SPEC must define selectorDefault');
+}
 
-const STORAGE_BACKEND_VALUES = (
-	CONFIG_SPEC.find((g) => g.selector === 'MARIMOHUB_STORAGE_BACKEND')?.backends ?? []
-)
+export const DEFAULT_STORAGE_BACKEND = STORAGE_CONFIG.selectorDefault;
+
+const STORAGE_BACKEND_VALUES = STORAGE_CONFIG.backends
 	.map((b) => b.selectorValue)
 	.filter((v): v is string => Boolean(v));
 
