@@ -328,7 +328,7 @@ describe('E2bCompute', () => {
 		expect(live[0].info.metadata?.['mh-owner']).toBe('marimohub');
 	});
 
-	it('a failed create is retryable (the rejected provision is not cached)', async () => {
+	it('shares a retry between the original instance and a fresh wrapper', async () => {
 		class FlakyCreateE2b extends FakeE2b {
 			failuresRemaining = 1;
 
@@ -338,10 +338,20 @@ describe('E2bCompute', () => {
 			}
 		}
 		const fake = new FlakyCreateE2b();
-		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+		const compute = new E2bCompute(baseConfig, fake);
+		const sb = compute.create(SANDBOX_ID);
 		await expect(sb.exec('true')).rejects.toThrow('provision failed');
-		await expect(sb.exec('true')).resolves.toMatchObject({ success: true });
+		await Promise.all([sb.exec('true'), compute.create(SANDBOX_ID).exec('true')]);
+		expect(fake.createCalls).toHaveLength(1);
 		expect(fake.sandboxes.size).toBe(1);
+	});
+
+	it('does not retain sandbox state strongly in the provider', async () => {
+		const compute = new E2bCompute(baseConfig, new FakeE2b());
+		await compute.create(SANDBOX_ID).exec('true');
+
+		const states = Reflect.get(compute, 'sandboxStates') as Map<SandboxId, unknown>;
+		expect(states.get(SANDBOX_ID)).toBeInstanceOf(WeakRef);
 	});
 
 	it('destroy kills every sandbox carrying our id, not just the first match', async () => {

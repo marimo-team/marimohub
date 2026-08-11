@@ -56,26 +56,30 @@ export interface ComputeContractOptions {
 	semantics?: ComputeContractSemantics;
 }
 
-/**
- * Behavioral cases each backend/fake can opt into. Every field is optional:
- * a fake that cannot model a behavior omits the field and the case is skipped.
- */
-export interface ComputeContractSemantics {
+interface PreexistingEnvSemantics {
+	name: string;
+	value: string;
+	setup: (inst: SandboxInstance) => Promise<() => void | Promise<void>>;
+}
+
+type EnvironmentSemantics =
+	| { envProbe?: never; preexistingEnv?: never }
+	| {
+			/** Command whose stdout is the value of the named environment variable. */
+			envProbe: (name: string) => string;
+			/** Backend-defined value that an onlyIfUnset default must preserve. */
+			preexistingEnv?: PreexistingEnvSemantics;
+	  };
+
+/** Behavioral cases each backend fake can opt into when it can model them faithfully. */
+export type ComputeContractSemantics = {
 	/** Shell command guaranteed to exit non-zero in this backend/fake. */
 	failingCommand?: string;
 	/** A path guaranteed absent, plus the error code the adapter maps it to. */
 	absentFile?: { path: string; code: 'NOT_FOUND' | 'READ_FAILED' };
 	/** Directory listing whose seed creates the contract's visible and hidden fixtures. */
 	hiddenFiles?: { dir: string; seed: (inst: SandboxInstance) => Promise<void> };
-	/** Command whose stdout is the value of the named environment variable. */
-	envProbe?: (name: string) => string;
-	/** Backend-defined environment value that an onlyIfUnset default must preserve. */
-	preexistingEnv?: {
-		name: string;
-		value: string;
-		setup: (inst: SandboxInstance) => Promise<() => void | Promise<void>>;
-	};
-}
+} & EnvironmentSemantics;
 
 export function computeContract(
 	name: string,

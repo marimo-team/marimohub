@@ -149,7 +149,6 @@ class E2bSandboxInstance implements SandboxInstance {
 		private readonly config: E2bConfig,
 		private readonly client: E2bClient,
 		private readonly state: E2bSandboxState,
-		private readonly releaseState: () => void,
 	) {}
 
 	private get ownerTag(): string {
@@ -181,7 +180,6 @@ class E2bSandboxInstance implements SandboxInstance {
 		this.state.handlePromise = promise;
 		promise.catch(() => {
 			if (this.state.handlePromise === promise) this.state.handlePromise = undefined;
-			this.releaseState();
 		});
 		return promise;
 	}
@@ -319,7 +317,6 @@ class E2bSandboxInstance implements SandboxInstance {
 		this.state.destroyPromise = promise;
 		const release = () => {
 			if (this.state.destroyPromise === promise) this.state.destroyPromise = undefined;
-			this.releaseState();
 		};
 		void promise.then(release, release);
 		return promise;
@@ -328,7 +325,13 @@ class E2bSandboxInstance implements SandboxInstance {
 
 export class E2bCompute implements SandboxProvider {
 	private client?: E2bClient;
-	private readonly sandboxStates = new Map<SandboxId, E2bSandboxState>();
+	private readonly sandboxStates = new Map<SandboxId, WeakRef<E2bSandboxState>>();
+	private readonly sandboxStateFinalizer = new FinalizationRegistry<{
+		id: SandboxId;
+		ref: WeakRef<E2bSandboxState>;
+	}>(({ id, ref }) => {
+		if (this.sandboxStates.get(id) === ref) this.sandboxStates.delete(id);
+	});
 
 	constructor(
 		private readonly config: E2bConfig,
@@ -345,21 +348,15 @@ export class E2bCompute implements SandboxProvider {
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
 		// For E2B the selectable "image" is a template id.
 		const config = options?.image ? { ...this.config, template: options.image } : this.config;
-		let state = this.sandboxStates.get(id);
+		let ref = this.sandboxStates.get(id);
+		let state = ref?.deref();
 		if (!state) {
 			state = {};
-			this.sandboxStates.set(id, state);
+			ref = new WeakRef(state);
+			this.sandboxStates.set(id, ref);
+			this.sandboxStateFinalizer.register(state, { id, ref });
 		}
-		const sharedState = state;
-		return new E2bSandboxInstance(id, config, this.getClient(), sharedState, () => {
-			if (
-				this.sandboxStates.get(id) === sharedState &&
-				!sharedState.handlePromise &&
-				!sharedState.destroyPromise
-			) {
-				this.sandboxStates.delete(id);
-			}
-		});
+		return new E2bSandboxInstance(id, config, this.getClient(), state);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { SandboxId } from '@marimo-hub/core';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import type { SandboxInstance } from '@marimo-hub/core/ports';
 import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectFileResult } from '@marimo-hub/core/testing';
 import {
@@ -21,6 +22,31 @@ function newSandbox() {
 	const id = `sb-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
 	created.push(id);
 	return compute.create(id);
+}
+
+function processIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+		throw error;
+	}
+}
+
+async function waitForPid(sandbox: SandboxInstance, path: string): Promise<number> {
+	let pid = 0;
+	await expect
+		.poll(
+			async () => {
+				const result = await sandbox.readFile(path);
+				if (result.success) pid = Number(result.content.trim());
+				return pid;
+			},
+			{ timeout: 5000, interval: 20 },
+		)
+		.toBeGreaterThan(0);
+	return pid;
 }
 
 afterEach(async () => {
@@ -424,27 +450,21 @@ describe('LocalCompute process hygiene', () => {
 
 	it('cancelling an execStream kills the child', async () => {
 		const sb = newSandbox();
-		await sb.writeFiles([{ path: '/workspace/.keep', content: '' }]);
-		const stream = await sb.execStream('sleep 1 && echo alive > /workspace/alive.txt');
+		const stream = await sb.execStream('echo $$ > direct.pid; sleep 30');
+		const pid = await waitForPid(sb, 'direct.pid');
+		expect(processIsAlive(pid)).toBe(true);
 		await stream.cancel();
-		await new Promise((resolve) => setTimeout(resolve, 1500));
-		const read = await sb.readFile('/workspace/alive.txt');
-		expect(read.success).toBe(false);
+		await expect.poll(() => processIsAlive(pid), { timeout: 5000, interval: 20 }).toBe(false);
 	}, 10_000);
 
 	it('cancelling an execStream reader kills the process group', async () => {
 		const sb = newSandbox();
-		await sb.writeFiles([{ path: '/workspace/.keep', content: '' }]);
-		const stream = await sb.execStream(
-			'(sleep 1; echo alive > /workspace/descendant.txt) & printf ready; wait',
-		);
+		const stream = await sb.execStream('sleep 30 & echo $! > descendant.pid; wait');
 		const reader = stream.getReader();
-		const first = await reader.read();
-		expect(new TextDecoder().decode(first.value)).toBe('ready');
+		const pid = await waitForPid(sb, 'descendant.pid');
+		expect(processIsAlive(pid)).toBe(true);
 		await reader.cancel();
-		await new Promise((resolve) => setTimeout(resolve, 1500));
-		const read = await sb.readFile('/workspace/descendant.txt');
-		expect(read.success).toBe(false);
+		await expect.poll(() => processIsAlive(pid), { timeout: 5000, interval: 20 }).toBe(false);
 	}, 10_000);
 
 	it('exec retains only the trailing output', async () => {
