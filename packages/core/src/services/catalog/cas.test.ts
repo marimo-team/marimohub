@@ -1,21 +1,38 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
+import {
+	assertVersionMatch,
+	ConflictError,
+	NotFoundError,
+	PreconditionFailedError,
+} from '../../errors';
 import { MemoryBucket } from '../../testing';
-import { acquireSingletonClaim, mutateObject, releaseSingletonClaim, withCasRetry } from './cas';
+import {
+	acquireSingletonClaim,
+	mutateObject,
+	mutateObjectWithOutcome,
+	releaseSingletonClaim,
+	withCasRetry,
+} from './cas';
 
 describe('withCasRetry', () => {
 	it('returns the first successful attempt', async () => {
+		const bucket = new MemoryBucket();
 		const attempt = vi.fn().mockResolvedValue('ok');
-		expect(await withCasRetry(attempt)).toBe('ok');
+		expect(await withCasRetry(bucket, attempt)).toBe('ok');
 		expect(attempt).toHaveBeenCalledTimes(1);
 	});
 
-	it('retries on PreconditionFailedError then succeeds', async () => {
+	it('retries a conditional-write conflict then succeeds', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('k', 'seed');
 		const onConflict = vi.fn();
 		let n = 0;
 		const result = await withCasRetry(
-			async () => {
-				if (n++ < 2) throw new PreconditionFailedError('race');
+			bucket,
+			async (cas) => {
+				if (n++ < 2) {
+					await cas.put('k', 'loser', { onlyIfEtagMatches: 'stale' });
+				}
 				return 'won';
 			},
 			{ backoffMs: () => 0, onConflict },
@@ -25,31 +42,94 @@ describe('withCasRetry', () => {
 	});
 
 	it('throws ConflictError once retries are exhausted', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('k', 'seed');
+		const precondition = new PreconditionFailedError('lost race');
+		vi.spyOn(bucket, 'put').mockRejectedValue(precondition);
+		const onConflict = vi.fn();
 		const onExhausted = vi.fn();
+		const result = withCasRetry(
+			bucket,
+			async (cas) => {
+				return cas.put('k', 'loser', { onlyIfEtagMatches: 'stale' });
+			},
+			{
+				retries: 3,
+				backoffMs: () => 0,
+				onConflict,
+				onExhausted,
+			},
+		);
+		await expect(result).rejects.toMatchObject({
+			name: 'ConflictError',
+			cause: precondition,
+		});
+		expect(onConflict).toHaveBeenNthCalledWith(1, 0, precondition);
+		expect(onConflict).toHaveBeenNthCalledWith(2, 1, precondition);
+		expect(onConflict).toHaveBeenNthCalledWith(3, 2, precondition);
+		expect(onExhausted).toHaveBeenCalledOnce();
+		expect(onExhausted).toHaveBeenCalledWith(precondition);
+	});
+
+	it('does not attach a cause when zero retries run', async () => {
+		const bucket = new MemoryBucket();
+		const onExhausted = vi.fn();
+		const attempt = vi.fn();
+		const result = withCasRetry(bucket, attempt, { retries: 0, onExhausted });
+
+		await expect(result).rejects.toSatisfy(
+			(error: unknown) => error instanceof ConflictError && error.cause === undefined,
+		);
+		expect(attempt).not.toHaveBeenCalled();
+		expect(onExhausted).toHaveBeenCalledWith(undefined);
+	});
+
+	it('keeps callback-thrown preconditions out of conflict hooks', async () => {
+		const bucket = new MemoryBucket();
+		const precondition = new PreconditionFailedError('stale client version');
+		const onConflict = vi.fn();
+		const onExhausted = vi.fn();
+
 		await expect(
 			withCasRetry(
+				bucket,
 				async () => {
-					throw new PreconditionFailedError('race');
+					throw precondition;
 				},
 				{
-					retries: 3,
 					backoffMs: () => 0,
+					onConflict,
 					onExhausted,
 				},
 			),
-		).rejects.toBeInstanceOf(ConflictError);
-		expect(onExhausted).toHaveBeenCalledTimes(1);
+		).rejects.toBe(precondition);
+		expect(onConflict).not.toHaveBeenCalled();
+		expect(onExhausted).not.toHaveBeenCalled();
 	});
 
 	it('propagates a non-precondition error immediately (no retry)', async () => {
+		const bucket = new MemoryBucket();
 		const attempt = vi.fn().mockRejectedValue(new TypeError('boom'));
-		await expect(withCasRetry(attempt, { backoffMs: () => 0 })).rejects.toBeInstanceOf(TypeError);
+		await expect(withCasRetry(bucket, attempt, { backoffMs: () => 0 })).rejects.toBeInstanceOf(
+			TypeError,
+		);
+		expect(attempt).toHaveBeenCalledTimes(1);
+	});
+
+	it('propagates a client precondition error immediately (no retry)', async () => {
+		const bucket = new MemoryBucket();
+		const precondition = new PreconditionFailedError('stale client version');
+		const attempt = vi.fn().mockRejectedValue(precondition);
+		await expect(withCasRetry(bucket, attempt, { backoffMs: () => 0 })).rejects.toBe(precondition);
 		expect(attempt).toHaveBeenCalledTimes(1);
 	});
 
 	it('throws ConflictError immediately when retries is 0 (attempt never runs)', async () => {
+		const bucket = new MemoryBucket();
 		const attempt = vi.fn();
-		await expect(withCasRetry(attempt, { retries: 0 })).rejects.toBeInstanceOf(ConflictError);
+		await expect(withCasRetry(bucket, attempt, { retries: 0 })).rejects.toBeInstanceOf(
+			ConflictError,
+		);
 		expect(attempt).not.toHaveBeenCalled();
 	});
 });
@@ -61,7 +141,7 @@ describe('mutateObject', () => {
 		const bucket = new MemoryBucket();
 		await bucket.put('k', JSON.stringify({ n: 1 }));
 		const result = await mutateObject(bucket, 'k', parse, (cur) => ({ n: cur.n + 1 }));
-		expect(result.n).toBe(2);
+		expect(result).toEqual({ n: 2 });
 		expect(JSON.parse(await (await bucket.get('k'))!.text())).toEqual({ n: 2 });
 	});
 
@@ -69,7 +149,7 @@ describe('mutateObject', () => {
 		const bucket = new MemoryBucket();
 		const before = await bucket.put('k', JSON.stringify({ n: 1 }));
 		const result = await mutateObject(bucket, 'k', parse, () => null);
-		expect(result.n).toBe(1);
+		expect(result).toEqual({ n: 1 });
 		// ETag unchanged → no write happened.
 		expect((await bucket.head('k'))!.etag).toBe(before.etag);
 	});
@@ -152,7 +232,58 @@ describe('mutateObject', () => {
 		);
 
 		expect(seen).toEqual([0, 99]); // applied to the stale value, then re-applied to fresh
-		expect(result.n).toBe(100);
+		expect(result).toEqual({ n: 100 });
+	});
+});
+
+describe('mutateObjectWithOutcome', () => {
+	const parse = (raw: unknown) => raw as { n: number };
+
+	it('reports a committed write', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('k', JSON.stringify({ n: 1 }));
+
+		const result = await mutateObjectWithOutcome(bucket, 'k', parse, (current) => ({
+			n: current.n + 1,
+		}));
+
+		expect(result).toEqual({ value: { n: 2 }, written: true });
+	});
+
+	it('reports an unchanged value', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('k', JSON.stringify({ n: 1 }));
+
+		const result = await mutateObjectWithOutcome(bucket, 'k', parse, () => null);
+
+		expect(result).toEqual({ value: { n: 1 }, written: false });
+	});
+});
+
+describe('mutateObject preconditions', () => {
+	it('does not retry a stale client precondition inside mutateObject', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('k', JSON.stringify({ updated_at: 'v2' }));
+		const onAttempt = vi.fn();
+
+		await expect(
+			mutateObject(
+				bucket,
+				'k',
+				(raw) => raw as { updated_at: string },
+				(current) => {
+					assertVersionMatch(current.updated_at, 'v1');
+					return current;
+				},
+				{
+					onAttempt,
+					backoffMs: () => {
+						throw new Error('unexpected retry');
+					},
+				},
+			),
+		).rejects.toBeInstanceOf(PreconditionFailedError);
+		expect(onAttempt).toHaveBeenCalledTimes(1);
 	});
 });
 

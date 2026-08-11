@@ -5,7 +5,6 @@ import {
 	assertVersionMatch,
 	BadRequestError,
 	NotFoundError,
-	PreconditionFailedError,
 	ResourceExhaustedError,
 	UnavailableError,
 	ValidationError,
@@ -117,27 +116,6 @@ const ORG_SCOPE: IntegrationScope = {
 	nameClaim: paths.orgIntegrationNameClaim,
 	where: 'at the org level',
 };
-
-/**
- * A head that no longer matches the caller's `If-Match`, raised from inside a CAS
- * callback. `withCasRetry` reads a `PreconditionFailedError` as a lost race and
- * retries it, so the guard escapes the loop wrapped and `update` rethrows the 412.
- */
-class StaleHeadError extends Error {
-	constructor(readonly precondition: PreconditionFailedError) {
-		super(precondition.message);
-		this.name = 'StaleHeadError';
-	}
-}
-
-function assertHeadUnchanged(current: IntegrationRecord, expected: string | undefined): void {
-	try {
-		assertVersionMatch(current.updated_at, expected);
-	} catch (err) {
-		if (err instanceof PreconditionFailedError) throw new StaleHeadError(err);
-		throw err;
-	}
-}
 
 /**
  * A head carrying `deleted_at` is a tombstone: the terminal state a delete CAS's
@@ -367,7 +345,7 @@ class ScopedIntegrationsStore {
 							headPath,
 							parseHead,
 							(current) => {
-								assertHeadUnchanged(current, expected);
+								assertVersionMatch(current.updated_at, expected);
 								return {
 									...current,
 									name: newName,
@@ -413,7 +391,7 @@ class ScopedIntegrationsStore {
 				headPath,
 				parseHead,
 				(current) => {
-					assertHeadUnchanged(current, expected);
+					assertVersionMatch(current.updated_at, expected);
 					return {
 						...current,
 						...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
@@ -428,12 +406,7 @@ class ScopedIntegrationsStore {
 				headNotFound,
 			);
 		});
-		try {
-			await transaction.run();
-		} catch (err) {
-			if (err instanceof StaleHeadError) throw err.precondition;
-			throw err;
-		}
+		await transaction.run();
 		if (newName !== undefined) await this.releaseName(scope, head.name, id);
 		const { version, config } = await this.loadCurrent(scope, updated!);
 		return this.toDetail(scope, updated!, version, config);
@@ -494,7 +467,6 @@ class ScopedIntegrationsStore {
 			name = await this.tombstoneHead(scope, id, expectedVersion);
 			existed = name !== undefined;
 		} catch (err) {
-			if (err instanceof StaleHeadError) throw err.precondition;
 			// A head that cannot be parsed has no version to check and nothing to
 			// tombstone, but must still be removable — sweep its objects unguarded.
 			if (!(err instanceof ValidationError || err instanceof StoredObjectError)) throw err;
@@ -528,7 +500,7 @@ class ScopedIntegrationsStore {
 		expectedVersion: string | undefined,
 	): Promise<string | undefined> {
 		const headPath = scope.integration(id).head;
-		return withCasRetry(async () => {
+		return withCasRetry(this.bucket, async (cas) => {
 			const existing = await this.bucket.get(headPath);
 			if (!existing) return;
 			const raw = await readStoredJson(existing, headPath);
@@ -538,8 +510,8 @@ class ScopedIntegrationsStore {
 				return parseStored(IntegrationRecordSchema, raw, `integration ${id}`).name;
 			}
 			const head = this.parseHead(scope, id, raw);
-			assertHeadUnchanged(head, expectedVersion);
-			await this.bucket.put(headPath, JSON.stringify({ ...head, deleted_at: this.now() }), {
+			assertVersionMatch(head.updated_at, expectedVersion);
+			await cas.put(headPath, JSON.stringify({ ...head, deleted_at: this.now() }), {
 				onlyIfEtagMatches: existing.etag,
 			});
 			return head.name;
@@ -853,21 +825,20 @@ class ScopedIntegrationsStore {
 	): Promise<number> {
 		let version = head.current_version + 1;
 		const integrationPaths = scope.integration(head.id);
-		return withCasRetry(async () => {
-			try {
-				await this.bucket.put(
-					integrationPaths.version(version),
-					JSON.stringify({ ...record, version }),
-					{
-						onlyIfNotExists: true,
-					},
-				);
+		return withCasRetry(
+			this.bucket,
+			async (cas) => {
+				await cas.put(integrationPaths.version(version), JSON.stringify({ ...record, version }), {
+					onlyIfNotExists: true,
+				});
 				return version;
-			} catch (err) {
-				if (err instanceof PreconditionFailedError) version += 1;
-				throw err;
-			}
-		});
+			},
+			{
+				onConflict: () => {
+					version += 1;
+				},
+			},
+		);
 	}
 
 	private async assertNameFree(scope: IntegrationScope, name: string): Promise<void> {

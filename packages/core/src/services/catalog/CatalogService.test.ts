@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ACTOR, makeCatalog, makeSnapshot, MemoryBucket, setupTestEnv } from '../../testing';
 import { ConflictError, NotInitializedError, PreconditionFailedError } from '../../errors';
-import { createSnapshotId } from '../../ids';
+import { createNotebookId, createSnapshotId } from '../../ids';
 import { paths } from '../../paths';
 import { noopMetrics } from '../../ports/metrics';
 import { EventSchema, SnapshotSchema } from '../../schema';
@@ -9,13 +9,16 @@ import type { Snapshot } from '../../schema';
 import { CatalogService } from './CatalogService';
 import { EventService } from './EventService';
 
+// Exhaustion tests should not spend 750 ms in production backoff timers.
+const ZERO_BACKOFF = { backoffMs: () => 0 };
+
 describe('CatalogService', () => {
 	let bucket: MemoryBucket;
 	let catalog: CatalogService;
 
 	beforeEach(async () => {
 		bucket = new MemoryBucket();
-		catalog = new CatalogService(bucket);
+		catalog = new CatalogService(bucket, noopMetrics, undefined, ZERO_BACKOFF);
 	});
 
 	describe('initialize', () => {
@@ -145,6 +148,30 @@ describe('CatalogService', () => {
 			expect(result.operation).toBe('test.op');
 			expect(result.projects).toHaveLength(1);
 			expect(result.projects[0].name).toBe('New');
+		});
+
+		it('awaits an asynchronous mutation', async () => {
+			const result = await catalog.mutateSnapshot('test.async', ACTOR, async (snapshot) => {
+				await Promise.resolve();
+				return {
+					...snapshot,
+					projects: [
+						{
+							id: 'proj-7h2k9qm4xz7rp3w8' as any,
+							name: 'Async',
+							description: '',
+							owner: ACTOR,
+							status: 'active',
+							created_at: new Date().toISOString(),
+							updated_at: new Date().toISOString(),
+							notebook_count: 0,
+							notebooks: [],
+						},
+					],
+				};
+			});
+
+			expect(result.projects[0].name).toBe('Async');
 		});
 
 		it('preserves snapshot chain — previous_snapshot_id is set', async () => {
@@ -343,7 +370,12 @@ describe('CatalogService', () => {
 	describe('metrics', () => {
 		it('emits CAS conflict + exhausted counters under contention', async () => {
 			const increment = vi.fn();
-			const instrumented = new CatalogService(bucket, { increment, gauge: vi.fn() });
+			const instrumented = new CatalogService(
+				bucket,
+				{ increment, gauge: vi.fn() },
+				undefined,
+				ZERO_BACKOFF,
+			);
 			await instrumented.initialize(ACTOR);
 
 			// Always fail the conditional catalog swap.
@@ -422,6 +454,73 @@ describe('CatalogService', () => {
 		it('writes no events when no EventService is injected', async () => {
 			await catalog.mutateSnapshot('project.update', ACTOR, (s) => s);
 			expect(await listEvents()).toHaveLength(0);
+		});
+	});
+
+	describe('updateNotebookEntry', () => {
+		async function setupEntry() {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'D' }, ACTOR);
+			const notebook = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: 'D', code: 'print(1)' },
+				ACTOR,
+			);
+			return { env, project, notebook };
+		}
+
+		it.each([
+			{
+				name: 'keeps a newer notebook timestamp over an older project patch',
+				notebookAt: '2099-01-01T00:00:00.000Z',
+				projectAt: '2000-01-01T00:00:00.000Z',
+				expected: '2099-01-01T00:00:00.000Z',
+			},
+			{
+				name: 'uses a newer explicit project timestamp',
+				notebookAt: '2099-01-01T00:00:00.000Z',
+				projectAt: '2100-01-01T00:00:00.000Z',
+				expected: '2100-01-01T00:00:00.000Z',
+			},
+		])('$name', async ({ notebookAt, projectAt, expected }) => {
+			const { env, project, notebook } = await setupEntry();
+
+			const snapshot = await env.catalog.updateNotebookEntry(
+				'test.notebook.patch',
+				ACTOR,
+				project.id,
+				notebook.id,
+				() => ({ updated_at: notebookAt }),
+				() => ({ updated_at: projectAt }),
+			);
+
+			expect(snapshot.projects[0].notebooks[0].updated_at).toBe(notebookAt);
+			expect(snapshot.projects[0].updated_at).toBe(expected);
+		});
+
+		it('skips the notebook patch when the entry is missing', async () => {
+			const { env, project } = await setupEntry();
+			const before = await env.catalog.getCurrentSnapshot();
+			const notebookPatch = vi.fn();
+			const projectPatch = vi.fn().mockReturnValue({
+				updated_at: '2000-01-01T00:00:00.000Z',
+				notebook_count: 7,
+			});
+
+			const snapshot = await env.catalog.updateNotebookEntry(
+				'test.notebook.missing',
+				ACTOR,
+				project.id,
+				createNotebookId(),
+				notebookPatch,
+				projectPatch,
+			);
+
+			expect(notebookPatch).not.toHaveBeenCalled();
+			expect(projectPatch).toHaveBeenCalledOnce();
+			expect(snapshot.projects[0].notebooks).toEqual(before.projects[0].notebooks);
+			expect(snapshot.projects[0].updated_at).toBe(before.projects[0].updated_at);
+			expect(snapshot.projects[0].notebook_count).toBe(7);
 		});
 	});
 

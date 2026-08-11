@@ -31,6 +31,7 @@ import { mutateObject } from '../catalog/cas';
 import { buildNotebookEntry, buildNotebookMeta, buildVersion } from './notebookMeta';
 import { listAllKeys } from '../catalog/storage';
 import type { GitSource, NotebookMeta, Source } from '../../schema';
+import { loadNotebookCatalogPatch } from './catalogProjection';
 
 interface SyncedNotebookServiceHooks {
 	getNotebook: (
@@ -175,8 +176,7 @@ export class SyncedNotebookService {
 			actor,
 			projectId,
 			notebookId,
-			() => ({ updated_at: now }),
-			() => ({ updated_at: now }),
+			() => loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
 		);
 		return source;
 	}
@@ -287,8 +287,7 @@ export class SyncedNotebookService {
 			actor,
 			projectId,
 			notebookId,
-			() => ({ status: updatedMeta.status, updated_at: now }),
-			() => ({ updated_at: now }),
+			() => loadNotebookCatalogPatch(this.bucket, projectId, notebookId),
 		);
 
 		await this.hooks.pruneVersions(projectId, notebookId, versionToKeep);

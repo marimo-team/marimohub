@@ -13,7 +13,7 @@ import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
 import { metricsObserver, saga } from '../../saga';
-import { ProjectSchema, readStored, toPublicProjectEntry } from '../../schema';
+import { parseStored, ProjectSchema, readStored, toPublicProjectEntry } from '../../schema';
 import type {
 	Project,
 	ProjectFederation,
@@ -22,7 +22,9 @@ import type {
 	Snapshot,
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
+import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
 import { deleteByPrefix } from '../catalog/storage';
+import { loadProjectCatalogPatch, projectCatalogPatch } from './catalogProjection';
 
 /** Grace period before a soft-deleted project's storage is purged by the GC sweep. */
 export const DEFAULT_DELETED_PROJECT_RETENTION_MS = Millis.days(30);
@@ -166,26 +168,32 @@ export class ProjectService {
 		actor: UserId,
 		expectedVersion?: string,
 	): Promise<Project> {
-		const existing = await this.getProject(id);
-		assertVersionMatch(existing.updated_at, expectedVersion);
-		const now = new Date().toISOString();
+		const key = paths.project(id).meta;
 
-		const updated: Project = {
-			...existing,
-			name: input.name ?? existing.name,
-			description: input.description ?? existing.description,
-			tags: input.tags ?? existing.tags,
-			federation: input.federation ?? existing.federation,
-			updated_at: now,
-		};
+		const updated = await mutateObject(
+			this.bucket,
+			key,
+			(raw) => parseStored(ProjectSchema, raw, key),
+			(current) => {
+				assertVersionMatch(current.updated_at, expectedVersion);
+				if (current.status === 'deleted') {
+					throw new NotFoundError(`Project ${id} not found`);
+				}
+				return {
+					...current,
+					name: input.name ?? current.name,
+					description: input.description ?? current.description,
+					tags: input.tags ?? current.tags,
+					federation: input.federation ?? current.federation,
+					updated_at: new Date().toISOString(),
+				};
+			},
+			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
+		);
 
-		await this.bucket.put(paths.project(id).meta, JSON.stringify(updated));
-
-		await this.catalog.updateProjectEntry('project.update', actor, id, () => ({
-			name: updated.name,
-			description: updated.description,
-			updated_at: now,
-		}));
+		await this.catalog.updateProjectEntry('project.update', actor, id, (entry) =>
+			loadProjectCatalogPatch(this.bucket, id, entry),
+		);
 
 		return updated;
 	}
@@ -201,20 +209,25 @@ export class ProjectService {
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<Project> {
-		const existing = await this.getProject(id);
 		const userId = 'user_id' in member ? member.user_id : undefined;
 		const email = member.email !== undefined ? normalizeEmail(member.email) : undefined;
-		const duplicate = existing.members.some(
-			(m) =>
-				(userId !== undefined && m.user_id === userId) ||
-				(email !== undefined && m.email === email),
+		return this.writeMembers(
+			id,
+			(current) => {
+				const duplicate = current.members.some(
+					(m) =>
+						(userId !== undefined && m.user_id === userId) ||
+						(email !== undefined && m.email === email),
+				);
+				if (duplicate) {
+					throw new ConflictError(`${userId ?? email} is already a member of project ${id}`);
+				}
+				const row: ProjectMember =
+					userId !== undefined ? { user_id: userId, role } : { email: email as string, role };
+				return [...current.members, row];
+			},
+			actor,
 		);
-		if (duplicate) {
-			throw new ConflictError(`${userId ?? email} is already a member of project ${id}`);
-		}
-		const row: ProjectMember =
-			userId !== undefined ? { user_id: userId, role } : { email: email as string, role };
-		return this.writeMembers(existing, [...existing.members, row], actor);
 	}
 
 	/**
@@ -228,17 +241,21 @@ export class ProjectService {
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<Project> {
-		const existing = await this.getProject(id);
-		if (selector === existing.owner) {
-			throw new ConflictError(`Cannot change the role of the project owner`);
-		}
-		if (!existing.members.some((m) => memberRefMatchesSelector(m, selector))) {
-			throw new NotFoundError(`${selector} is not a member of project ${id}`);
-		}
-		const members = existing.members.map((m) =>
-			memberRefMatchesSelector(m, selector) ? { ...m, role } : m,
+		return this.writeMembers(
+			id,
+			(current) => {
+				if (selector === current.owner) {
+					throw new ConflictError(`Cannot change the role of the project owner`);
+				}
+				if (!current.members.some((m) => memberRefMatchesSelector(m, selector))) {
+					throw new NotFoundError(`${selector} is not a member of project ${id}`);
+				}
+				return current.members.map((m) =>
+					memberRefMatchesSelector(m, selector) ? { ...m, role } : m,
+				);
+			},
+			actor,
 		);
-		return this.writeMembers(existing, members, actor);
 	}
 
 	/**
@@ -246,15 +263,19 @@ export class ProjectService {
 	 * be removed.
 	 */
 	async removeMember(id: ProjectId, selector: string, actor: UserId): Promise<Project> {
-		const existing = await this.getProject(id);
-		if (selector === existing.owner) {
-			throw new ConflictError(`Cannot remove the project owner`);
-		}
-		if (!existing.members.some((m) => memberRefMatchesSelector(m, selector))) {
-			throw new NotFoundError(`${selector} is not a member of project ${id}`);
-		}
-		const members = existing.members.filter((m) => !memberRefMatchesSelector(m, selector));
-		return this.writeMembers(existing, members, actor);
+		return this.writeMembers(
+			id,
+			(current) => {
+				if (selector === current.owner) {
+					throw new ConflictError(`Cannot remove the project owner`);
+				}
+				if (!current.members.some((m) => memberRefMatchesSelector(m, selector))) {
+					throw new NotFoundError(`${selector} is not a member of project ${id}`);
+				}
+				return current.members.filter((m) => !memberRefMatchesSelector(m, selector));
+			},
+			actor,
+		);
 	}
 
 	// The authoritative roster (with roles) lives on project.json; the snapshot
@@ -263,18 +284,30 @@ export class ProjectService {
 	// membership change rewrites the meta blob and, in the same catalog CAS, bumps
 	// `updated_at` and refreshes both rosters to match.
 	private async writeMembers(
-		existing: Project,
-		members: ProjectMember[],
+		id: ProjectId,
+		deriveMembers: (current: Project) => ProjectMember[],
 		actor: UserId,
 	): Promise<Project> {
-		const now = new Date().toISOString();
-		const updated: Project = { ...existing, members, updated_at: now };
-		await this.bucket.put(paths.project(existing.id).meta, JSON.stringify(updated));
-		await this.catalog.updateProjectEntry('project.members', actor, existing.id, () => ({
-			updated_at: now,
-			member_ids: members.flatMap((m) => (m.user_id !== undefined ? [m.user_id] : [])),
-			member_emails: members.flatMap((m) => (m.email !== undefined ? [m.email] : [])),
-		}));
+		const key = paths.project(id).meta;
+		const updated = await mutateObject(
+			this.bucket,
+			key,
+			(raw) => parseStored(ProjectSchema, raw, key),
+			(current) => {
+				if (current.status === 'deleted') {
+					throw new NotFoundError(`Project ${id} not found`);
+				}
+				return {
+					...current,
+					members: deriveMembers(current),
+					updated_at: new Date().toISOString(),
+				};
+			},
+			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
+		);
+		await this.catalog.updateProjectEntry('project.members', actor, id, (entry) =>
+			loadProjectCatalogPatch(this.bucket, id, entry),
+		);
 		return updated;
 	}
 
@@ -285,26 +318,35 @@ export class ProjectService {
 	 * Mirrors `NotebookService.deleteNotebook`.
 	 */
 	async deleteProject(id: ProjectId, actor: UserId, expectedVersion?: string): Promise<void> {
-		const existing = await this.getProject(id); // ensure exists (404 otherwise)
-		assertVersionMatch(existing.updated_at, expectedVersion);
-		// Idempotent: a project already soft-deleted is left untouched so a repeated
-		// delete (retry / double-click) is a no-op.
-		if (existing.status === 'deleted') {
-			return;
-		}
-		const now = new Date().toISOString();
-
-		// Soft-delete: tombstone the project.json (deletion time = updated_at).
-		const updated: Project = { ...existing, status: 'deleted', updated_at: now };
-		await this.bucket.put(paths.project(id).meta, JSON.stringify(updated));
+		const key = paths.project(id).meta;
+		const { value: updated, written } = await mutateObjectWithOutcome(
+			this.bucket,
+			key,
+			(raw) => parseStored(ProjectSchema, raw, key),
+			(current) => {
+				assertVersionMatch(current.updated_at, expectedVersion);
+				if (current.status === 'deleted') return null;
+				return {
+					...current,
+					status: 'deleted' as const,
+					updated_at: new Date().toISOString(),
+				};
+			},
+			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
+		);
+		if (!written) return;
 
 		// Soft-delete in the snapshot: keep the entry (and its nested notebooks) so
 		// the GC sweep can find and purge it later, but mark it deleted so it drops
 		// out of listProjects immediately.
-		await this.catalog.updateProjectEntry('project.delete', actor, id, () => ({
-			status: 'deleted' as const,
-			updated_at: now,
-		}));
+		await this.catalog.updateProjectEntry(
+			'project.delete',
+			actor,
+			id,
+			async (entry) =>
+				(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
+				projectCatalogPatch(updated, entry),
+		);
 	}
 
 	/**

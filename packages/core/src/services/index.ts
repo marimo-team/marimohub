@@ -96,7 +96,14 @@ export {
 export type { CreatedToken, CreateTokenInput } from './tokens/TokenService';
 export { composeAuthenticators } from './tokens/composeAuthenticators';
 export { listAllKeys } from './catalog/storage';
-export { mutateObject, withCasRetry, type CasRetryOptions } from './catalog/cas';
+export {
+	mutateObject,
+	mutateObjectWithOutcome,
+	withCasRetry,
+	type CasRetryOptions,
+	type CasWriter,
+	type ObjectMutationOutcome,
+} from './catalog/cas';
 export {
 	createWorkspaceLoadStrategies,
 	DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
