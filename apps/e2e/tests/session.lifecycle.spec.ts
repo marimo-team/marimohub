@@ -20,10 +20,42 @@ async function listProjectSessions(page: Page, projectId: string): Promise<Sessi
 	return body.data?.items ?? [];
 }
 
+async function listProjectSessionsWithRetry(
+	page: Page,
+	projectId: string,
+): Promise<SessionSummary[]> {
+	let sessions: SessionSummary[] | undefined;
+	await expect(async () => {
+		sessions = await listProjectSessions(page, projectId);
+	}).toPass({ timeout: 10_000 });
+	if (!sessions) throw new Error('Session listing completed without a result');
+	return sessions;
+}
+
 async function expectNoProjectSessions(page: Page, projectId: string): Promise<void> {
-	await expect
-		.poll(async () => (await listProjectSessions(page, projectId)).length, { timeout: 120_000 })
-		.toBe(0);
+	await expect(async () => {
+		const sessions = await listProjectSessions(page, projectId);
+		expect(
+			sessions,
+			`Active project sessions: ${sessions.map((session) => `${session.session_id} (${session.status})`).join(', ')}`,
+		).toHaveLength(0);
+	}).toPass({ timeout: 120_000 });
+}
+
+async function deleteSessionForCleanup(
+	page: Page,
+	projectId: string,
+	session: SessionSummary,
+): Promise<void> {
+	const path = `/api/v1/projects/${projectId}/notebooks/${session.notebook_id}/sessions/${session.session_id}`;
+	const response = await page.request.delete(path).catch((error: unknown) => {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`DELETE ${path} failed: ${detail}`);
+	});
+	if (!response.ok()) {
+		const body = (await response.text()).slice(0, 500);
+		throw new Error(`DELETE ${path} returned ${response.status()}${body ? `: ${body}` : ''}`);
+	}
 }
 
 test.describe('session lifecycle', () => {
@@ -33,17 +65,21 @@ test.describe('session lifecycle', () => {
 		const projectId = projectIdFromUrl(page.url());
 		if (!projectId) return;
 
-		const sessions = await listProjectSessions(page, projectId).catch(() => null);
-		if (!sessions) return;
-
-		for (const session of sessions) {
-			if (session.status === 'running' || session.status === 'starting') {
-				await page.request
-					.delete(
-						`/api/v1/projects/${projectId}/notebooks/${session.notebook_id}/sessions/${session.session_id}`,
-					)
-					.catch(() => {});
-			}
+		const sessions = await listProjectSessionsWithRetry(page, projectId);
+		const results = await Promise.allSettled(
+			sessions
+				.filter((session) => session.status === 'running' || session.status === 'starting')
+				.map((session) => deleteSessionForCleanup(page, projectId, session)),
+		);
+		const failures = results.flatMap((result) =>
+			result.status === 'rejected'
+				? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
+				: [],
+		);
+		if (failures.length > 0) {
+			throw new Error(
+				`Session cleanup failed:\n${failures.map((failure) => `- ${failure}`).join('\n')}`,
+			);
 		}
 		// A terminating session already has a teardown owner; a duplicate DELETE
 		// skips sandbox destruction, so wait for the original teardown to finish.
