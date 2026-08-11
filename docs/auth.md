@@ -172,9 +172,11 @@ It is the one grant that overrides the per-project role model. Only super admins
 can manage [organization-wide integrations](./integrations.md#organization-wide-integrations).
 Project roles never grant this access.
 
-The web application gives super admins a deployment audit-log page. The page
-uses `GET /api/v1/events`. This endpoint returns at most 30 UTC days per query.
-Project managers retain access to each project's daily audit log.
+The web application gives super admins deployment users, settings, and audit-log
+pages. From the users page they can suspend or reactivate anyone except
+themselves. The audit page uses `GET /api/v1/events`. This endpoint returns at
+most 30 UTC days per query. Project managers retain access to each project's
+daily audit log.
 
 Existing non-owner Admin memberships remain valid and can be demoted or removed,
 but the API does not allow new Admin assignments. A deployment introducing
@@ -193,6 +195,33 @@ removed, and a soft-deleted project stays unreachable (`404`) like it is for
 everyone else. Session and app rate caps are not bypassed. A personal access
 token minted by a super admin carries the same power, so scope those tokens
 accordingly. Unset (the default) means no super admins.
+
+## Deprovisioning and user suspension
+
+Super admins can suspend a known user from **Admin -> Users**, or with
+`PUT /api/v1/users/{id}/suspension`; `DELETE` on the same path reactivates the
+user. Suspension blocks both browser-session authentication and personal access
+tokens. Requests authenticated with a browser session receive
+`403 USER_SUSPENDED`; PAT authentication fails as an invalid credential.
+Suspension and reactivation write `user.suspended` and `user.unsuspended` audit
+events with the operator and target user ids.
+
+Enforcement uses a bounded per-user cache in each server process. An active
+result is fresh for 10 seconds, then served stale while it refreshes until a
+hard limit of 30 seconds. Past that limit the request waits for storage; if the
+status cannot be verified, the API fails closed with `503 SERVICE_UNAVAILABLE`.
+A suspended result is cached for five minutes and remains denied while a stale
+entry refreshes. This asymmetry bounds unauthorized access without making a
+storage outage reactivate anyone. Pair suspension with session revocation at
+the identity provider when access must end immediately.
+
+Profile and suspension updates use ETag compare-and-swap. An authenticated
+profile refresh therefore cannot overwrite a concurrent suspension change.
+
+Suspension does not terminate an already-running notebook sandbox. Its normal
+lifetime and idle policies still apply. This lifecycle flag is also the intended
+target for future SCIM deprovisioning: a SCIM `active: false` update can suspend
+the same identity without changing the authentication-time enforcement path.
 
 ## Troubleshooting
 

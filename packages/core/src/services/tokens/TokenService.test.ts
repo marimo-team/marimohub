@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { advanceTime, MemoryBucket, restoreClock, uid } from '../../testing';
-import { NotFoundError, ResourceExhaustedError } from '../../errors';
+import { NotFoundError, ResourceExhaustedError, UnavailableError } from '../../errors';
 import { TokenId } from '../../ids';
 import { paths } from '../../paths';
 import { IdentityService } from '../identity/IdentityService';
@@ -179,6 +179,40 @@ describe('TokenService', () => {
 
 			advanceTime(2 * 24 * 60 * 60 * 1000);
 			expect(await tokens.verify(token)).toBeNull();
+		});
+
+		it('rejects a suspended issuer and accepts the token again after reactivation', async () => {
+			const { token } = await tokens.create({ name: 'ci' }, OWNER);
+			expect(await tokens.verify(token)).toBeTruthy();
+
+			await identities.setSuspension(OWNER, true);
+			expect(await tokens.verify(token)).toBeNull();
+
+			await identities.setSuspension(OWNER, false);
+			expect(await tokens.verify(token)).toBeTruthy();
+		});
+
+		it('checks suspension on every verification, including token-cache hits', async () => {
+			const { token } = await tokens.create({ name: 'ci' }, OWNER);
+			const isSuspended = vi.spyOn(identities, 'isSuspended');
+
+			await tokens.verify(token);
+			await tokens.verify(token);
+
+			expect(isSuspended).toHaveBeenCalledTimes(2);
+			expect(isSuspended).toHaveBeenNthCalledWith(1, OWNER);
+			expect(isSuspended).toHaveBeenNthCalledWith(2, OWNER);
+		});
+
+		it('propagates an unavailable suspension check without touching the token', async () => {
+			const { token } = await tokens.create({ name: 'ci' }, OWNER);
+			const put = vi.spyOn(bucket, 'put');
+			vi.spyOn(identities, 'isSuspended').mockRejectedValue(
+				new UnavailableError('Unable to verify account suspension status'),
+			);
+
+			await expect(tokens.verify(token)).rejects.toBeInstanceOf(UnavailableError);
+			expect(put).not.toHaveBeenCalled();
 		});
 
 		it('returns null for a schema-corrupt stored record', async () => {

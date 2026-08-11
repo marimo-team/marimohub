@@ -9,7 +9,8 @@ import {
 	PreconditionFailedError,
 	UnavailableError,
 } from '@marimo-hub/core';
-import { createInitializedBucket, createTestApi, expectPage } from './testing';
+import { ACTOR } from '@marimo-hub/core/testing';
+import { createInitializedBucket, createTestApi, expectError, expectPage } from './testing';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -87,6 +88,40 @@ describe('createApi identity refresh is best-effort', () => {
 		const { request } = createTestApi({ bucket, deps: { services } });
 		const res = await request('GET', '/projects');
 		expect(await expectPage(res)).toEqual([]);
+	});
+});
+
+describe('createApi suspended-user enforcement', () => {
+	it('rejects every authenticated API route before identity upsert and restores access on reactivation', async () => {
+		const bucket = await createInitializedBucket();
+		const { request, deps } = createTestApi({ bucket });
+		await deps.services.identities.upsert({
+			id: ACTOR,
+			email: `${ACTOR}@example.com`,
+			name: 'Suspended User',
+		});
+		await deps.services.identities.setSuspension(ACTOR, true);
+		const upsert = vi.spyOn(deps.services.identities, 'upsert');
+
+		for (const path of ['/me', '/projects', '/admin/users']) {
+			await expectError(await request('GET', path), 403, 'USER_SUSPENDED');
+		}
+		expect(upsert).not.toHaveBeenCalled();
+		expect((await deps.services.identities.get(ACTOR))?.suspended_at).toBeTruthy();
+
+		await deps.services.identities.setSuspension(ACTOR, false);
+		expect(await request('GET', '/me')).toHaveProperty('status', 200);
+	});
+
+	it('fails closed when suspension status cannot be verified', async () => {
+		const bucket = await createInitializedBucket();
+		const services = createServices(bucket);
+		vi.spyOn(services.identities, 'isSuspended').mockRejectedValue(
+			new UnavailableError('Unable to verify account suspension status'),
+		);
+
+		const { request } = createTestApi({ bucket, deps: { services } });
+		await expectError(await request('GET', '/projects'), 503, 'SERVICE_UNAVAILABLE');
 	});
 });
 

@@ -12,6 +12,7 @@ const USERS: AdminUser[] = [
 		email: 'ada@example.com',
 		name: 'Ada Lovelace',
 		updated_at: '2026-08-01T12:00:00.000Z',
+		suspended_at: null,
 		is_super_admin: true,
 	},
 	{
@@ -19,16 +20,32 @@ const USERS: AdminUser[] = [
 		email: 'grace@example.com',
 		name: 'Grace Hopper',
 		updated_at: '2026-08-02T09:30:00.000Z',
+		suspended_at: null,
 		is_super_admin: false,
 	},
 ];
 
 function setup(items: AdminUser[] = USERS) {
+	let current = items.map((item) => ({ ...item }));
 	vi.stubGlobal(
 		'fetch',
-		vi.fn(async (input: RequestInfo | URL) => {
+		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = String(input);
-			if (url === '/api/v1/admin/users') return jsonOk({ items, next_cursor: null });
+			if (url === '/api/v1/admin/users') return jsonOk({ items: current, next_cursor: null });
+			const match = /^\/api\/v1\/users\/([^/]+)\/suspension$/.exec(url);
+			if (match) {
+				const userId = decodeURIComponent(match[1]);
+				const suspended = init?.method === 'PUT';
+				current = current.map((item) =>
+					item.id === userId
+						? {
+								...item,
+								suspended_at: suspended ? '2026-08-11T18:00:00.000Z' : null,
+							}
+						: item,
+				);
+				return jsonOk(current.find((item) => item.id === userId));
+			}
 			throw new Error(`unexpected fetch: ${url}`);
 		}),
 	);
@@ -54,6 +71,39 @@ describe('AdminUsersPage', () => {
 		expect(rows).toHaveLength(2);
 		expect(rows[0]).toHaveTextContent('Super admin');
 		expect(rows[1]).not.toHaveTextContent('Super admin');
+	});
+
+	it('confirms suspension and refreshes the row with a suspended badge', async () => {
+		const user = setup();
+		await screen.findByText('Grace Hopper');
+
+		const rows = screen.getAllByTestId('admin-user-row');
+		await user.click(rows[1].querySelector('button')!);
+		expect(screen.getByRole('heading', { name: 'Suspend Grace Hopper' })).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Suspend' }));
+
+		expect(await screen.findByText('Suspended')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Reactivate' })).toBeInTheDocument();
+		expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+			'/api/v1/users/user-grace/suspension',
+			expect.objectContaining({ method: 'PUT' }),
+		);
+	});
+
+	it('reactivates a suspended user', async () => {
+		const user = setup([USERS[0], { ...USERS[1], suspended_at: '2026-08-11T18:00:00.000Z' }]);
+		await screen.findByText('Suspended');
+
+		await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+		expect(screen.getByRole('heading', { name: 'Reactivate Grace Hopper' })).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Reactivate' }));
+
+		expect(await screen.findAllByRole('button', { name: 'Suspend' })).toHaveLength(2);
+		expect(screen.queryByText('Suspended')).not.toBeInTheDocument();
+		expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+			'/api/v1/users/user-grace/suspension',
+			expect.objectContaining({ method: 'DELETE' }),
+		);
 	});
 
 	it('filters by name, email, or id from the search box', async () => {

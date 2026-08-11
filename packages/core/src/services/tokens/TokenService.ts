@@ -228,6 +228,7 @@ export class TokenService {
 			this.cache.delete(tokenId);
 			return null;
 		}
+		if (await this.identities.isSuspended(user.id)) return null;
 
 		await this.touch(entry);
 		return user;

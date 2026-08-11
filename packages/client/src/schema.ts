@@ -205,6 +205,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Request body too large */
 				413: {
 					headers: {
@@ -289,6 +298,15 @@ export interface paths {
 				};
 				/** @description Authentication required */
 				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -385,6 +403,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Not found */
 				404: {
 					headers: {
@@ -468,7 +495,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -585,7 +612,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -698,6 +725,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Not found */
 				404: {
 					headers: {
@@ -798,7 +834,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -921,7 +957,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -1021,7 +1057,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -1154,7 +1190,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -1258,7 +1294,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -1366,7 +1402,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -1423,6 +1459,212 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/users/{id}/suspension': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		/**
+		 * Suspend a user
+		 * @description Blocks the user at authentication time, including personal access tokens. Super-admin only and session-only. A super admin cannot suspend their own account.
+		 */
+		put: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					/** @description The user's identity-provider subject id */
+					id: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description The suspended user */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['AdminUser'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		post?: never;
+		/**
+		 * Reactivate a suspended user
+		 * @description Restores authentication for a known user. Super-admin only and session-only.
+		 */
+		delete: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					/** @description The user's identity-provider subject id */
+					id: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description The reactivated user */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['AdminUser'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/admin/config': {
 		parameters: {
 			query?: never;
@@ -1465,7 +1707,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -1568,6 +1810,15 @@ export interface paths {
 				};
 				/** @description Authentication required */
 				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -1688,7 +1939,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -1839,7 +2090,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -1956,7 +2207,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -2111,7 +2362,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -2224,6 +2475,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Not found */
 				404: {
 					headers: {
@@ -2308,7 +2568,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -2431,7 +2691,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -2553,6 +2813,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Not found */
 				404: {
 					headers: {
@@ -2664,6 +2933,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Not found */
 				404: {
 					headers: {
@@ -2760,6 +3038,15 @@ export interface paths {
 				};
 				/** @description Authentication required */
 				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -2865,6 +3152,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Not found */
 				404: {
 					headers: {
@@ -2957,6 +3253,15 @@ export interface paths {
 				};
 				/** @description Authentication required */
 				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3066,7 +3371,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -3192,7 +3497,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -3309,6 +3614,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Not found */
 				404: {
 					headers: {
@@ -3409,6 +3723,15 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Not found */
 				404: {
 					headers: {
@@ -3492,7 +3815,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -3597,7 +3920,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -3716,7 +4039,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -3852,7 +4175,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -3981,7 +4304,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -4077,6 +4400,15 @@ export interface paths {
 				};
 				/** @description Authentication required */
 				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -4185,7 +4517,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -4299,7 +4631,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -4407,7 +4739,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -4500,7 +4832,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -4619,7 +4951,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -4742,7 +5074,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -4855,7 +5187,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -4966,7 +5298,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5092,7 +5424,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5195,7 +5527,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5302,7 +5634,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5394,7 +5726,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5512,7 +5844,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5634,7 +5966,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5745,7 +6077,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5865,7 +6197,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -5992,7 +6324,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -6089,7 +6421,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -6198,7 +6530,7 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
-				/** @description Insufficient role */
+				/** @description Access forbidden */
 				403: {
 					headers: {
 						[name: string]: unknown;
@@ -6293,6 +6625,7 @@ export interface components {
 					| 'SERVICE_UNAVAILABLE'
 					| 'RESOURCE_EXHAUSTED'
 					| 'UNAUTHORIZED'
+					| 'USER_SUSPENDED'
 					| 'GONE'
 					| 'PAYLOAD_TOO_LARGE'
 					| 'NO_HTML_SNAPSHOT'
@@ -6455,6 +6788,8 @@ export interface components {
 			name: string;
 			/** Format: date-time */
 			updated_at: string;
+			/** Format: date-time */
+			suspended_at: string | null;
 			is_super_admin: boolean;
 		};
 		DeploymentConfig: {

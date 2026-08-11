@@ -104,6 +104,7 @@ ETag compare-and-swap (conditional PUT) with retries.
 
 These CAS-managed records also have one writer each:
 
+- `IdentityService` owns each identity at `_system/identities/{user-id}.json`.
 - `SessionService` owns each editor claim at
   `_system/editors/{pid}/{nid}.json`.
 - `SessionService.claimApp`/`releaseApp` owns each app claim at

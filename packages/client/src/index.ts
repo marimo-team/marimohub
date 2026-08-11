@@ -58,6 +58,7 @@ export type ApiRequestErrorCode = ServerErrorCode | 'NETWORK_ERROR' | 'PARSE_ERR
 const KNOWN_SERVER_ERROR_CODES = {
 	BAD_REQUEST: true,
 	UNAUTHORIZED: true,
+	USER_SUSPENDED: true,
 	FORBIDDEN: true,
 	NOT_FOUND: true,
 	CONFLICT: true,

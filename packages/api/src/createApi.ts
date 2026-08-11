@@ -313,6 +313,9 @@ export function createApi(rawDeps: ApiDeps) {
 		if (!user) {
 			return fail(c, 'UNAUTHORIZED', 'Authentication required', 401);
 		}
+		if (await deps.services.identities.isSuspended(user.id)) {
+			return fail(c, 'USER_SUSPENDED', 'User account is suspended', 403);
+		}
 		c.set('user', user);
 		// A PAT-shaped bearer is resolved ONLY by the token path (see
 		// composeAuthenticators), so its presence is an exact signal for "this

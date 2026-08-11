@@ -52,6 +52,16 @@ describe('IdentitySchema', () => {
 		).toBe(true);
 	});
 
+	it('accepts active legacy records and an optional suspension timestamp', () => {
+		expect(IdentitySchema.parse(identity)).not.toHaveProperty('suspended_at');
+		expect(
+			IdentitySchema.parse({ ...identity, suspended_at: '2026-08-11T18:00:00.000Z' }),
+		).toMatchObject({ suspended_at: '2026-08-11T18:00:00.000Z' });
+		expect(IdentitySchema.safeParse({ ...identity, suspended_at: 'yesterday' }).success).toBe(
+			false,
+		);
+	});
+
 	it.each([
 		['HTTP', 'http://images.example.com/avatar.png'],
 		['non-HTTP', 'ftp://images.example.com/avatar.png'],
