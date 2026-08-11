@@ -139,6 +139,12 @@ interface E2bSandboxState {
 	destroyPromise?: Promise<void>;
 }
 
+interface E2bSandboxStateEntry {
+	ref: WeakRef<E2bSandboxState>;
+	retained?: E2bSandboxState;
+	retainCount: number;
+}
+
 class E2bSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
 	private env: Record<string, string> = {};
@@ -149,6 +155,7 @@ class E2bSandboxInstance implements SandboxInstance {
 		private readonly config: E2bConfig,
 		private readonly client: E2bClient,
 		private readonly state: E2bSandboxState,
+		private readonly retainState: () => () => void,
 	) {}
 
 	private get ownerTag(): string {
@@ -178,8 +185,10 @@ class E2bSandboxInstance implements SandboxInstance {
 			});
 		})();
 		this.state.handlePromise = promise;
-		promise.catch(() => {
+		const releaseState = this.retainState();
+		void promise.then(releaseState, () => {
 			if (this.state.handlePromise === promise) this.state.handlePromise = undefined;
+			releaseState();
 		});
 		return promise;
 	}
@@ -315,8 +324,10 @@ class E2bSandboxInstance implements SandboxInstance {
 			}
 		})();
 		this.state.destroyPromise = promise;
+		const releaseState = this.retainState();
 		const release = () => {
 			if (this.state.destroyPromise === promise) this.state.destroyPromise = undefined;
+			releaseState();
 		};
 		void promise.then(release, release);
 		return promise;
@@ -325,12 +336,12 @@ class E2bSandboxInstance implements SandboxInstance {
 
 export class E2bCompute implements SandboxProvider {
 	private client?: E2bClient;
-	private readonly sandboxStates = new Map<SandboxId, WeakRef<E2bSandboxState>>();
+	private readonly sandboxStates = new Map<SandboxId, E2bSandboxStateEntry>();
 	private readonly sandboxStateFinalizer = new FinalizationRegistry<{
 		id: SandboxId;
 		ref: WeakRef<E2bSandboxState>;
 	}>(({ id, ref }) => {
-		if (this.sandboxStates.get(id) === ref) this.sandboxStates.delete(id);
+		if (this.sandboxStates.get(id)?.ref === ref) this.sandboxStates.delete(id);
 	});
 
 	constructor(
@@ -345,18 +356,34 @@ export class E2bCompute implements SandboxProvider {
 		return this.client;
 	}
 
+	private retainSandboxState(entry: E2bSandboxStateEntry, state: E2bSandboxState): () => void {
+		entry.retainCount += 1;
+		entry.retained = state;
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			entry.retainCount -= 1;
+			if (entry.retainCount === 0) entry.retained = undefined;
+		};
+	}
+
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
 		// For E2B the selectable "image" is a template id.
 		const config = options?.image ? { ...this.config, template: options.image } : this.config;
-		let ref = this.sandboxStates.get(id);
-		let state = ref?.deref();
-		if (!state) {
+		let entry = this.sandboxStates.get(id);
+		let state = entry?.retained ?? entry?.ref.deref();
+		if (!entry || !state) {
 			state = {};
-			ref = new WeakRef(state);
-			this.sandboxStates.set(id, ref);
+			const ref = new WeakRef(state);
+			entry = { ref, retainCount: 0 };
+			this.sandboxStates.set(id, entry);
 			this.sandboxStateFinalizer.register(state, { id, ref });
 		}
-		return new E2bSandboxInstance(id, config, this.getClient(), state);
+		const stateEntry = entry;
+		return new E2bSandboxInstance(id, config, this.getClient(), state, () =>
+			this.retainSandboxState(stateEntry, state),
+		);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

@@ -46,6 +46,7 @@ class FakeE2b implements E2bClient {
 		cmd: string;
 		options?: { cwd?: string; envs?: Record<string, string> };
 	}[] = [];
+	readonly connectCalls: string[] = [];
 	killedBackgroundCommands = 0;
 	private seq = 0;
 
@@ -53,6 +54,7 @@ class FakeE2b implements E2bClient {
 		private readonly opts: {
 			failOn?: (cmd: string) => boolean;
 			runResult?: (cmd: string) => E2bExecResult | undefined;
+			beforeCreate?: () => Promise<void>;
 			beforeKill?: (sandbox: FakeSandbox) => Promise<void>;
 		} = {},
 	) {}
@@ -110,6 +112,7 @@ class FakeE2b implements E2bClient {
 		metadata?: Record<string, string>;
 		timeoutMs?: number;
 	}): Promise<E2bSandboxHandle> {
+		await this.opts.beforeCreate?.();
 		this.createCalls.push(options);
 		const sandboxId = `e2b-${++this.seq}`;
 		const sb: FakeSandbox = {
@@ -122,6 +125,7 @@ class FakeE2b implements E2bClient {
 	}
 
 	async connect(sandboxId: string): Promise<E2bSandboxHandle> {
+		this.connectCalls.push(sandboxId);
 		const sb = this.sandboxes.get(sandboxId);
 		if (!sb) throw new Error(`no sandbox ${sandboxId}`);
 		return this.makeHandle(sb);
@@ -130,6 +134,20 @@ class FakeE2b implements E2bClient {
 	async list(): Promise<E2bSandboxInfo[]> {
 		return [...this.sandboxes.values()].filter((s) => !s.killed).map((s) => s.info);
 	}
+}
+
+function stubClearedWeakRefs(): () => void {
+	vi.stubGlobal(
+		'WeakRef',
+		class {
+			constructor(_target: WeakKey) {}
+
+			deref(): undefined {
+				return undefined;
+			}
+		},
+	);
+	return () => vi.unstubAllGlobals();
 }
 
 describe('E2bCompute', () => {
@@ -300,32 +318,37 @@ describe('E2bCompute', () => {
 			releaseKill = resolve;
 		});
 		let pauseNextKill = true;
-		const fake = new FakeE2b({
-			beforeKill: async () => {
-				if (!pauseNextKill) return;
-				pauseNextKill = false;
-				signalKillStarted();
-				await killReleased;
-			},
-		});
-		const compute = new E2bCompute(baseConfig, fake);
-		const first = compute.create(SANDBOX_ID);
-		await first.exec('true');
+		const restoreWeakRefs = stubClearedWeakRefs();
+		try {
+			const fake = new FakeE2b({
+				beforeKill: async () => {
+					if (!pauseNextKill) return;
+					pauseNextKill = false;
+					signalKillStarted();
+					await killReleased;
+				},
+			});
+			const compute = new E2bCompute(baseConfig, fake);
+			await compute.create(SANDBOX_ID).exec('true');
 
-		const destroying = first.destroy();
-		await killStarted;
-		const replacing = compute.create(SANDBOX_ID).exec('true');
-		await Promise.resolve();
-		expect(fake.createCalls).toHaveLength(1);
+			const destroying = compute.create(SANDBOX_ID).destroy();
+			await killStarted;
+			const replacing = compute.create(SANDBOX_ID).exec('true');
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(fake.createCalls).toHaveLength(1);
 
-		releaseKill();
-		await destroying;
-		await replacing;
+			releaseKill();
+			await destroying;
+			await replacing;
 
-		expect(fake.createCalls).toHaveLength(2);
-		const live = [...fake.sandboxes.values()].filter((sandbox) => !sandbox.killed);
-		expect(live).toHaveLength(1);
-		expect(live[0].info.metadata?.['mh-owner']).toBe('marimohub');
+			expect(fake.createCalls).toHaveLength(2);
+			const live = [...fake.sandboxes.values()].filter((sandbox) => !sandbox.killed);
+			expect(live).toHaveLength(1);
+			expect(live[0].info.metadata?.['mh-owner']).toBe('marimohub');
+		} finally {
+			releaseKill();
+			restoreWeakRefs();
+		}
 	});
 
 	it('shares a retry between the original instance and a fresh wrapper', async () => {
@@ -346,12 +369,42 @@ describe('E2bCompute', () => {
 		expect(fake.sandboxes.size).toBe(1);
 	});
 
-	it('does not retain sandbox state strongly in the provider', async () => {
-		const compute = new E2bCompute(baseConfig, new FakeE2b());
-		await compute.create(SANDBOX_ID).exec('true');
+	it('retains pending provision state across temporary wrappers, then releases it', async () => {
+		let signalCreateStarted!: () => void;
+		let releaseCreate!: () => void;
+		const createStarted = new Promise<void>((resolve) => {
+			signalCreateStarted = resolve;
+		});
+		const createReleased = new Promise<void>((resolve) => {
+			releaseCreate = resolve;
+		});
+		let createAttempts = 0;
+		const restoreWeakRefs = stubClearedWeakRefs();
+		try {
+			const fake = new FakeE2b({
+				beforeCreate: async () => {
+					createAttempts += 1;
+					signalCreateStarted();
+					await createReleased;
+				},
+			});
+			const compute = new E2bCompute(baseConfig, fake);
+			const first = compute.create(SANDBOX_ID).exec('true');
+			await createStarted;
+			const second = compute.create(SANDBOX_ID).exec('true');
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(createAttempts).toBe(1);
 
-		const states = Reflect.get(compute, 'sandboxStates') as Map<SandboxId, unknown>;
-		expect(states.get(SANDBOX_ID)).toBeInstanceOf(WeakRef);
+			releaseCreate();
+			await Promise.all([first, second]);
+			expect(fake.createCalls).toHaveLength(1);
+
+			await compute.create(SANDBOX_ID).exec('true');
+			expect(fake.connectCalls).toHaveLength(1);
+		} finally {
+			releaseCreate();
+			restoreWeakRefs();
+		}
 	});
 
 	it('destroy kills every sandbox carrying our id, not just the first match', async () => {
