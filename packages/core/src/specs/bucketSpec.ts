@@ -313,7 +313,7 @@ export function buildBucketSpec(): Record<string, unknown> {
 				'',
 				'Deliberately excluded (no zod schema; internal operational records or',
 				'non-JSON artifacts): idempotency records, integration name claims,',
-				'reconcile orphan markers, advisory locks, and version/workspace file',
+				'reconcile orphan markers, and version/workspace file',
 				'artifacts (notebook.py, pyproject.toml, notebook.html, session.json,',
 				'README.md, workspace files).',
 			].join('\n'),

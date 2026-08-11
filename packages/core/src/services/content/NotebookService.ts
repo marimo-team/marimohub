@@ -62,6 +62,7 @@ export const DEFAULT_DELETED_NOTEBOOK_RETENTION_MS = Millis.days(30);
 
 const SESSION_COMMIT_LOCK_WAIT_MS = Millis.seconds(30);
 const SESSION_COMMIT_LOCK_POLL_MS = Millis.of(25);
+const SESSION_COMMIT_LOCK_LEASE_MS = Millis.minutes(10);
 
 export interface CreateNotebookInput {
 	title: string;
@@ -511,16 +512,27 @@ export class NotebookService {
 		const deadline = Date.now() + SESSION_COMMIT_LOCK_WAIT_MS;
 		for (;;) {
 			const etag = await withCasRetry(this.bucket, async (cas) => {
+				const now = Date.now();
+				const body = JSON.stringify({
+					schema_version: 1,
+					holder,
+					expires_at: new Date(now + SESSION_COMMIT_LOCK_LEASE_MS).toISOString(),
+				});
 				const obj = await this.bucket.get(key);
 				if (!obj) {
-					const created = await cas.put(key, JSON.stringify({ schema_version: 1, holder }), {
+					const created = await cas.put(key, body, {
 						onlyIfNotExists: true,
 					});
 					return created.etag;
 				}
 				const current = await readStored(SessionCommitLockSchema, obj, key);
-				if (current.holder !== null) return null;
-				const acquired = await cas.put(key, JSON.stringify({ ...current, holder }), {
+				// Give pre-lease records a grace period during rolling upgrades instead of
+				// immediately stealing a lock that an older replica may still hold.
+				const expiresAt = current.expires_at
+					? Date.parse(current.expires_at)
+					: obj.uploaded.getTime() + SESSION_COMMIT_LOCK_LEASE_MS;
+				if (current.holder !== null && expiresAt > now) return null;
+				const acquired = await cas.put(key, body, {
 					onlyIfEtagMatches: obj.etag,
 				});
 				return acquired.etag;
@@ -551,11 +563,18 @@ export class NotebookService {
 
 	private async releaseSessionCommitLock(key: string, etag: string): Promise<void> {
 		try {
-			await this.bucket.put(key, JSON.stringify({ schema_version: 1, holder: null }), {
-				onlyIfEtagMatches: etag,
-			});
+			await this.bucket.put(
+				key,
+				JSON.stringify({ schema_version: 1, holder: null, expires_at: null }),
+				{ onlyIfEtagMatches: etag },
+			);
 		} catch (err) {
-			if (!(err instanceof PreconditionFailedError)) throw err;
+			if (err instanceof PreconditionFailedError) return;
+			logOperationalError(
+				'notebook_session_commit_lock_release_failed',
+				{ operation: 'notebook.session_commit_lock.release', object: key },
+				err,
+			);
 		}
 	}
 

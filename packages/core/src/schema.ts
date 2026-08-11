@@ -364,6 +364,7 @@ export function toPublicProject(project: Project): PublicProject {
 export const SessionCommitLockSchema = z.object({
 	schema_version: z.literal(1),
 	holder: z.string().nullable(),
+	expires_at: z.iso.datetime().nullable().optional(),
 });
 
 export type SessionCommitLock = z.infer<typeof SessionCommitLockSchema>;

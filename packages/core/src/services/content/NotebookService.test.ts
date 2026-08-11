@@ -1495,6 +1495,97 @@ describe('NotebookService', () => {
 			}
 		});
 
+		it('takes over an expired session commit lease', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const key = paths.project(projectId).notebook(created.id).sessionCommitLock;
+			await bucket.put(
+				key,
+				JSON.stringify({
+					schema_version: 1,
+					holder: 'crashed-process',
+					expires_at: '2000-01-01T00:00:00.000Z',
+				}),
+			);
+
+			const result = await notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
+
+			expect(result?.newVersion).toBe(true);
+			expect(await (await bucket.get(key))?.json()).toEqual({
+				schema_version: 1,
+				holder: null,
+				expires_at: null,
+			});
+		});
+
+		it('expires a legacy held lock from its upload time', async () => {
+			vi.useFakeTimers();
+			try {
+				vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+				const created = await notebooks.createNotebook(
+					projectId,
+					{ title: 'NB', description: 'D', code: 'v1' },
+					ACTOR,
+				);
+				const key = paths.project(projectId).notebook(created.id).sessionCommitLock;
+				await bucket.put(key, JSON.stringify({ schema_version: 1, holder: 'old-process' }));
+				vi.setSystemTime(new Date('2026-01-01T00:10:00.001Z'));
+
+				const result = await notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
+
+				expect(result?.newVersion).toBe(true);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('does not fail a committed operation when releasing its lease fails', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const key = paths.project(projectId).notebook(created.id).sessionCommitLock;
+			const realPut = bucket.put.bind(bucket);
+			const boom = new Error('bucket down');
+			const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (putKey, value, options) => {
+				if (
+					putKey === key &&
+					typeof value === 'string' &&
+					(JSON.parse(value) as { holder?: string | null }).holder === null
+				) {
+					throw boom;
+				}
+				return realPut(putKey, value, options);
+			});
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			try {
+				const result = await notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
+
+				expect(result?.newVersion).toBe(true);
+				expect(await countVersionFolders(bucket, projectId, created.id)).toBe(2);
+				const line = log.mock.calls[0]?.[0] as string;
+				expect(line).toContain('notebook_session_commit_lock_release_failed');
+				expect(line).toContain(key);
+				expect(line).not.toContain(boom.message);
+				const lock = await (
+					await bucket.get(key)
+				)?.json<{
+					holder: string | null;
+					expires_at: string | null;
+				}>();
+				expect(lock?.holder).not.toBeNull();
+				expect(lock?.expires_at).toEqual(expect.any(String));
+			} finally {
+				putSpy.mockRestore();
+				log.mockRestore();
+			}
+		});
+
 		it('cuts a new version from changed code and updates the live notebook + source', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
