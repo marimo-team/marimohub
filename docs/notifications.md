@@ -35,7 +35,7 @@ These notification kinds are available:
 | `member.added`     | A manager adds a known user.                                 | `personal`              |
 | `session.takeover` | An editor takes over an exclusive editor session.            | `personal`, `broadcast` |
 
-`MARIMOHUB_NOTIFY_KINDS` is the default allowlist for all backends. A blank value enables all listed kinds. Set it to `none` to disable all kinds without changing the backend configuration.
+`MARIMOHUB_NOTIFY_KINDS` is the default allowlist for all backends. A blank value enables all listed kinds. Set it to `none` to disable all kinds. This global off switch takes precedence over per-backend values.
 
 Each backend can replace the global allowlist:
 

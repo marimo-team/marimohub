@@ -1,4 +1,4 @@
-import { noopNotifier } from '@marimo-hub/core';
+import { noopNotifier, reduceNotificationDeliveryResults } from '@marimo-hub/core';
 import type { Notification, NotificationDeliveryOutcome, NotificationKind } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
@@ -22,21 +22,7 @@ export function scheduleNotification(
 			const results = await Promise.allSettled(
 				notifications.map((notification) => (deps.notifier ?? noopNotifier).deliver(notification)),
 			);
-			const failures = results.filter((result) => result.status === 'rejected');
-			const outcomes = results
-				.filter((result) => result.status === 'fulfilled')
-				.map((result) => result.value);
-			if (outcomes.some((outcome) => outcome === 'delivered' || outcome === 'partial')) {
-				return failures.length > 0 || outcomes.includes('partial') ? 'partial' : 'delivered';
-			}
-			if (failures.length > 0) {
-				if (failures.length === 1) throw failures[0]?.reason;
-				throw new AggregateError(
-					failures.map((result) => result.reason),
-					'No notification variant delivered',
-				);
-			}
-			return 'skipped';
+			return reduceNotificationDeliveryResults(results, 'No notification variant delivered');
 		})
 		.then((outcome) => {
 			if (outcome === 'partial') {

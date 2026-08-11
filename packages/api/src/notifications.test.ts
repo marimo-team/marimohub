@@ -96,7 +96,7 @@ describe('scheduleNotification', () => {
 			event: 'notification_delivery_failed',
 			notification_kind: 'member.invited',
 			request_id: 'request-1',
-			error: { error_name: 'Error' },
+			error: { error_name: 'AggregateError' },
 		});
 		expect(log.mock.calls[0]?.[0]).not.toContain('secret');
 	});

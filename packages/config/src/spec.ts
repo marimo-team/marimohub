@@ -1304,7 +1304,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_NOTIFY_KINDS',
 						name: 'Notification kinds',
 						description:
-							'Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, and `session.takeover`. Set `none` to disable all kinds. An unknown kind causes a startup error.',
+							'Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, and `session.takeover`. Set `none` to disable all kinds, including per-backend overrides. An unknown kind causes a startup error.',
 						example: 'member.invited,member.added',
 					},
 				],

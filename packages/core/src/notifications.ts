@@ -92,7 +92,7 @@ function actorLabel(actor: AuthUser): string {
 }
 
 function recipientLabel(input: SessionTakeoverNotificationInput): string {
-	return input.recipient?.name ?? input.recipient?.email ?? input.displacedUserId;
+	return input.recipient?.name ?? input.recipient?.email ?? 'another editor';
 }
 
 function memberLink(input: MemberInvitedNotificationInput | MemberAddedNotificationInput) {
@@ -264,6 +264,7 @@ export const NotificationSchema = NotificationEnvelopeSchema.transform((value, c
 			path: ['severity'],
 			message: `Expected ${definition.severity} severity for ${kind}`,
 		});
+		return z.NEVER;
 	}
 	if (!Object.hasOwn(definition.render, value.audience)) {
 		context.addIssue({
@@ -271,6 +272,7 @@ export const NotificationSchema = NotificationEnvelopeSchema.transform((value, c
 			path: ['audience'],
 			message: `Unsupported ${value.audience} audience for ${kind}`,
 		});
+		return z.NEVER;
 	}
 	const data = definition.dataSchema.safeParse(value.data);
 	if (!data.success) {

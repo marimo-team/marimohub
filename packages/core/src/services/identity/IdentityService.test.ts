@@ -38,14 +38,17 @@ describe('IdentityService', () => {
 			});
 		});
 
-		it('rejects an invalid provider email before writing the record', async () => {
-			const put = vi.spyOn(bucket, 'put');
+		it.each(['not-an-email', 'user@@example.com'])(
+			'rejects the invalid provider email %j before writing the record',
+			async (email) => {
+				const put = vi.spyOn(bucket, 'put');
 
-			await expect(
-				identities.upsert({ id: uid('sub-invalid-email'), email: 'not-an-email' }),
-			).rejects.toThrow('Invalid email address');
-			expect(put).not.toHaveBeenCalled();
-		});
+				await expect(identities.upsert({ id: uid('sub-invalid-email'), email })).rejects.toThrow(
+					'Invalid email address',
+				);
+				expect(put).not.toHaveBeenCalled();
+			},
+		);
 
 		it('skips re-writing when the identity is unchanged since last write', async () => {
 			const put = vi.spyOn(bucket, 'put');
@@ -91,6 +94,25 @@ describe('IdentityService', () => {
 			expect(await identities.get(uid('auth0|abc/def'))).toMatchObject({
 				id: uid('auth0|abc/def'),
 			});
+		});
+
+		it('reads and repairs a legacy identity with an invalid email', async () => {
+			const id = uid('legacy-email');
+			await bucket.put(
+				paths.identity(id),
+				JSON.stringify({
+					id,
+					email: 'legacy-invalid',
+					name: 'Legacy User',
+					updated_at: '2025-01-01T00:00:00.000Z',
+				}),
+			);
+
+			expect(await identities.get(id)).toMatchObject({ email: 'legacy-invalid' });
+			expect((await identities.list()).map((identity) => identity.id)).toContain(id);
+
+			await identities.upsert({ id, email: 'repaired@example.com', name: 'Legacy User' });
+			expect(await identities.get(id)).toMatchObject({ email: 'repaired@example.com' });
 		});
 	});
 

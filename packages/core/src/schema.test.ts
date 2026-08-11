@@ -9,6 +9,7 @@ import {
 import { z } from 'zod';
 import {
 	CatalogSchema,
+	EmailAddressSchema,
 	EventSchema,
 	IdentitySchema,
 	NotebookIdSchema,
@@ -70,16 +71,24 @@ describe('IdentitySchema', () => {
 		expect(IdentitySchema.safeParse({ ...identity, picture_url: pictureUrl }).success).toBe(false);
 	});
 
+	it('accepts a legacy identity email that predates write validation', () => {
+		expect(IdentitySchema.safeParse({ ...identity, email: 'legacy-invalid' }).success).toBe(true);
+	});
+});
+
+describe('EmailAddressSchema', () => {
 	it('accepts a provider-valid address without a public DNS suffix', () => {
-		expect(IdentitySchema.safeParse({ ...identity, email: 'user@localhost' }).success).toBe(true);
+		expect(EmailAddressSchema.safeParse('user@localhost').success).toBe(true);
 	});
 
-	it.each(['not-an-email', 'user @example.com', 'user@example.com\nBcc: other@example.com'])(
-		'rejects the invalid email %j',
-		(email) => {
-			expect(IdentitySchema.safeParse({ ...identity, email }).success).toBe(false);
-		},
-	);
+	it.each([
+		'not-an-email',
+		'user@@example.com',
+		'user @example.com',
+		'user@example.com\nBcc: other@example.com',
+	])('rejects the invalid email %j', (email) => {
+		expect(EmailAddressSchema.safeParse(email).success).toBe(false);
+	});
 });
 
 describe('parseStored', () => {

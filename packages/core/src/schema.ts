@@ -303,8 +303,8 @@ export const EmailAddressSchema = z.string().refine(
 			const code = character.charCodeAt(0);
 			if (code <= 31 || code === 127) return false;
 		}
-		const at = value.lastIndexOf('@');
-		return at > 0 && at < value.length - 1;
+		const at = value.indexOf('@');
+		return at > 0 && at === value.lastIndexOf('@') && at < value.length - 1;
 	},
 	{ message: 'Invalid email address' },
 );
@@ -744,7 +744,9 @@ export type EditorClaim = z.infer<typeof EditorClaimSchema>;
 // mutable per-user records and updates them with ETag compare-and-swap.
 export const IdentitySchema = z.object({
 	id: UserIdSchema,
-	email: EmailAddressSchema,
+	// Keep legacy reads permissive. IdentityService validates new writes so an
+	// older invalid record remains readable and can be repaired after sign-in.
+	email: z.string(),
 	name: z.string(),
 	picture_url: z.url({ protocol: /^https$/ }).optional(),
 	suspended_at: z.iso.datetime().optional(),

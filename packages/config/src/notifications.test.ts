@@ -108,6 +108,16 @@ describe('makeNotifier', () => {
 		]);
 	});
 
+	it('treats global none as a hard disable over backend overrides', () => {
+		const env = {
+			MARIMOHUB_NOTIFY_KINDS: 'none',
+			MARIMOHUB_NOTIFY_SMTP_KINDS: 'member.invited',
+			MARIMOHUB_NOTIFY_SLACK_KINDS: 'session.takeover',
+		};
+		expect(notificationKindsForBackend(env, 'smtp')).toEqual(new Set());
+		expect(notificationKindsForBackend(env, 'slack')).toEqual(new Set());
+	});
+
 	it('rejects unknown notification kinds', () => {
 		expect(() =>
 			makeNotifier({

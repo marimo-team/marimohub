@@ -8,7 +8,7 @@ import type { UserId } from '../../ids';
 import type { AuthUser } from '../../ports/auth';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
-import { IdentitySchema, parseStored, readStored } from '../../schema';
+import { EmailAddressSchema, IdentitySchema, parseStored, readStored } from '../../schema';
 import type { Identity } from '../../schema';
 import { mutateObjectWithOutcome, withCasRetry } from '../catalog/cas';
 import { listAllKeys } from '../catalog/storage';
@@ -85,8 +85,9 @@ export class IdentityService {
 	 * path and must not let a failure block the request.
 	 */
 	async upsert(user: AuthUser): Promise<void> {
+		const email = EmailAddressSchema.parse(user.email);
 		const name = IdentityService.displayName(user);
-		const sig = IdentityService.signature(user.email, name, user.pictureUrl);
+		const sig = IdentityService.signature(email, name, user.pictureUrl);
 		if (this.written.get(user.id) === sig) return;
 
 		const key = paths.identity(user.id);
@@ -95,7 +96,7 @@ export class IdentityService {
 			const existing = obj ? await readStored(IdentitySchema, obj, key) : null;
 			const next = IdentitySchema.parse({
 				id: user.id,
-				email: user.email,
+				email,
 				name,
 				...(user.pictureUrl ? { picture_url: user.pictureUrl } : {}),
 				...(existing?.suspended_at ? { suspended_at: existing.suspended_at } : {}),

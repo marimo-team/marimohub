@@ -24,6 +24,26 @@ export interface NamedNotifier {
 	notifier: Notifier;
 }
 
+export function reduceNotificationDeliveryResults(
+	results: readonly PromiseSettledResult<NotificationDeliveryOutcome>[],
+	failureMessage: string,
+): NotificationDeliveryOutcome {
+	const failures = results.filter((result) => result.status === 'rejected');
+	const outcomes = results
+		.filter((result) => result.status === 'fulfilled')
+		.map((result) => result.value);
+	if (outcomes.some((outcome) => outcome === 'delivered' || outcome === 'partial')) {
+		return failures.length > 0 || outcomes.includes('partial') ? 'partial' : 'delivered';
+	}
+	if (failures.length > 0) {
+		throw new AggregateError(
+			failures.map((result) => result.reason),
+			failureMessage,
+		);
+	}
+	return 'skipped';
+}
+
 export function fanOutNotifier(targets: NamedNotifier[], metrics: Metrics = noopMetrics): Notifier {
 	if (targets.length === 0) return noopNotifier;
 	return {
@@ -46,20 +66,7 @@ export function fanOutNotifier(targets: NamedNotifier[], metrics: Metrics = noop
 					}
 				}),
 			);
-			const failures = results.filter((result) => result.status === 'rejected');
-			const outcomes = results
-				.filter((result) => result.status === 'fulfilled')
-				.map((result) => result.value);
-			if (outcomes.some((outcome) => outcome === 'delivered' || outcome === 'partial')) {
-				return failures.length > 0 || outcomes.includes('partial') ? 'partial' : 'delivered';
-			}
-			if (failures.length > 0) {
-				throw new AggregateError(
-					failures.map((result) => result.reason),
-					'No notification adapter delivered',
-				);
-			}
-			return 'skipped';
+			return reduceNotificationDeliveryResults(results, 'No notification adapter delivered');
 		},
 	};
 }

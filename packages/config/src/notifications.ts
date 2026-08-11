@@ -56,6 +56,7 @@ function parseKinds(env: Env, variable: string, fallback: ReadonlySet<string>): 
 
 export function notificationKindsForBackend(env: Env, backend: NotificationBackend): Set<string> {
 	const globalKinds = parseKinds(env, 'MARIMOHUB_NOTIFY_KINDS', new Set(NOTIFICATION_KINDS));
+	if (globalKinds.size === 0) return globalKinds;
 	return parseKinds(env, BACKEND_KIND_VARIABLES[backend], globalKinds);
 }
 

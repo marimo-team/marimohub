@@ -157,6 +157,28 @@ describe('NotificationRouter', () => {
 		expect(rendered[0]?.data).toEqual(rendered[1]?.data);
 	});
 
+	it('uses neutral broadcast copy when the displaced identity is unresolved', () => {
+		const displacedUserId = uid('opaque-provider-subject');
+		const rendered = notificationRouter.render({
+			kind: 'session.takeover',
+			project,
+			notebookTitle: 'Revenue',
+			projectId: project.id,
+			notebookId: ids().notebook,
+			takeoverId: 'takeover-unresolved',
+			displacedUserId,
+			recipient: null,
+			actor: { id: uid('other_editor'), email: 'other@example.com', name: 'Other editor' },
+		});
+
+		expect(rendered[0]).toMatchObject({ audience: 'personal', recipients: [] });
+		expect(rendered[1]).toMatchObject({
+			audience: 'broadcast',
+			body: 'Other editor took over Revenue in Forecasts, replacing another editor.',
+		});
+		expect(rendered[1]?.body).not.toContain(displacedUserId);
+	});
+
 	it('keeps fixed-channel delivery when a member identity cannot be resolved', () => {
 		const userId = uid('unknown_member');
 		const [rendered] = notificationRouter.render({
