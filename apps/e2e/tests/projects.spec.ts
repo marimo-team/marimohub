@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
-	createProject,
+	createAndOpenProject,
 	openProject,
 	editProjectName,
 	deleteProject,
@@ -14,9 +14,7 @@ test('project lifecycle: create, list, edit, delete', async ({ page }) => {
 	// the old name is gone after the rename.
 	const renamed = uniqueName('proj-renamed');
 
-	await createProject(page, name, 'an e2e project');
-
-	await openProject(page, name);
+	await createAndOpenProject(page, name, 'an e2e project');
 	await editProjectName(page, renamed);
 
 	await page.goto('/');
@@ -42,8 +40,7 @@ test('create project: submit is disabled until a name is entered', async ({ page
 
 test('delete project: confirm is disabled until the exact name is typed', async ({ page }) => {
 	const name = uniqueName('proj');
-	await createProject(page, name);
-	await openProject(page, name);
+	await createAndOpenProject(page, name);
 
 	await page.getByRole('button', { name: 'Delete project' }).click();
 	const confirm = page.getByRole('button', { name: 'Delete', exact: true });

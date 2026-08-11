@@ -22,21 +22,47 @@ for (const browser of browsers) {
 	}
 }
 
-// Boots apps/server serving the prebuilt SPA, wired to the local ports (memory
-// storage, dev auth, no compute) for zero external deps. State is shared across
-// the single server process, so tests run serially with unique names.
+// The lifecycle spec needs a real kernel through the local compute adapter, so
+// it runs only on Chromium and can be skipped on hosts without uv.
+const LIFECYCLE_SPEC = /session\.lifecycle\.spec\.ts$/;
+const runLifecycle = browsers.includes('chromium') && process.env.E2E_LIFECYCLE !== '0';
+
+// Boots apps/server serving the prebuilt SPA with memory storage and dev auth.
+// State is shared across the single server process, so tests run serially with unique names.
 export default defineConfig({
 	testDir: './tests',
 	fullyParallel: false,
 	workers: 1,
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
-	reporter: process.env.CI ? [['html', { open: 'never' }], ['list']] : 'list',
+	reporter: process.env.CI
+		? [
+				['github'],
+				['junit', { outputFile: 'test-results/junit.xml' }],
+				['html', { open: 'never' }],
+				['list'],
+			]
+		: 'list',
 	use: {
 		baseURL: BASE_URL,
 		trace: 'on-first-retry',
+		screenshot: 'only-on-failure',
+		video: 'retain-on-failure',
 	},
-	projects: allProjects.filter((p) => browsers.includes(p.name)),
+	projects: [
+		...allProjects
+			.filter((p) => browsers.includes(p.name))
+			.map((p) => ({ ...p, testIgnore: LIFECYCLE_SPEC })),
+		...(runLifecycle
+			? [
+					{
+						name: 'lifecycle',
+						testMatch: LIFECYCLE_SPEC,
+						use: { ...devices['Desktop Chrome'] },
+					},
+				]
+			: []),
+	],
 	// Builds web + server (cached `vp run` tasks) and serves the SPA from
 	// packages/web/dist. A warm `e2e:serve` server is reused via reuseExistingServer.
 	webServer: {
@@ -50,7 +76,7 @@ export default defineConfig({
 			PORT: String(PORT),
 			MARIMOHUB_STORAGE_BACKEND: 'memory',
 			MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
-			MARIMOHUB_COMPUTE_BACKEND: 'none',
+			MARIMOHUB_COMPUTE_BACKEND: runLifecycle ? 'local' : 'none',
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_STATIC_ROOT: 'packages/web/dist',
 		},

@@ -1,7 +1,7 @@
 name: E2E
 
 # Browser end-to-end tests (Playwright) driving the real SPA against a local
-# server wired to the in-memory / dev-auth / no-compute ports. No external deps.
+# server wired to in-memory storage and dev auth. Chromium also starts a local kernel.
 on:
   push:
     branches: [main]
@@ -18,7 +18,7 @@ jobs:
   e2e:
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -37,14 +37,60 @@ jobs:
           cache: true
           run-install: |
             - args: ['--frozen-lockfile']
-      - run: pnpm --filter @marimo-hub/e2e exec playwright install --with-deps ${{ matrix.browser }}
+
+      # Forks must not read the shared cache; only main pushes can update it.
+      - name: Restore Vite Task cache
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        id: vite-task-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-e2e-${{ matrix.browser }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-e2e-${{ matrix.browser }}-${{ runner.os }}-${{ runner.arch }}-
+            vite-task-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-${{ matrix.browser }}-
+
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @marimo-hub/e2e exec playwright install --with-deps ${{ matrix.browser }}
+      - if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @marimo-hub/e2e exec playwright install-deps ${{ matrix.browser }}
+
+      - name: Install uv
+        if: matrix.browser == 'chromium'
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Pre-warm marimo
+        if: matrix.browser == 'chromium'
+        run: uv run --no-project --with marimo python -c "import marimo"
+
       - run: pnpm e2e
         env:
           E2E_BROWSER: ${{ matrix.browser }}
+
       - name: Upload report
-        if: failure()
+        if: '!cancelled()'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: playwright-report-${{ matrix.browser }}
-          path: apps/e2e/playwright-report/
+          path: |
+            apps/e2e/playwright-report/
+            apps/e2e/test-results/
           retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Save Vite Task cache
+        if: success() && github.event_name == 'push'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
