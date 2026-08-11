@@ -46,6 +46,7 @@ class FakeE2b implements E2bClient {
 		cmd: string;
 		options?: { cwd?: string; envs?: Record<string, string> };
 	}[] = [];
+	readonly connectCalls: string[] = [];
 	killedBackgroundCommands = 0;
 	private seq = 0;
 
@@ -53,6 +54,8 @@ class FakeE2b implements E2bClient {
 		private readonly opts: {
 			failOn?: (cmd: string) => boolean;
 			runResult?: (cmd: string) => E2bExecResult | undefined;
+			beforeCreate?: () => Promise<void>;
+			beforeKill?: (sandbox: FakeSandbox) => Promise<void>;
 		} = {},
 	) {}
 
@@ -97,7 +100,10 @@ class FakeE2b implements E2bClient {
 				},
 			},
 			getHost: (port) => `${port}-${sb.info.sandboxId}.e2b.app`,
-			kill: async () => void (sb.killed = true),
+			kill: async () => {
+				sb.killed = true;
+				await this.opts.beforeKill?.(sb);
+			},
 		};
 	}
 
@@ -106,6 +112,7 @@ class FakeE2b implements E2bClient {
 		metadata?: Record<string, string>;
 		timeoutMs?: number;
 	}): Promise<E2bSandboxHandle> {
+		await this.opts.beforeCreate?.();
 		this.createCalls.push(options);
 		const sandboxId = `e2b-${++this.seq}`;
 		const sb: FakeSandbox = {
@@ -118,6 +125,7 @@ class FakeE2b implements E2bClient {
 	}
 
 	async connect(sandboxId: string): Promise<E2bSandboxHandle> {
+		this.connectCalls.push(sandboxId);
 		const sb = this.sandboxes.get(sandboxId);
 		if (!sb) throw new Error(`no sandbox ${sandboxId}`);
 		return this.makeHandle(sb);
@@ -126,6 +134,20 @@ class FakeE2b implements E2bClient {
 	async list(): Promise<E2bSandboxInfo[]> {
 		return [...this.sandboxes.values()].filter((s) => !s.killed).map((s) => s.info);
 	}
+}
+
+function stubClearedWeakRefs(): () => void {
+	vi.stubGlobal(
+		'WeakRef',
+		class {
+			constructor(_target: WeakKey) {}
+
+			deref(): undefined {
+				return undefined;
+			}
+		},
+	);
+	return () => vi.unstubAllGlobals();
 }
 
 describe('E2bCompute', () => {
@@ -169,6 +191,30 @@ describe('E2bCompute', () => {
 		const only = [...fake.sandboxes.values()][0];
 		expect(only.files.get('/a')).toBe('1');
 		expect(only.files.get('/b')).toBe('2');
+	});
+
+	it('does not reconnect to or destroy another owner sandbox with the same id', async () => {
+		const fake = new FakeE2b();
+		await fake.create({
+			metadata: { 'mh-sandbox-id': SANDBOX_ID, 'mh-owner': 'another-deployment' },
+		});
+		const compute = new E2bCompute(baseConfig, fake);
+		const sb = compute.create(SANDBOX_ID);
+
+		await sb.writeFiles([{ path: '/owned', content: 'yes' }]);
+		expect(fake.createCalls).toHaveLength(2);
+		const foreign = [...fake.sandboxes.values()].find(
+			(sandbox) => sandbox.info.metadata?.['mh-owner'] === 'another-deployment',
+		)!;
+		const owned = [...fake.sandboxes.values()].find(
+			(sandbox) => sandbox.info.metadata?.['mh-owner'] === 'marimohub',
+		)!;
+		expect(foreign.files.has('/owned')).toBe(false);
+		expect(owned.files.get('/owned')).toBe('yes');
+
+		await sb.destroy();
+		expect(foreign.killed).toBe(false);
+		expect(owned.killed).toBe(true);
 	});
 
 	it('destroy reconnects by metadata when the instance has no cached handle', async () => {
@@ -248,6 +294,131 @@ describe('E2bCompute', () => {
 		await sb.writeFiles([{ path: '/a', content: '1' }]);
 		await sb.destroy();
 		expect([...fake.sandboxes.values()][0].killed).toBe(true);
+	});
+
+	it('concurrent calls through separate instances provision exactly one sandbox', async () => {
+		const fake = new FakeE2b();
+		const compute = new E2bCompute(baseConfig, fake);
+		await Promise.all([
+			compute.create(SANDBOX_ID).exec('true'),
+			compute.create(SANDBOX_ID).writeFiles([{ path: '/a', content: '1' }]),
+			compute.create(SANDBOX_ID).exposePort(2718, { hostname: 'ignored' }),
+		]);
+		expect(fake.createCalls).toHaveLength(1);
+		expect(fake.sandboxes.size).toBe(1);
+	});
+
+	it('waits for destroy before provisioning a replacement', async () => {
+		let signalKillStarted!: () => void;
+		let releaseKill!: () => void;
+		const killStarted = new Promise<void>((resolve) => {
+			signalKillStarted = resolve;
+		});
+		const killReleased = new Promise<void>((resolve) => {
+			releaseKill = resolve;
+		});
+		let pauseNextKill = true;
+		const restoreWeakRefs = stubClearedWeakRefs();
+		try {
+			const fake = new FakeE2b({
+				beforeKill: async () => {
+					if (!pauseNextKill) return;
+					pauseNextKill = false;
+					signalKillStarted();
+					await killReleased;
+				},
+			});
+			const compute = new E2bCompute(baseConfig, fake);
+			await compute.create(SANDBOX_ID).exec('true');
+
+			const destroying = compute.create(SANDBOX_ID).destroy();
+			await killStarted;
+			const replacing = compute.create(SANDBOX_ID).exec('true');
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(fake.createCalls).toHaveLength(1);
+
+			releaseKill();
+			await destroying;
+			await replacing;
+
+			expect(fake.createCalls).toHaveLength(2);
+			const live = [...fake.sandboxes.values()].filter((sandbox) => !sandbox.killed);
+			expect(live).toHaveLength(1);
+			expect(live[0].info.metadata?.['mh-owner']).toBe('marimohub');
+		} finally {
+			releaseKill();
+			restoreWeakRefs();
+		}
+	});
+
+	it('shares a retry between the original instance and a fresh wrapper', async () => {
+		class FlakyCreateE2b extends FakeE2b {
+			failuresRemaining = 1;
+
+			override async create(options: Parameters<FakeE2b['create']>[0]): Promise<E2bSandboxHandle> {
+				if (this.failuresRemaining-- > 0) throw new Error('provision failed');
+				return super.create(options);
+			}
+		}
+		const fake = new FlakyCreateE2b();
+		const compute = new E2bCompute(baseConfig, fake);
+		const sb = compute.create(SANDBOX_ID);
+		await expect(sb.exec('true')).rejects.toThrow('provision failed');
+		await Promise.all([sb.exec('true'), compute.create(SANDBOX_ID).exec('true')]);
+		expect(fake.createCalls).toHaveLength(1);
+		expect(fake.sandboxes.size).toBe(1);
+	});
+
+	it('retains pending provision state across temporary wrappers, then releases it', async () => {
+		let signalCreateStarted!: () => void;
+		let releaseCreate!: () => void;
+		const createStarted = new Promise<void>((resolve) => {
+			signalCreateStarted = resolve;
+		});
+		const createReleased = new Promise<void>((resolve) => {
+			releaseCreate = resolve;
+		});
+		let createAttempts = 0;
+		const restoreWeakRefs = stubClearedWeakRefs();
+		try {
+			const fake = new FakeE2b({
+				beforeCreate: async () => {
+					createAttempts += 1;
+					signalCreateStarted();
+					await createReleased;
+				},
+			});
+			const compute = new E2bCompute(baseConfig, fake);
+			const first = compute.create(SANDBOX_ID).exec('true');
+			await createStarted;
+			const second = compute.create(SANDBOX_ID).exec('true');
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(createAttempts).toBe(1);
+
+			releaseCreate();
+			await Promise.all([first, second]);
+			expect(fake.createCalls).toHaveLength(1);
+
+			await compute.create(SANDBOX_ID).exec('true');
+			expect(fake.connectCalls).toHaveLength(1);
+		} finally {
+			releaseCreate();
+			restoreWeakRefs();
+		}
+	});
+
+	it('destroy kills every sandbox carrying our id, not just the first match', async () => {
+		const fake = new FakeE2b();
+		await fake.create({
+			metadata: { 'mh-sandbox-id': SANDBOX_ID, 'mh-owner': 'marimohub' },
+		});
+		await fake.create({
+			metadata: { 'mh-sandbox-id': SANDBOX_ID, 'mh-owner': 'marimohub' },
+		});
+
+		await new E2bCompute(baseConfig, fake).create(SANDBOX_ID).destroy();
+
+		expect([...fake.sandboxes.values()].every((sandbox) => sandbox.killed)).toBe(true);
 	});
 
 	it('readFile returns success:false when the SDK read throws', async () => {
@@ -565,6 +736,16 @@ describe('createE2bClient', () => {
 	});
 });
 
-computeContract('E2bCompute', () => new E2bCompute(baseConfig, new FakeE2b()), {
-	mountFallsBack: true,
-});
+computeContract(
+	'E2bCompute',
+	() =>
+		new E2bCompute(baseConfig, new FakeE2b({ failOn: (cmd) => cmd.includes('mh-contract-fail') })),
+	{
+		mountFallsBack: true,
+		semantics: {
+			failingCommand: 'mh-contract-fail',
+			// The SDK does not distinguish a missing file from other read failures.
+			absentFile: { path: '/contract-absent.txt', code: 'READ_FAILED' },
+		},
+	},
+);

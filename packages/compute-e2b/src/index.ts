@@ -134,9 +134,19 @@ export interface E2bConfig {
 	maxLifetimeSeconds?: Seconds;
 }
 
+interface E2bSandboxState {
+	handlePromise?: Promise<E2bSandboxHandle>;
+	destroyPromise?: Promise<void>;
+}
+
+interface E2bSandboxStateEntry {
+	ref: WeakRef<E2bSandboxState>;
+	retained?: E2bSandboxState;
+	retainCount: number;
+}
+
 class E2bSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
-	private handle?: E2bSandboxHandle;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
 
@@ -144,26 +154,43 @@ class E2bSandboxInstance implements SandboxInstance {
 		private readonly id: SandboxId,
 		private readonly config: E2bConfig,
 		private readonly client: E2bClient,
+		private readonly state: E2bSandboxState,
+		private readonly retainState: () => () => void,
 	) {}
 
 	private get ownerTag(): string {
 		return this.config.ownerTag ?? DEFAULT_OWNER_TAG;
 	}
 
+	private isOwned(info: E2bSandboxInfo): boolean {
+		return (
+			info.metadata?.[ID_META_KEY] === this.id && info.metadata?.[OWNER_META_KEY] === this.ownerTag
+		);
+	}
+
 	/** Resolve the live E2B sandbox for our id: cached → reconnect-by-tag → create. */
-	private async ensure(): Promise<E2bSandboxHandle> {
-		if (this.handle) return this.handle;
-		const existing = (await this.client.list()).find((s) => s.metadata?.[ID_META_KEY] === this.id);
-		this.handle = existing
-			? await this.client.connect(existing.sandboxId)
-			: await this.client.create({
-					template: this.config.template,
-					metadata: { [ID_META_KEY]: this.id, [OWNER_META_KEY]: this.ownerTag },
-					...(this.config.maxLifetimeSeconds
-						? { timeoutMs: Seconds.toMillis(this.config.maxLifetimeSeconds) }
-						: {}),
-				});
-		return this.handle;
+	private ensure(): Promise<E2bSandboxHandle> {
+		if (this.state.handlePromise) return this.state.handlePromise;
+		const destroyPromise = this.state.destroyPromise;
+		const promise = (async () => {
+			if (destroyPromise) await destroyPromise;
+			const existing = (await this.client.list()).find((sandbox) => this.isOwned(sandbox));
+			if (existing) return this.client.connect(existing.sandboxId);
+			return this.client.create({
+				template: this.config.template,
+				metadata: { [ID_META_KEY]: this.id, [OWNER_META_KEY]: this.ownerTag },
+				...(this.config.maxLifetimeSeconds
+					? { timeoutMs: Seconds.toMillis(this.config.maxLifetimeSeconds) }
+					: {}),
+			});
+		})();
+		this.state.handlePromise = promise;
+		const releaseState = this.retainState();
+		void promise.then(releaseState, () => {
+			if (this.state.handlePromise === promise) this.state.handlePromise = undefined;
+			releaseState();
+		});
+		return promise;
 	}
 
 	async exec(cmd: string): Promise<ExecResult> {
@@ -279,23 +306,43 @@ class E2bSandboxInstance implements SandboxInstance {
 		return { url: `https://${sb.getHost(port)}` };
 	}
 
-	async destroy(): Promise<void> {
-		// Kill the cached handle if we have one; otherwise resolve-by-tag and kill.
-		if (this.handle) {
-			await this.handle.kill().catch(() => {});
-			this.handle = undefined;
-			return;
-		}
-		const existing = (await this.client.list()).find((s) => s.metadata?.[ID_META_KEY] === this.id);
-		if (existing) {
-			const h = await this.client.connect(existing.sandboxId);
-			await h.kill().catch(() => {});
-		}
+	destroy(): Promise<void> {
+		if (this.state.destroyPromise) return this.state.destroyPromise;
+
+		const pending = this.state.handlePromise;
+		this.state.handlePromise = undefined;
+		const promise = (async () => {
+			if (pending) {
+				const cached = await pending.catch(() => null);
+				if (cached) await cached.kill().catch(() => {});
+			}
+			// Reap duplicates left by provisioning races from older processes.
+			const matches = (await this.client.list()).filter((sandbox) => this.isOwned(sandbox));
+			for (const match of matches) {
+				const handle = await this.client.connect(match.sandboxId).catch(() => null);
+				if (handle) await handle.kill().catch(() => {});
+			}
+		})();
+		this.state.destroyPromise = promise;
+		const releaseState = this.retainState();
+		const release = () => {
+			if (this.state.destroyPromise === promise) this.state.destroyPromise = undefined;
+			releaseState();
+		};
+		void promise.then(release, release);
+		return promise;
 	}
 }
 
 export class E2bCompute implements SandboxProvider {
 	private client?: E2bClient;
+	private readonly sandboxStates = new Map<SandboxId, E2bSandboxStateEntry>();
+	private readonly sandboxStateFinalizer = new FinalizationRegistry<{
+		id: SandboxId;
+		ref: WeakRef<E2bSandboxState>;
+	}>(({ id, ref }) => {
+		if (this.sandboxStates.get(id)?.ref === ref) this.sandboxStates.delete(id);
+	});
 
 	constructor(
 		private readonly config: E2bConfig,
@@ -309,10 +356,34 @@ export class E2bCompute implements SandboxProvider {
 		return this.client;
 	}
 
+	private retainSandboxState(entry: E2bSandboxStateEntry, state: E2bSandboxState): () => void {
+		entry.retainCount += 1;
+		entry.retained = state;
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			entry.retainCount -= 1;
+			if (entry.retainCount === 0) entry.retained = undefined;
+		};
+	}
+
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
 		// For E2B the selectable "image" is a template id.
 		const config = options?.image ? { ...this.config, template: options.image } : this.config;
-		return new E2bSandboxInstance(id, config, this.getClient());
+		let entry = this.sandboxStates.get(id);
+		let state = entry?.retained ?? entry?.ref.deref();
+		if (!entry || !state) {
+			state = {};
+			const ref = new WeakRef(state);
+			entry = { ref, retainCount: 0 };
+			this.sandboxStates.set(id, entry);
+			this.sandboxStateFinalizer.register(state, { id, ref });
+		}
+		const stateEntry = entry;
+		return new E2bSandboxInstance(id, config, this.getClient(), state, () =>
+			this.retainSandboxState(stateEntry, state),
+		);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

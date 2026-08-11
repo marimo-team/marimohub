@@ -31,6 +31,7 @@ import {
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
+import { Utf8TailBuffer } from '@marimo-hub/compute-commons/node';
 import type { SandboxId } from '@marimo-hub/core';
 import type {
 	ActiveSandbox,
@@ -53,6 +54,29 @@ import type {
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
+
+// Kernel processes can run for hours; diagnostics only need their recent output.
+const OUTPUT_TAIL_CHARS = 64 * 1024;
+
+function captureOutput(child: ChildProcess) {
+	const stdout = new Utf8TailBuffer(OUTPUT_TAIL_CHARS);
+	const stderr = new Utf8TailBuffer(OUTPUT_TAIL_CHARS);
+	child.stdout?.on('data', (chunk: Buffer) => stdout.append(chunk));
+	child.stderr?.on('data', (chunk: Buffer) => stderr.append(chunk));
+	return { stdout, stderr };
+}
+
+function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+	if (!child.pid) {
+		child.kill(signal);
+		return;
+	}
+	try {
+		process.kill(-child.pid, signal);
+	} catch {
+		child.kill(signal);
+	}
+}
 
 const WORKSPACE = '/workspace';
 
@@ -207,6 +231,7 @@ class LocalSandboxInstance implements SandboxInstance {
 		id: SandboxId,
 		opts: Required<Pick<LocalComputeOptions, 'host' | 'bindHost'>> &
 			Pick<LocalComputeOptions, 'ports'>,
+		private readonly onDestroyed?: () => void,
 	) {
 		this.root = path.join(os.tmpdir(), `marimohub-sandbox-${id}`);
 		this.host = opts.host;
@@ -248,25 +273,48 @@ class LocalSandboxInstance implements SandboxInstance {
 		await mkdir(this.root, { recursive: true });
 	}
 
+	private spawnShell(
+		command: string,
+		options: { cwd?: string; env?: NodeJS.ProcessEnv; detached?: boolean } = {},
+	): ChildProcess {
+		// Spawn env entries are forced; guarded defaults defer to the inherited host env.
+		return spawn('sh', ['-c', withEnvPrefix(command, {}, this.envDefaults)], {
+			cwd: options.cwd ?? this.root,
+			env: { ...process.env, ...this.env, ...options.env },
+			detached: options.detached,
+		});
+	}
+
 	async exec(cmd: string): Promise<ExecResult> {
 		await this.ensureRoot();
 		return new Promise((resolve) => {
-			const child = spawn('sh', ['-c', this.rewriteCmd(cmd)], { cwd: this.root });
-			let stdout = '';
-			let stderr = '';
-			child.stdout?.on('data', (d) => (stdout += d.toString()));
-			child.stderr?.on('data', (d) => (stderr += d.toString()));
+			const child = this.spawnShell(this.rewriteCmd(cmd));
+			const { stdout, stderr } = captureOutput(child);
 			child.on('error', (err) =>
-				resolve(execResult(false, stdout, stderr + String(err), 'SPAWN_FAILED')),
+				resolve(
+					execResult(false, stdout.toString(), stderr.toString() + String(err), 'SPAWN_FAILED'),
+				),
 			);
-			child.on('close', (code) => resolve(execResult(code === 0, stdout, stderr)));
+			child.on('close', (code) =>
+				resolve(execResult(code === 0, stdout.toString(), stderr.toString())),
+			);
 		});
 	}
 
 	async execStream(cmd: string, _options?: ExecStreamOptions): Promise<ReadableStream> {
 		await this.ensureRoot();
-		const child = spawn('sh', ['-c', this.rewriteCmd(cmd)], { cwd: this.root });
-		return Readable.toWeb(child.stdout ?? Readable.from([])) as ReadableStream;
+		const child = this.spawnShell(this.rewriteCmd(cmd), { detached: true });
+		this.children.add(child);
+		// An undrained stderr pipe can fill and block the child before stdout completes.
+		child.stderr?.resume();
+		const forget = () => this.children.delete(child);
+		child.once('exit', forget);
+		child.once('error', forget);
+		const stdout = child.stdout ?? Readable.from([]);
+		stdout.once('close', () => {
+			if (stdout.readableAborted) killProcessGroup(child, 'SIGKILL');
+		});
+		return Readable.toWeb(stdout) as ReadableStream;
 	}
 
 	async readFile(p: string): Promise<ReadFileResult> {
@@ -369,19 +417,14 @@ class LocalSandboxInstance implements SandboxInstance {
 		const cwd = options?.cwd ? this.mapPath(options.cwd) : this.root;
 		await mkdir(cwd, { recursive: true });
 
-		// Forced vars ride spawn's env; defaults can't (a spawn env entry always
-		// wins), so they go in as a guarded prefix that defers to the host env.
-		const child = spawn('sh', ['-c', withEnvPrefix(command, {}, this.envDefaults)], {
+		const child = this.spawnShell(command, {
 			cwd,
-			env: { ...process.env, ...this.env, ...options?.env },
+			env: options?.env,
 			detached: true,
 		});
 		this.children.add(child);
 
-		let stdout = '';
-		let stderr = '';
-		child.stdout?.on('data', (d) => (stdout += d.toString()));
-		child.stderr?.on('data', (d) => (stderr += d.toString()));
+		const { stdout, stderr } = captureOutput(child);
 
 		let exitInfo: { code: number | null; signal: NodeJS.Signals | null } | null = null;
 		child.on('exit', (code, signal) => {
@@ -396,11 +439,7 @@ class LocalSandboxInstance implements SandboxInstance {
 			id,
 			command,
 			async kill(signal?: string) {
-				try {
-					if (child.pid) process.kill(-child.pid, (signal as NodeJS.Signals) ?? 'SIGTERM');
-				} catch {
-					child.kill((signal as NodeJS.Signals) ?? 'SIGTERM');
-				}
+				killProcessGroup(child, (signal as NodeJS.Signals) ?? 'SIGTERM');
 			},
 			async waitForPort(port: number, opts?: WaitForPortOptions) {
 				const real = portMap.get(port) ?? port;
@@ -411,7 +450,7 @@ class LocalSandboxInstance implements SandboxInstance {
 						// throw to abort the wait immediately (pollUntilReady won't retry).
 						if (exitInfo) {
 							throw new Error(
-								`process exited (code ${exitInfo.code}) before port ${port} was ready.\n${stderr || stdout}`,
+								`process exited (code ${exitInfo.code}) before port ${port} was ready.\n${stderr.toString() || stdout.toString()}`,
 							);
 						}
 						return tcpReady(real);
@@ -420,12 +459,12 @@ class LocalSandboxInstance implements SandboxInstance {
 						timeoutMs: timeout,
 						intervalMs: 200,
 						timeoutMessage: () =>
-							`timed out waiting for port ${port} after ${timeout}ms.\n${stderr || stdout}`,
+							`timed out waiting for port ${port} after ${timeout}ms.\n${stderr.toString() || stdout.toString()}`,
 					},
 				);
 			},
 			async getLogs() {
-				return { stdout, stderr };
+				return { stdout: stdout.toString(), stderr: stderr.toString() };
 			},
 		};
 		return proc;
@@ -438,15 +477,12 @@ class LocalSandboxInstance implements SandboxInstance {
 
 	async destroy(): Promise<void> {
 		for (const child of this.children) {
-			try {
-				if (child.pid) process.kill(-child.pid, 'SIGKILL');
-			} catch {
-				child.kill('SIGKILL');
-			}
+			killProcessGroup(child, 'SIGKILL');
 		}
 		this.children.clear();
 		this.portMap.clear();
 		await rm(this.root, { recursive: true, force: true });
+		this.onDestroyed?.();
 	}
 }
 
@@ -454,9 +490,8 @@ export class LocalCompute implements SandboxProvider {
 	private readonly host: string;
 	private readonly bindHost: string;
 	private readonly ports?: PortRange;
-	// The kernel child process lives in THIS Node process, so we must hand back
-	// the same instance when the (stateless) API re-resolves a sandbox by id for
-	// teardown — otherwise destroy() couldn't find the running kernel to kill it.
+	// Re-resolution must return the same live instance so teardown can find its
+	// child process; destroy evicts it so a later create gets fresh state.
 	private readonly instances = new Map<SandboxId, LocalSandboxInstance>();
 
 	constructor(options?: LocalComputeOptions) {
@@ -468,11 +503,18 @@ export class LocalCompute implements SandboxProvider {
 	create(id: SandboxId): SandboxInstance {
 		let instance = this.instances.get(id);
 		if (!instance) {
-			instance = new LocalSandboxInstance(id, {
-				host: this.host,
-				bindHost: this.bindHost,
-				ports: this.ports,
-			});
+			const next = new LocalSandboxInstance(
+				id,
+				{
+					host: this.host,
+					bindHost: this.bindHost,
+					ports: this.ports,
+				},
+				() => {
+					if (this.instances.get(id) === next) this.instances.delete(id);
+				},
+			);
+			instance = next;
 			this.instances.set(id, instance);
 		}
 		return instance;

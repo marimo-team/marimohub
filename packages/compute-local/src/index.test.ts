@@ -3,9 +3,16 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import type { SandboxId } from '@marimo-hub/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import type { SandboxInstance } from '@marimo-hub/core/ports';
 import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectFileResult } from '@marimo-hub/core/testing';
+import {
+	computeContract,
+	CONTRACT_HIDDEN_FILE,
+	CONTRACT_SANDBOX_ID,
+	CONTRACT_VISIBLE_FILE,
+} from '@marimo-hub/core/testing/compute-contract';
 import { LocalCompute, prepareMarimoCommand, rewriteWorkspace } from './index';
 
 const compute = new LocalCompute();
@@ -15,6 +22,31 @@ function newSandbox() {
 	const id = `sb-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
 	created.push(id);
 	return compute.create(id);
+}
+
+function processIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+		throw error;
+	}
+}
+
+async function waitForPid(sandbox: SandboxInstance, path: string): Promise<number> {
+	let pid = 0;
+	await expect
+		.poll(
+			async () => {
+				const result = await sandbox.readFile(path);
+				if (result.success) pid = Number(result.content.trim());
+				return pid;
+			},
+			{ timeout: 5000, interval: 20 },
+		)
+		.toBeGreaterThan(0);
+	return pid;
 }
 
 afterEach(async () => {
@@ -397,4 +429,127 @@ describe('LocalCompute listActive', () => {
 		active = await compute.listActive();
 		expect(active.map((s) => s.id)).not.toContain(runningId);
 	});
+});
+
+describe('LocalCompute process hygiene', () => {
+	it('execStream does not deadlock when the command floods stderr', async () => {
+		const sb = newSandbox();
+		const stream = await sb.execStream(
+			`node -e "process.stderr.write('e'.repeat(256 * 1024)); process.stdout.write('done')"`,
+		);
+		expect(await new Response(stream).text()).toBe('done');
+	}, 15_000);
+
+	it('destroy kills a live execStream child', async () => {
+		const sb = newSandbox();
+		const stream = await sb.execStream('sleep 30');
+		const drained = new Response(stream).text();
+		await sb.destroy();
+		await expect(drained).resolves.toBe('');
+	}, 10_000);
+
+	it('cancelling an execStream kills the child', async () => {
+		const sb = newSandbox();
+		const stream = await sb.execStream('echo $$ > direct.pid; sleep 30');
+		const pid = await waitForPid(sb, 'direct.pid');
+		expect(processIsAlive(pid)).toBe(true);
+		await stream.cancel();
+		await expect.poll(() => processIsAlive(pid), { timeout: 5000, interval: 20 }).toBe(false);
+	}, 10_000);
+
+	it('cancelling an execStream reader kills the process group', async () => {
+		const sb = newSandbox();
+		const stream = await sb.execStream('sleep 30 & echo $! > descendant.pid; wait');
+		const reader = stream.getReader();
+		const pid = await waitForPid(sb, 'descendant.pid');
+		expect(processIsAlive(pid)).toBe(true);
+		await reader.cancel();
+		await expect.poll(() => processIsAlive(pid), { timeout: 5000, interval: 20 }).toBe(false);
+	}, 10_000);
+
+	it('exec retains only the trailing output', async () => {
+		const sb = newSandbox();
+		const res = await sb.exec(`node -e "process.stdout.write('a'.repeat(300 * 1024))"`);
+		expect(res.success).toBe(true);
+		expect(res.stdout.length).toBeLessThanOrEqual(64 * 1024);
+		expect(res.stdout.endsWith('a')).toBe(true);
+	});
+
+	it('exec decodes multi-byte UTF-8 split across chunks', async () => {
+		const sb = newSandbox();
+		const res = await sb.exec(
+			`node -e "process.stdout.write(Buffer.from([0xc3])); setTimeout(() => process.stdout.write(Buffer.from([0xa9])), 100)"`,
+		);
+		expect(res.success).toBe(true);
+		expect(res.stdout).toBe('é');
+	});
+
+	it('startProcess logs are capped to the trailing output', async () => {
+		const sb = newSandbox();
+		const proc = await sb.startProcess(
+			`node -e "process.stdout.write('b'.repeat(300 * 1024)); setInterval(() => {}, 1000)"`,
+			{ cwd: '/workspace' },
+		);
+		let logs = { stdout: '', stderr: '' };
+		for (let i = 0; i < 50; i++) {
+			logs = await proc.getLogs();
+			if (logs.stdout.length > 0) break;
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+		expect(logs.stdout.length).toBeGreaterThan(0);
+		expect(logs.stdout.length).toBeLessThanOrEqual(64 * 1024);
+		await proc.kill();
+	});
+
+	it('destroy evicts the instance so the id maps to a fresh one', async () => {
+		const id = `sb-evict-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
+		created.push(id);
+		const sb = compute.create(id);
+		expect(compute.create(id)).toBe(sb);
+		await sb.destroy();
+		expect(compute.create(id)).not.toBe(sb);
+	});
+
+	it('a stale destroy does not evict a replacement instance', async () => {
+		const id = `sb-stale-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
+		created.push(id);
+		const first = compute.create(id);
+		await first.destroy();
+		const second = compute.create(id);
+		await first.destroy();
+		expect(compute.create(id)).toBe(second);
+	});
+});
+
+computeContract('LocalCompute', () => new LocalCompute(), {
+	mountFallsBack: true,
+	semantics: {
+		failingCommand: 'false',
+		absentFile: { path: '/workspace/contract-absent.txt', code: 'NOT_FOUND' },
+		hiddenFiles: {
+			dir: '/workspace',
+			seed: (inst) =>
+				inst.writeFiles([
+					{ path: `/workspace/${CONTRACT_VISIBLE_FILE}`, content: 'v' },
+					{ path: `/workspace/${CONTRACT_HIDDEN_FILE}`, content: 'h' },
+				]),
+		},
+		envProbe: (name) => `printenv ${name}`,
+		preexistingEnv: {
+			name: 'MH_CONTRACT_ENV_PREEXISTING',
+			value: 'host',
+			setup: async () => {
+				const previous = process.env.MH_CONTRACT_ENV_PREEXISTING;
+				process.env.MH_CONTRACT_ENV_PREEXISTING = 'host';
+				return () => {
+					if (previous === undefined) delete process.env.MH_CONTRACT_ENV_PREEXISTING;
+					else process.env.MH_CONTRACT_ENV_PREEXISTING = previous;
+				};
+			},
+		},
+	},
+});
+
+afterAll(async () => {
+	await new LocalCompute().create(CONTRACT_SANDBOX_ID).destroy();
 });

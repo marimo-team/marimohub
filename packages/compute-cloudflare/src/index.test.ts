@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
+import { computeContract } from '@marimo-hub/core/testing/compute-contract';
 
 /**
  * Tests for the Cloudflare Containers compute adapter.
@@ -428,3 +429,41 @@ describe('CloudflareSandboxProvider', () => {
 		});
 	});
 });
+
+function primeContractFakes() {
+	fakeSandbox.exec.mockImplementation(async (cmd: string) =>
+		cmd.includes('mh-contract-fail')
+			? {
+					success: false,
+					stdout: '',
+					stderr: 'scripted failure',
+					error: { code: 'COMMAND_FAILED' },
+				}
+			: { success: true, stdout: '', stderr: '' },
+	);
+	fakeSandbox.execStream.mockImplementation(async () => new ReadableStream());
+	fakeSandbox.readFile.mockImplementation(async () => ({ success: false }));
+	fakeSandbox.writeFile.mockResolvedValue(undefined);
+	fakeSandbox.listFiles.mockImplementation(async () => ({ success: true, files: [] }));
+	fakeSandbox.setEnvVars.mockResolvedValue(undefined);
+	fakeSandbox.mountBucket.mockResolvedValue(undefined);
+	fakeSandbox.unmountBucket.mockResolvedValue(undefined);
+	fakeSandbox.destroy.mockResolvedValue(undefined);
+	fakeSandbox.exposePort.mockImplementation(async () => ({ url: 'https://tunnel.example.com' }));
+	proxyToSandbox.mockResolvedValue(null);
+}
+
+computeContract(
+	'CloudflareSandboxProvider',
+	() => {
+		primeContractFakes();
+		return makeProvider();
+	},
+	{
+		semantics: {
+			failingCommand: 'mh-contract-fail',
+			// The SDK failure shape does not distinguish an absent file.
+			absentFile: { path: '/contract-absent.txt', code: 'READ_FAILED' },
+		},
+	},
+);
