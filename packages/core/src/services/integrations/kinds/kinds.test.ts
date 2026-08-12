@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { ValidationError } from '../../../errors';
-import { createProjectId, createSessionId, UserId } from '../../../ids';
+import { createIntegrationId, createProjectId, createSessionId, UserId } from '../../../ids';
 import type { IntegrationProbe, ProbeRequestInit } from '../../../ports/integrations';
 import { bundleIntegrations, INTEGRATIONS_DIR } from '../bundle';
 import { SECRET_MARK } from '../secretFields';
@@ -61,6 +61,32 @@ function fixtureFor(def: IntegrationDefinition, overrides: object = {}): object 
 
 function renderFixture(def: IntegrationDefinition, overrides: object = {}, name = 'prod') {
 	return renderDefinition(def, fixtureFor(def, overrides), name);
+}
+
+function icebergPreviewPrograms(
+	config: unknown,
+	overrides: Partial<{
+		integrationName: string;
+		namespace: string[];
+		table: string;
+		limit: number;
+	}> = {},
+) {
+	return icebergRest.preview?.programs({
+		config: icebergRest.configSchema.parse(config),
+		integration: {
+			id: createIntegrationId(),
+			name: overrides.integrationName ?? 'lake',
+			kind: 'iceberg_rest',
+			version: 1,
+		},
+		projectId: createProjectId(),
+		principal: { userId: UserId.parse('user-1'), email: 'ada@example.com' },
+		sessionId: createSessionId(),
+		namespace: overrides.namespace ?? ['sales'],
+		table: overrides.table ?? 'orders',
+		limit: overrides.limit ?? 20,
+	});
 }
 
 /** Plaintext values sitting at a kind's schema-marked secret paths. */
@@ -697,6 +723,114 @@ describe('kind renders (golden)', () => {
 		const descriptor = JSON.parse(out.files?.[0]?.content ?? '') as Record<string, unknown>;
 		expect(descriptor.catalog_name).toBe('lake-house');
 		expect(JSON.stringify(descriptor)).not.toContain('csec');
+	});
+
+	it('iceberg_rest binds SQL values and formats identifiers', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/api',
+			warehouse: "lake'house",
+			auth: { method: 'bearer_token', token: "tok'en" },
+			storage: { scheme: 'catalog' },
+		});
+		const programs = icebergPreviewPrograms(config, { namespace: ['sales"archive'] });
+
+		expect(programs?.duckdbWasm).toMatchObject({ requires: ['iceberg-http'] });
+		const attach = programs?.duckdbWasm?.setup.at(-1);
+		expect(attach?.text).toContain("ATTACH 'lake''house'");
+		expect(attach?.text).toContain('ENDPOINT ?');
+		expect(attach?.text).toContain('WAREHOUSE ?');
+		expect(attach?.text).toContain('TOKEN ?');
+		expect(attach?.text).not.toContain("tok'en");
+		expect(attach?.params).toEqual([
+			'https://catalog.example.com/api',
+			"lake'house",
+			"tok'en",
+			'vended_credentials',
+		]);
+		expect(programs?.duckdbWasm?.query).toEqual({
+			text: expect.stringContaining('"sales""archive".orders LIMIT ?'),
+			params: [20],
+		});
+		expect(programs?.python?.maxRows).toBe(20);
+		expect(programs?.python?.input).toMatchObject({
+			integration_name: 'lake',
+			namespace: ['sales"archive'],
+			table: 'orders',
+			limit: 20,
+		});
+	});
+
+	it('iceberg_rest keeps every remote value bound when optional warehouse is absent', () => {
+		const uri = "https://catalog.example.com/a'b?token=not-sql";
+		const programs = icebergPreviewPrograms(
+			{
+				uri,
+				auth: { method: 'none' },
+				access_delegation: 'none',
+			},
+			{
+				integrationName: "catalog'name",
+				namespace: ['select', 'two.parts'],
+				table: 'order"items',
+				limit: 1,
+			},
+		);
+
+		const attach = programs?.duckdbWasm?.setup.at(-1);
+		expect(attach).toEqual({
+			text: expect.stringContaining("ATTACH 'catalog''name'"),
+			params: [uri, '', 'none'],
+		});
+		expect(attach?.text).not.toContain(uri);
+		expect(attach?.text).not.toContain('WAREHOUSE');
+		expect(programs?.duckdbWasm?.query).toEqual({
+			text: expect.stringContaining('"select"."two.parts"."order""items" LIMIT ?'),
+			params: [1],
+		});
+	});
+
+	it.each([
+		['basic auth', { auth: { method: 'basic', username: 'user', password: 'password' } }],
+		[
+			'OAuth2 auth',
+			{
+				auth: {
+					method: 'oauth2_client_credentials',
+					token_endpoint: 'https://identity.example.com/token',
+					client_id: 'client',
+					client_secret: 'secret',
+				},
+			},
+		],
+		['SigV4 auth', { auth: { method: 'sigv4', region: 'us-east-1' } }],
+		['Google auth', { auth: { method: 'google' } }],
+		['Entra auth', { auth: { method: 'entra' } }],
+		['custom TLS', { tls: { ca_bundle: 'CA' } }],
+		['custom headers', { headers: { 'X-Trace': 'trace' } }],
+		['extra properties', { extra_properties: { 'rest.custom-option': 'true' } }],
+		['explicit storage', { storage: { scheme: 's3', region: 'us-east-1' } }],
+	] as const)('iceberg_rest routes %s previews only to the sandbox', (_name, patch) => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com',
+			auth: { method: 'none' },
+			...patch,
+		});
+
+		expect(icebergRest.preview?.available(config)).toEqual({
+			ok: true,
+			programs: { python: true },
+		});
+		expect(icebergPreviewPrograms(config)).toEqual({
+			python: expect.objectContaining({ maxRows: 20 }),
+		});
+	});
+
+	it('iceberg_rest omits the DuckDB program for unsupported options', () => {
+		const config = icebergRest.configSchema.parse(FIXTURES.iceberg_rest);
+		expect(icebergRest.preview?.available(config)).toEqual({
+			ok: true,
+			programs: { python: true },
+		});
 	});
 
 	it('iceberg_rest: rejects empty extra-property keys', () => {

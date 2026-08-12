@@ -1,3 +1,5 @@
+import { assertPositiveInteger } from './internal/validation';
+
 /**
  * Counting semaphore that gates async work to at most `permits` in-flight
  * tasks. Waiters are released in FIFO order.
@@ -79,4 +81,51 @@ export function mapWithConcurrency<T, R>(
 		return Promise.resolve([]);
 	}
 	return Promise.all(items.map((item, index) => sem.run(() => fn(item, index))));
+}
+
+export class KeyedAdmission<K> {
+	private active = 0;
+	private readonly activeByKey = new Map<K, number>();
+
+	constructor(
+		private readonly maxConcurrent: number,
+		private readonly maxConcurrentPerKey: number,
+		private readonly errors: { global: () => Error; perKey: () => Error },
+	) {
+		assertPositiveInteger('maxConcurrent', maxConcurrent);
+		assertPositiveInteger('maxConcurrentPerKey', maxConcurrentPerKey);
+	}
+
+	async run<T>(key: K, work: () => Promise<T>): Promise<T> {
+		const keyActive = this.activeByKey.get(key) ?? 0;
+		if (keyActive >= this.maxConcurrentPerKey) throw this.errors.perKey();
+		if (this.active >= this.maxConcurrent) throw this.errors.global();
+		this.active++;
+		this.activeByKey.set(key, keyActive + 1);
+		try {
+			return await work();
+		} finally {
+			this.active--;
+			const remaining = (this.activeByKey.get(key) ?? 1) - 1;
+			if (remaining === 0) this.activeByKey.delete(key);
+			else this.activeByKey.set(key, remaining);
+		}
+	}
+}
+
+export class InFlightWork {
+	private readonly work = new Set<Promise<unknown>>();
+
+	async track<T>(promise: Promise<T>): Promise<T> {
+		this.work.add(promise);
+		try {
+			return await promise;
+		} finally {
+			this.work.delete(promise);
+		}
+	}
+
+	async drain(): Promise<void> {
+		await Promise.allSettled(this.work);
+	}
 }

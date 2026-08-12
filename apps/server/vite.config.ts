@@ -15,6 +15,7 @@ export default defineConfig({
 		},
 	},
 	pack: {
+		entry: ['src/index.ts', 'src/duckdbWorker.ts'],
 		platform: 'node',
 		format: ['esm'],
 		dts: false,
@@ -51,6 +52,12 @@ export default defineConfig({
 			/^@coreweave\//,
 			/^@grpc\//,
 			/^@protobuf-ts\//,
+		],
+		copy: [
+			{
+				from: '../../packages/duckdb-wasm-runtime/node_modules/@duckdb/duckdb-wasm/dist/duckdb-eh.wasm',
+				to: 'dist',
+			},
 		],
 	},
 });

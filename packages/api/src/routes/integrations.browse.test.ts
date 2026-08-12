@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from '@hono/zod-openapi';
 import {
 	AesGcmSecretCodec,
+	DataPreviewService,
 	defaultRegistry,
 	defineIntegration,
 	IntegrationRegistry,
@@ -13,6 +14,7 @@ import {
 } from '@marimo-hub/core';
 import type { ObjectBrowser } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
+import type { PythonPreviewProgram, TablePreview } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 import { clearObjectCredentialCacheForTests } from './objectBrowse';
@@ -71,6 +73,23 @@ const sandboxBrowsyKind = defineIntegration({
 	schemaVersion: 1,
 	configSchema: z.object({}),
 	render: () => ({ env: { SANDBOX_BROWSY: 'enabled' } }),
+	preview: {
+		available: () => ({ ok: true, programs: { python: true } }),
+		programs: (input) => ({
+			python: {
+				script: 'preview',
+				maxRows: input.limit,
+				input: {
+					integration_name: input.integration.name,
+					user_id: input.principal.userId,
+				},
+				render: { env: { SANDBOX_BROWSY: 'enabled' } },
+				integration: input.integration,
+				sessionId: input.sessionId,
+				credentialVars: input.credentialVars,
+			},
+		}),
+	},
 	browse: {
 		available: () => ({ ok: true }),
 		listNamespaces: async () => ({ items: [['sales']], next_cursor: null }),
@@ -169,7 +188,7 @@ const objectBrowser: ObjectBrowser = {
 	}),
 };
 
-function browserDeps(bucket: MemoryBucket) {
+function browserDeps(bucket: MemoryBucket, dataPreview?: DataPreviewService) {
 	const registry = new IntegrationRegistry();
 	registry.register(browsyKind);
 	registry.register(sandboxBrowsyKind);
@@ -182,6 +201,7 @@ function browserDeps(bucket: MemoryBucket) {
 		probe: stubProbe,
 		browseProbe: stubProbe,
 		objectBrowsers: { s3: objectBrowser },
+		dataPreview,
 	};
 	return {
 		integrations: new ProjectIntegrationsStore(options),
@@ -196,6 +216,22 @@ function browserDeps(bucket: MemoryBucket) {
 			},
 		},
 	};
+}
+
+function previewService(
+	preview: (program: PythonPreviewProgram) => Promise<TablePreview>,
+	available: () => boolean = () => true,
+): DataPreviewService {
+	return new DataPreviewService({
+		maxConcurrent: 4,
+		maxConcurrentPerUser: 1,
+		sandbox: {
+			available,
+			check: async () => {},
+			preview,
+			close: async () => {},
+		},
+	});
 }
 
 describe('Data browser routes', () => {
@@ -586,7 +622,7 @@ describe('Data browser routes', () => {
 		const captured: unknown[] = [];
 		const original = deps.integrations.browseTablePreview.bind(deps.integrations);
 		deps.integrations.browseTablePreview = (async (...args: Parameters<typeof original>) => {
-			captured.push(args.at(-1));
+			captured.push(args[6]);
 			return original(...args);
 		}) as typeof original;
 
@@ -611,22 +647,16 @@ describe('Data browser routes', () => {
 			201,
 		);
 		const calls: unknown[] = [];
+		const dataPreview = previewService(async (program) => {
+			calls.push(program);
+			return { columns: ['id'], rows: [[1]] };
+		});
 		const full = createTestApi({
 			bucket,
 			userId: ACTOR,
 			deps: {
-				...deps,
-				dataBrowser: {
-					preview: true,
-					sandboxPreview: {
-						available: () => true,
-						check: async () => {},
-						preview: async (input) => {
-							calls.push(input);
-							return { columns: ['id'], rows: [[1]] };
-						},
-					},
-				},
+				...browserDeps(bucket, dataPreview),
+				dataBrowser: { preview: true },
 			},
 		}).request;
 
@@ -638,12 +668,9 @@ describe('Data browser routes', () => {
 		expect(await expectOk(response)).toEqual({ columns: ['id'], rows: [[1]] });
 		expect(calls).toHaveLength(1);
 		expect(calls[0]).toMatchObject({
-			integration_name: 'selected',
-			user_id: ACTOR,
-			bundle: {
-				vars: expect.objectContaining({ SANDBOX_BROWSY: 'enabled' }),
-				attachments: [{ name: 'selected', kind: 'sandbox_browsy' }],
-			},
+			input: { integration_name: 'selected', user_id: ACTOR },
+			render: { env: { SANDBOX_BROWSY: 'enabled' } },
+			integration: { name: 'selected', kind: 'sandbox_browsy' },
 		});
 	});
 
@@ -658,21 +685,16 @@ describe('Data browser routes', () => {
 			201,
 		);
 		let ready = false;
+		const dataPreview = previewService(
+			async () => ({ columns: [], rows: [] }),
+			() => ready,
+		);
 		const full = createTestApi({
 			bucket,
 			userId: ACTOR,
 			deps: {
-				...deps,
-				dataBrowser: {
-					preview: true,
-					sandboxPreview: {
-						available: () => ready,
-						check: async () => {
-							ready = true;
-						},
-						preview: async () => ({ columns: [], rows: [] }),
-					},
-				},
+				...browserDeps(bucket, dataPreview),
+				dataBrowser: { preview: true },
 			},
 		}).request;
 		const url = `/projects/${pid}/integrations/${selected.id}/browse`;
@@ -702,11 +724,15 @@ describe('Data browser routes', () => {
 			201,
 		);
 		const calls: unknown[] = [];
+		const dataPreview = previewService(async (program) => {
+			calls.push(program);
+			return { columns: [], rows: [] };
+		});
 		const full = createTestApi({
 			bucket,
 			userId: ACTOR,
 			deps: {
-				...deps,
+				...browserDeps(bucket, dataPreview),
 				wif: {
 					issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
 					issuerUrl: 'https://hub.example.com',
@@ -722,17 +748,7 @@ describe('Data browser routes', () => {
 						audience: 'storage',
 					},
 				},
-				dataBrowser: {
-					preview: true,
-					sandboxPreview: {
-						available: () => true,
-						check: async () => {},
-						preview: async (input) => {
-							calls.push(input);
-							return { columns: [], rows: [] };
-						},
-					},
-				},
+				dataBrowser: { preview: true },
 			},
 		}).request;
 
@@ -743,7 +759,7 @@ describe('Data browser routes', () => {
 			}),
 		);
 		expect(calls[0]).toMatchObject({
-			credential_vars: {
+			credentialVars: {
 				AWS_ACCESS_KEY_ID: 'temporary-key',
 				AWS_SECRET_ACCESS_KEY: 'temporary-secret',
 				AWS_SESSION_TOKEN: 'temporary-token',

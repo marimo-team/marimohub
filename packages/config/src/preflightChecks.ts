@@ -329,17 +329,19 @@ async function checkIntegrationSecrets(deps: ApiDeps): Promise<CheckOutcome> {
 }
 
 async function checkDataPreview(deps: ApiDeps): Promise<CheckOutcome> {
-	const preview = deps.dataBrowser?.sandboxPreview;
-	if (!preview) return { status: 'skipped', message: 'dedicated data-preview runtime disabled' };
+	const preview = deps.dataBrowser?.checkPreview;
+	if (!preview) {
+		return { status: 'skipped', message: 'dedicated data-preview runtime disabled' };
+	}
 	try {
-		await preview.check();
-		return { status: 'ok', message: 'data-preview runtime provides PyIceberg and PyArrow' };
+		await preview();
+		return { status: 'ok', message: 'data-preview runtime is ready' };
 	} catch (err) {
 		return {
 			status: 'fail',
 			message: `Data-preview runtime unavailable: ${errMsg(err)}`,
 			remediation:
-				'Check compute credentials, connectivity, and capacity, then verify MARIMOHUB_DATA_PREVIEW_IMAGE provides Python, PyIceberg, and PyArrow.',
+				'Check DuckDB-Wasm runtime support or compute credentials and capacity; for sandbox previews, verify MARIMOHUB_DATA_PREVIEW_IMAGE provides Python, PyIceberg, and PyArrow.',
 		};
 	}
 }
@@ -360,7 +362,7 @@ export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] 
 	if (deps.integrations) {
 		checks.push({ name: 'integrations.secrets', run: () => checkIntegrationSecrets(deps) });
 	}
-	if (deps.dataBrowser?.sandboxPreview) {
+	if (deps.dataBrowser?.close) {
 		checks.push({
 			name: 'integrations.data-preview',
 			run: () => checkDataPreview(deps),

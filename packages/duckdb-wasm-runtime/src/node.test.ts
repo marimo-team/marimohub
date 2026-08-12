@@ -1,0 +1,256 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import type { DuckDBWasmRuntime } from '@marimo-hub/core';
+import { createNodeDuckDBWasmRuntimeFactory } from './node';
+
+const open: DuckDBWasmRuntime[] = [];
+
+afterEach(async () => {
+	await Promise.all(open.splice(0).map((runtime) => runtime.close()));
+});
+
+async function initialized(mode: 'worker' | 'inline'): Promise<DuckDBWasmRuntime> {
+	const runtime = await createNodeDuckDBWasmRuntimeFactory(mode)();
+	open.push(runtime);
+	await runtime.initialize({ memoryLimitMb: 64 });
+	return runtime;
+}
+
+describe.each(['worker', 'inline'] as const)('DuckDB-Wasm %s runtime', (mode) => {
+	it('rejects work before initialization and after close', async () => {
+		const runtime = await createNodeDuckDBWasmRuntimeFactory(mode)();
+		open.push(runtime);
+		await expect(runtime.execute({ setup: [], query: { text: 'SELECT 1' } })).rejects.toThrow(
+			/not initialized/i,
+		);
+		await runtime.initialize({ memoryLimitMb: 64 });
+		await runtime.close();
+		await expect(runtime.execute({ setup: [], query: { text: 'SELECT 1' } })).rejects.toThrow(
+			/closed|not initialized/i,
+		);
+		await expect(runtime.close()).resolves.toBeUndefined();
+	});
+
+	it('allows repeated initialization without replacing the database', async () => {
+		const runtime = await initialized(mode);
+		await runtime.initialize({ memoryLimitMb: 128 });
+		await expect(runtime.ping()).resolves.toBeUndefined();
+		await expect(
+			runtime.execute({ setup: [], query: { text: "SET memory_limit='128MB'" } }),
+		).rejects.toThrow(/locked/i);
+	});
+
+	it('executes SQL and normalizes Arrow values', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: { text: "SELECT 42::BIGINT AS bigint, 'ok' AS text, '2024-01-01'::DATE AS date" },
+			}),
+		).resolves.toEqual({
+			columns: ['bigint', 'text', 'date'],
+			rows: [['42', 'ok', expect.any(String)]],
+		});
+	});
+
+	it('normalizes nested, binary, null, and non-finite values to JSON-safe output', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: {
+					text: `SELECT
+						NULL::VARCHAR AS null_value,
+						'NaN'::DOUBLE AS nan_value,
+						'Infinity'::DOUBLE AS infinity_value,
+						from_hex('616263') AS bytes,
+						[1, 2, NULL] AS list_value,
+						{'name': 'duck', 'count': 2} AS struct_value`,
+				},
+			}),
+		).resolves.toEqual({
+			columns: ['null_value', 'nan_value', 'infinity_value', 'bytes', 'list_value', 'struct_value'],
+			rows: [[null, null, null, 'YWJj', [1, 2, null], { name: 'duck', count: 2 }]],
+		});
+	});
+
+	it('binds statement parameters instead of interpolating values', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [
+					{ text: 'CREATE TABLE values_table(value VARCHAR)' },
+					{ text: 'INSERT INTO values_table VALUES (?)', params: ["x'); SELECT 99; --"] },
+				],
+				query: { text: 'SELECT value FROM values_table LIMIT ?', params: [1] },
+				cleanup: [{ text: 'DROP TABLE values_table' }],
+			}),
+		).resolves.toEqual({
+			columns: ['value'],
+			rows: [["x'); SELECT 99; --"]],
+		});
+	});
+
+	it('binds every supported parameter type including null', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: {
+					text: `SELECT
+						?::VARCHAR AS text,
+						?::DOUBLE AS number,
+						?::BOOLEAN AS bool,
+						?::VARCHAR AS nullable`,
+					params: ["x'); DROP TABLE anything; --", 1.25, false, null],
+				},
+			}),
+		).resolves.toEqual({
+			columns: ['text', 'number', 'bool', 'nullable'],
+			rows: [["x'); DROP TABLE anything; --", 1.25, false, null]],
+		});
+	});
+
+	it.each([
+		['too few', []],
+		['too many', [1, 2]],
+	] as const)('rejects %s bound parameters and remains usable', async (_name, params) => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({ setup: [], query: { text: 'SELECT ? AS value', params } }),
+		).rejects.toThrow();
+		await expect(
+			runtime.execute({ setup: [], query: { text: 'SELECT 1 AS value' } }),
+		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
+	});
+
+	it('locks configuration, disables external access, and forces a read-only transaction', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({ setup: [], query: { text: "SET memory_limit='128MB'" } }),
+		).rejects.toThrow(/locked/i);
+		await expect(
+			runtime.execute({ setup: [], query: { text: 'CREATE TABLE denied(i INTEGER)' } }),
+		).rejects.toThrow(/read-only mode/i);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: { text: "SELECT * FROM read_csv_auto('https://example.com/a.csv')" },
+			}),
+		).rejects.toThrow(/external access|disabled/i);
+	});
+
+	it('closes the failed connection before later work', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: { text: 'SELECT missing_column' },
+			}),
+		).rejects.toThrow(/missing_column/i);
+		await expect(
+			runtime.execute({ setup: [], query: { text: 'SELECT 1 AS value' } }),
+		).resolves.toEqual({
+			columns: ['value'],
+			rows: [[1]],
+		});
+	});
+
+	it('runs cleanup when setup fails partway through', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [
+					{ text: 'CREATE TABLE cleanup_after_setup_failure(value INTEGER)' },
+					{ text: 'INSERT INTO cleanup_after_setup_failure VALUES (?)', params: [] },
+				],
+				query: { text: 'SELECT * FROM cleanup_after_setup_failure' },
+				cleanup: [{ text: 'DROP TABLE cleanup_after_setup_failure' }],
+			}),
+		).rejects.toThrow();
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: {
+					text: `SELECT count(*) AS count
+						FROM information_schema.tables
+						WHERE table_name = 'cleanup_after_setup_failure'`,
+				},
+			}),
+		).resolves.toEqual({ columns: ['count'], rows: [['0']] });
+	});
+
+	it('runs cleanup after the preview query fails', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [{ text: 'CREATE TABLE cleanup_after_query_failure(value INTEGER)' }],
+				query: { text: 'SELECT missing_column FROM cleanup_after_query_failure' },
+				cleanup: [{ text: 'DROP TABLE cleanup_after_query_failure' }],
+			}),
+		).rejects.toThrow(/missing_column/i);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: {
+					text: `SELECT count(*) AS count
+						FROM information_schema.tables
+						WHERE table_name = 'cleanup_after_query_failure'`,
+				},
+			}),
+		).resolves.toEqual({ columns: ['count'], rows: [['0']] });
+	});
+
+	it('runs cleanup statements in reverse dependency order', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [
+					{ text: 'CREATE TABLE cleanup_parent(id INTEGER PRIMARY KEY)' },
+					{
+						text: 'CREATE TABLE cleanup_child(parent_id INTEGER REFERENCES cleanup_parent(id))',
+					},
+				],
+				query: { text: 'SELECT 1 AS value' },
+				cleanup: [{ text: 'DROP TABLE cleanup_parent' }, { text: 'DROP TABLE cleanup_child' }],
+			}),
+		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
+	});
+
+	it('returns the primary query error when cleanup also fails', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: { text: 'SELECT primary_missing' },
+				cleanup: [{ text: 'SELECT cleanup_missing' }],
+			}),
+		).rejects.toThrow(/primary_missing/i);
+	});
+
+	it('returns a cleanup error after a successful query and remains usable', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: { text: 'SELECT 1 AS value' },
+				cleanup: [{ text: 'SELECT cleanup_missing' }],
+			}),
+		).rejects.toThrow(/cleanup_missing/i);
+		await expect(
+			runtime.execute({ setup: [], query: { text: 'SELECT 2 AS value' } }),
+		).resolves.toEqual({ columns: ['value'], rows: [[2]] });
+	});
+
+	it('rejects oversized results without making later work fail', async () => {
+		const runtime = await initialized(mode);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: { text: `SELECT repeat('x', ${2 * 1024 * 1024 + 1}) AS huge` },
+			}),
+		).rejects.toThrow(/response limit/i);
+		await expect(
+			runtime.execute({ setup: [], query: { text: 'SELECT 1 AS value' } }),
+		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
+	});
+});

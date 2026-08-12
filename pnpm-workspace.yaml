@@ -14,6 +14,7 @@ catalog:
   '@azure/storage-blob': ^12.33.0
   '@cloudflare/sandbox': ^0.12.1
   '@cloudflare/workers-types': ^4.20260610.1
+  '@duckdb/duckdb-wasm': 1.32.0
   '@hono/node-server': ^2.0.10
   '@hono/otel': ^1.1.2
   '@hono/zod-openapi': ^1.2.2
@@ -36,6 +37,7 @@ catalog:
   '@testing-library/react': ^16.3.2
   '@testing-library/user-event': ^14.6.1
   '@types/node': ^25.9.3
+  '@types/pg-format': 1.0.5
   '@vitest/coverage-v8': 4.1.8
   better-all: ^0.0.7
   class-variance-authority: ^0.7.1
@@ -51,6 +53,7 @@ catalog:
   ofetch: ^1.5.1
   openapi-fetch: ^0.17.0
   oxlint: 1.67.0
+  pg-format: 1.0.4
   simple-icons: ^16.27.0
   smol-toml: ^1.7.0
   sonner: ^2.0.7
@@ -109,5 +112,9 @@ peerDependencyRules:
     vitest: '*'
 
 trustPolicy: no-downgrade
+trustPolicyExclude:
+  # Transitive of apache-arrow 17 (DuckDB-Wasm); this older release predates
+  # the provenance carried by later undici-types releases.
+  - undici-types@6.21.0
 
 verifyDepsBeforeRun: install

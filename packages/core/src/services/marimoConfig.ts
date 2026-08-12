@@ -1,5 +1,6 @@
 import { stringify } from 'smol-toml';
 import type { TomlTable, TomlValue } from 'smol-toml';
+import { isRecord } from '../internal/validation';
 import type { SessionEnv } from './runtime/SandboxProvisioner';
 
 // Contributors (aiSessionConfig) type their tables against this re-export so
@@ -20,9 +21,7 @@ const XDG_CACHE_HOME = '/tmp/marimohub-cache';
 const XDG_STATE_HOME = '/tmp/marimohub-state';
 
 function isTomlTable(value: TomlValue | undefined): value is TomlTable {
-	return (
-		typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date)
-	);
+	return isRecord(value) && !(value instanceof Date);
 }
 
 function emptyTable(): TomlTable {

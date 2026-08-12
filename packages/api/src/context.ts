@@ -6,7 +6,6 @@ import type {
 	Bucket,
 	BucketConfig,
 	ComputeResources,
-	DataPreview,
 	createServices,
 	EditorSandboxSharing,
 	FederationTarget,
@@ -336,12 +335,13 @@ export interface ApiDeps {
 	orgIntegrations?: OrgIntegrationsService;
 	/**
 	 * Read-only data browsing over integrations (MARIMOHUB_DATA_BROWSER).
-	 * Absent disables the browse routes (404). `sandboxPreview` is the fallback
-	 * for kinds without a cheap HTTP-native preview.
+	 * Absent disables the browse routes (404). Runtime selection stays behind the
+	 * integration service.
 	 */
 	dataBrowser?: {
 		preview: boolean;
-		sandboxPreview?: DataPreview;
+		checkPreview?: () => Promise<void>;
+		close?: () => Promise<void>;
 		objectBrowser?: {
 			allowServerAmbientCredentials: boolean;
 			maxConcurrentDownloads: number;

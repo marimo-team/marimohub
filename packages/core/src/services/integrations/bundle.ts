@@ -2,6 +2,7 @@
 // captured into a notebook version.
 import { ValidationError } from '../../errors';
 import type { IntegrationId, SessionId } from '../../ids';
+import { isRecord } from '../../internal/validation';
 import type { SessionRender } from '../../ports/integrations';
 import type { RenderOutput } from './sdk';
 import { CODE_EXECUTION_ENV, SHELL_BASICS_ENV } from './environmentName';
@@ -202,7 +203,7 @@ function recordOwners(
 ): void {
 	// An empty object has no leaves to attribute, so it is claimed as a leaf
 	// itself — otherwise a later value replacing it would blame nobody.
-	if (isPlainObject(value) && Object.keys(value).length > 0) {
+	if (isRecord(value) && Object.keys(value).length > 0) {
 		for (const [key, child] of Object.entries(value)) {
 			recordOwners(owners, `${keyPath}${KEY_SEP}${key}`, child, owner);
 		}
@@ -247,7 +248,7 @@ function mergeYaml(
 		if (previous === undefined) {
 			merged[key] = structuredClone(value);
 			recordOwners(owners, childPath, value, rightOwner);
-		} else if (isPlainObject(previous) && isPlainObject(value)) {
+		} else if (isRecord(previous) && isRecord(value)) {
 			merged[key] = mergeYaml(previous, value, `${path}:${key}`, owners, rightOwner, childPath);
 		} else if (JSON.stringify(previous) === JSON.stringify(value)) {
 			recordOwners(owners, childPath, value, rightOwner);
@@ -263,13 +264,9 @@ function mergeYaml(
 	return merged;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function sortObject(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(sortObject);
-	if (!isPlainObject(value)) return value;
+	if (!isRecord(value)) return value;
 	return Object.fromEntries(
 		Object.entries(value)
 			.sort(([a], [b]) => a.localeCompare(b))

@@ -29,10 +29,10 @@ Use these as the done-criteria for any change.
   It imports **no vendor SDK** — nothing that speaks to a specific provider or
   performs I/O. Its deps are generic, side-effect-free utilities only: `ulidx`,
   `zod`, `better-all`, `@opentelemetry/api` (a no-op tracing facade unless an
-  entrypoint registers a provider), and the format serializers `smol-toml` and
-  `yaml` (core renders `marimo.toml` and integration config files). A serializer
-  is a pure function, not a vendor, so a port around it would buy no
-  substitutability.
+  entrypoint registers a provider), and the format serializers `smol-toml`,
+  `yaml`, and `pg-format` (core renders `marimo.toml`, integration config files,
+  and guarded SQL programs). A serializer is a pure function, not a vendor, so a
+  port around it would buy no substitutability.
   Anything that _reaches_ something — a store, a cluster, an IdP — is a port.
 - **Adapters** (`packages/storage-*`, `packages/compute-*`, `packages/auth-*`)
   implement the ports. `packages/api` wires the services to Hono/OpenAPI routes

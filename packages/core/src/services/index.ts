@@ -54,7 +54,27 @@ export {
 } from './integrations/ProjectIntegrationsStore';
 export type { IntegrationsStoreOptions } from './integrations/ProjectIntegrationsStore';
 export type { OrgIntegrationsService, ProjectIntegrationsService } from './integrations/contracts';
-export { SandboxDataPreview } from './integrations/SandboxDataPreview';
+export {
+	DataPreviewService,
+	DuckDBWasmDataPreview,
+	SandboxDataPreview,
+	sqlIdentifier,
+	sqlLiteral,
+} from './integrations/data-preview';
+export type {
+	DataPreviewServiceOptions,
+	DuckDBPreviewProgram,
+	DuckDBPreviewParameter,
+	DuckDBPreviewStatement,
+	DuckDBWasmDataPreviewOptions,
+	DuckDBWasmRuntime,
+	DuckDBWasmRuntimeFactory,
+	PreviewProgramAvailability,
+	PreviewProgramInput,
+	PreviewPrograms,
+	PythonPreviewProgram,
+	SandboxDataPreviewOptions,
+} from './integrations/data-preview';
 export { IntegrationRegistry } from './integrations/registry';
 export { defineIntegration, envSegment } from './integrations/sdk';
 export type { IntegrationDefinition, RenderInput, RenderOutput } from './integrations/sdk';

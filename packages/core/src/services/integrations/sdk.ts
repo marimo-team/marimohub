@@ -16,6 +16,11 @@ import type {
 } from '../../ports/integrations';
 import type { ProjectId, SessionId, UserId } from '../../ids';
 import type { ObjectStoreSource } from '../../ports/objectBrowser';
+import type {
+	PreviewProgramAvailability,
+	PreviewProgramInput,
+	PreviewPrograms,
+} from './data-preview/programs';
 import { secretPaths } from './secretFields';
 import type { SecretPath } from './secretFields';
 
@@ -181,6 +186,12 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 		source(config: z.infer<S>): ObjectStoreSource;
 		snippet(instanceName: string, bucket: string, key: string): string;
 	};
+	preview?: {
+		available(
+			config: z.infer<S>,
+		): { ok: true; programs: PreviewProgramAvailability } | { ok: false; reason: string };
+		programs(input: PreviewProgramInput<z.infer<S>>): PreviewPrograms;
+	};
 	/**
 	 * Upgrade a stored config from an older `schemaVersion`. Chainable per step.
 	 * Operates on the STORED shape (secret fields are `{ $secret: … }` boxes) and
@@ -203,7 +214,7 @@ export function defineIntegration<S extends z.ZodType>(
 	def: IntegrationDefinition<S>,
 ): IntegrationDefinition<S> {
 	const testConnection = def.testConnection?.bind(def);
-	if (!testConnection && !def.browse && !def.objectBrowse) return def;
+	if (!testConnection && !def.browse && !def.objectBrowse && !def.preview) return def;
 	let paths: SecretPath[] | undefined;
 	const pathsOf = () =>
 		(paths ??= secretPaths(
@@ -236,6 +247,7 @@ export function defineIntegration<S extends z.ZodType>(
 			: {}),
 		...(def.browse ? { browse: guardedBrowse(def.browse, pathsOf) } : {}),
 		...(def.objectBrowse ? { objectBrowse: guardedObjectBrowse(def.objectBrowse, pathsOf) } : {}),
+		...(def.preview ? { preview: guardedPreview(def.preview, pathsOf) } : {}),
 	};
 }
 
@@ -258,6 +270,24 @@ function guardedObjectBrowse<C>(
 			}
 		},
 		snippet: objectBrowse.snippet.bind(objectBrowse),
+	};
+}
+
+function guardedPreview<C>(
+	preview: NonNullable<IntegrationDefinition<z.ZodType<C>>['preview']>,
+	pathsOf: () => SecretPath[],
+): NonNullable<IntegrationDefinition<z.ZodType<C>>['preview']> {
+	return {
+		available: preview.available.bind(preview),
+		programs(input) {
+			try {
+				return preview.programs(input);
+			} catch (err) {
+				if (err instanceof DomainError && !echoesSecret(err.message, input.config, pathsOf()))
+					throw err;
+				throw new ValidationError('The integration preview program could not be created.');
+			}
+		},
 	};
 }
 

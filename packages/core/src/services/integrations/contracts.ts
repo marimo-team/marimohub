@@ -97,9 +97,12 @@ export interface ProjectIntegrationsService {
 	browseTablePreview(
 		projectId: ProjectId,
 		id: IntegrationId,
+		principal: { userId: UserId; email: string },
+		sessionId: SessionRenderContext['sessionId'],
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
+		credentialVars?: Record<string, string>,
 	): Promise<TablePreview>;
 	browseObjectBuckets(
 		projectId: ProjectId,
@@ -143,12 +146,6 @@ export interface ProjectIntegrationsService {
 		context: ObjectBrowseContext,
 		request: ObjectOpenRequest,
 	): Promise<ObjectBody>;
-	/** Render exactly one resolved integration for an isolated preview sandbox. */
-	resolveForPreview(
-		projectId: ProjectId,
-		id: IntegrationId,
-		context: SessionRenderContext,
-	): Promise<SessionRender>;
 	copy(
 		sourceProjectId: ProjectId,
 		id: IntegrationId,

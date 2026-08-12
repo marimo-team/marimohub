@@ -28,6 +28,7 @@
 	"dependencies": {
 		"@opentelemetry/api": "catalog:",
 		"better-all": "catalog:",
+		"pg-format": "catalog:",
 		"smol-toml": "catalog:",
 		"ulidx": "catalog:",
 		"yaml": "catalog:",
@@ -38,6 +39,7 @@
 		"@opentelemetry/context-async-hooks": "catalog:",
 		"@opentelemetry/sdk-trace-base": "catalog:",
 		"@types/node": "catalog:",
+		"@types/pg-format": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",
 		"vitest": "catalog:"

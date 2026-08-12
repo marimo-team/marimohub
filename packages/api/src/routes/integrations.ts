@@ -15,12 +15,10 @@ import type {
 	AuthUser,
 	IntegrationDetail,
 	IntegrationEntry,
-	DataPreview,
 	Project,
 	ProjectIntegrationsService,
 	OrgIntegrationsService,
 	TestIntegrationRequest,
-	TablePreview,
 } from '@marimo-hub/core';
 import {
 	assertProjectRole,
@@ -1025,7 +1023,6 @@ function requireIntegrations(deps: ApiDeps): ProjectIntegrationsService {
 function requireDataBrowser(deps: ApiDeps): {
 	integrations: ProjectIntegrationsService;
 	preview: boolean;
-	sandboxPreview?: DataPreview;
 } {
 	if (!deps.dataBrowser) {
 		throw new NotFoundError('The data browser is not enabled on this deployment');
@@ -1033,7 +1030,6 @@ function requireDataBrowser(deps: ApiDeps): {
 	return {
 		integrations: requireIntegrations(deps),
 		preview: deps.dataBrowser.preview,
-		...(deps.dataBrowser.sandboxPreview ? { sandboxPreview: deps.dataBrowser.sandboxPreview } : {}),
 	};
 }
 
@@ -1565,7 +1561,7 @@ app.openapi(browseTablePreview, async (c) => {
 	const user = c.get('user');
 	const { pid, iid } = c.req.valid('param');
 	const { namespace, table, limit } = c.req.valid('json');
-	const { integrations, preview, sandboxPreview } = requireDataBrowser(deps);
+	const { integrations, preview } = requireDataBrowser(deps);
 	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
 	if (!preview) throw new NotFoundError('Row preview is not enabled on this deployment');
 	assertBrowseBudget(user.id);
@@ -1573,43 +1569,28 @@ app.openapi(browseTablePreview, async (c) => {
 	if (!capability.metadata) {
 		throw new ValidationError(capability.reason ?? 'This integration cannot be browsed.');
 	}
-	let data: TablePreview;
-	if (capability.hub_preview) {
-		data = await integrations.browseTablePreview(pid, iid, namespace, table, {
-			limit,
-			query_user: user.email,
-		});
-	} else {
-		if (!sandboxPreview?.available()) {
-			throw new ValidationError(
-				'This integration does not support row preview on this deployment.',
-			);
-		}
-		const sessionId = createSessionId();
-		const bundle = await integrations.resolveForPreview(pid, iid, {
-			sessionId,
-			principal: { userId: user.id, email: user.email },
-		});
-		data = await sandboxPreview.preview({
-			bundle,
-			integration_name: bundle.attachments[0].name,
-			user_id: user.id,
-			...(deps.wif && project.federation?.enabled
-				? {
-						credential_vars: await exchangeFederatedStorageEnv(
-							deps.wif.issuer,
-							deps.wif.issuerUrl,
-							deps.wif.target,
-							pid,
-							sessionId,
-						),
-					}
-				: {}),
-			namespace,
-			table,
-			limit,
-		});
+	if (!capability.hub_preview) {
+		throw new ValidationError('This integration does not support row preview on this deployment.');
 	}
+	const sessionId = createSessionId();
+	const data = await integrations.browseTablePreview(
+		pid,
+		iid,
+		{ userId: user.id, email: user.email },
+		sessionId,
+		namespace,
+		table,
+		{ limit, query_user: user.email },
+		deps.wif && project.federation?.enabled
+			? await exchangeFederatedStorageEnv(
+					deps.wif.issuer,
+					deps.wif.issuerUrl,
+					deps.wif.target,
+					pid,
+					sessionId,
+				)
+			: undefined,
+	);
 	await appendAudit(
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'integration.preview',

@@ -333,13 +333,10 @@ describe('integrations.data-preview check', () => {
 		const deps = makeDeps({
 			dataBrowser: {
 				preview: true,
-				sandboxPreview: {
-					available: () => ready,
-					check: async () => {
-						ready = true;
-					},
-					preview: async () => ({ columns: [], rows: [] }),
+				checkPreview: async () => {
+					ready = true;
 				},
+				close: async () => {},
 			},
 		});
 		expect((await run({}, deps)).by('integrations.data-preview')).toMatchObject({ status: 'ok' });
@@ -350,13 +347,10 @@ describe('integrations.data-preview check', () => {
 		const deps = makeDeps({
 			dataBrowser: {
 				preview: true,
-				sandboxPreview: {
-					available: () => false,
-					check: async () => {
-						throw new Error('missing pyiceberg');
-					},
-					preview: async () => ({ columns: [], rows: [] }),
+				checkPreview: async () => {
+					throw new Error('missing pyiceberg');
 				},
+				close: async () => {},
 			},
 		});
 		const { report, by } = await run({}, deps);
@@ -371,11 +365,8 @@ describe('integrations.data-preview check', () => {
 		const deps = makeDeps({
 			dataBrowser: {
 				preview: true,
-				sandboxPreview: {
-					available: () => false,
-					check: () => new Promise(() => {}),
-					preview: async () => ({ columns: [], rows: [] }),
-				},
+				checkPreview: () => new Promise(() => {}),
+				close: async () => {},
 			},
 		});
 		const check = buildPreflightChecks({}, deps).find(

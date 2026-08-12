@@ -162,7 +162,11 @@ export async function bootstrap(
 			// Long-lived WebSockets can keep close pending indefinitely. Ten seconds stays
 			// below Kubernetes' default 30-second termination grace period.
 			const result = await settleAllWithin(
-				[closed, ...(otel ? [Promise.resolve().then(() => otel.shutdown())] : [])],
+				[
+					closed,
+					...(deps.dataBrowser?.close ? [deps.dataBrowser.close()] : []),
+					...(otel ? [Promise.resolve().then(() => otel.shutdown())] : []),
+				],
 				DRAIN_TIMEOUT_MS,
 			);
 			// A timed-out drain still resolves (settleAllWithin never rejects), so surface it
