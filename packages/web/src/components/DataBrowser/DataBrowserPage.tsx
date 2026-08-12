@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
@@ -592,9 +593,6 @@ function TableDetail({
 	);
 	const { copied, copy } = useCopyToClipboard();
 	const [columnFilter, setColumnFilter] = useState('');
-	const [tab, setTab] = useState<'schema' | 'preview'>('schema');
-	const selectedTab = previewAvailable ? tab : 'schema';
-	const preview = useBrowseTablePreview(projectId, integration.id);
 	const createNotebook = useCreateNotebook(projectId);
 	const navigate = useNavigate();
 	const qualifiedName = [...selection.namespace, selection.table].join('.');
@@ -735,57 +733,12 @@ function TableDetail({
 			)}
 
 			{previewAvailable ? (
-				<Tabs
-					selectedKey={selectedTab}
-					onSelectionChange={(key) => setTab(key as 'schema' | 'preview')}
-					className="flex flex-col gap-4"
-				>
-					<TabList aria-label="Table details" className="flex border-b border-input">
-						{(['schema', 'preview'] as const).map((value) => (
-							<Tab
-								key={value}
-								id={value}
-								className={({ isSelected, isFocusVisible }) =>
-									cn(
-										'-mb-px cursor-default border-b-2 px-3 py-2 text-xs font-medium capitalize outline-none',
-										isSelected
-											? 'border-primary text-foreground'
-											: 'border-transparent text-muted-foreground hover:text-foreground',
-										isFocusVisible && 'ring-2 ring-ring ring-offset-2',
-									)
-								}
-							>
-								{value === 'schema' ? 'Schema' : 'Preview'}
-							</Tab>
-						))}
-					</TabList>
-					<TabPanel id="schema" className="outline-none">
-						{schemaContent}
-					</TabPanel>
-					<TabPanel id="preview" className="flex flex-col gap-3 outline-none">
-						<div>
-							<Button
-								variant="primary"
-								onPress={() =>
-									preview.mutate({
-										namespace: selection.namespace,
-										table: selection.table,
-										limit: 20,
-									})
-								}
-								isDisabled={preview.isPending}
-							>
-								{preview.isPending ? 'Loading…' : preview.data ? 'Reload preview' : 'Load preview'}
-							</Button>
-						</div>
-						{preview.error && (
-							<p className="text-sm text-destructive">
-								{preview.error instanceof Error ? preview.error.message : 'Request failed'}
-							</p>
-						)}
-						{preview.data && <PreviewTable data={preview.data} />}
-					</TabPanel>
-				</Tabs>
+				<TableDetailTabs
+					projectId={projectId}
+					integrationId={integration.id}
+					selection={selection}
+					schemaContent={schemaContent}
+				/>
 			) : (
 				schemaContent
 			)}
@@ -817,6 +770,74 @@ function TableDetail({
 				</div>
 			)}
 		</div>
+	);
+}
+
+function TableDetailTabs({
+	projectId,
+	integrationId,
+	selection,
+	schemaContent,
+}: {
+	projectId: string;
+	integrationId: string;
+	selection: Selection;
+	schemaContent: ReactNode;
+}) {
+	const [tab, setTab] = useState<'schema' | 'preview'>('schema');
+	const preview = useBrowseTablePreview(projectId, integrationId);
+	return (
+		<Tabs
+			selectedKey={tab}
+			onSelectionChange={(key) => setTab(key as 'schema' | 'preview')}
+			className="flex flex-col gap-4"
+		>
+			<TabList aria-label="Table details" className="flex border-b border-input">
+				{(['schema', 'preview'] as const).map((value) => (
+					<Tab
+						key={value}
+						id={value}
+						className={({ isSelected, isFocusVisible }) =>
+							cn(
+								'-mb-px cursor-default border-b-2 px-3 py-2 text-xs font-medium capitalize outline-none',
+								isSelected
+									? 'border-primary text-foreground'
+									: 'border-transparent text-muted-foreground hover:text-foreground',
+								isFocusVisible && 'ring-2 ring-ring ring-offset-2',
+							)
+						}
+					>
+						{value === 'schema' ? 'Schema' : 'Preview'}
+					</Tab>
+				))}
+			</TabList>
+			<TabPanel id="schema" className="outline-none">
+				{schemaContent}
+			</TabPanel>
+			<TabPanel id="preview" className="flex flex-col gap-3 outline-none">
+				<div>
+					<Button
+						variant="primary"
+						onPress={() =>
+							preview.mutate({
+								namespace: selection.namespace,
+								table: selection.table,
+								limit: 20,
+							})
+						}
+						isDisabled={preview.isPending}
+					>
+						{preview.isPending ? 'Loading…' : preview.data ? 'Reload preview' : 'Load preview'}
+					</Button>
+				</div>
+				{preview.error && (
+					<p className="text-sm text-destructive">
+						{preview.error instanceof Error ? preview.error.message : 'Request failed'}
+					</p>
+				)}
+				{preview.data && <PreviewTable data={preview.data} />}
+			</TabPanel>
+		</Tabs>
 	);
 }
 

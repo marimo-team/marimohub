@@ -333,6 +333,13 @@ describe('DataBrowserPage', () => {
 		);
 		expect(screen.getByPlaceholderText('Filter columns...')).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Load preview' })).not.toBeInTheDocument();
+
+		capability.preview = true;
+		await user.click(screen.getByRole('button', { name: 'Refresh' }));
+		await waitFor(() =>
+			expect(screen.getByRole('tab', { name: 'Schema' })).toHaveAttribute('aria-selected', 'true'),
+		);
+		expect(screen.queryByRole('button', { name: 'Load preview' })).not.toBeInTheDocument();
 		expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/browse/preview'))).toBe(
 			false,
 		);

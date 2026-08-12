@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DomainError, UnavailableError } from '../../errors';
+import { DomainError, UnavailableError, ValidationError } from '../../errors';
 import type {
 	BrowseNamespacesRequest,
 	BrowsePage,
@@ -90,6 +90,34 @@ export interface BrowseCapability<C> {
 	): Promise<TablePreview>;
 	/** Notebook code that loads the table through this instance's rendered config. */
 	snippet(instanceName: string, namespace: string[], table: string): string;
+}
+
+export function pageByNameCursor<T>(
+	items: T[],
+	request: BrowsePageRequest,
+	key: (item: T) => string,
+): BrowsePage<T> {
+	const after = decodeNameCursor(request.cursor);
+	const byKey = new Map(items.map((item) => [key(item), item]));
+	const remaining = [...byKey.entries()]
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+		.filter(([itemKey]) => after === undefined || itemKey > after);
+	const selected = remaining.slice(0, request.limit);
+	return {
+		items: selected.map(([, item]) => item),
+		next_cursor:
+			remaining.length > selected.length ? `name:${encodeURIComponent(selected.at(-1)![0])}` : null,
+	};
+}
+
+function decodeNameCursor(cursor: string | undefined): string | undefined {
+	if (cursor === undefined) return undefined;
+	if (!cursor.startsWith('name:')) throw new ValidationError('Invalid browse cursor.');
+	try {
+		return decodeURIComponent(cursor.slice('name:'.length));
+	} catch {
+		throw new ValidationError('Invalid browse cursor.');
+	}
 }
 
 /** Complete contract for one registered integration kind. */

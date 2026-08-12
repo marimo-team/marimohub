@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { UnavailableError, ValidationError } from '../../../errors';
-import type { BrowsePageRequest, IntegrationProbe } from '../../../ports/integrations';
-import { basicAuthHeader, defineIntegration, envSegment, probeEndpoint } from '../sdk';
+import type { IntegrationProbe } from '../../../ports/integrations';
+import {
+	basicAuthHeader,
+	defineIntegration,
+	envSegment,
+	pageByNameCursor,
+	probeEndpoint,
+} from '../sdk';
 import { zSecret } from '../secretFields';
 import {
 	connectionUrl,
@@ -97,7 +103,7 @@ export const clickhouse = defineIntegration({
 		async listNamespaces(config, probe, request) {
 			if (request.parent?.length) return { items: [], next_cursor: null };
 			const result = await clickhouseQuery(config, probe, 'SHOW DATABASES');
-			return page(
+			return pageByNameCursor(
 				result.rows.map((row) => [String(row[0])]),
 				request,
 				(namespace) => namespace[0],
@@ -110,7 +116,7 @@ export const clickhouse = defineIntegration({
 				probe,
 				`SHOW TABLES FROM ${quoteIdentifier(namespace[0])}`,
 			);
-			return page(
+			return pageByNameCursor(
 				result.rows.map((row) => String(row[0])),
 				request,
 				(table) => table,
@@ -202,30 +208,6 @@ async function clickhouseQuery(
 		throw new UnavailableError('ClickHouse returned an invalid result.');
 	}
 	return { columns: columns as string[], rows: body.data as unknown[][] };
-}
-
-function page<T>(items: T[], request: BrowsePageRequest, key: (item: T) => string) {
-	const after = decodeCursor(request.cursor);
-	const byKey = new Map(items.map((item) => [key(item), item]));
-	const remaining = [...byKey.entries()]
-		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-		.filter(([itemKey]) => after === undefined || itemKey > after);
-	const selected = remaining.slice(0, request.limit);
-	return {
-		items: selected.map(([, item]) => item),
-		next_cursor:
-			remaining.length > selected.length ? `name:${encodeURIComponent(selected.at(-1)![0])}` : null,
-	};
-}
-
-function decodeCursor(cursor: string | undefined): string | undefined {
-	if (cursor === undefined) return undefined;
-	if (!cursor.startsWith('name:')) throw new ValidationError('Invalid browse cursor.');
-	try {
-		return decodeURIComponent(cursor.slice('name:'.length));
-	} catch {
-		throw new ValidationError('Invalid browse cursor.');
-	}
 }
 
 function isNullableType(type: string): boolean {

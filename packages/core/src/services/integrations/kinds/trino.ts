@@ -1,12 +1,13 @@
 import { z } from 'zod';
 import { UnavailableError, ValidationError } from '../../../errors';
-import type { BrowsePageRequest, IntegrationProbe } from '../../../ports/integrations';
+import type { IntegrationProbe } from '../../../ports/integrations';
 import { INTEGRATIONS_DIR } from '../bundle';
 import {
 	basicAuthHeader,
 	defineIntegration,
 	envSegment,
 	HOSTNAME_REGEX,
+	pageByNameCursor,
 	probeEndpoint,
 } from '../sdk';
 import { zSecret } from '../secretFields';
@@ -412,7 +413,7 @@ export const trino = defineIntegration({
 			const sql = parent ? `SHOW SCHEMAS FROM ${quoteIdentifier(parent[0])}` : 'SHOW CATALOGS';
 			const result = await trinoQuery(config, probe, request.query_user, sql);
 			const names = result.rows.map((row) => String(row[0]));
-			return page(
+			return pageByNameCursor(
 				parent ? names.map((name) => [parent[0], name]) : names.map((name) => [name]),
 				request,
 				(namespace) => namespace.at(-1)!,
@@ -426,7 +427,7 @@ export const trino = defineIntegration({
 				request.query_user,
 				`SHOW TABLES FROM ${qualifiedName(namespace)}`,
 			);
-			return page(
+			return pageByNameCursor(
 				result.rows.map((row) => String(row[0])),
 				request,
 				(table) => table,
@@ -611,30 +612,6 @@ function propertyHeader(entries: readonly (readonly [string, string])[]): string
 	return entries
 		.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
 		.join(',');
-}
-
-function page<T>(items: T[], request: BrowsePageRequest, key: (item: T) => string) {
-	const after = decodeCursor(request.cursor);
-	const byKey = new Map(items.map((item) => [key(item), item]));
-	const remaining = [...byKey.entries()]
-		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-		.filter(([itemKey]) => after === undefined || itemKey > after);
-	const selected = remaining.slice(0, request.limit);
-	return {
-		items: selected.map(([, item]) => item),
-		next_cursor:
-			remaining.length > selected.length ? `name:${encodeURIComponent(selected.at(-1)![0])}` : null,
-	};
-}
-
-function decodeCursor(cursor: string | undefined): string | undefined {
-	if (cursor === undefined) return undefined;
-	if (!cursor.startsWith('name:')) throw new ValidationError('Invalid browse cursor.');
-	try {
-		return decodeURIComponent(cursor.slice('name:'.length));
-	} catch {
-		throw new ValidationError('Invalid browse cursor.');
-	}
 }
 
 function assertTableNamespace(namespace: string[]): void {
