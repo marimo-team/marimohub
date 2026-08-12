@@ -38,7 +38,7 @@ pub struct Profile {
 struct FileCredentials {
     #[serde(default)]
     tokens: BTreeMap<String, String>,
-    // A marker is authoritative over the keyring when its removal could not be confirmed.
+    // File state stays authoritative so a stale keyring entry cannot resurface.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     deleted: BTreeSet<String>,
 }
@@ -87,6 +87,51 @@ fn resolve_file_credential(
         FileCredential::Token(token) => Ok(Some(SecretString::from(token))),
         FileCredential::Deleted => Ok(None),
         FileCredential::Missing => Ok(keyring_token()?.map(SecretString::from)),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn set_linux_credential(
+    current: FileCredential,
+    token: &str,
+    set_keyring: impl FnOnce(&str) -> keyring::Result<()>,
+    set_file: impl FnOnce(FileCredential) -> Result<(), Error>,
+    warn: impl FnOnce(&keyring::Error),
+) -> Result<(), Error> {
+    if current != FileCredential::Missing {
+        return set_file(FileCredential::Token(token.to_owned()));
+    }
+
+    match set_keyring(token) {
+        Ok(()) => Ok(()),
+        Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
+            warn(&error);
+            set_file(FileCredential::Token(token.to_owned()))
+        }
+        Err(error) => Err(Error::Credential(error.to_string())),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn delete_linux_credential(
+    current: FileCredential,
+    delete_keyring: impl FnOnce() -> keyring::Result<()>,
+    set_file: impl FnOnce(FileCredential) -> Result<(), Error>,
+    warn: impl FnOnce(&keyring::Error),
+) -> Result<(), Error> {
+    match current {
+        FileCredential::Token(_) => return set_file(FileCredential::Deleted),
+        FileCredential::Deleted => return Ok(()),
+        FileCredential::Missing => {}
+    }
+
+    match delete_keyring() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
+            warn(&error);
+            set_file(FileCredential::Deleted)
+        }
+        Err(error) => Err(Error::Credential(error.to_string())),
     }
 }
 
@@ -286,44 +331,26 @@ pub fn delete_token(profile: &str) -> Result<(), Error> {
 #[cfg(target_os = "linux")]
 fn set_token_linux(profile: &str, token: &SecretString) -> Result<(), Error> {
     let _operation_lock = credential_operation_lock()?;
-    let previous = get_file_credential(profile)?;
-    set_file_credential(
-        profile,
-        FileCredential::Token(token.expose_secret().to_owned()),
-    )?;
-
-    match keyring(profile)?.set_password(token.expose_secret()) {
-        Ok(()) => set_file_credential(profile, FileCredential::Missing),
-        Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
-            warn_file_credentials(&error);
-            Ok(())
-        }
-        Err(error) => {
-            set_file_credential(profile, previous)?;
-            Err(Error::Credential(error.to_string()))
-        }
-    }
+    let current = get_file_credential(profile)?;
+    set_linux_credential(
+        current,
+        token.expose_secret(),
+        |token| Entry::new(KEYRING_SERVICE, profile)?.set_password(token),
+        |credential| set_file_credential(profile, credential),
+        warn_file_credentials,
+    )
 }
 
 #[cfg(target_os = "linux")]
 fn delete_token_linux(profile: &str) -> Result<(), Error> {
     let _operation_lock = credential_operation_lock()?;
-    let previous = get_file_credential(profile)?;
-    set_file_credential(profile, FileCredential::Deleted)?;
-
-    match keyring(profile)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => {
-            set_file_credential(profile, FileCredential::Missing)
-        }
-        Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
-            warn_file_credentials(&error);
-            Ok(())
-        }
-        Err(error) => {
-            set_file_credential(profile, previous)?;
-            Err(Error::Credential(error.to_string()))
-        }
-    }
+    let current = get_file_credential(profile)?;
+    delete_linux_credential(
+        current,
+        || Entry::new(KEYRING_SERVICE, profile)?.delete_credential(),
+        |credential| set_file_credential(profile, credential),
+        warn_file_credentials,
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -389,6 +416,7 @@ fn warn_file_credentials(error: &keyring::Error) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::sync::Arc;
     use std::thread;
 
@@ -450,6 +478,67 @@ mod tests {
 
         credentials.set("default", FileCredential::Missing);
         assert_eq!(credentials.get("default"), FileCredential::Missing);
+    }
+
+    #[test]
+    fn failed_keyring_write_does_not_stage_the_new_token() {
+        let file_write_called = Cell::new(false);
+        let result = set_linux_credential(
+            FileCredential::Missing,
+            "new-token",
+            |_| Err(keyring::Error::Invalid("profile".into(), "invalid".into())),
+            |_| {
+                file_write_called.set(true);
+                Err(Error::Config("file write failed".into()))
+            },
+            |_| {},
+        );
+
+        assert!(matches!(result, Err(Error::Credential(_))));
+        assert!(!file_write_called.get());
+    }
+
+    #[test]
+    fn failed_keyring_delete_does_not_stage_a_deletion() {
+        let file_write_called = Cell::new(false);
+        let result = delete_linux_credential(
+            FileCredential::Missing,
+            || Err(keyring::Error::Invalid("profile".into(), "invalid".into())),
+            |_| {
+                file_write_called.set(true);
+                Err(Error::Config("file write failed".into()))
+            },
+            |_| {},
+        );
+
+        assert!(matches!(result, Err(Error::Credential(_))));
+        assert!(!file_write_called.get());
+    }
+
+    #[test]
+    fn file_backed_profile_stays_file_backed() {
+        let keyring_write_called = Cell::new(false);
+        let stored = std::cell::RefCell::new(None);
+        set_linux_credential(
+            FileCredential::Token("old-token".into()),
+            "new-token",
+            |_| {
+                keyring_write_called.set(true);
+                Ok(())
+            },
+            |credential| {
+                stored.replace(Some(credential));
+                Ok(())
+            },
+            |_| {},
+        )
+        .unwrap();
+
+        assert!(!keyring_write_called.get());
+        assert_eq!(
+            stored.into_inner(),
+            Some(FileCredential::Token("new-token".into()))
+        );
     }
 
     #[test]
