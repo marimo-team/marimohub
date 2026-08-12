@@ -2516,6 +2516,7 @@ components:
 paths:
   /api/v1/me:
     get:
+      operationId: me
       tags:
         - Auth
       summary: Get current user info
@@ -2544,6 +2545,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/version:
     get:
+      operationId: version
       tags:
         - System
       summary: Get the deployment version
@@ -2575,6 +2577,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/capabilities:
     get:
+      operationId: capabilities
       tags:
         - System
       summary: Get deployment capability flags
@@ -2603,6 +2606,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects:
     get:
+      operationId: projects.list
       tags:
         - Projects
       summary: List all projects
@@ -2688,6 +2692,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
+      operationId: projects.create
       tags:
         - Projects
       summary: Create a project
@@ -2791,6 +2796,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}:
     get:
+      operationId: projects.get
       tags:
         - Projects
       summary: Get a project
@@ -2880,6 +2886,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     patch:
+      operationId: projects.update
       tags:
         - Projects
       summary: Update a project
@@ -3000,6 +3007,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
+      operationId: projects.delete
       tags:
         - Projects
       summary: Delete a project
@@ -3096,6 +3104,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/members:
     get:
+      operationId: projects.members.list
       tags:
         - Projects
       summary: List project members
@@ -3179,6 +3188,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
+      operationId: projects.members.add
       tags:
         - Projects
       summary: Add a project member
@@ -3301,6 +3311,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/members/{uid}:
     put:
+      operationId: projects.members.update
       tags:
         - Projects
       summary: Change a member's role
@@ -3421,6 +3432,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
+      operationId: projects.members.remove
       tags:
         - Projects
       summary: Remove a project member
@@ -4162,6 +4174,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/events:
     get:
+      operationId: audit.list
       tags:
         - Audit
       summary: List deployment audit events
@@ -4286,6 +4299,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/events:
     get:
+      operationId: projects.audit.list
       tags:
         - Projects
       summary: List a project's audit events for one day
@@ -4380,6 +4394,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/admin/users:
     get:
+      operationId: admin.users.list
       tags:
         - Admin
       summary: List all users in the identity directory
@@ -4621,6 +4636,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/admin/config:
     get:
+      operationId: admin.config.get
       tags:
         - Admin
       summary: Describe the deployment's configuration
@@ -4692,6 +4708,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks:
     get:
+      operationId: notebooks.list
       tags:
         - Notebooks
       summary: List notebooks in a project
@@ -4790,6 +4807,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
+      operationId: notebooks.create
       tags:
         - Notebooks
       summary: Create a notebook
@@ -4927,6 +4945,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/git:
     post:
+      operationId: notebooks.create-git
       tags:
         - Notebooks
       summary: Create a git-synced workspace notebook
@@ -5087,6 +5106,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate:
     post:
+      operationId: notebooks.rotate-sync-token
       tags:
         - Notebooks
       summary: Rotate a notebook sync token
@@ -5180,6 +5200,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/source:
     patch:
+      operationId: notebooks.update-source
       tags:
         - Notebooks
       summary: Update a git-synced notebook source
@@ -5579,6 +5600,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}:
     get:
+      operationId: notebooks.get
       tags:
         - Notebooks
       summary: Get notebook metadata
@@ -5675,6 +5697,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     patch:
+      operationId: notebooks.update
       tags:
         - Notebooks
       summary: Update a notebook
@@ -5824,6 +5847,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
+      operationId: notebooks.delete
       tags:
         - Notebooks
       summary: Delete a notebook (soft-delete)
@@ -5913,6 +5937,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/content:
     get:
+      operationId: notebooks.content
       tags:
         - Notebooks
       summary: Get notebook code
@@ -6005,6 +6030,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/versions:
     get:
+      operationId: notebooks.versions.list
       tags:
         - Notebooks
       summary: List notebook versions
@@ -6111,6 +6137,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}:
     get:
+      operationId: notebooks.versions.get
       tags:
         - Notebooks
       summary: Get a specific version
@@ -6213,6 +6240,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/html:
     get:
+      operationId: notebooks.html
       tags:
         - Notebooks
       summary: Latest HTML snapshot of the notebook's outputs
@@ -6295,6 +6323,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}/html:
     get:
+      operationId: notebooks.versions.html
       tags:
         - Notebooks
       summary: One version's HTML snapshot of the notebook's outputs
@@ -6381,6 +6410,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}/restore:
     post:
+      operationId: notebooks.versions.restore
       tags:
         - Notebooks
       summary: Restore a version as a new save
@@ -6481,6 +6511,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/duplicate:
     post:
+      operationId: notebooks.duplicate
       tags:
         - Notebooks
       summary: Duplicate a notebook
@@ -6723,6 +6754,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/sessions:
     get:
+      operationId: sessions.list
       tags:
         - Sessions
       summary: List active sessions for a project
@@ -6822,6 +6854,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}:
     get:
+      operationId: sessions.get
       tags:
         - Sessions
       summary: Get a session (status + kernel URL)
@@ -6915,6 +6948,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
+      operationId: sessions.terminate
       tags:
         - Sessions
       summary: Terminate a session and destroy sandbox
@@ -6999,6 +7033,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/editor-session:
     get:
+      operationId: sessions.editor.get
       tags:
         - Sessions
       summary: Inspect persistent editor ownership
@@ -7086,6 +7121,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/editor-session/takeover:
     post:
+      operationId: sessions.editor.takeover
       tags:
         - Sessions
       summary: Gracefully take over an exclusive editor session
@@ -7195,6 +7231,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/sessions:
     post:
+      operationId: sessions.create
       tags:
         - Sessions
       summary: Create a session and provision a sandbox
@@ -7329,6 +7366,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat:
     post:
+      operationId: sessions.heartbeat
       tags:
         - Sessions
       summary: Update session heartbeat
@@ -7423,6 +7461,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/integrations/kinds:
     get:
+      operationId: integrations.kinds.list
       tags:
         - Integrations
       summary: List available integration kinds (schemas drive the config forms)
@@ -7491,6 +7530,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations:
     get:
+      operationId: integrations.project.list
       tags:
         - Integrations
       summary: List a project's integrations
@@ -7589,6 +7629,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
+      operationId: integrations.project.create
       tags:
         - Integrations
       summary: Create an integration (manager only)
@@ -7700,6 +7741,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}:
     get:
+      operationId: integrations.project.get
       tags:
         - Integrations
       summary: Get an integration with its redacted config
@@ -7796,6 +7838,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     patch:
+      operationId: integrations.project.update
       tags:
         - Integrations
       summary: Update an integration (manager only); a config change appends a version
@@ -7923,6 +7966,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
+      operationId: integrations.project.delete
       tags:
         - Integrations
       summary: Delete an integration and its version history (manager only)
@@ -8012,6 +8056,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/versions:
     get:
+      operationId: integrations.project.versions
       tags:
         - Integrations
       summary: List an integration's config versions (metadata only)
@@ -8118,6 +8163,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/copy:
     post:
+      operationId: integrations.project.copy
       tags:
         - Integrations
       summary: Copy an integration from another project (manager of both projects)
@@ -8205,6 +8251,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/test:
     post:
+      operationId: integrations.project.test
       tags:
         - Integrations
       summary: Probe connectivity for an unsaved config or a stored instance (manager
@@ -10416,6 +10463,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/org/integrations:
     get:
+      operationId: integrations.org.list
       tags:
         - Integrations
       summary: List org-wide integrations (super admin only)
@@ -10507,6 +10555,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
+      operationId: integrations.org.create
       tags:
         - Integrations
       summary: Create an org-wide integration (super admin only)
@@ -10604,6 +10653,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/org/integrations/{iid}:
     get:
+      operationId: integrations.org.get
       tags:
         - Integrations
       summary: Get an org-wide integration with its redacted config (super admin only)
@@ -10693,6 +10743,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     patch:
+      operationId: integrations.org.update
       tags:
         - Integrations
       summary: Update an org-wide integration (super admin only)
@@ -10813,6 +10864,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
+      operationId: integrations.org.delete
       tags:
         - Integrations
       summary: Delete an org-wide integration and its version history (super admin only)
@@ -10895,6 +10947,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/org/integrations/{iid}/versions:
     get:
+      operationId: integrations.org.versions
       tags:
         - Integrations
       summary: List an org-wide integration's config versions (super admin only)
@@ -10994,6 +11047,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/org/integrations/test:
     post:
+      operationId: integrations.org.test
       tags:
         - Integrations
       summary: Probe connectivity for an unsaved or stored org config (super admin only)
@@ -11166,6 +11220,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/users/search:
     get:
+      operationId: users.search
       tags:
         - Users
       summary: Search the user directory
@@ -11231,6 +11286,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/users:
     get:
+      operationId: users.resolve
       tags:
         - Users
       summary: Resolve user ids to display identities
@@ -11273,6 +11329,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/me/tokens:
     post:
+      operationId: auth.tokens.create
       tags:
         - Auth
       summary: Create a personal access token
@@ -11377,6 +11434,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     get:
+      operationId: auth.tokens.list
       tags:
         - Auth
       summary: List the caller's personal access tokens
@@ -11447,6 +11505,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/me/tokens/{tokenId}:
     delete:
+      operationId: auth.tokens.revoke
       tags:
         - Auth
       summary: Revoke a personal access token

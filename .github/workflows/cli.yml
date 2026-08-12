@@ -1,0 +1,52 @@
+name: CLI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Rust CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 0.1.24
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+      - name: Install Rust
+        working-directory: apps/cli
+        run: rustup show
+      - name: Check generated manifest and versions
+        run: |
+          pnpm --filter @marimo-hub/api test cliManifest.spec
+          pnpm cli:version-check
+      - name: Validate distribution plan
+        working-directory: apps/cli
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+          dist plan --allow-dirty
+      - name: Format
+        working-directory: apps/cli
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        working-directory: apps/cli
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test
+        working-directory: apps/cli
+        run: cargo test --locked

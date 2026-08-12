@@ -113,6 +113,7 @@ const SessionCreateResponseSchema = SessionResponseSchema.extend({
 const listSessions = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/sessions',
+	operationId: 'sessions.list',
 	tags: ['Sessions'],
 	summary: 'List active sessions for a project',
 	request: { params: ProjectIdParam, query: PaginationQuery },
@@ -150,6 +151,7 @@ const SessionCreateBodySchema = z
 const createSession = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebooks/{nid}/sessions',
+	operationId: 'sessions.create',
 	tags: ['Sessions'],
 	summary: 'Create a session and provision a sandbox',
 	// `Idempotency-Key` is accepted and documented, but this route is already
@@ -180,6 +182,7 @@ const createSession = createRoute({
 const deleteSession = createRoute({
 	method: 'delete',
 	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}',
+	operationId: 'sessions.terminate',
 	tags: ['Sessions'],
 	summary: 'Terminate a session and destroy sandbox',
 	request: { params: SessionIdParam },
@@ -193,6 +196,7 @@ const deleteSession = createRoute({
 const getSession = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}',
+	operationId: 'sessions.get',
 	tags: ['Sessions'],
 	summary: 'Get a session (status + kernel URL)',
 	request: { params: SessionIdParam },
@@ -209,6 +213,7 @@ const getSession = createRoute({
 const heartbeatSession = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat',
+	operationId: 'sessions.heartbeat',
 	tags: ['Sessions'],
 	summary: 'Update session heartbeat',
 	request: { params: SessionIdParam },
@@ -247,6 +252,7 @@ const EditorSessionStateSchema = z
 const getEditorSession = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/notebooks/{nid}/editor-session',
+	operationId: 'sessions.editor.get',
 	tags: ['Sessions'],
 	summary: 'Inspect persistent editor ownership',
 	request: { params: NotebookIdParam },
@@ -272,6 +278,7 @@ const TakeoverBodySchema = z
 const takeoverEditorSession = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebooks/{nid}/editor-session/takeover',
+	operationId: 'sessions.editor.takeover',
 	tags: ['Sessions'],
 	summary: 'Gracefully take over an exclusive editor session',
 	request: {

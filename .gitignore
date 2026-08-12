@@ -1,4 +1,8 @@
 node_modules
+/apps/cli/target
+/apps/cli/*.cdx.json
+/apps/cli/generated/completions/
+/apps/cli/generated/man/
 dist
 coverage
 *.log

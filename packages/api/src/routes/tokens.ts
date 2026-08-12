@@ -54,6 +54,7 @@ const TokenIdParam = z.object({
 const createToken = createRoute({
 	method: 'post',
 	path: '/me/tokens',
+	operationId: 'auth.tokens.create',
 	tags: ['Auth'],
 	summary: 'Create a personal access token',
 	description:
@@ -75,6 +76,7 @@ const createToken = createRoute({
 const listTokens = createRoute({
 	method: 'get',
 	path: '/me/tokens',
+	operationId: 'auth.tokens.list',
 	tags: ['Auth'],
 	summary: "List the caller's personal access tokens",
 	description: 'Metadata only — the secret is never retrievable after creation.',
@@ -92,6 +94,7 @@ const listTokens = createRoute({
 const revokeToken = createRoute({
 	method: 'delete',
 	path: '/me/tokens/{tokenId}',
+	operationId: 'auth.tokens.revoke',
 	tags: ['Auth'],
 	summary: 'Revoke a personal access token',
 	description:

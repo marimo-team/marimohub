@@ -1,4 +1,6 @@
 export { createApi, generateOpenApiDocument } from './createApi';
+export { generateCliManifest } from './cliManifest';
+export type { CliManifest, CliOperation } from './cliManifest';
 export type {
 	ApiDeps,
 	ConfigSummary,

@@ -16,6 +16,7 @@
 		"build": "vp pack",
 		"test": "vp test",
 		"check": "vp check",
+		"cli:generate": "UPDATE_CLI_MANIFEST=1 vp test cliManifest.spec && pnpm --dir ../.. exec vp fmt apps/cli/generated/cli-manifest.json",
 		"openapi:generate": "UPDATE_OPENAPI=1 vp test openapi.spec && vp fmt openapi.yaml",
 		"typecheck": "tsc --noEmit"
 	},

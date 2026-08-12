@@ -1,0 +1,2425 @@
+{
+	"version": 1,
+	"api_version": "1.0.0",
+	"operations": [
+		{
+			"id": "admin.config.get",
+			"command": ["admin", "config", "get"],
+			"method": "GET",
+			"path": "/api/v1/admin/config",
+			"summary": "Describe the deployment's configuration",
+			"description": "Read-only view of every configuration group (storage, compute, auth, …) as resolved from the serving replica's environment at boot; secret values are never included, only whether they are set. Super-admin only, session-only.",
+			"parameters": [],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": true,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "admin.users.list",
+			"command": ["admin", "users", "list"],
+			"method": "GET",
+			"path": "/api/v1/admin/users",
+			"summary": "List all users in the identity directory",
+			"description": "Every user who has signed in at least once, name-sorted. Currently a single page (`next_cursor` is always null). Super-admin only, and session-only: a PAT — even a super admin’s — is rejected with 403.",
+			"parameters": [],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": true,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "audit.list",
+			"command": ["audit", "list"],
+			"method": "GET",
+			"path": "/api/v1/events",
+			"summary": "List deployment audit events",
+			"description": "Deployment-wide audit trail, newest first. Super-admin only. Date ranges are inclusive and limited to 30 UTC days.",
+			"parameters": [
+				{
+					"name": "actor",
+					"cli_name": "actor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "event",
+					"cli_name": "event",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "from",
+					"cli_name": "from",
+					"in": "query",
+					"required": false,
+					"description": "UTC calendar date",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "project_id",
+					"cli_name": "project-id",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "to",
+					"cli_name": "to",
+					"in": "query",
+					"required": false,
+					"description": "UTC calendar date",
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "auth.tokens.create",
+			"command": ["auth", "tokens", "create"],
+			"method": "POST",
+			"path": "/api/v1/me/tokens",
+			"summary": "Create a personal access token",
+			"description": "Mint a machine credential that acts as the calling user (CI, scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The plaintext token is returned once, in this response, and never again. Requires session (SSO) auth — a token cannot mint tokens.",
+			"parameters": [],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "expires_in_days",
+						"cli_name": "expires-in-days",
+						"required": false,
+						"description": "Days until expiry; omit for a non-expiring token.",
+						"value_type": "integer",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": true,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "auth.tokens.list",
+			"command": ["auth", "tokens", "list"],
+			"method": "GET",
+			"path": "/api/v1/me/tokens",
+			"summary": "List the caller's personal access tokens",
+			"description": "Metadata only — the secret is never retrievable after creation.",
+			"parameters": [],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": true,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "auth.tokens.revoke",
+			"command": ["auth", "tokens", "revoke"],
+			"method": "DELETE",
+			"path": "/api/v1/me/tokens/{tokenId}",
+			"summary": "Revoke a personal access token",
+			"description": "Deletes the token; API requests using it fail within the verification-cache TTL (~30 seconds) on other replicas, immediately on this one.",
+			"parameters": [
+				{
+					"name": "tokenId",
+					"cli_name": "token-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": true,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "capabilities",
+			"command": ["capabilities"],
+			"method": "GET",
+			"path": "/api/v1/capabilities",
+			"summary": "Get deployment capability flags",
+			"parameters": [],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.kinds.list",
+			"command": ["integrations", "kinds", "list"],
+			"method": "GET",
+			"path": "/api/v1/integrations/kinds",
+			"summary": "List available integration kinds (schemas drive the config forms)",
+			"parameters": [],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.org.create",
+			"command": ["integrations", "org", "create"],
+			"method": "POST",
+			"path": "/api/v1/org/integrations",
+			"summary": "Create an org-wide integration (super admin only)",
+			"parameters": [],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "change_note",
+						"cli_name": "change-note",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "config",
+						"cli_name": "config",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "kind",
+						"cli_name": "kind",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.org.delete",
+			"command": ["integrations", "org", "delete"],
+			"method": "DELETE",
+			"path": "/api/v1/org/integrations/{iid}",
+			"summary": "Delete an org-wide integration and its version history (super admin only)",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "integrations.org.get"
+		},
+		{
+			"id": "integrations.org.get",
+			"command": ["integrations", "org", "get"],
+			"method": "GET",
+			"path": "/api/v1/org/integrations/{iid}",
+			"summary": "Get an org-wide integration with its redacted config (super admin only)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.org.list",
+			"command": ["integrations", "org", "list"],
+			"method": "GET",
+			"path": "/api/v1/org/integrations",
+			"summary": "List org-wide integrations (super admin only)",
+			"parameters": [
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.org.test",
+			"command": ["integrations", "org", "test"],
+			"method": "POST",
+			"path": "/api/v1/org/integrations/test",
+			"summary": "Probe connectivity for an unsaved or stored org config (super admin only)",
+			"parameters": [],
+			"body": {
+				"required": true,
+				"properties": []
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.org.update",
+			"command": ["integrations", "org", "update"],
+			"method": "PATCH",
+			"path": "/api/v1/org/integrations/{iid}",
+			"summary": "Update an org-wide integration (super admin only)",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "change_note",
+						"cli_name": "change-note",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "config",
+						"cli_name": "config",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "enabled",
+						"cli_name": "enabled",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "integrations.org.get"
+		},
+		{
+			"id": "integrations.org.versions",
+			"command": ["integrations", "org", "versions"],
+			"method": "GET",
+			"path": "/api/v1/org/integrations/{iid}/versions",
+			"summary": "List an org-wide integration's config versions (super admin only)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.copy",
+			"command": ["integrations", "project", "copy"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/copy",
+			"summary": "Copy an integration from another project (manager of both projects)",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "source_integration_id",
+						"cli_name": "source-integration-id",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "source_project_id",
+						"cli_name": "source-project-id",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.create",
+			"command": ["integrations", "project", "create"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations",
+			"summary": "Create an integration (manager only)",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "change_note",
+						"cli_name": "change-note",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "config",
+						"cli_name": "config",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "kind",
+						"cli_name": "kind",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.delete",
+			"command": ["integrations", "project", "delete"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}",
+			"summary": "Delete an integration and its version history (manager only)",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "integrations.project.get"
+		},
+		{
+			"id": "integrations.project.get",
+			"command": ["integrations", "project", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}",
+			"summary": "Get an integration with its redacted config",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.list",
+			"command": ["integrations", "project", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations",
+			"summary": "List a project's integrations",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.test",
+			"command": ["integrations", "project", "test"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/test",
+			"summary": "Probe connectivity for an unsaved config or a stored instance (manager only)",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": []
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.update",
+			"command": ["integrations", "project", "update"],
+			"method": "PATCH",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}",
+			"summary": "Update an integration (manager only); a config change appends a version",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "change_note",
+						"cli_name": "change-note",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "config",
+						"cli_name": "config",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "enabled",
+						"cli_name": "enabled",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "integrations.project.get"
+		},
+		{
+			"id": "integrations.project.versions",
+			"command": ["integrations", "project", "versions"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/versions",
+			"summary": "List an integration's config versions (metadata only)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "me",
+			"command": ["me"],
+			"method": "GET",
+			"path": "/api/v1/me",
+			"summary": "Get current user info",
+			"parameters": [],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.content",
+			"command": ["notebooks", "content"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/content",
+			"summary": "Get notebook code",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.create",
+			"command": ["notebooks", "create"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks",
+			"summary": "Create a notebook",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "base_image",
+						"cli_name": "base-image",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "code",
+						"cli_name": "code",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "compute_profile",
+						"cli_name": "compute-profile",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "deps",
+						"cli_name": "deps",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "description",
+						"cli_name": "description",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "readme",
+						"cli_name": "readme",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "runtime",
+						"cli_name": "runtime",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "tags",
+						"cli_name": "tags",
+						"required": false,
+						"value_type": "string",
+						"repeatable": true
+					},
+					{
+						"name": "title",
+						"cli_name": "title",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
+		},
+		{
+			"id": "notebooks.create-git",
+			"command": ["notebooks", "create-git"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/git",
+			"summary": "Create a git-synced workspace notebook",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "base_image",
+						"cli_name": "base-image",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "branch",
+						"cli_name": "branch",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "compute_profile",
+						"cli_name": "compute-profile",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "description",
+						"cli_name": "description",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "entry_notebook",
+						"cli_name": "entry-notebook",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "provider",
+						"cli_name": "provider",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "readme",
+						"cli_name": "readme",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "repo",
+						"cli_name": "repo",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "root_path",
+						"cli_name": "root-path",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "runtime",
+						"cli_name": "runtime",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "tags",
+						"cli_name": "tags",
+						"required": false,
+						"value_type": "string",
+						"repeatable": true
+					},
+					{
+						"name": "title",
+						"cli_name": "title",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.delete",
+			"command": ["notebooks", "delete"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}",
+			"summary": "Delete a notebook (soft-delete)",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "notebooks.get"
+		},
+		{
+			"id": "notebooks.duplicate",
+			"command": ["notebooks", "duplicate"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/duplicate",
+			"summary": "Duplicate a notebook",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "title",
+						"cli_name": "title",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
+		},
+		{
+			"id": "notebooks.get",
+			"command": ["notebooks", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}",
+			"summary": "Get notebook metadata",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.html",
+			"command": ["notebooks", "html"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/html",
+			"summary": "Latest HTML snapshot of the notebook's outputs",
+			"description": "Serves the newest version's HTML snapshot (captured best-effort at session teardown) raw — the static outputs shown to viewers under MARIMOHUB_VIEWER_MODE=static. `X-Marimohub-Version-Id` / `X-Marimohub-Captured-At` identify the snapshot. 404 with code `NO_HTML_SNAPSHOT` when no version has one.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "raw",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.list",
+			"command": ["notebooks", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks",
+			"summary": "List notebooks in a project",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.rotate-sync-token",
+			"command": ["notebooks", "rotate-sync-token"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate",
+			"summary": "Rotate a notebook sync token",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.update",
+			"command": ["notebooks", "update"],
+			"method": "PATCH",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}",
+			"summary": "Update a notebook",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "base_image",
+						"cli_name": "base-image",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "code",
+						"cli_name": "code",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "compute_profile",
+						"cli_name": "compute-profile",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "deps",
+						"cli_name": "deps",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "description",
+						"cli_name": "description",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "message",
+						"cli_name": "message",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "readme",
+						"cli_name": "readme",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "tags",
+						"cli_name": "tags",
+						"required": false,
+						"value_type": "string",
+						"repeatable": true
+					},
+					{
+						"name": "title",
+						"cli_name": "title",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "notebooks.get"
+		},
+		{
+			"id": "notebooks.update-source",
+			"command": ["notebooks", "update-source"],
+			"method": "PATCH",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/source",
+			"summary": "Update a git-synced notebook source",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "branch",
+						"cli_name": "branch",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "entry_notebook",
+						"cli_name": "entry-notebook",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "repo",
+						"cli_name": "repo",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "root_path",
+						"cli_name": "root-path",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.versions.get",
+			"command": ["notebooks", "versions", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}",
+			"summary": "Get a specific version",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "vid",
+					"cli_name": "vid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.versions.html",
+			"command": ["notebooks", "versions", "html"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}/html",
+			"summary": "One version's HTML snapshot of the notebook's outputs",
+			"description": "Serves the HTML snapshot captured for this specific version, raw. 404 with code `NO_HTML_SNAPSHOT` when the version captured none.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "vid",
+					"cli_name": "vid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "raw",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.versions.list",
+			"command": ["notebooks", "versions", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/versions",
+			"summary": "List notebook versions",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.versions.restore",
+			"command": ["notebooks", "versions", "restore"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}/restore",
+			"summary": "Restore a version as a new save",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "vid",
+					"cli_name": "vid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.audit.list",
+			"command": ["projects", "audit", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/events",
+			"summary": "List a project's audit events for one day",
+			"description": "Catalog mutation audit trail (project/notebook lifecycle, membership changes), one UTC day at a time. Manager-only: events may record member management and deletions.",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "date",
+					"cli_name": "date",
+					"in": "query",
+					"required": false,
+					"description": "UTC day (defaults to today)",
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.create",
+			"command": ["projects", "create"],
+			"method": "POST",
+			"path": "/api/v1/projects",
+			"summary": "Create a project",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "description",
+						"cli_name": "description",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "federation",
+						"cli_name": "federation",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "tags",
+						"cli_name": "tags",
+						"required": false,
+						"value_type": "string",
+						"repeatable": true
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
+		},
+		{
+			"id": "projects.delete",
+			"command": ["projects", "delete"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}",
+			"summary": "Delete a project",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "projects.get"
+		},
+		{
+			"id": "projects.get",
+			"command": ["projects", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}",
+			"summary": "Get a project",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.list",
+			"command": ["projects", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects",
+			"summary": "List all projects",
+			"parameters": [
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.members.add",
+			"command": ["projects", "members", "add"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/members",
+			"summary": "Add a project member",
+			"description": "Add a member by user id or email. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "email",
+						"cli_name": "email",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "role",
+						"cli_name": "role",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "user_id",
+						"cli_name": "user-id",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.members.list",
+			"command": ["projects", "members", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/members",
+			"summary": "List project members",
+			"description": "Pending email invites are visible only to project managers (plus the invitee themself); other callers see the id-keyed rows only.",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.members.remove",
+			"command": ["projects", "members", "remove"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/members/{uid}",
+			"summary": "Remove a project member",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uid",
+					"cli_name": "uid",
+					"in": "path",
+					"required": true,
+					"description": "The member's user id, or the (URL-encoded) email of a pending invite",
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.members.update",
+			"command": ["projects", "members", "update"],
+			"method": "PUT",
+			"path": "/api/v1/projects/{pid}/members/{uid}",
+			"summary": "Change a member's role",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uid",
+					"cli_name": "uid",
+					"in": "path",
+					"required": true,
+					"description": "The member's user id, or the (URL-encoded) email of a pending invite",
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "role",
+						"cli_name": "role",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.update",
+			"command": ["projects", "update"],
+			"method": "PATCH",
+			"path": "/api/v1/projects/{pid}",
+			"summary": "Update a project",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "description",
+						"cli_name": "description",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "federation",
+						"cli_name": "federation",
+						"required": false,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "tags",
+						"cli_name": "tags",
+						"required": false,
+						"value_type": "string",
+						"repeatable": true
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false,
+			"preflight_operation_id": "projects.get"
+		},
+		{
+			"id": "sessions.create",
+			"command": ["sessions", "create"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions",
+			"summary": "Create a session and provision a sandbox",
+			"description": "Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App-session reuse is shared per notebook.",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": false,
+				"properties": [
+					{
+						"name": "compute_profile",
+						"cli_name": "compute-profile",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "edit_intent",
+						"cli_name": "edit-intent",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "mode",
+						"cli_name": "mode",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
+		},
+		{
+			"id": "sessions.editor.get",
+			"command": ["sessions", "editor", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/editor-session",
+			"summary": "Inspect persistent editor ownership",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "sessions.editor.takeover",
+			"command": ["sessions", "editor", "takeover"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/editor-session/takeover",
+			"summary": "Gracefully take over an exclusive editor session",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "acknowledge_disruption",
+						"cli_name": "acknowledge-disruption",
+						"required": true,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "expected_activity",
+						"cli_name": "expected-activity",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "expected_holder_session_id",
+						"cli_name": "expected-holder-session-id",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "takeover_id",
+						"cli_name": "takeover-id",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "sessions.get",
+			"command": ["sessions", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}",
+			"summary": "Get a session (status + kernel URL)",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "sid",
+					"cli_name": "sid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "sessions.heartbeat",
+			"command": ["sessions", "heartbeat"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat",
+			"summary": "Update session heartbeat",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "sid",
+					"cli_name": "sid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "sessions.list",
+			"command": ["sessions", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/sessions",
+			"summary": "List active sessions for a project",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "sessions.terminate",
+			"command": ["sessions", "terminate"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}",
+			"summary": "Terminate a session and destroy sandbox",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "sid",
+					"cli_name": "sid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "users.resolve",
+			"command": ["users", "resolve"],
+			"method": "GET",
+			"path": "/api/v1/users",
+			"summary": "Resolve user ids to display identities",
+			"description": "Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` or session `user_id`) into `{ id, email, name, picture_url }`. Ids with no recorded identity are omitted from the result map.",
+			"parameters": [
+				{
+					"name": "ids",
+					"cli_name": "ids",
+					"in": "query",
+					"required": false,
+					"description": "Comma-separated user ids.",
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "users.search",
+			"command": ["users", "search"],
+			"method": "GET",
+			"path": "/api/v1/users/search",
+			"summary": "Search the user directory",
+			"description": "Case-insensitive substring search over email, name, and id, for the add-member picker. Only users who have signed in at least once are in the directory. Under MARIMOHUB_DEFAULT_ROLE=none the caller must own or belong to at least one project — a signed-in account with no involvement cannot enumerate the directory; with a default role set, every authenticated user may search.",
+			"parameters": [
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "q",
+					"cli_name": "q",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "version",
+			"command": ["version"],
+			"method": "GET",
+			"path": "/api/v1/version",
+			"summary": "Get the deployment version",
+			"description": "Just the version string. The rest of the build/runtime identity (image, replica, backends, …) is super-admin material on `GET /api/v1/admin/config`.",
+			"parameters": [],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		}
+	]
+}
