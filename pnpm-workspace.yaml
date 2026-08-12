@@ -97,6 +97,8 @@ minimumReleaseAgeExclude:
   - tar
   - undici
   - vite@6.4.3
+  # Renovate security update: pnpm@11.5.3
+  - pnpm@11.5.3
 
 onlyBuiltDependencies: []
 
