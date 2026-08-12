@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createApi } from '@marimo-hub/api';
 import type { OrgIntegrationsService } from '@marimo-hub/core';
 import { createFromEnv } from '@marimo-hub/config';
 import { localDevEnv, seedLocalDev } from './devSetup';
@@ -21,7 +22,7 @@ describe('local development setup', () => {
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_AUTH_DEV_USER_ID: 'user',
 			MARIMOHUB_AUTH_DEV_EMAIL: 'user@localhost',
-			MARIMOHUB_SUPER_ADMINS: 'user',
+			MARIMOHUB_SUPER_ADMINS: 'user@localhost',
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_INTEGRATIONS_PROBE: 'private',
 			MARIMOHUB_DATA_BROWSER: 'metadata',
@@ -50,5 +51,13 @@ describe('local development setup', () => {
 		await seedLocalDev({ orgIntegrations: { list, create } as unknown as OrgIntegrationsService });
 
 		expect(create).not.toHaveBeenCalled();
+	});
+
+	it('allows the authenticated dev user to reach the super-admin API', async () => {
+		const deps = createFromEnv(localDevEnv({ PORT: '4321' }));
+		const response = await createApi(deps).request('/api/v1/admin/config');
+
+		expect(deps.policy.superAdmins).toEqual(['user@localhost']);
+		expect(response.status).toBe(200);
 	});
 });

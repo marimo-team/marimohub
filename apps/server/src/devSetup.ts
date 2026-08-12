@@ -2,6 +2,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import { UserId } from '@marimo-hub/core';
 
 const DEV_USER_ID = UserId.parse('user');
+const DEV_USER_EMAIL = 'user@localhost';
 const DEV_INTEGRATION_NAME = 'local-development';
 
 export function localDevEnv(
@@ -14,9 +15,9 @@ export function localDevEnv(
 		MARIMOHUB_COMPUTE_BACKEND: 'local',
 		MARIMOHUB_AUTH_BACKEND: 'dev',
 		MARIMOHUB_AUTH_DEV_USER_ID: DEV_USER_ID,
-		MARIMOHUB_AUTH_DEV_EMAIL: 'user@localhost',
+		MARIMOHUB_AUTH_DEV_EMAIL: DEV_USER_EMAIL,
 		MARIMOHUB_AUTH_DEV_NAME: 'Local Dev Super Admin',
-		MARIMOHUB_SUPER_ADMINS: DEV_USER_ID,
+		MARIMOHUB_SUPER_ADMINS: DEV_USER_EMAIL,
 		MARIMOHUB_INTEGRATIONS: 'on',
 		MARIMOHUB_INTEGRATIONS_PROBE: 'private',
 		MARIMOHUB_DATA_BROWSER: 'metadata',
