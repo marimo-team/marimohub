@@ -1,6 +1,11 @@
 import { z } from 'zod';
-import { ValidationError } from '../../../errors';
-import type { IntegrationProbe } from '../../../ports/integrations';
+import { NotFoundError, UnavailableError, ValidationError } from '../../../errors';
+import type {
+	BrowsePageRequest,
+	IntegrationProbe,
+	TableColumn,
+	TableSchema,
+} from '../../../ports/integrations';
 import { INTEGRATIONS_DIR } from '../bundle';
 import { basicAuthHeader, defineIntegration, probeErrorDetails } from '../sdk';
 import { zSecret } from '../secretFields';
@@ -273,25 +278,9 @@ export const icebergRest = defineIntegration({
 	async testConnection(config, probe) {
 		assertSafeHeaders(config.headers);
 		const start = performance.now();
-		if (
-			config.auth.method === 'sigv4' ||
-			config.auth.method === 'google' ||
-			config.auth.method === 'entra'
-		) {
-			return {
-				ok: false,
-				latency_ms: 0,
-				details: `${config.auth.method} authentication can only be exercised inside the sandbox`,
-			};
-		}
-		// The probe has no seam for per-connection TLS material, so it would test a
-		// different (hub-trusted) connection than the sandbox will make.
-		if (config.tls.ca_bundle !== undefined || config.tls.client_certificate !== undefined) {
-			return {
-				ok: false,
-				latency_ms: 0,
-				details: 'a custom CA or client certificate can only be exercised inside the sandbox',
-			};
+		const blocker = hubProbeBlocker(config);
+		if (blocker) {
+			return { ok: false, latency_ms: 0, details: blocker };
 		}
 		try {
 			const headers: Record<string, string> = { ...config.headers };
@@ -323,7 +312,409 @@ export const icebergRest = defineIntegration({
 			};
 		}
 	},
+
+	browse: {
+		available(config) {
+			const blocker = hubProbeBlocker(config);
+			return blocker ? { ok: false, reason: blocker } : { ok: true };
+		},
+
+		async listNamespaces(config, probe, request) {
+			const catalog = await openCatalog(config, probe);
+			const parent = request.parent ?? [];
+			const body = await catalogGet(catalog, '/namespaces', {
+				...pageParams(request),
+				...(parent.length > 0 ? { parent: parent.join(decodedSeparator(catalog.separator)) } : {}),
+			});
+			const namespaces = (asRecord(body)?.namespaces ?? []) as unknown;
+			const raw = Array.isArray(namespaces)
+				? namespaces.filter(
+						(ns): ns is string[] =>
+							Array.isArray(ns) &&
+							ns.length > 0 &&
+							ns.every((part) => typeof part === 'string' && part !== ''),
+					)
+				: [];
+			return {
+				items: childNamespaces(raw, parent),
+				next_cursor: advancedPageToken(body, request.cursor),
+			};
+		},
+
+		async listTables(config, probe, namespace, request) {
+			const catalog = await openCatalog(config, probe);
+			const body = await catalogGet(
+				catalog,
+				`/namespaces/${namespacePathSegment(catalog, namespace)}/tables`,
+				pageParams(request),
+			);
+			const identifiers = (asRecord(body)?.identifiers ?? []) as unknown;
+			const items = Array.isArray(identifiers)
+				? identifiers
+						.map(asRecord)
+						// A mis-scoped listing (separator drift) must not surface another
+						// namespace's tables; identifiers without a namespace are kept —
+						// some servers omit the field on this route.
+						.filter((identifier) => {
+							const ns = identifier?.namespace;
+							if (!Array.isArray(ns)) return true;
+							return ns.length === namespace.length && namespace.every((part, i) => ns[i] === part);
+						})
+						.map((identifier) => identifier?.name)
+						.filter((name): name is string => typeof name === 'string' && name !== '')
+				: [];
+			return {
+				items: [...new Set(items)],
+				next_cursor: advancedPageToken(body, request.cursor),
+			};
+		},
+
+		async getTableSchema(config, probe, namespace, table) {
+			const catalog = await openCatalog(config, probe);
+			const body = await catalogGet(
+				catalog,
+				`/namespaces/${namespacePathSegment(catalog, namespace)}/tables/${encodeURIComponent(table)}`,
+			);
+			return tableSchemaOf(body);
+		},
+
+		snippet(instanceName, namespace, table) {
+			const parts = [...namespace, table];
+			// PyIceberg splits a string identifier on dots, so a namespace part
+			// containing one must be passed as a tuple instead.
+			const identifier = parts.some((part) => part.includes('.'))
+				? `(${parts.map((part) => JSON.stringify(part)).join(', ')})`
+				: JSON.stringify(parts.join('.'));
+			return [
+				'from pyiceberg.catalog import load_catalog',
+				'',
+				`catalog = load_catalog(${JSON.stringify(instanceName)})`,
+				`table = catalog.load_table(${identifier})`,
+				// scan() alone is a lazy DataScan; Arrow materializes rows without
+				// dragging in pandas, and marimo renders Arrow tables natively.
+				'df = table.scan(limit=100).to_arrow()',
+				'df',
+			].join('\n');
+		},
+	},
 });
+
+type IcebergRestConfig = z.infer<typeof icebergRestConfig>;
+
+/**
+ * Auth methods and TLS material the guarded probe cannot exercise; testing and
+ * browsing both defer them to the sandbox, which runs the real client. The
+ * probe has no seam for per-connection TLS material, so it would exercise a
+ * different (hub-trusted) connection than the sandbox will make.
+ */
+function hubProbeBlocker(config: IcebergRestConfig): string | undefined {
+	if (
+		config.auth.method === 'sigv4' ||
+		config.auth.method === 'google' ||
+		config.auth.method === 'entra'
+	) {
+		return `${config.auth.method} authentication can only be exercised inside the sandbox`;
+	}
+	if (config.tls.ca_bundle !== undefined || config.tls.client_certificate !== undefined) {
+		return 'a custom CA or client certificate can only be exercised inside the sandbox';
+	}
+	return undefined;
+}
+
+interface OpenedCatalog {
+	config: IcebergRestConfig;
+	probe: IntegrationProbe;
+	headers: Record<string, string>;
+	/** Server-supplied route prefix from `/v1/config` (Polaris et al. require it). */
+	prefix?: string;
+	/** Effective URL-encoded namespace joiner (see {@link effectiveSeparator}). */
+	separator: string;
+}
+
+/**
+ * Authenticates and resolves the server's route prefix — the same handshake
+ * PyIceberg performs before any catalog route.
+ */
+async function openCatalog(
+	config: IcebergRestConfig,
+	probe: IntegrationProbe,
+): Promise<OpenedCatalog> {
+	assertSafeHeaders(config.headers);
+	const headers: Record<string, string> = { ...config.headers };
+	if (config.auth.method === 'bearer_token') {
+		headers.Authorization = `Bearer ${config.auth.token}`;
+	} else if (config.auth.method === 'basic') {
+		headers.Authorization = basicAuthHeader(config.auth.username, config.auth.password);
+	} else if (config.auth.method === 'oauth2_client_credentials') {
+		const token = await oauth2Token(config.auth, probe);
+		if (!token.ok) throw new UnavailableError(`The catalog is not reachable: ${token.details}.`);
+		headers.Authorization = `Bearer ${token.value}`;
+	}
+	const res = await probe.fetch(configEndpoint(config.uri, config.warehouse), { headers });
+	if (!res.ok) {
+		throw new UnavailableError(`The catalog config endpoint answered HTTP ${res.status}.`);
+	}
+	const body = asRecord(await res.json());
+	const overrides = asRecord(body?.overrides);
+	const defaults = asRecord(body?.defaults);
+	const prefix = [overrides?.prefix, defaults?.prefix].find(
+		(value): value is string => typeof value === 'string' && value !== '',
+	);
+	return {
+		config,
+		probe,
+		headers,
+		prefix,
+		separator: effectiveSeparator(config, overrides, defaults),
+	};
+}
+
+/** Percent-encoded byte or a single URL-safe character — nothing that could restructure a path. */
+const SAFE_SEPARATOR = /^(?:%[0-9A-Fa-f]{2}|[.\-_~])$/;
+
+/**
+ * The `/v1/config` handshake can pin the namespace separator: `overrides`
+ * beat the client's property, the client beats `defaults` (the spec's merge
+ * order — the fixture's `latest` image, for one, overrides it to `%2E`).
+ * Ignoring an override would 404 every nested-namespace route there.
+ *
+ * Every candidate — including the CONFIGURED one, which the schema leaves
+ * free-form for the sandbox render — must pass {@link SAFE_SEPARATOR}: a
+ * value like `/` would restructure the catalog path. Nothing safe declared
+ * falls back to the spec's `%1F`.
+ *
+ * Exported so the live conformance seeding resolves the separator with the
+ * exact rules the client under test applies.
+ */
+export function resolveNamespaceSeparator(
+	configured: string,
+	overrides: Record<string, unknown> | undefined,
+	defaults: Record<string, unknown> | undefined,
+): string {
+	const candidates = [
+		overrides?.['namespace-separator'],
+		configured,
+		defaults?.['namespace-separator'],
+	];
+	for (const value of candidates) {
+		if (typeof value === 'string' && SAFE_SEPARATOR.test(value)) return value;
+	}
+	return '%1F';
+}
+
+function effectiveSeparator(
+	config: IcebergRestConfig,
+	overrides: Record<string, unknown> | undefined,
+	defaults: Record<string, unknown> | undefined,
+): string {
+	return resolveNamespaceSeparator(config.rest.namespace_separator, overrides, defaults);
+}
+
+async function catalogGet(
+	catalog: OpenedCatalog,
+	route: string,
+	params: Record<string, string> = {},
+): Promise<unknown> {
+	const url = new URL(catalog.config.uri);
+	url.hash = '';
+	// The configured URI's query string is kept: some catalogs route tenants
+	// through it, and dropping it would 404 every request past /v1/config.
+	const prefixPart = catalog.prefix
+		? `/${catalog.prefix.split('/').map(encodeURIComponent).join('/')}`
+		: '';
+	url.pathname = `${url.pathname.replace(/\/+$/, '')}/v1${prefixPart}${route}`;
+	for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+	const res = await catalog.probe.fetch(url.toString(), { headers: catalog.headers });
+	if (res.status === 404) {
+		throw new NotFoundError('The catalog reports no such namespace or table.');
+	}
+	if (!res.ok) throw new UnavailableError(`The catalog answered HTTP ${res.status}.`);
+	const body = await res.json();
+	if (body === undefined) {
+		throw new UnavailableError(
+			'The catalog response was not JSON or exceeded the size limit — request a smaller page.',
+		);
+	}
+	return body;
+}
+
+function pageParams(request: BrowsePageRequest): Record<string, string> {
+	return {
+		pageSize: String(request.limit),
+		...(request.cursor !== undefined ? { pageToken: request.cursor } : {}),
+	};
+}
+
+/**
+ * The next upstream page token — null when the server sends none, and null
+ * when it echoes the token it was just given: following an unchanged token
+ * would page forever without advancing (observed spec drift; servers that do
+ * not support `pageToken` sometimes reflect the request's params).
+ */
+function advancedPageToken(body: unknown, requested: string | undefined): string | null {
+	const token = asRecord(body)?.['next-page-token'];
+	if (typeof token !== 'string' || token === '') return null;
+	return token === requested ? null : token;
+}
+
+/**
+ * The direct children of `parent` from a namespace listing. Compliant servers
+ * return exactly that as full paths, making this a no-op; servers that ignore
+ * `parent` (or return the whole tree flat) return ancestors, the parent
+ * itself, and unrelated roots — filtering by prefix and depth keeps the tree
+ * correct against both, and deeper descendants stay reachable by expansion.
+ */
+function childNamespaces(items: string[][], parent: string[]): string[][] {
+	const seen = new Set<string>();
+	const children: string[][] = [];
+	for (const namespace of items) {
+		if (namespace.length !== parent.length + 1) continue;
+		if (!parent.every((part, index) => namespace[index] === part)) continue;
+		const key = namespace.join('\u001f');
+		if (seen.has(key)) continue;
+		seen.add(key);
+		children.push(namespace);
+	}
+	return children;
+}
+
+/**
+ * The effective separator is the URL-encoded joiner for namespace parts in
+ * catalog routes (`%1F` = the REST spec's unit separator). Parts are encoded
+ * individually and joined with it verbatim; for query params the decoded form
+ * is used and re-encoded by URLSearchParams.
+ */
+function namespacePathSegment(catalog: OpenedCatalog, namespace: string[]): string {
+	return namespace.map(encodeURIComponent).join(catalog.separator);
+}
+
+function decodedSeparator(separator: string): string {
+	try {
+		return decodeURIComponent(separator);
+	} catch {
+		return separator;
+	}
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function tableSchemaOf(body: unknown): TableSchema {
+	const metadata = asRecord(asRecord(body)?.metadata);
+	const schemas = metadata?.schemas;
+	const currentId = metadata?.['current-schema-id'];
+	let schema = Array.isArray(schemas)
+		? (schemas.map(asRecord).find((s) => s?.['schema-id'] === currentId) ??
+			asRecord(schemas.at(-1)))
+		: undefined;
+	// Format-v1 metadata carries a single `schema` instead of a `schemas` list.
+	schema ??= asRecord(metadata?.schema);
+	const fields = Array.isArray(schema?.fields) ? schema.fields.map(asRecord) : [];
+	const columnNamesById = new Map<unknown, string>();
+	const columns: TableColumn[] = [];
+	for (const field of fields) {
+		if (field === undefined || typeof field.name !== 'string') continue;
+		columnNamesById.set(field.id, field.name);
+		columns.push({
+			name: field.name,
+			type: typeText(field.type),
+			nullable: field.required !== true,
+			...(typeof field.doc === 'string' && field.doc !== '' ? { comment: field.doc } : {}),
+		});
+	}
+	const partitioning = partitionFields(metadata, columnNamesById);
+	const snapshot = currentSnapshot(metadata);
+	return {
+		columns,
+		...(partitioning.length > 0 ? { partitioning } : {}),
+		...(typeof metadata?.location === 'string' ? { location: metadata.location } : {}),
+		...(typeof metadata?.['format-version'] === 'number'
+			? { format_version: metadata['format-version'] }
+			: {}),
+		...(snapshot ? { current_snapshot: snapshot } : {}),
+	};
+}
+
+function currentSnapshot(
+	metadata: Record<string, unknown> | undefined,
+): TableSchema['current_snapshot'] | undefined {
+	const snapshots = metadata?.snapshots;
+	const currentId = metadata?.['current-snapshot-id'];
+	if (!Array.isArray(snapshots) || currentId === undefined) return undefined;
+	const snapshot = snapshots.map(asRecord).find((s) => s?.['snapshot-id'] === currentId);
+	if (!snapshot) return undefined;
+	const summary = asRecord(snapshot.summary);
+	const committedMs = snapshot['timestamp-ms'];
+	const result = {
+		...(typeof committedMs === 'number'
+			? { committed_at: new Date(committedMs).toISOString() }
+			: {}),
+		...numericSummary(summary, 'total-records', 'total_records'),
+		...numericSummary(summary, 'total-files-size', 'total_data_size_bytes'),
+	};
+	return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/** Iceberg snapshot summaries carry numbers as strings; parse defensively. */
+function numericSummary(
+	summary: Record<string, unknown> | undefined,
+	key: string,
+	as: string,
+): Record<string, number> {
+	const raw = summary?.[key];
+	const value = typeof raw === 'string' ? Number(raw) : typeof raw === 'number' ? raw : Number.NaN;
+	return Number.isFinite(value) ? { [as]: value } : {};
+}
+
+function partitionFields(
+	metadata: Record<string, unknown> | undefined,
+	columnNamesById: Map<unknown, string>,
+): string[] {
+	const specs = metadata?.['partition-specs'];
+	const defaultSpecId = metadata?.['default-spec-id'];
+	const spec = Array.isArray(specs)
+		? (specs.map(asRecord).find((s) => s?.['spec-id'] === defaultSpecId) ?? asRecord(specs.at(-1)))
+		: undefined;
+	let fields = Array.isArray(spec?.fields) ? spec.fields : undefined;
+	// Format-v1 metadata carries the fields as a flat singular `partition-spec`.
+	fields ??= Array.isArray(metadata?.['partition-spec']) ? metadata['partition-spec'] : undefined;
+	if (!fields) return [];
+	const rendered: string[] = [];
+	for (const field of fields.map(asRecord)) {
+		if (field === undefined) continue;
+		const source = columnNamesById.get(field['source-id']);
+		const name = source ?? (typeof field.name === 'string' ? field.name : undefined);
+		if (name === undefined) continue;
+		const transform = typeof field.transform === 'string' ? field.transform : 'identity';
+		rendered.push(transform === 'identity' ? name : `${transform}(${name})`);
+	}
+	return rendered;
+}
+
+/** Renders an Iceberg type (string or nested struct/list/map object) as display text. */
+function typeText(type: unknown): string {
+	if (typeof type === 'string') return type;
+	const record = asRecord(type);
+	if (!record) return 'unknown';
+	switch (record.type) {
+		case 'struct': {
+			const fields = Array.isArray(record.fields) ? record.fields.map(asRecord) : [];
+			const parts = fields
+				.filter((f): f is Record<string, unknown> => f !== undefined)
+				.map((f) => `${String(f.name)}: ${typeText(f.type)}`);
+			return `struct<${parts.join(', ')}>`;
+		}
+		case 'list':
+			return `list<${typeText(record.element)}>`;
+		case 'map':
+			return `map<${typeText(record.key)}, ${typeText(record.value)}>`;
+		default:
+			return typeof record.type === 'string' ? record.type : 'unknown';
+	}
+}
 
 function assertSafeHeaders(headers: Record<string, string>): void {
 	for (const [key, value] of Object.entries(headers)) {

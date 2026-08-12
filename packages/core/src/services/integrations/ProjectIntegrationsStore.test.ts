@@ -2051,3 +2051,193 @@ describe('OrgIntegrationsStore + project inheritance', () => {
 		await expect(org.get(created.id)).rejects.toThrow(/does not match its storage path/);
 	});
 });
+
+describe('data browsing', () => {
+	/** Browsable test kind; ops are network-free so the probe is never touched. */
+	const browsyKind = defineIntegration({
+		kind: 'browsy',
+		title: 'Browsy',
+		description: 'test kind',
+		category: 'catalog',
+		brand: { color: '#000000' },
+		schemaVersion: 1,
+		configSchema: z.object({
+			mode: z.enum(['open', 'sandbox_only']).default('open'),
+			token: zSecret(),
+		}),
+		render: () => ({}),
+		browse: {
+			available: (config) =>
+				config.mode === 'open' ? { ok: true } : { ok: false, reason: 'sandbox only' },
+			listNamespaces: async () => ({ items: [['sales', 'eu']], next_cursor: 'more' }),
+			// Echoes the decrypted token so tests can assert the open() path ran.
+			listTables: async (config, _probe, namespace) => ({
+				items: [`${namespace.join('/')}::${config.token}`],
+				next_cursor: null,
+			}),
+			getTableSchema: async () => ({
+				columns: [{ name: 'id', type: 'long', nullable: false }],
+			}),
+			snippet: (name, namespace, table) => `load ${name}:${namespace.join('.')}.${table}`,
+		},
+	});
+
+	let bucket: MemoryBucket;
+	let pid: ProjectId;
+	let store: ProjectIntegrationsStore;
+	let orgStore: OrgIntegrationsStore;
+
+	beforeEach(() => {
+		bucket = new MemoryBucket();
+		pid = createProjectId();
+		const registry = new IntegrationRegistry();
+		registry.register(echoKind);
+		registry.register(browsyKind);
+		const options = { bucket, registry, codec, probe: stubProbe, browseProbe: stubProbe };
+		store = new ProjectIntegrationsStore(options);
+		orgStore = new OrgIntegrationsStore(options);
+	});
+
+	const createBrowsy = (config: Record<string, unknown> = { token: 'plain-token' }) =>
+		store.create(pid, { kind: 'browsy', name: 'lake', config }, ACTOR);
+
+	it('reports the capability verdict without resolving secrets', async () => {
+		const created = await createBrowsy();
+		expect(await store.browseCapability(pid, created.id)).toEqual({
+			metadata: true,
+			current_version: 1,
+			updated_at: expect.any(String),
+		});
+
+		const closed = await store.create(
+			pid,
+			{ kind: 'browsy', name: 'closed', config: { mode: 'sandbox_only', token: 't' } },
+			ACTOR,
+		);
+		expect(await store.browseCapability(pid, closed.id)).toEqual({
+			metadata: false,
+			current_version: 1,
+			updated_at: expect.any(String),
+			reason: 'sandbox only',
+		});
+
+		const echo = await store.create(
+			pid,
+			{ kind: 'echo', name: 'plain', config: { token: 'valid' } },
+			ACTOR,
+		);
+		expect(await store.browseCapability(pid, echo.id)).toMatchObject({
+			metadata: false,
+			reason: expect.stringContaining('does not support browsing'),
+		});
+	});
+
+	it('a disabled instance is not browsable', async () => {
+		const created = await createBrowsy();
+		await store.update(pid, created.id, { enabled: false }, ACTOR);
+		expect(await store.browseCapability(pid, created.id)).toMatchObject({
+			metadata: false,
+			reason: expect.stringContaining('disabled'),
+		});
+		await expect(store.browseTables(pid, created.id, ['ns'], { limit: 10 })).rejects.toThrow(
+			ValidationError,
+		);
+	});
+
+	it('without a browse probe, kinds report supports_browse: false and ops refuse', async () => {
+		const bare = new ProjectIntegrationsStore({
+			bucket,
+			registry: (() => {
+				const registry = new IntegrationRegistry();
+				registry.register(browsyKind);
+				return registry;
+			})(),
+			codec,
+			probe: stubProbe,
+		});
+		const created = await bare.create(
+			pid,
+			{ kind: 'browsy', name: 'b', config: { token: 't' } },
+			ACTOR,
+		);
+		expect(bare.listKinds().find((k) => k.kind === 'browsy')?.supports_browse).toBe(false);
+		expect(await bare.browseCapability(pid, created.id)).toMatchObject({
+			metadata: false,
+			reason: expect.stringContaining('not enabled'),
+		});
+		await expect(bare.browseNamespaces(pid, created.id, { limit: 10 })).rejects.toThrow(
+			ValidationError,
+		);
+	});
+
+	it('browse ops decrypt the stored config, attach the snippet, and never write', async () => {
+		const created = await createBrowsy();
+		const put = vi.spyOn(bucket, 'put');
+		const del = vi.spyOn(bucket, 'delete');
+
+		expect(await store.browseNamespaces(pid, created.id, { limit: 10 })).toEqual({
+			items: [['sales', 'eu']],
+			next_cursor: 'more',
+		});
+		expect(await store.browseTables(pid, created.id, ['sales', 'eu'], { limit: 10 })).toEqual({
+			items: ['sales/eu::plain-token'],
+			next_cursor: null,
+		});
+		expect(await store.browseTableSchema(pid, created.id, ['sales'], 'orders')).toEqual({
+			columns: [{ name: 'id', type: 'long', nullable: false }],
+			snippet: 'load lake:sales.orders',
+		});
+
+		expect(put).not.toHaveBeenCalled();
+		expect(del).not.toHaveBeenCalled();
+	});
+
+	it('resolves an org instance project-first-then-org, and shadowing hides it', async () => {
+		const orgInstance = await orgStore.create(
+			{ kind: 'browsy', name: 'lake', config: { token: 'org-token' } },
+			ACTOR,
+		);
+
+		expect(await store.browseCapability(pid, orgInstance.id)).toEqual({
+			metadata: true,
+			current_version: 1,
+			updated_at: expect.any(String),
+		});
+		expect(await store.browseTables(pid, orgInstance.id, ['ns'], { limit: 10 })).toEqual({
+			items: ['ns::org-token'],
+			next_cursor: null,
+		});
+
+		// A same-name project instance shadows the org one; the org id must now
+		// read as absent through the project browse surface.
+		await createBrowsy();
+		await expect(store.browseCapability(pid, orgInstance.id)).rejects.toThrow(NotFoundError);
+		await expect(store.browseTables(pid, orgInstance.id, ['ns'], { limit: 10 })).rejects.toThrow(
+			NotFoundError,
+		);
+	});
+
+	it('an unknown id answers NotFound', async () => {
+		await expect(store.browseCapability(pid, createIntegrationId())).rejects.toThrow(NotFoundError);
+	});
+
+	// Shadowing keys off existence, not `enabled` — the same rule sessions use,
+	// so a disabled project override is the org opt-out here too.
+	it('a DISABLED same-name project instance still shadows the org one', async () => {
+		const orgInstance = await orgStore.create(
+			{ kind: 'browsy', name: 'lake', config: { token: 'org-token' } },
+			ACTOR,
+		);
+		const project = await createBrowsy();
+		await store.update(pid, project.id, { enabled: false }, ACTOR);
+
+		await expect(store.browseCapability(pid, orgInstance.id)).rejects.toThrow(NotFoundError);
+		await expect(store.browseNamespaces(pid, orgInstance.id, { limit: 10 })).rejects.toThrow(
+			NotFoundError,
+		);
+		expect(await store.browseCapability(pid, project.id)).toMatchObject({
+			metadata: false,
+			reason: expect.stringContaining('disabled'),
+		});
+	});
+});

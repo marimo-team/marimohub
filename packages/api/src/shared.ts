@@ -945,6 +945,8 @@ export const CapabilitiesResponseSchema = z
 	.object({
 		federation: z.object({ available: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
+		/** Read-only data browsing over integrations; `preview` gates row preview. */
+		data_browser: z.object({ available: z.boolean(), preview: z.boolean() }),
 		/**
 		 * What an effective `viewer` sees when opening a notebook
 		 * (MARIMOHUB_VIEWER_MODE): the client branches on this before starting a

@@ -144,6 +144,46 @@ hooks needed to pin validated addresses.
 Probe results and errors must never include credentials or resolved plaintext
 secret values.
 
+## Data browsing
+
+A kind can implement `BrowseCapability` when it has an HTTP metadata API. The
+capability lists namespaces, tables, and schemas. It also creates a notebook
+snippet. `MARIMOHUB_DATA_BROWSER` controls access to this capability.
+
+All network access must use the injected browse probe. This probe has a separate
+request budget and a larger response limit than the connection-test probe.
+
+Browse errors must not include secrets. `defineIntegration` replaces transport
+errors with a generic failure. It also replaces a `DomainError` that contains a
+schema-marked secret value.
+
+`browse.available(config)` checks whether the hub supports one stored instance.
+For example, it can reject unsupported authentication methods or TLS material.
+This function receives secret placeholders, so it must not inspect secret
+values.
+
+The kind descriptor uses `supports_browse` to report kind-level support. The
+`GET …/browse` route reports support for one instance. All browse routes require
+the editor role or a higher role.
+
+The API resolves a browse ID in the project tier before the organization tier.
+A project integration shadows an organization integration with the same name.
+Browse operations do not write to the bucket.
+
+Servers differ in pagination and namespace addressing, so the `iceberg_rest`
+client filters listings to direct children, stops on a non-advancing page
+token, and honors a `namespace-separator` declared by `/v1/config`.
+
+Every browsable kind should run the shared live suite: `browseContract`
+(`@marimo-hub/core/testing/browse-contract`) pins the cross-kind guarantees —
+roots without descendants, exact direct children under a parent, tables in
+their namespace, schema round-trip — while the kind supplies config, probe,
+and seeding. See `icebergRest.browse.live.test.ts` for the shape; suites gate
+on a `MARIMOHUB_TEST_*` env var and skip otherwise. CI runs them on every PR:
+the `Catalog conformance` workflow (mirroring storage-conformance) starts the
+pinned servers — currently `apache/iceberg-rest-fixture` — and sets the env
+vars. A new kind adds its server container and env var there.
+
 ## Secrets
 
 Mark secret-bearing string fields with `zSecret()`. The framework derives their

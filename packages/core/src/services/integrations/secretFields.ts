@@ -296,6 +296,30 @@ export function validateStoredConfig(options: {
 	check?: (parsed: unknown) => void;
 }): void {
 	const { schema, paths, stored, check } = options;
+	const parsed = schema.safeParse(placeholderSubstituted(stored, paths));
+	if (!parsed.success) throw new ValidationError('Stored config does not match the kind schema.');
+	check?.(parsed.data);
+}
+
+/**
+ * Parses a stored config with placeholders standing in for its secret boxes —
+ * for logic that only inspects non-secret fields (e.g. a browse-capability
+ * verdict) and must not pay for (or depend on) secret resolution. Returns
+ * undefined when the config no longer matches the schema.
+ */
+export function parseStoredWithPlaceholders(options: {
+	schema: z.ZodType;
+	paths: SecretPath[];
+	stored: Record<string, unknown>;
+}): unknown {
+	const parsed = options.schema.safeParse(placeholderSubstituted(options.stored, options.paths));
+	return parsed.success ? parsed.data : undefined;
+}
+
+function placeholderSubstituted(
+	stored: Record<string, unknown>,
+	paths: SecretPath[],
+): Record<string, unknown> {
 	const sanitized = structuredClone(stored);
 	for (const path of paths) {
 		for (const concrete of expandPath(sanitized, path)) {
@@ -309,9 +333,7 @@ export function validateStoredConfig(options: {
 			setAt(sanitized, concrete, PLACEHOLDER);
 		}
 	}
-	const parsed = schema.safeParse(sanitized);
-	if (!parsed.success) throw new ValidationError('Stored config does not match the kind schema.');
-	check?.(parsed.data);
+	return sanitized;
 }
 
 /**

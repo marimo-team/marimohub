@@ -1321,6 +1321,13 @@ See the [secret-source guide](./integration-secrets.md).`,
 							'Policy for the "Test connection" probe, which makes server-side HTTP requests to manager-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`).',
 						default: 'guarded',
 					},
+					{
+						id: 'MARIMOHUB_DATA_BROWSER',
+						name: 'Data browser',
+						description:
+							'Controls read-only catalog metadata browsing for editors and higher roles. `metadata` enables the Data page and browse API. It requires `MARIMOHUB_INTEGRATIONS=on` and a probe policy other than `off`. All upstream requests use the egress controls from `MARIMOHUB_INTEGRATIONS_PROBE`. `off` disables browsing. The reserved `full` value is not yet supported.',
+						default: 'off',
+					},
 				],
 			},
 			{

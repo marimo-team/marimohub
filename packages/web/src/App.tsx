@@ -16,6 +16,7 @@ import { ApiRequestError } from '@/api/client';
 import { AdminLayout } from '@/components/Admin/AdminLayout';
 
 const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
+const DataBrowserPage = lazy(() => import('@/components/DataBrowser/DataBrowserPage'));
 const AdminUsersPage = lazy(() => import('@/components/Admin/AdminUsersPage'));
 const AdminSettingsPage = lazy(() => import('@/components/Admin/AdminSettingsPage'));
 
@@ -114,6 +115,8 @@ function StandardLayout() {
 						<Routes>
 							<Route path="/" element={<ProjectList />} />
 							<Route path="/projects/:pid" element={<Project />} />
+							<Route path="/projects/:pid/data" element={<DataBrowserPage />} />
+							<Route path="/projects/:pid/data/:iid" element={<DataBrowserPage />} />
 							<Route path="/admin" element={<AdminLayout />}>
 								<Route index element={<Navigate to="/admin/users" replace />} />
 								<Route path="users" element={<AdminUsersPage />} />

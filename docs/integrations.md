@@ -30,6 +30,53 @@ See the two-phase policy in `development_docs/migrations.md`.
 Integration configuration is versioned. Each save creates an immutable
 revision. Each session records the revisions that it uses.
 
+## Browse catalog metadata
+
+Set `MARIMOHUB_DATA_BROWSER=metadata` to enable the Data page and browse API.
+`MARIMOHUB_INTEGRATIONS` must be `on`. `MARIMOHUB_INTEGRATIONS_PROBE` must not
+be `off`.
+
+Editors and higher roles can use the Data page at `/projects/{pid}/data`.
+They do not need to start a session. The URL stores the selected integration,
+namespace, table, and filter, so a link restores the same view.
+
+The Data page lists namespaces, tables, and table schemas. The schema view
+shows columns, partition fields, and available snapshot statistics. It also
+provides notebook code that loads the table through the integration. The
+**Open in notebook** action creates a notebook in the project with that code
+already in place and opens it. Add the kind's listed packages to the
+notebook's dependencies before you run it.
+
+Browsing is read-only. Catalog requests use GET, and the API has no catalog
+write operations. OAuth2 authentication can also send a token request. All
+upstream requests use the egress policy from `MARIMOHUB_INTEGRATIONS_PROBE`.
+
+Browsing currently supports the Iceberg REST Catalog. The hub supports only
+configurations that the **Test** action can exercise. The hub cannot browse an
+`iceberg_rest` integration that uses:
+
+- SigV4, Google, or Entra authentication
+- a custom CA or client certificate
+
+These configurations continue to work inside the sandbox. The
+`GET …/integrations/{iid}/browse` route explains whether the hub can browse one
+integration.
+
+### Scope and caching
+
+The browse API resolves an ID in the project tier before the organization tier.
+An organization integration is available from each project that inherits it.
+A project integration with the same name shadows the organization integration.
+
+Each request checks whether the integration is available before it reads the
+cache. Disabling or shadowing an integration therefore takes effect immediately.
+A new configuration version uses a new cache entry.
+
+Each replica can cache namespace and table lists for one minute. It can cache
+schemas for five minutes. Browse requests have a per-user rate limit. The
+**Refresh** action bypasses the response cache, but it still uses the rate
+limit.
+
 ## Using an integration in a notebook
 
 Each kind documents its sandbox contract — the env vars and files it renders —

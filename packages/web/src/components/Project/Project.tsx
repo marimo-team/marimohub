@@ -11,6 +11,7 @@ import {
 	Container,
 	Copy,
 	Cpu,
+	Database,
 	Download,
 	FileDown,
 	FileText,
@@ -72,6 +73,8 @@ import {
 	useStopSession,
 	useUsersQuery,
 	useCapabilitiesQuery,
+	useIntegrationKindsQuery,
+	useIntegrationsQuery,
 } from '@/api/hooks';
 import { AppSessionIndicator } from './AppSessionIndicator';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
@@ -185,6 +188,17 @@ export function Project() {
 	// admission row in capabilities. The server enforces all of it regardless.
 	const canStartApps =
 		project.your_role !== 'viewer' || (capabilities?.viewer_session_modes ?? []).includes('app');
+
+	const dataBrowserAvailable =
+		(capabilities?.data_browser?.available ?? false) && project.your_role !== 'viewer';
+	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
+	const { data: projectIntegrations } = useIntegrationsQuery({ pid: pid! }, dataBrowserAvailable);
+	const browsableKinds = new Set(
+		(integrationKinds ?? []).filter((kind) => kind.supports_browse).map((kind) => kind.kind),
+	);
+	const browsableIntegrations = (projectIntegrations ?? []).filter(
+		(entry) => entry.enabled && !entry.shadowed && browsableKinds.has(entry.kind),
+	);
 
 	const editProjectForm = useAppForm({
 		defaultValues: { name: project.name, description: project.description },
@@ -563,6 +577,11 @@ export function Project() {
 						>
 							<Settings2 className="size-4" />
 						</IconButton>
+						{dataBrowserAvailable && browsableIntegrations.length > 0 && (
+							<IconLink to={`/projects/${pid}/data`} label="Browse data" tooltip="Browse data">
+								<Database className="size-4" />
+							</IconLink>
+						)}
 						<IconButton label="Edit project" tooltip="Edit project" onPress={editProjectModal.open}>
 							<Pencil className="size-4" />
 						</IconButton>

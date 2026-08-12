@@ -6,6 +6,7 @@ import {
 	ProjectId,
 	requireRole,
 	ResourceExhaustedError,
+	ValidationError,
 } from '@marimo-hub/core';
 import type {
 	IntegrationDetail,
@@ -87,6 +88,7 @@ const KindDescriptorSchema = z
 			}),
 		),
 		supports_test: z.boolean(),
+		supports_browse: z.boolean(),
 		secret_sources: z.object({
 			inline: z.boolean(),
 			references: z.array(
@@ -357,6 +359,192 @@ const testIntegration = createRoute({
 	},
 });
 
+// --- Data browser (read-only catalog metadata over an integration) ---
+
+/**
+ * Multi-part namespaces ride in one query param, parts joined by U+001F — the
+ * Iceberg REST unit separator, which cannot appear in an identifier — so parts
+ * containing dots round-trip.
+ */
+const NAMESPACE_JOINER = '\u001f';
+
+const NamespaceQueryValue = z
+	.string()
+	.min(1)
+	// A leading/trailing/doubled joiner splits into empty identifier parts,
+	// which no catalog can hold — refuse here (422) instead of spending a probe
+	// call on a guaranteed upstream 404.
+	.refine((value) => value.split(NAMESPACE_JOINER).every((part) => part !== ''), {
+		message: 'Namespace parts must be non-empty.',
+	})
+	.openapi({
+		param: { name: 'namespace', in: 'query' },
+		description: 'Namespace parts joined by U+001F (percent-encoded as %1F).',
+		example: 'sales',
+	});
+
+const BrowsePageQuery = z.object({
+	limit: z.coerce
+		.number()
+		.int()
+		.positive()
+		.max(500)
+		.default(100)
+		.openapi({ param: { name: 'limit', in: 'query' }, example: 100 }),
+	/** Opaque upstream pagination token from the previous page's `next_cursor`. */
+	cursor: z
+		.string()
+		.optional()
+		.openapi({ param: { name: 'cursor', in: 'query' } }),
+	/**
+	 * Bypass the replica's metadata cache for this lookup (the result still
+	 * refreshes it). Fresh lookups always spend browse budget, so the cap
+	 * bounds abuse.
+	 */
+	fresh: z
+		.enum(['true', 'false'])
+		.optional()
+		.openapi({ param: { name: 'fresh', in: 'query' }, example: 'false' }),
+});
+
+const BrowseCapabilitySchema = z
+	.object({
+		/** Whether namespace/table/schema browsing works for this instance. */
+		metadata: z.boolean(),
+		/** Whether row preview is available (always false until preview ships). */
+		preview: z.boolean(),
+		reason: z.string().optional(),
+	})
+	.openapi('IntegrationBrowseCapability');
+
+const BrowseNamespacePageSchema = z
+	.object({
+		/** Each namespace as its parts, e.g. `["sales", "eu"]`. */
+		items: z.array(z.array(z.string())),
+		next_cursor: z.string().nullable(),
+	})
+	.openapi('IntegrationBrowseNamespacePage');
+
+const BrowseTablePageSchema = z
+	.object({
+		items: z.array(z.string()),
+		next_cursor: z.string().nullable(),
+	})
+	.openapi('IntegrationBrowseTablePage');
+
+const BrowseTableSchemaSchema = z
+	.object({
+		columns: z.array(
+			z.object({
+				name: z.string(),
+				type: z.string(),
+				nullable: z.boolean(),
+				comment: z.string().optional(),
+			}),
+		),
+		partitioning: z.array(z.string()).optional(),
+		/** Ready-to-paste notebook code that loads this table via the integration. */
+		snippet: z.string().optional(),
+		/** Table root location, e.g. `s3://warehouse/sales/orders`. */
+		location: z.string().optional(),
+		format_version: z.number().int().optional(),
+		/** Facts from the table's current snapshot, when the catalog reports one. */
+		current_snapshot: z
+			.object({
+				committed_at: z.iso.datetime().optional(),
+				total_records: z.number().optional(),
+				total_data_size_bytes: z.number().optional(),
+			})
+			.optional(),
+	})
+	.openapi('IntegrationTableSchema');
+
+const browseCapability = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse',
+	tags: ['Integrations'],
+	summary: 'Whether this integration instance can be browsed (editor or above)',
+	description:
+		'Browse routes resolve the id against the project tier first, then the inherited org ' +
+		'tier; a shadowed org instance reads as absent. All browse operations are strictly ' +
+		'read-only against the upstream.',
+	request: { params: IntegrationIdParam },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: BrowseCapabilitySchema }),
+			'Instance browse capability',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
+const browseNamespaces = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse/namespaces',
+	tags: ['Integrations'],
+	summary: 'List catalog namespaces (editor or above)',
+	request: {
+		params: IntegrationIdParam,
+		query: BrowsePageQuery.extend({
+			parent: NamespaceQueryValue.optional().openapi({ param: { name: 'parent', in: 'query' } }),
+		}),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: BrowseNamespacePageSchema }),
+			'Namespaces, with upstream pagination passed through',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 429),
+	},
+});
+
+const browseTables = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse/tables',
+	tags: ['Integrations'],
+	summary: 'List tables in a namespace (editor or above)',
+	request: {
+		params: IntegrationIdParam,
+		query: BrowsePageQuery.extend({ namespace: NamespaceQueryValue }),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: BrowseTablePageSchema }),
+			'Table names, with upstream pagination passed through',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 429),
+	},
+});
+
+const browseTableSchema = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse/schema',
+	tags: ['Integrations'],
+	summary: "Get a table's schema (editor or above)",
+	request: {
+		params: IntegrationIdParam,
+		query: z.object({
+			namespace: NamespaceQueryValue,
+			table: z
+				.string()
+				.min(1)
+				.openapi({ param: { name: 'table', in: 'query' }, example: 'orders' }),
+			fresh: BrowsePageQuery.shape.fresh,
+		}),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: BrowseTableSchemaSchema }),
+			'Column names, types, and partitioning',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
 // Org-scoped (deployment-wide) instances, inherited by every project. All
 // management is super-admin only — org integrations render into every
 // project's sessions, so no project role can be sufficient.
@@ -486,6 +674,96 @@ function requireIntegrations(deps: ApiDeps): ProjectIntegrationsService {
 		throw new NotFoundError('Integrations are not enabled on this deployment');
 	}
 	return deps.integrations;
+}
+
+function requireDataBrowser(deps: ApiDeps): {
+	integrations: ProjectIntegrationsService;
+	preview: boolean;
+} {
+	if (!deps.dataBrowser) {
+		throw new NotFoundError('The data browser is not enabled on this deployment');
+	}
+	return { integrations: requireIntegrations(deps), preview: deps.dataBrowser.preview };
+}
+
+function splitNamespace(value: string): string[] {
+	return value.split(NAMESPACE_JOINER);
+}
+
+const BROWSE_LIST_TTL_MS = 60_000;
+const BROWSE_SCHEMA_TTL_MS = 300_000;
+const BROWSE_CACHE_MAX_ENTRIES = 1024;
+
+/**
+ * A cache entry must not outlive the integration state it was computed from,
+ * so every metadata request re-runs resolution (project-then-org, shadowing),
+ * the enablement check, and the instance verdict BEFORE the cache is
+ * consulted: a shadowed org head 404s and a disabled instance 422s even while
+ * a hit is warm. The returned token keys the entry on the config version AND
+ * `updated_at` — a rename bumps only the head, yet changes the snippet a
+ * schema response embeds. Only the upstream catalog traffic is cached.
+ */
+async function assertBrowsable(
+	integrations: ProjectIntegrationsService,
+	pid: ProjectId,
+	iid: IntegrationId,
+): Promise<string> {
+	const capability = await integrations.browseCapability(pid, iid);
+	if (!capability.metadata) {
+		throw new ValidationError(capability.reason ?? 'This integration cannot be browsed.');
+	}
+	return `${capability.current_version}:${capability.updated_at}`;
+}
+
+/**
+ * Per-replica TTL cache over successful browse results, so tree navigation
+ * does not re-spend probe budget on every expansion. Bounded: expired entries
+ * are dropped when full, then oldest-inserted. Concurrent misses for one key
+ * share a single upstream load — a lazy tree expansion fans in identical
+ * lookups faster than the first can populate the cache.
+ */
+const browseCache = new Map<string, { expiresAt: number; value: unknown }>();
+const inflightBrowse = new Map<string, Promise<unknown>>();
+
+async function cachedBrowse<T>(
+	key: string,
+	ttlMs: number,
+	fresh: boolean,
+	charge: () => void,
+	load: () => Promise<T>,
+): Promise<T> {
+	const now = Date.now();
+	const hit = fresh ? undefined : browseCache.get(key);
+	if (hit && hit.expiresAt > now) return hit.value as T;
+	// Every consumer of a miss pays its own budget BEFORE creating or joining
+	// the shared load: an exhausted user 429s alone (never poisoning the shared
+	// promise for others), and piggybacking on someone else's load is not free.
+	charge();
+	const pending = fresh ? undefined : inflightBrowse.get(key);
+	if (pending) return pending as Promise<T>;
+	const promise = (async () => {
+		const value = await load();
+		if (browseCache.size >= BROWSE_CACHE_MAX_ENTRIES) {
+			for (const [cachedKey, entry] of browseCache) {
+				if (entry.expiresAt <= now) browseCache.delete(cachedKey);
+			}
+			while (browseCache.size >= BROWSE_CACHE_MAX_ENTRIES) {
+				const oldest = browseCache.keys().next().value;
+				if (oldest === undefined) break;
+				browseCache.delete(oldest);
+			}
+		}
+		browseCache.set(key, { expiresAt: Date.now() + ttlMs, value });
+		return value;
+	})();
+	inflightBrowse.set(key, promise);
+	try {
+		return await promise;
+	} finally {
+		// A fresh load may have replaced this entry mid-flight; deleting blindly
+		// would drop the newer promise and re-run its upstream fetch.
+		if (inflightBrowse.get(key) === promise) inflightBrowse.delete(key);
+	}
 }
 
 function requireOrgIntegrations(deps: ApiDeps): OrgIntegrationsService {
@@ -649,39 +927,50 @@ app.openapi(listIntegrationVersions, async (c) => {
 // The probe is a server-side request forger by construction, so beside the
 // probe's own global cap, each USER gets a sliding-window budget — one manager
 // cannot starve every other tenant on the replica.
-const TESTS_PER_USER_PER_MINUTE = 10;
-const TEST_WINDOW_MS = 60_000;
-const recentTestsByUser = new Map<string, number[]>();
-let lastSweptAt = 0;
+const BUDGET_WINDOW_MS = 60_000;
 
 /**
- * Forget users whose window has fully expired, so the map tracks concurrent
- * probers rather than every user the replica has ever served. Driven by request
- * traffic and amortized to once per window — an interval would keep a timer (and
- * this module's state) alive with no request behind it, in tests and on Workers
- * alike.
+ * Per-user sliding-window budget. Expired users are forgotten on request
+ * traffic, amortized to once per window, so the map tracks concurrent users
+ * rather than every user the replica has ever served — an interval would keep
+ * a timer (and this module's state) alive with no request behind it, in tests
+ * and on Workers alike.
  */
-function sweepTestBudgets(now: number): void {
-	if (now - lastSweptAt < TEST_WINDOW_MS) return;
-	lastSweptAt = now;
-	for (const [userId, timestamps] of recentTestsByUser) {
-		if (timestamps.every((t) => now - t >= TEST_WINDOW_MS)) recentTestsByUser.delete(userId);
-	}
+function slidingWindowBudget(perMinute: number, message: string) {
+	const recentByUser = new Map<string, number[]>();
+	let lastSweptAt = 0;
+	return {
+		assert(userId: string): void {
+			const now = Date.now();
+			if (now - lastSweptAt >= BUDGET_WINDOW_MS) {
+				lastSweptAt = now;
+				for (const [user, timestamps] of recentByUser) {
+					if (timestamps.every((t) => now - t >= BUDGET_WINDOW_MS)) recentByUser.delete(user);
+				}
+			}
+			const recent = (recentByUser.get(userId) ?? []).filter((t) => now - t < BUDGET_WINDOW_MS);
+			if (recent.length >= perMinute) throw new ResourceExhaustedError(message);
+			recent.push(now);
+			recentByUser.set(userId, recent);
+		},
+		tracked(): number {
+			return recentByUser.size;
+		},
+	};
 }
 
+const testBudget = slidingWindowBudget(10, 'Too many connection tests — try again in a minute.');
+// Sized against the browse probe's process-wide cap (240/min): one op spends
+// up to 3 probe requests (config handshake + metadata + OAuth token), so a
+// single user can hold at most ~90 of it — never the whole allowance.
+const browseBudget = slidingWindowBudget(30, 'Too many browse requests — try again in a minute.');
+
 function assertTestBudget(userId: string): void {
-	const now = Date.now();
-	sweepTestBudgets(now);
-	const recent = (recentTestsByUser.get(userId) ?? []).filter((t) => now - t < TEST_WINDOW_MS);
-	if (recent.length >= TESTS_PER_USER_PER_MINUTE) {
-		throw new ResourceExhaustedError('Too many connection tests — try again in a minute.');
-	}
-	recent.push(now);
-	recentTestsByUser.set(userId, recent);
+	testBudget.assert(userId);
 }
 
 export function trackedTestBudgets(): number {
-	return recentTestsByUser.size;
+	return testBudget.tracked();
 }
 
 app.openapi(copyIntegration, async (c) => {
@@ -739,6 +1028,89 @@ app.openapi(testIntegration, async (c) => {
 	assertTestBudget(user.id);
 	const body = c.req.valid('json') as TestIntegrationRequest;
 	return c.json({ success: true, data: await integrations.test(pid, body) }, 200);
+});
+
+// Browse is editor+ (not viewer, not manager): an editor can already read all
+// of this data by starting a session, so browse adds zero new reach; a viewer
+// cannot run code, so metadata would be a genuinely new disclosure.
+app.openapi(browseCapability, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { integrations, preview } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	const capability = await integrations.browseCapability(pid, iid);
+	return c.json(
+		{
+			success: true,
+			data: {
+				metadata: capability.metadata,
+				preview: preview && capability.metadata,
+				...(capability.reason !== undefined ? { reason: capability.reason } : {}),
+			},
+		},
+		200,
+	);
+});
+
+app.openapi(browseNamespaces, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { limit, cursor, parent, fresh } = c.req.valid('query');
+	const { integrations } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	const stateToken = await assertBrowsable(integrations, pid, iid);
+	const request = {
+		limit,
+		...(cursor !== undefined ? { cursor } : {}),
+		...(parent !== undefined ? { parent: splitNamespace(parent) } : {}),
+	};
+	const data = await cachedBrowse(
+		JSON.stringify([pid, iid, stateToken, 'namespaces', request]),
+		BROWSE_LIST_TTL_MS,
+		fresh === 'true',
+		() => browseBudget.assert(user.id),
+		() => integrations.browseNamespaces(pid, iid, request),
+	);
+	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(browseTables, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { limit, cursor, namespace, fresh } = c.req.valid('query');
+	const { integrations } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	const stateToken = await assertBrowsable(integrations, pid, iid);
+	const request = { limit, ...(cursor !== undefined ? { cursor } : {}) };
+	const data = await cachedBrowse(
+		JSON.stringify([pid, iid, stateToken, 'tables', namespace, request]),
+		BROWSE_LIST_TTL_MS,
+		fresh === 'true',
+		() => browseBudget.assert(user.id),
+		() => integrations.browseTables(pid, iid, splitNamespace(namespace), request),
+	);
+	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(browseTableSchema, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { namespace, table, fresh } = c.req.valid('query');
+	const { integrations } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	const stateToken = await assertBrowsable(integrations, pid, iid);
+	const data = await cachedBrowse(
+		JSON.stringify([pid, iid, stateToken, 'schema', namespace, table]),
+		BROWSE_SCHEMA_TTL_MS,
+		fresh === 'true',
+		() => browseBudget.assert(user.id),
+		() => integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table),
+	);
+	return c.json({ success: true, data }, 200);
 });
 
 app.openapi(listOrgIntegrations, async (c) => {

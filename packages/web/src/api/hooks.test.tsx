@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
-import { notebookKeys, projectKeys, sessionKeys } from './queryKeys';
+import { browseKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 import {
+	refreshBrowseQueries,
+	resetBrowseRefreshBudgetForTests,
+	useBrowseCapabilityQuery,
+	useBrowseTablesQuery,
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
 	useEditorSessionQuery,
@@ -453,8 +457,26 @@ describe('useUpdateIntegration conflict recovery', () => {
 
 		expect(invalidatedKeys(spy)).toEqual([
 			projectKeys.integrations(PID),
+			[...browseKeys.all, PID],
 			projectKeys.integration(PID, 'int-1'),
 		]);
+	});
+
+	// Browse results embed the config and name (capability, snippets), so a
+	// successful edit must drop them project-wide — a rename would otherwise
+	// keep serving snippets that load the old instance name.
+	it('a successful update also drops the project browse results', async () => {
+		stubFetch(async () => jsonOk({ id: 'int-1', name: 'renamed' }));
+
+		const { result, client } = renderHookWithClient(() => useUpdateIntegration(scope), {
+			toaster: false,
+		});
+		const spy = vi.spyOn(client, 'invalidateQueries');
+		await act(async () => {
+			await result.current.mutateAsync({ id: 'int-1', etag: 'W/"1"', name: 'renamed' });
+		});
+
+		expect(invalidatedKeys(spy)).toContainEqual([...browseKeys.all, PID]);
 	});
 
 	it('leaves the cache alone on non-conflict failures', async () => {
@@ -590,5 +612,121 @@ describe('useEditorSessionQuery', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe('refreshBrowseQueries', () => {
+	beforeEach(() => {
+		resetBrowseRefreshBudgetForTests();
+	});
+
+	it('freshly refetches mounted queries, drops unmounted ones, then clears the flag', async () => {
+		const fetchMock = stubFetch(async () => jsonOk({ items: ['orders'], next_cursor: null }));
+		const { result, client } = renderHookWithClient(
+			() => useBrowseTablesQuery(PID, 'int-1', ['sales']),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.data).toBeDefined());
+
+		// A result whose component has unmounted (a collapsed tree node).
+		client.setQueryData(browseKeys.schema(PID, 'int-1', ['sales'], 'orders'), { columns: [] });
+
+		fetchMock.mockClear();
+		await refreshBrowseQueries(client);
+
+		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(true);
+		expect(
+			client.getQueryState(browseKeys.schema(PID, 'int-1', ['sales'], 'orders')),
+		).toBeUndefined();
+
+		// The bypass flag must not leak past the round.
+		fetchMock.mockClear();
+		await act(async () => {
+			await result.current.refetch();
+		});
+		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(false);
+	});
+});
+
+describe('refreshBrowseQueries budget', () => {
+	beforeEach(() => {
+		resetBrowseRefreshBudgetForTests();
+	});
+
+	it('refetches every retained page of an infinite query, each fresh', async () => {
+		const fetchMock = stubFetch(async (url) => {
+			const cursor = new URL(String(url), 'http://test.local').searchParams.get('cursor');
+			return cursor === null
+				? jsonOk({ items: ['orders'], next_cursor: 'p2' })
+				: jsonOk({ items: ['refunds'], next_cursor: null });
+		});
+		const { result, client } = renderHookWithClient(
+			() => useBrowseTablesQuery(PID, 'int-1', ['sales']),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+		await act(async () => {
+			await result.current.fetchNextPage();
+		});
+		await waitFor(() => expect(result.current.data?.pages).toHaveLength(2));
+
+		fetchMock.mockClear();
+		await refreshBrowseQueries(client);
+
+		// Two pages retained → two page fetches, both bypassing the server cache.
+		expect(urlsOf(fetchMock).filter((url) => url.includes('fresh=true'))).toHaveLength(2);
+	});
+
+	it('the rolling window stops adding fresh at 30 page fetches, then replenishes', async () => {
+		const fetchMock = stubFetch(async () => jsonOk({ items: ['orders'], next_cursor: null }));
+		const { result, client } = renderHookWithClient(
+			() => useBrowseTablesQuery(PID, 'int-1', ['sales']),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.data).toBeDefined());
+
+		for (let i = 0; i < 30; i++) {
+			await refreshBrowseQueries(client);
+		}
+		const freshCount = urlsOf(fetchMock).filter((url) => url.includes('fresh=true')).length;
+		expect(freshCount).toBe(30);
+
+		fetchMock.mockClear();
+		await refreshBrowseQueries(client);
+		expect(fetchMock).toHaveBeenCalled();
+		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(false);
+
+		// ROLLING, not a hard cap: once the window passes, the allowance returns.
+		const realNow = Date.now.bind(Date);
+		vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 61_000);
+		fetchMock.mockClear();
+		await refreshBrowseQueries(client);
+		expect(urlsOf(fetchMock).some((url) => url.includes('fresh=true'))).toBe(true);
+	});
+
+	it('capability lookups ride along without spending fresh budget', async () => {
+		const fetchMock = stubFetch(async (url) =>
+			String(url).includes('/browse/tables')
+				? jsonOk({ items: ['orders'], next_cursor: null })
+				: jsonOk({ metadata: true, preview: false }),
+		);
+		const { result, client } = renderHookWithClient(
+			() => ({
+				capability: useBrowseCapabilityQuery(PID, 'int-1'),
+				tables: useBrowseTablesQuery(PID, 'int-1', ['sales']),
+			}),
+			{ toaster: false },
+		);
+		await waitFor(() => expect(result.current.tables.data).toBeDefined());
+
+		fetchMock.mockClear();
+		// If the capability lookup were charged, only ~15 of these table
+		// refetches could carry fresh before the mirror ran dry.
+		for (let i = 0; i < 30; i++) {
+			await refreshBrowseQueries(client);
+		}
+		const urls = urlsOf(fetchMock);
+		expect(urls.filter((url) => url.includes('fresh=true')).length).toBe(30);
+		expect(urls.some((url) => url.endsWith('/browse'))).toBe(true);
 	});
 });

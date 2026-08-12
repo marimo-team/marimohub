@@ -34,6 +34,7 @@ const postgresKind: IntegrationKind = {
 	},
 	ui_hints: {},
 	supports_test: false,
+	supports_browse: false,
 	requirements: ['sqlalchemy>=2'],
 	secret_sources: { inline: false, references: [] },
 };
@@ -48,6 +49,7 @@ const customEnvKind: IntegrationKind = {
 	json_schema: { type: 'object', properties: {} },
 	ui_hints: {},
 	supports_test: true,
+	supports_browse: false,
 	requirements: [],
 	secret_sources: { inline: false, references: [] },
 };

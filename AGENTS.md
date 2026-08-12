@@ -64,8 +64,11 @@ imports, and a colocated `package-dependencies.test.ts` in each of `core` and
 - **Tests** are colocated `*.test.ts` files using **vitest**, with the
   `MemoryBucket` test double imported from `@marimo-hub/core/testing`. Reusable
   conformance suites live at `@marimo-hub/core/testing/contract` (`bucketContract`,
-  run by every storage adapter) and `@marimo-hub/core/testing/compute-contract`
-  (`computeContract`, run by the hermetic compute adapters). Result-envelope
+  run by every storage adapter), `@marimo-hub/core/testing/compute-contract`
+  (`computeContract`, run by the hermetic compute adapters), and
+  `@marimo-hub/core/testing/browse-contract` (`browseContract`, run by every
+  browsable integration kind against a live catalog — env-gated, served in CI by
+  the `Catalog conformance` workflow). Result-envelope
   assertions (`expectExecResult`, `expectFileResult`) are exported from
   `@marimo-hub/core/testing` — prefer them over hand-rolled `{ success, … }` checks.
 - **API response envelope** is always `{ success: true, data }` or
