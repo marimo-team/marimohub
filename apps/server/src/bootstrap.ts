@@ -178,7 +178,7 @@ export async function bootstrap(
 			// here or the forced termination looks like a clean shutdown.
 			if (result === 'timed-out') {
 				logEvent({ level: 'warn', event: 'drain_timeout', timeoutMs: DRAIN_TIMEOUT_MS });
-				await Promise.allSettled([closeDataBrowser()]);
+				await settleAllWithin([closeDataBrowser()], DRAIN_TIMEOUT_MS);
 			}
 		})();
 		return drainPromise;

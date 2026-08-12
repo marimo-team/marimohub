@@ -89,9 +89,40 @@ describe('SandboxDataPreview', () => {
 		expect(calls.setEnvVars.at(-1)).toMatchObject({ AWS_ACCESS_KEY_ID: 'lazy-temporary' });
 	});
 
-	it('destroys the sandbox when credential resolution fails', async () => {
+	it('does not charge credential resolution against the sandbox startup deadline', async () => {
+		vi.useFakeTimers();
+		try {
+			const { instance } = makeFakeSandbox();
+			instance.exec = async (command) =>
+				command.includes('marimohub-data-preview.py')
+					? { success: true, stdout: '{"columns":["id"],"rows":[[1]]}', stderr: '' }
+					: { success: true, stdout: '', stderr: '' };
+			let resolveCredentials: ((vars: Record<string, string>) => void) | undefined;
+			const credentials = vi.fn(
+				() =>
+					new Promise<Record<string, string>>((resolve) => {
+						resolveCredentials = resolve;
+					}),
+			);
+			const create = vi.fn(() => instance);
+			const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
+			await preview.check();
+
+			const result = preview.preview({ ...program, credentialVars: credentials });
+			await vi.advanceTimersByTimeAsync(options.startupTimeoutMs + 1);
+			expect(create).toHaveBeenCalledOnce();
+
+			resolveCredentials?.({ AWS_ACCESS_KEY_ID: 'slow-temporary' });
+			await expect(result).resolves.toEqual({ columns: ['id'], rows: [[1]] });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('does not create a sandbox when credential resolution fails', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
+		const create = vi.fn(() => instance);
+		const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
 		await preview.check();
 
 		await expect(
@@ -102,7 +133,8 @@ describe('SandboxDataPreview', () => {
 				},
 			}),
 		).rejects.toThrow('WIF exchange failed');
-		expect(calls.destroy).toBe(2);
+		expect(create).toHaveBeenCalledOnce();
+		expect(calls.destroy).toBe(1);
 	});
 
 	it('destroys the sandbox after execution failure', async () => {

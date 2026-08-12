@@ -229,6 +229,23 @@ describe('bootstrap', () => {
 		expect(closePreview).toHaveBeenCalledOnce();
 	});
 
+	it('exits after a bounded wait when forced data-preview cleanup does not finish', async () => {
+		const closePreview = vi.fn(() => new Promise<void>(() => {}));
+		deps.dataBrowser = { preview: true, close: closePreview };
+		const harness = makeHarness(deps, { closeImmediately: false });
+		await bootstrap(BASE_ENV, harness.overrides);
+
+		harness.signals.get('SIGTERM')?.();
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(closePreview).toHaveBeenCalledOnce();
+		expect(harness.exit).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(harness.exit).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(harness.exit).toHaveBeenCalledWith(0);
+	});
+
 	it.each([
 		['starts', 'true', 1],
 		['does not start', undefined, 0],

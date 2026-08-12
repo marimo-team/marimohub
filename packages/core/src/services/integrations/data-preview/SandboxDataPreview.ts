@@ -66,6 +66,7 @@ export class SandboxDataPreview {
 	}
 
 	private async runPreview(program: PythonPreviewProgram): Promise<TablePreview> {
+		const credentialVars = await resolveCredentialVars(program);
 		const sandbox = this.createSandbox();
 		try {
 			await sandboxDeadline(ready(sandbox), this.options.startupTimeoutMs, 'start');
@@ -85,9 +86,7 @@ export class SandboxDataPreview {
 						{ path: SCRIPT_PATH, content: program.script },
 						{ path: REQUEST_PATH, content: JSON.stringify(program.input) },
 					]),
-					resolveCredentialVars(program).then((credentialVars) =>
-						sandbox.setEnvVars({ ...bundle.vars, ...credentialVars }),
-					),
+					sandbox.setEnvVars({ ...bundle.vars, ...credentialVars }),
 				]),
 				this.options.startupTimeoutMs,
 				'prepare',
