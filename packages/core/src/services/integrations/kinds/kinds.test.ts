@@ -1217,6 +1217,32 @@ describe('kind renders (golden)', () => {
 		expect(byKind.custom_env).toEqual([]);
 	});
 
+	it('s3 maps configured and ambient sources without changing credential values', () => {
+		const configured = s3.objectBrowse!.source(s3.configSchema.parse(FIXTURES.s3));
+		expect(configured).toEqual({
+			provider: 's3',
+			configured_bucket: 'lake',
+			region: 'us-east-1',
+			endpoint: 'https://minio.internal:9000',
+			path_style: true,
+			auth: {
+				method: 'static',
+				access_key_id: 'AKIAEXAMPLE',
+				secret_access_key: 's3-secret',
+				session_token: undefined,
+			},
+		});
+		const ambient = s3.objectBrowse!.source(s3.configSchema.parse({ auth: { method: 'ambient' } }));
+		expect(ambient).toEqual({
+			provider: 's3',
+			configured_bucket: undefined,
+			region: undefined,
+			endpoint: undefined,
+			path_style: false,
+			auth: { method: 'ambient' },
+		});
+	});
+
 	it('resolves requirements from the selected driver, storage, and authentication branches', () => {
 		const odbc = sqlserver.configSchema.parse(FIXTURES.sqlserver);
 		const pymssql = sqlserver.configSchema.parse({

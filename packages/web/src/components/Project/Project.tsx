@@ -76,6 +76,7 @@ import {
 	useIntegrationKindsQuery,
 	useIntegrationsQuery,
 } from '@/api/hooks';
+import { supportsTableBrowse } from '@/lib/integrationBrowse';
 import { AppSessionIndicator } from './AppSessionIndicator';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
 import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
@@ -194,7 +195,7 @@ export function Project() {
 	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
 	const { data: projectIntegrations } = useIntegrationsQuery({ pid: pid! }, dataBrowserAvailable);
 	const browsableKinds = new Set(
-		(integrationKinds ?? []).filter((kind) => kind.supports_browse).map((kind) => kind.kind),
+		(integrationKinds ?? []).filter(supportsTableBrowse).map((kind) => kind.kind),
 	);
 	const browsableIntegrations = (projectIntegrations ?? []).filter(
 		(entry) => entry.enabled && !entry.shadowed && browsableKinds.has(entry.kind),

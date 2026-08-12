@@ -1,5 +1,5 @@
 /** Shared env-reading primitives used by every `make*` config module. */
-import { foldCase } from '@marimo-hub/core';
+import { foldCase, Millis } from '@marimo-hub/core';
 import { ConfigError } from './errors';
 import type { ConfigErrorOptions } from './errors';
 
@@ -53,6 +53,32 @@ export function parseIntEnv(env: Env, key: string): number | undefined {
 	if (!Number.isInteger(n))
 		throw new ConfigError(`Invalid ${key}: ${raw} (expected an integer)`, { variable: key });
 	return n;
+}
+
+export function parseSecondsEnv(
+	env: Env,
+	key: string,
+	opts: { dflt: number; allowZero?: boolean },
+): Millis;
+export function parseSecondsEnv(
+	env: Env,
+	key: string,
+	opts?: { dflt?: number; allowZero?: boolean },
+): Millis | undefined;
+export function parseSecondsEnv(
+	env: Env,
+	key: string,
+	opts?: { dflt?: number; allowZero?: boolean },
+): Millis | undefined {
+	const seconds = parseIntEnv(env, key) ?? opts?.dflt;
+	if (seconds === undefined) return undefined;
+	const minimum = opts?.allowZero ? 0 : 1;
+	if (seconds < minimum) {
+		throw new ConfigError(`Invalid ${key}: ${seconds} (expected an integer >= ${minimum})`, {
+			variable: key,
+		});
+	}
+	return Millis.seconds(seconds);
 }
 
 /** Read an env value case-folded (trimmed + lowercased); undefined when unset or blank. */

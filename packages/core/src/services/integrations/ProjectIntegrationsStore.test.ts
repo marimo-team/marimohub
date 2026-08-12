@@ -12,6 +12,7 @@ import { createIntegrationId, createProjectId, createSessionId } from '../../ids
 import type { ProjectId, SessionId } from '../../ids';
 import { paths } from '../../paths';
 import type { Bucket, BucketListOptions } from '../../ports/bucket';
+import type { ObjectBrowseContext, ObjectBrowser } from '../../ports/objectBrowser';
 import { SecretResolutionError } from '../../ports/secrets';
 import type { SecretResolver } from '../../ports/secrets';
 import { ACTOR, MemoryBucket } from '../../testing';
@@ -2081,6 +2082,70 @@ describe('data browsing', () => {
 			snippet: (name, namespace, table) => `load ${name}:${namespace.join('.')}.${table}`,
 		},
 	});
+	const objectKind = defineIntegration({
+		kind: 'objecty',
+		title: 'Objecty',
+		description: 'test kind',
+		category: 'storage',
+		brand: { color: '#000000' },
+		schemaVersion: 1,
+		configSchema: z.object({ token: zSecret() }),
+		render: () => ({}),
+		objectBrowse: {
+			source: (config) => ({
+				provider: 's3',
+				configured_bucket: 'lake',
+				path_style: true,
+				auth: {
+					method: 'static',
+					access_key_id: 'key',
+					secret_access_key: config.token,
+				},
+			}),
+			snippet: (name, bucket, key) => `open ${name}:s3://${bucket}/${key}`,
+		},
+	});
+	const objectBrowser: ObjectBrowser = {
+		capability: () => ({
+			available: true,
+			preview: true,
+			download: true,
+			search: 'bounded-key-name',
+			versions: true,
+			preview_formats: ['csv'],
+		}),
+		listBuckets: async (source) => ({
+			items: [{ name: source.configured_bucket!, configured: true }],
+			next_cursor: null,
+		}),
+		listObjects: async () => ({ items: [], next_cursor: null }),
+		searchObjects: async () => ({ items: [], next_cursor: null, scanned: 0, complete: true }),
+		headObject: async (_source, _context, request) => ({
+			...request,
+			size: 3,
+			checksums: [],
+			metadata: {},
+			tags_available: false,
+		}),
+		listVersions: async () => ({ items: [], next_cursor: null }),
+		previewObject: async () => ({
+			kind: 'text',
+			format: 'text',
+			text: 'abc',
+			truncated: false,
+			bytes_read: 3,
+			total_bytes: 3,
+			warnings: [],
+		}),
+		openObject: async () => ({
+			body: new ReadableStream(),
+			status: 200,
+			content_type: 'text/plain',
+			content_length: 3,
+			total_size: 3,
+			close: () => {},
+		}),
+	};
 
 	let bucket: MemoryBucket;
 	let pid: ProjectId;
@@ -2093,19 +2158,94 @@ describe('data browsing', () => {
 		const registry = new IntegrationRegistry();
 		registry.register(echoKind);
 		registry.register(browsyKind);
-		const options = { bucket, registry, codec, probe: stubProbe, browseProbe: stubProbe };
+		registry.register(objectKind);
+		const options = {
+			bucket,
+			registry,
+			codec,
+			probe: stubProbe,
+			browseProbe: stubProbe,
+			objectBrowsers: { s3: objectBrowser },
+		};
 		store = new ProjectIntegrationsStore(options);
 		orgStore = new OrgIntegrationsStore(options);
 	});
 
 	const createBrowsy = (config: Record<string, unknown> = { token: 'plain-token' }) =>
 		store.create(pid, { kind: 'browsy', name: 'lake', config }, ACTOR);
+	const objectContext = (): ObjectBrowseContext => ({
+		project_id: pid,
+		user_id: ACTOR,
+		user_email: 'actor@example.com',
+		allow_server_ambient: false,
+	});
+
+	it('gates object-only integrations by provider and keeps table operations separate', async () => {
+		const created = await store.create(
+			pid,
+			{ kind: 'objecty', name: 'objects', config: { token: 'provider-secret' } },
+			ACTOR,
+		);
+		expect(await store.browseCapability(pid, created.id, objectContext())).toMatchObject({
+			metadata: false,
+			hub_preview: false,
+			surfaces: { objects: { available: true, preview: true, download: true } },
+		});
+		expect(
+			await store.browseObjectBuckets(pid, created.id, objectContext(), { limit: 10 }),
+		).toEqual({ items: [{ name: 'lake', configured: true }], next_cursor: null });
+		expect(
+			await store.browseObjectDetail(pid, created.id, objectContext(), {
+				bucket: 'lake',
+				key: 'a.csv',
+			}),
+		).toMatchObject({ snippet: 'open objects:s3://lake/a.csv' });
+		await expect(store.browseNamespaces(pid, created.id, { limit: 10 })).rejects.toThrow(
+			/object browsing|does not support browsing/,
+		);
+
+		const registry = new IntegrationRegistry();
+		registry.register(objectKind);
+		const bare = new ProjectIntegrationsStore({ bucket, registry, codec, browseProbe: stubProbe });
+		expect(await bare.browseCapability(pid, created.id, objectContext())).toMatchObject({
+			surfaces: { objects: { available: false, reason: expect.stringContaining('not enabled') } },
+		});
+		await expect(
+			bare.browseObjectBuckets(pid, created.id, objectContext(), { limit: 10 }),
+		).rejects.toThrow(/not enabled/);
+	});
+
+	it('does not expose provider exceptions containing resolved object credentials', async () => {
+		const registry = new IntegrationRegistry();
+		registry.register(objectKind);
+		const leakingBrowser = {
+			...objectBrowser,
+			listBuckets: async () => {
+				throw new Error('provider rejected provider-secret');
+			},
+		};
+		const guarded = new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			objectBrowsers: { s3: leakingBrowser },
+		});
+		const created = await guarded.create(
+			pid,
+			{ kind: 'objecty', name: 'guarded', config: { token: 'provider-secret' } },
+			ACTOR,
+		);
+		await expect(
+			guarded.browseObjectBuckets(pid, created.id, objectContext(), { limit: 10 }),
+		).rejects.toThrow('The object-store request failed.');
+	});
 
 	it('reports the capability verdict without resolving secrets', async () => {
 		const created = await createBrowsy();
 		expect(await store.browseCapability(pid, created.id)).toEqual({
 			metadata: true,
 			hub_preview: false,
+			surfaces: { tables: { available: true, preview: false } },
 			current_version: 1,
 			updated_at: expect.any(String),
 		});
@@ -2118,6 +2258,9 @@ describe('data browsing', () => {
 		expect(await store.browseCapability(pid, closed.id)).toEqual({
 			metadata: false,
 			hub_preview: false,
+			surfaces: {
+				tables: { available: false, preview: false, reason: 'sandbox only' },
+			},
 			current_version: 1,
 			updated_at: expect.any(String),
 			reason: 'sandbox only',
@@ -2203,6 +2346,7 @@ describe('data browsing', () => {
 		expect(await store.browseCapability(pid, orgInstance.id)).toEqual({
 			metadata: true,
 			hub_preview: false,
+			surfaces: { tables: { available: true, preview: false } },
 			current_version: 1,
 			updated_at: expect.any(String),
 		});

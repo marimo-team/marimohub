@@ -5,6 +5,7 @@ import {
 	parseEnumOr,
 	parseIntEnv,
 	parseList,
+	parseSecondsEnv,
 	readFolded,
 	required,
 	requiredVar,
@@ -74,6 +75,18 @@ describe('parseIntEnv', () => {
 
 	it.each(['1.5', 'abc', '10px'])('throws ConfigError on the non-integer %o', (value) => {
 		expect(() => parseIntEnv({ N: value }, 'N')).toThrow(ConfigError);
+	});
+});
+
+describe('parseSecondsEnv', () => {
+	it('uses a default and converts integer seconds to milliseconds', () => {
+		expect(parseSecondsEnv({}, 'TIMEOUT', { dflt: 30 })).toBe(30_000);
+		expect(parseSecondsEnv({ TIMEOUT: '2' }, 'TIMEOUT')).toBe(2_000);
+	});
+
+	it('supports an explicit zero only when allowed', () => {
+		expect(parseSecondsEnv({ TIMEOUT: '0' }, 'TIMEOUT', { allowZero: true })).toBe(0);
+		expect(() => parseSecondsEnv({ TIMEOUT: '0' }, 'TIMEOUT')).toThrow(ConfigError);
 	});
 });
 

@@ -49,7 +49,7 @@ import { makeNotifier } from './notifications';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
-import { parseEnum, parseEnumOr, parseIntEnv, parseList } from './env';
+import { parseEnum, parseEnumOr, parseIntEnv, parseList, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import { checkSandboxHostIsolation } from './hostIsolation';
@@ -164,37 +164,6 @@ const DEFAULT_SESSION_IDLE_TIMEOUT_S = 1800; // 30m no-editors idle reap
 const DEFAULT_SESSION_SNAPSHOT_INTERVAL_S = 120; // 2m periodic-save floor
 const DEFAULT_SESSION_LIFETIME_EXTENSION_S = 1800; // 30m slide while editors connected
 const DEFAULT_SESSION_SWEEP_INTERVAL_S = 60;
-
-/**
- * An integer-seconds env var as `Millis`. `dflt` fills in when unset (omitted:
- * unset stays undefined). Below the floor — 1, or 0 with `allowZero` — throws,
- * so every seconds-valued knob validates and words its error identically.
- */
-function parseSecondsEnv(
-	env: Env,
-	key: string,
-	opts: { dflt: number; allowZero?: boolean },
-): Millis;
-function parseSecondsEnv(
-	env: Env,
-	key: string,
-	opts?: { dflt?: number; allowZero?: boolean },
-): Millis | undefined;
-function parseSecondsEnv(
-	env: Env,
-	key: string,
-	opts?: { dflt?: number; allowZero?: boolean },
-): Millis | undefined {
-	const n = parseIntEnv(env, key) ?? opts?.dflt;
-	if (n === undefined) return undefined;
-	const min = opts?.allowZero ? 0 : 1;
-	if (n < min) {
-		throw new ConfigError(`Invalid ${key}: ${n} (expected an integer >= ${min})`, {
-			variable: key,
-		});
-	}
-	return Millis.seconds(n);
-}
 
 /**
  * Parse the marimohub-owned session lifetime policy: the graceful TTL enforced

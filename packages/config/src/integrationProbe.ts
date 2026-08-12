@@ -27,6 +27,24 @@ export interface GuardedProbeOptions {
 	transport?: ProbeTransport;
 }
 
+export interface PinnedAddress {
+	address: string;
+	family: number;
+}
+
+export type GuardedHostResolver = (hostname: string) => Promise<PinnedAddress[]>;
+
+export function createGuardedHostResolver(
+	options: {
+		allowPrivate?: boolean;
+		timeoutMs?: number;
+	} = {},
+): GuardedHostResolver {
+	const { allowPrivate = false, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+	return (hostname) =>
+		withDeadline(resolveAndValidate(hostname, allowPrivate), Date.now() + timeoutMs);
+}
+
 /**
  * One policy-checked request: the socket may connect ONLY to `pinned` (the
  * validated addresses, in resolution order), while `url`'s hostname still
@@ -37,7 +55,7 @@ export interface ProbeTransportRequest {
 	method: string;
 	headers: Record<string, string>;
 	body?: string;
-	pinned: { address: string; family: number }[];
+	pinned: PinnedAddress[];
 	timeoutMs: number;
 	maxResponseBytes: number;
 }
@@ -166,7 +184,7 @@ const nodeTransport: ProbeTransport = (probeRequest) =>
 	});
 
 /** A DNS lookup function that returns only the pre-validated addresses. */
-function pinnedLookup(pinned: { address: string; family: number }[]): LookupFunction {
+function pinnedLookup(pinned: PinnedAddress[]): LookupFunction {
 	return ((_hostname: string, lookupOptions: unknown, callback: unknown) => {
 		const cb = callback as (err: Error | null, addr: unknown, fam?: number) => void;
 		if (typeof lookupOptions === 'object' && (lookupOptions as { all?: boolean } | null)?.all) {

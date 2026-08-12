@@ -78,6 +78,41 @@ export const s3 = defineIntegration({
 		'auth.session_token': { widget: 'password' },
 		ambient_env: { group: 'Authentication', order: 11, widget: 'toggle', advanced: true },
 	},
+	objectBrowse: {
+		source(config) {
+			return {
+				provider: 's3',
+				configured_bucket: config.bucket,
+				region: config.region,
+				endpoint: config.endpoint_url,
+				path_style: config.path_style,
+				auth:
+					config.auth.method === 'static'
+						? {
+								method: 'static',
+								access_key_id: config.auth.access_key_id,
+								secret_access_key: config.auth.secret_access_key,
+								session_token: config.auth.session_token,
+							}
+						: { method: 'ambient' },
+			};
+		},
+		snippet(instanceName, bucket, key) {
+			const uri = JSON.stringify(`s3://${bucket}/${key}`);
+			const descriptor = JSON.stringify(instanceName);
+			const extension = key.split('.').at(-1)?.toLowerCase();
+			if (extension === 'csv') {
+				return `import polars as pl\n\ndf = pl.read_csv(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
+			}
+			if (extension === 'json' || extension === 'jsonl' || extension === 'ndjson') {
+				return `import polars as pl\n\ndf = pl.read_ndjson(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
+			}
+			if (extension === 'parquet') {
+				return `import polars as pl\n\ndf = pl.read_parquet(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
+			}
+			return `import fsspec\n\nwith fsspec.open(${uri}, "rb", marimohub_integration=${descriptor}) as source:\n    data = source.read()`;
+		},
+	},
 
 	render({ config, instanceName }) {
 		const files: { path: string; content: string }[] = [];

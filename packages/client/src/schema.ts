@@ -7732,6 +7732,7 @@ export interface components {
 			};
 			supports_test: boolean;
 			supports_browse: boolean;
+			browse_surfaces: ('tables' | 'objects')[];
 			secret_sources: {
 				inline: boolean;
 				references: {
@@ -7812,6 +7813,23 @@ export interface components {
 					id: string;
 			  };
 		IntegrationBrowseCapability: {
+			surfaces: {
+				tables?: {
+					available: boolean;
+					preview: boolean;
+					reason?: string;
+				};
+				objects?: {
+					available: boolean;
+					preview: boolean;
+					download: boolean;
+					/** @enum {string} */
+					search: 'bounded-key-name';
+					versions: boolean;
+					preview_formats: string[];
+					reason?: string;
+				};
+			};
 			metadata: boolean;
 			preview: boolean;
 			reason?: string;

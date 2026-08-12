@@ -1,9 +1,11 @@
 import { defaultRegistry, OrgIntegrationsStore, ProjectIntegrationsStore } from '@marimo-hub/core';
 import type { Bucket, DataPreview, IntegrationProbe, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from '@marimo-hub/api';
+import { S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
+import { parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
-import { createGuardedProbe } from './integrationProbe';
+import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 import { makeSecretSources } from './secrets';
 
 /**
@@ -41,6 +43,26 @@ export function makeIntegrations(
 	// Parsed once so both probes interpret the same validated policy — neither
 	// depends on the other having rejected an invalid value first.
 	const policy = probePolicy(env);
+	const objectBrowsers =
+		dataBrowser === 'off'
+			? undefined
+			: (() => {
+					const timeoutMs = parseSecondsEnv(
+						env,
+						'MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS',
+						{ dflt: 30 },
+					);
+					return {
+						s3: new S3ObjectBrowser({
+							mode: dataBrowser,
+							resolveHost: createGuardedHostResolver({ allowPrivate: policy === 'private' }),
+							limits: {
+								metadataTimeoutMs: timeoutMs,
+								previewTimeoutMs: timeoutMs,
+							},
+						}),
+					};
+				})();
 	const options = {
 		bucket,
 		registry: defaultRegistry(),
@@ -48,6 +70,7 @@ export function makeIntegrations(
 		resolvers: secretSources.resolvers,
 		probe: makeProbe(policy),
 		browseProbe: makeBrowseProbe(policy, dataBrowser),
+		...(objectBrowsers ? { objectBrowsers } : {}),
 		metrics,
 	};
 	return {
