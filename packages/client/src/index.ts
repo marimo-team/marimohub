@@ -36,6 +36,11 @@ export type IntegrationBrowseNamespacePage =
 export type IntegrationBrowseTablePage = components['schemas']['IntegrationBrowseTablePage'];
 export type IntegrationTableSchema = components['schemas']['IntegrationTableSchema'];
 export type IntegrationTablePreview = components['schemas']['IntegrationTablePreview'];
+export type IntegrationObjectBucket = components['schemas']['IntegrationObjectBucket'];
+export type IntegrationObjectEntry = components['schemas']['IntegrationObjectEntry'];
+export type IntegrationObjectDetail = components['schemas']['IntegrationObjectDetail'];
+export type IntegrationObjectVersion = components['schemas']['IntegrationObjectVersion'];
+export type IntegrationObjectPreview = components['schemas']['IntegrationObjectPreview'];
 /** A single saved notebook revision (was `Version`). */
 export type NotebookVersion = components['schemas']['NotebookVersion'];
 /** Read-only deployment metadata from `GET /api/v1/version`. */

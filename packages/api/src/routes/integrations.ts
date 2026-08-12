@@ -12,9 +12,11 @@ import {
 	createSlidingWindowBudget,
 } from '@marimo-hub/core';
 import type {
+	AuthUser,
 	IntegrationDetail,
 	IntegrationEntry,
 	DataPreview,
+	Project,
 	ProjectIntegrationsService,
 	OrgIntegrationsService,
 	TestIntegrationRequest,
@@ -45,6 +47,15 @@ import {
 	PaginationQuery,
 } from '../pagination';
 import { appendAudit } from '../log';
+import {
+	acquireDownload,
+	makeObjectBrowseContext,
+	objectContentDisposition,
+	runObjectBrowse,
+	safeObjectContentType,
+	streamObjectBody,
+	validRangeHeader,
+} from './objectBrowse';
 
 const IntegrationIdSchema = z.string().regex(IntegrationId.regex).refine(IntegrationId.is);
 const IntegrationNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
@@ -428,7 +439,7 @@ const BrowseCapabilitySchema = z
 					available: z.boolean(),
 					preview: z.boolean(),
 					download: z.boolean(),
-					search: z.literal('bounded-key-name'),
+					search: z.enum(['none', 'bounded-key-name']),
 					versions: z.boolean(),
 					preview_formats: z.array(z.string()),
 					reason: z.string().optional(),
@@ -597,6 +608,283 @@ const browseTablePreview = createRoute({
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: BrowsePreviewSchema }),
 			'Column names and a bounded row sample',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
+const ObjectBucketValue = z
+	.string()
+	.min(1)
+	.max(255)
+	.openapi({ param: { name: 'bucket', in: 'query' }, example: 'analytics-lake' });
+const ObjectPrefixValue = z
+	.string()
+	.refine((value) => new TextEncoder().encode(value).byteLength <= 1024, {
+		message: "Prefix exceeds S3's 1,024-byte UTF-8 limit.",
+	})
+	.openapi({ param: { name: 'prefix', in: 'query' }, example: 'events/2026/' });
+const ObjectKeyValue = z
+	.string()
+	.min(1)
+	.refine((value) => new TextEncoder().encode(value).byteLength <= 1024, {
+		message: "Key exceeds S3's 1,024-byte UTF-8 limit.",
+	})
+	.openapi({ param: { name: 'key', in: 'query' }, example: 'events/2026/part-001.jsonl' });
+const ObjectVersionIdValue = z.string().min(1).max(2048);
+const ObjectVersionValue = ObjectVersionIdValue.optional().openapi({
+	param: { name: 'version_id', in: 'query' },
+});
+const ObjectPageQuery = z.object({
+	limit: z.coerce
+		.number()
+		.int()
+		.positive()
+		.max(100)
+		.default(50)
+		.openapi({ param: { name: 'limit', in: 'query' }, example: 50 }),
+	cursor: BrowsePageQuery.shape.cursor,
+	fresh: BrowsePageQuery.shape.fresh,
+});
+const ObjectIdentityQuery = z.object({
+	bucket: ObjectBucketValue,
+	key: ObjectKeyValue,
+	version_id: ObjectVersionValue,
+});
+
+const ObjectBucketSchema = z
+	.object({
+		name: z.string(),
+		created_at: z.iso.datetime().optional(),
+		configured: z.boolean(),
+	})
+	.openapi('IntegrationObjectBucket');
+const ObjectEntrySchema = z
+	.object({
+		kind: z.enum(['prefix', 'object']),
+		name: z.string(),
+		key: z.string(),
+		size: z.number().nonnegative().optional(),
+		last_modified: z.iso.datetime().optional(),
+		etag: z.string().optional(),
+		storage_class: z.string().optional(),
+	})
+	.openapi('IntegrationObjectEntry');
+const ObjectDetailSchema = z
+	.object({
+		bucket: z.string(),
+		key: z.string(),
+		version_id: z.string().optional(),
+		size: z.number().nonnegative(),
+		last_modified: z.iso.datetime().optional(),
+		etag: z.string().optional(),
+		storage_class: z.string().optional(),
+		content_type: z.string().optional(),
+		content_encoding: z.string().optional(),
+		cache_control: z.string().optional(),
+		checksums: z.array(z.object({ algorithm: z.string(), value: z.string() })),
+		metadata: z.record(z.string(), z.string()),
+		tags: z.array(z.object({ key: z.string(), value: z.string() })).optional(),
+		tags_available: z.boolean(),
+		snippet: z.string().optional(),
+	})
+	.openapi('IntegrationObjectDetail');
+const ObjectVersionSchema = z
+	.object({
+		bucket: z.string(),
+		key: z.string(),
+		version_id: z.string().optional(),
+		kind: z.enum(['version', 'delete-marker']),
+		is_latest: z.boolean(),
+		last_modified: z.iso.datetime().optional(),
+		size: z.number().nonnegative().optional(),
+		etag: z.string().optional(),
+		storage_class: z.string().optional(),
+		owner: z.object({ id: z.string().optional(), display_name: z.string().optional() }).optional(),
+	})
+	.openapi('IntegrationObjectVersion');
+const TabularObjectPreviewSchema = z.object({
+	kind: z.literal('tabular'),
+	format: z.enum(['table', 'csv', 'tsv', 'json', 'jsonl', 'parquet']),
+	columns: z.array(z.object({ name: z.string(), type: z.string().optional() })),
+	rows: z.array(z.array(z.unknown())),
+	truncated: z.boolean(),
+	bytes_read: z.number().nonnegative().optional(),
+	total_bytes: z.number().nonnegative().optional(),
+	warnings: z.array(z.string()),
+});
+const ObjectPreviewSchema = z
+	.discriminatedUnion('kind', [
+		TabularObjectPreviewSchema,
+		z.object({
+			kind: z.literal('text'),
+			format: z.enum(['text', 'markdown', 'code', 'log', 'json']),
+			text: z.string(),
+			truncated: z.boolean(),
+			bytes_read: z.number().nonnegative(),
+			total_bytes: z.number().nonnegative(),
+			warnings: z.array(z.string()),
+		}),
+		z.object({
+			kind: z.literal('image'),
+			format: z.enum(['png', 'jpeg', 'gif', 'webp']),
+			content_url: z.string(),
+			width: z.number().int().positive().optional(),
+			height: z.number().int().positive().optional(),
+			total_bytes: z.number().nonnegative(),
+			warnings: z.array(z.string()),
+		}),
+		z.object({
+			kind: z.literal('unsupported'),
+			reason: z.string(),
+			detected_type: z.string().optional(),
+			total_bytes: z.number().nonnegative(),
+		}),
+	])
+	.openapi('IntegrationObjectPreview');
+
+const browseObjectBuckets = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse/objects/buckets',
+	tags: ['Integrations'],
+	summary: 'List object-store buckets (editor or above)',
+	request: { params: IntegrationIdParam, query: ObjectPageQuery },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({ items: z.array(ObjectBucketSchema), next_cursor: z.string().nullable() }),
+			}),
+			'Buckets visible through the integration',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
+const browseObjects = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse/objects',
+	tags: ['Integrations'],
+	summary: 'List direct object-store children (editor or above)',
+	request: {
+		params: IntegrationIdParam,
+		query: ObjectPageQuery.extend({
+			bucket: ObjectBucketValue,
+			prefix: ObjectPrefixValue.optional(),
+		}),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({ items: z.array(ObjectEntrySchema), next_cursor: z.string().nullable() }),
+			}),
+			'Direct prefixes and objects',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
+const searchObjects = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse/objects/search',
+	tags: ['Integrations'],
+	summary: 'Run a bounded object-key search (editor or above)',
+	request: {
+		params: IntegrationIdParam,
+		query: ObjectPageQuery.omit({ fresh: true }).extend({
+			bucket: ObjectBucketValue,
+			prefix: ObjectPrefixValue.optional(),
+			query: z.string().trim().min(2).max(1024),
+			formats: z.string().optional(),
+			modified_after: z.iso.datetime().optional(),
+			modified_before: z.iso.datetime().optional(),
+			min_size: z.coerce.number().nonnegative().optional(),
+			max_size: z.coerce.number().nonnegative().optional(),
+		}),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({
+					items: z.array(ObjectEntrySchema),
+					next_cursor: z.string().nullable(),
+					scanned: z.number().int().nonnegative(),
+					complete: z.boolean(),
+				}),
+			}),
+			'Bounded object-key search results',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
+const browseObjectHead = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse/objects/head',
+	tags: ['Integrations'],
+	summary: 'Read object metadata and tags (editor or above)',
+	request: {
+		params: IntegrationIdParam,
+		query: ObjectIdentityQuery,
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: ObjectDetailSchema }),
+			'Object metadata',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
+const browseObjectVersions = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse/objects/versions',
+	tags: ['Integrations'],
+	summary: 'List object versions and delete markers (editor or above)',
+	request: {
+		params: IntegrationIdParam,
+		query: ObjectPageQuery.extend(ObjectIdentityQuery.shape),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({ items: z.array(ObjectVersionSchema), next_cursor: z.string().nullable() }),
+			}),
+			'Object versions and delete markers',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
+const browseObjectPreview = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/integrations/{iid}/browse/objects/preview',
+	tags: ['Integrations'],
+	summary: 'Preview bounded object content (editor or above)',
+	request: {
+		params: IntegrationIdParam,
+		body: jsonBody(
+			z.object({
+				bucket: ObjectBucketValue,
+				key: ObjectKeyValue,
+				version_id: ObjectVersionIdValue.optional(),
+				limit: z.number().int().positive().max(100).default(20),
+			}),
+		),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: ObjectPreviewSchema }),
+			'Bounded object preview',
 		),
 		...commonErrors(),
 		...errorResponses(403, 404, 429),
@@ -778,6 +1066,73 @@ async function assertBrowsable(
 	return `${capability.current_version}:${capability.updated_at}`;
 }
 
+async function resolveObjectAccess(
+	deps: ApiDeps,
+	project: Project,
+	user: AuthUser,
+	integrations: ProjectIntegrationsService,
+	pid: ProjectId,
+	iid: IntegrationId,
+	signal?: AbortSignal,
+) {
+	const wifEligible = Boolean(deps.wif && project.federation?.enabled);
+	const base = await makeObjectBrowseContext(deps, project, user, signal, {
+		integrationId: iid,
+		includeFederated: false,
+		allowServerAmbient: wifEligible
+			? false
+			: deps.dataBrowser?.objectBrowser?.allowServerAmbientCredentials,
+	});
+	const baseCapability = await runObjectBrowse(() => integrations.browseCapability(pid, iid, base));
+	if (baseCapability.surfaces.objects?.available || !wifEligible) {
+		return { context: base, capability: baseCapability };
+	}
+	const federated = await makeObjectBrowseContext(deps, project, user, signal, {
+		integrationId: iid,
+	});
+	return {
+		context: federated,
+		capability: await runObjectBrowse(() => integrations.browseCapability(pid, iid, federated)),
+	};
+}
+
+function requireObjectCapability(
+	capability: Awaited<ReturnType<ProjectIntegrationsService['browseCapability']>>,
+) {
+	const objects = capability.surfaces.objects;
+	if (!objects?.available) {
+		throw new ValidationError(objects?.reason ?? 'This integration cannot browse objects.');
+	}
+	return {
+		stateToken: `${capability.current_version}:${capability.updated_at}`,
+		capability: objects,
+	};
+}
+
+async function resolveAuthorizedObjectAccess(
+	deps: ApiDeps,
+	user: AuthUser,
+	integrations: ProjectIntegrationsService,
+	pid: ProjectId,
+	iid: IntegrationId,
+	signal?: AbortSignal,
+) {
+	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	return resolveObjectAccess(deps, project, user, integrations, pid, iid, signal);
+}
+
+async function requireAuthorizedObjectAccess(
+	deps: ApiDeps,
+	user: AuthUser,
+	integrations: ProjectIntegrationsService,
+	pid: ProjectId,
+	iid: IntegrationId,
+	signal?: AbortSignal,
+) {
+	const access = await resolveAuthorizedObjectAccess(deps, user, integrations, pid, iid, signal);
+	return { context: access.context, ...requireObjectCapability(access.capability) };
+}
+
 /**
  * Per-replica TTL cache over successful browse results, so tree navigation
  * does not re-spend probe budget on every expansion. Bounded: expired entries
@@ -863,11 +1218,7 @@ const app = createApp();
 
 app.openapi(listKinds, (c) => {
 	const integrations = requireIntegrations(c.get('deps'));
-	const data = integrations.listKinds().map((kind) => {
-		const browse_surfaces = kind.browse_surfaces.filter((surface) => surface === 'tables');
-		return { ...kind, browse_surfaces, supports_browse: browse_surfaces.length > 0 };
-	});
-	return c.json({ success: true as const, data }, 200);
+	return c.json({ success: true as const, data: integrations.listKinds() }, 200);
 });
 
 app.openapi(listIntegrations, async (c) => {
@@ -998,7 +1349,14 @@ const testBudget = createSlidingWindowBudget<string>({ limit: 10, windowMs: 60_0
 // Sized against the browse probe's process-wide cap (360/min): a bounded Trino
 // statement spends at most 12 probe requests, so one user can hold at most 240
 // of the shared allowance.
-const browseBudget = createSlidingWindowBudget<string>({ limit: 20, windowMs: 60_000 });
+const createBrowseBudget = () => createSlidingWindowBudget<string>({ limit: 20, windowMs: 60_000 });
+const createObjectSearchBudget = () =>
+	createSlidingWindowBudget<string>({ limit: 5, windowMs: 60_000 });
+const createObjectPreviewBudget = () =>
+	createSlidingWindowBudget<string>({ limit: 10, windowMs: 60_000 });
+let browseBudget = createBrowseBudget();
+let objectSearchBudget = createObjectSearchBudget();
+let objectPreviewBudget = createObjectPreviewBudget();
 
 function assertTestBudget(userId: string): void {
 	if (!testBudget.consume(userId)) {
@@ -1012,8 +1370,28 @@ function assertBrowseBudget(userId: string): void {
 	}
 }
 
+function assertObjectSearchBudget(userId: string): void {
+	if (!objectSearchBudget.consume(userId)) {
+		throw new ResourceExhaustedError('Too many object searches — try again in a minute.');
+	}
+}
+
+function assertObjectPreviewBudget(userId: string): void {
+	if (!objectPreviewBudget.consume(userId)) {
+		throw new ResourceExhaustedError('Too many object previews — try again in a minute.');
+	}
+}
+
 export function trackedTestBudgets(): number {
 	return testBudget.tracked();
+}
+
+export function clearIntegrationBrowseStateForTests(): void {
+	browseBudget = createBrowseBudget();
+	objectSearchBudget = createObjectSearchBudget();
+	objectPreviewBudget = createObjectPreviewBudget();
+	browseCache.clear();
+	inflightBrowse.clear();
 }
 
 app.openapi(copyIntegration, async (c) => {
@@ -1081,8 +1459,14 @@ app.openapi(browseCapability, async (c) => {
 	const user = c.get('user');
 	const { pid, iid } = c.req.valid('param');
 	const { integrations, preview } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
-	const capability = await integrations.browseCapability(pid, iid);
+	const { capability } = await resolveAuthorizedObjectAccess(
+		deps,
+		user,
+		integrations,
+		pid,
+		iid,
+		c.req.raw.signal,
+	);
 	const tablePreview =
 		preview &&
 		capability.metadata &&
@@ -1091,14 +1475,17 @@ app.openapi(browseCapability, async (c) => {
 		{
 			success: true,
 			data: {
-				surfaces: capability.surfaces.tables
-					? {
-							tables: {
-								...capability.surfaces.tables,
-								preview: tablePreview,
-							},
-						}
-					: {},
+				surfaces: {
+					...(capability.surfaces.tables
+						? {
+								tables: {
+									...capability.surfaces.tables,
+									preview: tablePreview,
+								},
+							}
+						: {}),
+					...(capability.surfaces.objects ? { objects: capability.surfaces.objects } : {}),
+				},
 				metadata: capability.metadata,
 				preview: tablePreview,
 				...(capability.reason !== undefined ? { reason: capability.reason } : {}),
@@ -1238,6 +1625,304 @@ app.openapi(browseTablePreview, async (c) => {
 			}),
 	);
 	return c.json({ success: true, data }, 200);
+});
+
+const OBJECT_METADATA_TTL_MS = 15_000;
+
+app.openapi(browseObjectBuckets, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { limit, cursor, fresh } = c.req.valid('query');
+	const { integrations } = requireDataBrowser(deps);
+	const { context, stateToken } = await requireAuthorizedObjectAccess(
+		deps,
+		user,
+		integrations,
+		pid,
+		iid,
+		c.req.raw.signal,
+	);
+	const request = { limit, ...(cursor ? { cursor } : {}) };
+	const data = await cachedBrowse(
+		JSON.stringify([pid, iid, user.id, stateToken, 'object-buckets', request]),
+		OBJECT_METADATA_TTL_MS,
+		fresh === 'true',
+		() => assertBrowseBudget(user.id),
+		() => runObjectBrowse(() => integrations.browseObjectBuckets(pid, iid, context, request)),
+	);
+	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(browseObjects, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { bucket, prefix, limit, cursor, fresh } = c.req.valid('query');
+	const { integrations } = requireDataBrowser(deps);
+	const { context, stateToken } = await requireAuthorizedObjectAccess(
+		deps,
+		user,
+		integrations,
+		pid,
+		iid,
+		c.req.raw.signal,
+	);
+	const request = {
+		bucket,
+		limit,
+		...(prefix !== undefined ? { prefix } : {}),
+		...(cursor ? { cursor } : {}),
+	};
+	const data = await cachedBrowse(
+		JSON.stringify([pid, iid, user.id, stateToken, 'objects', request]),
+		OBJECT_METADATA_TTL_MS,
+		fresh === 'true',
+		() => assertBrowseBudget(user.id),
+		() => runObjectBrowse(() => integrations.browseObjects(pid, iid, context, request)),
+	);
+	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(searchObjects, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const query = c.req.valid('query');
+	if (
+		query.min_size !== undefined &&
+		query.max_size !== undefined &&
+		query.min_size > query.max_size
+	) {
+		throw new ValidationError('min_size cannot exceed max_size.');
+	}
+	if (
+		query.modified_after !== undefined &&
+		query.modified_before !== undefined &&
+		query.modified_after > query.modified_before
+	) {
+		throw new ValidationError('modified_after cannot be later than modified_before.');
+	}
+	const { integrations } = requireDataBrowser(deps);
+	const { capability, context } = await requireAuthorizedObjectAccess(
+		deps,
+		user,
+		integrations,
+		pid,
+		iid,
+		c.req.raw.signal,
+	);
+	if (capability.search !== 'bounded-key-name') {
+		throw new ValidationError('Object search is unavailable.');
+	}
+	assertObjectSearchBudget(user.id);
+	const formats = query.formats
+		?.split(',')
+		.map((value) => value.trim())
+		.filter(Boolean);
+	const data = await runObjectBrowse(() =>
+		integrations.searchObjects(pid, iid, context, {
+			bucket: query.bucket,
+			query: query.query,
+			limit: query.limit,
+			...(query.prefix !== undefined ? { prefix: query.prefix } : {}),
+			...(query.cursor ? { cursor: query.cursor } : {}),
+			...(formats?.length ? { formats } : {}),
+			...(query.modified_after ? { modified_after: query.modified_after } : {}),
+			...(query.modified_before ? { modified_before: query.modified_before } : {}),
+			...(query.min_size !== undefined ? { min_size: query.min_size } : {}),
+			...(query.max_size !== undefined ? { max_size: query.max_size } : {}),
+		}),
+	);
+	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(browseObjectHead, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { bucket, key, version_id } = c.req.valid('query');
+	const { integrations } = requireDataBrowser(deps);
+	const { context } = await requireAuthorizedObjectAccess(
+		deps,
+		user,
+		integrations,
+		pid,
+		iid,
+		c.req.raw.signal,
+	);
+	const request = { bucket, key, ...(version_id ? { version_id } : {}) };
+	assertBrowseBudget(user.id);
+	const data = await runObjectBrowse(() =>
+		integrations.browseObjectDetail(pid, iid, context, request),
+	);
+	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(browseObjectVersions, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { bucket, key, version_id, limit, cursor } = c.req.valid('query');
+	const { integrations } = requireDataBrowser(deps);
+	const { capability, context } = await requireAuthorizedObjectAccess(
+		deps,
+		user,
+		integrations,
+		pid,
+		iid,
+		c.req.raw.signal,
+	);
+	if (!capability.versions) throw new ValidationError('Object versions are unavailable.');
+	assertBrowseBudget(user.id);
+	const data = await runObjectBrowse(() =>
+		integrations.browseObjectVersions(pid, iid, context, {
+			bucket,
+			key,
+			limit,
+			...(version_id ? { version_id } : {}),
+			...(cursor ? { cursor } : {}),
+		}),
+	);
+	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(browseObjectPreview, async (c) => {
+	c.header('Cache-Control', 'no-store');
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const body = c.req.valid('json');
+	const { integrations } = requireDataBrowser(deps);
+	const { capability, context } = await requireAuthorizedObjectAccess(
+		deps,
+		user,
+		integrations,
+		pid,
+		iid,
+		c.req.raw.signal,
+	);
+	if (!capability.preview) throw new NotFoundError('Object preview is not enabled.');
+	assertObjectPreviewBudget(user.id);
+	const contentParams = new URLSearchParams({ bucket: body.bucket, key: body.key, inline: 'true' });
+	if (body.version_id) contentParams.set('version_id', body.version_id);
+	const data = await runObjectBrowse(() =>
+		integrations.browseObjectPreview(pid, iid, context, {
+			...body,
+			content_url: `/api/v1/projects/${pid}/integrations/${iid}/browse/objects/content?${contentParams}`,
+		}),
+	);
+	if (data.kind !== 'image') {
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			'integration.object.preview',
+			() =>
+				deps.services.events.append({
+					event: 'integration.object.preview',
+					actor: user.id,
+					project_id: pid,
+					integration_id: iid,
+					bucket: body.bucket,
+					key: body.key,
+					...(body.version_id ? { version_id: body.version_id } : {}),
+					format: data.kind === 'unsupported' ? data.detected_type : data.format,
+					bytes: 'bytes_read' in data ? data.bytes_read : undefined,
+					request_id: c.get('requestId'),
+				}),
+		);
+	}
+	return c.json({ success: true, data }, 200);
+});
+
+app.get('/projects/:pid/integrations/:iid/browse/objects/content', async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const parsedIds = IntegrationIdParam.safeParse({
+		pid: c.req.param('pid'),
+		iid: c.req.param('iid'),
+	});
+	if (!parsedIds.success) throw new NotFoundError('Integration not found.');
+	const parsed = ObjectIdentityQuery.extend({
+		inline: z.enum(['true', 'false']).default('false'),
+		etag: z.string().max(1024).optional(),
+	}).safeParse(c.req.query());
+	if (!parsed.success) throw new ValidationError('Invalid object content request.');
+	const { pid, iid } = parsedIds.data;
+	const { bucket, key, version_id, inline, etag } = parsed.data;
+	const { integrations } = requireDataBrowser(deps);
+	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	const release = acquireDownload(deps, user.id);
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	c.req.raw.signal.addEventListener('abort', abort, { once: true });
+	const timeout = setTimeout(abort, deps.dataBrowser!.objectBrowser!.downloadTimeoutMs);
+	const finish = () => {
+		clearTimeout(timeout);
+		c.req.raw.signal.removeEventListener('abort', abort);
+	};
+	try {
+		const access = await resolveObjectAccess(
+			deps,
+			project,
+			user,
+			integrations,
+			pid,
+			iid,
+			controller.signal,
+		);
+		const { capability } = requireObjectCapability(access.capability);
+		const context = access.context;
+		if (!capability.download) throw new NotFoundError('Object downloads are not enabled.');
+		const range = validRangeHeader(c.req.header('range'));
+		const object = await runObjectBrowse(() =>
+			integrations.openObject(pid, iid, context, {
+				bucket,
+				key,
+				...(version_id ? { version_id } : {}),
+				...(range ? { range } : {}),
+				...(etag ? { if_match: etag } : {}),
+				inline: inline === 'true',
+			}),
+		);
+		const event = inline === 'true' ? 'integration.object.preview' : 'integration.object.download';
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			event,
+			() =>
+				deps.services.events.append({
+					event,
+					actor: user.id,
+					project_id: pid,
+					integration_id: iid,
+					bucket,
+					key,
+					...(version_id ? { version_id } : {}),
+					...(range ? { range } : {}),
+					bytes: object.content_length,
+					request_id: c.get('requestId'),
+				}),
+		);
+		const headers = new Headers({
+			'Accept-Ranges': 'bytes',
+			'Cache-Control': 'private, no-store',
+			'Content-Disposition': objectContentDisposition(key, inline === 'true'),
+			'Content-Length': String(object.content_length),
+			'Content-Type': safeObjectContentType(object.content_type, inline === 'true'),
+			'X-Content-Type-Options': 'nosniff',
+		});
+		if (inline === 'true') headers.set('Content-Security-Policy', "default-src 'none'; sandbox");
+		if (object.content_range) headers.set('Content-Range', object.content_range);
+		if (object.etag) headers.set('ETag', object.etag);
+		if (object.version_id) headers.set('X-Marimohub-Object-Version', object.version_id);
+		return new Response(streamObjectBody(object, release, finish), {
+			status: object.status,
+			headers,
+		});
+	} catch (error) {
+		finish();
+		release();
+		throw error;
+	}
 });
 
 app.openapi(listOrgIntegrations, async (c) => {

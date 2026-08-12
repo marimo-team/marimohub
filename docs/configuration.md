@@ -513,6 +513,16 @@ Integration management and session injection are enabled. Project entries use
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER` | Maximum number of preview sandboxes for one user. | — | `1` | — |
 | `MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS` | Maximum time to start and prepare a preview sandbox. | — | `120` | — |
 | `MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS` | Maximum time for the fixed PyIceberg scan. | — | `30` | — |
+| `MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS` | Allow editors to browse ambient-auth S3 integrations with the control-plane AWS identity when compatible project WIF credentials are unavailable. Keep this off unless that identity is intentionally available to project editors. | — | `false` | — |
+| `MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS` | Maximum time for one object listing or metadata operation, including DNS resolution. | — | `30` | — |
+| `MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS` | Maximum time for one bounded object preview, including DNS resolution and ranged reads. | — | `30` | — |
+| `MARIMOHUB_OBJECT_BROWSER_PREVIEW_MAX_BYTES` | Maximum source bytes read for CSV, JSON, JSON Lines, and text previews. | — | `8388608` | — |
+| `MARIMOHUB_OBJECT_BROWSER_INLINE_IMAGE_MAX_BYTES` | Maximum size of a magic-byte-validated raster image shown inline. | — | `10485760` | — |
+| `MARIMOHUB_OBJECT_BROWSER_PARQUET_MAX_RANGED_BYTES` | Maximum total bytes fetched across ranged requests for one Parquet preview. | — | `33554432` | — |
+| `MARIMOHUB_OBJECT_BROWSER_SEARCH_MAX_KEYS` | Maximum keys scanned by one bounded object-name search request. | — | `5000` | — |
+| `MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS` | Maximum object content streams held by one server process. | — | `16` | — |
+| `MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS_PER_USER` | Maximum object content streams one user can hold on one server process. | — | `2` | — |
+| `MARIMOHUB_OBJECT_BROWSER_DOWNLOAD_TIMEOUT_SECONDS` | Maximum lifetime of one proxied object content stream. | — | `3600` | — |
 
 ### Off
 

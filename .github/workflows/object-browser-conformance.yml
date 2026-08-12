@@ -1,0 +1,45 @@
+name: Object browser conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  minio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 0.1.24
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 19000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:19000/minio/health/live && break
+            sleep 1
+            [ "$i" = 30 ] && exit 1
+          done
+      - name: Run object-browser contract
+        env:
+          MARIMOHUB_TEST_S3_ENDPOINT: http://127.0.0.1:19000
+          MARIMOHUB_TEST_S3_ACCESS_KEY: minioadmin
+          MARIMOHUB_TEST_S3_SECRET_KEY: minioadmin
+        run: vp test packages/object-browser-s3/src/minio.live.test.ts

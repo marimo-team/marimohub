@@ -30,17 +30,18 @@ See the two-phase policy in `development_docs/migrations.md`.
 Integration configuration is versioned. Each save creates an immutable
 revision. Each session records the revisions that it uses.
 
-## Browse catalog metadata
+## Browse data
 
 Set `MARIMOHUB_DATA_BROWSER=metadata` to enable the Data page and browse API.
-Set it to `full` to also enable row previews. Integrations must be enabled, and
+Set it to `full` to also enable row and object previews and object downloads. Integrations must be enabled, and
 the integration probe must not be `off`.
 
 Editors and higher roles can use the Data page at `/projects/{pid}/data`.
 They do not need to start a session. The URL stores the selected integration,
-namespace, table, and filter, so a link restores the same view.
+surface, table or object identity, and search scope, so a link restores the same view.
 
-The Data page lists namespaces, tables, and table schemas. The schema view
+The Data page lists namespaces, tables, and table schemas for catalog integrations. S3 integrations
+retain bucket, prefix, and object semantics; they are not presented as tables. The schema view
 shows columns, partition fields, and available snapshot statistics. It also
 provides notebook code that loads the table through the integration. The
 **Open in notebook** action creates a notebook in the project with that code
@@ -50,6 +51,73 @@ notebook's dependencies before you run it.
 Browsing is read-only. Iceberg REST and ClickHouse use HTTP GET requests. Trino
 submits hub-generated `SHOW`, `DESCRIBE`, and bounded `SELECT` statements. All
 requests use the egress policy from `MARIMOHUB_INTEGRATIONS_PROBE`.
+
+### S3 object browsing
+
+S3 object browsing supports configured-bucket or accessible-bucket navigation, direct prefix
+listing, bounded key-name search, object metadata and tags, read-only version history, explicit
+previews, notebook snippets, and streamed downloads. It never uploads, deletes, restores, renames,
+or edits upstream objects or metadata.
+
+When an S3 integration sets `bucket`, the browser exposes only that bucket and does not call
+`ListBuckets`. This is a user-interface scope, not an IAM restriction: notebook code still has every
+permission granted to the integration credentials. Without `bucket`, the browser calls
+`ListBuckets` and shows the accessible result.
+
+Metadata mode prevents the hub from returning object bodies; full mode permits explicit previews
+and downloads. S3 authorizes `HeadObject` with the same read actions as content, so IAM cannot grant
+metadata-only HEAD access separately. Grant only the actions needed by the selected features:
+
+- `s3:ListAllMyBuckets` only when the integration has no configured bucket;
+- `s3:ListBucket` for prefixes and bounded key-name search;
+- `s3:GetObject` for current-object metadata and, in full mode, previews and downloads;
+- `s3:GetObjectVersion` for selected-version metadata and, in full mode, previews and downloads;
+- `s3:ListBucketVersions` for version history;
+- `s3:GetObjectTagging` when tags should appear. A denied tag request does not hide other metadata.
+
+Substring search is a bounded recursive S3 listing, not a persistent index or content search. The
+Data page reports how many keys were scanned and whether more keys may exist. Continue the search
+to scan the next bounded segment. Prefix navigation uses S3's native `Prefix` operation and is less
+expensive.
+
+Selecting an object performs metadata reads only. Content is fetched after **Load preview** or
+**Download**. CSV, TSV, JSON, JSON Lines, Parquet, UTF-8 text/code/Markdown/logs, and magic-byte-
+validated PNG, JPEG, GIF, and WebP files can be previewed within configured byte, row, column,
+request, result, and deadline limits. HTML, SVG, PDF, archives, executables, unknown binary files,
+and oversized images are never rendered inline. Truncated previews say so.
+
+Downloads stay behind hub authorization and stream from S3 through the server. They support one
+HTTP byte range, preserve ETag/version preconditions, use safe attachment filenames, and propagate
+client cancellation upstream. The hub does not return S3 credentials or presigned URLs.
+
+The raw content endpoint is
+`GET /api/v1/projects/{pid}/integrations/{iid}/browse/objects/content`. It requires `bucket` and
+`key`; `version_id`, `etag`, and `inline=true` are optional. Editors and higher roles can send one
+`Range: bytes=…` header and receive `200` or `206`. Pre-stream failures use the standard JSON error
+envelope, including `403`, `404`, `412`, `416`, `429`, and `503` responses.
+
+Static integration credentials are used only for that integration. Ambient-auth integrations use
+short-lived project WIF credentials when the project enables a compatible target. The WIF storage
+endpoint and integration endpoint must be the same canonical origin. Otherwise, ambient object
+browsing remains unavailable unless the operator explicitly sets
+`MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS=true`. That setting grants project
+editors access through the control-plane AWS identity and should be enabled only intentionally.
+
+Custom endpoints use the configured guarded/private integration egress policy. `guarded` rejects
+private, loopback, link-local, metadata, and other reserved targets. Use `private` only when an
+on-premises S3-compatible endpoint must be reachable. Every final SDK hostname, including generated
+virtual-host names and retries, is resolved, checked, and pinned before transport.
+
+Successful object previews and opened downloads create `integration.object.preview` and
+`integration.object.download` audit events. Routine listing, search, and metadata navigation do not.
+Object content, credentials, signed headers, and provider error text are not stored in browse
+caches or audit events.
+
+S3-compatible implementations can omit operations such as bucket discovery, tags, checksums, or
+versioning. Configure a bucket when `ListBuckets` is unavailable; the Data page reports optional
+features that the target or credentials do not support. For a private endpoint that times out,
+verify `MARIMOHUB_INTEGRATIONS_PROBE=private`, DNS visibility from the server, TLS trust, and the
+object-browser timeout/limit settings in [Configuration](./configuration.md).
 
 The hub supports Iceberg REST Catalog, Trino, and ClickHouse. Trino uses the
 catalog → schema → table hierarchy. ClickHouse uses database → table.
@@ -98,8 +166,9 @@ Each request checks whether the integration is available before it reads the
 cache. Disabling or shadowing an integration therefore takes effect immediately.
 A new configuration version uses a new cache entry.
 
-Each replica can cache namespace and table lists for one minute. It can cache
-schemas for five minutes. Browse requests have a per-user rate limit. The
+Each replica can cache namespace and table lists for one minute and S3 bucket/object lists for 15 seconds.
+It can cache table schemas for five minutes. Searches, previews, tags, versions, content, failures,
+and authorization denials are not cached. Browse requests have per-user rate limits. The
 **Refresh** action bypasses the response cache, but it still uses the rate
 limit.
 

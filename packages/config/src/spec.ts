@@ -1486,6 +1486,70 @@ See the [secret-source guide](./integration-secrets.md).`,
 						description: 'Maximum time for the fixed PyIceberg scan.',
 						default: '30',
 					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS',
+						name: 'Allow server credentials for object browsing',
+						description:
+							'Allow editors to browse ambient-auth S3 integrations with the control-plane AWS identity when compatible project WIF credentials are unavailable. Keep this off unless that identity is intentionally available to project editors.',
+						default: 'false',
+					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS',
+						name: 'Object-metadata timeout',
+						description:
+							'Maximum time for one object listing or metadata operation, including DNS resolution.',
+						default: '30',
+					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS',
+						name: 'Object-preview timeout',
+						description:
+							'Maximum time for one bounded object preview, including DNS resolution and ranged reads.',
+						default: '30',
+					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_PREVIEW_MAX_BYTES',
+						name: 'Object-preview source byte limit',
+						description: 'Maximum source bytes read for CSV, JSON, JSON Lines, and text previews.',
+						default: String(8 * 1024 * 1024),
+					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_INLINE_IMAGE_MAX_BYTES',
+						name: 'Inline-image byte limit',
+						description: 'Maximum size of a magic-byte-validated raster image shown inline.',
+						default: String(10 * 1024 * 1024),
+					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_PARQUET_MAX_RANGED_BYTES',
+						name: 'Parquet ranged-read byte limit',
+						description:
+							'Maximum total bytes fetched across ranged requests for one Parquet preview.',
+						default: String(32 * 1024 * 1024),
+					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_SEARCH_MAX_KEYS',
+						name: 'Object-search scan limit',
+						description: 'Maximum keys scanned by one bounded object-name search request.',
+						default: '5000',
+					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS',
+						name: 'Max concurrent object downloads',
+						description: 'Maximum object content streams held by one server process.',
+						default: '16',
+					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS_PER_USER',
+						name: 'Max object downloads per user',
+						description: 'Maximum object content streams one user can hold on one server process.',
+						default: '2',
+					},
+					{
+						id: 'MARIMOHUB_OBJECT_BROWSER_DOWNLOAD_TIMEOUT_SECONDS',
+						name: 'Object-download timeout',
+						description: 'Maximum lifetime of one proxied object content stream.',
+						default: '3600',
+					},
 				],
 			},
 			{

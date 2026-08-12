@@ -209,7 +209,7 @@ export interface ObjectBrowseCapability {
 	available: boolean;
 	preview: boolean;
 	download: boolean;
-	search: 'bounded-key-name';
+	search: 'none' | 'bounded-key-name';
 	versions: boolean;
 	preview_formats: string[];
 	reason?: string;

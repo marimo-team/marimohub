@@ -33,6 +33,36 @@ export const browseKeys = {
 		[...browseKeys.all, projectId, integrationId, 'tables', namespace] as const,
 	schema: (projectId: string, integrationId: string, namespace: readonly string[], table: string) =>
 		[...browseKeys.all, projectId, integrationId, 'schema', namespace, table] as const,
+	objectBuckets: (projectId: string, integrationId: string) =>
+		[...browseKeys.all, projectId, integrationId, 'object-buckets'] as const,
+	objects: (projectId: string, integrationId: string, bucket: string, prefix: string) =>
+		[...browseKeys.all, projectId, integrationId, 'objects', bucket, prefix] as const,
+	objectSearch: (
+		projectId: string,
+		integrationId: string,
+		bucket: string,
+		prefix: string,
+		query: string,
+	) =>
+		[...browseKeys.all, projectId, integrationId, 'object-search', bucket, prefix, query] as const,
+	objectDetail: (
+		projectId: string,
+		integrationId: string,
+		bucket: string,
+		key: string,
+		versionId?: string,
+	) =>
+		[
+			...browseKeys.all,
+			projectId,
+			integrationId,
+			'object-detail',
+			bucket,
+			key,
+			versionId ?? null,
+		] as const,
+	objectVersions: (projectId: string, integrationId: string, bucket: string, key: string) =>
+		[...browseKeys.all, projectId, integrationId, 'object-versions', bucket, key] as const,
 };
 
 export const integrationKeys = {

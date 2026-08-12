@@ -819,6 +819,7 @@ describe('capabilities and metadata-only mode', () => {
 			available: false,
 			preview: false,
 			download: false,
+			search: 'none',
 			versions: false,
 			reason: expect.stringContaining('not enabled'),
 		});

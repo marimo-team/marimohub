@@ -54,6 +54,15 @@ function ok(data: unknown) {
 	});
 }
 
+function failed(message: string) {
+	return new Response(
+		JSON.stringify({ success: false, error: { code: 'SERVICE_UNAVAILABLE', message } }),
+		{ status: 503, headers: { 'Content-Type': 'application/json' } },
+	);
+}
+
+type ObjectFailure = 'buckets' | 'objects' | 'search' | 'detail' | 'versions' | 'preview';
+
 function makeFetch({
 	available = true,
 	pagedTables = false,
@@ -62,6 +71,27 @@ function makeFetch({
 	namespacesDown = false,
 	kind = icebergKind,
 	entry = lakeEntry,
+	objectSearch = 'bounded-key-name',
+	objectBuckets = [{ name: 'lake', configured: true }],
+	objectEntries = [
+		{ kind: 'prefix', name: 'daily/', key: 'daily/' },
+		{ kind: 'object', name: 'events.jsonl', key: 'events.jsonl', size: 12 },
+	],
+	objectEntriesSecond = [],
+	objectNextCursor = null,
+	objectDetail = {},
+	objectVersions = [],
+	notebookFailure,
+	objectPreview = {
+		kind: 'text',
+		format: 'text',
+		text: 'hello object',
+		truncated: false,
+		bytes_read: 12,
+		total_bytes: 12,
+		warnings: [],
+	},
+	objectFailures = {},
 }: {
 	available?: boolean;
 	pagedTables?: boolean;
@@ -70,13 +100,28 @@ function makeFetch({
 	namespacesDown?: boolean;
 	kind?: IntegrationKind;
 	entry?: IntegrationEntry;
+	objectSearch?: 'none' | 'bounded-key-name';
+	objectBuckets?: { name: string; configured: boolean }[];
+	objectEntries?: unknown[];
+	objectEntriesSecond?: unknown[];
+	objectNextCursor?: string | null;
+	objectDetail?: Record<string, unknown>;
+	objectVersions?: unknown[];
+	notebookFailure?: string;
+	objectPreview?: unknown;
+	objectFailures?: Partial<Record<ObjectFailure, string>>;
 } = {}) {
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? 'GET';
 		if (method === 'POST' && url.includes(`/api/v1/projects/${PID}/notebooks`)) {
+			if (notebookFailure) return failed(notebookFailure);
 			const body = JSON.parse(String(init?.body)) as { title: string };
 			return ok({ id: 'nb_1', project_id: PID, title: body.title });
+		}
+		if (method === 'POST' && url.endsWith('/browse/objects/preview')) {
+			if (objectFailures.preview) return failed(objectFailures.preview);
+			return ok(objectPreview);
 		}
 		if (method === 'POST' && url.endsWith('/browse/preview')) {
 			return ok({ columns: ['id', 'status'], rows: [[1, 'paid']] });
@@ -88,6 +133,52 @@ function makeFetch({
 		}
 		if (url.includes('/api/v1/integrations/kinds')) {
 			return ok([kind]);
+		}
+		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/objects/buckets`)) {
+			if (objectFailures.buckets) return failed(objectFailures.buckets);
+			return ok({ items: objectBuckets, next_cursor: null });
+		}
+		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/objects/head`)) {
+			if (objectFailures.detail) return failed(objectFailures.detail);
+			return ok({
+				bucket: 'lake',
+				key: target.searchParams.get('key'),
+				size: 12,
+				etag: '"etag"',
+				content_type: 'text/plain',
+				checksums: [],
+				metadata: {},
+				tags_available: false,
+				snippet: 'import polars as pl',
+				...objectDetail,
+			});
+		}
+		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/objects/versions`)) {
+			if (objectFailures.versions) return failed(objectFailures.versions);
+			return ok({ items: objectVersions, next_cursor: null });
+		}
+		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/objects/search`)) {
+			if (objectFailures.search) return failed(objectFailures.search);
+			const continuing = target.searchParams.has('cursor');
+			return ok({
+				items: [
+					{
+						kind: 'object',
+						name: continuing ? 'needle-second.jsonl' : 'needle.jsonl',
+						key: continuing ? 'needle-second.jsonl' : 'needle.jsonl',
+						size: 12,
+					},
+				],
+				next_cursor: continuing ? null : 'continue',
+				scanned: 5000,
+				complete: continuing,
+			});
+		}
+		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/objects`)) {
+			if (objectFailures.objects) return failed(objectFailures.objects);
+			return target.searchParams.has('cursor')
+				? ok({ items: objectEntriesSecond, next_cursor: null })
+				: ok({ items: objectEntries, next_cursor: objectNextCursor });
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/namespaces`)) {
 			if (namespacesDown) {
@@ -128,6 +219,22 @@ function makeFetch({
 			});
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse`)) {
+			if (kind.browse_surfaces.includes('objects')) {
+				return ok({
+					metadata: false,
+					preview: false,
+					surfaces: {
+						objects: {
+							available: true,
+							preview: true,
+							download: true,
+							search: objectSearch,
+							versions: true,
+							preview_formats: ['text'],
+						},
+					},
+				});
+			}
 			return ok({
 				...capability,
 				surfaces: {
@@ -374,13 +481,414 @@ describe('DataBrowserPage', () => {
 		expect(await screen.findByText('Data browsing is not available')).toBeInTheDocument();
 	});
 
-	it('does not advertise object-only integrations through the table browser', async () => {
+	it('dispatches object-only integrations to the object browser', async () => {
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}`, {
 			kind: objectKind,
 			entry: { ...lakeEntry, kind: 's3' },
 		});
-		expect(await screen.findByText('Nothing to browse')).toBeInTheDocument();
+		expect(await screen.findByText('events.jsonl')).toBeInTheDocument();
+		expect(screen.getByText('daily/')).toBeInTheDocument();
 		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('/browse/namespaces'))).toBe(
+			false,
+		);
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('/browse/objects'))).toBe(
+			true,
+		);
+	});
+
+	it('selects among discovered buckets and reports empty or failed discovery', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectBuckets: [
+				{ name: 'lake', configured: false },
+				{ name: 'archive', configured: false },
+			],
+		});
+		await user.click(await screen.findByRole('button', { name: 'archive' }));
+		await waitFor(() => {
+			const listCall = fetchImpl.mock.calls.find(([url]) => {
+				const target = new URL(String(url), 'http://test');
+				return target.pathname.endsWith('/browse/objects') && target.searchParams.has('bucket');
+			});
+			expect(new URL(String(listCall?.[0]), 'http://test').searchParams.get('bucket')).toBe(
+				'archive',
+			);
+		});
+	});
+
+	it('explains when credentials discover no buckets', async () => {
+		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectBuckets: [],
+		});
+		expect(await screen.findByText('No buckets available')).toBeInTheDocument();
+		expect(
+			screen.getByText('The integration credentials did not return an accessible bucket.'),
+		).toBeInTheDocument();
+	});
+
+	it('shows actionable bucket and object-list failures', async () => {
+		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectFailures: { buckets: 'Bucket discovery failed. Check S3 permissions.' },
+		});
+		expect(
+			await screen.findByText('Bucket discovery failed. Check S3 permissions.'),
+		).toBeInTheDocument();
+
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectFailures: { objects: 'Object listing failed. Check ListBucket access.' },
+		});
+		expect(
+			await screen.findByText('Object listing failed. Check ListBucket access.'),
+		).toBeInTheDocument();
+	});
+
+	it('round-trips object selection in the URL and loads previews only on request', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(
+			`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`,
+			{ kind: objectKind, entry: { ...lakeEntry, kind: 's3' } },
+		);
+		expect(await screen.findByText('s3://lake/events.jsonl')).toBeInTheDocument();
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/objects/preview'))).toBe(
+			false,
+		);
+		await user.click(screen.getByRole('tab', { name: 'Preview' }));
+		await user.click(screen.getByRole('button', { name: 'Load preview' }));
+		expect(await screen.findByText('hello object')).toBeInTheDocument();
+	});
+
+	it('preserves URL-sensitive Unicode keys in detail and download links', async () => {
+		const key = 'reports/日本語 ?#%/events.jsonl';
+		setup(
+			`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=${encodeURIComponent(key)}`,
+			{ kind: objectKind, entry: { ...lakeEntry, kind: 's3' } },
+		);
+
+		expect(await screen.findByText(`s3://lake/${key}`)).toBeInTheDocument();
+		const download = screen.getByRole('link', { name: 'Download' });
+		const target = new URL(download.getAttribute('href')!, 'http://test');
+		expect(target.searchParams.get('bucket')).toBe('lake');
+		expect(target.searchParams.get('key')).toBe(key);
+	});
+
+	it('renders checksums and tags and selects only concrete object versions', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectDetail: {
+				checksums: [{ algorithm: 'SHA256', value: 'abc123' }],
+				metadata: { owner: 'analytics' },
+				tags_available: true,
+				tags: [{ key: 'environment', value: 'production' }],
+				last_modified: '2026-08-12T12:00:00Z',
+			},
+			objectVersions: [
+				{
+					bucket: 'lake',
+					key: 'events.jsonl',
+					version_id: 'v1',
+					kind: 'version',
+					is_latest: false,
+					last_modified: '2026-08-11T12:00:00Z',
+				},
+				{
+					bucket: 'lake',
+					key: 'events.jsonl',
+					version_id: 'deleted',
+					kind: 'delete-marker',
+					is_latest: true,
+				},
+			],
+		});
+
+		expect(await screen.findByText('abc123')).toBeInTheDocument();
+		expect(screen.getByText('analytics')).toBeInTheDocument();
+		expect(screen.getByText('production')).toBeInTheDocument();
+		await user.click(screen.getByRole('tab', { name: 'Versions' }));
+		expect(screen.getByRole('button', { name: /Delete marker/ })).toBeDisabled();
+		await user.click(screen.getByRole('button', { name: /v1/ }));
+		await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('version=v1'));
+	});
+
+	it.each([
+		[
+			'tabular',
+			{
+				kind: 'tabular',
+				format: 'csv',
+				columns: [{ name: 'name' }],
+				rows: [['first'], ['first']],
+				truncated: true,
+				warnings: ['A malformed final row was omitted.'],
+			},
+			'A malformed final row was omitted.',
+		],
+		[
+			'image',
+			{
+				kind: 'image',
+				format: 'png',
+				content_url: '/api/v1/image-content',
+				width: 32,
+				height: 16,
+				total_bytes: 100,
+				warnings: [],
+			},
+			'Object preview',
+		],
+		[
+			'unsupported',
+			{
+				kind: 'unsupported',
+				reason: 'Archives cannot be previewed safely.',
+				total_bytes: 100,
+			},
+			'Archives cannot be previewed safely.',
+		],
+	] as const)(
+		'renders an explicit %s preview and offers reload',
+		async (_kind, preview, expected) => {
+			const user = userEvent.setup();
+			setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
+				kind: objectKind,
+				entry: { ...lakeEntry, kind: 's3' },
+				objectPreview: preview,
+			});
+			await user.click(await screen.findByRole('tab', { name: 'Preview' }));
+			await user.click(screen.getByRole('button', { name: 'Load preview' }));
+			if (_kind === 'image')
+				expect(await screen.findByRole('img', { name: expected })).toBeInTheDocument();
+			else expect(await screen.findByText(expected)).toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Reload preview' })).toBeInTheDocument();
+		},
+	);
+
+	it('hides server search when the adapter does not provide it', async () => {
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&q=ignored`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectSearch: 'none',
+		});
+
+		expect(await screen.findByText('events.jsonl')).toBeInTheDocument();
+		expect(screen.queryByRole('textbox', { name: 'Search object keys' })).not.toBeInTheDocument();
+	});
+
+	it('submits bounded object search explicitly and reports partial progress', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+		});
+		await screen.findByText('events.jsonl');
+		const input = screen.getByRole('textbox', { name: 'Search object keys' });
+		await user.type(input, 'needle');
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('/objects/search'))).toBe(
+			false,
+		);
+		await user.click(screen.getByRole('button', { name: 'Search object keys' }));
+		expect(await screen.findByText('needle.jsonl')).toBeInTheDocument();
+		expect(screen.getByText(/matches after scanning/)).toHaveTextContent(
+			'1 matches after scanning 5000 keys; more may exist.',
+		);
+		await user.click(screen.getByRole('button', { name: 'Continue search' }));
+		await waitFor(() =>
+			expect(
+				fetchImpl.mock.calls.some(
+					([url]) =>
+						String(url).includes('/objects/search') && String(url).includes('cursor=continue'),
+				),
+			).toBe(true),
+		);
+	});
+
+	it('pages object listings through the reachable fallback button', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectNextCursor: 'p2',
+			objectEntriesSecond: [{ kind: 'object', name: 'second.csv', key: 'second.csv', size: 24 }],
+		});
+
+		await user.click(await screen.findByRole('button', { name: 'Load more' }));
+		expect(await screen.findByText('second.csv')).toBeInTheDocument();
+	});
+
+	it('multi-selects object URIs and clears selection while navigating prefixes', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectEntries: [
+				{ kind: 'prefix', name: 'daily/', key: 'daily/' },
+				{ kind: 'object', name: 'first.csv', key: 'first.csv', size: 12 },
+				{ kind: 'object', name: 'second.csv', key: 'second.csv', size: 24 },
+			],
+		});
+
+		await user.click((await screen.findByText('first.csv')).closest('button')!);
+		await user.keyboard('{Control>}');
+		await user.click(screen.getByText('second.csv').closest('button')!);
+		await user.keyboard('{/Control}');
+		const copy = screen.getByRole('button', { name: 'Copy 2 selected URIs' });
+		await user.click(copy);
+		expect(await navigator.clipboard.readText()).toBe('s3://lake/first.csv\ns3://lake/second.csv');
+
+		await user.click(screen.getByText('daily/').closest('button')!);
+		expect(screen.queryByRole('button', { name: /Copy .* selected/ })).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveTextContent('prefix=daily%2F'),
+		);
+		const row = await screen.findByText('first.csv');
+		row.closest('button')!.focus();
+		await user.keyboard('{Backspace}');
+		await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('prefix='));
+	});
+
+	it('applies loaded type, size, date, and sort controls without searching', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectEntries: [
+				{
+					kind: 'object',
+					name: 'old.csv',
+					key: 'old.csv',
+					size: 100,
+					last_modified: '2026-08-10T12:00:00Z',
+				},
+				{
+					kind: 'object',
+					name: 'new.py',
+					key: 'new.py',
+					size: 2 * 1024 * 1024,
+					last_modified: '2026-08-12T12:00:00Z',
+				},
+				{ kind: 'object', name: 'large.png', key: 'large.png', size: 200 * 1024 * 1024 },
+			],
+		});
+		await screen.findByText('new.py');
+
+		await user.selectOptions(screen.getByLabelText('Type'), 'text');
+		expect(screen.getByText('new.py')).toBeInTheDocument();
+		expect(screen.queryByText('old.csv')).not.toBeInTheDocument();
+		await user.selectOptions(screen.getByLabelText('Type'), 'all');
+		await user.selectOptions(screen.getByLabelText('Size'), 'large');
+		expect(screen.getByText('large.png')).toBeInTheDocument();
+		expect(screen.queryByText('new.py')).not.toBeInTheDocument();
+		await user.selectOptions(screen.getByLabelText('Size'), 'all');
+		await user.type(screen.getByLabelText('Modified after'), '2026-08-11');
+		expect(screen.getByText('new.py')).toBeInTheDocument();
+		expect(screen.queryByText('old.csv')).not.toBeInTheDocument();
+		await user.selectOptions(screen.getByLabelText('Sort loaded results'), 'name-desc');
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('/objects/search'))).toBe(
+			false,
+		);
+	});
+
+	it('creates a notebook from the object-specific load snippet', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(
+			`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`,
+			{ kind: objectKind, entry: { ...lakeEntry, kind: 's3' } },
+		);
+		await user.click(await screen.findByRole('button', { name: 'Open in notebook' }));
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveTextContent(`/projects/${PID}/notebooks/nb_1`),
+		);
+		const post = fetchImpl.mock.calls.find(
+			([url, init]) => String(url).includes('/notebooks') && init?.method === 'POST',
+		);
+		const body = JSON.parse(String(post?.[1]?.body)) as { code: string };
+		expect(body.code).toContain('# s3://lake/events.jsonl');
+		expect(body.code).toContain('    import polars as pl');
+	});
+
+	it('preserves object selection when shared notebook creation fails', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			notebookFailure: 'Notebook creation failed.',
+		});
+		await user.click(await screen.findByRole('button', { name: 'Open in notebook' }));
+		await waitFor(() =>
+			expect(screen.getByRole('button', { name: 'Open in notebook' })).toBeEnabled(),
+		);
+		expect(screen.getByTestId('location')).toHaveTextContent('key=events.jsonl');
+		expect(screen.getByText('s3://lake/events.jsonl')).toBeInTheDocument();
+	});
+
+	it('keeps an explicit preview failure inline with a retry action', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectFailures: { preview: 'Preview failed. Try a smaller object.' },
+		});
+		await user.click(await screen.findByRole('tab', { name: 'Preview' }));
+		await user.click(screen.getByRole('button', { name: 'Load preview' }));
+		expect(
+			await screen.findByText('Preview failed. Try a smaller object.', { selector: 'p' }),
+		).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Load preview' })).toBeInTheDocument();
+	});
+
+	it('keeps an object metadata failure inside the detail pane', async () => {
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectFailures: { detail: 'Object metadata is unavailable.' },
+		});
+		expect(await screen.findByText('Object metadata is unavailable.')).toBeInTheDocument();
+	});
+
+	it('keeps an object search failure inside the listing pane', async () => {
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&q=needle`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectFailures: { search: 'Object search reached its scan limit.' },
+		});
+		expect(await screen.findByText('Object search reached its scan limit.')).toBeInTheDocument();
+	});
+
+	it('keeps an object version failure inside the versions panel', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectFailures: { versions: 'Object versions are unavailable.' },
+		});
+		await user.click(await screen.findByRole('tab', { name: 'Versions' }));
+		expect(await screen.findByText('Object versions are unavailable.')).toBeInTheDocument();
+	});
+
+	it('filters and keyboard-navigates loaded object rows without a server request', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+		});
+		const object = await screen.findByText('events.jsonl');
+		const objectButton = object.closest('button')!;
+		objectButton.focus();
+		await user.keyboard('{ArrowUp}');
+		expect(screen.getByText('daily/').closest('button')).toHaveFocus();
+
+		await user.selectOptions(screen.getByLabelText('Type'), 'text');
+		expect(screen.queryByText('events.jsonl')).not.toBeInTheDocument();
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('/objects/search'))).toBe(
 			false,
 		);
 	});

@@ -150,6 +150,11 @@ A kind can implement `BrowseCapability` when it has an HTTP metadata API. The
 capability lists namespaces, tables, and schemas. It also creates a notebook
 snippet. `MARIMOHUB_DATA_BROWSER` controls access to this capability.
 
+Object stores implement the provider-neutral `ObjectBrowser` port separately from table
+`BrowseCapability`. The S3 adapter lives in `packages/object-browser-s3`; only `packages/config`
+imports it. Core owns source/context/result contracts, and API/web dispatch on the advertised
+`tables` or `objects` surface instead of importing provider code.
+
 Kinds can implement `previewRows` for bounded reads through the guarded HTTP
 path. Other kinds use `SandboxDataPreview` when the data browser is `full`.
 
@@ -179,6 +184,16 @@ the editor role or a higher role.
 The API resolves a browse ID in the project tier before the organization tier.
 A project integration shadows an organization integration with the same name.
 Browse operations do not write to the bucket.
+
+S3 content routes are the raw-response exception to the JSON envelope on success. They authorize
+and resolve the integration before opening a stream, accept at most one byte range, set no-store and
+nosniff headers, sanitize `Content-Disposition`, and release the provider client on completion,
+failure, deadline, or client cancellation. Pre-stream failures still use the standard envelope.
+
+Metadata lists use a short state-token cache. Details, search, previews, tags, versions, streams,
+credentials, provider clients, and failures are never cached. Explicit preview/download reads append
+audit events; navigation does not. Live S3 transport behavior is covered by
+`objectBrowseContract` against pinned MinIO in the Object browser conformance workflow.
 
 Servers differ in pagination and namespace addressing, so the `iceberg_rest`
 client filters listings to direct children, stops on a non-advancing page

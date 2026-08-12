@@ -339,7 +339,16 @@ export interface ApiDeps {
 	 * Absent disables the browse routes (404). `sandboxPreview` is the fallback
 	 * for kinds without a cheap HTTP-native preview.
 	 */
-	dataBrowser?: { preview: boolean; sandboxPreview?: DataPreview };
+	dataBrowser?: {
+		preview: boolean;
+		sandboxPreview?: DataPreview;
+		objectBrowser?: {
+			allowServerAmbientCredentials: boolean;
+			maxConcurrentDownloads: number;
+			maxConcurrentDownloadsPerUser: number;
+			downloadTimeoutMs: Millis;
+		};
+	};
 	/**
 	 * Build/deploy identity surfaced read-only by `GET /api/v1/version` (the UI's
 	 * footer info popover). Baked into the image at build time and read from env

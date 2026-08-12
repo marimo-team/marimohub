@@ -74,9 +74,14 @@ export class S3ObjectBrowser implements ObjectBrowser {
 		this.limits = { ...DEFAULT_S3_OBJECT_BROWSER_LIMITS, ...options.limits };
 		if (options.clientFactory) this.clientFactory = options.clientFactory;
 		else if (options.resolveHost) {
+			const transportTimeoutMs = Math.max(
+				this.limits.metadataTimeoutMs,
+				this.limits.previewTimeoutMs,
+			);
 			this.clientFactory = createS3ClientFactory({
 				resolveHost: options.resolveHost,
-				requestTimeoutMs: this.limits.metadataTimeoutMs,
+				connectionTimeoutMs: transportTimeoutMs,
+				requestTimeoutMs: transportTimeoutMs,
 			});
 		} else {
 			throw new Error('S3ObjectBrowser requires a guarded host resolver.');
@@ -100,7 +105,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 				available: false,
 				preview: false,
 				download: false,
-				search: 'bounded-key-name',
+				search: 'none',
 				versions: false,
 				preview_formats: [],
 				reason: mapped.message,

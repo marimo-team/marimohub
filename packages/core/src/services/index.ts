@@ -171,7 +171,11 @@ export type {
 export { WorkloadIdentityIssuer } from './identity/WorkloadIdentityIssuer';
 export type { WifClaims, JwksKey } from './identity/WorkloadIdentityIssuer';
 export { s3CredsToEnv } from './identity/s3CredsEnv';
-export { exchangeFederatedStorageEnv, projectSubject } from './identity/federation';
+export {
+	exchangeFederatedStorageCredentials,
+	exchangeFederatedStorageEnv,
+	projectSubject,
+} from './identity/federation';
 export {
 	buildMarimoAiToml,
 	marimoAiContributor,

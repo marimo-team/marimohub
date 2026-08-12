@@ -716,6 +716,12 @@ const BROWSE_SCHEMA_STALE_MS = 300_000;
  */
 let bypassBrowseCache = 0;
 const freshQuery = () => (bypassBrowseCache > 0 ? { fresh: 'true' as const } : {});
+const browsePath = (projectId: string, integrationId: string) => ({
+	pid: projectId,
+	iid: integrationId,
+});
+const cursorQuery = (cursor: string | null): { cursor?: string } => (cursor ? { cursor } : {});
+const nextCursor = (page: { next_cursor: string | null }) => page.next_cursor;
 
 /**
  * Client-side mirror of the server's 30 fresh ops/min/user budget, spent in
@@ -796,7 +802,7 @@ export function useBrowseCapabilityQuery(projectId: string, integrationId: strin
 		queryFn: () =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse', {
-					params: { path: { pid: projectId, iid: integrationId } },
+					params: { path: browsePath(projectId, integrationId) },
 				}),
 			),
 	});
@@ -817,16 +823,16 @@ export function useBrowseNamespacesQuery(
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/namespaces', {
 					params: {
-						path: { pid: projectId, iid: integrationId },
+						path: browsePath(projectId, integrationId),
 						query: {
 							...(parent.length > 0 ? { parent: parent.join(NAMESPACE_JOINER) } : {}),
-							...(pageParam ? { cursor: pageParam } : {}),
+							...cursorQuery(pageParam),
 							...freshQuery(),
 						},
 					},
 				}),
 			),
-		getNextPageParam: (lastPage) => lastPage.next_cursor,
+		getNextPageParam: nextCursor,
 	});
 }
 
@@ -845,16 +851,16 @@ export function useBrowseTablesQuery(
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/tables', {
 					params: {
-						path: { pid: projectId, iid: integrationId },
+						path: browsePath(projectId, integrationId),
 						query: {
 							namespace: namespace.join(NAMESPACE_JOINER),
-							...(pageParam ? { cursor: pageParam } : {}),
+							...cursorQuery(pageParam),
 							...freshQuery(),
 						},
 					},
 				}),
 			),
-		getNextPageParam: (lastPage) => lastPage.next_cursor,
+		getNextPageParam: nextCursor,
 	});
 }
 
@@ -873,7 +879,7 @@ export function useBrowseTableSchemaQuery(
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/schema', {
 					params: {
-						path: { pid: projectId, iid: integrationId },
+						path: browsePath(projectId, integrationId),
 						query: { namespace: namespace.join(NAMESPACE_JOINER), table, ...freshQuery() },
 					},
 				}),
@@ -886,11 +892,172 @@ export function useBrowseTablePreview(projectId: string, integrationId: string) 
 		mutationFn: (input: { namespace: string[]; table: string; limit?: number }) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/preview', {
-					params: { path: { pid: projectId, iid: integrationId } },
+					params: { path: browsePath(projectId, integrationId) },
 					body: input,
 				}),
 			),
 	});
+}
+
+export function useObjectBucketsQuery(projectId: string, integrationId: string, enabled = true) {
+	return useInfiniteQuery({
+		queryKey: browseKeys.objectBuckets(projectId, integrationId),
+		enabled,
+		staleTime: BROWSE_LIST_STALE_MS,
+		initialPageParam: null as string | null,
+		queryFn: ({ pageParam }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/buckets', {
+					params: {
+						path: browsePath(projectId, integrationId),
+						query: { ...cursorQuery(pageParam), ...freshQuery() },
+					},
+				}),
+			),
+		getNextPageParam: nextCursor,
+	});
+}
+
+export function useObjectsQuery(
+	projectId: string,
+	integrationId: string,
+	bucket: string,
+	prefix: string,
+	enabled = true,
+) {
+	return useInfiniteQuery({
+		queryKey: browseKeys.objects(projectId, integrationId, bucket, prefix),
+		enabled: enabled && bucket !== '',
+		staleTime: BROWSE_LIST_STALE_MS,
+		initialPageParam: null as string | null,
+		queryFn: ({ pageParam }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects', {
+					params: {
+						path: browsePath(projectId, integrationId),
+						query: {
+							bucket,
+							...(prefix ? { prefix } : {}),
+							...cursorQuery(pageParam),
+							...freshQuery(),
+						},
+					},
+				}),
+			),
+		getNextPageParam: nextCursor,
+	});
+}
+
+export function useObjectSearchQuery(
+	projectId: string,
+	integrationId: string,
+	bucket: string,
+	prefix: string,
+	query: string,
+) {
+	return useInfiniteQuery({
+		queryKey: browseKeys.objectSearch(projectId, integrationId, bucket, prefix, query),
+		enabled: bucket !== '' && query.trim().length >= 2,
+		initialPageParam: null as string | null,
+		queryFn: ({ pageParam }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/search', {
+					params: {
+						path: browsePath(projectId, integrationId),
+						query: {
+							bucket,
+							query: query.trim(),
+							...(prefix ? { prefix } : {}),
+							...cursorQuery(pageParam),
+						},
+					},
+				}),
+			),
+		getNextPageParam: nextCursor,
+	});
+}
+
+export function useObjectDetailQuery(
+	projectId: string,
+	integrationId: string,
+	bucket: string,
+	key: string,
+	versionId?: string,
+) {
+	return useQuery({
+		queryKey: browseKeys.objectDetail(projectId, integrationId, bucket, key, versionId),
+		enabled: bucket !== '' && key !== '',
+		staleTime: BROWSE_LIST_STALE_MS,
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/head', {
+					params: {
+						path: browsePath(projectId, integrationId),
+						query: {
+							bucket,
+							key,
+							...(versionId ? { version_id: versionId } : {}),
+						},
+					},
+				}),
+			),
+	});
+}
+
+export function useObjectVersionsQuery(
+	projectId: string,
+	integrationId: string,
+	bucket: string,
+	key: string,
+	enabled = true,
+) {
+	return useInfiniteQuery({
+		queryKey: browseKeys.objectVersions(projectId, integrationId, bucket, key),
+		enabled: enabled && bucket !== '' && key !== '',
+		initialPageParam: null as string | null,
+		queryFn: ({ pageParam }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/versions', {
+					params: {
+						path: browsePath(projectId, integrationId),
+						query: {
+							bucket,
+							key,
+							...cursorQuery(pageParam),
+						},
+					},
+				}),
+			),
+		getNextPageParam: nextCursor,
+	});
+}
+
+export function useObjectPreview(projectId: string, integrationId: string) {
+	return useMutation({
+		mutationFn: (input: { bucket: string; key: string; version_id?: string; limit?: number }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/preview', {
+					params: { path: browsePath(projectId, integrationId) },
+					body: input,
+				}),
+			),
+	});
+}
+
+export function objectContentUrl(input: {
+	projectId: string;
+	integrationId: string;
+	bucket: string;
+	key: string;
+	versionId?: string;
+	etag?: string;
+	inline?: boolean;
+}): string {
+	const params = new URLSearchParams({ bucket: input.bucket, key: input.key });
+	if (input.versionId) params.set('version_id', input.versionId);
+	if (input.etag) params.set('etag', input.etag);
+	if (input.inline) params.set('inline', 'true');
+	return `/api/v1/projects/${encodeURIComponent(input.projectId)}/integrations/${encodeURIComponent(input.integrationId)}/browse/objects/content?${params}`;
 }
 
 // Notebooks

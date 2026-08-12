@@ -112,7 +112,7 @@ function unavailableObjectCapability(reason: string) {
 		available: false,
 		preview: false,
 		download: false,
-		search: 'bounded-key-name' as const,
+		search: 'none' as const,
 		versions: false,
 		preview_formats: [],
 		reason,
@@ -810,7 +810,11 @@ class ScopedIntegrationsStore {
 				);
 			}
 		}
-		return compatibility(surfaces.tables?.reason);
+		const anySurfaceAvailable =
+			(surfaces.tables?.available ?? false) || (surfaces.objects?.available ?? false);
+		return compatibility(
+			anySurfaceAvailable ? undefined : (surfaces.tables?.reason ?? surfaces.objects?.reason),
+		);
 	}
 
 	async browseNamespaces(

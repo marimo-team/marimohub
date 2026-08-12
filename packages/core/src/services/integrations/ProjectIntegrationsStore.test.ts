@@ -2295,7 +2295,7 @@ describe('data browsing', () => {
 					available: false,
 					preview: false,
 					download: false,
-					search: 'bounded-key-name',
+					search: 'none',
 					versions: false,
 					preview_formats: [],
 					...(reason ? { reason } : {}),
