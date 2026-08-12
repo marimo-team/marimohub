@@ -505,7 +505,8 @@ export class NotebookService {
 	 * A new version is cut only when the read-back code/deps differ from the current
 	 * version, so a read-only session creates no spurious version. When unchanged,
 	 * the snapshots attach to the existing current version folder. Returns null when
-	 * the notebook is not `local` or no code could be read back (nothing to commit).
+	 * the notebook is deleted, is not `local`, or no code could be read back
+	 * (nothing to commit).
 	 */
 	async commitSession(
 		projectId: ProjectId,
@@ -513,7 +514,10 @@ export class NotebookService {
 		input: CommitSessionInput,
 		actor: UserId,
 	): Promise<CommitSessionResult | null> {
-		const { source } = await this.getNotebook(projectId, notebookId);
+		const { meta, source } = await this.getNotebook(projectId, notebookId);
+		if (meta.status === 'deleted') {
+			return null;
+		}
 		// Remote-backed notebooks are updated by their integration sync path.
 		if (source.type !== 'local') {
 			return null;
