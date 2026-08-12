@@ -47,7 +47,7 @@ export function createS3ClientFactory(options: {
 			maxAttempts: 3,
 			requestHandler,
 			...(credentials ? { credentials } : {}),
-		}) as unknown as S3ClientLike;
+		}) as S3ClientLike;
 	};
 }
 
