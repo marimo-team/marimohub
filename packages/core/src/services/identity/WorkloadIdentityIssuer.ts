@@ -44,7 +44,7 @@ export interface JwksKey {
 }
 
 /** Strip PEM armor + whitespace and base64-decode to DER bytes. */
-function pemToDer(pem: string): Uint8Array {
+function pemToDer(pem: string): ArrayBuffer {
 	const body = pem
 		.replace(/-----BEGIN [^-]+-----/, '')
 		.replace(/-----END [^-]+-----/, '')
@@ -52,7 +52,7 @@ function pemToDer(pem: string): Uint8Array {
 	const bin = atob(body);
 	const der = new Uint8Array(bin.length);
 	for (let i = 0; i < bin.length; i++) der[i] = bin.charCodeAt(i);
-	return der;
+	return der.buffer;
 }
 
 export class WorkloadIdentityIssuer {
@@ -74,7 +74,7 @@ export class WorkloadIdentityIssuer {
 		// `extractable: true` so `jwks()` can export the public params from it.
 		this.privateKeyPromise ??= crypto.subtle.importKey(
 			'pkcs8',
-			pemToDer(this.privateKeyPkcs8Pem) as unknown as ArrayBuffer,
+			pemToDer(this.privateKeyPkcs8Pem),
 			RS256_ALG,
 			true,
 			['sign'],

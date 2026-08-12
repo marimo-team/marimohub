@@ -66,6 +66,9 @@ catalogs:
     '@opentelemetry/sdk-trace-node':
       specifier: ^2.9.0
       version: 2.9.0
+    '@oxlint/plugins':
+      specifier: 1.67.0
+      version: 1.67.0
     '@tailwindcss/vite':
       specifier: ^4.3.0
       version: 4.3.0
@@ -123,6 +126,9 @@ catalogs:
     openapi-fetch:
       specifier: ^0.17.0
       version: 0.17.0
+    oxlint:
+      specifier: 1.67.0
+      version: 1.67.0
     simple-icons:
       specifier: ^16.27.0
       version: 16.27.0
@@ -191,9 +197,15 @@ importers:
 
   .:
     devDependencies:
+      '@oxlint/plugins':
+        specifier: 'catalog:'
+        version: 1.67.0
       '@vitest/coverage-v8':
         specifier: 'catalog:'
         version: 4.1.8(vitest@4.1.8)
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.67.0(oxlint-tsgolint@0.23.0)(vite-plus@0.1.24(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8)(esbuild@0.28.1)(jiti@2.7.0)(jsdom@29.1.1)(tsx@4.23.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(yaml@2.9.0))
       vite-plus:
         specifier: 'catalog:'
         version: 0.1.24(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.8)(esbuild@0.28.1)(jiti@2.7.0)(jsdom@29.1.1)(tsx@4.23.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(yaml@2.9.0)
@@ -2581,6 +2593,10 @@ packages:
 
   '@oxlint/plugins@1.61.0':
     resolution: {integrity: sha512-nkOyZEF1vH527CkdQtOp1HMrVFEM4ResURvI2JFeGoup+h+43J/k/FgdOR9b9Isxg+Yae7qVDa7y3nssE8b3TQ==}
+    engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
+
+  '@oxlint/plugins@1.67.0':
+    resolution: {integrity: sha512-L5oSCA3Ehr2BvRCHy9e64InPnkfjeopwsP4VsxfZwcvZA9c7wRp48RXVt2q3OA8Z/uM6RFbE/VIB2ZYTA31guA==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
   '@pierre/diffs@1.2.11':
@@ -6734,6 +6750,8 @@ snapshots:
     optional: true
 
   '@oxlint/plugins@1.61.0': {}
+
+  '@oxlint/plugins@1.67.0': {}
 
   '@pierre/diffs@1.2.11(@shikijs/themes@4.2.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:

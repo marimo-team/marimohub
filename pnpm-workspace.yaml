@@ -26,6 +26,7 @@ catalog:
   '@opentelemetry/sdk-metrics': ^2.9.0
   '@opentelemetry/sdk-trace-base': ^2.9.0
   '@opentelemetry/sdk-trace-node': ^2.9.0
+  '@oxlint/plugins': 1.67.0
   '@tailwindcss/vite': ^4.3.0
   '@tanstack/react-form': ^1.33.0
   '@tanstack/react-store': ^0.11.0
@@ -46,6 +47,7 @@ catalog:
   oauth4webapi: ^3.8.6
   ofetch: ^1.5.1
   openapi-fetch: ^0.17.0
+  oxlint: 1.67.0
   simple-icons: ^16.27.0
   smol-toml: ^1.7.0
   sonner: ^2.0.7

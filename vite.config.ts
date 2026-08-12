@@ -19,6 +19,7 @@ export default defineConfig({
 		singleQuote: true,
 	},
 	lint: {
+		jsPlugins: [{ name: 'anti-slop', specifier: './tools/oxlint/anti-slop/index.ts' }],
 		plugins: [
 			'react',
 			'react-hooks',
@@ -45,10 +46,17 @@ export default defineConfig({
 			'dist',
 			'node_modules',
 			'vendor',
+			'tools/oxlint/anti-slop',
 			'**/ts-reset.d.ts',
 			'packages/client/src/schema.ts',
 		],
 		rules: {
+			// The broader anti-slop rules reject legitimate boundary parsing, dynamic JSON,
+			// optional-property construction, and vendor-owned names in this codebase.
+			'anti-slop/no-chained-type-assertions': 'error',
+			'anti-slop/no-object-parameters': 'error',
+			'anti-slop/no-unknown-type-aliases': 'error',
+			'anti-slop/no-widen-then-assert': 'error',
 			'eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
 			'react/react-in-jsx-scope': 'off',
 
@@ -279,8 +287,10 @@ export default defineConfig({
 				// Tests and test helpers may use `any`, log freely, and stringify/spread
 				// mock objects (URLs, fake records) where these type-aware rules would
 				// otherwise false-positive.
-				files: ['**/*.test.ts', '**/*.test.tsx', '**/testing/**'],
+				files: ['**/*.test.ts', '**/*.test.tsx', '**/testing/**', '**/testWorld.ts'],
 				rules: {
+					'anti-slop/no-chained-type-assertions': 'off',
+					'anti-slop/no-object-parameters': 'off',
 					'typescript/no-explicit-any': 'off',
 					'eslint/no-console': 'off',
 					'typescript/no-base-to-string': 'off',
