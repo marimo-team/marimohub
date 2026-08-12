@@ -147,6 +147,20 @@ describe('Git sync routes', () => {
 		expect(versions.items[0]?.commit).toBe('abc123');
 	});
 
+	it('does not perform alert metadata reads before a successful sync', async () => {
+		const { notebookId, syncToken } = await createSyncedNotebook();
+		const services = createServices(bucket);
+		const projectLookup = vi
+			.spyOn(services.projects, 'getProject')
+			.mockRejectedValue(new Error('down'));
+		const notebookLookup = vi.spyOn(services.notebooks, 'getNotebook');
+		app = createTestApi({ bucket, deps: { services } }).app;
+
+		await expectOk(await syncRequest({ notebookId, headers: requiredHeaders(syncToken) }));
+		expect(projectLookup).not.toHaveBeenCalled();
+		expect(notebookLookup).toHaveBeenCalledOnce();
+	});
+
 	it("rejects a valid sync token used against a DIFFERENT notebook's path (401 IDOR)", async () => {
 		// Two independently-synced notebooks, each with its own per-notebook token.
 		const a = await createSyncedNotebook();

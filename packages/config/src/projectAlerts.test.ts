@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AesGcmSecretCodec, noopMetrics, ProjectAlertStore } from '@marimo-hub/core';
+import {
+	AesGcmSecretCodec,
+	createProjectId,
+	createSlidingWindowBudget,
+	noopMetrics,
+	paths,
+	ProjectAlertStore,
+} from '@marimo-hub/core';
 import type { IntegrationProbe, Metrics, ProjectAlertKind, ProjectId } from '@marimo-hub/core';
 import { ACTOR, BROADCAST_NOTIFICATION_FIXTURE, MemoryBucket } from '@marimo-hub/core/testing';
 import { ConfigError } from './errors';
@@ -136,6 +143,51 @@ describe('NodeProjectAlertDispatcher', () => {
 		expect(JSON.parse(options?.body ?? '')).toEqual(BROADCAST_NOTIFICATION_FIXTURE);
 	});
 
+	it('does not retry a signed webhook after a permanent HTTP response', async () => {
+		const bucket = new MemoryBucket();
+		const store = new ProjectAlertStore(bucket, new AesGcmSecretCodec({ kek: KEK }));
+		const projectId = BROADCAST_NOTIFICATION_FIXTURE.data.project_id;
+		await enabledDestination(store, projectId, {
+			name: 'Webhook',
+			type: 'webhook',
+			url: 'https://events.example.com/project-alerts',
+			signing_secret: 'signing-secret',
+		});
+		const fetch = vi.fn<IntegrationProbe['fetch']>(async () => ({
+			ok: false,
+			status: 401,
+			json: async () => null,
+		}));
+		const dispatcher = new NodeProjectAlertDispatcher(store, noopMetrics, probe(fetch));
+
+		await expect(
+			dispatcher.deliver(projectId, 'session.takeover', BROADCAST_NOTIFICATION_FIXTURE),
+		).rejects.toThrow();
+		expect(fetch).toHaveBeenCalledOnce();
+	});
+
+	it('retries a signed webhook after a retryable HTTP response', async () => {
+		const bucket = new MemoryBucket();
+		const store = new ProjectAlertStore(bucket, new AesGcmSecretCodec({ kek: KEK }));
+		const projectId = BROADCAST_NOTIFICATION_FIXTURE.data.project_id;
+		await enabledDestination(store, projectId, {
+			name: 'Webhook',
+			type: 'webhook',
+			url: 'https://events.example.com/project-alerts',
+			signing_secret: 'signing-secret',
+		});
+		const fetch = vi
+			.fn<IntegrationProbe['fetch']>()
+			.mockResolvedValueOnce({ ok: false, status: 429, json: async () => null })
+			.mockResolvedValueOnce({ ok: true, status: 204, json: async () => null });
+		const dispatcher = new NodeProjectAlertDispatcher(store, noopMetrics, probe(fetch));
+
+		await expect(
+			dispatcher.deliver(projectId, 'session.takeover', BROADCAST_NOTIFICATION_FIXTURE),
+		).resolves.toBe('delivered');
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
 	it('isolates a failed destination and reports partial fan-out', async () => {
 		const bucket = new MemoryBucket();
 		const store = new ProjectAlertStore(bucket, new AesGcmSecretCodec({ kek: KEK }));
@@ -170,6 +222,81 @@ describe('NodeProjectAlertDispatcher', () => {
 			adapter: 'slack',
 			kind: 'session.takeover',
 		});
+	});
+
+	it('isolates destination decryption failures during fan-out', async () => {
+		const bucket = new MemoryBucket();
+		const store = new ProjectAlertStore(bucket, new AesGcmSecretCodec({ kek: KEK }));
+		const projectId = BROADCAST_NOTIFICATION_FIXTURE.data.project_id;
+		const broken = await enabledDestination(store, projectId, {
+			name: 'Broken Slack',
+			type: 'slack',
+			webhook_url: 'https://hooks.example.com/broken',
+		});
+		await enabledDestination(store, projectId, {
+			name: 'Healthy Slack',
+			type: 'slack',
+			webhook_url: 'https://hooks.example.com/healthy',
+		});
+		const key = paths.project(projectId).alerts;
+		const object = await bucket.get(key);
+		const config = JSON.parse((await object?.text()) ?? '{}') as {
+			destinations: { id: string; webhook_url?: { ciphertext: string } }[];
+		};
+		const stored = config.destinations.find((destination) => destination.id === broken.id);
+		if (!stored?.webhook_url) throw new Error('Expected stored Slack destination');
+		stored.webhook_url.ciphertext = 'AAAA';
+		await bucket.put(key, JSON.stringify(config));
+		const fetch = vi.fn<IntegrationProbe['fetch']>(async () => ({
+			ok: true,
+			status: 200,
+			json: async () => null,
+		}));
+		const dispatcher = new NodeProjectAlertDispatcher(store, noopMetrics, probe(fetch));
+
+		await expect(
+			dispatcher.deliver(projectId, 'session.takeover', BROADCAST_NOTIFICATION_FIXTURE),
+		).resolves.toBe('partial');
+		expect(fetch).toHaveBeenCalledOnce();
+		expect(fetch.mock.calls[0]?.[0]).toBe('https://hooks.example.com/healthy');
+	});
+
+	it('limits noisy projects without consuming another project budget', async () => {
+		const bucket = new MemoryBucket();
+		const store = new ProjectAlertStore(bucket, new AesGcmSecretCodec({ kek: KEK }));
+		const firstProject = BROADCAST_NOTIFICATION_FIXTURE.data.project_id;
+		const secondProject = createProjectId();
+		await enabledDestination(store, firstProject, {
+			name: 'First Slack',
+			type: 'slack',
+			webhook_url: 'https://hooks.example.com/first',
+		});
+		await enabledDestination(store, secondProject, {
+			name: 'Second Slack',
+			type: 'slack',
+			webhook_url: 'https://hooks.example.com/second',
+		});
+		const fetch = vi.fn<IntegrationProbe['fetch']>(async () => ({
+			ok: true,
+			status: 200,
+			json: async () => null,
+		}));
+		const dispatcher = new NodeProjectAlertDispatcher(
+			store,
+			noopMetrics,
+			probe(fetch),
+			createSlidingWindowBudget({ limit: 1, windowMs: 60_000 }),
+		);
+		await expect(
+			dispatcher.deliver(firstProject, 'session.takeover', BROADCAST_NOTIFICATION_FIXTURE),
+		).resolves.toBe('delivered');
+		await expect(
+			dispatcher.deliver(firstProject, 'session.takeover', BROADCAST_NOTIFICATION_FIXTURE),
+		).resolves.toBe('skipped');
+		await expect(
+			dispatcher.deliver(secondProject, 'session.takeover', BROADCAST_NOTIFICATION_FIXTURE),
+		).resolves.toBe('delivered');
+		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
 	it('fails a test without verifying the destination or exposing the transport error', async () => {

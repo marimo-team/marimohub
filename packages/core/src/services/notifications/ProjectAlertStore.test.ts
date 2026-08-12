@@ -9,6 +9,7 @@ import {
 import { AesGcmSecretCodec } from '../secrets/AesGcmSecretCodec';
 import { createAlertDestinationId, createProjectId } from '../../ids';
 import { paths } from '../../paths';
+import { StoredObjectError } from '../../schema';
 import { ACTOR, MemoryBucket } from '../../testing';
 import { MAX_PROJECT_ALERT_DESTINATIONS, ProjectAlertStore } from './ProjectAlertStore';
 
@@ -84,10 +85,18 @@ describe('ProjectAlertStore', () => {
 		);
 		expect(enabled.enabled).toBe(true);
 
+		await expect(
+			store.update(
+				projectId,
+				created.id,
+				{ webhook_url: 'https://hooks.slack.com/services/two', enabled: true },
+				enabled.updated_at,
+			),
+		).rejects.toBeInstanceOf(ConflictError);
 		const replaced = await store.update(
 			projectId,
 			created.id,
-			{ webhook_url: 'https://hooks.slack.com/services/two', enabled: true },
+			{ webhook_url: 'https://hooks.slack.com/services/two' },
 			enabled.updated_at,
 		);
 		expect(replaced).toMatchObject({ enabled: false, verified_at: null });
@@ -161,16 +170,20 @@ describe('ProjectAlertStore', () => {
 	});
 
 	it.each([
-		['plain HTTP', 'http://hooks.example.com/alert'],
-		['embedded username', 'https://user@hooks.example.com/alert'],
-		['embedded password', 'https://user:secret@hooks.example.com/alert'],
-	] as const)('rejects %s endpoints without writing a record', async (_label, webhookUrl) => {
-		const { bucket, projectId, store } = setup();
-		await expect(
-			store.create(projectId, { name: 'Unsafe', type: 'slack', webhook_url: webhookUrl }, ACTOR),
-		).rejects.toBeInstanceOf(ValidationError);
-		expect(await bucket.get(paths.project(projectId).alerts)).toBeNull();
-	});
+		['invalid URL', 'not a url', 'URL is invalid'],
+		['plain HTTP', 'http://hooks.example.com/alert', 'must use HTTPS'],
+		['embedded username', 'https://user@hooks.example.com/alert', 'embedded credentials'],
+		['embedded password', 'https://user:secret@hooks.example.com/alert', 'embedded credentials'],
+	] as const)(
+		'rejects %s endpoints without writing a record',
+		async (_label, webhookUrl, message) => {
+			const { bucket, projectId, store } = setup();
+			await expect(
+				store.create(projectId, { name: 'Unsafe', type: 'slack', webhook_url: webhookUrl }, ACTOR),
+			).rejects.toThrow(message);
+			expect(await bucket.get(paths.project(projectId).alerts)).toBeNull();
+		},
+	);
 
 	it('rejects empty names, empty event selections, and oversized stored fields', async () => {
 		const { bucket, projectId, store } = setup();
@@ -237,6 +250,28 @@ describe('ProjectAlertStore', () => {
 				webhook_url: 'https://hooks.slack.com/services/two',
 			}),
 		).rejects.toBeInstanceOf(ValidationError);
+		await expect(store.update(projectId, webhook.id, { signing_secret: '' })).rejects.toThrow(
+			'Webhook signing secret is required',
+		);
+	});
+
+	it('sanitizes invalid stored alert records on reads and mutations', async () => {
+		const { bucket, projectId, store } = setup();
+		const key = paths.project(projectId).alerts;
+		await bucket.put(key, JSON.stringify({ schema_version: 1, project_id: projectId }));
+
+		await expect(store.list(projectId)).rejects.toMatchObject({
+			name: 'StoredObjectError',
+			reason: 'schema_mismatch',
+			object: key,
+		});
+		await expect(
+			store.create(
+				projectId,
+				{ name: 'Slack', type: 'slack', webhook_url: 'https://hooks.example.com/new' },
+				ACTOR,
+			),
+		).rejects.toBeInstanceOf(StoredObjectError);
 	});
 
 	it('rejects stale updates and deletes without changing the destination', async () => {

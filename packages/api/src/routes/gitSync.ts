@@ -48,10 +48,6 @@ app.post('/projects/:pid/notebooks/:nid', async (c) => {
 		throw new NotFoundError('Notebook not found');
 	}
 
-	const [project, notebook] = await Promise.all([
-		deps.services.projects.getProject(pidRaw),
-		deps.services.notebooks.getNotebook(pidRaw, nidRaw),
-	]);
 	const commit = c.req.header('x-marimohub-commit')?.trim() || 'unknown';
 	try {
 		const bytes = new Uint8Array(await c.req.arrayBuffer());
@@ -75,8 +71,12 @@ app.post('/projects/:pid/notebooks/:nid', async (c) => {
 			pidRaw,
 			'sync.failed',
 			{ project_id: pidRaw, notebook_id: nidRaw },
-			() =>
-				notificationRouter.render({
+			async () => {
+				const [project, notebook] = await Promise.all([
+					deps.services.projects.getProject(pidRaw),
+					deps.services.notebooks.getNotebook(pidRaw, nidRaw),
+				]);
+				return notificationRouter.render({
 					kind: 'sync.failed',
 					project,
 					notebookId: nidRaw,
@@ -84,7 +84,8 @@ app.post('/projects/:pid/notebooks/:nid', async (c) => {
 					commit,
 					errorCode: error instanceof DomainError ? error.code : 'SYNC_FAILED',
 					baseUrl: deps.sandbox.appBaseUrl,
-				}),
+				});
+			},
 		);
 		throw error;
 	}

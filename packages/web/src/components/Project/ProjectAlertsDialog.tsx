@@ -8,7 +8,9 @@ import {
 	useTestProjectAlert,
 	useUpdateProjectAlert,
 } from '@/api/hooks';
-import { Button, DialogModal, EmptyState, TextField } from '@/components/ui';
+import { Button, ConfirmDialog, DialogModal, EmptyState, TextField } from '@/components/ui';
+import { useDialogTarget } from '@/hooks/useDialogTarget';
+import { toastError } from '@/lib/errors';
 import type { ProjectAlertDestination, ProjectAlertKind } from '@/types';
 
 const LABELS: Record<ProjectAlertKind, string> = {
@@ -66,6 +68,7 @@ export function ProjectAlertsDialog({
 	const update = useUpdateProjectAlert(projectId);
 	const remove = useDeleteProjectAlert(projectId);
 	const test = useTestProjectAlert(projectId);
+	const confirmDelete = useDialogTarget<ProjectAlertDestination>();
 	const [editor, setEditor] = useState<EditorState | null>(null);
 	const pending = create.isPending || update.isPending;
 
@@ -118,8 +121,20 @@ export function ProjectAlertsDialog({
 				toast.success('Alert destination updated.');
 			}
 			setEditor(null);
-		} catch {
-			return;
+		} catch (error) {
+			toastError(error);
+		}
+	};
+
+	const deleteDestination = async () => {
+		const destination = confirmDelete.target;
+		if (!destination) return;
+		try {
+			await remove.mutateAsync({ id: destination.id, updatedAt: destination.updated_at });
+			toast.success('Alert destination deleted.');
+			confirmDelete.close();
+		} catch (error) {
+			toastError(error);
 		}
 	};
 
@@ -222,7 +237,13 @@ export function ProjectAlertsDialog({
 								size="sm"
 								variant="primary"
 								onPress={() => void save()}
-								isDisabled={pending || !editor.name.trim() || editor.kinds.length === 0}
+								isDisabled={
+									pending ||
+									!editor.name.trim() ||
+									editor.kinds.length === 0 ||
+									(!editor.destination &&
+										(!editor.endpoint.trim() || (editor.type === 'webhook' && !editor.secret)))
+								}
 							>
 								{pending ? 'Saving…' : 'Save'}
 							</Button>
@@ -265,7 +286,10 @@ export function ProjectAlertsDialog({
 												id: destination.id,
 												updatedAt: destination.updated_at,
 											},
-											{ onSuccess: () => toast.success('Test alert delivered.') },
+											{
+												onSuccess: () => toast.success('Test alert delivered.'),
+												onError: toastError,
+											},
 										)
 									}
 									isDisabled={test.isPending}
@@ -275,11 +299,14 @@ export function ProjectAlertsDialog({
 								<Button
 									size="sm"
 									onPress={() =>
-										update.mutate({
-											id: destination.id,
-											updatedAt: destination.updated_at,
-											enabled: !destination.enabled,
-										})
+										update.mutate(
+											{
+												id: destination.id,
+												updatedAt: destination.updated_at,
+												enabled: !destination.enabled,
+											},
+											{ onError: toastError },
+										)
 									}
 									isDisabled={!destination.verified_at || update.isPending}
 								>
@@ -297,9 +324,7 @@ export function ProjectAlertsDialog({
 									size="sm"
 									variant="ghost"
 									aria-label={`Delete ${destination.name}`}
-									onPress={() =>
-										remove.mutate({ id: destination.id, updatedAt: destination.updated_at })
-									}
+									onPress={() => confirmDelete.open(destination)}
 								>
 									<Trash2 className="size-3.5 text-destructive" />
 								</Button>
@@ -308,6 +333,16 @@ export function ProjectAlertsDialog({
 					</div>
 				)}
 			</div>
+			<ConfirmDialog
+				isOpen={confirmDelete.isOpen}
+				onClose={confirmDelete.close}
+				title="Delete alert destination"
+				description={`Delete "${confirmDelete.target?.name}"? Its stored endpoint and secret cannot be recovered.`}
+				confirmLabel="Delete"
+				pendingLabel="Deleting…"
+				isPending={remove.isPending}
+				onConfirm={() => void deleteDestination()}
+			/>
 		</DialogModal>
 	);
 }

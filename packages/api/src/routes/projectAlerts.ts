@@ -77,12 +77,16 @@ const CreateDestinationBody = z.discriminatedUnion('type', [
 	}),
 ]);
 
-const UpdateDestinationBody = DestinationInputCommonSchema.partial().extend({
-	enabled: z.boolean().optional(),
-	webhook_url: z.url().optional(),
-	url: z.url().optional(),
-	signing_secret: z.string().min(1).optional(),
-});
+const UpdateDestinationBody = DestinationInputCommonSchema.partial()
+	.extend({
+		enabled: z.boolean().optional(),
+		webhook_url: z.url().optional(),
+		url: z.url().optional(),
+		signing_secret: z.string().min(1).optional(),
+	})
+	.refine((body) => Object.values(body).some((value) => value !== undefined), {
+		message: 'At least one destination field is required.',
+	});
 
 const listDestinations = createRoute({
 	method: 'get',

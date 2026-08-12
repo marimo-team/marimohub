@@ -3,6 +3,7 @@ import {
 	NotFoundError,
 	noopMetrics,
 	ProjectAlertStore,
+	createSlidingWindowBudget,
 	reduceNotificationDeliveryResults,
 	UnavailableError,
 	assertVersionMatch,
@@ -19,6 +20,7 @@ import type {
 	ProjectAlertKind,
 	ProjectId,
 	ResolvedProjectAlertDestination,
+	SlidingWindowBudget,
 } from '@marimo-hub/core';
 import { SlackNotifier } from '@marimo-hub/notify-slack';
 import { WebhookNotifier } from '@marimo-hub/notify-webhook';
@@ -29,6 +31,23 @@ import { createGuardedProbe } from './integrationProbe';
 import { makeSecretSources } from './secrets';
 
 const DOCS = 'docs/project-alerts.md';
+const MAX_PROJECT_ALERT_EVENTS_PER_MINUTE = 100;
+
+class AlertHttpError extends Error {
+	constructor(readonly status: number) {
+		super(`Alert destination returned HTTP ${status}`);
+		this.name = 'AlertHttpError';
+	}
+}
+
+function retryableAlertError(error: unknown): boolean {
+	return (
+		!(error instanceof AlertHttpError) ||
+		error.status === 408 ||
+		error.status === 429 ||
+		error.status >= 500
+	);
+}
 
 export interface ProjectAlertsConfig {
 	store: ProjectAlertStore;
@@ -73,11 +92,13 @@ export function makeProjectAlerts(
 
 export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 	private readonly probe: IntegrationProbe;
+	private readonly deliveryBudget: SlidingWindowBudget<ProjectId>;
 
 	constructor(
 		private readonly store: ProjectAlertStore,
 		private readonly metrics: Metrics,
 		probe?: IntegrationProbe,
+		deliveryBudget?: SlidingWindowBudget<ProjectId>,
 	) {
 		this.probe =
 			probe ??
@@ -86,6 +107,12 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 				timeoutMs: 10_000,
 				maxResponseBytes: 16 * 1024,
 				maxProbesPerMinute: 10_000,
+			});
+		this.deliveryBudget =
+			deliveryBudget ??
+			createSlidingWindowBudget({
+				limit: MAX_PROJECT_ALERT_EVENTS_PER_MINUTE,
+				windowMs: 60_000,
 			});
 	}
 
@@ -97,13 +124,36 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 		if (notification.kind !== kind || notification.audience !== 'broadcast') {
 			throw new Error('Project alerts require a matching broadcast notification');
 		}
-		const destinations = await this.store.resolve(projectId, { kind, requireEnabled: true });
+		const destinations = (await this.store.list(projectId)).filter(
+			(destination) =>
+				destination.enabled && destination.verified_at !== null && destination.kinds.includes(kind),
+		);
 		if (destinations.length === 0) {
 			this.metrics.increment('project_alert.skipped', 1, { kind });
 			return 'skipped';
 		}
+		if (!this.deliveryBudget.consume(projectId)) {
+			this.metrics.increment('project_alert.rate_limited', 1, { kind });
+			return 'skipped';
+		}
 		const results = await Promise.allSettled(
-			destinations.map((destination) => this.deliverTo(destination, notification)),
+			destinations.map(async (configured) => {
+				let destination: ResolvedProjectAlertDestination | undefined;
+				try {
+					[destination] = await this.store.resolve(projectId, {
+						id: configured.id,
+						kind,
+						requireEnabled: true,
+					});
+				} catch (error) {
+					this.metrics.increment('project_alert.deliver_failed', 1, {
+						adapter: configured.type,
+						kind: notification.kind,
+					});
+					throw error;
+				}
+				return destination ? this.deliverTo(destination, notification) : 'skipped';
+			}),
 		);
 		return reduceNotificationDeliveryResults(results, 'No project alert destination delivered');
 	}
@@ -155,6 +205,7 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 										return;
 									} catch (error) {
 										lastError = error;
+										if (attempt === options.retry || !retryableAlertError(error)) throw error;
 									}
 								}
 								throw lastError;
@@ -179,6 +230,6 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 		options: { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: string },
 	): Promise<void> {
 		const response = await this.probe.fetch(url, options);
-		if (!response.ok) throw new Error(`Alert destination returned HTTP ${response.status}`);
+		if (!response.ok) throw new AlertHttpError(response.status);
 	}
 }

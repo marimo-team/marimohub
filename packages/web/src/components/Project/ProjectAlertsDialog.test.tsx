@@ -3,9 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { ProjectAlertsDialog } from './ProjectAlertsDialog';
 import { createTestQueryClient } from '@/test/render';
 import type { ProjectAlertDestination, ProjectAlertKind } from '@/types';
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const KINDS: ProjectAlertKind[] = [
 	'member.invited',
@@ -73,6 +76,8 @@ function slackDestination(
 }
 
 beforeEach(() => {
+	vi.mocked(toast.success).mockClear();
+	vi.mocked(toast.error).mockClear();
 	vi.stubGlobal('matchMedia', () => ({
 		matches: false,
 		addEventListener: () => {},
@@ -151,6 +156,92 @@ describe('ProjectAlertsDialog', () => {
 		);
 		for (const checkbox of screen.getAllByRole('checkbox')) await user.click(checkbox);
 		expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+	});
+
+	it('requires endpoint and signing-secret fields before creating a destination', async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await user.click(await screen.findByRole('button', { name: 'Add destination' }));
+		await user.type(screen.getByLabelText('Name'), 'Webhook');
+		await user.selectOptions(screen.getByLabelText('Destination type'), 'webhook');
+		const save = screen.getByRole('button', { name: 'Save' });
+		expect(save).toBeDisabled();
+		await user.type(screen.getByLabelText('Webhook URL'), 'https://events.example.com/hook');
+		expect(save).toBeDisabled();
+		await user.type(screen.getByLabelText('HMAC signing secret'), 'secret');
+		expect(save).toBeEnabled();
+	});
+
+	it('shows API failures while saving and keeps the editor open', async () => {
+		const user = userEvent.setup();
+		renderDialog([], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			if (method === 'POST') {
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'VALIDATION_ERROR', message: 'Invalid webhook URL' },
+					}),
+					{ status: 422, headers: { 'content-type': 'application/json' } },
+				);
+			}
+			return ok([]);
+		});
+		await user.click(await screen.findByRole('button', { name: 'Add destination' }));
+		await user.type(screen.getByLabelText('Name'), 'Broken');
+		await user.type(
+			screen.getByLabelText('Slack incoming webhook URL'),
+			'https://hooks.example.com/broken',
+		);
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Invalid webhook URL'));
+		expect(screen.getByRole('heading', { name: 'New destination' })).toBeInTheDocument();
+	});
+
+	it('confirms deletion before removing a destination', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-delete-000001', { name: 'Production Slack' });
+		const { fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			return method === 'DELETE' ? ok(undefined) : ok([destination]);
+		});
+		await user.click(await screen.findByRole('button', { name: 'Delete Production Slack' }));
+		expect(screen.getByRole('heading', { name: 'Delete alert destination' })).toBeInTheDocument();
+		expect(
+			fetchMock.mock.calls.some(([input, init]) =>
+				input instanceof Request ? input.method === 'DELETE' : init?.method === 'DELETE',
+			),
+		).toBe(false);
+		await user.click(screen.getByRole('button', { name: 'Delete' }));
+		await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Alert destination deleted.'));
+	});
+
+	it('shows delete conflicts and leaves the confirmation open', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-delete-000002', { name: 'Production Slack' });
+		renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			if (method === 'DELETE') {
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: 'PRECONDITION_FAILED', message: 'Stale destination' },
+					}),
+					{ status: 412, headers: { 'content-type': 'application/json' } },
+				);
+			}
+			return ok([destination]);
+		});
+		await user.click(await screen.findByRole('button', { name: 'Delete Production Slack' }));
+		await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith(
+				'Someone else changed this item. Reload it and try again.',
+			),
+		);
+		expect(screen.getByRole('heading', { name: 'Delete alert destination' })).toBeInTheDocument();
 	});
 
 	it('sends only replacement material entered during an edit', async () => {

@@ -2,7 +2,14 @@ import { z } from 'zod';
 import { ROLES } from './constants';
 import type { AlertDestinationId, NotebookId, ProjectId, SessionId, UserId } from './ids';
 import type { AuthUser } from './ports/auth';
-import { EmailAddressSchema, NotebookIdSchema, ProjectIdSchema, UserIdSchema } from './schema';
+import {
+	AlertDestinationIdSchema,
+	EmailAddressSchema,
+	NotebookIdSchema,
+	ProjectIdSchema,
+	SessionIdSchema,
+	UserIdSchema,
+} from './schema';
 import type { Identity, Project, ProjectMember } from './schema';
 
 export const NotificationRecipientSchema = z.object({
@@ -68,7 +75,7 @@ const ProjectDeletedDataSchema = ProjectAlertDataSchema.extend({
 });
 
 const AppFailureDataSchema = NotebookAlertDataSchema.extend({
-	session_id: z.string().min(1),
+	session_id: SessionIdSchema,
 	started_by_user_id: UserIdSchema,
 	error_code: z.string().min(1),
 });
@@ -79,7 +86,7 @@ const SyncFailedDataSchema = NotebookAlertDataSchema.extend({
 });
 
 const AlertTestDataSchema = ProjectAlertDataSchema.extend({
-	destination_id: z.string().min(1),
+	destination_id: AlertDestinationIdSchema,
 	actor_user_id: UserIdSchema,
 	test_id: z.string().min(1),
 });
@@ -525,13 +532,13 @@ export const NOTIFICATION_KIND_REGISTRY = {
 } as const;
 
 export type NotificationKind = keyof typeof NOTIFICATION_KIND_REGISTRY;
-export const GLOBAL_NOTIFICATION_KINDS = [
+export const GLOBAL_NOTIFICATION_KINDS = Object.freeze([
 	'member.invited',
 	'member.added',
 	'session.takeover',
-] as const satisfies readonly NotificationKind[];
+] as const satisfies readonly NotificationKind[]);
 export const NOTIFICATION_KINDS = GLOBAL_NOTIFICATION_KINDS;
-export const PROJECT_ALERT_KINDS = [
+export const PROJECT_ALERT_KINDS = Object.freeze([
 	'member.invited',
 	'member.added',
 	'member.role_changed',
@@ -542,7 +549,7 @@ export const PROJECT_ALERT_KINDS = [
 	'app.start_failed',
 	'app.unavailable',
 	'sync.failed',
-] as const satisfies readonly NotificationKind[];
+] as const satisfies readonly NotificationKind[]);
 export type ProjectAlertKind = (typeof PROJECT_ALERT_KINDS)[number];
 export const ProjectAlertKindSchema = z.enum(PROJECT_ALERT_KINDS);
 

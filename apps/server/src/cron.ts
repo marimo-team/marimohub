@@ -16,6 +16,63 @@ import type { WideEventMetrics } from './metrics';
 
 const FIVE_MINUTES_MS = Millis.minutes(5);
 
+async function retryMetadataRead<T>(read: () => Promise<T>): Promise<T> {
+	try {
+		return await read();
+	} catch {
+		return read();
+	}
+}
+
+async function scheduleUnavailableAppAlerts(
+	deps: ApiDeps,
+	sessions: Awaited<ReturnType<ReconciliationService['reconcile']>>['markedDeadSessions'],
+): Promise<void> {
+	await Promise.all(
+		sessions.map(async (session) => {
+			if (session.status !== 'running' || !sessionModePolicy(session).singleton) return;
+			try {
+				const [project, notebook] = await Promise.all([
+					retryMetadataRead(() => deps.services.projects.getProject(session.project_id)),
+					retryMetadataRead(() =>
+						deps.services.notebooks.getNotebook(session.project_id, session.notebook_id),
+					),
+				]);
+				scheduleProjectAlert(
+					deps,
+					session.project_id,
+					'app.unavailable',
+					{
+						project_id: session.project_id,
+						notebook_id: session.notebook_id,
+						session_id: session.session_id,
+					},
+					() =>
+						notificationRouter.render({
+							kind: 'app.unavailable',
+							project,
+							notebookId: session.notebook_id,
+							notebookTitle: notebook.meta.title,
+							sessionId: session.session_id,
+							startedByUserId: session.user_id,
+							errorCode: 'SANDBOX_DISAPPEARED',
+							baseUrl: deps.sandbox.appBaseUrl,
+						}),
+				);
+			} catch (error) {
+				logEvent({
+					level: 'error',
+					event: 'app_unavailable_alert_context_failed',
+					project_id: session.project_id,
+					notebook_id: session.notebook_id,
+					session_id: session.session_id,
+					name: error instanceof Error ? error.name : undefined,
+				});
+			}
+		}),
+	);
+}
+
 /**
  * Node-side maintenance loop — the replacement for the Cloudflare Workers
  * `scheduled()` cron. Each run, in order:
@@ -71,35 +128,7 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 			try {
 				const sessionsExpired = await sessions.expireStale();
 				const reconcile = await reconciler.reconcile();
-				for (const session of reconcile.markedDeadSessions) {
-					if (session.status !== 'running' || !sessionModePolicy(session).singleton) continue;
-					const [project, notebook] = await Promise.all([
-						projects.getProject(session.project_id).catch(() => null),
-						notebooks.getNotebook(session.project_id, session.notebook_id).catch(() => null),
-					]);
-					if (!project || !notebook) continue;
-					scheduleProjectAlert(
-						deps,
-						session.project_id,
-						'app.unavailable',
-						{
-							project_id: session.project_id,
-							notebook_id: session.notebook_id,
-							session_id: session.session_id,
-						},
-						() =>
-							notificationRouter.render({
-								kind: 'app.unavailable',
-								project,
-								notebookId: session.notebook_id,
-								notebookTitle: notebook.meta.title,
-								sessionId: session.session_id,
-								startedByUserId: session.user_id,
-								errorCode: 'SANDBOX_DISAPPEARED',
-								baseUrl: deps.sandbox.appBaseUrl,
-							}),
-					);
-				}
+				await scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions);
 				if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
 					logEvent({
 						level: 'warn',

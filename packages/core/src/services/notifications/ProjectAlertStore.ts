@@ -14,7 +14,7 @@ import { paths } from '../../paths';
 import {
 	AlertDestinationIdSchema,
 	ProjectIdSchema,
-	readStoredJson,
+	readStored,
 	SecretEnvelopeSchema,
 	UserIdSchema,
 } from '../../schema';
@@ -100,11 +100,13 @@ export interface UpdateProjectAlertDestinationInput {
 
 function endpoint(value: string): URL {
 	const parsed = parseHttpUrl(value, { protocols: ['https:'] });
-	if (!parsed.ok) {
-		throw new ValidationError(
-			'Alert destination must be an HTTPS URL without embedded credentials',
-		);
+	if (!parsed.ok && parsed.issue === 'protocol') {
+		throw new ValidationError('Alert destination URL must use HTTPS');
 	}
+	if (!parsed.ok && parsed.issue === 'credentials') {
+		throw new ValidationError('Alert destination URL cannot contain embedded credentials');
+	}
+	if (!parsed.ok) throw new ValidationError('Alert destination URL is invalid');
 	return parsed.url;
 }
 
@@ -197,6 +199,11 @@ export class ProjectAlertStore {
 				(current.type === 'slack' && input.webhook_url !== undefined) ||
 				(current.type === 'webhook' &&
 					(input.url !== undefined || input.signing_secret !== undefined));
+			if (secretChanged && input.enabled === true) {
+				throw new ConflictError(
+					'Test the replacement endpoint successfully before enabling this destination',
+				);
+			}
 			if (
 				current.type === 'slack' &&
 				(input.url !== undefined || input.signing_secret !== undefined)
@@ -205,6 +212,9 @@ export class ProjectAlertStore {
 			}
 			if (current.type === 'webhook' && input.webhook_url !== undefined) {
 				throw new ValidationError('Slack fields cannot update a webhook destination');
+			}
+			if (input.signing_secret?.length === 0) {
+				throw new ValidationError('Webhook signing secret is required');
 			}
 			const updatedAt = nextIsoTimestamp(current.updated_at, new Date().toISOString());
 			const name = input.name === undefined ? current.name : input.name.trim();
@@ -325,7 +335,7 @@ export class ProjectAlertStore {
 		const key = paths.project(projectId).alerts;
 		const obj = await this.bucket.get(key);
 		if (!obj) return null;
-		return ProjectAlertConfigSchema.parse(await readStoredJson(obj, key));
+		return readStored(ProjectAlertConfigSchema, obj, key);
 	}
 
 	private async mutate(
@@ -336,7 +346,7 @@ export class ProjectAlertStore {
 		return withCasRetry(this.bucket, async (cas) => {
 			const obj = await this.bucket.get(key);
 			const current = obj
-				? ProjectAlertConfigSchema.parse(await readStoredJson(obj, key))
+				? await readStored(ProjectAlertConfigSchema, obj, key)
 				: {
 						schema_version: 1 as const,
 						project_id: projectId,

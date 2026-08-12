@@ -217,6 +217,74 @@ describe('startMaintenance', () => {
 		);
 	});
 
+	it('retries a transient metadata read before scheduling an unavailable-app alert', async () => {
+		const session = makeSession({ mode: 'app', sandbox_id: createSandboxId() });
+		const project = makeProject({ id: session.project_id });
+		const notebook = makeNotebookMeta({
+			id: session.notebook_id,
+			project_id: session.project_id,
+			title: 'Shared app',
+		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
+			skipped: false,
+			reclaimed: 0,
+			markedDead: 1,
+			orphansReaped: 0,
+			orphanSandboxIds: [],
+			markedDeadSessions: [session],
+		});
+		const getProject = vi
+			.spyOn(deps.services.projects, 'getProject')
+			.mockRejectedValueOnce(new Error('temporary read failure'))
+			.mockResolvedValue(project);
+		vi.spyOn(deps.services.notebooks, 'getNotebook').mockResolvedValue({ meta: notebook } as never);
+		const deliver = vi.fn(async () => 'delivered' as const);
+		deps.projectAlerts = {
+			store: {} as never,
+			dispatcher: { deliver, test: vi.fn() },
+			maxDestinations: 10,
+		};
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+		expect(getProject).toHaveBeenCalledTimes(2);
+	});
+
+	it('loads unavailable-app alert metadata concurrently across sessions', async () => {
+		const sessions = [
+			makeSession({ mode: 'app', sandbox_id: createSandboxId() }),
+			makeSession({ mode: 'app', sandbox_id: createSandboxId() }),
+		];
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
+			skipped: false,
+			reclaimed: 0,
+			markedDead: 2,
+			orphansReaped: 0,
+			orphanSandboxIds: [],
+			markedDeadSessions: sessions,
+		});
+		const releases: (() => void)[] = [];
+		const getProject = vi.spyOn(deps.services.projects, 'getProject').mockImplementation(
+			(projectId) =>
+				new Promise((resolve) => {
+					releases.push(() => resolve(makeProject({ id: projectId })));
+				}),
+		);
+		vi.spyOn(deps.services.notebooks, 'getNotebook').mockImplementation(
+			async (projectId, notebookId) =>
+				({
+					meta: makeNotebookMeta({ id: notebookId, project_id: projectId }),
+				}) as never,
+		);
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		expect(getProject).toHaveBeenCalledTimes(2);
+		for (const release of releases) release();
+		await flushRun();
+	});
+
 	it('does not alert for vanished editor sessions or non-running apps', async () => {
 		const editor = makeSession({ mode: 'edit', sandbox_id: createSandboxId() });
 		const startingApp = makeSession({

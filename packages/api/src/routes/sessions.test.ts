@@ -422,6 +422,52 @@ describe('Session routes', () => {
 		expect(notifier.deliveries[0]?.audience).toBe('broadcast');
 	});
 
+	it('renders takeover notifications once and keeps project alerts when identity lookup fails', async () => {
+		const notifier = new MemoryNotifier();
+		const deliver = vi.fn(async () => 'delivered' as const);
+		const services = createServices(bucket);
+		const getIdentity = services.identities.get.bind(services.identities);
+		const identityLookup = vi
+			.spyOn(services.identities, 'get')
+			.mockImplementation((userId) =>
+				userId === ACTOR
+					? Promise.reject(new Error('identity store unavailable'))
+					: getIdentity(userId),
+			);
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const exclusiveOther = exclusiveApi(STRANGER, makeFakeCompute(), {
+			services,
+			notifier,
+			projectAlerts: {
+				store: {} as never,
+				dispatcher: { deliver, test: vi.fn() },
+				maxDestinations: 10,
+			},
+		});
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+
+		await expectOk(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-identity-failure',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
+		);
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+		expect(identityLookup.mock.calls.filter(([userId]) => userId === ACTOR)).toHaveLength(1);
+		expect(notifier.attempts).toBe(2);
+		expect(deliver).toHaveBeenCalledWith(
+			pid,
+			'session.takeover',
+			expect.objectContaining({
+				audience: 'broadcast',
+				data: expect.objectContaining({ displaced_user_id: ACTOR }),
+			}),
+		);
+	});
+
 	it('does not offer takeover when a claim names a terminal session', async () => {
 		const services = createServices(bucket);
 		const exclusiveOwner = exclusiveApi(ACTOR);

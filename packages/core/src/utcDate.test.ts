@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextIsoTimestamp, parseUtcDate } from './utcDate';
+import { nextIsoTimestamp, parseIsoTimestamp, parseUtcDate } from './utcDate';
 
 describe('parseUtcDate', () => {
 	it('parses real ISO calendar dates at UTC midnight', () => {
@@ -45,5 +45,16 @@ describe('nextIsoTimestamp', () => {
 
 	it('rejects an invalid candidate without a previous timestamp', () => {
 		expect(() => nextIsoTimestamp(undefined, 'invalid')).toThrow(RangeError);
+	});
+
+	it.each([
+		'2025-01-01',
+		'Wed, 01 Jan 2025 00:00:00 GMT',
+		'2025-02-30T00:00:00.000Z',
+		'2025-01-01T24:00:00.000Z',
+		'2025-01-01T00:00:00.000+00:00',
+	])('rejects parseable values that are not valid UTC ISO timestamps: %s', (value) => {
+		expect(parseIsoTimestamp(value)).toBeNull();
+		expect(() => nextIsoTimestamp(undefined, value)).toThrow(RangeError);
 	});
 });

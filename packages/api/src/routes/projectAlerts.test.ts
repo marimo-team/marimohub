@@ -237,6 +237,29 @@ describe('project alert destination routes', () => {
 		).toEqual([current]);
 	});
 
+	it('rejects an empty update without advancing the destination version', async () => {
+		const created = await expectOk<any>(
+			await request('POST', `/projects/${pid}/alert-destinations`, {
+				name: 'Slack',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/secret',
+			}),
+			201,
+		);
+
+		await expectError(
+			await request(
+				'PATCH',
+				`/projects/${pid}/alert-destinations/${created.id}`,
+				{},
+				{ 'if-match': created.updated_at },
+			),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect((await store.list(pid as never))[0]?.updated_at).toBe(created.updated_at);
+	});
+
 	it('endpoint replacement atomically disables and clears verification', async () => {
 		const created = await expectOk<any>(
 			await request('POST', `/projects/${pid}/alert-destinations`, {
@@ -260,14 +283,21 @@ describe('project alert destination routes', () => {
 			),
 		);
 
+		await expectError(
+			await request(
+				'PATCH',
+				`/projects/${pid}/alert-destinations/${created.id}`,
+				{ webhook_url: 'https://hooks.example.com/services/replacement', enabled: true },
+				{ 'if-match': enabled.updated_at },
+			),
+			409,
+			'CONFLICT',
+		);
 		const replaced = await expectOk<any>(
 			await request(
 				'PATCH',
 				`/projects/${pid}/alert-destinations/${created.id}`,
-				{
-					webhook_url: 'https://hooks.example.com/services/replacement',
-					enabled: true,
-				},
+				{ webhook_url: 'https://hooks.example.com/services/replacement' },
 				{ 'if-match': enabled.updated_at },
 			),
 		);

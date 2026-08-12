@@ -57,10 +57,11 @@ app stops do not create it.
 
 ## Delivery and payloads
 
-Slack gets one attempt. A generic webhook gets one immediate retry and the same
-`schema_version: 1` notification envelope documented in [Notifications](./notifications.md).
-Only the destination's selected kinds are sent. Error events contain a sanitized error code,
-not provider messages, URLs, credentials, or secrets.
+Slack gets one attempt. A generic webhook gets one immediate retry after a transport failure,
+HTTP 408, HTTP 429, or a 5xx response. Other 4xx responses are not retried. Webhooks receive the
+same `schema_version: 1` notification envelope documented in
+[Notifications](./notifications.md). Only the destination's selected kinds are sent. Error
+events contain a sanitized error code, not provider messages, URLs, credentials, or secrets.
 
 Delivery is best-effort. It begins only after the related storage mutation commits, and a
 delivery failure never changes the API response. There is no durable queue, history, digest, or
@@ -68,7 +69,9 @@ user-visible retry. Webhook consumers should deduplicate on `dedupe_key`.
 
 Operational logs use `project_alert_delivery_failed` and `project_alert_delivery_partial`.
 Metrics use `project_alert.delivered`, `project_alert.skipped`, and
-`project_alert.deliver_failed`, tagged only by adapter type and notification kind.
+`project_alert.deliver_failed`, tagged only by adapter type and notification kind. Each project
+can schedule at most 100 alert events per minute per server process. Excess events are skipped
+and increment `project_alert.rate_limited`; another project's budget is unaffected.
 
 ## Egress security
 

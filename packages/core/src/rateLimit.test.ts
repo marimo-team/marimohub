@@ -57,6 +57,20 @@ describe('createSlidingWindowBudget', () => {
 		expect(budget.tracked()).toBe(1);
 	});
 
+	it('detects a rollback that occurs between amortized sweeps', () => {
+		let now = 1_000;
+		const budget = createSlidingWindowBudget<string>({
+			limit: 1,
+			windowMs: 1_000,
+			now: () => now,
+		});
+		expect(budget.consume('user')).toBe(true);
+		now = 1_500;
+		expect(budget.consume('user')).toBe(false);
+		now = 1_250;
+		expect(budget.consume('user')).toBe(true);
+	});
+
 	it.each([
 		{ limit: 0, windowMs: 1_000 },
 		{ limit: 1.5, windowMs: 1_000 },

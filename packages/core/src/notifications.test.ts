@@ -210,6 +210,8 @@ describe('NotificationRouter', () => {
 			'app.unavailable',
 			'sync.failed',
 		]);
+		expect(Object.isFrozen(NOTIFICATION_KINDS)).toBe(true);
+		expect(Object.isFrozen(PROJECT_ALERT_KINDS)).toBe(true);
 	});
 
 	it('renders stable app-failure data without provider error text', () => {
@@ -370,5 +372,37 @@ describe('NotificationSchema', () => {
 			testId: 'test-request-1',
 		});
 		expect(() => NotificationSchema.parse({ ...testAlert, audience: 'personal' })).toThrow();
+	});
+
+	it('rejects malformed branded IDs in project-alert payloads', () => {
+		const [appAlert] = notificationRouter.render({
+			kind: 'app.unavailable',
+			project,
+			notebookId: ids().notebook,
+			notebookTitle: 'Revenue',
+			sessionId: ids().session,
+			startedByUserId: uid('app_starter'),
+			errorCode: 'SANDBOX_DISAPPEARED',
+		});
+		const [testAlert] = notificationRouter.render({
+			kind: 'alert.test',
+			project,
+			destinationId: 'alert-0123456789abcdef' as never,
+			actor: { id: uid('owner_notify'), email: 'owner@example.com' },
+			testId: 'test-request-1',
+		});
+
+		expect(() =>
+			NotificationSchema.parse({
+				...appAlert,
+				data: { ...appAlert?.data, session_id: 'not-a-session' },
+			}),
+		).toThrow();
+		expect(() =>
+			NotificationSchema.parse({
+				...testAlert,
+				data: { ...testAlert?.data, destination_id: 'not-a-destination' },
+			}),
+		).toThrow();
 	});
 });

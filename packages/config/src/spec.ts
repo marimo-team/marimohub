@@ -1290,8 +1290,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			'Outbound notifications support several backends at the same time. `MARIMOHUB_NOTIFY_BACKENDS` is a comma-separated list. The hub sends notifications after it stores the related change. Delivery failures do not change the API response. See the [notifications guide](./notifications.md) for delivery and security details.',
 		backends: [
 			{
-				name: 'Shared',
-				description: 'These variables control all notification backends.',
+				name: 'Project alerts',
+				description:
+					'Project-scoped destinations are separate from deployment-wide notification backends. See the [project alerts guide](./project-alerts.md).',
 				vars: [
 					{
 						id: 'MARIMOHUB_PROJECT_ALERTS',
@@ -1301,6 +1302,12 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'off',
 						example: 'on',
 					},
+				],
+			},
+			{
+				name: 'Shared',
+				description: 'These variables control all notification backends.',
+				vars: [
 					{
 						id: 'MARIMOHUB_NOTIFY_BACKENDS',
 						name: 'Notification backends',
