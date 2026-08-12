@@ -61,7 +61,14 @@ function failed(message: string) {
 	);
 }
 
-type ObjectFailure = 'buckets' | 'objects' | 'search' | 'detail' | 'versions' | 'preview';
+type ObjectFailure =
+	| 'capability'
+	| 'buckets'
+	| 'objects'
+	| 'search'
+	| 'detail'
+	| 'versions'
+	| 'preview';
 
 function makeFetch({
 	available = true,
@@ -73,6 +80,8 @@ function makeFetch({
 	entry = lakeEntry,
 	objectSearch = 'bounded-key-name',
 	objectBuckets = [{ name: 'lake', configured: true }],
+	objectBucketsSecond = [],
+	objectBucketNextCursor = null,
 	objectEntries = [
 		{ kind: 'prefix', name: 'daily/', key: 'daily/' },
 		{ kind: 'object', name: 'events.jsonl', key: 'events.jsonl', size: 12 },
@@ -82,6 +91,7 @@ function makeFetch({
 	objectDetail = {},
 	objectVersions = [],
 	notebookFailure,
+	notebookGate,
 	objectPreview = {
 		kind: 'text',
 		format: 'text',
@@ -102,12 +112,15 @@ function makeFetch({
 	entry?: IntegrationEntry;
 	objectSearch?: 'none' | 'bounded-key-name';
 	objectBuckets?: { name: string; configured: boolean }[];
+	objectBucketsSecond?: { name: string; configured: boolean }[];
+	objectBucketNextCursor?: string | null;
 	objectEntries?: unknown[];
 	objectEntriesSecond?: unknown[];
 	objectNextCursor?: string | null;
 	objectDetail?: Record<string, unknown>;
 	objectVersions?: unknown[];
 	notebookFailure?: string;
+	notebookGate?: Promise<void>;
 	objectPreview?: unknown;
 	objectFailures?: Partial<Record<ObjectFailure, string>>;
 } = {}) {
@@ -115,6 +128,7 @@ function makeFetch({
 		const url = String(input);
 		const method = init?.method ?? 'GET';
 		if (method === 'POST' && url.includes(`/api/v1/projects/${PID}/notebooks`)) {
+			await notebookGate;
 			if (notebookFailure) return failed(notebookFailure);
 			const body = JSON.parse(String(init?.body)) as { title: string };
 			return ok({ id: 'nb_1', project_id: PID, title: body.title });
@@ -136,7 +150,9 @@ function makeFetch({
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/objects/buckets`)) {
 			if (objectFailures.buckets) return failed(objectFailures.buckets);
-			return ok({ items: objectBuckets, next_cursor: null });
+			return target.searchParams.has('cursor')
+				? ok({ items: objectBucketsSecond, next_cursor: null })
+				: ok({ items: objectBuckets, next_cursor: objectBucketNextCursor });
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/objects/head`)) {
 			if (objectFailures.detail) return failed(objectFailures.detail);
@@ -219,6 +235,7 @@ function makeFetch({
 			});
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse`)) {
+			if (objectFailures.capability) return failed(objectFailures.capability);
 			if (kind.browse_surfaces.includes('objects')) {
 				return ok({
 					metadata: false,
@@ -273,6 +290,20 @@ function DeepLink({ to }: { to: string }) {
 	);
 }
 
+function HistoryControls() {
+	const navigate = useNavigate();
+	return (
+		<>
+			<button type="button" data-testid="history-back" onClick={() => void navigate(-1)}>
+				back
+			</button>
+			<button type="button" data-testid="history-forward" onClick={() => void navigate(1)}>
+				forward
+			</button>
+		</>
+	);
+}
+
 function setup(route: string, fetchOpts?: Parameters<typeof makeFetch>[0]) {
 	installMatchMedia();
 	const fetchImpl = makeFetch(fetchOpts);
@@ -284,6 +315,7 @@ function setup(route: string, fetchOpts?: Parameters<typeof makeFetch>[0]) {
 			</Routes>
 			<LocationProbe />
 			<DeepLink to={`/projects/${PID}/data/${IID}?ns=sales&table=orders`} />
+			<HistoryControls />
 		</>,
 		{ route },
 	);
@@ -518,6 +550,28 @@ describe('DataBrowserPage', () => {
 		});
 	});
 
+	it('pages bucket discovery before choosing a bucket', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}?surface=objects`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectBuckets: [{ name: 'first', configured: false }],
+			objectBucketsSecond: [{ name: 'second', configured: false }],
+			objectBucketNextCursor: 'bucket-page-2',
+		});
+
+		expect(await screen.findByText('first')).toBeInTheDocument();
+		expect(screen.queryByText('second')).not.toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Load more buckets' }));
+		expect(await screen.findByText('second')).toBeInTheDocument();
+		expect(
+			fetchImpl.mock.calls.some(
+				([url]) =>
+					String(url).includes('/objects/buckets') && String(url).includes('cursor=bucket-page-2'),
+			),
+		).toBe(true);
+	});
+
 	it('explains when credentials discover no buckets', async () => {
 		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
 			kind: objectKind,
@@ -563,6 +617,65 @@ describe('DataBrowserPage', () => {
 		await user.click(screen.getByRole('tab', { name: 'Preview' }));
 		await user.click(screen.getByRole('button', { name: 'Load preview' }));
 		expect(await screen.findByText('hello object')).toBeInTheDocument();
+	});
+
+	it('resets selection to the URL object after back and forward navigation', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=first.csv`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectEntries: [
+				{ kind: 'object', name: 'first.csv', key: 'first.csv', size: 12 },
+				{ kind: 'object', name: 'second.csv', key: 'second.csv', size: 24 },
+			],
+		});
+
+		await user.click((await screen.findByText('second.csv')).closest('button')!);
+		await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('key=second.csv'));
+		await user.click(screen.getByTestId('history-back'));
+		expect(await screen.findByText('s3://lake/first.csv')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Copy 1 selected URI' }));
+		expect(await navigator.clipboard.readText()).toBe('s3://lake/first.csv');
+
+		await user.click(screen.getByTestId('history-forward'));
+		expect(await screen.findByText('s3://lake/second.csv')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Copy 1 selected URI' }));
+		expect(await navigator.clipboard.readText()).toBe('s3://lake/second.csv');
+	});
+
+	it('does not carry a loaded preview into another object detail', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=first.csv`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectEntries: [
+				{ kind: 'object', name: 'first.csv', key: 'first.csv', size: 12 },
+				{ kind: 'object', name: 'second.csv', key: 'second.csv', size: 24 },
+			],
+		});
+
+		await user.click(await screen.findByRole('tab', { name: 'Preview' }));
+		await user.click(screen.getByRole('button', { name: 'Load preview' }));
+		expect(await screen.findByText('hello object')).toBeInTheDocument();
+		await user.click(screen.getByText('second.csv').closest('button')!);
+		await user.click(await screen.findByRole('tab', { name: 'Preview' }));
+		expect(screen.getByRole('button', { name: 'Load preview' })).toBeInTheDocument();
+		expect(screen.queryByText('hello object')).not.toBeInTheDocument();
+	});
+
+	it('reports rejected key and snippet clipboard writes', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+		});
+		await screen.findByText('s3://lake/events.jsonl');
+		const write = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('denied'));
+
+		await user.click(screen.getByRole('button', { name: 'Copy key' }));
+		expect(await screen.findByText('Could not copy to clipboard')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Copy snippet' }));
+		expect(write).toHaveBeenCalledTimes(2);
 	});
 
 	it('preserves URL-sensitive Unicode keys in detail and download links', async () => {
@@ -741,8 +854,11 @@ describe('DataBrowserPage', () => {
 		await user.click(screen.getByText('second.csv').closest('button')!);
 		await user.keyboard('{/Control}');
 		const copy = screen.getByRole('button', { name: 'Copy 2 selected URIs' });
+		const write = vi.spyOn(navigator.clipboard, 'writeText');
 		await user.click(copy);
-		expect(await navigator.clipboard.readText()).toBe('s3://lake/first.csv\ns3://lake/second.csv');
+		await waitFor(() =>
+			expect(write).toHaveBeenCalledWith('s3://lake/first.csv\ns3://lake/second.csv'),
+		);
 
 		await user.click(screen.getByText('daily/').closest('button')!);
 		expect(screen.queryByRole('button', { name: /Copy .* selected/ })).not.toBeInTheDocument();
@@ -813,6 +929,36 @@ describe('DataBrowserPage', () => {
 		const body = JSON.parse(String(post?.[1]?.body)) as { code: string };
 		expect(body.code).toContain('# s3://lake/events.jsonl');
 		expect(body.code).toContain('    import polars as pl');
+	});
+
+	it('disables object notebook creation while the request is pending', async () => {
+		const user = userEvent.setup();
+		let releaseNotebook!: () => void;
+		const notebookGate = new Promise<void>((resolve) => {
+			releaseNotebook = resolve;
+		});
+		const fetchImpl = setup(
+			`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`,
+			{
+				kind: objectKind,
+				entry: { ...lakeEntry, kind: 's3' },
+				notebookGate,
+			},
+		);
+
+		await user.click(await screen.findByRole('button', { name: 'Open in notebook' }));
+		const pending = await screen.findByRole('button', { name: 'Creating notebook…' });
+		expect(pending).toBeDisabled();
+		await user.click(pending);
+		expect(
+			fetchImpl.mock.calls.filter(
+				([url, init]) => String(url).includes('/notebooks') && init?.method === 'POST',
+			),
+		).toHaveLength(1);
+		releaseNotebook();
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveTextContent(`/projects/${PID}/notebooks/nb_1`),
+		);
 	});
 
 	it('preserves object selection when shared notebook creation fails', async () => {
@@ -900,6 +1046,17 @@ describe('DataBrowserPage', () => {
 
 		expect(await screen.findByText('sandbox only')).toBeInTheDocument();
 		expect(screen.queryByTestId('browse-namespace')).not.toBeInTheDocument();
+	});
+
+	it('shows an object capability request failure instead of a perpetual loading message', async () => {
+		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectFailures: { capability: 'S3 capability check failed.' },
+		});
+
+		expect(await screen.findByText('S3 capability check failed.')).toBeInTheDocument();
+		expect(screen.queryByText('Checking object-store access…')).not.toBeInTheDocument();
 	});
 
 	it('shows the upstream error inline when a listing fails', async () => {

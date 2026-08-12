@@ -1699,7 +1699,7 @@ app.openapi(searchObjects, async (c) => {
 	if (
 		query.modified_after !== undefined &&
 		query.modified_before !== undefined &&
-		query.modified_after > query.modified_before
+		Date.parse(query.modified_after) > Date.parse(query.modified_before)
 	) {
 		throw new ValidationError('modified_after cannot be later than modified_before.');
 	}
@@ -1914,7 +1914,7 @@ app.get('/projects/:pid/integrations/:iid/browse/objects/content', async (c) => 
 		if (object.content_range) headers.set('Content-Range', object.content_range);
 		if (object.etag) headers.set('ETag', object.etag);
 		if (object.version_id) headers.set('X-Marimohub-Object-Version', object.version_id);
-		return new Response(streamObjectBody(object, release, finish), {
+		return new Response(streamObjectBody(object, release, finish, controller.signal), {
 			status: object.status,
 			headers,
 		});

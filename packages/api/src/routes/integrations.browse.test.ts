@@ -384,6 +384,12 @@ describe('Data browser routes', () => {
 			422,
 			'VALIDATION_ERROR',
 		);
+		await expectOk(
+			await request(
+				'GET',
+				`${base}?bucket=lake&query=needle&modified_after=2026-08-12T00%3A00%3A00.1Z&modified_before=2026-08-12T00%3A00%3A00.100Z`,
+			),
+		);
 	});
 
 	it('enforces object search and preview budgets independently', async () => {
@@ -818,6 +824,48 @@ describe('Data browser routes', () => {
 			422,
 			'VALIDATION_ERROR',
 		);
+	});
+
+	it('does not fall through to ambient server credentials when WIF exchange fails', async () => {
+		const pid = await createProject();
+		await expectOk(await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }));
+		const ambient = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 's3',
+				name: 'federated-objects',
+				config: { bucket: 'lake', auth: { method: 'ambient' } },
+			}),
+			201,
+		);
+		deps.dataBrowser.objectBrowser.allowServerAmbientCredentials = true;
+		const federatedApi = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: {
+				...deps,
+				wif: {
+					issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
+					issuerUrl: 'https://hub.example.com',
+					target: {
+						broker: {
+							exchange: async () => {
+								throw new Error('broker unavailable');
+							},
+						},
+						storage: { region: 'us-east-1' },
+						audience: 'storage',
+					},
+				},
+			},
+		}).request;
+
+		const capability = await expectOk<{
+			surfaces: { objects: { available: boolean; reason?: string } };
+		}>(await federatedApi('GET', `/projects/${pid}/integrations/${ambient.id}/browse`));
+		expect(capability.surfaces.objects).toMatchObject({
+			available: false,
+			reason: 'No object-store credentials are available.',
+		});
 	});
 
 	it('editor can browse; viewer cannot', async () => {

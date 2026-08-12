@@ -42,15 +42,20 @@ export async function makeObjectBrowseContext(
 	} = {},
 ): Promise<ObjectBrowseContext> {
 	const browser = deps.dataBrowser?.objectBrowser;
+	const wif = deps.wif;
+	const useFederatedCredentials = Boolean(
+		options.includeFederated !== false && wif && project.federation?.enabled,
+	);
 	const context: ObjectBrowseContext = {
 		project_id: project.id,
 		user_id: user.id,
 		user_email: user.email,
-		allow_server_ambient:
-			options.allowServerAmbient ?? browser?.allowServerAmbientCredentials ?? false,
+		allow_server_ambient: useFederatedCredentials
+			? false
+			: (options.allowServerAmbient ?? browser?.allowServerAmbientCredentials ?? false),
 		...(signal ? { signal } : {}),
 	};
-	if (!(options.includeFederated !== false && deps.wif && project.federation?.enabled)) {
+	if (!useFederatedCredentials || !wif) {
 		return context;
 	}
 
@@ -64,7 +69,7 @@ export async function makeObjectBrowseContext(
 		? {
 				...context,
 				temporary_s3_credentials: temporary,
-				temporary_storage: deps.wif.target.storage,
+				temporary_storage: wif.target.storage,
 			}
 		: context;
 }
@@ -203,19 +208,49 @@ export function streamObjectBody(
 	object: ObjectBody,
 	release: () => void,
 	onFinish: () => void,
+	signal?: AbortSignal,
 ): ReadableStream<Uint8Array> {
 	const reader = object.body.getReader();
 	let finished = false;
+	let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
 	const finish = () => {
 		if (finished) return;
 		finished = true;
-		onFinish();
-		release();
+		signal?.removeEventListener('abort', abort);
+		try {
+			onFinish();
+		} finally {
+			release();
+		}
+	};
+	const close = () => {
+		try {
+			object.close();
+		} finally {
+			finish();
+		}
+	};
+	const abort = () => {
+		if (finished) return;
+		const reason =
+			signal?.reason ?? new DOMException('The object download was aborted.', 'AbortError');
+		try {
+			streamController?.error(reason);
+		} finally {
+			void reader.cancel(reason).catch(() => {});
+			close();
+		}
 	};
 	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			streamController = controller;
+			if (signal?.aborted) abort();
+			else signal?.addEventListener('abort', abort, { once: true });
+		},
 		async pull(controller) {
 			try {
 				const next = await reader.read();
+				if (finished) return;
 				if (next.done) {
 					controller.close();
 					finish();
@@ -223,17 +258,16 @@ export function streamObjectBody(
 					controller.enqueue(next.value);
 				}
 			} catch (error) {
+				if (finished) return;
 				controller.error(error);
-				object.close();
-				finish();
+				close();
 			}
 		},
 		async cancel(reason) {
 			try {
 				await reader.cancel(reason);
 			} finally {
-				object.close();
-				finish();
+				close();
 			}
 		},
 	});

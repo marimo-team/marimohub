@@ -64,7 +64,7 @@ function keyedNames(names: string[]): { key: string; name: string }[] {
 function keyedRows(rows: unknown[][]): { key: string; row: unknown[] }[] {
 	const counts = new Map<string, number>();
 	return rows.map((row) => {
-		const base = JSON.stringify(row) ?? '[unserializable]';
+		const base = JSON.stringify(row.map(renderCell));
 		const occurrence = counts.get(base) ?? 0;
 		counts.set(base, occurrence + 1);
 		return { key: `${base}:${occurrence}`, row };

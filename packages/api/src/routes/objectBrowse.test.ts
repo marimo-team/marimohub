@@ -121,6 +121,7 @@ describe('object browse credentials', () => {
 			throw new Error('broker-secret');
 		});
 		const deps = wifDeps(exchange);
+		deps.dataBrowser!.objectBrowser!.allowServerAmbientCredentials = true;
 		const withoutWif = await makeObjectBrowseContext(deps, project, user, undefined, {
 			includeFederated: false,
 			allowServerAmbient: true,
@@ -130,6 +131,7 @@ describe('object browse credentials', () => {
 
 		const failed = await makeObjectBrowseContext(deps, project, user);
 		expect(failed.temporary_s3_credentials).toBeUndefined();
+		expect(failed.allow_server_ambient).toBe(false);
 		expect(exchange).toHaveBeenCalledTimes(1);
 	});
 
@@ -291,6 +293,45 @@ describe('object content response helpers', () => {
 		await expect(streamObjectBody(object, release, finish).cancel('gone')).rejects.toThrow(
 			'cancel failed',
 		);
+		expect(close).toHaveBeenCalledOnce();
+		expect(release).toHaveBeenCalledOnce();
+		expect(finish).toHaveBeenCalledOnce();
+	});
+
+	it('aborts an open response stream and releases its permit at the operation deadline', async () => {
+		const controller = new AbortController();
+		const close = vi.fn();
+		const release = vi.fn();
+		const finish = vi.fn();
+		const upstreamCancel = vi.fn();
+		const object = body(new ReadableStream({ cancel: upstreamCancel }), close);
+		const reader = streamObjectBody(object, release, finish, controller.signal).getReader();
+		const pending = reader.read();
+
+		controller.abort();
+
+		await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+		await vi.waitFor(() => expect(upstreamCancel).toHaveBeenCalledOnce());
+		expect(close).toHaveBeenCalledOnce();
+		expect(release).toHaveBeenCalledOnce();
+		expect(finish).toHaveBeenCalledOnce();
+	});
+
+	it('releases an unread response stream when its deadline expires', async () => {
+		const controller = new AbortController();
+		const close = vi.fn();
+		const release = vi.fn();
+		const finish = vi.fn();
+		const stream = streamObjectBody(
+			body(new ReadableStream({ pull() {} }), close),
+			release,
+			finish,
+			controller.signal,
+		);
+
+		controller.abort();
+
+		await expect(stream.getReader().read()).rejects.toMatchObject({ name: 'AbortError' });
 		expect(close).toHaveBeenCalledOnce();
 		expect(release).toHaveBeenCalledOnce();
 		expect(finish).toHaveBeenCalledOnce();

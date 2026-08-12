@@ -46,6 +46,7 @@ import {
 	tableBrowseCapability,
 } from '@/lib/integrationBrowse';
 import { formatRelative } from '@/lib/time';
+import { errorMessage } from '@/lib/errors';
 import { cn } from '@/lib/utils';
 import type { IntegrationEntry, IntegrationKind } from '@/types';
 import { useSeededNotebook } from './notebookSeed';
@@ -325,7 +326,11 @@ export default function DataBrowserPage() {
 								<EmptyState
 									icon={<Folder />}
 									message="Object browsing unavailable"
-									description={selectedObjectCapability?.reason ?? 'Checking object-store access…'}
+									description={
+										selectedCapability.error
+											? errorMessage(selectedCapability.error)
+											: (selectedObjectCapability?.reason ?? 'Checking object-store access…')
+									}
 								/>
 							)
 						) : selected && selection ? (

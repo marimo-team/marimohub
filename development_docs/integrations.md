@@ -190,9 +190,10 @@ and resolve the integration before opening a stream, accept at most one byte ran
 nosniff headers, sanitize `Content-Disposition`, and release the provider client on completion,
 failure, deadline, or client cancellation. Pre-stream failures still use the standard envelope.
 
-Metadata lists use a short state-token cache. Details, search, previews, tags, versions, streams,
-credentials, provider clients, and failures are never cached. Explicit preview/download reads append
-audit events; navigation does not. Live S3 transport behavior is covered by
+Metadata lists use a short state-token cache. Short-lived federated credentials are cached in memory
+until their refresh window; details, search, previews, tags, versions, streams, provider clients, and
+failures are not cached. Explicit preview/download reads append audit events; navigation does not.
+Live S3 transport behavior is covered by
 `objectBrowseContract` against pinned MinIO in the Object browser conformance workflow.
 
 Servers differ in pagination and namespace addressing, so the `iceberg_rest`

@@ -36,7 +36,7 @@ export function objectBrowseContract(
 		}, 30_000);
 
 		afterAll(async () => {
-			if (fixture) await opts.teardown?.(fixture)?.catch(() => {});
+			if (fixture) await opts.teardown?.(fixture);
 		});
 
 		async function collect(

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
@@ -15,6 +15,7 @@ import {
 } from '@/api/hooks';
 import { Button, Chip, EmptyState, IconButton, Skeleton, TextField } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
+import { errorMessage } from '@/lib/errors';
 import { cn } from '@/lib/utils';
 import type { IntegrationEntry, IntegrationObjectEntry, IntegrationObjectPreview } from '@/types';
 import { useSeededNotebook } from './notebookSeed';
@@ -49,12 +50,31 @@ export function ObjectBrowser({
 	const [sizeFilter, setSizeFilter] = useState('all');
 	const [modifiedAfter, setModifiedAfter] = useState('');
 	const [sort, setSort] = useState('name-asc');
-	const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+	const [selection, setSelection] = useState(() => ({
+		location: objectSelectionLocation(bucketParam, prefix, key),
+		keys: new Set(key ? [key] : []),
+	}));
+	const pendingSelectionLocation = useRef<string | undefined>(undefined);
 	const [searchDraft, setSearchDraft] = useState(searchQuery);
 	useEffect(() => setSearchDraft(searchQuery), [searchQuery]);
 	const buckets = useObjectBucketsQuery(projectId, integration.id);
 	const bucketItems = buckets.data?.pages.flatMap((page) => page.items) ?? [];
-	const bucket = bucketParam || (bucketItems.length === 1 ? bucketItems[0].name : '');
+	const bucket =
+		bucketParam || (bucketItems.length === 1 && !buckets.hasNextPage ? bucketItems[0].name : '');
+	const selectionLocation = objectSelectionLocation(bucket, prefix, key);
+	const selectedKeys =
+		selection.location === selectionLocation ? selection.keys : new Set(key ? [key] : []);
+	useEffect(() => {
+		if (pendingSelectionLocation.current === selectionLocation) {
+			pendingSelectionLocation.current = undefined;
+			return;
+		}
+		setSelection((current) =>
+			current.location === selectionLocation
+				? current
+				: { location: selectionLocation, keys: new Set(key ? [key] : []) },
+		);
+	}, [key, selectionLocation]);
 	const listing = useObjectsQuery(
 		projectId,
 		integration.id,
@@ -110,11 +130,15 @@ export function ObjectBrowser({
 		});
 	};
 	const selectBucket = (value: string) => {
-		setSelectedKeys(new Set());
+		const location = objectSelectionLocation(value, '', '');
+		pendingSelectionLocation.current = location;
+		setSelection({ location, keys: new Set() });
 		update({ bucket: value, prefix: undefined, key: undefined, version: undefined, q: undefined });
 	};
 	const selectPrefix = (value: string) => {
-		setSelectedKeys(new Set());
+		const location = objectSelectionLocation(bucket, value, '');
+		pendingSelectionLocation.current = location;
+		setSelection({ location, keys: new Set() });
 		setSearchDraft('');
 		update({ prefix: value, key: undefined, version: undefined, q: undefined });
 	};
@@ -122,12 +146,18 @@ export function ObjectBrowser({
 		if (entry.kind === 'prefix') {
 			selectPrefix(entry.key);
 		} else {
-			setSelectedKeys((current) => {
-				if (!(event?.metaKey || event?.ctrlKey)) return new Set([entry.key]);
-				const next = new Set(current);
+			const location = objectSelectionLocation(bucket, prefix, entry.key);
+			pendingSelectionLocation.current = location;
+			setSelection((current) => {
+				if (!(event?.metaKey || event?.ctrlKey)) {
+					return { location, keys: new Set([entry.key]) };
+				}
+				const next = new Set(
+					current.location === selectionLocation ? current.keys : key ? [key] : [],
+				);
 				if (next.has(entry.key)) next.delete(entry.key);
 				else next.add(entry.key);
-				return next;
+				return { location, keys: next };
 			});
 			update({ key: entry.key, version: undefined });
 		}
@@ -135,12 +165,12 @@ export function ObjectBrowser({
 	const parentPrefix = prefix ? prefix.replace(/[^/]+\/$/, '') : '';
 	const searchSummary = search.data?.pages.at(-1);
 	const listError = activeSearchQuery ? search.error : listing.error;
+	const { copy: copySelection } = useCopyToClipboard();
 	const copySelectedUris = () => {
 		const keys = selectedKeys.size > 0 ? [...selectedKeys] : key ? [key] : [];
-		void navigator.clipboard
-			.writeText(keys.map((value) => `s3://${bucket}/${value}`).join('\n'))
-			.then(() => toast.success(`Copied ${keys.length} object URI${keys.length === 1 ? '' : 's'}`))
-			.catch(() => toast.error('Could not copy object URIs'));
+		void copySelection(keys.map((value) => `s3://${bucket}/${value}`).join('\n')).then((copied) => {
+			if (copied) toast.success(`Copied ${keys.length} object URI${keys.length === 1 ? '' : 's'}`);
+		});
 	};
 	const handleListKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
 		if (event.key === 'Backspace' && prefix) {
@@ -179,18 +209,29 @@ export function ObjectBrowser({
 								description="The integration credentials did not return an accessible bucket."
 							/>
 						) : (
-							bucketItems.map((item) => (
-								<button
-									key={item.name}
-									type="button"
-									onClick={() => selectBucket(item.name)}
-									className="flex w-full touch-manipulation items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11"
-								>
-									<Folder className="size-4" aria-hidden />
-									<span className="truncate">{item.name}</span>
-									{item.configured && <Chip className="ml-auto">configured</Chip>}
-								</button>
-							))
+							<>
+								{bucketItems.map((item) => (
+									<button
+										key={item.name}
+										type="button"
+										onClick={() => selectBucket(item.name)}
+										className="flex w-full touch-manipulation items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11"
+									>
+										<Folder className="size-4" aria-hidden />
+										<span className="truncate">{item.name}</span>
+										{item.configured && <Chip className="ml-auto">configured</Chip>}
+									</button>
+								))}
+								{buckets.hasNextPage && (
+									<Button
+										className="mt-2 w-full"
+										isDisabled={buckets.isFetchingNextPage}
+										onPress={() => void buckets.fetchNextPage()}
+									>
+										{buckets.isFetchingNextPage ? 'Loading buckets…' : 'Load more buckets'}
+									</Button>
+								)}
+							</>
 						)}
 					</div>
 				) : (
@@ -388,6 +429,7 @@ export function ObjectBrowser({
 			<section className="min-h-0 overflow-y-auto rounded-xl border bg-card p-4">
 				{bucket && key ? (
 					<ObjectDetail
+						key={JSON.stringify([bucket, key, versionId ?? null])}
 						projectId={projectId}
 						integration={integration}
 						bucket={bucket}
@@ -440,7 +482,6 @@ function ObjectDetail({
 		versionsAvailable,
 	);
 	const preview = useObjectPreview(projectId, integration.id);
-	const { copied, copy } = useCopyToClipboard();
 	const seededNotebook = useSeededNotebook(projectId);
 	if (!detail.data) {
 		return detail.error ? (
@@ -485,37 +526,13 @@ function ObjectDetail({
 					</p>
 				</div>
 				<div className="flex flex-wrap gap-2">
-					<IconButton
-						label={copied ? 'Copied URI' : 'Copy URI'}
-						tooltip="Copy URI"
-						onPress={() => void copy(uri)}
-					>
-						{copied ? (
-							<Check className="size-4" aria-hidden />
-						) : (
-							<Copy className="size-4" aria-hidden />
-						)}
-					</IconButton>
-					<IconButton
-						label="Copy key"
-						tooltip="Copy key"
-						onPress={() => void navigator.clipboard.writeText(objectKey)}
-					>
-						<Copy className="size-4" aria-hidden />
-					</IconButton>
+					<CopyIconButton label="URI" value={uri} />
+					<CopyIconButton label="key" value={objectKey} />
+					{detail.data.snippet && <CopyIconButton label="snippet" value={detail.data.snippet} />}
 					{detail.data.snippet && (
-						<IconButton
-							label="Copy snippet"
-							tooltip="Copy snippet"
-							onPress={() => void navigator.clipboard.writeText(detail.data.snippet ?? '')}
-						>
-							<Copy className="size-4" aria-hidden />
-						</IconButton>
-					)}
-					{detail.data.snippet && (
-						<Button onPress={() => void openInNotebook()}>
+						<Button isDisabled={seededNotebook.isPending} onPress={() => void openInNotebook()}>
 							<NotebookPen className="size-4" aria-hidden />
-							Open in notebook
+							{seededNotebook.isPending ? 'Creating notebook…' : 'Open in notebook'}
 						</Button>
 					)}
 					{downloadAvailable && (
@@ -807,14 +824,27 @@ function ObjectFilterSelect({
 	);
 }
 
+function CopyIconButton({ label, value }: { label: string; value: string }) {
+	const { copied, copy } = useCopyToClipboard();
+	return (
+		<IconButton
+			label={`${copied ? 'Copied' : 'Copy'} ${label}`}
+			tooltip={`Copy ${label}`}
+			onPress={() => void copy(value)}
+		>
+			{copied ? <Check className="size-4" aria-hidden /> : <Copy className="size-4" aria-hidden />}
+		</IconButton>
+	);
+}
+
 function safeNotebookTitle(key: string): string {
 	return (
 		(key.split('/').at(-1) ?? 'object').replaceAll(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 48) || 'object'
 	);
 }
 
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : 'The object-store request failed.';
+function objectSelectionLocation(bucket: string, prefix: string, key: string): string {
+	return JSON.stringify([bucket, prefix, key]);
 }
 
 const tabClass =
