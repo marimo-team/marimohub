@@ -77,7 +77,7 @@ jobs:
           MARIMOHUB_TEST_CLICKHOUSE_HOST: 127.0.0.1
           MARIMOHUB_TEST_CLICKHOUSE_PORT: 18123
         run: |
-          pnpm --filter @marimo-hub/core exec vp test \
-            src/services/integrations/kinds/icebergRest.browse.live.test.ts \
-            src/services/integrations/kinds/trino.browse.live.test.ts \
-            src/services/integrations/kinds/clickhouse.browse.live.test.ts
+          vp test \
+            packages/core/src/services/integrations/kinds/icebergRest.browse.live.test.ts \
+            packages/core/src/services/integrations/kinds/trino.browse.live.test.ts \
+            packages/core/src/services/integrations/kinds/clickhouse.browse.live.test.ts
