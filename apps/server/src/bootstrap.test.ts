@@ -112,6 +112,28 @@ describe('bootstrap', () => {
 		expect(harness.exit).not.toHaveBeenCalled();
 	});
 
+	it('prepares dependencies before preflight and serving', async () => {
+		const order: string[] = [];
+		deps.preflight = async () => {
+			order.push('preflight');
+			return { ok: true, fatal: false, checks: [] };
+		};
+		const harness = makeHarness(deps);
+		harness.serveFn.mockImplementationOnce(() => {
+			order.push('serve');
+			return harness.server;
+		});
+
+		await bootstrap(BASE_ENV, {
+			...harness.overrides,
+			prepareDeps: async () => {
+				order.push('prepare');
+			},
+		});
+
+		expect(order).toEqual(['prepare', 'preflight', 'serve']);
+	});
+
 	it('registers both drain signals without OpenTelemetry', async () => {
 		const harness = makeHarness(deps);
 

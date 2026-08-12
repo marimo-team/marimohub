@@ -30,6 +30,7 @@
 		"@marimo-hub/tsconfig": "workspace:*",
 		"@opentelemetry/core": "catalog:",
 		"@types/node": "catalog:",
+		"tsx": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",
 		"vitest": "catalog:"

@@ -35,14 +35,18 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-`pnpm dev` builds the server package, watches it, runs the Node server, and runs
-the web dev server. It sets the local backend selectors for you:
+`pnpm dev` watches the TypeScript server and runs it with the Vite web server in
+parallel. It skips the production server build. The development entrypoint sets:
 
 ```bash
 MARIMOHUB_STORAGE_BACKEND=memory
 MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true
 MARIMOHUB_COMPUTE_BACKEND=local
 MARIMOHUB_AUTH_BACKEND=dev
+MARIMOHUB_SUPER_ADMINS=user@localhost
+MARIMOHUB_INTEGRATIONS=on
+MARIMOHUB_INTEGRATIONS_PROBE=private
+MARIMOHUB_DATA_BROWSER=metadata
 ```
 
 Startup is ready when the `server` process is listening on port `3000` and the
@@ -57,9 +61,10 @@ the web dev server proxies `/api` requests to it.
 | Compute | `local`, host process   | CoreWeave, Modal, Kubernetes, Docker, Podman -> [Compute](./compute.md) |
 | Auth    | `dev`, fixed local user | OIDC or Cloudflare Access -> [Auth](./auth.md)                          |
 
-The local stack is not a production mode. It stores nothing durably, starts
-kernels on your machine, and authenticates every request as a fixed development
-user.
+The local stack stores nothing durably. It starts kernels on your machine and
+authenticates every request as a fixed super admin. It enables integrations and
+metadata browsing, then seeds an org-wide `local-development` integration. The
+development entrypoint does not change deployed defaults.
 
 ## Run the server manually
 
@@ -70,8 +75,8 @@ the example when you want persistent local overrides:
 cp apps/server/.env.example apps/server/.env
 ```
 
-The script's in-memory storage, local compute, and development-auth defaults
-take precedence over the file.
+The development entrypoint overrides its storage, compute, auth, access, and
+feature values. The file can set other values, such as `PORT`.
 
 ## Validate the local run
 

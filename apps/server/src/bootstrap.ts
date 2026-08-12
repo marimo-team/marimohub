@@ -20,6 +20,7 @@ type Signal = 'SIGTERM' | 'SIGINT';
 
 export interface BootstrapOverrides {
 	createDeps?: typeof createFromEnv;
+	prepareDeps?: (deps: ApiDeps) => Promise<void>;
 	serveFn?: typeof serve;
 	startOtelFn?: typeof startOtel;
 	exit?: (code: number) => void;
@@ -36,6 +37,7 @@ export async function bootstrap(
 	overrides: BootstrapOverrides = {},
 ): Promise<BootstrapHandle | undefined> {
 	const createDeps = overrides.createDeps ?? createFromEnv;
+	const prepareDeps = overrides.prepareDeps;
 	const serveFn = overrides.serveFn ?? serve;
 	const startOtelFn = overrides.startOtelFn ?? startOtel;
 	const exit = overrides.exit ?? ((code) => process.exit(code));
@@ -67,6 +69,7 @@ export async function bootstrap(
 	try {
 		validatedEnv = validateServerEnv(env);
 		deps = createDeps(validatedEnv, metrics, { tracing: otel?.tracing ?? false });
+		await prepareDeps?.(deps);
 	} catch (err) {
 		if (isConfigError(err)) {
 			console.error(`\n${err.format()}\n`);

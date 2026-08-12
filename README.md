@@ -34,12 +34,13 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-The root `pnpm dev` script runs the server and web app with dependency-free
-local backends:
+`pnpm dev` watches the TypeScript server and runs it with the Vite web app in
+parallel. It skips the production server build. The local stack uses:
 
 - `memory` storage, which is non-durable
 - `local` compute, which starts `uv run marimo edit`
-- `dev` auth, which signs everyone in as a fixed local user
+- `dev` auth, which signs everyone in as a fixed local super admin
+- integrations and the metadata data browser, with one org-wide sample integration
 
 See [Testing locally](./docs/testing-locally.md) for the full local path and the
 production swaps for each backend.
