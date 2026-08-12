@@ -910,11 +910,15 @@ export class NotebookService {
 						(raw) => parseStored(VersionSchema, raw, ver.meta),
 						(current): Version => {
 							supersededKeys = [
-								capturedHtmlDescriptor && current.html_snapshot?.capture_id
-									? ver.capture(current.html_snapshot.capture_id).html
+								capturedHtmlDescriptor && current.html_snapshot
+									? current.html_snapshot.capture_id
+										? ver.capture(current.html_snapshot.capture_id).html
+										: ver.html
 									: undefined,
-								capturedSessionDescriptor && current.session_snapshot?.capture_id
-									? ver.capture(current.session_snapshot.capture_id).session
+								capturedSessionDescriptor && current.session_snapshot
+									? current.session_snapshot.capture_id
+										? ver.capture(current.session_snapshot.capture_id).session
+										: ver.session
 									: undefined,
 							].filter((key): key is string => key !== undefined);
 							return {

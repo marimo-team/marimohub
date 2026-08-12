@@ -414,34 +414,31 @@ export class SandboxProvisioner {
 		mountPath: string,
 	): Promise<void> {
 		if (!options.sourceVersionId) return;
-		if (!options.bucketHandle) {
-			throw provisionFailure(
-				'restoring the committed notebook source',
-				new Error('bucket handle is required to read the authoritative version'),
-			);
-		}
+		try {
+			if (!options.bucketHandle) {
+				throw new Error('bucket handle is required to read the authoritative version');
+			}
 
-		const ver = paths
-			.project(options.projectId)
-			.notebook(options.notebookId)
-			.version(options.sourceVersionId);
-		const [code, deps] = await Promise.all([
-			options.bucketHandle.get(ver.code),
-			options.bucketHandle.get(ver.deps),
-		]);
-		if (!code) {
-			throw provisionFailure(
-				'restoring the committed notebook source',
-				new Error(`version ${options.sourceVersionId} has no notebook.py`),
-			);
+			const ver = paths
+				.project(options.projectId)
+				.notebook(options.notebookId)
+				.version(options.sourceVersionId);
+			const [code, deps] = await Promise.all([
+				options.bucketHandle.get(ver.code),
+				options.bucketHandle.get(ver.deps),
+			]);
+			if (!code) {
+				throw new Error(`version ${options.sourceVersionId} has no notebook.py`);
+			}
+			const codeBytes = await code.bytes();
+			const depsBytes = deps ? await deps.bytes() : new Uint8Array();
+			await sandbox.writeFiles([
+				{ path: `${mountPath}/notebook.py`, content: codeBytes },
+				{ path: `${mountPath}/pyproject.toml`, content: depsBytes },
+			]);
+		} catch (err) {
+			throw provisionFailure('restoring the committed notebook source', err);
 		}
-		await sandbox.writeFiles([
-			{ path: `${mountPath}/notebook.py`, content: await code.bytes() },
-			{
-				path: `${mountPath}/pyproject.toml`,
-				content: deps ? await deps.bytes() : new Uint8Array(),
-			},
-		]);
 	}
 
 	private async injectSessionEnv(

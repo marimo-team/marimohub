@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryBucket } from '../../testing';
 import {
 	BadRequestError,
@@ -49,6 +49,11 @@ describe('NotebookService', () => {
 			ACTOR,
 		);
 		projectId = project.id;
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
 	});
 
 	describe('createNotebook', () => {
@@ -300,6 +305,50 @@ describe('NotebookService', () => {
 				);
 			}
 			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(1);
+		});
+
+		it('does not resurrect a notebook deleted before sync metadata publication', async () => {
+			const { meta } = await create();
+			const nb = paths.project(projectId).notebook(meta.id);
+			const realPut = bucket.put.bind(bucket);
+			let metaPutReached!: () => void;
+			let releaseMetaPut!: () => void;
+			const atMetaPut = new Promise<void>((resolve) => {
+				metaPutReached = resolve;
+			});
+			const metaPutGate = new Promise<void>((resolve) => {
+				releaseMetaPut = resolve;
+			});
+			let gated = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				const status =
+					typeof value === 'string' ? (JSON.parse(value) as { status?: string }).status : undefined;
+				if (key === nb.meta && status === 'active' && options?.onlyIfEtagMatches && !gated) {
+					gated = true;
+					metaPutReached();
+					await metaPutGate;
+				}
+				return realPut(key, value, options);
+			});
+
+			const syncing = sync(meta.id, 'abc123', [{ path: 'app.py', bytes: enc('v1') }]);
+			const rejected = expect(syncing).rejects.toThrow(NotFoundError);
+			try {
+				await atMetaPut;
+				await notebooks.deleteNotebook(projectId, meta.id, ACTOR);
+				releaseMetaPut();
+				await rejected;
+
+				const stored = await (await bucket.get(nb.meta))!.json<any>();
+				const snapshot = await catalog.getCurrentSnapshot();
+				const project = snapshot.projects.find((candidate) => candidate.id === projectId)!;
+				expect(stored.status).toBe('deleted');
+				expect(project.notebooks[0].status).toBe('deleted');
+				expect(project.notebook_count).toBe(0);
+			} finally {
+				releaseMetaPut();
+				await Promise.allSettled([syncing]);
+			}
 		});
 
 		it('lists the current version workspace for download', async () => {
@@ -2014,6 +2063,45 @@ describe('NotebookService', () => {
 			expect(await bucket.get(firstKey)).toBeNull();
 			expect((await notebooks.getLatestHtmlSnapshot(projectId, created.id))?.html).toBe(
 				'<html>second</html>',
+			);
+		});
+
+		it('removes legacy fixed-path snapshots after publishing their replacements', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const detail = await notebooks.getNotebook(projectId, created.id);
+			if (detail.source.type !== 'local') throw new Error('Expected local source');
+			const ver = paths
+				.project(projectId)
+				.notebook(created.id)
+				.version(detail.source.current_version_id);
+			const version = await (await bucket.get(ver.meta))!.json<any>();
+			const capturedAt = new Date().toISOString();
+			await bucket.put(ver.html, '<html>legacy</html>');
+			await bucket.put(ver.session, '{"legacy":true}');
+			await bucket.put(
+				ver.meta,
+				JSON.stringify({
+					...version,
+					html_snapshot: { captured_at: capturedAt, size_bytes: 19 },
+					session_snapshot: { captured_at: capturedAt, size_bytes: 15 },
+				}),
+			);
+
+			await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'v1', html: '<html>new</html>', session: '{"new":true}' },
+				ACTOR,
+			);
+
+			expect(await bucket.get(ver.html)).toBeNull();
+			expect(await bucket.get(ver.session)).toBeNull();
+			expect((await notebooks.getLatestHtmlSnapshot(projectId, created.id))?.html).toBe(
+				'<html>new</html>',
 			);
 		});
 

@@ -1,4 +1,5 @@
 import type { Bucket } from '../../ports/bucket';
+import { NotFoundError } from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR } from '../../ids';
 import type { NotebookId, ProjectId, UserId, VersionId } from '../../ids';
 import {
@@ -211,6 +212,9 @@ export class SyncedNotebookService {
 		actor: UserId = SYSTEM_ACTOR,
 	): Promise<NotebookMeta> {
 		const { meta: existing, source } = await this.hooks.getNotebook(projectId, notebookId);
+		if (existing.status === 'deleted') {
+			throw new NotFoundError(`Notebook ${notebookId} not found`);
+		}
 		const syncedSource = assertSyncedSource(source);
 		const prepared = prepareSync(syncedSource, input);
 
@@ -277,10 +281,19 @@ export class SyncedNotebookService {
 			})
 			.run();
 
-		// Past the commit point. Meta and the catalog entry are denormalized views that
-		// reconciliation can rebuild, so they update outside the saga.
-		const updatedMeta: NotebookMeta = { ...existing, status: 'active', updated_at: now };
-		await this.bucket.put(nb.meta, JSON.stringify(updatedMeta));
+		// Source advancement is the Git-content commit point. Publish the active status
+		// with CAS so a concurrent metadata tombstone remains authoritative.
+		const updatedMeta = await mutateObject(
+			this.bucket,
+			nb.meta,
+			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
+			(current) => {
+				if (current.status === 'deleted') {
+					throw new NotFoundError(`Notebook ${notebookId} not found`);
+				}
+				return { ...current, status: 'active' as const, updated_at: now };
+			},
+		);
 
 		await this.catalog.updateNotebookEntry(
 			'notebook.synced.sync',

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Millis } from '../../duration';
+import { UnavailableError } from '../../errors';
 import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import { paths } from '../../paths';
 import {
@@ -619,6 +620,99 @@ describe('SandboxProvisioner', () => {
 				.flat()
 				.find((file) => file.path === `${MOUNT_PATH}/notebook.py`);
 			expect(new TextDecoder().decode(notebook?.content as Uint8Array)).toBe('committed code');
+		});
+
+		it('wraps a source-version bucket read failure as unavailable', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const failure = new Error('vendor request included a secret');
+			vi.spyOn(bucketHandle, 'get').mockRejectedValueOnce(failure);
+
+			const result = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				sourceVersionId: createVersionId(),
+			});
+
+			await expect(result).rejects.toSatisfy(
+				(error: unknown) =>
+					error instanceof UnavailableError &&
+					error.code === 'SERVICE_UNAVAILABLE' &&
+					error.status === 503 &&
+					error.cause === failure &&
+					!error.message.includes('secret'),
+			);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('wraps a source-version body read failure as unavailable', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const versionId = createVersionId();
+			const codeKey = paths.project(projectId).notebook(notebookId).version(versionId).code;
+			await bucketHandle.put(codeKey, 'committed code');
+			const realGet = bucketHandle.get.bind(bucketHandle);
+			const failure = new Error('body stream failed with a secret');
+			vi.spyOn(bucketHandle, 'get').mockImplementation(async (key) => {
+				const object = await realGet(key);
+				if (key !== codeKey || !object) return object;
+				return {
+					...object,
+					bytes: async () => {
+						throw failure;
+					},
+				};
+			});
+
+			const result = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				sourceVersionId: versionId,
+			});
+
+			await expect(result).rejects.toSatisfy(
+				(error: unknown) =>
+					error instanceof UnavailableError &&
+					error.cause === failure &&
+					!error.message.includes('secret'),
+			);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('wraps a source-version sandbox write failure as unavailable', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const versionId = createVersionId();
+			const ver = paths.project(projectId).notebook(notebookId).version(versionId);
+			await bucketHandle.put(ver.code, 'committed code');
+			const failure = new Error('compute write exposed a secret');
+			vi.spyOn(instance, 'writeFiles').mockRejectedValue(failure);
+
+			const result = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				sourceVersionId: versionId,
+			});
+
+			await expect(result).rejects.toSatisfy(
+				(error: unknown) =>
+					error instanceof UnavailableError &&
+					error.cause === failure &&
+					!error.message.includes('secret'),
+			);
+			expect(calls.destroy).toBe(1);
 		});
 
 		it('uses the injected workspace loader selected by workspaceLoadMode', async () => {
