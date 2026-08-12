@@ -210,6 +210,27 @@ describe('preview format boundaries', () => {
 		);
 	});
 
+	it('finds the bounded row prefix with logarithmic serializations', async () => {
+		const record = Object.fromEntries(
+			Array.from({ length: 200 }, (_, index) => [`c${index}`, 'x'.repeat(300)]),
+		);
+		const bytes = new TextEncoder().encode(
+			JSON.stringify(Array.from({ length: 100 }, () => record)),
+		);
+		const encode = vi.spyOn(TextEncoder.prototype, 'encode');
+		const test = harness([
+			{ ContentLength: bytes.length, ContentType: 'application/json' },
+			{ Body: body(bytes) },
+		]);
+		const preview = await test.preview('many-wide-rows.json', 100);
+		expect(preview).toMatchObject({ kind: 'tabular', truncated: true });
+		const previewSerializations = encode.mock.calls.filter(
+			([value]) => typeof value === 'string' && value.startsWith('{"kind":"tabular"'),
+		);
+		expect(previewSerializations.length).toBeLessThanOrEqual(10);
+		encode.mockRestore();
+	});
+
 	it('returns unsupported for an empty unknown object and an oversized image', async () => {
 		const empty = harness([{ ContentLength: 0 }]);
 		await expect(empty.preview('unknown.bin')).resolves.toMatchObject({

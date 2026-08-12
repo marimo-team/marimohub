@@ -2,7 +2,7 @@ import type * as dnsPromises from 'node:dns/promises';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createGuardedProbe } from './integrationProbe';
+import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 import type { ProbeTransportRequest } from './integrationProbe';
 
 type PinnedAddress = { address: string; family: number };
@@ -218,6 +218,19 @@ describe('createGuardedProbe policy', () => {
 
 		vi.advanceTimersByTime(60_001);
 		await expect(probe.fetch('http://10.0.0.5/')).resolves.toMatchObject({ ok: true });
+	});
+});
+
+describe('createGuardedHostResolver', () => {
+	it('stops waiting for DNS when the operation signal aborts', async () => {
+		dns.delayMs = 200;
+		const controller = new AbortController();
+		const pending = createGuardedHostResolver({ allowPrivate: true, timeoutMs: 1_000 })(
+			'localhost',
+			controller.signal,
+		);
+		controller.abort();
+		await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
 	});
 });
 

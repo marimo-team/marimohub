@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { V4MAPPED } from 'node:dns';
+import { ALL, V4MAPPED } from 'node:dns';
 import { describe, expect, it, vi } from 'vitest';
 import { ObjectBrowseError } from '@marimo-hub/core';
 import { createGuardedLookup, endpointsMatch, enforcedTimeouts } from './client';
@@ -161,6 +161,26 @@ describe('guarded DNS lookup', () => {
 		await expect(
 			lookupResult(ipv4Only, 'objects.example.com', { family: 6, hints: V4MAPPED }),
 		).resolves.toEqual({ address: '::ffff:192.0.2.2', family: 6 });
+		await expect(
+			lookupResult(lookup, 'objects.example.com', {
+				all: true,
+				family: 6,
+				hints: V4MAPPED | ALL,
+			}),
+		).resolves.toEqual({
+			addresses: [
+				{ address: '2001:db8::1', family: 6 },
+				{ address: '::ffff:192.0.2.1', family: 6 },
+			],
+		});
+	});
+
+	it('passes the operation abort signal to guarded resolution', async () => {
+		const signal = new AbortController().signal;
+		const resolver = vi.fn().mockResolvedValue([{ address: '192.0.2.1', family: 4 }]);
+		const lookup = createGuardedLookup(resolver, signal);
+		await lookupResult(lookup, 'objects.example.com', {});
+		expect(resolver).toHaveBeenCalledWith('objects.example.com', signal);
 	});
 
 	it('fails closed for empty or rejected resolver output', async () => {

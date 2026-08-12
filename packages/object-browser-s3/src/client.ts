@@ -1,6 +1,6 @@
 import { Agent as HttpAgent } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
-import { V4MAPPED } from 'node:dns';
+import { ALL, V4MAPPED } from 'node:dns';
 import type { LookupFunction } from 'node:net';
 import { S3Client } from '@aws-sdk/client-s3';
 import type { ObjectBrowseContext, ObjectStoreSource } from '@marimo-hub/core';
@@ -12,7 +12,10 @@ export interface PinnedAddress {
 	family: number;
 }
 
-export type GuardedHostResolver = (hostname: string) => Promise<PinnedAddress[]>;
+export type GuardedHostResolver = (
+	hostname: string,
+	signal?: AbortSignal,
+) => Promise<PinnedAddress[]>;
 
 export interface S3ClientLike {
 	send(command: unknown, options?: { abortSignal?: AbortSignal }): Promise<unknown>;
@@ -30,7 +33,7 @@ export function createS3ClientFactory(options: {
 	requestTimeoutMs?: number;
 }): S3ClientFactory {
 	return (source, context) => {
-		const lookup = createGuardedLookup(options.resolveHost);
+		const lookup = createGuardedLookup(options.resolveHost, context.signal);
 		const requestHandler = new NodeHttpHandler({
 			httpAgent: new HttpAgent({ lookup }),
 			httpsAgent: new HttpsAgent({ lookup }),
@@ -98,27 +101,33 @@ export function endpointsMatch(left: string | undefined, right: string | undefin
 	}
 }
 
-export function createGuardedLookup(resolveHost: GuardedHostResolver): LookupFunction {
+export function createGuardedLookup(
+	resolveHost: GuardedHostResolver,
+	signal?: AbortSignal,
+): LookupFunction {
 	return ((hostname: string, lookupOptions: unknown, callback: unknown) => {
 		const cb = callback as (err: Error | null, address?: unknown, family?: number) => void;
-		void resolveHost(hostname).then(
+		void resolveHost(hostname, signal).then(
 			(addresses) => {
 				const options =
-					typeof lookupOptions === 'object' && lookupOptions !== null
-						? (lookupOptions as { all?: boolean; family?: number; hints?: number })
-						: {};
+					typeof lookupOptions === 'number'
+						? { family: lookupOptions }
+						: typeof lookupOptions === 'object' && lookupOptions !== null
+							? (lookupOptions as { all?: boolean; family?: number; hints?: number })
+							: {};
 				const requestedFamily = options.family === 4 || options.family === 6 ? options.family : 0;
 				let candidates = requestedFamily
 					? addresses.filter((address) => address.family === requestedFamily)
 					: addresses;
-				if (
-					requestedFamily === 6 &&
-					candidates.length === 0 &&
-					((options.hints ?? 0) & V4MAPPED) !== 0
-				) {
-					candidates = addresses
-						.filter((address) => address.family === 4)
-						.map((address) => ({ address: `::ffff:${address.address}`, family: 6 }));
+				const hints = options.hints ?? 0;
+				if (requestedFamily === 6 && (hints & V4MAPPED) !== 0) {
+					const includeMapped = candidates.length === 0 || (hints & ALL) !== 0;
+					if (includeMapped) {
+						const mapped = addresses
+							.filter((address) => address.family === 4)
+							.map((address) => ({ address: `::ffff:${address.address}`, family: 6 }));
+						candidates = [...candidates, ...mapped];
+					}
 				}
 				if (candidates.length === 0) {
 					cb(new Error('The object-store hostname did not resolve.'));

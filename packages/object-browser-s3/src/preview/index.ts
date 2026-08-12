@@ -494,10 +494,18 @@ function scalarText(value: unknown): string {
 
 function boundTable(preview: TabularPreview): TabularPreview {
 	preview.warnings = [...new Set(preview.warnings)];
-	while (preview.rows.length > 0 && serializedByteLength(preview) > MAX_RESULT_BYTES) {
-		preview.rows.pop();
-		preview.truncated = true;
+	if (serializedByteLength(preview) <= MAX_RESULT_BYTES) return preview;
+	const rows = preview.rows;
+	preview.truncated = true;
+	let lower = 0;
+	let upper = rows.length;
+	while (lower < upper) {
+		const candidate = Math.ceil((lower + upper) / 2);
+		preview.rows = rows.slice(0, candidate);
+		if (serializedByteLength(preview) <= MAX_RESULT_BYTES) lower = candidate;
+		else upper = candidate - 1;
 	}
+	preview.rows = rows.slice(0, lower);
 	if (serializedByteLength(preview) > MAX_RESULT_BYTES) {
 		throw new ObjectBrowseError('unsupported', 'The preview result exceeds the response limit.');
 	}
