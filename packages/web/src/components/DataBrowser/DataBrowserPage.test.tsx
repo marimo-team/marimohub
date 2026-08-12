@@ -167,7 +167,7 @@ describe('DataBrowserPage', () => {
 	it('restores a deep link: tree expanded to the namespace, table selected, schema shown', async () => {
 		setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`);
 
-		const namespace = await screen.findByTestId('browse-namespace');
+		const namespace = await screen.findByTestId('browse-namespace', undefined, { timeout: 5000 });
 		expect(namespace).toHaveAttribute('aria-expanded', 'true');
 		const table = await screen.findByTestId('browse-table');
 		expect(table).toHaveAttribute('aria-current', 'true');

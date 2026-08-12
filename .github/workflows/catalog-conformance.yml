@@ -4,7 +4,7 @@ name: Catalog conformance
 # against real catalog/engine servers. Each suite gates itself on its
 # MARIMOHUB_TEST_* env var and stays skipped in the ordinary CI test job; this
 # workflow starts the servers and turns them on. To cover a new kind, start
-# its server below and add its env var to the test step.
+# its server below. Add its env var and live test file to the test step.
 
 on:
   push:
