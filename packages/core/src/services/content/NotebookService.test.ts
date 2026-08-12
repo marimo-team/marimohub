@@ -302,6 +302,64 @@ describe('NotebookService', () => {
 			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(1);
 		});
 
+		it('does not resurrect a notebook deleted before sync metadata publication', async () => {
+			const { meta } = await create();
+			const nb = paths.project(projectId).notebook(meta.id);
+			const realPut = bucket.put.bind(bucket);
+			let metaPutReached!: () => void;
+			let releaseMetaPut!: () => void;
+			const atMetaPut = new Promise<void>((resolve) => {
+				metaPutReached = resolve;
+			});
+			const metaPutGate = new Promise<void>((resolve) => {
+				releaseMetaPut = resolve;
+			});
+			let gated = false;
+			const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				const status =
+					typeof value === 'string' ? (JSON.parse(value) as { status?: string }).status : undefined;
+				if (key === nb.meta && status === 'active' && !gated) {
+					gated = true;
+					metaPutReached();
+					await metaPutGate;
+				}
+				return realPut(key, value, options);
+			});
+
+			const syncing = sync(meta.id, 'abc123', [{ path: 'app.py', bytes: enc('v1') }]);
+			try {
+				await atMetaPut;
+				await notebooks.deleteNotebook(projectId, meta.id, ACTOR);
+				releaseMetaPut();
+				await expect(syncing).rejects.toThrow(NotFoundError);
+
+				const stored = await (await bucket.get(nb.meta))!.json<any>();
+				const snapshot = await catalog.getCurrentSnapshot();
+				const project = snapshot.projects.find((candidate) => candidate.id === projectId)!;
+				expect(stored.status).toBe('deleted');
+				expect(project.notebooks[0].status).toBe('deleted');
+				expect(project.notebook_count).toBe(0);
+			} finally {
+				releaseMetaPut();
+				await Promise.allSettled([syncing]);
+				putSpy.mockRestore();
+			}
+		});
+
+		it('rejects a sync for an already-deleted notebook without writing content', async () => {
+			const { meta } = await create();
+			const nb = paths.project(projectId).notebook(meta.id);
+			await notebooks.deleteNotebook(projectId, meta.id, ACTOR);
+			const sourceBefore = await (await bucket.get(nb.source))!.text();
+
+			await expect(sync(meta.id, 'abc123', [{ path: 'app.py', bytes: enc('v1') }])).rejects.toThrow(
+				NotFoundError,
+			);
+
+			expect(await (await bucket.get(nb.source))!.text()).toBe(sourceBefore);
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
+		});
+
 		it('lists the current version workspace for download', async () => {
 			const { meta } = await create();
 			await sync(meta.id, 'abc123', [
@@ -1380,6 +1438,30 @@ describe('NotebookService', () => {
 	});
 
 	describe('commitSession', () => {
+		it('returns null without writing when the notebook is already deleted', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const nb = paths.project(projectId).notebook(created.id);
+			await notebooks.deleteNotebook(projectId, created.id, ACTOR);
+			const sourceBefore = await (await bucket.get(nb.source))!.text();
+			const versionCountBefore = await countVersionFolders(bucket, projectId, created.id);
+
+			const result = await notebooks.commitSession(
+				projectId,
+				created.id,
+				{ code: 'late edit' },
+				ACTOR,
+			);
+
+			expect(result).toBeNull();
+			expect(await (await bucket.get(nb.code))!.text()).toBe('v1');
+			expect(await (await bucket.get(nb.source))!.text()).toBe(sourceBefore);
+			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(versionCountBefore);
+		});
+
 		it('cuts a new version from changed code and updates the live notebook + source', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
