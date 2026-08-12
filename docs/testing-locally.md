@@ -43,6 +43,10 @@ MARIMOHUB_STORAGE_BACKEND=memory
 MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true
 MARIMOHUB_COMPUTE_BACKEND=local
 MARIMOHUB_AUTH_BACKEND=dev
+MARIMOHUB_SUPER_ADMINS=user
+MARIMOHUB_INTEGRATIONS=on
+MARIMOHUB_INTEGRATIONS_PROBE=private
+MARIMOHUB_DATA_BROWSER=metadata
 ```
 
 Startup is ready when the `server` process is listening on port `3000` and the
@@ -59,7 +63,10 @@ the web dev server proxies `/api` requests to it.
 
 The local stack is not a production mode. It stores nothing durably, starts
 kernels on your machine, and authenticates every request as a fixed development
-user.
+super admin. It also enables integrations and metadata browsing, and seeds an
+org-wide `local-development` environment-variable integration. All of these
+settings are scoped to the development entrypoint; deployed defaults are
+unchanged.
 
 ## Run the server manually
 
@@ -70,8 +77,8 @@ the example when you want persistent local overrides:
 cp apps/server/.env.example apps/server/.env
 ```
 
-The script's in-memory storage, local compute, and development-auth defaults
-take precedence over the file.
+The script's local storage, compute, auth, super-admin, and feature defaults take
+precedence over the file. Other values, such as `PORT`, can still be overridden.
 
 ## Validate the local run
 

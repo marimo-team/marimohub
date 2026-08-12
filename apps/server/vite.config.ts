@@ -11,6 +11,7 @@ export default defineConfig({
 		},
 	},
 	pack: {
+		entry: { index: 'src/index.ts', dev: 'src/dev.ts' },
 		platform: 'node',
 		format: ['esm'],
 		dts: false,

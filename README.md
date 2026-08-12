@@ -39,7 +39,8 @@ local backends:
 
 - `memory` storage, which is non-durable
 - `local` compute, which starts `uv run marimo edit`
-- `dev` auth, which signs everyone in as a fixed local user
+- `dev` auth, which signs everyone in as a fixed local super admin
+- integrations and the metadata data browser, with one org-wide sample integration
 
 See [Testing locally](./docs/testing-locally.md) for the full local path and the
 production swaps for each backend.
