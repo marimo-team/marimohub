@@ -21,6 +21,24 @@ import type {
 	TestResult,
 	UpdateIntegrationInput,
 } from '../../ports/integrations';
+import type {
+	ObjectBody,
+	ObjectBrowseContext,
+	ObjectBucket,
+	ObjectDetail,
+	ObjectEntry,
+	ObjectIdentity,
+	ObjectListRequest,
+	ObjectOpenRequest,
+	ObjectPage,
+	ObjectPageRequest,
+	ObjectPreview,
+	ObjectPreviewRequest,
+	ObjectSearchPage,
+	ObjectSearchRequest,
+	ObjectVersion,
+	ObjectVersionRequest,
+} from '../../ports/objectBrowser';
 
 /** Application service for project integrations and inherited organization integrations. */
 export interface ProjectIntegrationsService {
@@ -53,7 +71,11 @@ export interface ProjectIntegrationsService {
 	 * project-first, then the inherited org tier (shadowed org instances read
 	 * as absent) — the merged view members already have.
 	 */
-	browseCapability(projectId: ProjectId, id: IntegrationId): Promise<BrowseCapabilityResult>;
+	browseCapability(
+		projectId: ProjectId,
+		id: IntegrationId,
+		objectContext?: ObjectBrowseContext,
+	): Promise<BrowseCapabilityResult>;
 	browseNamespaces(
 		projectId: ProjectId,
 		id: IntegrationId,
@@ -79,6 +101,48 @@ export interface ProjectIntegrationsService {
 		table: string,
 		request: TablePreviewRequest,
 	): Promise<TablePreview>;
+	browseObjectBuckets(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectPageRequest,
+	): Promise<ObjectPage<ObjectBucket>>;
+	browseObjects(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectListRequest,
+	): Promise<ObjectPage<ObjectEntry>>;
+	searchObjects(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectSearchRequest,
+	): Promise<ObjectSearchPage>;
+	browseObjectDetail(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectIdentity,
+	): Promise<ObjectDetail>;
+	browseObjectVersions(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectVersionRequest,
+	): Promise<ObjectPage<ObjectVersion>>;
+	browseObjectPreview(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectPreviewRequest,
+	): Promise<ObjectPreview>;
+	openObject(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectOpenRequest,
+	): Promise<ObjectBody>;
 	/** Render exactly one resolved integration for an isolated preview sandbox. */
 	resolveForPreview(
 		projectId: ProjectId,

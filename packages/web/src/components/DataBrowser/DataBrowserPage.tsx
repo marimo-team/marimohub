@@ -41,6 +41,7 @@ import {
 } from '@/api/hooks';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { BRAND_ICONS } from '@/components/Project/brandIcons';
+import { supportsTableBrowse, tableBrowseCapability } from '@/lib/integrationBrowse';
 import { formatRelative } from '@/lib/time';
 import { cn } from '@/lib/utils';
 import type { IntegrationEntry, IntegrationKind } from '@/types';
@@ -143,7 +144,8 @@ export default function DataBrowserPage() {
 	const browsable = useMemo(
 		() =>
 			(entries ?? []).filter(
-				(entry) => entry.enabled && !entry.shadowed && kindsByName.get(entry.kind)?.supports_browse,
+				(entry) =>
+					entry.enabled && !entry.shadowed && supportsTableBrowse(kindsByName.get(entry.kind)),
 			),
 		[entries, kindsByName],
 	);
@@ -217,6 +219,7 @@ export default function DataBrowserPage() {
 
 	const selected = browsable.find((entry) => entry.id === iid);
 	const selectedCapability = useBrowseCapabilityQuery(pid!, iid ?? '', selected !== undefined);
+	const selectedTableCapability = tableBrowseCapability(selectedCapability.data);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-6 max-md:overflow-y-auto max-md:p-3">
@@ -291,7 +294,7 @@ export default function DataBrowserPage() {
 								projectId={pid!}
 								integration={selected}
 								selection={selection}
-								previewAvailable={selectedCapability.data?.preview ?? false}
+								previewAvailable={selectedTableCapability?.preview ?? false}
 							/>
 						) : (
 							<EmptyState
@@ -330,6 +333,7 @@ function IntegrationSection({
 	onActivate: () => void;
 } & TreeHandlers) {
 	const capability = useBrowseCapabilityQuery(projectId, entry.id, active);
+	const tables = tableBrowseCapability(capability.data);
 	const iconSlug = kind?.brand.icon;
 	const BrandIcon = iconSlug ? BRAND_ICONS[iconSlug] : undefined;
 
@@ -358,7 +362,7 @@ function IntegrationSection({
 			{active &&
 				(capability.data === undefined ? (
 					<LoadState depth={1} error={capability.error ?? undefined} />
-				) : capability.data.metadata ? (
+				) : tables?.available ? (
 					<NamespaceLevel
 						projectId={projectId}
 						integrationId={entry.id}
@@ -369,7 +373,7 @@ function IntegrationSection({
 				) : (
 					<LoadState
 						depth={1}
-						hint={capability.data.reason ?? 'This instance cannot be browsed.'}
+						hint={tables?.reason ?? 'This instance cannot be browsed as a table catalog.'}
 					/>
 				))}
 		</div>

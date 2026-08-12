@@ -1,5 +1,5 @@
 /** Shared env-reading primitives used by every `make*` config module. */
-import { foldCase } from '@marimo-hub/core';
+import { foldCase, Millis } from '@marimo-hub/core';
 import { ConfigError } from './errors';
 import type { ConfigErrorOptions } from './errors';
 
@@ -53,6 +53,42 @@ export function parseIntEnv(env: Env, key: string): number | undefined {
 	if (!Number.isInteger(n))
 		throw new ConfigError(`Invalid ${key}: ${raw} (expected an integer)`, { variable: key });
 	return n;
+}
+
+export function parseSecondsEnv(
+	env: Env,
+	key: string,
+	opts: { dflt: number; allowZero?: boolean; max?: number },
+): Millis;
+export function parseSecondsEnv(
+	env: Env,
+	key: string,
+	opts?: { dflt?: number; allowZero?: boolean; max?: number },
+): Millis | undefined;
+export function parseSecondsEnv(
+	env: Env,
+	key: string,
+	opts?: { dflt?: number; allowZero?: boolean; max?: number },
+): Millis | undefined {
+	const seconds = parseIntEnv(env, key) ?? opts?.dflt;
+	if (seconds === undefined) return undefined;
+	const minimum = opts?.allowZero ? 0 : 1;
+	const milliseconds = seconds * 1000;
+	if (
+		!Number.isSafeInteger(seconds) ||
+		!Number.isSafeInteger(milliseconds) ||
+		seconds < minimum ||
+		(opts?.max !== undefined && seconds > opts.max)
+	) {
+		const maximum = opts?.max === undefined ? '' : ` and <= ${opts.max}`;
+		throw new ConfigError(
+			`Invalid ${key}: ${seconds} (expected a safe integer >= ${minimum}${maximum})`,
+			{
+				variable: key,
+			},
+		);
+	}
+	return Millis.of(milliseconds);
 }
 
 /** Read an env value case-folded (trimmed + lowercased); undefined when unset or blank. */

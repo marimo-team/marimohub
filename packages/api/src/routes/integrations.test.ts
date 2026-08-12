@@ -78,7 +78,10 @@ describe('Integrations routes', () => {
 			category: 'database',
 			schema_version: 2,
 			json_schema: { type: 'object' },
+			browse_surfaces: [],
 		});
+		const s3 = kinds.find((k) => k.kind === 's3');
+		expect(s3).toMatchObject({ supports_browse: false, browse_surfaces: [] });
 	});
 
 	it('create → get returns a redacted config; the plaintext never appears anywhere', async () => {

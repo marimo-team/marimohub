@@ -93,6 +93,7 @@ const KindDescriptorSchema = z
 		),
 		supports_test: z.boolean(),
 		supports_browse: z.boolean(),
+		browse_surfaces: z.array(z.enum(['tables', 'objects'])),
 		secret_sources: z.object({
 			inline: z.boolean(),
 			references: z.array(
@@ -413,6 +414,26 @@ const BrowsePageQuery = z.object({
 
 const BrowseCapabilitySchema = z
 	.object({
+		surfaces: z.object({
+			tables: z
+				.object({
+					available: z.boolean(),
+					preview: z.boolean(),
+					reason: z.string().optional(),
+				})
+				.optional(),
+			objects: z
+				.object({
+					available: z.boolean(),
+					preview: z.boolean(),
+					download: z.boolean(),
+					search: z.literal('bounded-key-name'),
+					versions: z.boolean(),
+					preview_formats: z.array(z.string()),
+					reason: z.string().optional(),
+				})
+				.optional(),
+		}),
 		/** Whether namespace/table/schema browsing works for this instance. */
 		metadata: z.boolean(),
 		/** Whether row preview is available for this instance. */
@@ -841,7 +862,11 @@ const app = createApp();
 
 app.openapi(listKinds, (c) => {
 	const integrations = requireIntegrations(c.get('deps'));
-	return c.json({ success: true as const, data: integrations.listKinds() }, 200);
+	const data = integrations.listKinds().map((kind) => {
+		const browse_surfaces = kind.browse_surfaces.filter((surface) => surface === 'tables');
+		return { ...kind, browse_surfaces, supports_browse: browse_surfaces.length > 0 };
+	});
+	return c.json({ success: true as const, data }, 200);
 });
 
 app.openapi(listIntegrations, async (c) => {
@@ -1081,15 +1106,24 @@ app.openapi(browseCapability, async (c) => {
 	const { integrations, preview } = requireDataBrowser(deps);
 	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
 	const capability = await integrations.browseCapability(pid, iid);
+	const tablePreview =
+		preview &&
+		capability.metadata &&
+		(capability.hub_preview || deps.dataBrowser?.sandboxPreview?.available() === true);
 	return c.json(
 		{
 			success: true,
 			data: {
+				surfaces: capability.surfaces.tables
+					? {
+							tables: {
+								...capability.surfaces.tables,
+								preview: tablePreview,
+							},
+						}
+					: {},
 				metadata: capability.metadata,
-				preview:
-					preview &&
-					capability.metadata &&
-					(capability.hub_preview || deps.dataBrowser?.sandboxPreview?.available() === true),
+				preview: tablePreview,
 				...(capability.reason !== undefined ? { reason: capability.reason } : {}),
 			},
 		},

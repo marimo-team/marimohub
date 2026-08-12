@@ -1,4 +1,5 @@
 import type { IntegrationId, SessionId, UserId } from '../ids';
+import type { BrowseSurface, ObjectBrowseCapability } from './objectBrowser';
 
 export const INTEGRATION_CATEGORIES = [
 	'database',
@@ -73,6 +74,8 @@ export interface KindDescriptor {
 	supports_test: boolean;
 	/** Whether this deployment can browse the kind's catalog metadata. */
 	supports_browse: boolean;
+	/** Read-only resource models this deployment exposes for the kind. */
+	browse_surfaces: BrowseSurface[];
 	secret_sources: IntegrationSecretSources;
 	/** Informational package requirements for notebook code. */
 	requirements: string[];
@@ -162,6 +165,10 @@ export interface BrowseCapabilityResult {
 	 */
 	current_version: number;
 	updated_at: string;
+	surfaces: {
+		tables?: { available: boolean; preview: boolean; reason?: string };
+		objects?: ObjectBrowseCapability;
+	};
 }
 
 /** The only network path allowed to integration probes; implementations enforce egress policy. */

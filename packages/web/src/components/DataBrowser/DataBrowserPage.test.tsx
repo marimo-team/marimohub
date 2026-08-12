@@ -20,6 +20,7 @@ const icebergKind: IntegrationKind = {
 	ui_hints: {},
 	supports_test: true,
 	supports_browse: true,
+	browse_surfaces: ['tables'],
 	requirements: [],
 	secret_sources: { inline: false, references: [] },
 };
@@ -34,6 +35,14 @@ const lakeEntry: IntegrationEntry = {
 	created_at: '2026-01-01T00:00:00Z',
 	updated_at: '2026-01-01T00:00:00Z',
 	scope: 'project',
+};
+
+const objectKind: IntegrationKind = {
+	...icebergKind,
+	kind: 's3',
+	title: 'S3',
+	supports_browse: true,
+	browse_surfaces: ['objects'],
 };
 
 const SNIPPET = 'from pyiceberg.catalog import load_catalog\n\ncatalog = load_catalog("lake")';
@@ -51,12 +60,16 @@ function makeFetch({
 	tables = ['orders'],
 	capability = { metadata: true, preview: false },
 	namespacesDown = false,
+	kind = icebergKind,
+	entry = lakeEntry,
 }: {
 	available?: boolean;
 	pagedTables?: boolean;
 	tables?: string[];
 	capability?: { metadata: boolean; preview: boolean; reason?: string };
 	namespacesDown?: boolean;
+	kind?: IntegrationKind;
+	entry?: IntegrationEntry;
 } = {}) {
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
@@ -73,7 +86,9 @@ function makeFetch({
 		if (url.includes('/api/v1/capabilities')) {
 			return ok({ data_browser: { available, preview: false } });
 		}
-		if (url.includes('/api/v1/integrations/kinds')) return ok([icebergKind]);
+		if (url.includes('/api/v1/integrations/kinds')) {
+			return ok([kind]);
+		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/namespaces`)) {
 			if (namespacesDown) {
 				return new Response(
@@ -113,10 +128,19 @@ function makeFetch({
 			});
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse`)) {
-			return ok(capability);
+			return ok({
+				...capability,
+				surfaces: {
+					tables: {
+						available: capability.metadata,
+						preview: capability.preview,
+						...(capability.reason ? { reason: capability.reason } : {}),
+					},
+				},
+			});
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations`)) {
-			return ok({ items: [lakeEntry], next_cursor: null });
+			return ok({ items: [entry], next_cursor: null });
 		}
 		if (url.includes(`/api/v1/projects/${PID}`)) {
 			return ok({ id: PID, name: 'Demo', description: 'd', your_role: 'editor' });
@@ -348,6 +372,17 @@ describe('DataBrowserPage', () => {
 	it('reports when browsing is unavailable', async () => {
 		setup(`/projects/${PID}/data`, { available: false });
 		expect(await screen.findByText('Data browsing is not available')).toBeInTheDocument();
+	});
+
+	it('does not advertise object-only integrations through the table browser', async () => {
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+		});
+		expect(await screen.findByText('Nothing to browse')).toBeInTheDocument();
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('/browse/namespaces'))).toBe(
+			false,
+		);
 	});
 
 	it('shows the capability reason under an instance the hub cannot browse', async () => {

@@ -27,6 +27,27 @@ export interface GuardedProbeOptions {
 	transport?: ProbeTransport;
 }
 
+export interface PinnedAddress {
+	address: string;
+	family: number;
+}
+
+export type GuardedHostResolver = (
+	hostname: string,
+	signal?: AbortSignal,
+) => Promise<PinnedAddress[]>;
+
+export function createGuardedHostResolver(
+	options: {
+		allowPrivate?: boolean;
+		timeoutMs?: number;
+	} = {},
+): GuardedHostResolver {
+	const { allowPrivate = false, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+	return (hostname, signal) =>
+		withDeadline(resolveAndValidate(hostname, allowPrivate), Date.now() + timeoutMs, signal);
+}
+
 /**
  * One policy-checked request: the socket may connect ONLY to `pinned` (the
  * validated addresses, in resolution order), while `url`'s hostname still
@@ -37,7 +58,7 @@ export interface ProbeTransportRequest {
 	method: string;
 	headers: Record<string, string>;
 	body?: string;
-	pinned: { address: string; family: number }[];
+	pinned: PinnedAddress[];
 	timeoutMs: number;
 	maxResponseBytes: number;
 }
@@ -166,7 +187,7 @@ const nodeTransport: ProbeTransport = (probeRequest) =>
 	});
 
 /** A DNS lookup function that returns only the pre-validated addresses. */
-function pinnedLookup(pinned: { address: string; family: number }[]): LookupFunction {
+function pinnedLookup(pinned: PinnedAddress[]): LookupFunction {
 	return ((_hostname: string, lookupOptions: unknown, callback: unknown) => {
 		const cb = callback as (err: Error | null, addr: unknown, fam?: number) => void;
 		if (typeof lookupOptions === 'object' && (lookupOptions as { all?: boolean } | null)?.all) {
@@ -219,18 +240,37 @@ async function resolveAndValidate(
 }
 
 /** `dns.lookup` honours no timeout of its own, so bound it from the outside. */
-function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+function withDeadline<T>(work: Promise<T>, deadline: number, signal?: AbortSignal): Promise<T> {
+	if (signal?.aborted) return Promise.reject(aborted());
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	return Promise.race([
+	let onAbort: (() => void) | undefined;
+	const candidates: Promise<T>[] = [
 		work,
 		new Promise<never>((_resolve, reject) => {
 			timer = setTimeout(() => reject(timedOut()), Math.max(0, deadline - Date.now()));
 		}),
-	]).finally(() => clearTimeout(timer));
+	];
+	if (signal) {
+		candidates.push(
+			new Promise<never>((_resolve, reject) => {
+				onAbort = () => reject(aborted());
+				signal.addEventListener('abort', onAbort, { once: true });
+				if (signal.aborted) onAbort();
+			}),
+		);
+	}
+	return Promise.race(candidates).finally(() => {
+		clearTimeout(timer);
+		if (onAbort) signal?.removeEventListener('abort', onAbort);
+	});
 }
 
 function timedOut(): Error {
 	return new Error('Connection test timed out.');
+}
+
+function aborted(): Error {
+	return Object.assign(new Error('Connection test aborted.'), { name: 'AbortError' });
 }
 
 function forbidden(hostname: string): Error {

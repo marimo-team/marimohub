@@ -63,6 +63,10 @@ export class IntegrationRegistry {
 		const cached = this.descriptors.get(kind);
 		if (cached) return cached;
 		const def = this.get(kind);
+		const browse_surfaces = [
+			...(def.browse ? (['tables'] as const) : []),
+			...(def.objectBrowse ? (['objects'] as const) : []),
+		];
 		const descriptor: KindDescriptor = {
 			kind: def.kind,
 			title: def.title,
@@ -73,7 +77,8 @@ export class IntegrationRegistry {
 			json_schema: this.jsonSchema(kind),
 			ui_hints: def.uiHints ?? {},
 			supports_test: def.testConnection !== undefined,
-			supports_browse: def.browse !== undefined,
+			supports_browse: browse_surfaces.length > 0,
+			browse_surfaces,
 			secret_sources: { inline: false, references: [] },
 			requirements: def.requirements ?? [],
 		};

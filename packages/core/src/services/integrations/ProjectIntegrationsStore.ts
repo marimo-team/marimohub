@@ -4,6 +4,7 @@ import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import {
 	assertVersionMatch,
 	BadRequestError,
+	DomainError,
 	NotFoundError,
 	ResourceExhaustedError,
 	UnavailableError,
@@ -43,6 +44,27 @@ import type {
 } from '../../ports/integrations';
 import type { ManagedSecretCodec, SecretRef, SecretResolver } from '../../ports/secrets';
 import { SecretResolutionError } from '../../ports/secrets';
+import { ObjectBrowseError } from '../../ports/objectBrowser';
+import type {
+	ObjectBody,
+	ObjectBrowseContext,
+	ObjectBrowser,
+	ObjectBucket,
+	ObjectDetail,
+	ObjectEntry,
+	ObjectIdentity,
+	ObjectListRequest,
+	ObjectOpenRequest,
+	ObjectPage,
+	ObjectPageRequest,
+	ObjectPreview,
+	ObjectPreviewRequest,
+	ObjectSearchPage,
+	ObjectSearchRequest,
+	ObjectStoreSource,
+	ObjectVersion,
+	ObjectVersionRequest,
+} from '../../ports/objectBrowser';
 import { metricsObserver, saga } from '../../saga';
 import {
 	CURRENT_INTEGRATION_CONFIG_VERSION,
@@ -79,6 +101,22 @@ import type { OrgIntegrationsService, ProjectIntegrationsService } from './contr
 
 /** Page size when a caller states none; the API passes its own page policy. */
 const DEFAULT_VERSION_PAGE_SIZE = 100;
+
+function unavailableTableCapability(reason: string) {
+	return { available: false, preview: false, reason };
+}
+
+function unavailableObjectCapability(reason: string) {
+	return {
+		available: false,
+		preview: false,
+		download: false,
+		search: 'bounded-key-name' as const,
+		versions: false,
+		preview_formats: [],
+		reason,
+	};
+}
 
 /** Bounds list scans and session rendering for one integration tier. */
 export const MAX_INTEGRATIONS_PER_SCOPE = 500;
@@ -175,6 +213,7 @@ export interface IntegrationsStoreOptions {
 	 * expansion) has its own budget and response cap; absence disables browsing.
 	 */
 	browseProbe?: IntegrationProbe;
+	objectBrowsers?: Partial<Record<ObjectStoreSource['provider'], ObjectBrowser>>;
 	/** Injectable clock for deterministic tests. */
 	now?: () => string;
 	metrics?: Metrics;
@@ -191,6 +230,7 @@ class ScopedIntegrationsStore {
 	private readonly resolvers: Map<string, SecretResolver>;
 	private readonly probe?: IntegrationProbe;
 	private readonly browseProbe?: IntegrationProbe;
+	private readonly objectBrowsers: Partial<Record<ObjectStoreSource['provider'], ObjectBrowser>>;
 	private readonly now: () => string;
 	private readonly metrics: Metrics;
 
@@ -203,6 +243,7 @@ class ScopedIntegrationsStore {
 		);
 		this.probe = options.probe;
 		this.browseProbe = options.browseProbe;
+		this.objectBrowsers = options.objectBrowsers ?? {};
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.metrics = options.metrics ?? noopMetrics;
 	}
@@ -211,14 +252,22 @@ class ScopedIntegrationsStore {
 		// A deployment without a guarded probe must not advertise the Test action;
 		// same for browsing and its own probe.
 		const testable = this.probe !== undefined;
-		const browsable = this.browseProbe !== undefined;
+		const tableBrowsable = this.browseProbe !== undefined;
 		const secret_sources = this.secretSources();
-		return this.registry.describeAll().map((descriptor) => ({
-			...descriptor,
-			supports_test: testable && descriptor.supports_test,
-			supports_browse: browsable && descriptor.supports_browse,
-			secret_sources,
-		}));
+		return this.registry.describeAll().map((descriptor) => {
+			const browse_surfaces = descriptor.browse_surfaces.filter(
+				(surface) =>
+					(surface === 'tables' && tableBrowsable) ||
+					(surface === 'objects' && Object.values(this.objectBrowsers).some(Boolean)),
+			);
+			return {
+				...descriptor,
+				supports_test: testable && descriptor.supports_test,
+				supports_browse: browse_surfaces.length > 0,
+				browse_surfaces,
+				secret_sources,
+			};
+		});
 	}
 
 	secretSources(): IntegrationSecretSources {
@@ -699,33 +748,39 @@ class ScopedIntegrationsStore {
 	async browseCapability(
 		scope: IntegrationScope,
 		id: IntegrationId,
+		objectContext?: ObjectBrowseContext,
 	): Promise<BrowseCapabilityResult> {
 		const head = await this.getHead(scope, id);
 		const state = { current_version: head.current_version, updated_at: head.updated_at };
 		const def = this.registry.get(head.kind);
-		if (!def.browse) {
-			return {
-				metadata: false,
-				hub_preview: false,
-				...state,
-				reason: `Integration kind "${head.kind}" does not support browsing.`,
-			};
+		const surfaces: BrowseCapabilityResult['surfaces'] = {};
+		if (def.browse) {
+			surfaces.tables = this.browseProbe
+				? { available: false, preview: false }
+				: unavailableTableCapability('Data browsing is not enabled on this deployment.');
 		}
-		if (!this.browseProbe) {
-			return {
-				metadata: false,
-				hub_preview: false,
-				...state,
-				reason: 'Data browsing is not enabled on this deployment.',
-			};
+		if (def.objectBrowse) {
+			surfaces.objects = unavailableObjectCapability(
+				objectContext
+					? 'Object browsing is not enabled on this deployment.'
+					: 'Object browsing requires a user credential context.',
+			);
+		}
+		const compatibility = (reason?: string): BrowseCapabilityResult => ({
+			metadata: surfaces.tables?.available ?? false,
+			hub_preview: surfaces.tables?.preview ?? false,
+			surfaces,
+			...state,
+			...(reason ? { reason } : {}),
+		});
+		if (!def.browse && !def.objectBrowse) {
+			return compatibility(`Integration kind "${head.kind}" does not support browsing.`);
 		}
 		if (!head.enabled) {
-			return {
-				metadata: false,
-				hub_preview: false,
-				...state,
-				reason: `Integration "${head.name}" is disabled.`,
-			};
+			const reason = `Integration "${head.name}" is disabled.`;
+			if (surfaces.tables) surfaces.tables = unavailableTableCapability(reason);
+			if (surfaces.objects) surfaces.objects = unavailableObjectCapability(reason);
+			return compatibility(reason);
 		}
 		const { config } = await this.loadCurrent(scope, head);
 		const parsed = parseStoredWithPlaceholders({
@@ -734,17 +789,27 @@ class ScopedIntegrationsStore {
 			stored: config,
 		});
 		if (parsed === undefined) {
-			return {
-				metadata: false,
-				hub_preview: false,
-				...state,
-				reason: `The stored config no longer matches kind "${head.kind}" — edit and re-save it.`,
-			};
+			const reason = `The stored config no longer matches kind "${head.kind}" — edit and re-save it.`;
+			if (surfaces.tables) surfaces.tables = unavailableTableCapability(reason);
+			if (surfaces.objects) surfaces.objects = unavailableObjectCapability(reason);
+			return compatibility(reason);
 		}
-		const verdict = def.browse.available(parsed);
-		return verdict.ok
-			? { metadata: true, hub_preview: def.browse.previewRows !== undefined, ...state }
-			: { metadata: false, hub_preview: false, ...state, reason: verdict.reason };
+		if (def.browse && this.browseProbe) {
+			const verdict = def.browse.available(parsed);
+			surfaces.tables = verdict.ok
+				? { available: true, preview: def.browse.previewRows !== undefined }
+				: unavailableTableCapability(verdict.reason);
+		}
+		if (def.objectBrowse && objectContext) {
+			const source = def.objectBrowse.source(parsed);
+			const browser = this.objectBrowsers[source.provider];
+			if (browser) {
+				surfaces.objects = await this.guardObjectBrowse(() =>
+					browser.capability(source, objectContext),
+				);
+			}
+		}
+		return compatibility(surfaces.tables?.reason);
 	}
 
 	async browseNamespaces(
@@ -792,37 +857,158 @@ class ScopedIntegrationsStore {
 		return browse.previewRows(config, probe, namespace, table, request);
 	}
 
+	async browseObjectBuckets(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectPageRequest,
+	): Promise<ObjectPage<ObjectBucket>> {
+		return this.runObjectBrowse(scope, id, context, (browser, source) =>
+			browser.listBuckets(source, context, request),
+		);
+	}
+
+	async browseObjects(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectListRequest,
+	): Promise<ObjectPage<ObjectEntry>> {
+		return this.runObjectBrowse(scope, id, context, (browser, source) =>
+			browser.listObjects(source, context, request),
+		);
+	}
+
+	async searchObjects(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectSearchRequest,
+	): Promise<ObjectSearchPage> {
+		return this.runObjectBrowse(scope, id, context, (browser, source) =>
+			browser.searchObjects(source, context, request),
+		);
+	}
+
+	async browseObjectDetail(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectIdentity,
+	): Promise<ObjectDetail> {
+		return this.runObjectBrowse(scope, id, context, async (browser, source, name, snippet) => ({
+			...(await browser.headObject(source, context, request)),
+			snippet: snippet(name, request.bucket, request.key),
+		}));
+	}
+
+	async browseObjectVersions(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectVersionRequest,
+	): Promise<ObjectPage<ObjectVersion>> {
+		return this.runObjectBrowse(scope, id, context, (browser, source) =>
+			browser.listVersions(source, context, request),
+		);
+	}
+
+	async browseObjectPreview(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectPreviewRequest,
+	): Promise<ObjectPreview> {
+		return this.runObjectBrowse(scope, id, context, (browser, source) =>
+			browser.previewObject(source, context, request),
+		);
+	}
+
+	async openObject(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectOpenRequest,
+	): Promise<ObjectBody> {
+		return this.runObjectBrowse(scope, id, context, (browser, source) =>
+			browser.openObject(source, context, request),
+		);
+	}
+
+	private async runObjectBrowse<T>(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		run: (
+			browser: ObjectBrowser,
+			source: ObjectStoreSource,
+			name: string,
+			snippet: (instanceName: string, bucket: string, key: string) => string,
+		) => Promise<T>,
+	): Promise<T> {
+		const { head, def, config } = await this.openResolvedBrowse(scope, id);
+		const objectBrowse = def.objectBrowse;
+		if (!objectBrowse) {
+			throw new ValidationError(
+				`Integration kind "${head.kind}" does not support object browsing.`,
+			);
+		}
+		const source = objectBrowse.source(config);
+		const browser = this.objectBrowsers[source.provider];
+		if (!browser) throw new ValidationError('Object browsing is not enabled on this deployment.');
+		return this.guardObjectBrowse(async () => {
+			const capability = await browser.capability(source, context);
+			if (!capability.available) {
+				throw new ValidationError(
+					capability.reason ?? 'This integration cannot be browsed as an object store.',
+				);
+			}
+			return run(browser, source, head.name, objectBrowse.snippet);
+		});
+	}
+
+	private async guardObjectBrowse<T>(run: () => Promise<T> | T): Promise<T> {
+		try {
+			return await run();
+		} catch (err) {
+			if (err instanceof ObjectBrowseError || err instanceof DomainError) throw err;
+			throw new UnavailableError('The object-store request failed.');
+		}
+	}
+
 	/**
 	 * Shared preamble of every browse op: load, migrate, decrypt, re-validate,
 	 * and gate — the same path `test('stored')` walks. Read-only throughout;
 	 * browsing writes nothing to the bucket.
 	 */
 	private async openBrowse(scope: IntegrationScope, id: IntegrationId) {
-		const head = await this.getHead(scope, id);
+		const { head, def, config: parsed } = await this.openResolvedBrowse(scope, id);
 		const probe = this.browseProbe;
 		if (!probe) {
 			throw new ValidationError('Data browsing is not enabled on this deployment.');
 		}
-		if (!head.enabled) {
-			throw new ValidationError(`Integration "${head.name}" is disabled.`);
-		}
-		const { def, config } = await this.loadCurrent(scope, head);
 		if (!def.browse) {
 			throw new ValidationError(`Integration kind "${head.kind}" does not support browsing.`);
 		}
+		const verdict = def.browse.available(parsed);
+		if (!verdict.ok) {
+			throw new ValidationError(`Integration "${head.name}" cannot be browsed: ${verdict.reason}.`);
+		}
+		return { head, browse: def.browse, config: parsed, probe };
+	}
+
+	private async openResolvedBrowse(scope: IntegrationScope, id: IntegrationId) {
+		const head = await this.getHead(scope, id);
+		if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
+		const { def, config } = await this.loadCurrent(scope, head);
 		const resolved = await this.open(scope, head.id, def, config);
-		// Never surface the Zod issues here — the resolved config is plaintext.
 		const parsed = def.configSchema.safeParse(resolved);
 		if (!parsed.success) {
 			throw new ValidationError(
 				`Stored config no longer matches kind "${def.kind}" — edit and re-save it.`,
 			);
 		}
-		const verdict = def.browse.available(parsed.data);
-		if (!verdict.ok) {
-			throw new ValidationError(`Integration "${head.name}" cannot be browsed: ${verdict.reason}.`);
-		}
-		return { head, browse: def.browse, config: parsed.data, probe };
+		return { head, def, config: parsed.data };
 	}
 
 	/** `getHead`, but absence (or a tombstone) reads as undefined instead of a 404. */
@@ -1347,8 +1533,14 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		);
 	}
 
-	browseCapability(projectId: ProjectId, id: IntegrationId): Promise<BrowseCapabilityResult> {
-		return this.withBrowseScope(projectId, id, (scope) => this.store.browseCapability(scope, id));
+	browseCapability(
+		projectId: ProjectId,
+		id: IntegrationId,
+		objectContext?: ObjectBrowseContext,
+	): Promise<BrowseCapabilityResult> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseCapability(scope, id, objectContext),
+		);
 	}
 
 	browseNamespaces(
@@ -1393,6 +1585,83 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 	): Promise<TablePreview> {
 		return this.withBrowseScope(projectId, id, (scope) =>
 			this.store.browseTablePreview(scope, id, namespace, table, request),
+		);
+	}
+
+	browseObjectBuckets(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectPageRequest,
+	): Promise<ObjectPage<ObjectBucket>> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseObjectBuckets(scope, id, context, request),
+		);
+	}
+
+	browseObjects(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectListRequest,
+	): Promise<ObjectPage<ObjectEntry>> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseObjects(scope, id, context, request),
+		);
+	}
+
+	searchObjects(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectSearchRequest,
+	): Promise<ObjectSearchPage> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.searchObjects(scope, id, context, request),
+		);
+	}
+
+	browseObjectDetail(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectIdentity,
+	): Promise<ObjectDetail> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseObjectDetail(scope, id, context, request),
+		);
+	}
+
+	browseObjectVersions(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectVersionRequest,
+	): Promise<ObjectPage<ObjectVersion>> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseObjectVersions(scope, id, context, request),
+		);
+	}
+
+	browseObjectPreview(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectPreviewRequest,
+	): Promise<ObjectPreview> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseObjectPreview(scope, id, context, request),
+		);
+	}
+
+	openObject(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectOpenRequest,
+	): Promise<ObjectBody> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.openObject(scope, id, context, request),
 		);
 	}
 

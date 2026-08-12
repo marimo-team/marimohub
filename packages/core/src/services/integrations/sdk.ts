@@ -15,6 +15,7 @@ import type {
 	UiHints,
 } from '../../ports/integrations';
 import type { ProjectId, SessionId, UserId } from '../../ids';
+import type { ObjectStoreSource } from '../../ports/objectBrowser';
 import { secretPaths } from './secretFields';
 import type { SecretPath } from './secretFields';
 
@@ -176,6 +177,10 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	 * degraded to a generic one — the same posture as `testConnection`.
 	 */
 	browse?: BrowseCapability<z.infer<S>>;
+	objectBrowse?: {
+		source(config: z.infer<S>): ObjectStoreSource;
+		snippet(instanceName: string, bucket: string, key: string): string;
+	};
 	/**
 	 * Upgrade a stored config from an older `schemaVersion`. Chainable per step.
 	 * Operates on the STORED shape (secret fields are `{ $secret: … }` boxes) and
@@ -198,7 +203,7 @@ export function defineIntegration<S extends z.ZodType>(
 	def: IntegrationDefinition<S>,
 ): IntegrationDefinition<S> {
 	const testConnection = def.testConnection?.bind(def);
-	if (!testConnection && !def.browse) return def;
+	if (!testConnection && !def.browse && !def.objectBrowse) return def;
 	let paths: SecretPath[] | undefined;
 	const pathsOf = () =>
 		(paths ??= secretPaths(
@@ -230,6 +235,29 @@ export function defineIntegration<S extends z.ZodType>(
 				}
 			: {}),
 		...(def.browse ? { browse: guardedBrowse(def.browse, pathsOf) } : {}),
+		...(def.objectBrowse ? { objectBrowse: guardedObjectBrowse(def.objectBrowse, pathsOf) } : {}),
+	};
+}
+
+function guardedObjectBrowse<C>(
+	objectBrowse: {
+		source(config: C): ObjectStoreSource;
+		snippet(instanceName: string, bucket: string, key: string): string;
+	},
+	pathsOf: () => SecretPath[],
+) {
+	return {
+		source(config: C) {
+			try {
+				return objectBrowse.source(config);
+			} catch (err) {
+				if (err instanceof DomainError && !echoesSecret(err.message, config, pathsOf())) {
+					throw err;
+				}
+				throw new UnavailableError('The object-store request failed.');
+			}
+		},
+		snippet: objectBrowse.snippet.bind(objectBrowse),
 	};
 }
 

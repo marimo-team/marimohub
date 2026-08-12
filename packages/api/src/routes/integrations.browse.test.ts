@@ -10,6 +10,7 @@ import {
 	UnavailableError,
 	zSecret,
 } from '@marimo-hub/core';
+import type { ObjectBrowser } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
@@ -74,13 +75,50 @@ const sandboxBrowsyKind = defineIntegration({
 	},
 });
 
+const objectBrowser: ObjectBrowser = {
+	capability: () => ({
+		available: true,
+		preview: false,
+		download: false,
+		search: 'bounded-key-name',
+		versions: true,
+		preview_formats: [],
+	}),
+	listBuckets: async () => ({ items: [], next_cursor: null }),
+	listObjects: async () => ({ items: [], next_cursor: null }),
+	searchObjects: async () => ({ items: [], next_cursor: null, scanned: 0, complete: true }),
+	headObject: async (_source, _context, request) => ({
+		...request,
+		size: 0,
+		checksums: [],
+		metadata: {},
+		tags_available: false,
+	}),
+	listVersions: async () => ({ items: [], next_cursor: null }),
+	previewObject: async () => ({
+		kind: 'unsupported',
+		reason: 'disabled',
+		total_bytes: 0,
+	}),
+	openObject: async () => {
+		throw new Error('not used');
+	},
+};
+
 function browserDeps(bucket: MemoryBucket) {
 	const registry = new IntegrationRegistry();
 	registry.register(browsyKind);
 	registry.register(sandboxBrowsyKind);
 	for (const def of defaultRegistry().list()) registry.register(def);
 	const stubProbe = { fetch: () => Promise.reject(new Error('no network in tests')) };
-	const options = { bucket, registry, codec, probe: stubProbe, browseProbe: stubProbe };
+	const options = {
+		bucket,
+		registry,
+		codec,
+		probe: stubProbe,
+		browseProbe: stubProbe,
+		objectBrowsers: { s3: objectBrowser },
+	};
 	return {
 		integrations: new ProjectIntegrationsStore(options),
 		orgIntegrations: new OrgIntegrationsStore(options),
@@ -136,7 +174,11 @@ describe('Data browser routes', () => {
 		const capability = await expectOk<Record<string, unknown>>(
 			await request('GET', `/projects/${pid}/integrations/${created.id}/browse`),
 		);
-		expect(capability).toEqual({ metadata: true, preview: false });
+		expect(capability).toEqual({
+			metadata: true,
+			preview: false,
+			surfaces: { tables: { available: true, preview: false } },
+		});
 
 		const closed = await expectOk<{ id: string }>(
 			await request('POST', `/projects/${pid}/integrations`, {
@@ -149,7 +191,39 @@ describe('Data browser routes', () => {
 		const closedCapability = await expectOk<Record<string, unknown>>(
 			await request('GET', `/projects/${pid}/integrations/${closed.id}/browse`),
 		);
-		expect(closedCapability).toEqual({ metadata: false, preview: false, reason: 'sandbox only' });
+		expect(closedCapability).toEqual({
+			metadata: false,
+			preview: false,
+			reason: 'sandbox only',
+			surfaces: { tables: { available: false, preview: false, reason: 'sandbox only' } },
+		});
+	});
+
+	it('does not advertise object-only instances until object routes are available', async () => {
+		const pid = await createProject();
+		const created = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 's3',
+				name: 'objects',
+				config: {
+					bucket: 'lake',
+					auth: {
+						method: 'static',
+						access_key_id: 'access',
+						secret_access_key: 'secret',
+					},
+				},
+			}),
+			201,
+		);
+		const capability = await expectOk<Record<string, unknown>>(
+			await request('GET', `/projects/${pid}/integrations/${created.id}/browse`),
+		);
+		expect(capability).toEqual({
+			metadata: false,
+			preview: false,
+			surfaces: {},
+		});
 	});
 
 	it('previews rows on demand with no-store and appends an audit event', async () => {
@@ -160,7 +234,11 @@ describe('Data browser routes', () => {
 		const capability = await expectOk<Record<string, unknown>>(
 			await request('GET', `/projects/${pid}/integrations/${created.id}/browse`),
 		);
-		expect(capability).toEqual({ metadata: true, preview: true });
+		expect(capability).toEqual({
+			metadata: true,
+			preview: true,
+			surfaces: { tables: { available: true, preview: true } },
+		});
 
 		const response = await request(
 			'POST',
@@ -277,9 +355,17 @@ describe('Data browser routes', () => {
 		}).request;
 		const url = `/projects/${pid}/integrations/${selected.id}/browse`;
 
-		expect(await expectOk(await full('GET', url))).toEqual({ metadata: true, preview: false });
+		expect(await expectOk(await full('GET', url))).toEqual({
+			metadata: true,
+			preview: false,
+			surfaces: { tables: { available: true, preview: false } },
+		});
 		ready = true;
-		expect(await expectOk(await full('GET', url))).toEqual({ metadata: true, preview: true });
+		expect(await expectOk(await full('GET', url))).toEqual({
+			metadata: true,
+			preview: true,
+			surfaces: { tables: { available: true, preview: true } },
+		});
 	});
 
 	it('injects project WIF credentials into sandbox previews', async () => {
@@ -626,7 +712,11 @@ describe('Data browser routes', () => {
 		const capability = await expectOk<Record<string, unknown>>(
 			await request('GET', `/projects/${pid}/integrations/${orgInstance.id}/browse`),
 		);
-		expect(capability).toEqual({ metadata: true, preview: false });
+		expect(capability).toEqual({
+			metadata: true,
+			preview: false,
+			surfaces: { tables: { available: true, preview: false } },
+		});
 
 		await createBrowsable(pid, 'shared-lake');
 		await expectError(

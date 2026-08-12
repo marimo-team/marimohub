@@ -1254,6 +1254,13 @@ components:
           type: boolean
         supports_browse:
           type: boolean
+        browse_surfaces:
+          type: array
+          items:
+            type: string
+            enum:
+              - tables
+              - objects
         secret_sources:
           type: object
           properties:
@@ -1304,6 +1311,7 @@ components:
         - ui_hints
         - supports_test
         - supports_browse
+        - browse_surfaces
         - secret_sources
         - requirements
     IntegrationPage:
@@ -1479,6 +1487,49 @@ components:
     IntegrationBrowseCapability:
       type: object
       properties:
+        surfaces:
+          type: object
+          properties:
+            tables:
+              type: object
+              properties:
+                available:
+                  type: boolean
+                preview:
+                  type: boolean
+                reason:
+                  type: string
+              required:
+                - available
+                - preview
+            objects:
+              type: object
+              properties:
+                available:
+                  type: boolean
+                preview:
+                  type: boolean
+                download:
+                  type: boolean
+                search:
+                  type: string
+                  enum:
+                    - bounded-key-name
+                versions:
+                  type: boolean
+                preview_formats:
+                  type: array
+                  items:
+                    type: string
+                reason:
+                  type: string
+              required:
+                - available
+                - preview
+                - download
+                - search
+                - versions
+                - preview_formats
         metadata:
           type: boolean
         preview:
@@ -1486,6 +1537,7 @@ components:
         reason:
           type: string
       required:
+        - surfaces
         - metadata
         - preview
     IntegrationBrowseNamespacePage:

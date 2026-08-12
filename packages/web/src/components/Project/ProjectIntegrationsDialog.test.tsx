@@ -35,6 +35,7 @@ const postgresKind: IntegrationKind = {
 	ui_hints: {},
 	supports_test: false,
 	supports_browse: false,
+	browse_surfaces: [],
 	requirements: ['sqlalchemy>=2'],
 	secret_sources: { inline: false, references: [] },
 };
@@ -50,6 +51,7 @@ const customEnvKind: IntegrationKind = {
 	ui_hints: {},
 	supports_test: true,
 	supports_browse: false,
+	browse_surfaces: [],
 	requirements: [],
 	secret_sources: { inline: false, references: [] },
 };
