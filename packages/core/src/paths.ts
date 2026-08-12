@@ -64,6 +64,8 @@ export interface IntegrationPaths {
 
 export interface ProjectPaths {
 	meta: string;
+	/** CAS-owned project alert destinations. */
+	alerts: string;
 	notebook: (nid: NotebookId) => NotebookPaths;
 	/** Project-scoped integration instance: `projects/{pid}/integrations/{iid}/…`. */
 	integration: (iid: IntegrationId) => IntegrationPaths;
@@ -131,6 +133,7 @@ function projectPaths(pid: ProjectId): ProjectPaths {
 	const base = `projects/${pid}`;
 	return {
 		meta: `${base}/project.json`,
+		alerts: `${base}/alerts.json`,
 		notebook: (nid: NotebookId) => notebookPaths(base, nid),
 		integration: (iid: IntegrationId) => integrationPaths(base, iid),
 		integrationsPrefix: `${base}/integrations/`,

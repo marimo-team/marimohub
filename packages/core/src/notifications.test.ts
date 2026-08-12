@@ -4,6 +4,7 @@ import {
 	fanOutNotifier,
 	filterNotifier,
 	NOTIFICATION_KINDS,
+	PROJECT_ALERT_KINDS,
 	NotificationSchema,
 	notificationRouter,
 	recipientFromIdentity,
@@ -197,6 +198,42 @@ describe('NotificationRouter', () => {
 
 	it('uses the registry as the notification-kind allowlist', () => {
 		expect(NOTIFICATION_KINDS).toEqual(['member.invited', 'member.added', 'session.takeover']);
+		expect(PROJECT_ALERT_KINDS).toEqual([
+			'member.invited',
+			'member.added',
+			'member.role_changed',
+			'member.removed',
+			'session.takeover',
+			'notebook.deleted',
+			'project.deleted',
+			'app.start_failed',
+			'app.unavailable',
+			'sync.failed',
+		]);
+		expect(Object.isFrozen(NOTIFICATION_KINDS)).toBe(true);
+		expect(Object.isFrozen(PROJECT_ALERT_KINDS)).toBe(true);
+	});
+
+	it('renders stable app-failure data without provider error text', () => {
+		const [rendered] = notificationRouter.render({
+			kind: 'app.start_failed',
+			project,
+			notebookId: ids().notebook,
+			notebookTitle: 'Revenue',
+			sessionId: ids().session,
+			startedByUserId: uid('app_starter'),
+			errorCode: 'PROVISION_FAILED',
+			baseUrl: 'https://hub.example.com',
+		});
+
+		expect(rendered).toMatchObject({
+			kind: 'app.start_failed',
+			severity: 'error',
+			audience: 'broadcast',
+			data: { error_code: 'PROVISION_FAILED', session_id: ids().session },
+			dedupe_key: `app.start_failed:${ids().session}:broadcast`,
+		});
+		expect(JSON.stringify(rendered)).not.toContain('provider');
 	});
 });
 
@@ -321,9 +358,51 @@ describe('NotificationSchema', () => {
 		['a non-string context value', { context: { pid: 42 } }],
 		['an unknown kind', { kind: 'job.failed' }],
 		['a mismatched severity', { severity: 'error' }],
-		['an unsupported audience', { audience: 'broadcast' }],
 		['data for another kind', { data: { takeover_id: 'takeover-1' } }],
 	])('rejects %s', (_label, replacement) => {
 		expect(() => NotificationSchema.parse({ ...notification, ...replacement })).toThrow();
+	});
+
+	it('rejects an audience unsupported by a kind', () => {
+		const [testAlert] = notificationRouter.render({
+			kind: 'alert.test',
+			project,
+			destinationId: 'alert-0123456789abcdef' as never,
+			actor: { id: uid('owner_notify'), email: 'owner@example.com' },
+			testId: 'test-request-1',
+		});
+		expect(() => NotificationSchema.parse({ ...testAlert, audience: 'personal' })).toThrow();
+	});
+
+	it('rejects malformed branded IDs in project-alert payloads', () => {
+		const [appAlert] = notificationRouter.render({
+			kind: 'app.unavailable',
+			project,
+			notebookId: ids().notebook,
+			notebookTitle: 'Revenue',
+			sessionId: ids().session,
+			startedByUserId: uid('app_starter'),
+			errorCode: 'SANDBOX_DISAPPEARED',
+		});
+		const [testAlert] = notificationRouter.render({
+			kind: 'alert.test',
+			project,
+			destinationId: 'alert-0123456789abcdef' as never,
+			actor: { id: uid('owner_notify'), email: 'owner@example.com' },
+			testId: 'test-request-1',
+		});
+
+		expect(() =>
+			NotificationSchema.parse({
+				...appAlert,
+				data: { ...appAlert?.data, session_id: 'not-a-session' },
+			}),
+		).toThrow();
+		expect(() =>
+			NotificationSchema.parse({
+				...testAlert,
+				data: { ...testAlert?.data, destination_id: 'not-a-destination' },
+			}),
+		).toThrow();
 	});
 });

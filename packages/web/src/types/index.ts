@@ -53,6 +53,8 @@ export type ProjectRole = ProjectMember['role'];
 export type AssignableProjectRole = components['schemas']['AssignableRole'];
 /** Deployment capability flags from `GET /api/v1/capabilities`. */
 export type Capabilities = ClientCapabilities;
+export type ProjectAlertDestination = components['schemas']['ProjectAlertDestination'];
+export type ProjectAlertKind = ProjectAlertDestination['kinds'][number];
 export type NotebookEntry = SnapshotNotebookEntry;
 export type NotebookMeta = ClientNotebookMeta;
 export type NotebookDetail = ClientNotebookDetail;

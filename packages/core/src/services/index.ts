@@ -30,6 +30,20 @@ export type {
 	UpdateSyncedNotebookSourceInput,
 } from '../integrations/syncedSource';
 export { ProjectService } from './content/ProjectService';
+export {
+	MAX_PROJECT_ALERT_DESTINATIONS,
+	ProjectAlertConfigSchema,
+	ProjectAlertStore,
+	StoredProjectAlertDestinationSchema,
+} from './notifications/ProjectAlertStore';
+export type {
+	CreateProjectAlertDestinationInput,
+	ProjectAlertConfig,
+	ProjectAlertDestination,
+	ResolvedProjectAlertDestination,
+	StoredProjectAlertDestination,
+	UpdateProjectAlertDestinationInput,
+} from './notifications/ProjectAlertStore';
 export { AesGcmSecretCodec } from './secrets/AesGcmSecretCodec';
 export type { AesGcmSecretCodecOptions } from './secrets/AesGcmSecretCodec';
 export { assertValidEnvironmentName } from './integrations/environmentName';

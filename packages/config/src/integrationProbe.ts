@@ -9,6 +9,7 @@ import type { RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import type { LookupFunction } from 'node:net';
+import { createSlidingWindowBudget, parseHttpUrl } from '@marimo-hub/core';
 import type { IntegrationProbe, ProbeRequestInit, ProbeResponse } from '@marimo-hub/core';
 
 export interface GuardedProbeOptions {
@@ -88,16 +89,17 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 		maxProbesPerMinute = DEFAULT_MAX_PROBES_PER_MINUTE,
 		transport = nodeTransport,
 	} = options;
-	const recentProbes: number[] = [];
+	const probeBudget = createSlidingWindowBudget<'probe'>({
+		limit: maxProbesPerMinute,
+		windowMs: 60_000,
+	});
 
 	return {
 		async fetch(url: string, init: ProbeRequestInit = {}): Promise<ProbeResponse> {
 			const now = Date.now();
-			while (recentProbes.length > 0 && now - recentProbes[0] > 60_000) recentProbes.shift();
-			if (recentProbes.length >= maxProbesPerMinute) {
+			if (!probeBudget.consume('probe')) {
 				throw new Error('Too many connection tests — try again in a minute.');
 			}
-			recentProbes.push(now);
 
 			// One deadline for the whole test: a slow resolver eats into the transport's
 			// share instead of granting it a fresh timeout (worst case ~2x the limit).
@@ -199,19 +201,13 @@ function pinnedLookup(pinned: PinnedAddress[]): LookupFunction {
 }
 
 function parseTarget(url: string): URL {
-	let parsed: URL;
-	try {
-		parsed = new URL(url);
-	} catch {
-		throw new Error('Invalid URL.');
-	}
-	if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-		throw new Error('Only http(s) URLs can be tested.');
-	}
-	if (parsed.username !== '' || parsed.password !== '') {
+	const parsed = parseHttpUrl(url);
+	if (parsed.ok) return parsed.url;
+	if (parsed.issue === 'protocol') throw new Error('Only http(s) URLs can be tested.');
+	if (parsed.issue === 'credentials') {
 		throw new Error('URLs with embedded credentials cannot be tested.');
 	}
-	return parsed;
+	throw new Error('Invalid URL.');
 }
 
 /** Resolves once and rejects the target if any returned address is forbidden. */

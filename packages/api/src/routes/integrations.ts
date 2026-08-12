@@ -9,6 +9,7 @@ import {
 	requireRole,
 	ResourceExhaustedError,
 	ValidationError,
+	createSlidingWindowBudget,
 } from '@marimo-hub/core';
 import type {
 	IntegrationDetail,
@@ -993,46 +994,22 @@ app.openapi(listIntegrationVersions, async (c) => {
 // The probe is a server-side request forger by construction, so beside the
 // probe's own global cap, each USER gets a sliding-window budget — one manager
 // cannot starve every other tenant on the replica.
-const BUDGET_WINDOW_MS = 60_000;
-
-/**
- * Per-user sliding-window budget. Expired users are forgotten on request
- * traffic, amortized to once per window, so the map tracks concurrent users
- * rather than every user the replica has ever served — an interval would keep
- * a timer (and this module's state) alive with no request behind it, in tests
- * and on Workers alike.
- */
-function slidingWindowBudget(perMinute: number, message: string) {
-	const recentByUser = new Map<string, number[]>();
-	let lastSweptAt = 0;
-	return {
-		assert(userId: string): void {
-			const now = Date.now();
-			if (now - lastSweptAt >= BUDGET_WINDOW_MS) {
-				lastSweptAt = now;
-				for (const [user, timestamps] of recentByUser) {
-					if (timestamps.every((t) => now - t >= BUDGET_WINDOW_MS)) recentByUser.delete(user);
-				}
-			}
-			const recent = (recentByUser.get(userId) ?? []).filter((t) => now - t < BUDGET_WINDOW_MS);
-			if (recent.length >= perMinute) throw new ResourceExhaustedError(message);
-			recent.push(now);
-			recentByUser.set(userId, recent);
-		},
-		tracked(): number {
-			return recentByUser.size;
-		},
-	};
-}
-
-const testBudget = slidingWindowBudget(10, 'Too many connection tests — try again in a minute.');
+const testBudget = createSlidingWindowBudget<string>({ limit: 10, windowMs: 60_000 });
 // Sized against the browse probe's process-wide cap (360/min): a bounded Trino
 // statement spends at most 12 probe requests, so one user can hold at most 240
 // of the shared allowance.
-const browseBudget = slidingWindowBudget(20, 'Too many browse requests — try again in a minute.');
+const browseBudget = createSlidingWindowBudget<string>({ limit: 20, windowMs: 60_000 });
 
 function assertTestBudget(userId: string): void {
-	testBudget.assert(userId);
+	if (!testBudget.consume(userId)) {
+		throw new ResourceExhaustedError('Too many connection tests — try again in a minute.');
+	}
+}
+
+function assertBrowseBudget(userId: string): void {
+	if (!browseBudget.consume(userId)) {
+		throw new ResourceExhaustedError('Too many browse requests — try again in a minute.');
+	}
 }
 
 export function trackedTestBudgets(): number {
@@ -1149,7 +1126,7 @@ app.openapi(browseNamespaces, async (c) => {
 		JSON.stringify([pid, iid, user.id, stateToken, 'namespaces', request]),
 		BROWSE_LIST_TTL_MS,
 		fresh === 'true',
-		() => browseBudget.assert(user.id),
+		() => assertBrowseBudget(user.id),
 		() => integrations.browseNamespaces(pid, iid, request),
 	);
 	return c.json({ success: true, data }, 200);
@@ -1168,7 +1145,7 @@ app.openapi(browseTables, async (c) => {
 		JSON.stringify([pid, iid, user.id, stateToken, 'tables', namespace, request]),
 		BROWSE_LIST_TTL_MS,
 		fresh === 'true',
-		() => browseBudget.assert(user.id),
+		() => assertBrowseBudget(user.id),
 		() => integrations.browseTables(pid, iid, splitNamespace(namespace), request),
 	);
 	return c.json({ success: true, data }, 200);
@@ -1186,7 +1163,7 @@ app.openapi(browseTableSchema, async (c) => {
 		JSON.stringify([pid, iid, user.id, user.email, stateToken, 'schema', namespace, table]),
 		BROWSE_SCHEMA_TTL_MS,
 		fresh === 'true',
-		() => browseBudget.assert(user.id),
+		() => assertBrowseBudget(user.id),
 		() =>
 			integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table, {
 				query_user: user.email,
@@ -1204,7 +1181,7 @@ app.openapi(browseTablePreview, async (c) => {
 	const { integrations, preview, sandboxPreview } = requireDataBrowser(deps);
 	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
 	if (!preview) throw new NotFoundError('Row preview is not enabled on this deployment');
-	browseBudget.assert(user.id);
+	assertBrowseBudget(user.id);
 	const capability = await integrations.browseCapability(pid, iid);
 	if (!capability.metadata) {
 		throw new ValidationError(capability.reason ?? 'This integration cannot be browsed.');

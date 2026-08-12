@@ -426,6 +426,14 @@ Resolve references with `backend: aws-sm`. The hub needs `secretsmanager:GetSecr
 
 Outbound notifications support several backends at the same time. `MARIMOHUB_NOTIFY_BACKENDS` is a comma-separated list. The hub sends notifications after it stores the related change. Delivery failures do not change the API response. See the [notifications guide](./notifications.md) for delivery and security details.
 
+### Project alerts
+
+Project-scoped destinations are separate from deployment-wide notification backends. See the [project alerts guide](./project-alerts.md).
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_PROJECT_ALERTS` | Enable Node-only manager-configured Slack and signed-webhook destinations. Requires `MARIMOHUB_SECRETS_KEK`. Accepted values are `on` and `off`. | — | `off` | `on` |
+
 ### Shared
 
 These variables control all notification backends.

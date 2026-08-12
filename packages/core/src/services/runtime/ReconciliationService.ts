@@ -6,6 +6,7 @@ import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
 import { readStored } from '../../schema';
+import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SessionRetirer } from './SessionRetirer';
 import { RECLAIM_PROVISION_GRACE_MS } from './sessionLifecycle';
@@ -34,6 +35,7 @@ export interface ReconcileResult {
 	orphansReaped: number;
 	/** Ids of the orphan sandboxes destroyed by Rule 3 — surfaced for audit logging. */
 	orphanSandboxIds: string[];
+	markedDeadSessions: Session[];
 }
 
 /**
@@ -77,7 +79,14 @@ export class ReconciliationService {
 		// No provider truth to reconcile against — leave the bucket sweep to do its
 		// record-only job and report a clean no-op.
 		if (!this.compute.listActive) {
-			return { skipped: true, reclaimed: 0, markedDead: 0, orphansReaped: 0, orphanSandboxIds: [] };
+			return {
+				skipped: true,
+				reclaimed: 0,
+				markedDead: 0,
+				orphansReaped: 0,
+				orphanSandboxIds: [],
+				markedDeadSessions: [],
+			};
 		}
 
 		const orphanGraceMs = opts?.orphanGraceMs ?? DEFAULT_ORPHAN_GRACE_MS;
@@ -112,6 +121,7 @@ export class ReconciliationService {
 		let markedDead = 0;
 		let orphansReaped = 0;
 		const orphanSandboxIds: string[] = [];
+		const markedDeadSessions: Session[] = [];
 
 		for (const session of sessions) {
 			const sandboxId = session.sandbox_id;
@@ -163,8 +173,14 @@ export class ReconciliationService {
 					continue;
 				}
 				try {
-					await this.sessions.markFailed(session.project_id, session.session_id);
-					markedDead++;
+					const failed = await this.sessions.markFailedWithOutcome(
+						session.project_id,
+						session.session_id,
+					);
+					if (failed.transitioned) {
+						markedDead++;
+						markedDeadSessions.push(session);
+					}
 				} catch {
 					// Best-effort: the session may have been deleted concurrently.
 				}
@@ -209,7 +225,14 @@ export class ReconciliationService {
 
 		await this.pruneOrphanMarkers(pendingUndated);
 
-		return { skipped: false, reclaimed, markedDead, orphansReaped, orphanSandboxIds };
+		return {
+			skipped: false,
+			reclaimed,
+			markedDead,
+			orphansReaped,
+			orphanSandboxIds,
+			markedDeadSessions,
+		};
 	}
 
 	/**

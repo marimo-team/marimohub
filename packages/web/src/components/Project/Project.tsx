@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
 	AppWindow,
 	ArrowLeft,
+	Bell,
 	Camera,
 	ChevronDown,
 	Container,
@@ -80,6 +81,7 @@ import { supportsTableBrowse } from '@/lib/integrationBrowse';
 import { AppSessionIndicator } from './AppSessionIndicator';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
 import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
+import { ProjectAlertsDialog } from './ProjectAlertsDialog';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { ChangeBaseImageDialog } from '@/components/Notebook/ChangeBaseImageDialog';
 import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/baseImage';
@@ -100,6 +102,7 @@ import { filterBySearch } from '@/lib/search';
 import { formatRelative } from '@/lib/time';
 import { syncUrl } from '@/lib/links';
 import { sessionConnectionHint, sessionsByNotebook } from '@/lib/sessions';
+import { canManageProject } from '@/lib/roles';
 import type { DropdownMenuOption } from '@/components/ui';
 import type { NotebookEntry, Session } from '@/types';
 
@@ -160,6 +163,7 @@ export function Project() {
 	const deleteProjectModal = useDisclosure();
 	const environmentModal = useDisclosure();
 	const membersModal = useDisclosure();
+	const alertsModal = useDisclosure();
 
 	const { data: notebooks } = useNotebooksQuery(pid!);
 	const { data: project } = useProjectQuery(pid!);
@@ -192,6 +196,8 @@ export function Project() {
 
 	const dataBrowserAvailable =
 		(capabilities?.data_browser?.available ?? false) && project.your_role !== 'viewer';
+	const projectAlertsAvailable =
+		(capabilities?.project_alerts?.available ?? false) && canManageProject(project.your_role);
 	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
 	const { data: projectIntegrations } = useIntegrationsQuery({ pid: pid! }, dataBrowserAvailable);
 	const browsableKinds = new Set(
@@ -578,6 +584,15 @@ export function Project() {
 						>
 							<Settings2 className="size-4" />
 						</IconButton>
+						{projectAlertsAvailable && (
+							<IconButton
+								label="Project alerts"
+								tooltip="Project alerts"
+								onPress={alertsModal.open}
+							>
+								<Bell className="size-4" />
+							</IconButton>
+						)}
 						{dataBrowserAvailable && browsableIntegrations.length > 0 && (
 							<IconLink to={`/projects/${pid}/data`} label="Browse data" tooltip="Browse data">
 								<Database className="size-4" />
@@ -967,6 +982,16 @@ export function Project() {
 					cloudAccessAvailable={capabilities?.federation.available ?? false}
 					isPending={updateProject.isPending}
 					onSaveCloudAccess={handleSaveCloudAccess}
+				/>
+			)}
+
+			{alertsModal.isOpen && capabilities?.project_alerts && (
+				<ProjectAlertsDialog
+					isOpen
+					onClose={alertsModal.close}
+					projectId={pid!}
+					selectableKinds={capabilities.project_alerts.selectable_kinds}
+					maxDestinations={capabilities.project_alerts.max_destinations}
 				/>
 			)}
 

@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { zipSync } from 'fflate';
 import { createServices } from '@marimo-hub/core';
-import type { ProjectId } from '@marimo-hub/core';
+import type { ProjectAlertDispatcher, ProjectId } from '@marimo-hub/core';
 import { ACTOR } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
@@ -147,6 +147,20 @@ describe('Git sync routes', () => {
 		expect(versions.items[0]?.commit).toBe('abc123');
 	});
 
+	it('does not perform alert metadata reads before a successful sync', async () => {
+		const { notebookId, syncToken } = await createSyncedNotebook();
+		const services = createServices(bucket);
+		const projectLookup = vi
+			.spyOn(services.projects, 'getProject')
+			.mockRejectedValue(new Error('down'));
+		const notebookLookup = vi.spyOn(services.notebooks, 'getNotebook');
+		app = createTestApi({ bucket, deps: { services } }).app;
+
+		await expectOk(await syncRequest({ notebookId, headers: requiredHeaders(syncToken) }));
+		expect(projectLookup).not.toHaveBeenCalled();
+		expect(notebookLookup).toHaveBeenCalledOnce();
+	});
+
 	it("rejects a valid sync token used against a DIFFERENT notebook's path (401 IDOR)", async () => {
 		// Two independently-synced notebooks, each with its own per-notebook token.
 		const a = await createSyncedNotebook();
@@ -169,6 +183,59 @@ describe('Git sync routes', () => {
 
 		const error = await expectError(await syncRequest({ notebookId, headers }), 400, 'BAD_REQUEST');
 		expect(error.message).toContain('x-marimohub-commit');
+	});
+
+	it('does not alert for an unauthenticated sync attempt', async () => {
+		const { notebookId } = await createSyncedNotebook();
+		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered' as const);
+		app = createTestApi({
+			bucket,
+			deps: {
+				projectAlerts: {
+					store: {} as never,
+					dispatcher: { deliver, test: vi.fn() },
+					maxDestinations: 10,
+				},
+			},
+		}).app;
+
+		await expectError(await syncRequest({ notebookId }), 401, 'UNAUTHORIZED');
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(deliver).not.toHaveBeenCalled();
+	});
+
+	it('alerts after an authenticated sync validation failure with sanitized data', async () => {
+		const { notebookId, syncToken } = await createSyncedNotebook();
+		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered' as const);
+		app = createTestApi({
+			bucket,
+			deps: {
+				projectAlerts: {
+					store: {} as never,
+					dispatcher: { deliver, test: vi.fn() },
+					maxDestinations: 10,
+				},
+			},
+		}).app;
+		const headers = requiredHeaders(syncToken);
+		delete (headers as Record<string, string>)['X-Marimohub-Branch'];
+
+		await expectError(await syncRequest({ notebookId, headers }), 400, 'BAD_REQUEST');
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+		expect(deliver).toHaveBeenCalledWith(
+			projectId,
+			'sync.failed',
+			expect.objectContaining({
+				kind: 'sync.failed',
+				data: expect.objectContaining({
+					notebook_id: notebookId,
+					commit: 'abc123',
+					error_code: 'BAD_REQUEST',
+				}),
+			}),
+		);
+		const notification = vi.mocked(deliver).mock.calls[0]?.[2];
+		expect(notification?.data).not.toHaveProperty('repo');
 	});
 
 	it('reports every mismatched source header with expected and received values', async () => {

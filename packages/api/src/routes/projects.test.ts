@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createProjectId, createServices, paths, ProjectId } from '@marimo-hub/core';
 import { ACTOR, MemoryNotifier, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
+import type { ProjectAlertDispatcher } from '@marimo-hub/core';
 import {
 	createInitializedBucket,
 	createTestApi,
@@ -227,6 +228,41 @@ describe('Project member routes', () => {
 		await expectOk(await owner('DELETE', `/projects/${pid}/members/${bob}`));
 		const members = await expectOk<any[]>(await owner('GET', `/projects/${pid}/members`));
 		expect(members.map((m) => m.user_id)).not.toContain(bob);
+	});
+
+	it('reports the exact known user whose role changed', async () => {
+		const charlie = uid('user_charlie_role_alert');
+		await expectOk(
+			await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'viewer' }),
+			201,
+		);
+		await expectOk(
+			await owner('POST', `/projects/${pid}/members`, { user_id: charlie, role: 'viewer' }),
+			201,
+		);
+		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered' as const);
+		const alertsOwner = createTestApi({
+			bucket,
+			deps: {
+				projectAlerts: {
+					store: {} as never,
+					dispatcher: { deliver, test: vi.fn() },
+					maxDestinations: 10,
+				},
+			},
+		}).request;
+
+		await expectOk(
+			await alertsOwner('PUT', `/projects/${pid}/members/${charlie}`, { role: 'editor' }),
+		);
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+		expect(deliver).toHaveBeenCalledWith(
+			pid,
+			'member.role_changed',
+			expect.objectContaining({
+				data: expect.objectContaining({ member_user_id: charlie, old_role: 'viewer' }),
+			}),
+		);
 	});
 
 	it('rejects a duplicate member (409)', async () => {

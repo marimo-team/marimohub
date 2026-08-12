@@ -6,15 +6,15 @@ import {
 	NOTIFICATION_FIXTURE,
 } from '@marimo-hub/core/testing';
 import type { ApiDeps } from './context';
-import { scheduleNotification } from './notifications';
+import { scheduleNotification, scheduleProjectAlert } from './notifications';
 import { makeTestDeps } from './testing';
 
 function notificationDeps(overrides: Partial<ApiDeps>): ApiDeps {
 	return makeTestDeps(new MemoryBucket(), overrides);
 }
 
-const PERSONAL_TAKEOVER_NOTIFICATION: Notification = {
-	...BROADCAST_NOTIFICATION_FIXTURE,
+const PERSONAL_TAKEOVER_NOTIFICATION: Extract<Notification, { kind: 'session.takeover' }> = {
+	...(BROADCAST_NOTIFICATION_FIXTURE as Extract<Notification, { kind: 'session.takeover' }>),
 	audience: 'personal',
 	title: 'Your editor session was taken over',
 	body: 'Owner took over Revenue in Forecasts.',
@@ -202,5 +202,44 @@ describe('scheduleNotification', () => {
 			event: 'notification_delivery_failed',
 			notification_kind: 'session.takeover',
 		});
+	});
+});
+
+describe('scheduleProjectAlert', () => {
+	it('delivers only the matching broadcast variant', async () => {
+		const deliver = vi.fn(async () => 'delivered' as const);
+		const deps = notificationDeps({
+			projectAlerts: {
+				store: {} as never,
+				dispatcher: { deliver, test: vi.fn() },
+				maxDestinations: 10,
+			},
+		});
+		scheduleProjectAlert(
+			deps,
+			BROADCAST_NOTIFICATION_FIXTURE.data.project_id,
+			'session.takeover',
+			{},
+			() => TAKEOVER_NOTIFICATIONS,
+		);
+
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+		expect(deliver).toHaveBeenCalledWith(
+			BROADCAST_NOTIFICATION_FIXTURE.data.project_id,
+			'session.takeover',
+			BROADCAST_NOTIFICATION_FIXTURE,
+		);
+	});
+
+	it('does not render when the feature is unavailable', () => {
+		const render = vi.fn(() => BROADCAST_NOTIFICATION_FIXTURE);
+		scheduleProjectAlert(
+			notificationDeps({}),
+			BROADCAST_NOTIFICATION_FIXTURE.data.project_id,
+			'session.takeover',
+			{},
+			render,
+		);
+		expect(render).not.toHaveBeenCalled();
 	});
 });

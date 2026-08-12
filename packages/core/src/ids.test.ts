@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+	AlertDestinationId,
+	createAlertDestinationId,
 	createNotebookId,
 	createProjectId,
 	createSandboxId,
@@ -53,13 +55,18 @@ describe('other id factories (contract)', () => {
 	it('createSessionId matches sess-<16-char body>', () => {
 		expect(createSessionId()).toMatch(/^sess-[0-9a-hjkmnp-tv-z]{16}$/);
 	});
+
+	it('createAlertDestinationId matches alert-<16-char body>', () => {
+		expect(createAlertDestinationId()).toMatch(/^alert-[0-9a-hjkmnp-tv-z]{16}$/);
+	});
 });
 
 // --- Namespace helpers: is() / assert() / parse() ---
 
-// The hyphen-bodied ids (proj/nb/snap/sess/sb) share a format, so they share a
+// The hyphen-bodied ids share a format, so they share a
 // table of expectations. VersionId differs (uppercase ULID) and is below.
 const hyphenIds: { name: string; id: IdBrand<string>; prefix: string }[] = [
+	{ name: 'AlertDestinationId', id: AlertDestinationId, prefix: 'alert-' },
 	{ name: 'ProjectId', id: ProjectId, prefix: 'proj-' },
 	{ name: 'NotebookId', id: NotebookId, prefix: 'nb-' },
 	{ name: 'SnapshotId', id: SnapshotId, prefix: 'snap-' },

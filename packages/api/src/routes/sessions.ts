@@ -54,7 +54,7 @@ import {
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
 import { appendAudit, errorMetadata, logEvent } from '../log';
-import { scheduleNotification } from '../notifications';
+import { scheduleNotification, scheduleProjectAlert } from '../notifications';
 import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
 	assertSessionAccess,
@@ -682,26 +682,37 @@ app.openapi(takeoverEditorSession, async (c) => {
 		});
 		observer.tag('phase', claim.transfer?.phase ?? 'changed');
 		await audit('session.takeover.request');
-		const notifyTakeover = (holderUserId: UserId) =>
+		const notifyTakeover = (holderUserId: UserId) => {
+			const rendered = Promise.resolve().then(async () => {
+				const identity = await deps.services.identities.get(holderUserId).catch(() => null);
+				return notificationRouter.render({
+					kind: 'session.takeover',
+					project: subject.project,
+					notebookTitle: subject.notebook.meta.title,
+					projectId: pid,
+					notebookId: nid,
+					takeoverId: body.takeover_id,
+					displacedUserId: holderUserId,
+					recipient: recipientFromIdentity(identity),
+					actor: user,
+					baseUrl: deps.sandbox.appBaseUrl,
+				});
+			});
+			const render = () => rendered;
 			scheduleNotification(
 				deps,
 				'session.takeover',
 				{ project_id: pid, notebook_id: nid, takeover_id: body.takeover_id },
-				async () => {
-					return notificationRouter.render({
-						kind: 'session.takeover',
-						project: subject.project,
-						notebookTitle: subject.notebook.meta.title,
-						projectId: pid,
-						notebookId: nid,
-						takeoverId: body.takeover_id,
-						displacedUserId: holderUserId,
-						recipient: recipientFromIdentity(await deps.services.identities.get(holderUserId)),
-						actor: user,
-						baseUrl: deps.sandbox.appBaseUrl,
-					});
-				},
+				render,
 			);
+			scheduleProjectAlert(
+				deps,
+				pid,
+				'session.takeover',
+				{ project_id: pid, notebook_id: nid, takeover_id: body.takeover_id },
+				render,
+			);
+		};
 		if (claim.transfer?.phase === 'ready') {
 			await audit('session.takeover.success');
 			return c.json({ success: true }, 200);
@@ -1403,7 +1414,29 @@ app.openapi(createSession, async (c) => {
 		// error): a marking failure just leaves the record for the stale reaper, and
 		// markFailed no-ops if a concurrent stop already made it terminal.
 		if (session) {
-			await sessions.markFailed(pid, session.session_id, toSessionError(err)).catch(() => {});
+			const safeError = toSessionError(err);
+			const failed = await sessions
+				.markFailedWithOutcome(pid, session.session_id, safeError)
+				.catch(() => null);
+			if (MODE_POLICY[mode].singleton && failed?.transitioned) {
+				scheduleProjectAlert(
+					deps,
+					pid,
+					'app.start_failed',
+					{ project_id: pid, notebook_id: nid, session_id: session.session_id },
+					() =>
+						notificationRouter.render({
+							kind: 'app.start_failed',
+							project,
+							notebookId: nid,
+							notebookTitle: notebook.meta.title,
+							sessionId: session!.session_id,
+							startedByUserId: user.id,
+							errorCode: safeError.code,
+							baseUrl: appBaseUrl,
+						}),
+				);
+			}
 		}
 		throw err;
 	} finally {

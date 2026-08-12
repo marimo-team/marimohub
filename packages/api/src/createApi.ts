@@ -20,6 +20,7 @@ import eventsApp from './routes/events';
 import gitSyncApp from './routes/gitSync';
 import notebooksApp from './routes/notebooks';
 import projectsApp from './routes/projects';
+import projectAlertsApp from './routes/projectAlerts';
 import integrationsApp from './routes/integrations';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
@@ -40,6 +41,7 @@ const OPENAPI_DOC = {
 	tags: [
 		{ name: 'Auth', description: 'Authentication' },
 		{ name: 'Projects', description: 'Project management' },
+		{ name: 'Alerts', description: 'Project alert destinations' },
 		{ name: 'Notebooks', description: 'Notebook CRUD and versioning' },
 		{ name: 'Sessions', description: 'Notebook session lifecycle' },
 		{ name: 'Integrations', description: 'Project and organization integrations' },
@@ -395,6 +397,7 @@ export function createApi(rawDeps: ApiDeps) {
 	// Mount resource routers.
 	app.route(API_PREFIX, systemApp);
 	app.route(API_PREFIX, projectsApp);
+	app.route(API_PREFIX, projectAlertsApp);
 	app.route(API_PREFIX, eventsApp);
 	app.route(API_PREFIX, adminApp);
 	app.route(API_PREFIX, notebooksApp);

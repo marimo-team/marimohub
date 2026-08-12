@@ -17,6 +17,7 @@ import {
 	SandboxId,
 	TokenId,
 	IntegrationId,
+	AlertDestinationId,
 	UserId,
 } from './ids';
 
@@ -135,6 +136,7 @@ export const SessionIdSchema = z.string().refine(SessionId.is);
 export const SandboxIdSchema = z.string().refine(SandboxId.is);
 export const TokenIdSchema = z.string().refine(TokenId.is);
 export const IntegrationIdSchema = z.string().refine(IntegrationId.is);
+export const AlertDestinationIdSchema = z.string().refine(AlertDestinationId.is);
 // User ids (`author`/`owner`/`user_id`/`actor` foreign keys) are the opaque auth
 // `sub`. UserId.is only checks non-empty, so this brands without imposing a
 // format the identity provider doesn't guarantee.

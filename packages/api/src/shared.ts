@@ -13,6 +13,7 @@ import {
 	NOTEBOOK_STATUSES,
 	PROJECT_STATUSES,
 	ProjectId,
+	ProjectAlertKindSchema,
 	requireRole,
 	ROLES,
 	SESSION_MODES,
@@ -945,6 +946,12 @@ export const CapabilitiesResponseSchema = z
 	.object({
 		federation: z.object({ available: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
+		project_alerts: z.object({
+			available: z.boolean(),
+			destination_types: z.array(z.enum(['slack', 'webhook'])),
+			selectable_kinds: z.array(ProjectAlertKindSchema),
+			max_destinations: z.number().int().positive(),
+		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */
 		data_browser: z.object({ available: z.boolean(), preview: z.boolean() }),
 		/**

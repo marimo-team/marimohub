@@ -1,17 +1,77 @@
 import os from 'node:os';
+import { scheduleProjectAlert } from '@marimo-hub/api';
 import type { ApiDeps } from '@marimo-hub/api';
 import {
 	MaintenanceLock,
 	Millis,
+	mapWithConcurrency,
+	notificationRouter,
 	paths,
 	reapFilesystemSnapshots,
 	ReconciliationService,
+	sessionModePolicy,
 	SessionLifecycleService,
 } from '@marimo-hub/core';
 import { logEvent } from './log';
 import type { WideEventMetrics } from './metrics';
 
 const FIVE_MINUTES_MS = Millis.minutes(5);
+const APP_ALERT_CONTEXT_CONCURRENCY = 8;
+
+async function retryMetadataRead<T>(read: () => Promise<T>): Promise<T> {
+	try {
+		return await read();
+	} catch {
+		return read();
+	}
+}
+
+async function scheduleUnavailableAppAlerts(
+	deps: ApiDeps,
+	sessions: Awaited<ReturnType<ReconciliationService['reconcile']>>['markedDeadSessions'],
+): Promise<void> {
+	await mapWithConcurrency(sessions, APP_ALERT_CONTEXT_CONCURRENCY, async (session) => {
+		if (session.status !== 'running' || !sessionModePolicy(session).singleton) return;
+		try {
+			const [project, notebook] = await Promise.all([
+				retryMetadataRead(() => deps.services.projects.getProject(session.project_id)),
+				retryMetadataRead(() =>
+					deps.services.notebooks.getNotebook(session.project_id, session.notebook_id),
+				),
+			]);
+			scheduleProjectAlert(
+				deps,
+				session.project_id,
+				'app.unavailable',
+				{
+					project_id: session.project_id,
+					notebook_id: session.notebook_id,
+					session_id: session.session_id,
+				},
+				() =>
+					notificationRouter.render({
+						kind: 'app.unavailable',
+						project,
+						notebookId: session.notebook_id,
+						notebookTitle: notebook.meta.title,
+						sessionId: session.session_id,
+						startedByUserId: session.user_id,
+						errorCode: 'SANDBOX_DISAPPEARED',
+						baseUrl: deps.sandbox.appBaseUrl,
+					}),
+			);
+		} catch (error) {
+			logEvent({
+				level: 'error',
+				event: 'app_unavailable_alert_context_failed',
+				project_id: session.project_id,
+				notebook_id: session.notebook_id,
+				session_id: session.session_id,
+				name: error instanceof Error ? error.name : undefined,
+			});
+		}
+	});
+}
 
 /**
  * Node-side maintenance loop — the replacement for the Cloudflare Workers
@@ -68,6 +128,7 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 			try {
 				const sessionsExpired = await sessions.expireStale();
 				const reconcile = await reconciler.reconcile();
+				await scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions);
 				if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
 					logEvent({
 						level: 'warn',

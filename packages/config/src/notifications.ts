@@ -1,7 +1,7 @@
 import {
 	filterNotifier,
 	fanOutNotifier,
-	NOTIFICATION_KINDS,
+	GLOBAL_NOTIFICATION_KINDS,
 	noopMetrics,
 	noopNotifier,
 } from '@marimo-hub/core';
@@ -42,12 +42,12 @@ function parseKinds(env: Env, variable: string, fallback: ReadonlySet<string>): 
 	const configured = parseList(env[variable]);
 	if (!configured) return new Set(fallback);
 	if (configured.length === 1 && configured[0]?.toLowerCase() === 'none') return new Set();
-	const known = new Set<string>(NOTIFICATION_KINDS);
+	const known = new Set<string>(GLOBAL_NOTIFICATION_KINDS);
 	const unsupported = configured.filter((kind) => !known.has(kind));
 	if (unsupported.length > 0) {
 		throw new ConfigError(
 			`Invalid ${variable}: ${unsupported.join(', ')} ` +
-				`(expected ${NOTIFICATION_KINDS.join(', ')}, or none)`,
+				`(expected ${GLOBAL_NOTIFICATION_KINDS.join(', ')}, or none)`,
 			{ variable, docs: 'docs/notifications.md' },
 		);
 	}
@@ -55,7 +55,7 @@ function parseKinds(env: Env, variable: string, fallback: ReadonlySet<string>): 
 }
 
 export function notificationKindsForBackend(env: Env, backend: NotificationBackend): Set<string> {
-	const globalKinds = parseKinds(env, 'MARIMOHUB_NOTIFY_KINDS', new Set(NOTIFICATION_KINDS));
+	const globalKinds = parseKinds(env, 'MARIMOHUB_NOTIFY_KINDS', new Set(GLOBAL_NOTIFICATION_KINDS));
 	if (globalKinds.size === 0) return globalKinds;
 	return parseKinds(env, BACKEND_KIND_VARIABLES[backend], globalKinds);
 }

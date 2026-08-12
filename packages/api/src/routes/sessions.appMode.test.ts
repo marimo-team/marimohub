@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createServices, paths } from '@marimo-hub/core';
-import type { NotebookId, ProjectId } from '@marimo-hub/core';
+import type { NotebookId, ProjectAlertDispatcher, ProjectId } from '@marimo-hub/core';
 import {
 	ACTOR,
 	appClaimHolder,
@@ -52,6 +52,42 @@ describe('Session routes (app mode)', () => {
 		await expectOk(await owner('DELETE', sessionsPath(`/${app.session_id}`)));
 		const remaining = await expectOk<any>(await owner('GET', sessionsPath(`/${edit.session_id}`)));
 		expect(remaining.status).toBe('running');
+	});
+
+	it('alerts only after a recorded shared app fails provisioning', async () => {
+		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered' as const);
+		const sandbox = makeFakeSandbox({
+			failWaitForPort: new Error('provider detail must stay private'),
+		});
+		const failing = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(sandbox.instance),
+			deps: {
+				projectAlerts: {
+					store: {} as never,
+					dispatcher: { deliver, test: vi.fn() },
+					maxDestinations: 10,
+				},
+			},
+		}).request;
+
+		await expectError(
+			await failing('POST', sessionsPath(), { mode: 'app' }),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+		const notification = vi.mocked(deliver).mock.calls[0]?.[2];
+		expect(notification).toMatchObject({
+			kind: 'app.start_failed',
+			data: {
+				project_id: pid,
+				notebook_id: nid,
+				error_code: 'SERVICE_UNAVAILABLE',
+			},
+		});
+		expect(JSON.stringify(notification)).not.toContain('provider detail must stay private');
 	});
 
 	it('stamps source_version_id from the notebook head at create', async () => {
