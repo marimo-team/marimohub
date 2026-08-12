@@ -33,8 +33,8 @@ revision. Each session records the revisions that it uses.
 ## Browse catalog metadata
 
 Set `MARIMOHUB_DATA_BROWSER=metadata` to enable the Data page and browse API.
-`MARIMOHUB_INTEGRATIONS` must be `on`. `MARIMOHUB_INTEGRATIONS_PROBE` must not
-be `off`.
+Set it to `full` to also enable row previews. Integrations must be enabled, and
+the integration probe must not be `off`.
 
 Editors and higher roles can use the Data page at `/projects/{pid}/data`.
 They do not need to start a session. The URL stores the selected integration,
@@ -47,20 +47,46 @@ provides notebook code that loads the table through the integration. The
 already in place and opens it. Add the kind's listed packages to the
 notebook's dependencies before you run it.
 
-Browsing is read-only. Catalog requests use GET, and the API has no catalog
-write operations. OAuth2 authentication can also send a token request. All
-upstream requests use the egress policy from `MARIMOHUB_INTEGRATIONS_PROBE`.
+Browsing is read-only. Iceberg REST and ClickHouse use HTTP GET requests. Trino
+submits hub-generated `SHOW`, `DESCRIBE`, and bounded `SELECT` statements. All
+requests use the egress policy from `MARIMOHUB_INTEGRATIONS_PROBE`.
 
-Browsing currently supports the Iceberg REST Catalog. The hub supports only
-configurations that the **Test** action can exercise. The hub cannot browse an
-`iceberg_rest` integration that uses:
+The hub supports Iceberg REST Catalog, Trino, and ClickHouse. Trino uses the
+catalog → schema → table hierarchy. ClickHouse uses database → table.
+
+The hub cannot browse an Iceberg REST integration that uses:
 
 - SigV4, Google, or Entra authentication
 - a custom CA or client certificate
 
-These configurations continue to work inside the sandbox. The
-`GET …/integrations/{iid}/browse` route explains whether the hub can browse one
-integration.
+These configurations continue to work in notebook sandboxes.
+
+Trino browsing supports no authentication, Basic authentication, and JWT with
+system TLS. OAuth2, client certificates, Kerberos, GSSAPI, and custom TLS are
+sandbox-only. ClickHouse requires certificate verification when using HTTPS.
+Password authentication also requires HTTPS.
+
+The `GET …/integrations/{iid}/browse` route reports the capabilities of one
+integration and explains why a capability is unavailable.
+
+### Row previews
+
+The Preview tab does not load data automatically. Select **Load preview** to
+request rows. The response is not cached, and a successful request creates an
+audit event.
+
+Trino and ClickHouse run bounded preview queries through their HTTP APIs. Other
+browsable integrations use a new sandbox and a fixed PyIceberg scan.
+
+Sandbox previews require `MARIMOHUB_DATA_PREVIEW_IMAGE`. The image must contain
+Python, PyIceberg, and PyArrow. The compute backend must support per-sandbox
+OCI image overrides. The `local`, `e2b`, `none`, and `noop` backends do not
+support them.
+
+At startup, the hub verifies the image before it advertises sandbox previews.
+Each preview receives the selected integration configuration and applicable WIF
+credentials. Concurrency limits and deadlines bound resource use. The hub
+destroys the sandbox after the request, including after a failure.
 
 ### Scope and caching
 

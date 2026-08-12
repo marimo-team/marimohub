@@ -15,6 +15,8 @@ import type {
 	SessionRender,
 	SessionRenderContext,
 	TableSchema,
+	TablePreview,
+	TablePreviewRequest,
 	TestIntegrationRequest,
 	TestResult,
 	UpdateIntegrationInput,
@@ -68,7 +70,21 @@ export interface ProjectIntegrationsService {
 		id: IntegrationId,
 		namespace: string[],
 		table: string,
+		request?: Pick<TablePreviewRequest, 'query_user'>,
 	): Promise<TableSchema>;
+	browseTablePreview(
+		projectId: ProjectId,
+		id: IntegrationId,
+		namespace: string[],
+		table: string,
+		request: TablePreviewRequest,
+	): Promise<TablePreview>;
+	/** Render exactly one resolved integration for an isolated preview sandbox. */
+	resolveForPreview(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: SessionRenderContext,
+	): Promise<SessionRender>;
 	copy(
 		sourceProjectId: ProjectId,
 		id: IntegrationId,

@@ -150,6 +150,16 @@ A kind can implement `BrowseCapability` when it has an HTTP metadata API. The
 capability lists namespaces, tables, and schemas. It also creates a notebook
 snippet. `MARIMOHUB_DATA_BROWSER` controls access to this capability.
 
+Kinds can implement `previewRows` for bounded reads through the guarded HTTP
+path. Other kinds use `SandboxDataPreview` when the data browser is `full`.
+
+The sandbox adapter renders only the selected integration. It uses the image
+from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It
+also injects applicable WIF credentials.
+
+Per-user and process-wide limits control admission. Deadlines bound startup and
+execution. A `finally` block destroys each sandbox.
+
 All network access must use the injected browse probe. This probe has a separate
 request budget and a larger response limit than the connection-test probe.
 

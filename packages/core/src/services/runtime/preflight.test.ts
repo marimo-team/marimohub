@@ -54,6 +54,17 @@ describe('runPreflight', () => {
 		expect(report.fatal).toBe(false);
 	});
 
+	it('honors a per-check timeout override', async () => {
+		const report = await runPreflight(
+			[{ name: 'slow', timeoutMs: 5, run: () => new Promise(() => {}) }],
+			{ timeoutMs: 100 },
+		);
+		expect(report.checks[0]).toMatchObject({
+			status: 'fail',
+			message: 'Timed out after 5ms (treated as transient)',
+		});
+	});
+
 	it('stamps latency', async () => {
 		let t = 0;
 		const report = await runPreflight([check('a', async () => ({ status: 'ok', message: 'ok' }))], {

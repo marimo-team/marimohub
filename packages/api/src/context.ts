@@ -6,6 +6,7 @@ import type {
 	Bucket,
 	BucketConfig,
 	ComputeResources,
+	DataPreview,
 	createServices,
 	EditorSandboxSharing,
 	FederationTarget,
@@ -327,10 +328,10 @@ export interface ApiDeps {
 	orgIntegrations?: OrgIntegrationsService;
 	/**
 	 * Read-only data browsing over integrations (MARIMOHUB_DATA_BROWSER).
-	 * Absent disables the browse routes (404). `preview` stays false until
-	 * sandbox-executed row preview ships.
+	 * Absent disables the browse routes (404). `sandboxPreview` is the fallback
+	 * for kinds without a cheap HTTP-native preview.
 	 */
-	dataBrowser?: { preview: boolean };
+	dataBrowser?: { preview: boolean; sandboxPreview?: DataPreview };
 	/**
 	 * Build/deploy identity surfaced read-only by `GET /api/v1/version` (the UI's
 	 * footer info popover). Baked into the image at build time and read from env

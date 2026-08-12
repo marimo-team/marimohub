@@ -499,7 +499,12 @@ Integration management and session injection are enabled. Project entries use
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_INTEGRATIONS_PROBE` | Policy for the "Test connection" probe, which makes server-side HTTP requests to manager-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`). | — | `guarded` | — |
-| `MARIMOHUB_DATA_BROWSER` | Controls read-only catalog metadata browsing for editors and higher roles. `metadata` enables the Data page and browse API. It requires `MARIMOHUB_INTEGRATIONS=on` and a probe policy other than `off`. All upstream requests use the egress controls from `MARIMOHUB_INTEGRATIONS_PROBE`. `off` disables browsing. The reserved `full` value is not yet supported. | — | `off` | — |
+| `MARIMOHUB_DATA_BROWSER` | Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews. Requires `MARIMOHUB_INTEGRATIONS=on` and an enabled integration probe. `off` disables browsing. | — | `off` | — |
+| `MARIMOHUB_DATA_PREVIEW_IMAGE` | OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The hub verifies the image at startup. | — | — | `ghcr.io/example/marimohub-data-preview:1` |
+| `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT` | Maximum number of preview sandboxes in this server process. | — | `4` | — |
+| `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER` | Maximum number of preview sandboxes for one user. | — | `1` | — |
+| `MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS` | Maximum time to start and prepare a preview sandbox. | — | `120` | — |
+| `MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS` | Maximum time for the fixed PyIceberg scan. | — | `30` | — |
 
 ### Off
 

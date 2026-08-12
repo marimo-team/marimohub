@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { basicAuthHeader, defineIntegration, probeEndpoint } from '../sdk';
+import { UnavailableError, ValidationError } from '../../../errors';
+import type { IntegrationProbe } from '../../../ports/integrations';
+import {
+	basicAuthHeader,
+	defineIntegration,
+	envSegment,
+	pageByNameCursor,
+	probeEndpoint,
+} from '../sdk';
 import { zSecret } from '../secretFields';
 import {
 	connectionUrl,
@@ -78,4 +86,147 @@ export const clickhouse = defineIntegration({
 			},
 		});
 	},
+
+	browse: {
+		available(config) {
+			if (!config.verify && config.secure) {
+				return {
+					ok: false,
+					reason: 'disabled TLS verification can only be exercised inside the sandbox',
+				};
+			}
+			if (!config.secure && config.password !== undefined) {
+				return { ok: false, reason: 'password authentication requires HTTPS for hub browsing' };
+			}
+			return { ok: true };
+		},
+		async listNamespaces(config, probe, request) {
+			if (request.parent?.length) return { items: [], next_cursor: null };
+			const result = await clickhouseQuery(config, probe, 'SHOW DATABASES');
+			return pageByNameCursor(
+				result.rows.map((row) => [String(row[0])]),
+				request,
+				(namespace) => namespace[0],
+			);
+		},
+		async listTables(config, probe, namespace, request) {
+			if (namespace.length !== 1) return { items: [], next_cursor: null };
+			const result = await clickhouseQuery(
+				config,
+				probe,
+				`SHOW TABLES FROM ${quoteIdentifier(namespace[0])}`,
+			);
+			return pageByNameCursor(
+				result.rows.map((row) => String(row[0])),
+				request,
+				(table) => table,
+			);
+		},
+		async getTableSchema(config, probe, namespace, table, _request) {
+			if (namespace.length !== 1) throw new ValidationError('ClickHouse tables need one database.');
+			const result = await clickhouseQuery(
+				config,
+				probe,
+				`DESCRIBE TABLE ${qualifiedName([...namespace, table])}`,
+			);
+			const name = result.columns.indexOf('name');
+			const type = result.columns.indexOf('type');
+			const comment = result.columns.indexOf('comment');
+			if (name === -1 || type === -1)
+				throw new UnavailableError('ClickHouse returned an invalid schema.');
+			return {
+				columns: result.rows.map((row) => {
+					if (typeof row[name] !== 'string' || typeof row[type] !== 'string') {
+						throw new UnavailableError('ClickHouse returned an invalid schema.');
+					}
+					const renderedType = row[type];
+					const renderedComment =
+						comment === -1 || typeof row[comment] !== 'string' ? '' : row[comment];
+					return {
+						name: row[name],
+						type: renderedType,
+						nullable: isNullableType(renderedType),
+						...(renderedComment ? { comment: renderedComment } : {}),
+					};
+				}),
+			};
+		},
+		snippet(instanceName, namespace, table) {
+			const env = `MARIMOHUB_CLICKHOUSE_${envSegment(instanceName)}_URL`;
+			const sql = `SELECT * FROM ${qualifiedName([...namespace, table])} LIMIT 100`;
+			return [
+				'import os',
+				'from sqlalchemy import create_engine',
+				'',
+				`engine = create_engine(os.environ[${JSON.stringify(env)}])`,
+				`df = mo.sql(${JSON.stringify(sql)}, engine=engine)`,
+				'df',
+			].join('\n');
+		},
+		async previewRows(config, probe, namespace, table, request) {
+			if (namespace.length !== 1) throw new ValidationError('ClickHouse tables need one database.');
+			const result = await clickhouseQuery(
+				config,
+				probe,
+				`SELECT * FROM ${qualifiedName([...namespace, table])} LIMIT ${request.limit}`,
+			);
+			return { columns: result.columns, rows: result.rows };
+		},
+	},
 });
+
+interface ClickHouseResult {
+	columns: string[];
+	rows: unknown[][];
+}
+
+async function clickhouseQuery(
+	config: z.infer<typeof clickhouseConfig>,
+	probe: IntegrationProbe,
+	query: string,
+): Promise<ClickHouseResult> {
+	const url = new URL(`${config.secure ? 'https' : 'http'}://${config.host}:${config.port}/`);
+	url.searchParams.set('database', config.database);
+	url.searchParams.set('wait_end_of_query', '1');
+	url.searchParams.set('query', `${query} FORMAT JSONCompact`);
+	const response = await probe.fetch(url.toString(), {
+		method: 'GET',
+		headers: { Authorization: basicAuthHeader(config.username, config.password ?? '') },
+	});
+	if (!response.ok) throw new UnavailableError(`ClickHouse answered HTTP ${response.status}.`);
+	const body = await response.json();
+	if (!isRecord(body) || !Array.isArray(body.meta) || !Array.isArray(body.data)) {
+		throw new UnavailableError('ClickHouse returned an invalid result.');
+	}
+	const columns = body.meta.map((column) =>
+		isRecord(column) && typeof column.name === 'string' ? column.name : undefined,
+	);
+	if (columns.some((column) => column === undefined)) {
+		throw new UnavailableError('ClickHouse returned an invalid result.');
+	}
+	if (!body.data.every((row) => Array.isArray(row) && row.length === columns.length)) {
+		throw new UnavailableError('ClickHouse returned an invalid result.');
+	}
+	return { columns: columns as string[], rows: body.data as unknown[][] };
+}
+
+function isNullableType(type: string): boolean {
+	const rendered = type.trim();
+	if (rendered.startsWith('Nullable(') && rendered.endsWith(')')) return true;
+	const prefix = 'LowCardinality(';
+	return rendered.startsWith(prefix) && rendered.endsWith(')')
+		? isNullableType(rendered.slice(prefix.length, -1))
+		: false;
+}
+
+function qualifiedName(parts: string[]): string {
+	return parts.map(quoteIdentifier).join('.');
+}
+
+function quoteIdentifier(value: string): string {
+	return `"${value.replaceAll('"', '""')}"`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

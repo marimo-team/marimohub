@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { NotFoundError, ValidationError } from '../../errors';
 import type { IntegrationProbe } from '../../ports/integrations';
 import { trino } from './kinds/trino';
-import { basicAuthHeader, defineIntegration, envSegment, probeErrorDetails } from './sdk';
+import {
+	basicAuthHeader,
+	defineIntegration,
+	envSegment,
+	pageByNameCursor,
+	probeErrorDetails,
+} from './sdk';
 import { zSecret } from './secretFields';
 
 /** Fails the request with a message that quotes whatever the kind sent. */
@@ -217,6 +223,33 @@ describe('sdk helpers', () => {
 	it('encodes non-Latin-1 basic credentials and normalizes env segments', () => {
 		expect(basicAuthHeader('césar', 'pässwörd')).toBe('Basic Y8Opc2FyOnDDpHNzd8O2cmQ=');
 		expect(envSegment('my-warehouse')).toBe('MY_WAREHOUSE');
+	});
+
+	it('pages sorted unique names with an opaque keyset cursor', () => {
+		const first = pageByNameCursor(
+			['delta', 'alpha', 'beta', 'beta'],
+			{ limit: 2 },
+			(item) => item,
+		);
+		expect(first).toEqual({ items: ['alpha', 'beta'], next_cursor: 'name:beta' });
+		expect(
+			pageByNameCursor(
+				['aardvark', 'beta', 'delta', 'epsilon'],
+				{ limit: 2, cursor: first.next_cursor! },
+				(item) => item,
+			),
+		).toEqual({ items: ['delta', 'epsilon'], next_cursor: null });
+	});
+
+	it('encodes name cursors and rejects malformed cursors', () => {
+		const first = pageByNameCursor(['a name', 'z'], { limit: 1 }, (item) => item);
+		expect(first.next_cursor).toBe('name:a%20name');
+		expect(() => pageByNameCursor(['a'], { limit: 1, cursor: 'offset:1' }, (item) => item)).toThrow(
+			'Invalid browse cursor.',
+		);
+		expect(() =>
+			pageByNameCursor(['a'], { limit: 1, cursor: 'name:%E0%A4%A' }, (item) => item),
+		).toThrow('Invalid browse cursor.');
 	});
 });
 

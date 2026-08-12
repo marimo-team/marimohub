@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DomainError, UnavailableError } from '../../errors';
+import { DomainError, UnavailableError, ValidationError } from '../../errors';
 import type {
 	BrowseNamespacesRequest,
 	BrowsePage,
@@ -9,6 +9,8 @@ import type {
 	KindBrand,
 	ProbeRequestInit,
 	TableSchema,
+	TablePreview,
+	TablePreviewRequest,
 	TestResult,
 	UiHints,
 } from '../../ports/integrations';
@@ -50,8 +52,8 @@ export interface RenderOutput {
 
 /**
  * Read-only catalog browsing for kinds with an HTTP-native metadata API.
- * Every op is metadata-only and GET-shaped against the upstream; nothing here
- * may write. Like `testConnection`, ALL network access goes through `probe`.
+ * Metadata operations must not write upstream. Like `testConnection`, ALL
+ * network access goes through `probe`.
  */
 export interface BrowseCapability<C> {
 	/**
@@ -76,9 +78,46 @@ export interface BrowseCapability<C> {
 		probe: IntegrationProbe,
 		namespace: string[],
 		table: string,
+		request?: Pick<TablePreviewRequest, 'query_user'>,
 	): Promise<TableSchema>;
+	/** Optional cheap row preview executed by this kind's read-only HTTP API. */
+	previewRows?(
+		config: C,
+		probe: IntegrationProbe,
+		namespace: string[],
+		table: string,
+		request: TablePreviewRequest,
+	): Promise<TablePreview>;
 	/** Notebook code that loads the table through this instance's rendered config. */
 	snippet(instanceName: string, namespace: string[], table: string): string;
+}
+
+export function pageByNameCursor<T>(
+	items: T[],
+	request: BrowsePageRequest,
+	key: (item: T) => string,
+): BrowsePage<T> {
+	const after = decodeNameCursor(request.cursor);
+	const byKey = new Map(items.map((item) => [key(item), item]));
+	const remaining = [...byKey.entries()]
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+		.filter(([itemKey]) => after === undefined || itemKey > after);
+	const selected = remaining.slice(0, request.limit);
+	return {
+		items: selected.map(([, item]) => item),
+		next_cursor:
+			remaining.length > selected.length ? `name:${encodeURIComponent(selected.at(-1)![0])}` : null,
+	};
+}
+
+function decodeNameCursor(cursor: string | undefined): string | undefined {
+	if (cursor === undefined) return undefined;
+	if (!cursor.startsWith('name:')) throw new ValidationError('Invalid browse cursor.');
+	try {
+		return decodeURIComponent(cursor.slice('name:'.length));
+	} catch {
+		throw new ValidationError('Invalid browse cursor.');
+	}
 }
 
 /** Complete contract for one registered integration kind. */
@@ -233,6 +272,7 @@ function guardedBrowse<C>(browse: BrowseCapability<C>, pathsOf: () => SecretPath
 		listNamespaces: guard(browse.listNamespaces.bind(browse)),
 		listTables: guard(browse.listTables.bind(browse)),
 		getTableSchema: guard(browse.getTableSchema.bind(browse)),
+		...(browse.previewRows ? { previewRows: guard(browse.previewRows.bind(browse)) } : {}),
 	} satisfies BrowseCapability<C>;
 }
 
@@ -250,7 +290,6 @@ function withoutSecretEcho(result: TestResult, config: unknown, paths: SecretPat
 	// The substring match stays deliberately blunt (a short secret matches an
 	// innocuous detail by chance), so the replacement tracks the result's own
 	// `ok` instead of asserting failure: a false positive then costs detail, not
-	// correctness.
 	return { ...result, details: result.ok ? 'connected' : 'request failed' };
 }
 

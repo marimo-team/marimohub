@@ -2,6 +2,8 @@ import { createRoute, z } from '@hono/zod-openapi';
 import {
 	INTEGRATION_CATEGORIES,
 	IntegrationId,
+	createSessionId,
+	exchangeFederatedStorageEnv,
 	NotFoundError,
 	ProjectId,
 	requireRole,
@@ -11,9 +13,11 @@ import {
 import type {
 	IntegrationDetail,
 	IntegrationEntry,
+	DataPreview,
 	ProjectIntegrationsService,
 	OrgIntegrationsService,
 	TestIntegrationRequest,
+	TablePreview,
 } from '@marimo-hub/core';
 import {
 	assertProjectRole,
@@ -411,7 +415,7 @@ const BrowseCapabilitySchema = z
 	.object({
 		/** Whether namespace/table/schema browsing works for this instance. */
 		metadata: z.boolean(),
-		/** Whether row preview is available (always false until preview ships). */
+		/** Whether row preview is available for this instance. */
 		preview: z.boolean(),
 		reason: z.string().optional(),
 	})
@@ -458,6 +462,19 @@ const BrowseTableSchemaSchema = z
 			.optional(),
 	})
 	.openapi('IntegrationTableSchema');
+
+const BrowsePreviewSchema = z
+	.object({
+		columns: z.array(z.string()),
+		rows: z.array(z.array(z.unknown())),
+	})
+	.openapi('IntegrationTablePreview');
+
+const BrowsePreviewBody = z.object({
+	namespace: z.array(z.string().min(1)).min(1),
+	table: z.string().min(1),
+	limit: z.number().int().positive().max(100).default(20),
+});
 
 const browseCapability = createRoute({
 	method: 'get',
@@ -539,6 +556,25 @@ const browseTableSchema = createRoute({
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: BrowseTableSchemaSchema }),
 			'Column names, types, and partitioning',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
+const browseTablePreview = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/integrations/{iid}/browse/preview',
+	tags: ['Integrations'],
+	summary: "Preview a table's rows (editor or above)",
+	description:
+		'Runs a bounded read-only scan. HTTP-native integrations execute through the guarded ' +
+		'browse probe; other integrations use a fresh, isolated preview sandbox.',
+	request: { params: IntegrationIdParam, body: jsonBody(BrowsePreviewBody) },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: BrowsePreviewSchema }),
+			'Column names and a bounded row sample',
 		),
 		...commonErrors(),
 		...errorResponses(403, 404, 429),
@@ -679,11 +715,16 @@ function requireIntegrations(deps: ApiDeps): ProjectIntegrationsService {
 function requireDataBrowser(deps: ApiDeps): {
 	integrations: ProjectIntegrationsService;
 	preview: boolean;
+	sandboxPreview?: DataPreview;
 } {
 	if (!deps.dataBrowser) {
 		throw new NotFoundError('The data browser is not enabled on this deployment');
 	}
-	return { integrations: requireIntegrations(deps), preview: deps.dataBrowser.preview };
+	return {
+		integrations: requireIntegrations(deps),
+		preview: deps.dataBrowser.preview,
+		...(deps.dataBrowser.sandboxPreview ? { sandboxPreview: deps.dataBrowser.sandboxPreview } : {}),
+	};
 }
 
 function splitNamespace(value: string): string[] {
@@ -960,10 +1001,10 @@ function slidingWindowBudget(perMinute: number, message: string) {
 }
 
 const testBudget = slidingWindowBudget(10, 'Too many connection tests — try again in a minute.');
-// Sized against the browse probe's process-wide cap (240/min): one op spends
-// up to 3 probe requests (config handshake + metadata + OAuth token), so a
-// single user can hold at most ~90 of it — never the whole allowance.
-const browseBudget = slidingWindowBudget(30, 'Too many browse requests — try again in a minute.');
+// Sized against the browse probe's process-wide cap (360/min): a bounded Trino
+// statement spends at most 12 probe requests, so one user can hold at most 240
+// of the shared allowance.
+const browseBudget = slidingWindowBudget(20, 'Too many browse requests — try again in a minute.');
 
 function assertTestBudget(userId: string): void {
 	testBudget.assert(userId);
@@ -1045,7 +1086,10 @@ app.openapi(browseCapability, async (c) => {
 			success: true,
 			data: {
 				metadata: capability.metadata,
-				preview: preview && capability.metadata,
+				preview:
+					preview &&
+					capability.metadata &&
+					(capability.hub_preview || deps.dataBrowser?.sandboxPreview?.available() === true),
 				...(capability.reason !== undefined ? { reason: capability.reason } : {}),
 			},
 		},
@@ -1063,11 +1107,12 @@ app.openapi(browseNamespaces, async (c) => {
 	const stateToken = await assertBrowsable(integrations, pid, iid);
 	const request = {
 		limit,
+		query_user: user.email,
 		...(cursor !== undefined ? { cursor } : {}),
 		...(parent !== undefined ? { parent: splitNamespace(parent) } : {}),
 	};
 	const data = await cachedBrowse(
-		JSON.stringify([pid, iid, stateToken, 'namespaces', request]),
+		JSON.stringify([pid, iid, user.id, stateToken, 'namespaces', request]),
 		BROWSE_LIST_TTL_MS,
 		fresh === 'true',
 		() => browseBudget.assert(user.id),
@@ -1084,9 +1129,9 @@ app.openapi(browseTables, async (c) => {
 	const { integrations } = requireDataBrowser(deps);
 	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
 	const stateToken = await assertBrowsable(integrations, pid, iid);
-	const request = { limit, ...(cursor !== undefined ? { cursor } : {}) };
+	const request = { limit, query_user: user.email, ...(cursor !== undefined ? { cursor } : {}) };
 	const data = await cachedBrowse(
-		JSON.stringify([pid, iid, stateToken, 'tables', namespace, request]),
+		JSON.stringify([pid, iid, user.id, stateToken, 'tables', namespace, request]),
 		BROWSE_LIST_TTL_MS,
 		fresh === 'true',
 		() => browseBudget.assert(user.id),
@@ -1104,11 +1149,82 @@ app.openapi(browseTableSchema, async (c) => {
 	await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
 	const stateToken = await assertBrowsable(integrations, pid, iid);
 	const data = await cachedBrowse(
-		JSON.stringify([pid, iid, stateToken, 'schema', namespace, table]),
+		JSON.stringify([pid, iid, user.id, user.email, stateToken, 'schema', namespace, table]),
 		BROWSE_SCHEMA_TTL_MS,
 		fresh === 'true',
 		() => browseBudget.assert(user.id),
-		() => integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table),
+		() =>
+			integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table, {
+				query_user: user.email,
+			}),
+	);
+	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(browseTablePreview, async (c) => {
+	c.header('Cache-Control', 'no-store');
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { namespace, table, limit } = c.req.valid('json');
+	const { integrations, preview, sandboxPreview } = requireDataBrowser(deps);
+	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	if (!preview) throw new NotFoundError('Row preview is not enabled on this deployment');
+	browseBudget.assert(user.id);
+	const capability = await integrations.browseCapability(pid, iid);
+	if (!capability.metadata) {
+		throw new ValidationError(capability.reason ?? 'This integration cannot be browsed.');
+	}
+	let data: TablePreview;
+	if (capability.hub_preview) {
+		data = await integrations.browseTablePreview(pid, iid, namespace, table, {
+			limit,
+			query_user: user.email,
+		});
+	} else {
+		if (!sandboxPreview?.available()) {
+			throw new ValidationError(
+				'This integration does not support row preview on this deployment.',
+			);
+		}
+		const sessionId = createSessionId();
+		const bundle = await integrations.resolveForPreview(pid, iid, {
+			sessionId,
+			principal: { userId: user.id, email: user.email },
+		});
+		data = await sandboxPreview.preview({
+			bundle,
+			integration_name: bundle.attachments[0].name,
+			user_id: user.id,
+			...(deps.wif && project.federation?.enabled
+				? {
+						credential_vars: await exchangeFederatedStorageEnv(
+							deps.wif.issuer,
+							deps.wif.issuerUrl,
+							deps.wif.target,
+							pid,
+							sessionId,
+						),
+					}
+				: {}),
+			namespace,
+			table,
+			limit,
+		});
+	}
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+		'integration.preview',
+		() =>
+			deps.services.events.append({
+				event: 'integration.preview',
+				actor: user.id,
+				project_id: pid,
+				integration_id: iid,
+				namespace,
+				table,
+				row_limit: limit,
+			}),
 	);
 	return c.json({ success: true, data }, 200);
 });

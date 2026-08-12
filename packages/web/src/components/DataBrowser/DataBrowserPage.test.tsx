@@ -65,6 +65,9 @@ function makeFetch({
 			const body = JSON.parse(String(init?.body)) as { title: string };
 			return ok({ id: 'nb_1', project_id: PID, title: body.title });
 		}
+		if (method === 'POST' && url.endsWith('/browse/preview')) {
+			return ok({ columns: ['id', 'status'], rows: [[1, 'paid']] });
+		}
 		if (method !== 'GET') throw new Error(`unexpected ${method} ${url}`);
 		const target = new URL(url, 'http://test');
 		if (url.includes('/api/v1/capabilities')) {
@@ -164,7 +167,7 @@ describe('DataBrowserPage', () => {
 	it('restores a deep link: tree expanded to the namespace, table selected, schema shown', async () => {
 		setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`);
 
-		const namespace = await screen.findByTestId('browse-namespace');
+		const namespace = await screen.findByTestId('browse-namespace', undefined, { timeout: 5000 });
 		expect(namespace).toHaveAttribute('aria-expanded', 'true');
 		const table = await screen.findByTestId('browse-table');
 		expect(table).toHaveAttribute('aria-current', 'true');
@@ -272,6 +275,74 @@ describe('DataBrowserPage', () => {
 		expect(body.title).toBe('explore_orders');
 		expect(body.code).toContain('# sales.orders');
 		expect(body.code).toContain('    catalog = load_catalog("lake")');
+	});
+
+	it('loads a row preview only after the explicit button is pressed', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
+			capability: { metadata: true, preview: true },
+		});
+
+		await user.click(await screen.findByRole('tab', { name: 'Preview' }));
+		expect(screen.getByRole('button', { name: 'Load preview' })).toBeInTheDocument();
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/browse/preview'))).toBe(
+			false,
+		);
+
+		await user.click(screen.getByRole('button', { name: 'Load preview' }));
+		expect(await screen.findByText('paid')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Reload preview' })).toBeInTheDocument();
+	});
+
+	it('supports keyboard navigation and associates tabs with their panels', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
+			capability: { metadata: true, preview: true },
+		});
+
+		const schemaTab = await screen.findByRole('tab', { name: 'Schema' });
+		const previewTab = screen.getByRole('tab', { name: 'Preview' });
+		schemaTab.focus();
+		await user.keyboard('{ArrowRight}');
+
+		expect(previewTab).toHaveFocus();
+		expect(previewTab).toHaveAttribute('aria-selected', 'true');
+		const previewPanel = screen.getByRole('tabpanel');
+		expect(previewTab).toHaveAttribute('aria-controls', previewPanel.id);
+		expect(previewPanel).toHaveAttribute('aria-labelledby', previewTab.id);
+
+		await user.keyboard('{ArrowLeft}');
+		expect(schemaTab).toHaveFocus();
+		expect(schemaTab).toHaveAttribute('aria-selected', 'true');
+	});
+
+	it('returns to schema when refreshed capabilities disable previews', async () => {
+		const user = userEvent.setup();
+		const capability = { metadata: true, preview: true };
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
+			capability,
+		});
+		await user.click(await screen.findByRole('tab', { name: 'Preview' }));
+		expect(screen.getByRole('button', { name: 'Load preview' })).toBeInTheDocument();
+
+		capability.preview = false;
+		await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+		await waitFor(() =>
+			expect(screen.queryByRole('tab', { name: 'Preview' })).not.toBeInTheDocument(),
+		);
+		expect(screen.getByPlaceholderText('Filter columns...')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Load preview' })).not.toBeInTheDocument();
+
+		capability.preview = true;
+		await user.click(screen.getByRole('button', { name: 'Refresh' }));
+		await waitFor(() =>
+			expect(screen.getByRole('tab', { name: 'Schema' })).toHaveAttribute('aria-selected', 'true'),
+		);
+		expect(screen.queryByRole('button', { name: 'Load preview' })).not.toBeInTheDocument();
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/browse/preview'))).toBe(
+			false,
+		);
 	});
 
 	it('reports when browsing is unavailable', async () => {

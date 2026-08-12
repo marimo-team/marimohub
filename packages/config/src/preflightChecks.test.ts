@@ -327,6 +327,65 @@ describe('integrations.secrets check', () => {
 	});
 });
 
+describe('integrations.data-preview check', () => {
+	it('marks the runtime ready only after its preflight succeeds', async () => {
+		let ready = false;
+		const deps = makeDeps({
+			dataBrowser: {
+				preview: true,
+				sandboxPreview: {
+					available: () => ready,
+					check: async () => {
+						ready = true;
+					},
+					preview: async () => ({ columns: [], rows: [] }),
+				},
+			},
+		});
+		expect((await run({}, deps)).by('integrations.data-preview')).toMatchObject({ status: 'ok' });
+		expect(ready).toBe(true);
+	});
+
+	it('reports a failed runtime without making preflight fatal', async () => {
+		const deps = makeDeps({
+			dataBrowser: {
+				preview: true,
+				sandboxPreview: {
+					available: () => false,
+					check: async () => {
+						throw new Error('missing pyiceberg');
+					},
+					preview: async () => ({ columns: [], rows: [] }),
+				},
+			},
+		});
+		const { report, by } = await run({}, deps);
+		expect(by('integrations.data-preview')).toMatchObject({
+			status: 'fail',
+			remediation: expect.stringMatching(/compute credentials.*PyIceberg/i),
+		});
+		expect(report.fatal).toBe(false);
+	});
+
+	it('uses a bounded reporting timeout independent of sandbox lifecycle settings', () => {
+		const deps = makeDeps({
+			dataBrowser: {
+				preview: true,
+				sandboxPreview: {
+					available: () => false,
+					check: () => new Promise(() => {}),
+					preview: async () => ({ columns: [], rows: [] }),
+				},
+			},
+		});
+		const check = buildPreflightChecks({}, deps).find(
+			(candidate) => candidate.name === 'integrations.data-preview',
+		);
+
+		expect(check?.timeoutMs).toBe(30_000);
+	});
+});
+
 describe('compute.object-storage-wif check', () => {
 	const osEnv: Env = {
 		MARIMOHUB_COMPUTE_BACKEND: 'coreweave',

@@ -48,13 +48,36 @@ const browsyKind = defineIntegration({
 		getTableSchema: async (_config, _probe, _namespace, table) => ({
 			columns: [{ name: `${table}_id`, type: 'long', nullable: false }],
 		}),
+		previewRows: async (_config, _probe, namespace, table, request) => ({
+			columns: ['qualified', 'limit'],
+			rows: [[`${namespace.join('.')}.${table}`, request.limit]],
+		}),
 		snippet: (name, namespace, table) => `load ${name}:${namespace.join('.')}.${table}`,
+	},
+});
+
+const sandboxBrowsyKind = defineIntegration({
+	kind: 'sandbox_browsy',
+	title: 'Sandbox browsy',
+	description: 'test kind with sandbox preview',
+	category: 'catalog',
+	brand: { color: '#000000' },
+	schemaVersion: 1,
+	configSchema: z.object({}),
+	render: () => ({ env: { SANDBOX_BROWSY: 'enabled' } }),
+	browse: {
+		available: () => ({ ok: true }),
+		listNamespaces: async () => ({ items: [['sales']], next_cursor: null }),
+		listTables: async () => ({ items: ['orders'], next_cursor: null }),
+		getTableSchema: async () => ({ columns: [] }),
+		snippet: () => 'load',
 	},
 });
 
 function browserDeps(bucket: MemoryBucket) {
 	const registry = new IntegrationRegistry();
 	registry.register(browsyKind);
+	registry.register(sandboxBrowsyKind);
 	for (const def of defaultRegistry().list()) registry.register(def);
 	const stubProbe = { fetch: () => Promise.reject(new Error('no network in tests')) };
 	const options = { bucket, registry, codec, probe: stubProbe, browseProbe: stubProbe };
@@ -127,6 +150,198 @@ describe('Data browser routes', () => {
 			await request('GET', `/projects/${pid}/integrations/${closed.id}/browse`),
 		);
 		expect(closedCapability).toEqual({ metadata: false, preview: false, reason: 'sandbox only' });
+	});
+
+	it('previews rows on demand with no-store and appends an audit event', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		deps.dataBrowser.preview = true;
+
+		const capability = await expectOk<Record<string, unknown>>(
+			await request('GET', `/projects/${pid}/integrations/${created.id}/browse`),
+		);
+		expect(capability).toEqual({ metadata: true, preview: true });
+
+		const response = await request(
+			'POST',
+			`/projects/${pid}/integrations/${created.id}/browse/preview`,
+			{ namespace: ['sales'], table: 'orders', limit: 7 },
+		);
+		expect(response.headers.get('cache-control')).toBe('no-store');
+		expect(await expectOk(response)).toEqual({
+			columns: ['qualified', 'limit'],
+			rows: [['sales.orders', 7]],
+		});
+
+		const events = await expectOk<{ event: string; table?: string }[]>(
+			await request('GET', `/projects/${pid}/events`),
+		);
+		expect(events).toContainEqual(expect.objectContaining({ event: 'integration.preview' }));
+	});
+
+	it('passes the authenticated email as the native browse identity', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		deps.dataBrowser.preview = true;
+		const captured: unknown[] = [];
+		const original = deps.integrations.browseTablePreview.bind(deps.integrations);
+		deps.integrations.browseTablePreview = (async (...args: Parameters<typeof original>) => {
+			captured.push(args.at(-1));
+			return original(...args);
+		}) as typeof original;
+
+		await expectOk(
+			await request('POST', `/projects/${pid}/integrations/${created.id}/browse/preview`, {
+				namespace: ['sales'],
+				table: 'orders',
+			}),
+		);
+		expect(captured).toEqual([{ limit: 20, query_user: `${ACTOR}@example.com` }]);
+	});
+
+	it('renders only the selected integration for the sandbox preview fallback', async () => {
+		const pid = await createProject();
+		await createBrowsable(pid, 'other');
+		const selected = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 'sandbox_browsy',
+				name: 'selected',
+				config: {},
+			}),
+			201,
+		);
+		const calls: unknown[] = [];
+		const full = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: {
+				...deps,
+				dataBrowser: {
+					preview: true,
+					sandboxPreview: {
+						available: () => true,
+						check: async () => {},
+						preview: async (input) => {
+							calls.push(input);
+							return { columns: ['id'], rows: [[1]] };
+						},
+					},
+				},
+			},
+		}).request;
+
+		const response = await full(
+			'POST',
+			`/projects/${pid}/integrations/${selected.id}/browse/preview`,
+			{ namespace: ['sales'], table: 'orders', limit: 3 },
+		);
+		expect(await expectOk(response)).toEqual({ columns: ['id'], rows: [[1]] });
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({
+			integration_name: 'selected',
+			user_id: ACTOR,
+			bundle: {
+				vars: expect.objectContaining({ SANDBOX_BROWSY: 'enabled' }),
+				attachments: [{ name: 'selected', kind: 'sandbox_browsy' }],
+			},
+		});
+	});
+
+	it('advertises a sandbox preview only after the runtime is ready', async () => {
+		const pid = await createProject();
+		const selected = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 'sandbox_browsy',
+				name: 'preview-gated',
+				config: {},
+			}),
+			201,
+		);
+		let ready = false;
+		const full = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: {
+				...deps,
+				dataBrowser: {
+					preview: true,
+					sandboxPreview: {
+						available: () => ready,
+						check: async () => {
+							ready = true;
+						},
+						preview: async () => ({ columns: [], rows: [] }),
+					},
+				},
+			},
+		}).request;
+		const url = `/projects/${pid}/integrations/${selected.id}/browse`;
+
+		expect(await expectOk(await full('GET', url))).toEqual({ metadata: true, preview: false });
+		ready = true;
+		expect(await expectOk(await full('GET', url))).toEqual({ metadata: true, preview: true });
+	});
+
+	it('injects project WIF credentials into sandbox previews', async () => {
+		const pid = await createProject();
+		await expectOk(await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }));
+		const selected = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 'sandbox_browsy',
+				name: 'selected-wif',
+				config: {},
+			}),
+			201,
+		);
+		const calls: unknown[] = [];
+		const full = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: {
+				...deps,
+				wif: {
+					issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
+					issuerUrl: 'https://hub.example.com',
+					target: {
+						broker: {
+							exchange: async () => ({
+								accessKeyId: 'temporary-key',
+								secretAccessKey: 'temporary-secret',
+								sessionToken: 'temporary-token',
+							}),
+						},
+						storage: { region: 'us-east-1' },
+						audience: 'storage',
+					},
+				},
+				dataBrowser: {
+					preview: true,
+					sandboxPreview: {
+						available: () => true,
+						check: async () => {},
+						preview: async (input) => {
+							calls.push(input);
+							return { columns: [], rows: [] };
+						},
+					},
+				},
+			},
+		}).request;
+
+		await expectOk(
+			await full('POST', `/projects/${pid}/integrations/${selected.id}/browse/preview`, {
+				namespace: ['sales'],
+				table: 'orders',
+			}),
+		);
+		expect(calls[0]).toMatchObject({
+			credential_vars: {
+				AWS_ACCESS_KEY_ID: 'temporary-key',
+				AWS_SECRET_ACCESS_KEY: 'temporary-secret',
+				AWS_SESSION_TOKEN: 'temporary-token',
+				AWS_REGION: 'us-east-1',
+			},
+		});
 	});
 
 	it('editor can browse; viewer cannot', async () => {
@@ -230,7 +445,7 @@ describe('Data browser routes', () => {
 
 		// Distinct lookups are misses; the budget refuses within the minute.
 		let limited = 0;
-		for (let i = 0; i < 31; i++) {
+		for (let i = 0; i < 21; i++) {
 			const res = await asRateUser('GET', `${base}/tables?namespace=ns-${i}`);
 			if (res.status === 429) limited += 1;
 		}

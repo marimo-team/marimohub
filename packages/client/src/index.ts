@@ -35,6 +35,7 @@ export type IntegrationBrowseNamespacePage =
 	components['schemas']['IntegrationBrowseNamespacePage'];
 export type IntegrationBrowseTablePage = components['schemas']['IntegrationBrowseTablePage'];
 export type IntegrationTableSchema = components['schemas']['IntegrationTableSchema'];
+export type IntegrationTablePreview = components['schemas']['IntegrationTablePreview'];
 /** A single saved notebook revision (was `Version`). */
 export type NotebookVersion = components['schemas']['NotebookVersion'];
 /** Read-only deployment metadata from `GET /api/v1/version`. */
