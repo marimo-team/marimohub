@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PreconditionFailedError } from '../../errors';
-import { ACTOR, setupTestEnv } from '../../testing';
+import { ACTOR, restoreClock, setupTestEnv, useFakeClock } from '../../testing';
 import type { MemoryBucket } from '../../testing';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
@@ -47,6 +47,10 @@ describe('SyncedNotebookService', () => {
 		catalog = env.catalog;
 		const project = await projects.createProject({ name: 'P', description: 'd' }, ACTOR);
 		projectId = project.id;
+	});
+
+	afterEach(() => {
+		restoreClock();
 	});
 
 	async function entry(nid: string) {
@@ -343,8 +347,7 @@ describe('SyncedNotebookService', () => {
 
 	describe('sync', () => {
 		it('does not roll back a concurrent metadata update token', async () => {
-			vi.useFakeTimers();
-			vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+			const clock = useFakeClock(Date.parse('2026-01-01T00:00:00.000Z'));
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 			const nb = paths.project(projectId).notebook(meta.id);
 			const realPut = bucket.put.bind(bucket);
@@ -369,7 +372,7 @@ describe('SyncedNotebookService', () => {
 			const syncing = notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
 			try {
 				await atSourcePut;
-				vi.setSystemTime(new Date('2026-01-01T00:01:00.000Z'));
+				clock.set(Date.parse('2026-01-01T00:01:00.000Z'));
 				const concurrent = await notebooks.updateNotebook(
 					projectId,
 					meta.id,
@@ -393,7 +396,6 @@ describe('SyncedNotebookService', () => {
 				releaseSourcePut();
 				await Promise.allSettled([syncing]);
 				putSpy.mockRestore();
-				vi.useRealTimers();
 			}
 		});
 
