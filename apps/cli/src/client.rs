@@ -223,13 +223,13 @@ fn request_headers(
 }
 
 fn send_once(
+    agent: &ureq::Agent,
     runtime: &Runtime<'_>,
     method: &str,
     url: &Url,
     headers: &BTreeMap<String, String>,
     body: Option<&[u8]>,
 ) -> Result<HttpResponse, Error> {
-    let agent = ureq::AgentBuilder::new().timeout(runtime.timeout).build();
     let mut request = agent
         .request(method, url.as_str())
         .set("Accept", "application/json");
@@ -270,6 +270,7 @@ fn send_once(
 }
 
 fn send(
+    agent: &ureq::Agent,
     runtime: &Runtime<'_>,
     operation: &Operation,
     url: &Url,
@@ -280,7 +281,7 @@ fn send(
         || operation.method == "HEAD"
         || headers.contains_key("Idempotency-Key");
     for attempt in 0..3 {
-        match send_once(runtime, &operation.method, url, headers, body) {
+        match send_once(agent, runtime, &operation.method, url, headers, body) {
             Ok(response)
                 if retryable && attempt < 2 && matches!(response.status, 500 | 502 | 503 | 504) => {
             }
@@ -347,6 +348,7 @@ fn ensure_success(response: &HttpResponse) -> Result<Value, Error> {
 
 fn preflight_etag(
     manifest: &Manifest,
+    agent: &ureq::Agent,
     runtime: &Runtime<'_>,
     operation: &Operation,
     matches: &ArgMatches,
@@ -369,7 +371,7 @@ fn preflight_etag(
         .find(|candidate| &candidate.id == preflight_id)
         .ok_or_else(|| Error::Manifest(format!("missing preflight operation {preflight_id}")))?;
     let url = build_url(runtime, preflight, matches, None)?;
-    let response = send(runtime, preflight, &url, &BTreeMap::new(), None)?;
+    let response = send(agent, runtime, preflight, &url, &BTreeMap::new(), None)?;
     ensure_success(&response)?;
     response
         .headers
@@ -379,12 +381,12 @@ fn preflight_etag(
         .ok_or_else(|| Error::Http("preflight GET did not return an ETag".into()))
 }
 
-fn write_json(value: &Value, mode: &str) -> Result<(), Error> {
+fn write_json_to(writer: &mut impl Write, value: &Value, mode: &str) -> Result<(), Error> {
     match mode {
-        "json" => println!("{}", serde_json::to_string_pretty(value)?),
+        "json" => writeln!(writer, "{}", serde_json::to_string_pretty(value)?)?,
         "raw" => match value {
-            Value::String(value) => println!("{value}"),
-            _ => println!("{}", serde_json::to_string(value)?),
+            Value::String(value) => writeln!(writer, "{value}")?,
+            _ => writeln!(writer, "{}", serde_json::to_string(value)?)?,
         },
         "jsonl" => {
             let values = value
@@ -393,14 +395,37 @@ fn write_json(value: &Value, mode: &str) -> Result<(), Error> {
                 .map(Vec::as_slice)
                 .unwrap_or(std::slice::from_ref(value));
             for item in values {
-                println!("{}", serde_json::to_string(item)?);
+                writeln!(writer, "{}", serde_json::to_string(item)?)?;
             }
         }
-        "table" => write_table(value),
-        "csv" => write_csv(value)?,
+        "table" => write_table(writer, value)?,
+        "csv" => write_csv(writer, value)?,
         _ => unreachable!(),
     }
     Ok(())
+}
+
+fn is_broken_pipe(error: &Error) -> bool {
+    match error {
+        Error::Io(error) => error.kind() == io::ErrorKind::BrokenPipe,
+        Error::Csv(error) => {
+            matches!(error.kind(), csv::ErrorKind::Io(error) if error.kind() == io::ErrorKind::BrokenPipe)
+        }
+        _ => false,
+    }
+}
+
+fn normalize_stdout_result(result: Result<(), Error>) -> Result<(), Error> {
+    match result {
+        Err(error) if is_broken_pipe(&error) => Ok(()),
+        result => result,
+    }
+}
+
+fn write_json(value: &Value, mode: &str) -> Result<(), Error> {
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    normalize_stdout_result(write_json_to(&mut writer, value, mode))
 }
 
 fn output_rows(value: &Value) -> Vec<&Value> {
@@ -440,12 +465,12 @@ fn columns(rows: &[&Value]) -> Vec<String> {
     columns
 }
 
-fn write_table(value: &Value) {
+fn write_table(writer: &mut impl Write, value: &Value) -> Result<(), Error> {
     let rows = output_rows(value);
     let columns = columns(&rows);
     if columns.is_empty() {
-        println!("{}", cell(Some(value)));
-        return;
+        writeln!(writer, "{}", cell(Some(value)))?;
+        return Ok(());
     }
     let mut builder = Builder::default();
     builder.push_record(columns.iter().map(|column| column.to_ascii_uppercase()));
@@ -459,10 +484,11 @@ fn write_table(value: &Value) {
     }
     let mut table = builder.build();
     table.with(Style::rounded());
-    println!("{table}");
+    writeln!(writer, "{table}")?;
+    Ok(())
 }
 
-fn write_csv(value: &Value) -> Result<(), Error> {
+fn write_csv(writer: &mut impl Write, value: &Value) -> Result<(), Error> {
     let rows = output_rows(value);
     let columns = columns(&rows);
     if columns.is_empty() {
@@ -470,7 +496,7 @@ fn write_csv(value: &Value) -> Result<(), Error> {
             "--output csv requires an object or an array of objects".into(),
         ));
     }
-    let mut writer = csv::Writer::from_writer(io::stdout());
+    let mut writer = csv::Writer::from_writer(writer);
     writer.write_record(&columns)?;
     for row in rows {
         writer.write_record(columns.iter().map(|column| cell(row.get(column))))?;
@@ -492,6 +518,7 @@ fn pagination_spinner() -> ProgressBar {
 }
 
 pub fn current_user(manifest: &Manifest, runtime: &Runtime<'_>) -> Result<Value, Error> {
+    let agent = ureq::AgentBuilder::new().timeout(runtime.timeout).build();
     let operation = manifest
         .operations
         .iter()
@@ -502,7 +529,7 @@ pub fn current_user(manifest: &Manifest, runtime: &Runtime<'_>) -> Result<Value,
         runtime.base_url.trim_end_matches('/'),
         operation.path
     ))?;
-    let response = send(runtime, operation, &url, &BTreeMap::new(), None)?;
+    let response = send(&agent, runtime, operation, &url, &BTreeMap::new(), None)?;
     let envelope = ensure_success(&response)?;
     envelope
         .get("data")
@@ -516,15 +543,16 @@ pub fn execute(
     operation: &Operation,
     matches: &ArgMatches,
 ) -> Result<(), Error> {
-    if operation.session_only && runtime.token.is_some() {
+    if operation.session_only {
         return Err(Error::Usage(format!(
-            "{} requires a browser session and cannot be called with a personal access token",
+            "{} requires a browser session, which the CLI does not support",
             operation.id
         )));
     }
+    let agent = ureq::AgentBuilder::new().timeout(runtime.timeout).build();
     confirm(operation, matches)?;
     let body = request_body(operation, matches)?;
-    let if_match = preflight_etag(manifest, runtime, operation, matches)?;
+    let if_match = preflight_etag(manifest, &agent, runtime, operation, matches)?;
     let generated_key = operation
         .accepts_idempotency_key
         .then(generated_idempotency_key);
@@ -548,7 +576,7 @@ pub fn execute(
         let progress = pagination_spinner();
         loop {
             let url = build_url(runtime, operation, matches, cursor.as_deref())?;
-            let response = send(runtime, operation, &url, &headers, body.as_deref())?;
+            let response = send(&agent, runtime, operation, &url, &headers, body.as_deref())?;
             let envelope = ensure_success(&response)?;
             let data = envelope
                 .get("data")
@@ -576,10 +604,11 @@ pub fn execute(
     }
 
     let url = build_url(runtime, operation, matches, None)?;
-    let response = send(runtime, operation, &url, &headers, body.as_deref())?;
+    let response = send(&agent, runtime, operation, &url, &headers, body.as_deref())?;
     if operation.response_kind == ResponseKind::Raw && (200..300).contains(&response.status) {
-        io::stdout().write_all(&response.body)?;
-        return Ok(());
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        return normalize_stdout_result(writer.write_all(&response.body).map_err(Error::from));
     }
     let envelope = ensure_success(&response)?;
     let value = if runtime.raw_envelope {
@@ -592,9 +621,22 @@ pub fn execute(
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, BufRead, BufReader};
     use std::net::TcpListener;
 
     use super::*;
+
+    struct BrokenPipeWriter;
+
+    impl Write for BrokenPipeWriter {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed pipe"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn operation<'a>(manifest: &'a Manifest, id: &str) -> &'a Operation {
         manifest
@@ -623,6 +665,33 @@ mod tests {
                 body.len()
             )
             .expect("write response");
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn serve_twice_on_one_connection(body: &str) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let body = body.to_owned();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone test stream"));
+            for _ in 0..2 {
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("read request line");
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                write!(
+					stream,
+					"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+					body.len(),
+				)
+                .expect("write response");
+                stream.flush().expect("flush response");
+            }
         });
         (format!("http://{address}"), handle)
     }
@@ -665,6 +734,31 @@ mod tests {
         let error = current_user(&crate::manifest::load(), &runtime).expect_err("invalid token");
         server.join().expect("test server");
         assert!(matches!(error, Error::Http(message) if message.contains("HTTP 401 UNAUTHORIZED")));
+    }
+
+    #[test]
+    fn agent_reuses_a_connection_across_requests() {
+        let (base_url, server) =
+            serve_twice_on_one_connection(r#"{"success":true,"data":{"enabled":true}}"#);
+        let manifest = crate::manifest::load();
+        let operation = operation(&manifest, "capabilities");
+        let runtime = Runtime {
+            base_url: &base_url,
+            token: None,
+            timeout: Duration::from_secs(1),
+            output: "json",
+            raw_envelope: false,
+        };
+        let agent = ureq::AgentBuilder::new().timeout(runtime.timeout).build();
+        let url = Url::parse(&format!("{base_url}{}", operation.path)).expect("valid URL");
+
+        for _ in 0..2 {
+            let response = send(&agent, &runtime, operation, &url, &BTreeMap::new(), None)
+                .expect("request succeeds");
+            ensure_success(&response).expect("successful response");
+        }
+
+        server.join().expect("test server");
     }
 
     #[test]
@@ -739,5 +833,51 @@ mod tests {
         let rows = output_rows(&value);
 
         assert_eq!(columns(&rows), ["id", "name", "email"]);
+    }
+
+    #[test]
+    fn output_modes_return_broken_pipe_errors_without_panicking() {
+        let value = serde_json::json!({"id": "one"});
+
+        for mode in ["json", "raw", "jsonl", "table", "csv"] {
+            let error = write_json_to(&mut BrokenPipeWriter, &value, mode)
+                .expect_err("closed output should return an error");
+            assert!(is_broken_pipe(&error), "unexpected {mode} error: {error}");
+            assert!(normalize_stdout_result(Err(error)).is_ok());
+        }
+    }
+
+    #[test]
+    fn session_only_operations_are_rejected_before_http() {
+        let manifest = crate::manifest::load();
+        let matches = crate::cli::build(&manifest)
+            .try_get_matches_from(["mohub", "auth", "tokens", "list"])
+            .expect("valid command");
+        let leaf = matches
+            .subcommand_matches("auth")
+            .and_then(|matches| matches.subcommand_matches("tokens"))
+            .and_then(|matches| matches.subcommand_matches("list"))
+            .expect("auth tokens list matches");
+        let runtime = Runtime {
+            base_url: "http://127.0.0.1:9",
+            token: None,
+            timeout: Duration::from_secs(1),
+            output: "json",
+            raw_envelope: false,
+        };
+
+        let error = execute(
+            &manifest,
+            &runtime,
+            operation(&manifest, "auth.tokens.list"),
+            leaf,
+        )
+        .expect_err("session-only operation should be rejected locally");
+
+        assert!(matches!(
+            error,
+            Error::Usage(message)
+                if message.contains("requires a browser session")
+        ));
     }
 }

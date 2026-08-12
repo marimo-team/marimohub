@@ -48,6 +48,12 @@ export interface CliManifest {
 
 const HTTP_METHODS = ['delete', 'get', 'head', 'options', 'patch', 'post', 'put', 'trace'];
 
+const DESTRUCTIVE_OPERATION_IDS = new Set([
+	'notebooks.rotate-sync-token',
+	'notebooks.versions.restore',
+	'sessions.editor.takeover',
+]);
+
 function object(value: unknown, context: string): JsonObject {
 	if (value === null || typeof value !== 'object' || Array.isArray(value)) {
 		throw new Error(`Expected ${context} to be an object`);
@@ -101,10 +107,16 @@ function parametersFor(
 	pathItem: JsonObject,
 	operation: JsonObject,
 ): CliParameter[] {
-	const values = [...(Array.isArray(pathItem.parameters) ? pathItem.parameters : [])];
-	if (Array.isArray(operation.parameters)) values.push(...operation.parameters);
-	return values
-		.map((value) => resolve(document, value))
+	const parameters = new Map<string, JsonObject>();
+	for (const value of Array.isArray(pathItem.parameters) ? pathItem.parameters : []) {
+		const parameter = resolve(document, value);
+		parameters.set(`${String(parameter.in)}\0${String(parameter.name)}`, parameter);
+	}
+	for (const value of Array.isArray(operation.parameters) ? operation.parameters : []) {
+		const parameter = resolve(document, value);
+		parameters.set(`${String(parameter.in)}\0${String(parameter.name)}`, parameter);
+	}
+	return [...parameters.values()]
 		.map((parameter): CliParameter => {
 			const location = parameter.in;
 			if (location !== 'path' && location !== 'query' && location !== 'header') {
@@ -217,7 +229,7 @@ export function generateCliManifest(documentValue: Record<string, unknown>): Cli
 					: {}),
 				parameters,
 				...(body ? { body } : {}),
-				destructive: method === 'delete',
+				destructive: method === 'delete' || DESTRUCTIVE_OPERATION_IDS.has(operation.operationId),
 				paginated: isPaginated(document, operation),
 				response_kind: responseKind(document, operation),
 				session_only: isSessionOnly(operation),

@@ -1298,7 +1298,7 @@
 					"repeatable": false
 				}
 			],
-			"destructive": false,
+			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
 			"session_only": false,
@@ -1635,7 +1635,7 @@
 					"repeatable": false
 				}
 			],
-			"destructive": false,
+			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
 			"session_only": false,
@@ -2186,7 +2186,7 @@
 					}
 				]
 			},
-			"destructive": false,
+			"destructive": true,
 			"paginated": false,
 			"response_kind": "json",
 			"session_only": false,

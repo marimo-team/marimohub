@@ -313,11 +313,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Report the overall outcome once every release job has finished.
-    needs: [cli, image, chart, release-notes]
+    needs: [cli, cli-linux-x64, cli-installers, image, chart, release-notes]
     if: always()
     steps:
       - name: Notify Slack - Release Success
-        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
         uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}
@@ -337,7 +337,7 @@ jobs:
             }
 
       - name: Notify Slack - Release Failed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
         uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL_RELEASES }}

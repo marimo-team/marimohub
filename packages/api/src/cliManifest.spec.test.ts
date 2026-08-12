@@ -20,7 +20,86 @@ describe('CLI manifest', () => {
 
 	it('has a unique command for every documented operation', () => {
 		const manifest = generateCliManifest(generateOpenApiDocument());
-		expect(manifest.operations).toHaveLength(59);
-		expect(new Set(manifest.operations.map((operation) => operation.id)).size).toBe(59);
+		expect(new Set(manifest.operations.map((operation) => operation.id)).size).toBe(
+			manifest.operations.length,
+		);
+		expect(new Set(manifest.operations.map((operation) => operation.command.join('\0'))).size).toBe(
+			manifest.operations.length,
+		);
+	});
+
+	it('lets operation parameters override matching path parameters', () => {
+		const manifest = generateCliManifest({
+			openapi: '3.1.0',
+			info: { title: 'Test', version: '1.0.0' },
+			paths: {
+				'/items/{id}': {
+					parameters: [
+						{
+							name: 'id',
+							in: 'path',
+							required: true,
+							description: 'Path-level description',
+							schema: { type: 'string' },
+						},
+						{ name: 'id', in: 'query', schema: { type: 'string' } },
+					],
+					get: {
+						operationId: 'items.get',
+						parameters: [
+							{
+								name: 'id',
+								in: 'path',
+								required: true,
+								description: 'Operation-level description',
+								schema: { type: 'integer' },
+							},
+						],
+						responses: {
+							200: {
+								description: 'Item',
+								content: { 'application/json': { schema: { type: 'object' } } },
+							},
+						},
+					},
+				},
+			},
+		});
+
+		expect(manifest.operations[0]?.parameters).toEqual([
+			{
+				name: 'id',
+				cli_name: 'id',
+				in: 'path',
+				required: true,
+				description: 'Operation-level description',
+				value_type: 'integer',
+				repeatable: false,
+			},
+			{
+				name: 'id',
+				cli_name: 'id',
+				in: 'query',
+				required: false,
+				value_type: 'string',
+				repeatable: false,
+			},
+		]);
+	});
+
+	it('classifies disruptive non-DELETE operations explicitly', () => {
+		const operations = new Map(
+			generateCliManifest(generateOpenApiDocument()).operations.map((operation) => [
+				operation.id,
+				operation,
+			]),
+		);
+
+		expect(operations.get('notebooks.rotate-sync-token')?.destructive).toBe(true);
+		expect(operations.get('notebooks.versions.restore')?.destructive).toBe(true);
+		expect(operations.get('sessions.editor.takeover')?.destructive).toBe(true);
+		expect(operations.get('projects.delete')?.destructive).toBe(true);
+		expect(operations.get('projects.create')?.destructive).toBe(false);
+		expect(operations.get('projects.update')?.destructive).toBe(false);
 	});
 });

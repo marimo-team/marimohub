@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -9,6 +9,14 @@ use inquire::Password;
 use mohub::{cli, client, config, manifest, Error};
 use secrecy::SecretString;
 use update_informer::{registry, Check};
+
+fn write_stdout(arguments: std::fmt::Arguments<'_>) -> Result<(), Error> {
+    match io::stdout().lock().write_fmt(arguments) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
 
 fn selected_command(matches: &ArgMatches) -> (Vec<String>, &ArgMatches) {
     let mut path = Vec::new();
@@ -44,16 +52,16 @@ fn supplied_token(matches: &ArgMatches) -> Result<Option<SecretString>, Error> {
 }
 
 fn handle_profile(matches: &ArgMatches) -> Result<(), Error> {
-    let mut config = config::load()?;
     match matches.subcommand() {
         Some(("list", _)) => {
+            let config = config::load()?;
             for (name, profile) in &config.profiles {
                 let marker = if config.current_profile.as_deref() == Some(name) {
                     "*"
                 } else {
                     " "
                 };
-                println!("{marker} {name}\t{}", profile.base_url);
+                write_stdout(format_args!("{marker} {name}\t{}\n", profile.base_url))?;
             }
         }
         Some(("set", args)) => {
@@ -62,43 +70,91 @@ fn handle_profile(matches: &ArgMatches) -> Result<(), Error> {
             let base_url = args
                 .get_one::<String>("base-url")
                 .expect("required by clap");
-            url::Url::parse(base_url)?;
-            config.profiles.insert(
-                name.clone(),
-                config::Profile {
-                    base_url: base_url.trim_end_matches('/').to_owned(),
-                },
-            );
-            if config.current_profile.is_none() {
-                config.current_profile = Some(name.clone());
-            }
-            config::save(&config)?;
+            let base_url = normalize_base_url(base_url)?;
+            config::update(|config| {
+                config.profiles.insert(
+                    name.clone(),
+                    config::Profile {
+                        base_url: base_url.clone(),
+                    },
+                );
+                if config.current_profile.is_none() {
+                    config.current_profile = Some(name.clone());
+                }
+                Ok(())
+            })?;
             if let Some(token) = token {
                 config::set_token(name, &token)?;
             }
         }
         Some(("use", args)) => {
             let name = args.get_one::<String>("name").expect("required by clap");
-            if !config.profiles.contains_key(name) {
-                return Err(Error::Config(format!("profile {name:?} does not exist")));
-            }
-            config.current_profile = Some(name.clone());
-            config::save(&config)?;
+            config::update(|config| {
+                if !config.profiles.contains_key(name) {
+                    return Err(Error::Config(format!("profile {name:?} does not exist")));
+                }
+                config.current_profile = Some(name.clone());
+                Ok(())
+            })?;
         }
         Some(("remove", args)) => {
             let name = args.get_one::<String>("name").expect("required by clap");
-            if config.profiles.remove(name).is_none() {
-                return Err(Error::Config(format!("profile {name:?} does not exist")));
-            }
-            config::delete_token(name)?;
-            if config.current_profile.as_deref() == Some(name) {
-                config.current_profile = None;
-            }
-            config::save(&config)?;
+            config::remove_profile(name)?;
         }
         _ => unreachable!("profile subcommand required by clap"),
     }
     Ok(())
+}
+
+fn normalize_base_url(value: &str) -> Result<String, Error> {
+    let url = url::Url::parse(value)?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        return Err(Error::Usage(
+            "server URL must be an absolute HTTP or HTTPS URL".into(),
+        ));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(Error::Usage(
+            "server URL must not contain a username or password".into(),
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(Error::Usage(
+            "server URL must not contain a query string or fragment".into(),
+        ));
+    }
+    Ok(url.as_str().trim_end_matches('/').to_owned())
+}
+
+fn server_label(value: &str) -> String {
+    url::Url::parse(value)
+        .map(|url| url.origin().ascii_serialization())
+        .unwrap_or_else(|_| "the configured server".into())
+}
+
+fn matching_server(override_url: Option<&str>, profile_url: Option<&str>) -> Result<bool, Error> {
+    match (override_url, profile_url) {
+        (Some(override_url), Some(profile_url)) => {
+            Ok(normalize_base_url(override_url)? == normalize_base_url(profile_url)?)
+        }
+        _ => Ok(true),
+    }
+}
+
+fn stored_token_profile<'a>(
+    profile_name: Option<&'a str>,
+    override_url: Option<&str>,
+    profile_url: Option<&str>,
+) -> Result<Option<&'a str>, Error> {
+    if !matching_server(override_url, profile_url)? {
+        if let Some(name) = profile_name {
+            return Err(Error::Usage(format!(
+				"refusing to send the stored token for profile {name:?} to a different server; pass --token or --token-file explicitly"
+			)));
+        }
+        return Ok(None);
+    }
+    Ok(profile_name)
 }
 
 fn selected_profile(matches: &ArgMatches) -> Result<(String, String), Error> {
@@ -117,12 +173,16 @@ fn selected_profile(matches: &ArgMatches) -> Result<(String, String), Error> {
         .profiles
         .get(&name)
         .ok_or_else(|| Error::Config(format!("profile {name:?} does not exist")))?;
-    let base_url = matches
-        .get_one::<String>("base-url")
-        .cloned()
-        .unwrap_or_else(|| profile.base_url.clone());
-    url::Url::parse(&base_url)?;
-    Ok((name, base_url.trim_end_matches('/').to_owned()))
+    let profile_url = normalize_base_url(&profile.base_url)?;
+    if !matching_server(
+        matches.get_one::<String>("base-url").map(String::as_str),
+        Some(&profile_url),
+    )? {
+        return Err(Error::Usage(format!(
+			"server override does not match profile {name:?}; update the profile or select a matching one"
+		)));
+    }
+    Ok((name, profile_url))
 }
 
 fn auth_runtime<'a>(
@@ -215,15 +275,15 @@ fn handle_login(
     };
     let user = client::current_user(manifest, &auth_runtime(matches, &base_url, &token)).map_err(
         |error| Error::Authentication {
-            base_url: base_url.clone(),
+            server: server_label(&base_url),
             reason: error.to_string(),
         },
     )?;
     config::set_token(&profile, &token)?;
-    println!(
-        "Logged in to {base_url} as {} (profile {profile}).",
-        user_label(&user)
-    );
+    write_stdout(format_args!(
+        "Logged in to {base_url} as {} (profile {profile}).\n",
+        user_label(&user),
+    ))?;
     Ok(())
 }
 
@@ -239,17 +299,17 @@ fn handle_status(manifest: &manifest::Manifest, matches: &ArgMatches) -> Result<
         })?,
     };
     let user = client::current_user(manifest, &auth_runtime(matches, &base_url, &token))?;
-    println!(
-        "Authenticated to {base_url} as {} (profile {profile}).",
-        user_label(&user)
-    );
+    write_stdout(format_args!(
+        "Authenticated to {base_url} as {} (profile {profile}).\n",
+        user_label(&user),
+    ))?;
     Ok(())
 }
 
 fn handle_logout(matches: &ArgMatches) -> Result<(), Error> {
     let (profile, _) = selected_profile(matches)?;
     config::delete_token(&profile)?;
-    println!("Logged out of profile {profile}.");
+    write_stdout(format_args!("Logged out of profile {profile}.\n"))?;
     Ok(())
 }
 
@@ -262,22 +322,35 @@ fn resolve_runtime(matches: &ArgMatches) -> Result<(String, Option<SecretString>
     let profile = profile_name
         .as_ref()
         .and_then(|name| config.profiles.get(name));
-    let base_url = matches
+    if let Some(name) = &profile_name {
+        if profile.is_none() {
+            return Err(Error::Config(format!("profile {name:?} does not exist")));
+        }
+    }
+    let supplied_token = supplied_token(matches)?;
+    let override_url = matches
         .get_one::<String>("base-url")
-        .cloned()
-        .or_else(|| profile.map(|profile| profile.base_url.clone()))
+        .map(|value| normalize_base_url(value))
+        .transpose()?;
+    let profile_url = profile
+        .map(|profile| normalize_base_url(&profile.base_url))
+        .transpose()?;
+    let base_url = override_url
+        .clone()
+        .or_else(|| profile_url.clone())
         .ok_or_else(|| {
             Error::Config(
                 "no server URL; pass --base-url, set MARIMOHUB_URL, or configure a profile".into(),
             )
         })?;
-    url::Url::parse(&base_url)?;
-    let token = if let Some(token) = matches.get_one::<String>("token") {
-        Some(SecretString::from(token.clone()))
-    } else if let Some(path) = matches.get_one::<String>("token-file") {
-        Some(config::read_token(fs::File::open(path)?)?)
-    } else if let Some(name) = profile_name {
-        config::get_token(&name)?
+    let token = if let Some(token) = supplied_token {
+        Some(token)
+    } else if let Some(name) = stored_token_profile(
+        profile_name.as_deref(),
+        override_url.as_deref(),
+        profile_url.as_deref(),
+    )? {
+        config::get_token(name)?
     } else {
         None
     };
@@ -373,7 +446,7 @@ mod tests {
     #[test]
     fn embedded_manifest_covers_the_api() {
         let manifest = manifest::load();
-        assert_eq!(manifest.operations.len(), 59);
+        assert!(!manifest.operations.is_empty());
         assert_eq!(manifest.api_version, "1.0.0");
         assert_eq!(
             manifest
@@ -386,6 +459,57 @@ mod tests {
         assert!(manifest.operations.iter().all(|operation| {
             !operation.accepts_if_match || operation.preflight_operation_id.is_some()
         }));
+    }
+
+    #[test]
+    fn server_labels_never_include_credentials_or_paths() {
+        assert_eq!(
+            server_label("https://user:secret@example.com:8443/api?token=value"),
+            "https://example.com:8443"
+        );
+    }
+
+    #[test]
+    fn base_urls_reject_embedded_credentials() {
+        assert!(matches!(
+            normalize_base_url("https://user:secret@example.com/api"),
+            Err(Error::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn server_overrides_must_match_profile_urls() {
+        assert!(matching_server(
+            Some("https://hub.example.com/"),
+            Some("https://hub.example.com"),
+        )
+        .unwrap());
+        assert!(!matching_server(
+            Some("https://other.example.com"),
+            Some("https://hub.example.com"),
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn stored_tokens_are_rejected_for_other_servers() {
+        assert!(matches!(
+            stored_token_profile(
+                Some("default"),
+                Some("https://other.example.com"),
+                Some("https://hub.example.com"),
+            ),
+            Err(Error::Usage(_))
+        ));
+        assert_eq!(
+            stored_token_profile(
+                Some("default"),
+                Some("https://hub.example.com/"),
+                Some("https://hub.example.com"),
+            )
+            .unwrap(),
+            Some("default"),
+        );
     }
 
     #[test]

@@ -15,7 +15,6 @@ if (!arg) {
 const pkgPath = new URL('../package.json', import.meta.url);
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 const cargoPath = new URL('../apps/cli/Cargo.toml', import.meta.url);
-const cargoLockPath = new URL('../apps/cli/Cargo.lock', import.meta.url);
 
 let version = arg;
 if (arg === 'patch' || arg === 'minor' || arg === 'major') {
@@ -52,12 +51,7 @@ const replaceVersion = (path, pattern, replacement, label) => {
 };
 
 replaceVersion(cargoPath, /^version = "[^"]+"$/m, `version = "${version}"`, 'Cargo package');
-replaceVersion(
-	cargoLockPath,
-	/(\[\[package\]\]\nname = "mohub"\nversion = ")[^"]+("\n)/,
-	`$1${version}$2`,
-	'Cargo lockfile',
-);
+run('cargo', 'update', '--manifest-path', 'apps/cli/Cargo.toml', '--package', 'mohub');
 
 run('git', 'add', 'package.json', 'apps/cli/Cargo.toml', 'apps/cli/Cargo.lock');
 run('git', 'commit', '-m', `release: ${version}`);

@@ -57,14 +57,16 @@ mohub me
 ```
 
 `mohub` stores the server URL in its profile file. It stores the token in the
-operating system credential store.
+operating system credential store. On Linux systems without a Secret Service,
+it uses a user-only credentials file instead.
 
 ## Use the CLI
 
 ```bash
 mohub projects list --all
 mohub notebooks list --pid <PROJECT_ID> --all
-mohub notebooks create --pid <PROJECT_ID> --name analysis
+mohub notebooks create --pid <PROJECT_ID> --title analysis \
+	--code 'import marimo as mo' --description 'Analysis notebook'
 mohub sessions list --pid <PROJECT_ID> --all
 ```
 

@@ -25,12 +25,12 @@ pub enum Error {
     #[error("{0}")]
     #[diagnostic(code(mohub::http))]
     Http(String),
-    #[error("authentication failed for {base_url}: {reason}")]
+    #[error("authentication failed for {server}: {reason}")]
     #[diagnostic(
         code(mohub::authentication),
         help("Create a token in Account → API tokens, then run `mohub login --token-stdin`.")
     )]
-    Authentication { base_url: String, reason: String },
+    Authentication { server: String, reason: String },
     #[error("operation cancelled")]
     #[diagnostic(code(mohub::cancelled))]
     Cancelled,
