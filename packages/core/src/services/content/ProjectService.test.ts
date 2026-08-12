@@ -270,11 +270,17 @@ describe('ProjectService', () => {
 
 		it('adds an email member lowercased and denormalizes member_emails', async () => {
 			const p = await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
-			await projects.addMember(p.id, { email: 'Invitee@Example.COM' }, 'viewer', ACTOR);
+			const mutation = await projects.addMemberWithMutation(
+				p.id,
+				{ email: 'Invitee@Example.COM' },
+				'viewer',
+				ACTOR,
+			);
 
 			const stored = await projects.getProject(p.id);
 			expect(stored.members).toContainEqual({ email: 'invitee@example.com', role: 'viewer' });
 			const snap = await catalog.getCurrentSnapshot();
+			expect(mutation).toMatchObject({ project: stored, mutationId: snap.snapshot_id });
 			expect(snap.projects[0].member_emails).toEqual(['invitee@example.com']);
 		});
 

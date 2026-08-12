@@ -808,7 +808,7 @@ export class SessionService {
 			expectedActivity: 'active' | 'idle' | 'unknown' | 'starting';
 		},
 	): Promise<EditorClaim> {
-		const value = await mutateObject(
+		return mutateObject(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
 			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),
@@ -840,7 +840,6 @@ export class SessionService {
 				};
 			},
 		);
-		return value;
 	}
 
 	async setTakeoverPhase(

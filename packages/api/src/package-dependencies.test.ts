@@ -4,7 +4,7 @@ import { expect, it } from 'vitest';
 // The lint ban in vite.config.ts only catches import statements; this guards
 // the other half of the dependency rule — an adapter sneaking into the
 // manifest without any import (see AGENTS.md "The dependency rule").
-const ADAPTER_PATTERN = /^@marimo-hub\/(storage|compute|auth|credentials|secrets)-/;
+const ADAPTER_PATTERN = /^@marimo-hub\/(storage|compute|auth|credentials|secrets|notify)-/;
 
 const DEPENDENCY_FIELDS = [
 	'dependencies',

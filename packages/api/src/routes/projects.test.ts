@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createProjectId, createServices, paths, ProjectId } from '@marimo-hub/core';
-import { ACTOR, uid } from '@marimo-hub/core/testing';
+import { ACTOR, MemoryNotifier, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
 	createInitializedBucket,
@@ -135,11 +135,13 @@ describe('Project member routes', () => {
 	let bucket: MemoryBucket;
 	let owner: ReturnType<typeof createTestApi>['request'];
 	let pid: string;
+	let notifier: MemoryNotifier;
 	const bob = uid('user_bob');
 
 	beforeEach(async () => {
 		bucket = await createInitializedBucket();
-		owner = createTestApi({ bucket }).request; // authed as ACTOR, the project owner
+		notifier = new MemoryNotifier();
+		owner = createTestApi({ bucket, deps: { notifier } }).request; // authed as ACTOR, the project owner
 		const created = await expectOk<any>(
 			await owner('POST', '/projects', { name: 'Team', description: 'd' }),
 			201,
@@ -385,6 +387,12 @@ describe('Project member routes', () => {
 		);
 		expect(added.members).toEqual(expect.arrayContaining([{ user_id: bob, role: 'editor' }]));
 		expect(added.members.some((m: any) => m.email)).toBe(false);
+		await vi.waitFor(() => expect(notifier.deliveries).toHaveLength(1));
+		expect(notifier.deliveries[0]).toMatchObject({
+			kind: 'member.added',
+			recipients: [{ userId: bob, email: `${bob}@example.com` }],
+			context: { pid, role: 'editor' },
+		});
 	});
 
 	it('adding an unknown email stores a pending invite that works on first login', async () => {
@@ -399,6 +407,14 @@ describe('Project member routes', () => {
 		expect(added.members).toEqual(
 			expect.arrayContaining([{ email: 'newbie@example.com', role: 'editor' }]),
 		);
+		await vi.waitFor(() => expect(notifier.deliveries).toHaveLength(1));
+		expect(notifier.deliveries[0]).toMatchObject({
+			kind: 'member.invited',
+			recipients: [{ email: 'newbie@example.com' }],
+		});
+		expect(notifier.deliveries[0]?.dedupe_key).toMatch(
+			/^member\.invited:snap-[0-9a-z]{16}:personal$/,
+		);
 
 		// The invitee signs in (stub auth email is `${userId}@example.com`) and is
 		// recognized by email: role gates and members-only visibility both pass.
@@ -406,6 +422,35 @@ describe('Project member routes', () => {
 		expect((await expectOk<any>(await newbie('GET', `/projects/${pid}`))).your_role).toBe('editor');
 		const listed = await expectPage(await newbie('GET', '/projects'));
 		expect(listed.map((p: any) => p.id)).toContain(pid);
+	});
+
+	it('uses a new dedupe key after an invite is removed and added again', async () => {
+		const email = 'returning@example.com';
+		await expectOk(await owner('POST', `/projects/${pid}/members`, { email, role: 'viewer' }), 201);
+		await vi.waitFor(() => expect(notifier.deliveries).toHaveLength(1));
+		const firstKey = notifier.deliveries[0]?.dedupe_key;
+
+		await expectOk(await owner('DELETE', `/projects/${pid}/members/${encodeURIComponent(email)}`));
+		await expectOk(await owner('POST', `/projects/${pid}/members`, { email, role: 'editor' }), 201);
+		await vi.waitFor(() => expect(notifier.deliveries).toHaveLength(2));
+
+		expect(firstKey).toMatch(/^member\.invited:/);
+		expect(notifier.deliveries[1]?.dedupe_key).toMatch(/^member\.invited:/);
+		expect(notifier.deliveries[1]?.dedupe_key).not.toBe(firstKey);
+	});
+
+	it('does not fail the member write when notification delivery fails', async () => {
+		notifier.failNext();
+		const added = await expectOk<any>(
+			await owner('POST', `/projects/${pid}/members`, {
+				email: 'offline@example.com',
+				role: 'viewer',
+			}),
+			201,
+		);
+		expect(added.members).toContainEqual({ email: 'offline@example.com', role: 'viewer' });
+		await vi.waitFor(() => expect(notifier.attempts).toBe(1));
+		expect(notifier.deliveries).toHaveLength(0);
 	});
 
 	it('updates and removes a pending invite by its URL-encoded email', async () => {

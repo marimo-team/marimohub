@@ -2,11 +2,20 @@ import { createRoute, z } from '@hono/zod-openapi';
 import {
 	ASSIGNABLE_ROLES,
 	effectiveRole,
+	notificationRouter,
+	resolveMemberRecipient,
 	roleAtLeast,
 	toPublicProject,
 	UserId,
 } from '@marimo-hub/core';
-import type { AuthSubject, AuthzPolicy, Project, ProjectMember, Role } from '@marimo-hub/core';
+import type {
+	AuthSubject,
+	AuthzPolicy,
+	Identity,
+	Project,
+	ProjectMember,
+	Role,
+} from '@marimo-hub/core';
 import {
 	assertProjectRole,
 	commonErrors,
@@ -29,6 +38,7 @@ import {
 } from '../shared';
 import { idempotentCreate } from '../idempotency';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
+import { scheduleNotification } from '../notifications';
 
 // --- Request body schemas ---
 
@@ -349,19 +359,54 @@ app.openapi(addMember, async (c) => {
 	// Both identifiers are passed to the service whenever both are known, so the
 	// duplicate check spans a person's id row AND any pending invite row — one
 	// human must never hold two rows (revoking one would silently leave the other).
-	let member;
+	let member: { user_id: UserId; email?: string } | { email: string };
+	let memberIdentity: Identity | null = null;
 	if (body.email !== undefined) {
 		const email = body.email.toLowerCase();
 		// A known email is canonicalized to its user id; an unknown one is stored
 		// as a pending invite that matches by email at auth time.
 		const known = await identities.getByEmail(email);
+		memberIdentity = known;
 		member = known ? { user_id: known.id, email } : { email };
 	} else {
 		// The body refine guarantees user_id is set when email is not.
 		const userId = UserId.parse(body.user_id ?? '');
-		member = { user_id: userId, email: (await identities.get(userId))?.email };
+		memberIdentity = await identities.get(userId);
+		member = { user_id: userId, email: memberIdentity?.email };
 	}
-	const project = await projects.addMember(pid, member, body.role, user.id);
+	const { project, mutationId } = await projects.addMemberWithMutation(
+		pid,
+		member,
+		body.role,
+		user.id,
+	);
+	if ('user_id' in member) {
+		const notificationMember = { user_id: member.user_id, role: body.role };
+		scheduleNotification(deps, 'member.added', { project_id: pid, user: user.id }, () =>
+			notificationRouter.render({
+				kind: 'member.added',
+				project,
+				member: notificationMember,
+				recipient: resolveMemberRecipient(notificationMember, memberIdentity),
+				actor: user,
+				mutationId,
+				baseUrl: deps.sandbox.appBaseUrl,
+			}),
+		);
+	} else {
+		const notificationMember = { email: member.email, role: body.role };
+		scheduleNotification(deps, 'member.invited', { project_id: pid, user: user.id }, () =>
+			notificationRouter.render({
+				kind: 'member.invited',
+				project,
+				member: notificationMember,
+				recipient: resolveMemberRecipient(notificationMember, memberIdentity),
+				actor: user,
+				mutationId,
+				baseUrl: deps.sandbox.appBaseUrl,
+			}),
+		);
+	}
 	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 201);
 });
 

@@ -7,6 +7,7 @@ export * from './operationalLog';
 export * from './paths';
 export * from './authz';
 export * from './identityMatch';
+export * from './notifications';
 export * from './utcDate';
 export * from './cache';
 

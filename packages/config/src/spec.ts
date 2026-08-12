@@ -1285,6 +1285,118 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		],
 	},
 	{
+		name: 'Notifications',
+		description:
+			'Outbound notifications support several backends at the same time. `MARIMOHUB_NOTIFY_BACKENDS` is a comma-separated list. The hub sends notifications after it stores the related change. Delivery failures do not change the API response. See the [notifications guide](./notifications.md) for delivery and security details.',
+		backends: [
+			{
+				name: 'Shared',
+				description: 'These variables control all notification backends.',
+				vars: [
+					{
+						id: 'MARIMOHUB_NOTIFY_BACKENDS',
+						name: 'Notification backends',
+						description:
+							'Comma-separated backends. Accepted values are `smtp`, `slack`, and `webhook`. An empty value disables notifications.',
+						example: 'smtp,slack,webhook',
+					},
+					{
+						id: 'MARIMOHUB_NOTIFY_KINDS',
+						name: 'Notification kinds',
+						description:
+							'Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, and `session.takeover`. Set `none` to disable all kinds, including per-backend overrides. An unknown kind causes a startup error.',
+						example: 'member.invited,member.added',
+					},
+				],
+			},
+			{
+				name: 'SMTP',
+				description:
+					'Sends personal notifications to resolved recipients and broadcast notifications to administrator addresses.',
+				vars: [
+					{
+						id: 'MARIMOHUB_NOTIFY_SMTP_URL',
+						name: 'SMTP URL',
+						description:
+							'Required when `smtp` is enabled. The connection URL must include a hostname and use `smtp://` or `smtps://`. Treat this value as a secret because it often contains credentials.',
+						example: 'smtps://user:password@smtp.example.com:465',
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_NOTIFY_SMTP_FROM',
+						name: 'SMTP sender',
+						description: 'Required sender address when `smtp` is enabled.',
+						example: 'marimohub <hub@example.com>',
+					},
+					{
+						id: 'MARIMOHUB_NOTIFY_SMTP_ADMIN_TO',
+						name: 'SMTP administrator recipients',
+						description:
+							'Optional comma-separated addresses for broadcast notifications. SMTP skips a personal notification when it has no resolved recipient. It does not send personal content to these addresses.',
+						example: 'platform@example.com,security@example.com',
+					},
+					{
+						id: 'MARIMOHUB_NOTIFY_SMTP_KINDS',
+						name: 'SMTP notification kinds',
+						description:
+							'Exact comma-separated allowlist for SMTP. If unset or blank, it inherits `MARIMOHUB_NOTIFY_KINDS`. Set `none` to disable SMTP delivery.',
+						example: 'member.invited,member.added',
+					},
+				],
+			},
+			{
+				name: 'Slack',
+				description:
+					'Sends each enabled broadcast notification to one operator-managed incoming webhook.',
+				vars: [
+					{
+						id: 'MARIMOHUB_NOTIFY_SLACK_WEBHOOK_URL',
+						name: 'Slack webhook URL',
+						description:
+							'Required HTTPS incoming webhook URL when `slack` is enabled. The target channel receives every enabled broadcast notification.',
+						example: 'https://hooks.slack.com/services/T000/B000/secret',
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_NOTIFY_SLACK_KINDS',
+						name: 'Slack notification kinds',
+						description:
+							'Exact comma-separated allowlist for Slack. If unset or blank, it inherits `MARIMOHUB_NOTIFY_KINDS`. Set `none` to disable Slack delivery. Slack sends broadcast variants only.',
+						example: 'session.takeover',
+					},
+				],
+			},
+			{
+				name: 'Webhook',
+				description: 'Posts the complete notification as signed JSON.',
+				vars: [
+					{
+						id: 'MARIMOHUB_NOTIFY_WEBHOOK_URL',
+						name: 'Notification webhook URL',
+						description:
+							'Required HTTPS endpoint when `webhook` is enabled. It receives the complete notification object.',
+						example: 'https://events.example.com/marimohub',
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_NOTIFY_WEBHOOK_SECRET',
+						name: 'Notification webhook secret',
+						description:
+							'Required HMAC-SHA256 key when `webhook` is enabled. It signs the `X-Marimohub-Signature` header.',
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_NOTIFY_WEBHOOK_KINDS',
+						name: 'Webhook notification kinds',
+						description:
+							'Exact comma-separated allowlist for webhooks. If unset or blank, it inherits `MARIMOHUB_NOTIFY_KINDS`. Set `none` to disable webhook delivery.',
+						example: 'session.takeover',
+					},
+				],
+			},
+		],
+	},
+	{
 		name: 'Integrations',
 		selector: 'MARIMOHUB_INTEGRATIONS',
 		selectorDefault: 'off',

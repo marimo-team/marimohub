@@ -10,7 +10,7 @@ description: Authoritative generated reference for every marimohub configuration
 
 # Configuration reference
 
-Every marimohub configuration variable, grouped by category and backend. Each category has a `*_BACKEND` selector that chooses an adapter; only that backend's variables are read.
+Every marimohub configuration variable, grouped by category and backend. A category can use a selector or document variables that apply together. Notifications use a comma-separated backend list for fan-out.
 
 🔒 marks a sensitive value (a secret).
 
@@ -421,6 +421,49 @@ Resolve references with `backend: aws-sm`. The hub needs `secretsmanager:GetSecr
 | `MARIMOHUB_SECRETS_AWS_ACCESS_KEY_ID` 🔒 | Static credential for non-AWS deployments. Set it with the secret access key. Omit both to use the default AWS credential chain. | — | — | — |
 | `MARIMOHUB_SECRETS_AWS_SECRET_ACCESS_KEY` 🔒 | Static credential paired with the access key ID. | — | — | — |
 | `MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS` | Cache duration for resolved values. A value of `0` disables caching. | — | `0` | — |
+
+## Notifications
+
+Outbound notifications support several backends at the same time. `MARIMOHUB_NOTIFY_BACKENDS` is a comma-separated list. The hub sends notifications after it stores the related change. Delivery failures do not change the API response. See the [notifications guide](./notifications.md) for delivery and security details.
+
+### Shared
+
+These variables control all notification backends.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_NOTIFY_BACKENDS` | Comma-separated backends. Accepted values are `smtp`, `slack`, and `webhook`. An empty value disables notifications. | — | — | `smtp,slack,webhook` |
+| `MARIMOHUB_NOTIFY_KINDS` | Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, and `session.takeover`. Set `none` to disable all kinds, including per-backend overrides. An unknown kind causes a startup error. | — | — | `member.invited,member.added` |
+
+### SMTP
+
+Sends personal notifications to resolved recipients and broadcast notifications to administrator addresses.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_NOTIFY_SMTP_URL` 🔒 | Required when `smtp` is enabled. The connection URL must include a hostname and use `smtp://` or `smtps://`. Treat this value as a secret because it often contains credentials. | — | — | `smtps://user:password@smtp.example.com:465` |
+| `MARIMOHUB_NOTIFY_SMTP_FROM` | Required sender address when `smtp` is enabled. | — | — | `marimohub <hub@example.com>` |
+| `MARIMOHUB_NOTIFY_SMTP_ADMIN_TO` | Optional comma-separated addresses for broadcast notifications. SMTP skips a personal notification when it has no resolved recipient. It does not send personal content to these addresses. | — | — | `platform@example.com,security@example.com` |
+| `MARIMOHUB_NOTIFY_SMTP_KINDS` | Exact comma-separated allowlist for SMTP. If unset or blank, it inherits `MARIMOHUB_NOTIFY_KINDS`. Set `none` to disable SMTP delivery. | — | — | `member.invited,member.added` |
+
+### Slack
+
+Sends each enabled broadcast notification to one operator-managed incoming webhook.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_NOTIFY_SLACK_WEBHOOK_URL` 🔒 | Required HTTPS incoming webhook URL when `slack` is enabled. The target channel receives every enabled broadcast notification. | — | — | `https://hooks.slack.com/services/T000/B000/secret` |
+| `MARIMOHUB_NOTIFY_SLACK_KINDS` | Exact comma-separated allowlist for Slack. If unset or blank, it inherits `MARIMOHUB_NOTIFY_KINDS`. Set `none` to disable Slack delivery. Slack sends broadcast variants only. | — | — | `session.takeover` |
+
+### Webhook
+
+Posts the complete notification as signed JSON.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_NOTIFY_WEBHOOK_URL` 🔒 | Required HTTPS endpoint when `webhook` is enabled. It receives the complete notification object. | — | — | `https://events.example.com/marimohub` |
+| `MARIMOHUB_NOTIFY_WEBHOOK_SECRET` 🔒 | Required HMAC-SHA256 key when `webhook` is enabled. It signs the `X-Marimohub-Signature` header. | — | — | — |
+| `MARIMOHUB_NOTIFY_WEBHOOK_KINDS` | Exact comma-separated allowlist for webhooks. If unset or blank, it inherits `MARIMOHUB_NOTIFY_KINDS`. Set `none` to disable webhook delivery. | — | — | `session.takeover` |
 
 ## Integrations
 

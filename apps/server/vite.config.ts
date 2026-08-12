@@ -28,6 +28,7 @@ export default defineConfig({
 			/^ufo$/,
 			/^ulidx$/,
 			/^zod$/,
+			/^nodemailer$/,
 			// better-all (pure-JS, used by core's provisioning graph) must be
 			// bundled — the runtime image ships no node_modules.
 			/^better-all$/,

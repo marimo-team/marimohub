@@ -100,7 +100,7 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|storage|compute|editor-sessions|sandbox-image|apps|ai|environment-and-access|integration-secrets|integrations|syncing|workload-identity-federation)',
+					'^/(auth|storage|compute|editor-sessions|sandbox-image|apps|ai|environment-and-access|integration-secrets|integrations|notifications|syncing|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
@@ -111,6 +111,7 @@ export default defineConfig({
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Environment & cloud access', link: '/environment-and-access' },
 					{ text: 'Integrations', link: '/integrations' },
+					{ text: 'Notifications', link: '/notifications' },
 					{ text: 'Integration secret sources', link: '/integration-secrets' },
 					{ text: 'Syncing from external sources', link: '/syncing' },
 					{ text: 'Workload Identity Federation', link: '/workload-identity-federation' },
@@ -162,6 +163,7 @@ export default defineConfig({
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Environment & cloud access', link: '/environment-and-access' },
 					{ text: 'Integrations', link: '/integrations' },
+					{ text: 'Notifications', link: '/notifications' },
 					{ text: 'Integration secret sources', link: '/integration-secrets' },
 					{ text: 'Syncing from external sources', link: '/syncing' },
 					{ text: 'Workload Identity Federation', link: '/workload-identity-federation' },

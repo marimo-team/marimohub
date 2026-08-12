@@ -73,7 +73,11 @@ function parseDefaultRole(raw: string | undefined): AssignableRole | undefined {
 	throw new Error(`Invalid DEFAULT_ROLE: ${raw} (expected ${ASSIGNABLE_ROLES.join(', ')}, none)`);
 }
 
-export function buildDeps(request: Request, env: Env): ApiDeps {
+export function buildDeps(
+	request: Request,
+	env: Env,
+	ctx?: Pick<ExecutionContext, 'waitUntil'>,
+): ApiDeps {
 	const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
 	parseComputeProfileOverride(env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE);
@@ -140,6 +144,7 @@ export function buildDeps(request: Request, env: Env): ApiDeps {
 		services,
 		bucket,
 		compute: new CloudflareSandboxProvider(env.SANDBOX, { useTunnel }),
+		...(ctx ? { backgroundTasks: { defer: (task: Promise<unknown>) => ctx.waitUntil(task) } } : {}),
 		// Personal access tokens (`Authorization: Bearer mhub_pat_…`) work on every
 		// deployment; other requests resolve through the adapter selected above.
 		authenticator: composeAuthenticators(services.tokens, authenticator),
@@ -212,7 +217,7 @@ export default {
 		// see what to fix in the deployment vars.
 		let api: ReturnType<typeof createApi>;
 		try {
-			api = createApi(buildDeps(request, env));
+			api = createApi(buildDeps(request, env, ctx));
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			return new Response(

@@ -56,6 +56,18 @@ describe('Cloudflare Worker configuration', () => {
 		expect(deps.policy.superAdmins).toBeUndefined();
 	});
 
+	it('adapts request background tasks to the Workers execution context', () => {
+		const waitUntil = vi.fn();
+		const deps = buildDeps(new Request('https://hub.example.com'), baseEnv as unknown as Env, {
+			waitUntil,
+		});
+		const task = Promise.resolve();
+
+		deps.backgroundTasks?.defer(task);
+
+		expect(waitUntil).toHaveBeenCalledWith(task);
+	});
+
 	it('defaults and canonicalizes editor sandbox sharing', () => {
 		expect(
 			buildDeps(new Request('https://hub.example.com'), baseEnv as unknown as Env).policy

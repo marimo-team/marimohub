@@ -8,7 +8,7 @@ import type { AssignableRole } from '../../constants';
 import { Millis } from '../../duration';
 import { assertVersionMatch, ConflictError, NotFoundError } from '../../errors';
 import { createProjectId, SYSTEM_ACTOR } from '../../ids';
-import type { ProjectId, UserId } from '../../ids';
+import type { ProjectId, SnapshotId, UserId } from '../../ids';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
@@ -51,6 +51,11 @@ export interface UpdateProjectInput {
  * would make demote/remove of one row silently fail to revoke the other).
  */
 export type NewMember = { user_id: UserId; email?: string } | { email: string };
+
+export interface MemberMutationResult {
+	project: Project;
+	mutationId: SnapshotId;
+}
 
 export class ProjectService {
 	constructor(
@@ -209,6 +214,15 @@ export class ProjectService {
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<Project> {
+		return (await this.addMemberWithMutation(id, member, role, actor)).project;
+	}
+
+	async addMemberWithMutation(
+		id: ProjectId,
+		member: NewMember,
+		role: AssignableRole,
+		actor: UserId,
+	): Promise<MemberMutationResult> {
 		const userId = 'user_id' in member ? member.user_id : undefined;
 		const email = member.email !== undefined ? normalizeEmail(member.email) : undefined;
 		return this.writeMembers(
@@ -241,7 +255,7 @@ export class ProjectService {
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<Project> {
-		return this.writeMembers(
+		const { project } = await this.writeMembers(
 			id,
 			(current) => {
 				if (selector === current.owner) {
@@ -256,6 +270,7 @@ export class ProjectService {
 			},
 			actor,
 		);
+		return project;
 	}
 
 	/**
@@ -263,7 +278,7 @@ export class ProjectService {
 	 * be removed.
 	 */
 	async removeMember(id: ProjectId, selector: string, actor: UserId): Promise<Project> {
-		return this.writeMembers(
+		const { project } = await this.writeMembers(
 			id,
 			(current) => {
 				if (selector === current.owner) {
@@ -276,6 +291,7 @@ export class ProjectService {
 			},
 			actor,
 		);
+		return project;
 	}
 
 	// The authoritative roster (with roles) lives on project.json; the snapshot
@@ -287,7 +303,7 @@ export class ProjectService {
 		id: ProjectId,
 		deriveMembers: (current: Project) => ProjectMember[],
 		actor: UserId,
-	): Promise<Project> {
+	): Promise<MemberMutationResult> {
 		const key = paths.project(id).meta;
 		const updated = await mutateObject(
 			this.bucket,
@@ -305,10 +321,10 @@ export class ProjectService {
 			},
 			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
 		);
-		await this.catalog.updateProjectEntry('project.members', actor, id, (entry) =>
+		const snapshot = await this.catalog.updateProjectEntry('project.members', actor, id, (entry) =>
 			loadProjectCatalogPatch(this.bucket, id, entry),
 		);
-		return updated;
+		return { project: updated, mutationId: snapshot.snapshot_id };
 	}
 
 	/**

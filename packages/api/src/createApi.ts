@@ -7,6 +7,7 @@ import {
 	ensureInitialized,
 	isPatRequest,
 	MAX_REQUEST_BYTES,
+	noopNotifier,
 	probeKernelLiveness,
 	SubdomainExposure,
 	UnavailableError,
@@ -76,6 +77,7 @@ export function createApi(rawDeps: ApiDeps) {
 	// Default the exposure mode and kernel probe so library callers need not wire them.
 	const deps: ApiDeps = {
 		...rawDeps,
+		notifier: rawDeps.notifier ?? noopNotifier,
 		kernelProbe: rawDeps.kernelProbe ?? ((url) => probeKernelLiveness(url, { timeoutMs: 2000 })),
 		sandbox: {
 			...rawDeps.sandbox,
