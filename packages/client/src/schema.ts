@@ -1129,6 +1129,675 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/alert-destinations': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List project alert destinations */
+		get: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Project alert destinations with secret material redacted */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['ProjectAlertDestination'][];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		/**
+		 * Create a project alert destination
+		 * @description New destinations subscribe to all 10 project alert kinds when kinds is omitted. They remain disabled until a successful test.
+		 */
+		post: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+				};
+				cookie?: never;
+			};
+			requestBody: {
+				content: {
+					'application/json':
+						| {
+								name: string;
+								kinds?: (
+									| 'member.invited'
+									| 'member.added'
+									| 'member.role_changed'
+									| 'member.removed'
+									| 'session.takeover'
+									| 'notebook.deleted'
+									| 'project.deleted'
+									| 'app.start_failed'
+									| 'app.unavailable'
+									| 'sync.failed'
+								)[];
+								/** @enum {string} */
+								type: 'slack';
+								/** Format: uri */
+								webhook_url: string;
+						  }
+						| {
+								name: string;
+								kinds?: (
+									| 'member.invited'
+									| 'member.added'
+									| 'member.role_changed'
+									| 'member.removed'
+									| 'session.takeover'
+									| 'notebook.deleted'
+									| 'project.deleted'
+									| 'app.start_failed'
+									| 'app.unavailable'
+									| 'sync.failed'
+								)[];
+								/** @enum {string} */
+								type: 'webhook';
+								/** Format: uri */
+								url: string;
+								signing_secret: string;
+						  };
+				};
+			};
+			responses: {
+				/** @description Alert destination created */
+				201: {
+					headers: {
+						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+						ETag: string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['ProjectAlertDestination'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/alert-destinations/{aid}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		post?: never;
+		/** Delete a project alert destination */
+		delete: {
+			parameters: {
+				query?: never;
+				header?: {
+					'if-match'?: string;
+				};
+				path: {
+					pid: string;
+					aid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Alert destination deleted */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['SuccessResponse'];
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Precondition failed (If-Match did not match the current version) */
+				412: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		options?: never;
+		head?: never;
+		/** Update a project alert destination */
+		patch: {
+			parameters: {
+				query?: never;
+				header?: {
+					'if-match'?: string;
+				};
+				path: {
+					pid: string;
+					aid: string;
+				};
+				cookie?: never;
+			};
+			requestBody: {
+				content: {
+					'application/json': {
+						name?: string;
+						kinds?: (
+							| 'member.invited'
+							| 'member.added'
+							| 'member.role_changed'
+							| 'member.removed'
+							| 'session.takeover'
+							| 'notebook.deleted'
+							| 'project.deleted'
+							| 'app.start_failed'
+							| 'app.unavailable'
+							| 'sync.failed'
+						)[];
+						enabled?: boolean;
+						/** Format: uri */
+						webhook_url?: string;
+						/** Format: uri */
+						url?: string;
+						signing_secret?: string;
+					};
+				};
+			};
+			responses: {
+				/** @description Alert destination updated */
+				200: {
+					headers: {
+						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+						ETag: string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['ProjectAlertDestination'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Precondition failed (If-Match did not match the current version) */
+				412: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/alert-destinations/{aid}/test': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Send a test project alert */
+		post: {
+			parameters: {
+				query?: never;
+				header?: {
+					'if-match'?: string;
+				};
+				path: {
+					pid: string;
+					aid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Test delivered and destination verified */
+				200: {
+					headers: {
+						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+						ETag: string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['ProjectAlertDestination'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Precondition failed (If-Match did not match the current version) */
+				412: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/events': {
 		parameters: {
 			query?: never;
@@ -7283,6 +7952,23 @@ export interface components {
 			integrations: {
 				available: boolean;
 			};
+			project_alerts: {
+				available: boolean;
+				destination_types: ('slack' | 'webhook')[];
+				selectable_kinds: (
+					| 'member.invited'
+					| 'member.added'
+					| 'member.role_changed'
+					| 'member.removed'
+					| 'session.takeover'
+					| 'notebook.deleted'
+					| 'project.deleted'
+					| 'app.start_failed'
+					| 'app.unavailable'
+					| 'sync.failed'
+				)[];
+				max_destinations: number;
+			};
 			data_browser: {
 				available: boolean;
 				preview: boolean;
@@ -7385,6 +8071,67 @@ export interface components {
 		 * @enum {string}
 		 */
 		AssignableRole: 'manager' | 'editor' | 'viewer';
+		ProjectAlertDestination:
+			| {
+					id: string;
+					name: string;
+					kinds: (
+						| 'member.invited'
+						| 'member.added'
+						| 'member.role_changed'
+						| 'member.removed'
+						| 'session.takeover'
+						| 'notebook.deleted'
+						| 'project.deleted'
+						| 'app.start_failed'
+						| 'app.unavailable'
+						| 'sync.failed'
+					)[];
+					enabled: boolean;
+					/** Format: date-time */
+					verified_at: string | null;
+					endpoint_host: string;
+					created_by: string;
+					/** Format: date-time */
+					created_at: string;
+					/** Format: date-time */
+					updated_at: string;
+					/** @enum {string} */
+					type: 'slack';
+					/** @enum {boolean} */
+					webhook_url_set: true;
+			  }
+			| {
+					id: string;
+					name: string;
+					kinds: (
+						| 'member.invited'
+						| 'member.added'
+						| 'member.role_changed'
+						| 'member.removed'
+						| 'session.takeover'
+						| 'notebook.deleted'
+						| 'project.deleted'
+						| 'app.start_failed'
+						| 'app.unavailable'
+						| 'sync.failed'
+					)[];
+					enabled: boolean;
+					/** Format: date-time */
+					verified_at: string | null;
+					endpoint_host: string;
+					created_by: string;
+					/** Format: date-time */
+					created_at: string;
+					/** Format: date-time */
+					updated_at: string;
+					/** @enum {string} */
+					type: 'webhook';
+					/** @enum {boolean} */
+					url_set: true;
+					/** @enum {boolean} */
+					signing_secret_set: true;
+			  };
 		AuditLogPage: {
 			items: components['schemas']['AuditLogEntry'][];
 			next_cursor: string | null;

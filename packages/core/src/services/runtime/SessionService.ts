@@ -314,11 +314,30 @@ export class SessionService {
 		id: SessionId,
 		error?: { code: string; message: string },
 	): Promise<Session> {
-		return this.mutate(projectId, id, (session) =>
-			isTerminal(session.status) || session.status === 'terminating'
-				? null
-				: { ...session, status: 'failed', ...(error ? { error } : {}) },
+		return (await this.markFailedWithOutcome(projectId, id, error)).session;
+	}
+
+	async markFailedWithOutcome(
+		projectId: ProjectId,
+		id: SessionId,
+		error?: { code: string; message: string },
+	): Promise<{ session: Session; transitioned: boolean }> {
+		const path = paths.session(projectId, id);
+		const result = await mutateObjectWithOutcome<Session>(
+			this.bucket,
+			path,
+			(raw) => parseStored(SessionSchema, raw, path),
+			(session) =>
+				isTerminal(session.status) || session.status === 'terminating'
+					? null
+					: { ...session, status: 'failed' as const, ...(error ? { error } : {}) },
+			{
+				notFound: () => new NotFoundError(`Session ${id} not found`),
+				onConflict: () => this.metrics.increment('sessions.cas.conflict'),
+				onExhausted: () => this.metrics.increment('sessions.cas.exhausted'),
+			},
 		);
+		return { session: result.value, transitioned: result.written };
 	}
 
 	/**

@@ -7,3 +7,16 @@ export function parseUtcDate(value: string): number | null {
 		? parsed
 		: null;
 }
+
+export function nextIsoTimestamp(previous: string | undefined, candidate: string): string {
+	const candidateMs = Date.parse(candidate);
+	if (!Number.isFinite(candidateMs)) {
+		throw new RangeError('Timestamps must be valid ISO date-time strings');
+	}
+	if (previous === undefined) return candidate;
+	const previousMs = Date.parse(previous);
+	if (!Number.isFinite(previousMs)) {
+		throw new RangeError('Timestamps must be valid ISO date-time strings');
+	}
+	return candidateMs > previousMs ? candidate : new Date(previousMs + 1).toISOString();
+}

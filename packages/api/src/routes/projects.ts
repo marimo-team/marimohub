@@ -38,7 +38,7 @@ import {
 } from '../shared';
 import { idempotentCreate } from '../idempotency';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
-import { scheduleNotification } from '../notifications';
+import { scheduleNotification, scheduleProjectAlert } from '../notifications';
 
 // --- Request body schemas ---
 
@@ -335,7 +335,17 @@ app.openapi(deleteProject, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
-	await projects.deleteProject(pid, user.id, ifMatchToken(c));
+	const deleted = await projects.deleteProjectWithMutation(pid, user.id, ifMatchToken(c));
+	if (deleted) {
+		scheduleProjectAlert(deps, pid, 'project.deleted', { project_id: pid, user: user.id }, () =>
+			notificationRouter.render({
+				kind: 'project.deleted',
+				project: deleted.project,
+				actor: user,
+				mutationId: deleted.mutationId,
+			}),
+		);
+	}
 	await retireLiveApps(deps, pid);
 	return c.json({ success: true }, 200);
 });
@@ -382,7 +392,7 @@ app.openapi(addMember, async (c) => {
 	);
 	if ('user_id' in member) {
 		const notificationMember = { user_id: member.user_id, role: body.role };
-		scheduleNotification(deps, 'member.added', { project_id: pid, user: user.id }, () =>
+		const render = () =>
 			notificationRouter.render({
 				kind: 'member.added',
 				project,
@@ -391,11 +401,14 @@ app.openapi(addMember, async (c) => {
 				actor: user,
 				mutationId,
 				baseUrl: deps.sandbox.appBaseUrl,
-			}),
+			});
+		scheduleNotification(deps, 'member.added', { project_id: pid, user: user.id }, () =>
+			render().filter((notification) => notification.audience === 'personal'),
 		);
+		scheduleProjectAlert(deps, pid, 'member.added', { project_id: pid, user: user.id }, render);
 	} else {
 		const notificationMember = { email: member.email, role: body.role };
-		scheduleNotification(deps, 'member.invited', { project_id: pid, user: user.id }, () =>
+		const render = () =>
 			notificationRouter.render({
 				kind: 'member.invited',
 				project,
@@ -404,8 +417,11 @@ app.openapi(addMember, async (c) => {
 				actor: user,
 				mutationId,
 				baseUrl: deps.sandbox.appBaseUrl,
-			}),
+			});
+		scheduleNotification(deps, 'member.invited', { project_id: pid, user: user.id }, () =>
+			render().filter((notification) => notification.audience === 'personal'),
 		);
+		scheduleProjectAlert(deps, pid, 'member.invited', { project_id: pid, user: user.id }, render);
 	}
 	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 201);
 });
@@ -417,7 +433,26 @@ app.openapi(updateMember, async (c) => {
 	const { pid, uid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
 	const body = c.req.valid('json');
-	const project = await projects.updateMemberRole(pid, uid, body.role, user.id);
+	const result = await projects.updateMemberRoleWithMutation(pid, uid, body.role, user.id);
+	const member = result.project.members.find(
+		(candidate) =>
+			candidate.user_id === result.previousMember.user_id ||
+			candidate.email === result.previousMember.email,
+	);
+	if (member && member.role !== result.previousMember.role) {
+		scheduleProjectAlert(deps, pid, 'member.role_changed', { project_id: pid, user: user.id }, () =>
+			notificationRouter.render({
+				kind: 'member.role_changed',
+				project: result.project,
+				member,
+				oldRole: result.previousMember.role,
+				actor: user,
+				mutationId: result.mutationId,
+				baseUrl: deps.sandbox.appBaseUrl,
+			}),
+		);
+	}
+	const project = result.project;
 	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
 });
 
@@ -427,7 +462,17 @@ app.openapi(removeMember, async (c) => {
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
-	await projects.removeMember(pid, uid, user.id);
+	const result = await projects.removeMemberWithMutation(pid, uid, user.id);
+	scheduleProjectAlert(deps, pid, 'member.removed', { project_id: pid, user: user.id }, () =>
+		notificationRouter.render({
+			kind: 'member.removed',
+			project: result.project,
+			member: result.previousMember,
+			actor: user,
+			mutationId: result.mutationId,
+			baseUrl: deps.sandbox.appBaseUrl,
+		}),
+	);
 	return c.json({ success: true }, 200);
 });
 

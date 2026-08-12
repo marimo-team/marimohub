@@ -129,6 +129,15 @@ describe('makeNotifier', () => {
 		).toThrow(/Invalid MARIMOHUB_NOTIFY_KINDS/);
 	});
 
+	it('rejects project-only kinds in every deployment-wide allowlist', () => {
+		expect(() =>
+			notificationKindsForBackend({ MARIMOHUB_NOTIFY_KINDS: 'app.unavailable' }, 'slack'),
+		).toThrow(/Invalid MARIMOHUB_NOTIFY_KINDS/);
+		expect(() =>
+			notificationKindsForBackend({ MARIMOHUB_NOTIFY_WEBHOOK_KINDS: 'project.deleted' }, 'webhook'),
+		).toThrow(/Invalid MARIMOHUB_NOTIFY_WEBHOOK_KINDS/);
+	});
+
 	it('rejects an unknown kind in a backend override', () => {
 		expect(() =>
 			notificationKindsForBackend({ MARIMOHUB_NOTIFY_SMTP_KINDS: 'job.failed' }, 'smtp'),

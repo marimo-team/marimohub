@@ -15,6 +15,7 @@ export const projectKeys = {
 	pickerList: () => [...projectKeys.all, 'list', 'all'] as const,
 	detail: (projectId: string) => [...projectKeys.all, 'detail', projectId] as const,
 	members: (projectId: string) => [...projectKeys.all, 'members', projectId] as const,
+	alerts: (projectId: string) => [...projectKeys.all, 'alerts', projectId] as const,
 	integrations: (projectId: string) => [...projectKeys.all, 'integrations', projectId] as const,
 	integration: (projectId: string, integrationId: string) =>
 		[...projectKeys.all, 'integrations', projectId, integrationId] as const,

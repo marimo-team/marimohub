@@ -1,0 +1,197 @@
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { ProjectAlertsDialog } from './ProjectAlertsDialog';
+import { createTestQueryClient } from '@/test/render';
+import type { ProjectAlertDestination, ProjectAlertKind } from '@/types';
+
+const KINDS: ProjectAlertKind[] = [
+	'member.invited',
+	'member.added',
+	'member.role_changed',
+	'member.removed',
+	'session.takeover',
+	'notebook.deleted',
+	'project.deleted',
+	'app.start_failed',
+	'app.unavailable',
+	'sync.failed',
+];
+
+function ok(data: unknown) {
+	return new Response(JSON.stringify({ success: true, data }), {
+		status: 200,
+		headers: { 'content-type': 'application/json' },
+	});
+}
+
+function renderDialog(
+	destinations: ProjectAlertDestination[] = [],
+	handler?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+) {
+	const fetchMock = vi.fn(handler ?? (async () => ok(destinations)));
+	vi.stubGlobal('fetch', fetchMock);
+	const client = createTestQueryClient();
+	const wrapper = ({ children }: { children: ReactNode }) => (
+		<QueryClientProvider client={client}>{children}</QueryClientProvider>
+	);
+	return {
+		...render(
+			<ProjectAlertsDialog
+				isOpen
+				onClose={() => {}}
+				projectId="proj-0123456789abcdef"
+				selectableKinds={KINDS}
+				maxDestinations={10}
+			/>,
+			{ wrapper },
+		),
+		fetchMock,
+	};
+}
+
+function slackDestination(
+	id: string,
+	overrides: Partial<ProjectAlertDestination> = {},
+): ProjectAlertDestination {
+	return {
+		id,
+		name: `Slack ${id}`,
+		type: 'slack',
+		kinds: ['app.unavailable'],
+		enabled: false,
+		verified_at: null,
+		endpoint_host: 'hooks.slack.com',
+		created_by: 'owner',
+		created_at: '2026-08-12T12:00:00.000Z',
+		updated_at: '2026-08-12T12:00:00.000Z',
+		webhook_url_set: true,
+		...overrides,
+	} as ProjectAlertDestination;
+}
+
+beforeEach(() => {
+	vi.stubGlobal('matchMedia', () => ({
+		matches: false,
+		addEventListener: () => {},
+		removeEventListener: () => {},
+	}));
+});
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('ProjectAlertsDialog', () => {
+	it('selects every actionable event for a new destination', async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await waitFor(() => expect(screen.getByText('No alert destinations')).toBeInTheDocument());
+		await user.click(screen.getByRole('button', { name: 'Add destination' }));
+		expect(screen.getAllByRole('checkbox')).toHaveLength(10);
+		for (const checkbox of screen.getAllByRole('checkbox')) expect(checkbox).toBeChecked();
+	});
+
+	it('never places stored endpoint or secret material in edit fields', async () => {
+		const user = userEvent.setup();
+		renderDialog([
+			{
+				id: 'alert-0123456789abcdef',
+				name: 'Production hook',
+				type: 'webhook',
+				kinds: ['app.unavailable'],
+				enabled: false,
+				verified_at: null,
+				endpoint_host: 'alerts.example.com',
+				created_by: 'owner',
+				created_at: '2026-08-12T12:00:00.000Z',
+				updated_at: '2026-08-12T12:00:00.000Z',
+				url_set: true,
+				signing_secret_set: true,
+			},
+		]);
+		await user.click(await screen.findByRole('button', { name: 'Edit Production hook' }));
+		const endpoint = screen.getByRole('textbox', { name: 'Webhook URL' });
+		expect(endpoint).toHaveValue('');
+		expect(endpoint).toHaveAttribute('placeholder', expect.stringContaining('alerts.example.com'));
+		expect(screen.getByLabelText('HMAC signing secret')).toHaveValue('');
+	});
+
+	it('disables creation when the project has reached its destination limit', async () => {
+		renderDialog(
+			Array.from({ length: 10 }, (_, index) =>
+				slackDestination(`alert-limit-${index.toString().padStart(8, '0')}`),
+			),
+		);
+		await screen.findByText('Slack alert-limit-00000000');
+		expect(await screen.findByRole('button', { name: 'Add destination' })).toBeDisabled();
+	});
+
+	it('allows enablement only for verified destinations', async () => {
+		renderDialog([
+			slackDestination('alert-unverified-0001', { name: 'Unverified' }),
+			slackDestination('alert-verified-00002', {
+				name: 'Verified',
+				verified_at: '2026-08-12T12:05:00.000Z',
+			}),
+		]);
+		const enables = await screen.findAllByRole('button', { name: 'Enable' });
+		expect(enables[0]).toBeDisabled();
+		expect(enables[1]).toBeEnabled();
+	});
+
+	it('does not allow a destination with no selected events to be saved', async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await user.click(await screen.findByRole('button', { name: 'Add destination' }));
+		await user.type(screen.getByLabelText('Name'), 'No events');
+		await user.type(
+			screen.getByLabelText('Slack incoming webhook URL'),
+			'https://hooks.example.com',
+		);
+		for (const checkbox of screen.getAllByRole('checkbox')) await user.click(checkbox);
+		expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+	});
+
+	it('sends only replacement material entered during an edit', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-edit-00000001', {
+			name: 'Production Slack',
+			verified_at: '2026-08-12T12:05:00.000Z',
+			enabled: true,
+		});
+		const { fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			return method === 'PATCH'
+				? ok({ ...destination, enabled: false, verified_at: null })
+				: ok([destination]);
+		});
+		await user.click(await screen.findByRole('button', { name: 'Edit Production Slack' }));
+		await user.type(
+			screen.getByLabelText('Slack incoming webhook URL'),
+			'https://hooks.example.com/replacement',
+		);
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+
+		await waitFor(() =>
+			expect(
+				fetchMock.mock.calls.some(([input, init]) =>
+					input instanceof Request ? input.method === 'PATCH' : init?.method === 'PATCH',
+				),
+			).toBe(true),
+		);
+		const [patchInput, patchInit] = fetchMock.mock.calls.find(([input, init]) =>
+			input instanceof Request ? input.method === 'PATCH' : init?.method === 'PATCH',
+		)!;
+		const body =
+			patchInput instanceof Request
+				? await patchInput.clone().json()
+				: JSON.parse(String(patchInit?.body));
+		expect(body).toMatchObject({
+			name: 'Production Slack',
+			webhook_url: 'https://hooks.example.com/replacement',
+		});
+		expect(body).not.toHaveProperty('enabled');
+		expect(JSON.stringify(body)).not.toContain('hooks.slack.com');
+	});
+});

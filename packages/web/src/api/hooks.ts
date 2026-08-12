@@ -29,6 +29,7 @@ import type {
 	NotebookDetail,
 	ResolvedUser,
 	ProjectFederation,
+	ProjectAlertKind,
 } from '../types';
 
 /** How often the notebook table re-polls runtime status, in ms. */
@@ -271,6 +272,101 @@ export function useDeleteProject() {
 				}),
 			),
 		() => [projectKeys.list()],
+	);
+}
+
+export type CreateProjectAlertDestination =
+	| { name: string; type: 'slack'; kinds: ProjectAlertKind[]; webhook_url: string }
+	| {
+			name: string;
+			type: 'webhook';
+			kinds: ProjectAlertKind[];
+			url: string;
+			signing_secret: string;
+	  };
+
+export function useProjectAlertsQuery(projectId: string, enabled = true) {
+	return useQuery({
+		queryKey: projectKeys.alerts(projectId),
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/alert-destinations', {
+					params: { path: { pid: projectId } },
+				}),
+			),
+		enabled,
+	});
+}
+
+export function useCreateProjectAlert(projectId: string) {
+	return useApiMutation(
+		(body: CreateProjectAlertDestination) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/alert-destinations', {
+					params: { path: { pid: projectId } },
+					body,
+				}),
+			),
+		() => [projectKeys.alerts(projectId)],
+	);
+}
+
+export function useUpdateProjectAlert(projectId: string) {
+	return useApiMutation(
+		({
+			id,
+			updatedAt,
+			...body
+		}: {
+			id: string;
+			updatedAt: string;
+			name?: string;
+			kinds?: ProjectAlertKind[];
+			enabled?: boolean;
+			webhook_url?: string;
+			url?: string;
+			signing_secret?: string;
+		}) =>
+			apiData(
+				apiClient.PATCH('/api/v1/projects/{pid}/alert-destinations/{aid}', {
+					params: {
+						path: { pid: projectId, aid: id },
+						header: { 'if-match': updatedAt },
+					},
+					body,
+				}),
+			),
+		() => [projectKeys.alerts(projectId)],
+	);
+}
+
+export function useDeleteProjectAlert(projectId: string) {
+	return useApiMutation(
+		({ id, updatedAt }: { id: string; updatedAt: string }) =>
+			apiData(
+				apiClient.DELETE('/api/v1/projects/{pid}/alert-destinations/{aid}', {
+					params: {
+						path: { pid: projectId, aid: id },
+						header: { 'if-match': updatedAt },
+					},
+				}),
+			),
+		() => [projectKeys.alerts(projectId)],
+	);
+}
+
+export function useTestProjectAlert(projectId: string) {
+	return useApiMutation(
+		({ id, updatedAt }: { id: string; updatedAt: string }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/alert-destinations/{aid}/test', {
+					params: {
+						path: { pid: projectId, aid: id },
+						header: { 'if-match': updatedAt },
+					},
+				}),
+			),
+		() => [projectKeys.alerts(projectId)],
 	);
 }
 

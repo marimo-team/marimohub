@@ -14,6 +14,7 @@ export type VersionId = string & { __brand: 'VersionId' };
 export type SessionId = string & { __brand: 'SessionId' };
 export type TokenId = string & { __brand: 'TokenId' };
 export type IntegrationId = string & { __brand: 'IntegrationId' };
+export type AlertDestinationId = string & { __brand: 'AlertDestinationId' };
 
 // A user id is the opaque auth `sub` (OIDC / Cloudflare Access / dev). We do not
 // mint or format it, so unlike the ids above it is a *nominal* brand only — it
@@ -135,6 +136,11 @@ export const IntegrationId = defineId<IntegrationId>(
 	/^intg-[0-9a-z]{16}$/,
 	() => `intg-${randomBody()}`,
 );
+export const AlertDestinationId = defineId<AlertDestinationId>(
+	'AlertDestinationId',
+	/^alert-[0-9a-z]{16}$/,
+	() => `alert-${randomBody()}`,
+);
 
 // A brand with no format/generator — `is` only checks "non-empty string". Used
 // for opaque provider ids (see UserId). `parse` brands a trusted value (e.g. an
@@ -180,6 +186,7 @@ export const createVersionId = VersionId.create;
 export const createSessionId = SessionId.create;
 export const createTokenId = TokenId.create;
 export const createIntegrationId = IntegrationId.create;
+export const createAlertDestinationId = AlertDestinationId.create;
 
 // Event object keys use a monotonic ULID so that, even when many events are
 // written within the same millisecond, the keys still sort in append order.

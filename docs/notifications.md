@@ -6,6 +6,9 @@ description: Configure outbound email, Slack, and signed webhook notifications.
 
 marimohub sends notifications after it stores the related change. It supports SMTP, Slack, and a signed JSON webhook. You can enable one backend or several backends.
 
+These are deployment-wide operator destinations. For manager-configured destinations that are
+limited to one project, see [Project alerts](./project-alerts.md).
+
 ## Configure notifications
 
 1. Set `MARIMOHUB_NOTIFY_BACKENDS` to a comma-separated list. Use `smtp`, `slack`, or `webhook`.
@@ -174,4 +177,5 @@ export function verifyMarimohubWebhook(rawBody, header, secret) {
 
 Only deployment operators set Slack and webhook destinations. Store SMTP credentials and webhook secrets as deployment secrets. Adapter errors do not include destination URLs or credentials.
 
-Do not expose these settings to project users. User-supplied destinations need SSRF controls. These controls must reject private, loopback, link-local, metadata, and CGNAT addresses. They must also reject redirects and enforce request limits.
+Do not expose these deployment settings to project users. Project-scoped destinations use the
+separate guarded transport described in [Project alerts](./project-alerts.md).

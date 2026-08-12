@@ -80,6 +80,11 @@ export interface UpdateNotebookInput {
 	compute_profile?: string | null;
 }
 
+export interface NotebookDeleteMutationResult {
+	notebook: NotebookMeta;
+	mutationId: Snapshot['snapshot_id'];
+}
+
 export interface NotebookDetail {
 	meta: NotebookMeta;
 	readme: string | null;
@@ -669,6 +674,15 @@ export class NotebookService {
 		actor: UserId,
 		expectedVersion?: string,
 	): Promise<void> {
+		await this.deleteNotebookWithMutation(projectId, notebookId, actor, expectedVersion);
+	}
+
+	async deleteNotebookWithMutation(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		actor: UserId,
+		expectedVersion?: string,
+	): Promise<NotebookDeleteMutationResult | null> {
 		const nb = paths.project(projectId).notebook(notebookId);
 		const { value: updated, written } = await mutateObjectWithOutcome(
 			this.bucket,
@@ -685,10 +699,10 @@ export class NotebookService {
 			},
 			{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
 		);
-		if (!written) return;
+		if (!written) return null;
 
 		// Soft-delete in snapshot
-		await this.catalog.updateNotebookEntry(
+		const snapshot = await this.catalog.updateNotebookEntry(
 			'notebook.delete',
 			actor,
 			projectId,
@@ -708,6 +722,7 @@ export class NotebookService {
 		// discipline (claimApp/releaseApp) still holds for live notebooks.
 		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
 		await this.bucket.delete(paths.editorClaim(projectId, notebookId)).catch(() => {});
+		return { notebook: updated, mutationId: snapshot.snapshot_id };
 	}
 
 	async listVersions(projectId: ProjectId, notebookId: NotebookId): Promise<Version[]> {

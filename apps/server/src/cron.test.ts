@@ -4,13 +4,16 @@ import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
 import type * as CoreModule from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
+	createSandboxId,
 	MaintenanceLock,
 	Millis,
 	paths,
 	reapFilesystemSnapshots,
+	ReconciliationService,
 	SessionLifecycleService,
 } from '@marimo-hub/core';
 import type { SweepResult } from '@marimo-hub/core';
+import { makeNotebookMeta, makeProject, makeSession } from '@marimo-hub/core/testing';
 import { startMaintenance, startSessionLifecycle } from './cron';
 import { WideEventMetrics } from './metrics';
 
@@ -174,6 +177,71 @@ describe('startMaintenance', () => {
 		expect(reapFilesystemSnapshots).toHaveBeenCalledWith(deps.compute, orphaned);
 		const events = parseLoggedEvents(logSpy);
 		expect(events[0]).toMatchObject({ notebooks_swept: 1, snapshots_reaped: 1 });
+	});
+
+	it('alerts once when reconciliation finds a running shared app without its sandbox', async () => {
+		const session = makeSession({ mode: 'app', sandbox_id: createSandboxId() });
+		const project = makeProject({ id: session.project_id });
+		const notebook = makeNotebookMeta({
+			id: session.notebook_id,
+			project_id: session.project_id,
+			title: 'Shared app',
+		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
+			skipped: false,
+			reclaimed: 0,
+			markedDead: 1,
+			orphansReaped: 0,
+			orphanSandboxIds: [],
+			markedDeadSessions: [session],
+		});
+		vi.spyOn(deps.services.projects, 'getProject').mockResolvedValue(project);
+		vi.spyOn(deps.services.notebooks, 'getNotebook').mockResolvedValue({ meta: notebook } as never);
+		const deliver = vi.fn(async () => 'delivered' as const);
+		deps.projectAlerts = {
+			store: {} as never,
+			dispatcher: { deliver, test: vi.fn() },
+			maxDestinations: 10,
+		};
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+		expect(deliver).toHaveBeenCalledWith(
+			session.project_id,
+			'app.unavailable',
+			expect.objectContaining({
+				kind: 'app.unavailable',
+				data: expect.objectContaining({ session_id: session.session_id }),
+			}),
+		);
+	});
+
+	it('does not alert for vanished editor sessions or non-running apps', async () => {
+		const editor = makeSession({ mode: 'edit', sandbox_id: createSandboxId() });
+		const startingApp = makeSession({
+			mode: 'app',
+			status: 'starting',
+			sandbox_id: createSandboxId(),
+		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
+			skipped: false,
+			reclaimed: 0,
+			markedDead: 2,
+			orphansReaped: 0,
+			orphanSandboxIds: [],
+			markedDeadSessions: [editor, startingApp],
+		});
+		const deliver = vi.fn(async () => 'delivered' as const);
+		deps.projectAlerts = {
+			store: {} as never,
+			dispatcher: { deliver, test: vi.fn() },
+			maxDestinations: 10,
+		};
+
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		expect(deliver).not.toHaveBeenCalled();
 	});
 });
 

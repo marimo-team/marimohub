@@ -3,6 +3,8 @@
 // URL for any other host (GitLab group paths may nest). SSH remotes and
 // scheme-less `host.tld/path` inputs normalize to the URL shape.
 
+import { parseHttpUrl } from '../url';
+
 export type GitProvider = 'github' | 'gitlab';
 
 // Plain `owner/repo` coordinates — not a clone URL or `git@` remote (a bare
@@ -19,16 +21,8 @@ const SSH_URL_PATTERN = /^ssh:\/\/git@([^/:\s]+)(?::\d+)?\/(.+)$/i;
 const SCP_REMOTE_PATTERN = /^git@([^/:\s]+):(.+)$/;
 
 function parseRepoUrl(value: string): URL | null {
-	let url: URL;
-	try {
-		url = new URL(value);
-	} catch {
-		return null;
-	}
-	if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-	// Never store credentials (e.g. a pasted `https://oauth2:token@…` remote).
-	if (!url.hostname || url.username || url.password) return null;
-	return url;
+	const parsed = parseHttpUrl(value);
+	return parsed.ok ? parsed.url : null;
 }
 
 function pathSegments(url: URL): string[] {

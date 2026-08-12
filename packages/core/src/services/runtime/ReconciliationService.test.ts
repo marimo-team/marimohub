@@ -93,6 +93,7 @@ describe('ReconciliationService', () => {
 			markedDead: 0,
 			orphansReaped: 0,
 			orphanSandboxIds: [],
+			markedDeadSessions: [],
 		});
 	});
 

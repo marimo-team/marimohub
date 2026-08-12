@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { zipSync } from 'fflate';
 import { createServices } from '@marimo-hub/core';
-import type { ProjectId } from '@marimo-hub/core';
+import type { ProjectAlertDispatcher, ProjectId } from '@marimo-hub/core';
 import { ACTOR } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
@@ -169,6 +169,59 @@ describe('Git sync routes', () => {
 
 		const error = await expectError(await syncRequest({ notebookId, headers }), 400, 'BAD_REQUEST');
 		expect(error.message).toContain('x-marimohub-commit');
+	});
+
+	it('does not alert for an unauthenticated sync attempt', async () => {
+		const { notebookId } = await createSyncedNotebook();
+		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered' as const);
+		app = createTestApi({
+			bucket,
+			deps: {
+				projectAlerts: {
+					store: {} as never,
+					dispatcher: { deliver, test: vi.fn() },
+					maxDestinations: 10,
+				},
+			},
+		}).app;
+
+		await expectError(await syncRequest({ notebookId }), 401, 'UNAUTHORIZED');
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(deliver).not.toHaveBeenCalled();
+	});
+
+	it('alerts after an authenticated sync validation failure with sanitized data', async () => {
+		const { notebookId, syncToken } = await createSyncedNotebook();
+		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered' as const);
+		app = createTestApi({
+			bucket,
+			deps: {
+				projectAlerts: {
+					store: {} as never,
+					dispatcher: { deliver, test: vi.fn() },
+					maxDestinations: 10,
+				},
+			},
+		}).app;
+		const headers = requiredHeaders(syncToken);
+		delete (headers as Record<string, string>)['X-Marimohub-Branch'];
+
+		await expectError(await syncRequest({ notebookId, headers }), 400, 'BAD_REQUEST');
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+		expect(deliver).toHaveBeenCalledWith(
+			projectId,
+			'sync.failed',
+			expect.objectContaining({
+				kind: 'sync.failed',
+				data: expect.objectContaining({
+					notebook_id: notebookId,
+					commit: 'abc123',
+					error_code: 'BAD_REQUEST',
+				}),
+			}),
+		);
+		const notification = vi.mocked(deliver).mock.calls[0]?.[2];
+		expect(notification?.data).not.toHaveProperty('repo');
 	});
 
 	it('reports every mismatched source header with expected and received values', async () => {

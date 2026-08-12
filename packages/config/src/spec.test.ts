@@ -14,6 +14,7 @@ const WIRING_SOURCES = [
 	fileURLToPath(new URL('./secrets.ts', import.meta.url)),
 	fileURLToPath(new URL('./integrations.ts', import.meta.url)),
 	fileURLToPath(new URL('./notifications.ts', import.meta.url)),
+	fileURLToPath(new URL('./projectAlerts.ts', import.meta.url)),
 	fileURLToPath(new URL('../../../apps/server/src/index.ts', import.meta.url)),
 ];
 

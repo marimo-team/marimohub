@@ -16,6 +16,8 @@ import type {
 	Notifier,
 	OrgIntegrationsService,
 	PreflightReport,
+	ProjectAlertDispatcher,
+	ProjectAlertStore,
 	SandboxExposure,
 	SandboxProvider,
 	SandboxUserHome,
@@ -270,6 +272,12 @@ export interface ApiDeps {
 	authenticator: Authenticator;
 	/** Outbound notification channel. `createApi` supplies a no-op when absent. */
 	notifier?: Notifier;
+	/** Node-only project-scoped alert configuration and guarded delivery. */
+	projectAlerts?: {
+		store: ProjectAlertStore;
+		dispatcher: ProjectAlertDispatcher;
+		maxDestinations: number;
+	};
 	/** Keep non-critical work alive after the response, for example with Workers `waitUntil`. */
 	backgroundTasks?: BackgroundTaskScheduler;
 	/**

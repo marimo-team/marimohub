@@ -9,6 +9,8 @@ export * from './authz';
 export * from './identityMatch';
 export * from './notifications';
 export * from './utcDate';
+export * from './url';
+export * from './rateLimit';
 export * from './cache';
 
 // Port interfaces (also available at the '@marimo-hub/core/ports' subpath)

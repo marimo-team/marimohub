@@ -76,6 +76,7 @@ import {
 	StoredObjectError,
 } from '../../schema';
 import type { IntegrationRecord, IntegrationVersionRecord } from '../../schema';
+import { nextIsoTimestamp } from '../../utcDate';
 import { listAllObjects } from '../catalog/storage';
 import {
 	acquireSingletonClaim,
@@ -417,7 +418,7 @@ class ScopedIntegrationsStore {
 								return {
 									...current,
 									name: newName,
-									updated_at: nextTimestamp(current.updated_at, this.now()),
+									updated_at: nextIsoTimestamp(current.updated_at, this.now()),
 								};
 							},
 							headNotFound,
@@ -468,7 +469,7 @@ class ScopedIntegrationsStore {
 						...(appended !== undefined
 							? { current_version: Math.max(current.current_version, appended) }
 							: {}),
-						updated_at: nextTimestamp(current.updated_at, this.now()),
+						updated_at: nextIsoTimestamp(current.updated_at, this.now()),
 					};
 				},
 				headNotFound,
@@ -506,7 +507,7 @@ class ScopedIntegrationsStore {
 					? {
 							...current,
 							name: toName,
-							updated_at: nextTimestamp(current.updated_at, this.now()),
+							updated_at: nextIsoTimestamp(current.updated_at, this.now()),
 						}
 					: null,
 			{ notFound: () => new NotFoundError(`Integration ${id} not found`) },
@@ -1797,12 +1798,6 @@ function toEntry(scope: IntegrationScope, head: IntegrationRecord): IntegrationE
 		updated_at: head.updated_at,
 		scope: scope.projectId === undefined ? 'org' : 'project',
 	};
-}
-
-function nextTimestamp(current: string, candidate: string): string {
-	const currentMs = Date.parse(current);
-	const candidateMs = Date.parse(candidate);
-	return candidateMs > currentMs ? candidate : new Date(currentMs + 1).toISOString();
 }
 
 /** In-memory seal/open pair used to validate unsaved configs. */

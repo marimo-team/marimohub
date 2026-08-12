@@ -46,6 +46,7 @@ import {
 } from './computeProfiles';
 import { makeIntegrations } from './integrations';
 import { makeNotifier } from './notifications';
+import { makeProjectAlerts } from './projectAlerts';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
@@ -367,6 +368,7 @@ export function createFromEnv(
 		warnedUnsupportedProfileBackends.add(computeBackendValue);
 	}
 	const services = createServices(bucket, metrics, { tracing: options?.tracing });
+	const projectAlerts = makeProjectAlerts(env, bucket, metrics);
 	const compute = makeCompute(env, {
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
@@ -376,6 +378,7 @@ export function createFromEnv(
 		services,
 		bucket,
 		notifier: makeNotifier(env, metrics),
+		projectAlerts,
 		// Provider-side limits trail the graceful lifecycle deadlines: Modal idle by
 		// 1.5× and CoreWeave/E2B lifetime by 2×.
 		compute,

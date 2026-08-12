@@ -1294,6 +1294,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				description: 'These variables control all notification backends.',
 				vars: [
 					{
+						id: 'MARIMOHUB_PROJECT_ALERTS',
+						name: 'Project alerts',
+						description:
+							'Enable Node-only manager-configured Slack and signed-webhook destinations. Requires `MARIMOHUB_SECRETS_KEK`. Accepted values are `on` and `off`.',
+						default: 'off',
+						example: 'on',
+					},
+					{
 						id: 'MARIMOHUB_NOTIFY_BACKENDS',
 						name: 'Notification backends',
 						description:

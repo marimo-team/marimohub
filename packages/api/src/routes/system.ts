@@ -5,6 +5,7 @@ import {
 	MAX_REQUEST_BYTES,
 	MAX_VERSIONS,
 	Millis,
+	PROJECT_ALERT_KINDS,
 	viewerSessionModes,
 } from '@marimo-hub/core';
 import {
@@ -96,6 +97,14 @@ app.openapi(capabilitiesRoute, (c) => {
 	return ok(c, {
 		federation: { available: Boolean(deps.wif) },
 		integrations: { available: Boolean(deps.integrations) },
+		project_alerts: {
+			available: Boolean(deps.projectAlerts),
+			destination_types: deps.projectAlerts
+				? (['slack', 'webhook'] satisfies ('slack' | 'webhook')[])
+				: [],
+			selectable_kinds: deps.projectAlerts ? [...PROJECT_ALERT_KINDS] : [],
+			max_destinations: deps.projectAlerts?.maxDestinations ?? 10,
+		},
 		data_browser: {
 			available: Boolean(deps.dataBrowser),
 			preview: deps.dataBrowser?.preview ?? false,

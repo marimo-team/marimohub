@@ -57,6 +57,15 @@ export interface MemberMutationResult {
 	mutationId: SnapshotId;
 }
 
+export interface ExistingMemberMutationResult extends MemberMutationResult {
+	previousMember: ProjectMember;
+}
+
+export interface ProjectDeleteMutationResult {
+	project: Project;
+	mutationId: SnapshotId;
+}
+
 export class ProjectService {
 	constructor(
 		private bucket: Bucket,
@@ -255,13 +264,24 @@ export class ProjectService {
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<Project> {
-		const { project } = await this.writeMembers(
+		return (await this.updateMemberRoleWithMutation(id, selector, role, actor)).project;
+	}
+
+	async updateMemberRoleWithMutation(
+		id: ProjectId,
+		selector: string,
+		role: AssignableRole,
+		actor: UserId,
+	): Promise<ExistingMemberMutationResult> {
+		let previousMember: ProjectMember | undefined;
+		const { project, mutationId } = await this.writeMembers(
 			id,
 			(current) => {
 				if (selector === current.owner) {
 					throw new ConflictError(`Cannot change the role of the project owner`);
 				}
-				if (!current.members.some((m) => memberRefMatchesSelector(m, selector))) {
+				previousMember = current.members.find((m) => memberRefMatchesSelector(m, selector));
+				if (!previousMember) {
 					throw new NotFoundError(`${selector} is not a member of project ${id}`);
 				}
 				return current.members.map((m) =>
@@ -270,7 +290,7 @@ export class ProjectService {
 			},
 			actor,
 		);
-		return project;
+		return { project, mutationId, previousMember: previousMember! };
 	}
 
 	/**
@@ -278,20 +298,30 @@ export class ProjectService {
 	 * be removed.
 	 */
 	async removeMember(id: ProjectId, selector: string, actor: UserId): Promise<Project> {
-		const { project } = await this.writeMembers(
+		return (await this.removeMemberWithMutation(id, selector, actor)).project;
+	}
+
+	async removeMemberWithMutation(
+		id: ProjectId,
+		selector: string,
+		actor: UserId,
+	): Promise<ExistingMemberMutationResult> {
+		let previousMember: ProjectMember | undefined;
+		const { project, mutationId } = await this.writeMembers(
 			id,
 			(current) => {
 				if (selector === current.owner) {
 					throw new ConflictError(`Cannot remove the project owner`);
 				}
-				if (!current.members.some((m) => memberRefMatchesSelector(m, selector))) {
+				previousMember = current.members.find((m) => memberRefMatchesSelector(m, selector));
+				if (!previousMember) {
 					throw new NotFoundError(`${selector} is not a member of project ${id}`);
 				}
 				return current.members.filter((m) => !memberRefMatchesSelector(m, selector));
 			},
 			actor,
 		);
-		return project;
+		return { project, mutationId, previousMember: previousMember! };
 	}
 
 	// The authoritative roster (with roles) lives on project.json; the snapshot
@@ -334,6 +364,14 @@ export class ProjectService {
 	 * Mirrors `NotebookService.deleteNotebook`.
 	 */
 	async deleteProject(id: ProjectId, actor: UserId, expectedVersion?: string): Promise<void> {
+		await this.deleteProjectWithMutation(id, actor, expectedVersion);
+	}
+
+	async deleteProjectWithMutation(
+		id: ProjectId,
+		actor: UserId,
+		expectedVersion?: string,
+	): Promise<ProjectDeleteMutationResult | null> {
 		const key = paths.project(id).meta;
 		const { value: updated, written } = await mutateObjectWithOutcome(
 			this.bucket,
@@ -350,12 +388,12 @@ export class ProjectService {
 			},
 			{ notFound: () => new NotFoundError(`Project ${id} not found`) },
 		);
-		if (!written) return;
+		if (!written) return null;
 
 		// Soft-delete in the snapshot: keep the entry (and its nested notebooks) so
 		// the GC sweep can find and purge it later, but mark it deleted so it drops
 		// out of listProjects immediately.
-		await this.catalog.updateProjectEntry(
+		const snapshot = await this.catalog.updateProjectEntry(
 			'project.delete',
 			actor,
 			id,
@@ -363,6 +401,7 @@ export class ProjectService {
 				(await loadProjectCatalogPatch(this.bucket, id, entry)) ??
 				projectCatalogPatch(updated, entry),
 		);
+		return { project: updated, mutationId: snapshot.snapshot_id };
 	}
 
 	/**

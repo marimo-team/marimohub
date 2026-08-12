@@ -1681,10 +1681,18 @@ describe('Session routes', () => {
 
 	it('POST /sessions: when provisioning fails, responds with an error and marks the session failed', async () => {
 		// Owner app backed by a compute whose sandbox reachability check throws.
+		const deliver = vi.fn(async () => 'delivered' as const);
 		const failOwner = createTestApi({
 			bucket,
 			userId: ACTOR,
 			compute: makeFakeCompute({ failExec: 'true' }),
+			deps: {
+				projectAlerts: {
+					store: {} as never,
+					dispatcher: { deliver, test: vi.fn() },
+					maxDestinations: 10,
+				},
+			},
 		}).request;
 		const res = await failOwner('POST', sessionsPath());
 
@@ -1702,6 +1710,8 @@ describe('Session routes', () => {
 		expect(all[0].status).toBe('failed');
 		expect(all[0].error?.code).toBe('SERVICE_UNAVAILABLE');
 		expect(all[0].error?.message).toBeTruthy();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(deliver).not.toHaveBeenCalled();
 	});
 
 	it('POST /sessions: provisioning failure self-destroys the partial sandbox', async () => {

@@ -8,6 +8,7 @@ export type {
 	SessionLifetimeConfig,
 } from './context';
 export { createApp, assertProjectRole } from './shared';
+export { scheduleProjectAlert } from './notifications';
 export {
 	authorizeProxyRequest,
 	CREDENTIAL_HEADERS,

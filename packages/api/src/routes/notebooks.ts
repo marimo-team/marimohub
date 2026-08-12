@@ -6,6 +6,7 @@ import {
 	ForbiddenError,
 	NotebookId,
 	NotFoundError,
+	notificationRouter,
 	ProjectId,
 	toPublicNotebookMeta,
 	toPublicSource,
@@ -40,6 +41,7 @@ import {
 import { idempotentCreate } from '../idempotency';
 import type { HonoEnv, SandboxConfig } from '../context';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
+import { scheduleProjectAlert } from '../notifications';
 
 // --- Request body schemas ---
 
@@ -592,8 +594,21 @@ app.openapi(deleteNotebook, async (c) => {
 	const { notebooks, projects } = deps.services;
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'editor', deps.policy);
-	await notebooks.deleteNotebook(pid, nid, user.id, ifMatchToken(c));
+	const project = await assertProjectRole(projects, pid, user, 'editor', deps.policy);
+	const deleted = await notebooks.deleteNotebookWithMutation(pid, nid, user.id, ifMatchToken(c));
+	if (deleted) {
+		scheduleProjectAlert(deps, pid, 'notebook.deleted', { project_id: pid, user: user.id }, () =>
+			notificationRouter.render({
+				kind: 'notebook.deleted',
+				project,
+				notebookId: nid,
+				notebookTitle: deleted.notebook.title,
+				actor: user,
+				mutationId: deleted.mutationId,
+				baseUrl: deps.sandbox.appBaseUrl,
+			}),
+		);
+	}
 
 	await retireLiveApps(deps, pid, (s) => s.notebook_id === nid);
 
