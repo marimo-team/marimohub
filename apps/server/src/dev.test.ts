@@ -1,14 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createApi } from '@marimo-hub/api';
-import type { OrgIntegrationsService } from '@marimo-hub/core';
 import { createFromEnv } from '@marimo-hub/config';
 import { localDevEnv, seedLocalDev } from './devSetup';
 
 describe('local development setup', () => {
-	it('overrides deployment-oriented environment values with the full local setup', () => {
+	const createDevDeps = () => createFromEnv(localDevEnv({ PORT: '4321' }));
+
+	it('overrides conflicting deployment values', () => {
 		const env = localDevEnv({
 			PORT: '4321',
 			MARIMOHUB_STORAGE_BACKEND: 's3',
+			MARIMOHUB_AUTH_DEV_USER_ID: 'other-user',
+			MARIMOHUB_AUTH_DEV_EMAIL: 'other@example.com',
 			MARIMOHUB_SUPER_ADMINS: 'operator@example.com',
 			MARIMOHUB_INTEGRATIONS: 'off',
 			MARIMOHUB_DATA_BROWSER: 'off',
@@ -29,9 +32,10 @@ describe('local development setup', () => {
 		});
 	});
 
-	it('seeds one org-wide integration', async () => {
-		const deps = createFromEnv(localDevEnv({ PORT: '4321' }));
+	it('seeds one org-wide integration once', async () => {
+		const deps = createDevDeps();
 
+		await seedLocalDev(deps);
 		await seedLocalDev(deps);
 
 		expect(await deps.orgIntegrations?.list()).toEqual([
@@ -44,20 +48,10 @@ describe('local development setup', () => {
 		]);
 	});
 
-	it('does not duplicate the seed', async () => {
-		const list = vi.fn().mockResolvedValue([{ name: 'local-development' }]);
-		const create = vi.fn();
-
-		await seedLocalDev({ orgIntegrations: { list, create } as unknown as OrgIntegrationsService });
-
-		expect(create).not.toHaveBeenCalled();
-	});
-
 	it('allows the authenticated dev user to reach the super-admin API', async () => {
-		const deps = createFromEnv(localDevEnv({ PORT: '4321' }));
+		const deps = createDevDeps();
 		const response = await createApi(deps).request('/api/v1/admin/config');
 
-		expect(deps.policy.superAdmins).toEqual(['user@localhost']);
 		expect(response.status).toBe(200);
 	});
 });

@@ -1,8 +1,7 @@
 import { logEvent } from './log';
 
 export function installProcessErrorHandlers(): void {
-	// Some provider SDKs can reject after their awaited call returned. Keep the
-	// request-serving process alive and leave health checks to report real outages.
+	// Some SDKs reject after an awaited call returns. Log the rejection and keep serving.
 	process.on('unhandledRejection', (reason) => {
 		logEvent({
 			level: 'error',
@@ -13,7 +12,7 @@ export function installProcessErrorHandlers(): void {
 		});
 	});
 
-	// A synchronous exception can leave shared process state inconsistent.
+	// A synchronous exception can corrupt shared process state.
 	process.on('uncaughtException', (err) => {
 		logEvent({
 			level: 'error',
