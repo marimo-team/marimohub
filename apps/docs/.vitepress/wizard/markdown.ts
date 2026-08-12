@@ -12,6 +12,7 @@ const CONTAINERS = ['tip', 'warning', 'info', 'danger'] as const;
 
 const md = new MarkdownIt({ html: false, linkify: true });
 // The container typings depend on a distinct MarkdownIt declaration from the one this package uses.
+// oxlint-disable-next-line anti-slop/no-chained-type-assertions
 const markdownItContainer = container as unknown as Parameters<typeof md.use>[0];
 
 for (const type of CONTAINERS) {

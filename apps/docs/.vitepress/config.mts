@@ -35,6 +35,7 @@ export default defineConfig({
 			openApiArtifact,
 			// The plugin is compiled against Vite 8; VitePress 1 supplies the compatible Vite 5 API.
 			// Emits llms.txt, llms-full.txt, and a raw-markdown twin next to every page.
+			// oxlint-disable-next-line anti-slop/no-chained-type-assertions
 			llmstxt({
 				domain: SITE,
 				// Keep the home page twin (it has real content below the hero), but drop

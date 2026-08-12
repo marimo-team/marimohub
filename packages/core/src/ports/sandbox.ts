@@ -278,6 +278,6 @@ export function asFilesystemSnapshots(p: SandboxProvider): FilesystemSnapshots |
 		typeof c.createFromSnapshot === 'function' &&
 		typeof c.captureSnapshot === 'function' &&
 		typeof c.deleteSnapshot === 'function'
-		? (p as unknown as FilesystemSnapshots)
+		? (c as FilesystemSnapshots)
 		: undefined;
 }

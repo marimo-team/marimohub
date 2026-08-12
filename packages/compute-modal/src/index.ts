@@ -446,6 +446,7 @@ export class ModalCompute implements SandboxProvider {
 	) {
 		this.client =
 			client ??
+			// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- the SDK class implements this injected seam
 			(new ModalClient({
 				tokenId: config.tokenId,
 				tokenSecret: config.tokenSecret,

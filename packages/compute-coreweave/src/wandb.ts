@@ -125,6 +125,7 @@ export function createWandbCompute(
 		// Same controlled cast as `CoreWeaveCompute.getClient()`: the SDK client
 		// exposes the CoreWeaveClient surface at runtime. Eager construction is
 		// safe — grpc-js channels dial lazily.
+		// oxlint-disable-next-line anti-slop/no-chained-type-assertions
 		new SandboxClient({ transport }) as unknown as CoreWeaveClient,
 	);
 }

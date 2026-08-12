@@ -21,7 +21,9 @@
 		"prepare": "vp config"
 	},
 	"devDependencies": {
+		"@oxlint/plugins": "catalog:",
 		"@vitest/coverage-v8": "catalog:",
+		"oxlint": "catalog:",
 		"vite-plus": "catalog:"
 	},
 	"engines": {

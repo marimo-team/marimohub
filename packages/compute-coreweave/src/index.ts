@@ -678,6 +678,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 			// The real SDK client exposes the CoreWeaveClient surface at runtime; one
 			// controlled cast at the construction boundary avoids overload-variance
 			// friction between the SDK's broad signatures and our narrow seam.
+			// oxlint-disable-next-line anti-slop/no-chained-type-assertions
 			this.client = createSandboxClient({
 				apiKey: this.config.apiKey,
 				...(this.config.baseUrl ? { baseUrl: this.config.baseUrl } : {}),

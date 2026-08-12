@@ -433,5 +433,6 @@ export function createApi(rawDeps: ApiDeps) {
  */
 export function generateOpenApiDocument(): Record<string, unknown> {
 	const app = createApi({ sandbox: {}, policy: {} } as ApiDeps);
+	// oxlint-disable-next-line anti-slop/no-chained-type-assertions -- generated OpenAPI is JSON object data
 	return app.getOpenAPI31Document(OPENAPI_DOC) as unknown as Record<string, unknown>;
 }
