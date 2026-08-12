@@ -116,20 +116,29 @@ fn set_linux_credential(
 fn delete_linux_credential(
     current: FileCredential,
     delete_keyring: impl FnOnce() -> keyring::Result<()>,
-    set_file: impl FnOnce(FileCredential) -> Result<(), Error>,
+    mut set_file: impl FnMut(FileCredential) -> Result<(), Error>,
     warn: impl FnOnce(&keyring::Error),
 ) -> Result<(), Error> {
-    match current {
-        FileCredential::Token(_) => return set_file(FileCredential::Deleted),
-        FileCredential::Deleted => return Ok(()),
-        FileCredential::Missing => {}
+    let has_file_state = current != FileCredential::Missing;
+    if matches!(current, FileCredential::Token(_)) {
+        set_file(FileCredential::Deleted)?;
     }
 
     match delete_keyring() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Ok(()) | Err(keyring::Error::NoEntry) => {
+            if has_file_state {
+                set_file(FileCredential::Missing)
+            } else {
+                Ok(())
+            }
+        }
         Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
             warn(&error);
-            set_file(FileCredential::Deleted)
+            if has_file_state {
+                Ok(())
+            } else {
+                set_file(FileCredential::Deleted)
+            }
         }
         Err(error) => Err(Error::Credential(error.to_string())),
     }
@@ -513,6 +522,30 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Credential(_))));
         assert!(!file_write_called.get());
+    }
+
+    #[test]
+    fn deletion_marker_retries_keyring_and_clears_when_empty() {
+        for keyring_result in [Ok(()), Err(keyring::Error::NoEntry)] {
+            let keyring_delete_called = Cell::new(false);
+            let stored = std::cell::RefCell::new(Vec::new());
+            delete_linux_credential(
+                FileCredential::Deleted,
+                || {
+                    keyring_delete_called.set(true);
+                    keyring_result
+                },
+                |credential| {
+                    stored.borrow_mut().push(credential);
+                    Ok(())
+                },
+                |_| {},
+            )
+            .unwrap();
+
+            assert!(keyring_delete_called.get());
+            assert_eq!(stored.into_inner(), vec![FileCredential::Missing]);
+        }
     }
 
     #[test]
