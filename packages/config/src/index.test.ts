@@ -69,6 +69,40 @@ describe('createFromEnv auth backend selection', () => {
 		expect(deps.sandbox.computeProfileOverride).toBe('none');
 	});
 
+	it('wires sandbox preview only when the compute backend honors its dedicated image', () => {
+		const env = {
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_INTEGRATIONS: 'on',
+			MARIMOHUB_DATA_BROWSER: 'full',
+			MARIMOHUB_DATA_PREVIEW_IMAGE: 'preview-image',
+		};
+		expect(
+			createFromEnv({ ...env, MARIMOHUB_COMPUTE_BACKEND: 'local' }).dataBrowser?.sandboxPreview,
+		).toBeUndefined();
+
+		const preview = createFromEnv({
+			...env,
+			MARIMOHUB_COMPUTE_BACKEND: 'docker',
+		}).dataBrowser?.sandboxPreview;
+		expect(preview).toBeDefined();
+		expect(preview?.available()).toBe(false);
+	});
+
+	it('rejects invalid sandbox-preview limits during composition', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_COMPUTE_BACKEND: 'docker',
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_DATA_BROWSER: 'full',
+				MARIMOHUB_DATA_PREVIEW_IMAGE: 'preview-image',
+				MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT: '0',
+			}),
+		).toThrow(/MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT/);
+	});
+
 	it('enables editor profile overrides explicitly', () => {
 		const deps = createFromEnv({
 			...baseEnv,

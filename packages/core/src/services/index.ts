@@ -40,6 +40,7 @@ export {
 } from './integrations/ProjectIntegrationsStore';
 export type { IntegrationsStoreOptions } from './integrations/ProjectIntegrationsStore';
 export type { OrgIntegrationsService, ProjectIntegrationsService } from './integrations/contracts';
+export { SandboxDataPreview } from './integrations/SandboxDataPreview';
 export { IntegrationRegistry } from './integrations/registry';
 export { defineIntegration, envSegment } from './integrations/sdk';
 export type { IntegrationDefinition, RenderInput, RenderOutput } from './integrations/sdk';

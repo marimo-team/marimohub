@@ -41,6 +41,9 @@ jobs:
           docker run -d --name iceberg-rest -p 18181:8181 \
             -e CATALOG_WAREHOUSE=file:///tmp/warehouse \
             apache/iceberg-rest-fixture:1.10.0
+          docker run -d --name trino -p 18080:8080 trinodb/trino:483
+          docker run -d --name clickhouse -p 18123:8123 \
+            -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server:26.2
 
       - name: Wait for catalog servers
         run: |
@@ -48,8 +51,20 @@ jobs:
             curl -fsS http://127.0.0.1:18181/v1/config && break
             sleep 1; [ "$i" = 30 ] && exit 1
           done
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:18080/v1/info && break
+            sleep 1; [ "$i" = 60 ] && exit 1
+          done
+          for i in $(seq 1 30); do
+            curl -fsS 'http://127.0.0.1:18123/?query=SELECT%201' && break
+            sleep 1; [ "$i" = 30 ] && exit 1
+          done
 
       - name: Browse contracts against the live servers
         env:
           MARIMOHUB_TEST_ICEBERG_REST_URI: http://127.0.0.1:18181
+          MARIMOHUB_TEST_TRINO_HOST: 127.0.0.1
+          MARIMOHUB_TEST_TRINO_PORT: 18080
+          MARIMOHUB_TEST_CLICKHOUSE_HOST: 127.0.0.1
+          MARIMOHUB_TEST_CLICKHOUSE_PORT: 18123
         run: vp run --no-cache --filter @marimo-hub/core --fail-if-no-match test

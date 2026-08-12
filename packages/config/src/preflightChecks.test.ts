@@ -327,6 +327,44 @@ describe('integrations.secrets check', () => {
 	});
 });
 
+describe('integrations.data-preview check', () => {
+	it('marks the runtime ready only after its preflight succeeds', async () => {
+		let ready = false;
+		const deps = makeDeps({
+			dataBrowser: {
+				preview: true,
+				sandboxPreview: {
+					available: () => ready,
+					check: async () => {
+						ready = true;
+					},
+					preview: async () => ({ columns: [], rows: [] }),
+				},
+			},
+		});
+		expect((await run({}, deps)).by('integrations.data-preview')).toMatchObject({ status: 'ok' });
+		expect(ready).toBe(true);
+	});
+
+	it('reports a failed runtime without making preflight fatal', async () => {
+		const deps = makeDeps({
+			dataBrowser: {
+				preview: true,
+				sandboxPreview: {
+					available: () => false,
+					check: async () => {
+						throw new Error('missing pyiceberg');
+					},
+					preview: async () => ({ columns: [], rows: [] }),
+				},
+			},
+		});
+		const { report, by } = await run({}, deps);
+		expect(by('integrations.data-preview')).toMatchObject({ status: 'fail' });
+		expect(report.fatal).toBe(false);
+	});
+});
+
 describe('compute.object-storage-wif check', () => {
 	const osEnv: Env = {
 		MARIMOHUB_COMPUTE_BACKEND: 'coreweave',

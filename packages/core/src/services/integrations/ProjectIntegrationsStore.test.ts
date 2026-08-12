@@ -2105,6 +2105,7 @@ describe('data browsing', () => {
 		const created = await createBrowsy();
 		expect(await store.browseCapability(pid, created.id)).toEqual({
 			metadata: true,
+			hub_preview: false,
 			current_version: 1,
 			updated_at: expect.any(String),
 		});
@@ -2116,6 +2117,7 @@ describe('data browsing', () => {
 		);
 		expect(await store.browseCapability(pid, closed.id)).toEqual({
 			metadata: false,
+			hub_preview: false,
 			current_version: 1,
 			updated_at: expect.any(String),
 			reason: 'sandbox only',
@@ -2200,6 +2202,7 @@ describe('data browsing', () => {
 
 		expect(await store.browseCapability(pid, orgInstance.id)).toEqual({
 			metadata: true,
+			hub_preview: false,
 			current_version: 1,
 			updated_at: expect.any(String),
 		});

@@ -5876,6 +5876,137 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/integrations/{iid}/browse/preview': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Preview a table's rows (editor or above)
+		 * @description Runs a bounded read-only scan. HTTP-native integrations execute through the guarded browse probe; other integrations use a fresh, isolated preview sandbox.
+		 */
+		post: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+					iid: string;
+				};
+				cookie?: never;
+			};
+			requestBody: {
+				content: {
+					'application/json': {
+						namespace: string[];
+						table: string;
+						/** @default 20 */
+						limit?: number;
+					};
+				};
+			};
+			responses: {
+				/** @description Column names and a bounded row sample */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['IntegrationTablePreview'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/org/integrations': {
 		parameters: {
 			query?: never;
@@ -7710,6 +7841,10 @@ export interface components {
 				total_records?: number;
 				total_data_size_bytes?: number;
 			};
+		};
+		IntegrationTablePreview: {
+			columns: string[];
+			rows: unknown[][];
 		};
 		User: {
 			id: string;

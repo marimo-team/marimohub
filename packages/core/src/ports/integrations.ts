@@ -97,6 +97,8 @@ export interface BrowsePage<T> {
 export interface BrowsePageRequest {
 	limit: number;
 	cursor?: string;
+	/** Effective upstream identity for engines that authorize each query. */
+	query_user?: string;
 }
 
 export interface BrowseNamespacesRequest extends BrowsePageRequest {
@@ -129,6 +131,17 @@ export interface TableSchema {
 	};
 }
 
+/** A bounded, JSON-safe row sample returned by the data browser. */
+export interface TablePreview {
+	columns: string[];
+	rows: unknown[][];
+}
+
+export interface TablePreviewRequest {
+	limit: number;
+	query_user?: string;
+}
+
 /**
  * Whether one stored instance can be browsed from the hub. Kind support alone
  * is not enough: the verdict depends on the instance config (auth method, TLS
@@ -136,6 +149,8 @@ export interface TableSchema {
  */
 export interface BrowseCapabilityResult {
 	metadata: boolean;
+	/** Whether this kind can preview rows directly through its guarded HTTP API. */
+	hub_preview: boolean;
 	reason?: string;
 	/**
 	 * The resolved head's config version and last-write time. Callers that
@@ -264,4 +279,23 @@ export interface SessionRender {
 	vars: Record<string, string>;
 	/** Version pins persisted on the session record. */
 	attachments: { id: IntegrationId; name: string; kind: string; version: number }[];
+}
+
+export interface DataPreviewRequest {
+	bundle: SessionRender;
+	integration_name: string;
+	user_id: UserId;
+	credential_vars?: Record<string, string>;
+	namespace: string[];
+	table: string;
+	limit: number;
+}
+
+/** Executes a bounded read-only table scan outside the control-plane process. */
+export interface DataPreview {
+	/** False until the dedicated runtime has passed its dependency preflight. */
+	available(): boolean;
+	/** Verify the dedicated runtime and update {@link available}. */
+	check(): Promise<void>;
+	preview(request: DataPreviewRequest): Promise<TablePreview>;
 }

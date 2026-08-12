@@ -1,5 +1,5 @@
 import { defaultRegistry, OrgIntegrationsStore, ProjectIntegrationsStore } from '@marimo-hub/core';
-import type { Bucket, IntegrationProbe, Metrics } from '@marimo-hub/core';
+import type { Bucket, DataPreview, IntegrationProbe, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from '@marimo-hub/api';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -18,6 +18,7 @@ export function makeIntegrations(
 	env: Env,
 	bucket: Bucket,
 	metrics?: Metrics,
+	sandboxPreview?: DataPreview,
 ): Pick<ApiDeps, 'integrations' | 'orgIntegrations' | 'dataBrowser'> {
 	const setting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
 	const dataBrowser = dataBrowserSetting(env);
@@ -54,11 +55,18 @@ export function makeIntegrations(
 		// Org-wide instances are managed by super admins (MARIMOHUB_SUPER_ADMINS);
 		// with none configured the routes are unreachable and the tier stays empty.
 		orgIntegrations: new OrgIntegrationsStore(options),
-		...(dataBrowser === 'metadata' ? { dataBrowser: { preview: false } } : {}),
+		...(dataBrowser === 'off'
+			? {}
+			: {
+					dataBrowser: {
+						preview: dataBrowser === 'full',
+						...(dataBrowser === 'full' && sandboxPreview ? { sandboxPreview } : {}),
+					},
+				}),
 	};
 }
 
-function dataBrowserSetting(env: Env): 'off' | 'metadata' {
+function dataBrowserSetting(env: Env): 'off' | 'metadata' | 'full' {
 	const setting = env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase();
 	switch (setting) {
 		case undefined:
@@ -66,12 +74,11 @@ function dataBrowserSetting(env: Env): 'off' | 'metadata' {
 		case 'off':
 			return 'off';
 		case 'metadata':
-			return 'metadata';
+		case 'full':
+			return setting;
 		default:
-			// `full` (metadata + row preview) arrives with the sandbox-executed
-			// preview; until then it is rejected rather than silently degraded.
 			throw new ConfigError(
-				`Unknown MARIMOHUB_DATA_BROWSER: ${env.MARIMOHUB_DATA_BROWSER} (supported: off, metadata).`,
+				`Unknown MARIMOHUB_DATA_BROWSER: ${env.MARIMOHUB_DATA_BROWSER} (supported: off, metadata, full).`,
 				{ variable: 'MARIMOHUB_DATA_BROWSER', docs: 'docs/integrations.md' },
 			);
 	}
@@ -83,14 +90,13 @@ function dataBrowserSetting(env: Env): 'off' | 'metadata' {
  * connection tests (and vice versa). Catalog pages are also larger than probe
  * responses, hence the 1 MiB cap; kinds always request upstream pagination.
  *
- * The 240/min cap pairs with the API's 30 ops/min/user budget: one op spends
- * up to 3 probe requests (config handshake + metadata + OAuth token), so a
- * single user tops out around 90 — the process-wide allowance cannot be
- * exhausted by one editor.
+ * The 240/min cap pairs with the API's 20 ops/min/user budget: Trino bounds one
+ * statement at 8 requests, so one editor can spend at most 160 of the shared
+ * allowance. Other kinds use fewer requests per operation.
  */
 function makeBrowseProbe(
 	policy: ProbePolicy,
-	dataBrowser: 'off' | 'metadata',
+	dataBrowser: 'off' | 'metadata' | 'full',
 ): IntegrationProbe | undefined {
 	if (dataBrowser === 'off') return undefined;
 	if (policy === 'off') {

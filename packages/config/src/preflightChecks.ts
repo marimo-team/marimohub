@@ -328,6 +328,22 @@ async function checkIntegrationSecrets(deps: ApiDeps): Promise<CheckOutcome> {
 	};
 }
 
+async function checkDataPreview(deps: ApiDeps): Promise<CheckOutcome> {
+	const preview = deps.dataBrowser?.sandboxPreview;
+	if (!preview) return { status: 'skipped', message: 'dedicated data-preview runtime disabled' };
+	try {
+		await preview.check();
+		return { status: 'ok', message: 'data-preview runtime provides PyIceberg and PyArrow' };
+	} catch (err) {
+		return {
+			status: 'fail',
+			message: `Data-preview runtime unavailable: ${errMsg(err)}`,
+			remediation:
+				'Set MARIMOHUB_DATA_PREVIEW_IMAGE to an image with Python, PyIceberg, and PyArrow.',
+		};
+	}
+}
+
 export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] {
 	const checks: PreflightCheck[] = [
 		{ name: 'storage', run: () => checkStorage(env, deps) },
@@ -341,6 +357,17 @@ export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] 
 	if (deps.ai) checks.push({ name: 'ai.upstream', run: () => checkAi(deps) });
 	if (deps.integrations) {
 		checks.push({ name: 'integrations.secrets', run: () => checkIntegrationSecrets(deps) });
+	}
+	if (deps.dataBrowser?.sandboxPreview) {
+		const preview = deps.dataBrowser.sandboxPreview;
+		checks.push({
+			name: 'integrations.data-preview',
+			run: () => checkDataPreview(deps),
+			timeoutMs:
+				'preflightTimeoutMs' in preview && typeof preview.preflightTimeoutMs === 'number'
+					? preview.preflightTimeoutMs
+					: undefined,
+		});
 	}
 	return checks;
 }

@@ -37,6 +37,8 @@ export type CheckOutcome = Omit<CheckResult, 'name' | 'latencyMs'>;
 export interface PreflightCheck {
 	name: string;
 	run: () => Promise<CheckOutcome>;
+	/** Override the runner deadline for checks whose own bounded operation is slower. */
+	timeoutMs?: number;
 }
 
 export interface PreflightReport {
@@ -58,9 +60,10 @@ const DEFAULT_TIMEOUT_MS = 3000;
 
 async function runOne(
 	check: PreflightCheck,
-	timeoutMs: number,
+	defaultTimeoutMs: number,
 	now: () => number,
 ): Promise<CheckResult> {
+	const timeoutMs = check.timeoutMs ?? defaultTimeoutMs;
 	const start = now();
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<CheckOutcome>((resolve) => {

@@ -9,6 +9,8 @@ import type {
 	KindBrand,
 	ProbeRequestInit,
 	TableSchema,
+	TablePreview,
+	TablePreviewRequest,
 	TestResult,
 	UiHints,
 } from '../../ports/integrations';
@@ -50,8 +52,8 @@ export interface RenderOutput {
 
 /**
  * Read-only catalog browsing for kinds with an HTTP-native metadata API.
- * Every op is metadata-only and GET-shaped against the upstream; nothing here
- * may write. Like `testConnection`, ALL network access goes through `probe`.
+ * Metadata operations must not write upstream. Like `testConnection`, ALL
+ * network access goes through `probe`.
  */
 export interface BrowseCapability<C> {
 	/**
@@ -76,7 +78,16 @@ export interface BrowseCapability<C> {
 		probe: IntegrationProbe,
 		namespace: string[],
 		table: string,
+		request?: Pick<TablePreviewRequest, 'query_user'>,
 	): Promise<TableSchema>;
+	/** Optional cheap row preview executed by this kind's read-only HTTP API. */
+	previewRows?(
+		config: C,
+		probe: IntegrationProbe,
+		namespace: string[],
+		table: string,
+		request: TablePreviewRequest,
+	): Promise<TablePreview>;
 	/** Notebook code that loads the table through this instance's rendered config. */
 	snippet(instanceName: string, namespace: string[], table: string): string;
 }
@@ -233,6 +244,7 @@ function guardedBrowse<C>(browse: BrowseCapability<C>, pathsOf: () => SecretPath
 		listNamespaces: guard(browse.listNamespaces.bind(browse)),
 		listTables: guard(browse.listTables.bind(browse)),
 		getTableSchema: guard(browse.getTableSchema.bind(browse)),
+		...(browse.previewRows ? { previewRows: guard(browse.previewRows.bind(browse)) } : {}),
 	} satisfies BrowseCapability<C>;
 }
 
@@ -250,7 +262,6 @@ function withoutSecretEcho(result: TestResult, config: unknown, paths: SecretPat
 	// The substring match stays deliberately blunt (a short secret matches an
 	// innocuous detail by chance), so the replacement tracks the result's own
 	// `ok` instead of asserting failure: a false positive then costs detail, not
-	// correctness.
 	return { ...result, details: result.ok ? 'connected' : 'request failed' };
 }
 

@@ -785,6 +785,18 @@ export function useBrowseTableSchemaQuery(
 	});
 }
 
+export function useBrowseTablePreview(projectId: string, integrationId: string) {
+	return useMutation({
+		mutationFn: (input: { namespace: string[]; table: string; limit?: number }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/preview', {
+					params: { path: { pid: projectId, iid: integrationId } },
+					body: input,
+				}),
+			),
+	});
+}
+
 // Notebooks
 
 export function useNotebooksQuery(projectId: string) {

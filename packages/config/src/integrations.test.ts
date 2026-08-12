@@ -113,6 +113,52 @@ describe('makeIntegrations data browser', () => {
 		);
 		expect(wired.dataBrowser).toEqual({ preview: false });
 		expect(wired.integrations?.listKinds().some((k) => k.supports_browse)).toBe(true);
+
+		const full = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
+			new MemoryBucket(),
+		);
+		expect(full.dataBrowser).toEqual({ preview: true });
+	});
+
+	it('does not add a generic sandbox fallback unless a runtime is explicitly wired', () => {
+		const runtime = {
+			available: () => false,
+			check: async () => {},
+			preview: async () => ({ columns: [], rows: [] }),
+		};
+		const without = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
+			new MemoryBucket(),
+		);
+		expect(without.dataBrowser?.sandboxPreview).toBeUndefined();
+		const withRuntime = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
+			new MemoryBucket(),
+			undefined,
+			runtime,
+		);
+		expect(withRuntime.dataBrowser?.sandboxPreview).toBe(runtime);
+	});
+
+	it('advertises sandbox fallback only after its runtime becomes available', async () => {
+		let available = false;
+		const runtime = {
+			available: () => available,
+			check: async () => {
+				available = true;
+			},
+			preview: async () => ({ columns: [], rows: [] }),
+		};
+		const wired = makeIntegrations(
+			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
+			new MemoryBucket(),
+			undefined,
+			runtime,
+		);
+		expect(wired.dataBrowser?.sandboxPreview?.available()).toBe(false);
+		await wired.dataBrowser?.sandboxPreview?.check();
+		expect(wired.dataBrowser?.sandboxPreview?.available()).toBe(true);
 	});
 
 	it('refuses to enable browsing without integrations', () => {
@@ -140,14 +186,14 @@ describe('makeIntegrations data browser', () => {
 		).toThrow(/probe/);
 	});
 
-	it('rejects unknown values, including the reserved `full`', () => {
-		for (const value of ['full', 'bogus']) {
+	it('rejects unknown values', () => {
+		for (const value of ['bogus']) {
 			expect(() =>
 				makeIntegrations(
 					{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: value },
 					new MemoryBucket(),
 				),
-			).toThrow(/supported: off, metadata/);
+			).toThrow(/supported: off, metadata, full/);
 		}
 	});
 });

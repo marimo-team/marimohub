@@ -65,6 +65,9 @@ function makeFetch({
 			const body = JSON.parse(String(init?.body)) as { title: string };
 			return ok({ id: 'nb_1', project_id: PID, title: body.title });
 		}
+		if (method === 'POST' && url.endsWith('/browse/preview')) {
+			return ok({ columns: ['id', 'status'], rows: [[1, 'paid']] });
+		}
 		if (method !== 'GET') throw new Error(`unexpected ${method} ${url}`);
 		const target = new URL(url, 'http://test');
 		if (url.includes('/api/v1/capabilities')) {
@@ -272,6 +275,23 @@ describe('DataBrowserPage', () => {
 		expect(body.title).toBe('explore_orders');
 		expect(body.code).toContain('# sales.orders');
 		expect(body.code).toContain('    catalog = load_catalog("lake")');
+	});
+
+	it('loads a row preview only after the explicit button is pressed', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
+			capability: { metadata: true, preview: true },
+		});
+
+		await user.click(await screen.findByRole('tab', { name: 'Preview' }));
+		expect(screen.getByRole('button', { name: 'Load preview' })).toBeInTheDocument();
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/browse/preview'))).toBe(
+			false,
+		);
+
+		await user.click(screen.getByRole('button', { name: 'Load preview' }));
+		expect(await screen.findByText('paid')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Reload preview' })).toBeInTheDocument();
 	});
 
 	it('reports when browsing is unavailable', async () => {

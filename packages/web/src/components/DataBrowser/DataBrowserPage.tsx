@@ -29,6 +29,7 @@ import {
 	useBrowseCapabilityQuery,
 	useBrowseNamespacesQuery,
 	useBrowseTableSchemaQuery,
+	useBrowseTablePreview,
 	useBrowseTablesQuery,
 	useCapabilitiesQuery,
 	useCreateNotebook,
@@ -213,6 +214,7 @@ export default function DataBrowserPage() {
 	};
 
 	const selected = browsable.find((entry) => entry.id === iid);
+	const selectedCapability = useBrowseCapabilityQuery(pid!, iid ?? '', selected !== undefined);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-6 max-md:overflow-y-auto max-md:p-3">
@@ -287,6 +289,7 @@ export default function DataBrowserPage() {
 								projectId={pid!}
 								integration={selected}
 								selection={selection}
+								previewAvailable={selectedCapability.data?.preview ?? false}
 							/>
 						) : (
 							<EmptyState
@@ -573,10 +576,12 @@ function TableDetail({
 	projectId,
 	integration,
 	selection,
+	previewAvailable,
 }: {
 	projectId: string;
 	integration: IntegrationEntry;
 	selection: Selection;
+	previewAvailable: boolean;
 }) {
 	const schema = useBrowseTableSchemaQuery(
 		projectId,
@@ -586,6 +591,8 @@ function TableDetail({
 	);
 	const { copied, copy } = useCopyToClipboard();
 	const [columnFilter, setColumnFilter] = useState('');
+	const [tab, setTab] = useState<'schema' | 'preview'>('schema');
+	const preview = useBrowseTablePreview(projectId, integration.id);
 	const createNotebook = useCreateNotebook(projectId);
 	const navigate = useNavigate();
 	const qualifiedName = [...selection.namespace, selection.table].join('.');
@@ -690,39 +697,87 @@ function TableDetail({
 				</p>
 			)}
 
-			<div className="flex flex-col gap-2">
-				<TextField
-					aria-label="Filter columns"
-					placeholder="Filter columns..."
-					value={columnFilter}
-					onChange={setColumnFilter}
-				/>
-				<table className="w-full text-left text-xs">
-					<thead>
-						<tr className="border-b border-input text-muted-foreground">
-							<th className="py-1.5 pr-2 font-medium">Column</th>
-							<th className="py-1.5 pr-2 font-medium">Type</th>
-							<th className="py-1.5 pr-2 font-medium">Nullable</th>
-							<th className="py-1.5 font-medium">Comment</th>
-						</tr>
-					</thead>
-					<tbody>
-						{columns.map((column) => (
-							<tr key={column.name} className="border-b border-input/50">
-								<td className="py-1.5 pr-2 font-mono">{column.name}</td>
-								<td className="py-1.5 pr-2 font-mono text-muted-foreground">{column.type}</td>
-								<td className="py-1.5 pr-2 text-muted-foreground">
-									{column.nullable ? 'yes' : 'no'}
-								</td>
-								<td className="py-1.5 text-muted-foreground">{column.comment ?? ''}</td>
+			{previewAvailable && (
+				<div role="tablist" aria-label="Table details" className="flex border-b border-input">
+					{(['schema', 'preview'] as const).map((value) => (
+						<button
+							key={value}
+							type="button"
+							role="tab"
+							aria-selected={tab === value}
+							onClick={() => setTab(value)}
+							className={cn(
+								'-mb-px border-b-2 px-3 py-2 text-xs font-medium capitalize',
+								tab === value
+									? 'border-primary text-foreground'
+									: 'border-transparent text-muted-foreground hover:text-foreground',
+							)}
+						>
+							{value === 'schema' ? 'Schema' : 'Preview'}
+						</button>
+					))}
+				</div>
+			)}
+
+			{tab === 'schema' ? (
+				<div role="tabpanel" aria-label="Schema" className="flex flex-col gap-2">
+					<TextField
+						aria-label="Filter columns"
+						placeholder="Filter columns..."
+						value={columnFilter}
+						onChange={setColumnFilter}
+					/>
+					<table className="w-full text-left text-xs">
+						<thead>
+							<tr className="border-b border-input text-muted-foreground">
+								<th className="py-1.5 pr-2 font-medium">Column</th>
+								<th className="py-1.5 pr-2 font-medium">Type</th>
+								<th className="py-1.5 pr-2 font-medium">Nullable</th>
+								<th className="py-1.5 font-medium">Comment</th>
 							</tr>
-						))}
-					</tbody>
-				</table>
-				{columns.length === 0 && (
-					<p className="text-xs text-muted-foreground">No columns match "{columnFilter}".</p>
-				)}
-			</div>
+						</thead>
+						<tbody>
+							{columns.map((column) => (
+								<tr key={column.name} className="border-b border-input/50">
+									<td className="py-1.5 pr-2 font-mono">{column.name}</td>
+									<td className="py-1.5 pr-2 font-mono text-muted-foreground">{column.type}</td>
+									<td className="py-1.5 pr-2 text-muted-foreground">
+										{column.nullable ? 'yes' : 'no'}
+									</td>
+									<td className="py-1.5 text-muted-foreground">{column.comment ?? ''}</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+					{columns.length === 0 && (
+						<p className="text-xs text-muted-foreground">No columns match "{columnFilter}".</p>
+					)}
+				</div>
+			) : (
+				<div role="tabpanel" aria-label="Preview" className="flex flex-col gap-3">
+					<div>
+						<Button
+							variant="primary"
+							onPress={() =>
+								preview.mutate({
+									namespace: selection.namespace,
+									table: selection.table,
+									limit: 20,
+								})
+							}
+							isDisabled={preview.isPending}
+						>
+							{preview.isPending ? 'Loading…' : preview.data ? 'Reload preview' : 'Load preview'}
+						</Button>
+					</div>
+					{preview.error && (
+						<p className="text-sm text-destructive">
+							{preview.error instanceof Error ? preview.error.message : 'Request failed'}
+						</p>
+					)}
+					{preview.data && <PreviewTable data={preview.data} />}
+				</div>
+			)}
 
 			{schema.data.partitioning && schema.data.partitioning.length > 0 && (
 				<div className="flex flex-wrap items-center gap-1.5">
@@ -752,4 +807,61 @@ function TableDetail({
 			)}
 		</div>
 	);
+}
+
+function PreviewTable({ data }: { data: { columns: string[]; rows: unknown[][] } }) {
+	if (data.rows.length === 0) {
+		return <p className="text-xs text-muted-foreground">This table returned no rows.</p>;
+	}
+	return (
+		<div className="overflow-x-auto rounded-md border border-input">
+			<table className="w-full whitespace-nowrap text-left text-xs">
+				<thead className="bg-muted/40">
+					<tr>
+						{data.columns.map((column) => (
+							<th key={column} className="px-3 py-2 font-medium">
+								{column}
+							</th>
+						))}
+					</tr>
+				</thead>
+				<tbody>
+					{keyedRows(data.rows).map(({ key, row }) => (
+						<tr key={key} className="border-t border-input/50">
+							{data.columns.map((column, columnIndex) => (
+								<td
+									key={column}
+									className="max-w-80 truncate px-3 py-2 font-mono"
+									title={renderCell(row[columnIndex])}
+								>
+									{renderCell(row[columnIndex])}
+								</td>
+							))}
+						</tr>
+					))}
+				</tbody>
+			</table>
+		</div>
+	);
+}
+
+function keyedRows(rows: unknown[][]): { key: string; row: unknown[] }[] {
+	const counts = new Map<string, number>();
+	return rows.map((row) => {
+		const base = JSON.stringify(row) ?? '[unserializable]';
+		const occurrence = counts.get(base) ?? 0;
+		counts.set(base, occurrence + 1);
+		return { key: `${base}:${occurrence}`, row };
+	});
+}
+
+function renderCell(value: unknown): string {
+	if (value === null) return 'null';
+	if (typeof value === 'string') return value;
+	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+	try {
+		return JSON.stringify(value) ?? '';
+	} catch {
+		return '[unserializable]';
+	}
 }

@@ -21,6 +21,7 @@ import {
 	EDITOR_SANDBOX_SHARING_VALUES,
 	runPreflight,
 	SubdomainExposure,
+	SandboxDataPreview,
 	VIEWER_MODES,
 } from '@marimo-hub/core';
 import type {
@@ -28,6 +29,7 @@ import type {
 	Metrics,
 	AssignableRole,
 	SandboxExposure,
+	SandboxProvider,
 	ViewerMode,
 } from '@marimo-hub/core';
 import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
@@ -84,6 +86,10 @@ const DEFAULT_MAX_SESSIONS_PER_USER = 10;
 
 /** Default per-project concurrent app (`run`) session cap when unset. */
 const DEFAULT_MAX_APPS_PER_PROJECT = 5;
+const DEFAULT_MAX_DATA_PREVIEWS = 4;
+const DEFAULT_MAX_DATA_PREVIEWS_PER_USER = 1;
+const DEFAULT_DATA_PREVIEW_STARTUP_TIMEOUT_S = 120;
+const DEFAULT_DATA_PREVIEW_EXECUTION_TIMEOUT_S = 30;
 
 /**
  * Parse a concurrency cap. `0` disables the cap (unlimited); unset falls back to
@@ -102,6 +108,52 @@ function parseCap(env: Env, key: string, dflt: number): number | undefined {
 		});
 	}
 	return n === 0 ? undefined : n;
+}
+
+function dataPreviewFromEnv(
+	env: Env,
+	compute: SandboxProvider,
+	computeBackendValue: string,
+): SandboxDataPreview | undefined {
+	const image = env.MARIMOHUB_DATA_PREVIEW_IMAGE?.trim();
+	if (
+		env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() !== 'full' ||
+		!image ||
+		computeBackendValue === 'local' ||
+		computeBackendValue === 'none' ||
+		computeBackendValue === 'noop'
+	) {
+		return undefined;
+	}
+	return new SandboxDataPreview(compute, {
+		image,
+		maxConcurrent: parsePositiveIntEnv(
+			env,
+			'MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT',
+			DEFAULT_MAX_DATA_PREVIEWS,
+		),
+		maxConcurrentPerUser: parsePositiveIntEnv(
+			env,
+			'MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER',
+			DEFAULT_MAX_DATA_PREVIEWS_PER_USER,
+		),
+		startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS', {
+			dflt: DEFAULT_DATA_PREVIEW_STARTUP_TIMEOUT_S,
+		}),
+		executionTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS', {
+			dflt: DEFAULT_DATA_PREVIEW_EXECUTION_TIMEOUT_S,
+		}),
+	});
+}
+
+function parsePositiveIntEnv(env: Env, key: string, fallback: number): number {
+	const value = parseIntEnv(env, key) ?? fallback;
+	if (value < 1) {
+		throw new ConfigError(`Invalid ${key}: ${value} (expected a positive integer)`, {
+			variable: key,
+		});
+	}
+	return value;
 }
 
 /** Session-lifecycle defaults (seconds). See docs/configuration.md#server--api. */
@@ -344,15 +396,17 @@ export function createFromEnv(
 		warnedUnsupportedProfileBackends.add(computeBackendValue);
 	}
 	const services = createServices(bucket, metrics, { tracing: options?.tracing });
+	const compute = makeCompute(env, {
+		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
+		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
+	});
+	const sandboxPreview = dataPreviewFromEnv(env, compute, computeBackendValue);
 	const deps: ApiDeps = {
 		services,
 		bucket,
 		// Provider-side limits trail the graceful lifecycle deadlines: Modal idle by
 		// 1.5× and CoreWeave/E2B lifetime by 2×.
-		compute: makeCompute(env, {
-			sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
-			sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
-		}),
+		compute,
 		// Personal access tokens ride on every deployment: a `mhub_pat_` bearer
 		// resolves through the TokenService, everything else through the SSO adapter.
 		authenticator: composeAuthenticators(services.tokens, authenticator),
@@ -401,7 +455,7 @@ export function createFromEnv(
 		...makeAi(env),
 		// Project integrations (no-op unless MARIMOHUB_INTEGRATIONS=on — opt-in per the
 		// two-phase rollout note on makeIntegrations).
-		...makeIntegrations(env, bucket, metrics),
+		...makeIntegrations(env, bucket, metrics, sandboxPreview),
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time
 		// (Dockerfile ARG → ENV); everything else is inferred from the live config +

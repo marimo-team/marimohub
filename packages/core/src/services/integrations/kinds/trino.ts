@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { ValidationError } from '../../../errors';
+import { UnavailableError, ValidationError } from '../../../errors';
+import type { BrowsePageRequest, IntegrationProbe } from '../../../ports/integrations';
 import { INTEGRATIONS_DIR } from '../bundle';
 import {
 	basicAuthHeader,
@@ -13,6 +14,7 @@ import { discoveryEnvField, HTTP_HEADER_NAME_REGEX } from './common';
 
 const IDENTIFIER_REGEX = /^[A-Za-z0-9_.-]+$/;
 const TIMEZONE_REGEX = /^[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)*$/;
+const MAX_STATEMENT_PAGES = 8;
 const mutualAuthenticationSchema = z.enum(['required', 'optional', 'disabled']);
 
 const authSchema = z.discriminatedUnion('method', [
@@ -398,7 +400,244 @@ export const trino = defineIntegration({
 			},
 		});
 	},
+
+	browse: {
+		available(config) {
+			const reason = hubBrowseBlocker(config);
+			return reason ? { ok: false, reason } : { ok: true };
+		},
+		async listNamespaces(config, probe, request) {
+			if (request.parent && request.parent.length > 1) return { items: [], next_cursor: null };
+			const sql = request.parent
+				? `SHOW SCHEMAS FROM ${quoteIdentifier(request.parent[0])}`
+				: 'SHOW CATALOGS';
+			const result = await trinoQuery(config, probe, request.query_user, sql);
+			const names = result.rows.map((row) => String(row[0]));
+			return page(
+				request.parent
+					? names.map((name) => [request.parent![0], name])
+					: names.map((name) => [name]),
+				request,
+			);
+		},
+		async listTables(config, probe, namespace, request) {
+			if (namespace.length !== 2) return { items: [], next_cursor: null };
+			const result = await trinoQuery(
+				config,
+				probe,
+				request.query_user,
+				`SHOW TABLES FROM ${qualifiedName(namespace)}`,
+			);
+			return page(
+				result.rows.map((row) => String(row[0])),
+				request,
+			);
+		},
+		async getTableSchema(config, probe, namespace, table, request) {
+			assertTableNamespace(namespace);
+			const result = await trinoQuery(
+				config,
+				probe,
+				request?.query_user,
+				`DESCRIBE ${qualifiedName([...namespace, table])}`,
+			);
+			const normalized = result.columns.map((column) => column.toLowerCase());
+			const name = normalized.indexOf('column');
+			const type = normalized.indexOf('type');
+			const comment = normalized.indexOf('comment');
+			if (name === -1 || type === -1)
+				throw new UnavailableError('Trino returned an invalid schema.');
+			return {
+				columns: result.rows.map((row) => {
+					if (typeof row[name] !== 'string' || typeof row[type] !== 'string') {
+						throw new UnavailableError('Trino returned an invalid schema.');
+					}
+					const renderedComment =
+						comment === -1 || typeof row[comment] !== 'string' ? '' : row[comment];
+					return {
+						name: row[name],
+						type: row[type],
+						nullable: true,
+						...(renderedComment ? { comment: renderedComment } : {}),
+					};
+				}),
+			};
+		},
+		snippet(instanceName, namespace, table) {
+			const env = `MARIMOHUB_TRINO_${envSegment(instanceName)}_URL`;
+			const sql = `SELECT * FROM ${qualifiedName([...namespace, table])} LIMIT 100`;
+			return [
+				'import os',
+				'from sqlalchemy import create_engine',
+				'',
+				`engine = create_engine(os.environ[${JSON.stringify(env)}])`,
+				`df = mo.sql(${JSON.stringify(sql)}, engine=engine)`,
+				'df',
+			].join('\n');
+		},
+		async previewRows(config, probe, namespace, table, request) {
+			assertTableNamespace(namespace);
+			const result = await trinoQuery(
+				config,
+				probe,
+				request.query_user,
+				`SELECT * FROM ${qualifiedName([...namespace, table])} LIMIT ${request.limit}`,
+			);
+			return { columns: result.columns, rows: result.rows };
+		},
+	},
 });
+
+function hubBrowseBlocker(config: z.infer<typeof trinoConfig>): string | undefined {
+	if (
+		config.auth.method === 'oauth2' ||
+		config.auth.method === 'certificate' ||
+		config.auth.method === 'kerberos' ||
+		config.auth.method === 'gssapi'
+	) {
+		return `${config.auth.method} authentication can only be exercised inside the sandbox`;
+	}
+	if (config.tls.verification !== 'system') {
+		return 'custom TLS verification can only be exercised inside the sandbox';
+	}
+	return undefined;
+}
+
+interface TrinoResult {
+	columns: string[];
+	rows: unknown[][];
+}
+
+async function trinoQuery(
+	config: z.infer<typeof trinoConfig>,
+	probe: IntegrationProbe,
+	queryUser: string | undefined,
+	query: string,
+): Promise<TrinoResult> {
+	assertSafeHttpHeaders(config.http_headers);
+	const statement = new URL(
+		'/v1/statement',
+		`${config.http_scheme}://${config.host}:${config.port}`,
+	);
+	const headers = trinoHeaders(config, queryUser);
+	let response = await probe.fetch(statement.toString(), {
+		method: 'POST',
+		headers,
+		body: query,
+	});
+	let columns: string[] | undefined;
+	const rows: unknown[][] = [];
+	const seen = new Set<string>();
+
+	for (let pageNumber = 0; pageNumber < MAX_STATEMENT_PAGES; pageNumber++) {
+		if (!response.ok) throw new UnavailableError(`Trino answered HTTP ${response.status}.`);
+		const body = await response.json();
+		if (!isRecord(body) || body.error !== undefined) {
+			throw new UnavailableError('The Trino query failed.');
+		}
+		if (body.columns !== undefined) {
+			if (!Array.isArray(body.columns))
+				throw new UnavailableError('Trino returned an invalid result.');
+			const names = body.columns.map((column) =>
+				isRecord(column) && typeof column.name === 'string' ? column.name : undefined,
+			);
+			if (names.some((name) => name === undefined)) {
+				throw new UnavailableError('Trino returned an invalid result.');
+			}
+			columns = names as string[];
+		}
+		if (body.data !== undefined) {
+			if (!Array.isArray(body.data) || !body.data.every(Array.isArray)) {
+				throw new UnavailableError('Trino returned an invalid result.');
+			}
+			rows.push(...body.data);
+			if (rows.length > 10_000) throw new UnavailableError('The Trino result is too large.');
+		}
+		if (body.nextUri === undefined) {
+			const resolvedColumns = columns ?? [];
+			if (!rows.every((row) => row.length === resolvedColumns.length)) {
+				throw new UnavailableError('Trino returned an invalid result.');
+			}
+			return { columns: resolvedColumns, rows };
+		}
+		if (typeof body.nextUri !== 'string')
+			throw new UnavailableError('Trino returned an invalid result.');
+		const next = new URL(body.nextUri);
+		if (
+			next.origin !== statement.origin ||
+			!next.pathname.startsWith('/v1/statement/') ||
+			seen.has(next.toString())
+		) {
+			throw new UnavailableError('Trino returned an invalid continuation URL.');
+		}
+		seen.add(next.toString());
+		if (pageNumber + 1 >= MAX_STATEMENT_PAGES) break;
+		response = await probe.fetch(next.toString(), { headers });
+	}
+	throw new UnavailableError('The Trino query did not finish.');
+}
+
+function trinoHeaders(
+	config: z.infer<typeof trinoConfig>,
+	queryUser: string | undefined,
+): Record<string, string> {
+	const headers = Object.fromEntries(config.http_headers.map(({ name, value }) => [name, value]));
+	const user = config.user ?? (config.auth.method === 'basic' ? config.auth.username : queryUser);
+	if (!user) throw new ValidationError('Trino hub browsing requires a query user.');
+	headers['X-Trino-User'] = user;
+	if (config.default_catalog) headers['X-Trino-Catalog'] = config.default_catalog;
+	if (config.default_schema) headers['X-Trino-Schema'] = config.default_schema;
+	if (config.source) headers['X-Trino-Source'] = config.source;
+	if (config.timezone) headers['X-Trino-Time-Zone'] = config.timezone;
+	if (config.client_tags.length > 0) {
+		headers['X-Trino-Client-Tags'] = config.client_tags.map(({ value }) => value).join(',');
+	}
+	const sessions = propertyHeader(Object.entries(config.session_properties));
+	if (sessions) headers['X-Trino-Session'] = sessions;
+	const roles = propertyHeader(Object.entries(config.roles));
+	if (roles) headers['X-Trino-Role'] = roles;
+	const credentials = propertyHeader(
+		config.extra_credentials.map(({ name, value }) => [name, value] as const),
+	);
+	if (credentials) headers['X-Trino-Extra-Credential'] = credentials;
+	addProbeAuth(headers, config.auth);
+	for (const value of Object.values(headers)) {
+		if (/[\r\n]/.test(value))
+			throw new ValidationError('A Trino browse header contains a line break.');
+	}
+	return headers;
+}
+
+function propertyHeader(entries: readonly (readonly [string, string])[]): string {
+	return entries
+		.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+		.join(',');
+}
+
+function page<T>(items: T[], request: BrowsePageRequest) {
+	const offset = request.cursor === undefined ? 0 : Number(request.cursor);
+	if (!Number.isSafeInteger(offset) || offset < 0)
+		throw new ValidationError('Invalid browse cursor.');
+	const selected = items.slice(offset, offset + request.limit);
+	const next = offset + selected.length;
+	return { items: selected, next_cursor: next < items.length ? String(next) : null };
+}
+
+function assertTableNamespace(namespace: string[]): void {
+	if (namespace.length !== 2) throw new ValidationError('Trino tables need a catalog and schema.');
+}
+
+function qualifiedName(parts: string[]): string {
+	return parts.map(quoteIdentifier).join('.');
+}
+
+function quoteIdentifier(value: string): string {
+	return `"${value.replaceAll('"', '""')}"`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 function assertSafeHttpHeaders(headers: { name: string; value: string }[]): void {
 	for (const { name, value } of headers) {

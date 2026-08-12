@@ -35,6 +35,8 @@ import type {
 	SessionRender,
 	SessionRenderContext,
 	TableSchema,
+	TablePreview,
+	TablePreviewRequest,
 	TestIntegrationRequest,
 	TestResult,
 	UpdateIntegrationInput,
@@ -704,6 +706,7 @@ class ScopedIntegrationsStore {
 		if (!def.browse) {
 			return {
 				metadata: false,
+				hub_preview: false,
 				...state,
 				reason: `Integration kind "${head.kind}" does not support browsing.`,
 			};
@@ -711,12 +714,18 @@ class ScopedIntegrationsStore {
 		if (!this.browseProbe) {
 			return {
 				metadata: false,
+				hub_preview: false,
 				...state,
 				reason: 'Data browsing is not enabled on this deployment.',
 			};
 		}
 		if (!head.enabled) {
-			return { metadata: false, ...state, reason: `Integration "${head.name}" is disabled.` };
+			return {
+				metadata: false,
+				hub_preview: false,
+				...state,
+				reason: `Integration "${head.name}" is disabled.`,
+			};
 		}
 		const { config } = await this.loadCurrent(scope, head);
 		const parsed = parseStoredWithPlaceholders({
@@ -727,14 +736,15 @@ class ScopedIntegrationsStore {
 		if (parsed === undefined) {
 			return {
 				metadata: false,
+				hub_preview: false,
 				...state,
 				reason: `The stored config no longer matches kind "${head.kind}" — edit and re-save it.`,
 			};
 		}
 		const verdict = def.browse.available(parsed);
 		return verdict.ok
-			? { metadata: true, ...state }
-			: { metadata: false, ...state, reason: verdict.reason };
+			? { metadata: true, hub_preview: def.browse.previewRows !== undefined, ...state }
+			: { metadata: false, hub_preview: false, ...state, reason: verdict.reason };
 	}
 
 	async browseNamespaces(
@@ -761,10 +771,25 @@ class ScopedIntegrationsStore {
 		id: IntegrationId,
 		namespace: string[],
 		table: string,
+		request?: Pick<TablePreviewRequest, 'query_user'>,
 	): Promise<TableSchema> {
 		const { head, browse, config, probe } = await this.openBrowse(scope, id);
-		const schema = await browse.getTableSchema(config, probe, namespace, table);
+		const schema = await browse.getTableSchema(config, probe, namespace, table, request);
 		return { ...schema, snippet: browse.snippet(head.name, namespace, table) };
+	}
+
+	async browseTablePreview(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		namespace: string[],
+		table: string,
+		request: TablePreviewRequest,
+	): Promise<TablePreview> {
+		const { browse, config, probe } = await this.openBrowse(scope, id);
+		if (!browse.previewRows) {
+			throw new ValidationError('This integration requires a preview sandbox.');
+		}
+		return browse.previewRows(config, probe, namespace, table, request);
 	}
 
 	/**
@@ -1352,10 +1377,37 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		id: IntegrationId,
 		namespace: string[],
 		table: string,
+		request?: Pick<TablePreviewRequest, 'query_user'>,
 	): Promise<TableSchema> {
 		return this.withBrowseScope(projectId, id, (scope) =>
-			this.store.browseTableSchema(scope, id, namespace, table),
+			this.store.browseTableSchema(scope, id, namespace, table, request),
 		);
+	}
+
+	browseTablePreview(
+		projectId: ProjectId,
+		id: IntegrationId,
+		namespace: string[],
+		table: string,
+		request: TablePreviewRequest,
+	): Promise<TablePreview> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.browseTablePreview(scope, id, namespace, table, request),
+		);
+	}
+
+	async resolveForPreview(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: SessionRenderContext,
+	): Promise<SessionRender> {
+		return this.withBrowseScope(projectId, id, async (scope) => {
+			const head = await this.store.findHead(scope, id);
+			if (!head) throw new NotFoundError(`Integration ${id} not found`);
+			if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
+			const rendered = await this.store.renderOne(scope, head, projectId, context);
+			return bundleIntegrations([rendered], context.sessionId);
+		});
 	}
 
 	/**

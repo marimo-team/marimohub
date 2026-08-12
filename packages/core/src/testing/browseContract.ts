@@ -18,6 +18,8 @@ import type { IntegrationProbe, TableColumn } from '../ports/integrations';
 import type { BrowseCapability } from '../services/integrations/sdk';
 
 export interface BrowseContractFixture {
+	/** Namespace shapes supported by the upstream. */
+	hierarchy?: 'flat' | 'two-level' | 'multi-level';
 	/** Run-unique root namespace the setup created. */
 	root: string;
 	/** Direct child namespaces the setup created under `root` (at least two). */
@@ -34,6 +36,10 @@ export interface BrowseContractFixture {
 	expectedColumns: TableColumn[];
 	/** Rendered partition fields, when the kind and upstream support them. */
 	expectedPartitioning?: string[];
+	/** Namespace containing `table`; defaults to `[root, children[0]]`. */
+	tableNamespace?: string[];
+	/** Expected bounded sample when the kind supports direct preview. */
+	expectedPreview?: { columns: string[]; rows?: unknown[][]; minimumRows?: number };
 }
 
 export interface BrowseContractOptions<C> {
@@ -56,7 +62,9 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
 		beforeAll(async () => {
 			opts = options();
 			fixture = await opts.setup();
-			expect(fixture.children.length).toBeGreaterThanOrEqual(2);
+			if ((fixture.hierarchy ?? 'multi-level') !== 'flat') {
+				expect(fixture.children.length).toBeGreaterThanOrEqual(2);
+			}
 		}, 30_000);
 
 		afterAll(async () => {
@@ -92,7 +100,11 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
 
 		it('lists the fixture root namespace, without leaking descendants', async () => {
 			const roots = await listAll((cursor) =>
-				opts.browse.listNamespaces(opts.config, opts.probe, { limit: limit(), cursor }),
+				opts.browse.listNamespaces(opts.config, opts.probe, {
+					limit: limit(),
+					cursor,
+					query_user: 'browse-contract',
+				}),
 			);
 			// Everything under the fixture root — children AND the grandchild — must
 			// collapse to exactly the root entry at this level.
@@ -100,11 +112,13 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
 		});
 
 		it('lists exactly the direct children under the root', async () => {
+			if (fixture.hierarchy === 'flat') return;
 			const children = await listAll((cursor) =>
 				opts.browse.listNamespaces(opts.config, opts.probe, {
 					limit: limit(),
 					cursor,
 					parent: [fixture.root],
+					query_user: 'browse-contract',
 				}),
 			);
 			// Exact set: no parent echo, no grandchild leak, no unrelated entries.
@@ -115,36 +129,64 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
 		});
 
 		it('lists the grandchild one level down, not before', async () => {
+			if (fixture.hierarchy && fixture.hierarchy !== 'multi-level') return;
 			const grandchildren = await listAll((cursor) =>
 				opts.browse.listNamespaces(opts.config, opts.probe, {
 					limit: limit(),
 					cursor,
 					parent: [fixture.root, fixture.children[0]],
+					query_user: 'browse-contract',
 				}),
 			);
 			expect(grandchildren).toContainEqual([fixture.root, fixture.children[0], fixture.grandchild]);
 		});
 
 		it('lists the fixture table in its namespace', async () => {
+			const namespace = fixture.tableNamespace ?? [fixture.root, fixture.children[0]];
 			const tables = await listAll((cursor) =>
-				opts.browse.listTables(opts.config, opts.probe, [fixture.root, fixture.children[0]], {
+				opts.browse.listTables(opts.config, opts.probe, namespace, {
 					limit: limit(),
 					cursor,
+					query_user: 'browse-contract',
 				}),
 			);
 			expect(tables).toContain(fixture.table);
 		});
 
 		it('reads the table schema back', async () => {
+			const namespace = fixture.tableNamespace ?? [fixture.root, fixture.children[0]];
 			const schema = await opts.browse.getTableSchema(
 				opts.config,
 				opts.probe,
-				[fixture.root, fixture.children[0]],
+				namespace,
 				fixture.table,
+				{ query_user: 'browse-contract' },
 			);
 			expect(schema.columns).toEqual(fixture.expectedColumns);
 			if (fixture.expectedPartitioning) {
 				expect(schema.partitioning).toEqual(fixture.expectedPartitioning);
+			}
+		});
+
+		it('reads a bounded row sample when direct preview is supported', async () => {
+			if (!opts.browse.previewRows || !fixture.expectedPreview) return;
+			const namespace = fixture.tableNamespace ?? [fixture.root, fixture.children[0]];
+			const limit = Math.max(
+				fixture.expectedPreview.rows?.length ?? 0,
+				fixture.expectedPreview.minimumRows ?? 1,
+			);
+			const preview = await opts.browse.previewRows(
+				opts.config,
+				opts.probe,
+				namespace,
+				fixture.table,
+				{ limit, query_user: 'browse-contract' },
+			);
+			expect(preview.columns).toEqual(fixture.expectedPreview.columns);
+			expect(preview.rows.length).toBeLessThanOrEqual(limit);
+			if (fixture.expectedPreview.rows) expect(preview.rows).toEqual(fixture.expectedPreview.rows);
+			if (fixture.expectedPreview.minimumRows) {
+				expect(preview.rows.length).toBeGreaterThanOrEqual(fixture.expectedPreview.minimumRows);
 			}
 		});
 	});
