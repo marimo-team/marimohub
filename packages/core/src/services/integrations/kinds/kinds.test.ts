@@ -1243,6 +1243,17 @@ describe('kind renders (golden)', () => {
 		});
 	});
 
+	it.each([
+		['records.json', 'pl.read_json('],
+		['records.JSON', 'pl.read_json('],
+		['records.jsonl', 'pl.read_ndjson('],
+		['records.ndjson', 'pl.read_ndjson('],
+	] as const)('s3 renders the correct Polars reader for %s', (key, reader) => {
+		const snippet = s3.objectBrowse!.snippet('warehouse', 'lake', key);
+		expect(snippet).toContain(reader);
+		expect(snippet).toContain('s3://lake/');
+	});
+
 	it('resolves requirements from the selected driver, storage, and authentication branches', () => {
 		const odbc = sqlserver.configSchema.parse(FIXTURES.sqlserver);
 		const pymssql = sqlserver.configSchema.parse({

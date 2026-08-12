@@ -58,27 +58,37 @@ export function parseIntEnv(env: Env, key: string): number | undefined {
 export function parseSecondsEnv(
 	env: Env,
 	key: string,
-	opts: { dflt: number; allowZero?: boolean },
+	opts: { dflt: number; allowZero?: boolean; max?: number },
 ): Millis;
 export function parseSecondsEnv(
 	env: Env,
 	key: string,
-	opts?: { dflt?: number; allowZero?: boolean },
+	opts?: { dflt?: number; allowZero?: boolean; max?: number },
 ): Millis | undefined;
 export function parseSecondsEnv(
 	env: Env,
 	key: string,
-	opts?: { dflt?: number; allowZero?: boolean },
+	opts?: { dflt?: number; allowZero?: boolean; max?: number },
 ): Millis | undefined {
 	const seconds = parseIntEnv(env, key) ?? opts?.dflt;
 	if (seconds === undefined) return undefined;
 	const minimum = opts?.allowZero ? 0 : 1;
-	if (seconds < minimum) {
-		throw new ConfigError(`Invalid ${key}: ${seconds} (expected an integer >= ${minimum})`, {
-			variable: key,
-		});
+	const milliseconds = seconds * 1000;
+	if (
+		!Number.isSafeInteger(seconds) ||
+		!Number.isSafeInteger(milliseconds) ||
+		seconds < minimum ||
+		(opts?.max !== undefined && seconds > opts.max)
+	) {
+		const maximum = opts?.max === undefined ? '' : ` and <= ${opts.max}`;
+		throw new ConfigError(
+			`Invalid ${key}: ${seconds} (expected a safe integer >= ${minimum}${maximum})`,
+			{
+				variable: key,
+			},
+		);
 	}
-	return Millis.seconds(seconds);
+	return Millis.of(milliseconds);
 }
 
 /** Read an env value case-folded (trimmed + lowercased); undefined when unset or blank. */

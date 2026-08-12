@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createProjectId } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
 import { ConfigError } from './errors';
-import { makeIntegrations } from './integrations';
+import { makeIntegrations, objectBrowserDeadlinesFromEnv } from './integrations';
 
 const PG_CONFIG = { host: 'db.internal', database: 'db', username: 'u', password: 'pw' };
 
@@ -138,6 +138,52 @@ describe('makeIntegrations data browser', () => {
 		).not.toThrow();
 	});
 
+	it('does not parse preview-only deadlines in metadata mode', () => {
+		expect(() =>
+			makeIntegrations(
+				{
+					MARIMOHUB_INTEGRATIONS: 'on',
+					MARIMOHUB_DATA_BROWSER: 'metadata',
+					MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: 'stale-invalid-value',
+				},
+				new MemoryBucket(),
+			),
+		).not.toThrow();
+		expect(
+			objectBrowserDeadlinesFromEnv(
+				{ MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: 'stale-invalid-value' },
+				'metadata',
+			),
+		).toEqual({
+			metadataTimeoutMs: 30_000,
+			previewTimeoutMs: 30_000,
+			resolveTimeoutMs: 30_000,
+		});
+	});
+
+	it('gives DNS resolution enough time for the longest active browser operation', () => {
+		expect(
+			objectBrowserDeadlinesFromEnv(
+				{ MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: '45' },
+				'full',
+			),
+		).toEqual({
+			metadataTimeoutMs: 30_000,
+			previewTimeoutMs: 45_000,
+			resolveTimeoutMs: 45_000,
+		});
+		expect(
+			objectBrowserDeadlinesFromEnv(
+				{ MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: '5' },
+				'full',
+			),
+		).toEqual({
+			metadataTimeoutMs: 30_000,
+			previewTimeoutMs: 5_000,
+			resolveTimeoutMs: 30_000,
+		});
+	});
+
 	it('does not add a generic sandbox fallback unless a runtime is explicitly wired', () => {
 		const runtime = {
 			available: () => false,
@@ -239,18 +285,18 @@ describe('makeIntegrations data browser', () => {
 		}
 	});
 
-	it('rejects invalid object-browser operation deadlines', () => {
-		for (const value of ['0', '-1', 'not-a-number']) {
+	it('rejects invalid full-preview operation deadlines', () => {
+		for (const value of ['0', '-1', 'not-a-number', '2147484']) {
 			expect(() =>
 				makeIntegrations(
 					{
 						MARIMOHUB_INTEGRATIONS: 'on',
-						MARIMOHUB_DATA_BROWSER: 'metadata',
+						MARIMOHUB_DATA_BROWSER: 'full',
 						MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: value,
 					},
 					new MemoryBucket(),
 				),
-			).toThrow(/expected an integer/);
+			).toThrow(/expected .*integer/);
 		}
 	});
 });

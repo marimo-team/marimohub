@@ -104,7 +104,10 @@ export const s3 = defineIntegration({
 			if (extension === 'csv') {
 				return `import polars as pl\n\ndf = pl.read_csv(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
 			}
-			if (extension === 'json' || extension === 'jsonl' || extension === 'ndjson') {
+			if (extension === 'json') {
+				return `import polars as pl\n\ndf = pl.read_json(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
+			}
+			if (extension === 'jsonl' || extension === 'ndjson') {
 				return `import polars as pl\n\ndf = pl.read_ndjson(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
 			}
 			if (extension === 'parquet') {

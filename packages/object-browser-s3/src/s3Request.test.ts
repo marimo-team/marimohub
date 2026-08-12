@@ -123,6 +123,18 @@ describe('S3 request utilities', () => {
 			readObjectRange(oversized, { bucket: 'lake', key: 'a' }, 0, 1),
 		).rejects.toMatchObject({ code: 'unsupported' });
 	});
+
+	it.each([
+		['AbortError', 'aborted'],
+		['AccessDenied', 'access_denied'],
+		['InternalError', 'unavailable'],
+	] as const)('maps %s failures raised while reading a response body', async (name, code) => {
+		const client = mockClient();
+		client.send.mockResolvedValue({ Body: failingBody(name) });
+		await expect(readObjectRange(client, { bucket: 'lake', key: 'a' }, 0, 1)).rejects.toMatchObject(
+			{ code },
+		);
+	});
 });
 
 function mockClient() {
@@ -137,6 +149,14 @@ function byteStream(values: number[]): ReadableStream<Uint8Array> {
 		start(controller) {
 			controller.enqueue(new Uint8Array(values));
 			controller.close();
+		},
+	});
+}
+
+function failingBody(name: string): ReadableStream<Uint8Array> {
+	return new ReadableStream({
+		start(controller) {
+			controller.error(Object.assign(new Error('raw provider detail'), { name }));
 		},
 	});
 }

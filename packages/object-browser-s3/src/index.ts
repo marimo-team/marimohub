@@ -120,7 +120,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 				next_cursor: null,
 			};
 		}
-		const cursor = decodeCursor<{ token?: string }>(request.cursor);
+		const cursor = decodeCursor(request.cursor, ['token']);
 		return this.metadataOperation(context, (scopedContext) =>
 			withS3Client(this.clientFactory, source, scopedContext, async (client) => {
 				const output = await sendS3<{
@@ -159,7 +159,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 	): Promise<ObjectPage<ObjectEntry>> {
 		assertBucket(source, request.bucket);
 		const prefix = request.prefix ?? '';
-		const cursor = decodeCursor<{ token?: string }>(request.cursor);
+		const cursor = decodeCursor(request.cursor, ['token']);
 		return this.metadataOperation(context, (scopedContext) =>
 			withS3Client(this.clientFactory, source, scopedContext, async (client) => {
 				const output = await sendS3<ListObjectsOutput>(
@@ -203,7 +203,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 	): Promise<ObjectSearchPage> {
 		assertBucket(source, request.bucket);
 		const prefix = request.prefix ?? '';
-		const cursor = decodeCursor<{ token?: string; start_after?: string }>(request.cursor);
+		const cursor = decodeCursor(request.cursor, ['token', 'start_after']);
 		if (cursor.token && cursor.start_after) {
 			throw new ObjectBrowseError('invalid_cursor', 'The object-browser cursor is invalid.');
 		}
@@ -285,16 +285,26 @@ export class S3ObjectBrowser implements ObjectBrowser {
 		assertObjectIdentity(source, request);
 		return this.metadataOperation(context, (scopedContext) =>
 			withS3Client(this.clientFactory, source, scopedContext, async (client) => {
-				const head = await sendS3<HeadOutput>(
-					client,
-					new HeadObjectCommand({
-						Bucket: request.bucket,
-						Key: request.key,
-						VersionId: request.version_id,
-						ChecksumMode: 'ENABLED',
-					}),
-					scopedContext.signal,
-				);
+				const input = {
+					Bucket: request.bucket,
+					Key: request.key,
+					VersionId: request.version_id,
+				};
+				let head: HeadOutput;
+				try {
+					head = await sendS3<HeadOutput>(
+						client,
+						new HeadObjectCommand({ ...input, ChecksumMode: 'ENABLED' }),
+						scopedContext.signal,
+					);
+				} catch (error) {
+					if (!(error instanceof ObjectBrowseError) || error.code !== 'access_denied') throw error;
+					head = await sendS3<HeadOutput>(
+						client,
+						new HeadObjectCommand(input),
+						scopedContext.signal,
+					);
+				}
 				let tags: { key: string; value: string }[] | undefined;
 				let tagsAvailable = false;
 				try {
@@ -328,7 +338,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 		request: ObjectVersionRequest,
 	): Promise<ObjectPage<ObjectVersion>> {
 		assertObjectIdentity(source, request);
-		const cursor = decodeCursor<{ key?: string; version?: string }>(request.cursor);
+		const cursor = decodeCursor(request.cursor, ['key', 'version']);
 		return this.metadataOperation(context, (scopedContext) =>
 			withS3Client(this.clientFactory, source, scopedContext, async (client) => {
 				const output = await sendS3<VersionsOutput>(

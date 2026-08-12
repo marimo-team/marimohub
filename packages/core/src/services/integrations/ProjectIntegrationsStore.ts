@@ -804,7 +804,9 @@ class ScopedIntegrationsStore {
 			const source = def.objectBrowse.source(parsed);
 			const browser = this.objectBrowsers[source.provider];
 			if (browser) {
-				surfaces.objects = await browser.capability(source, objectContext);
+				surfaces.objects = await this.guardObjectBrowse(() =>
+					browser.capability(source, objectContext),
+				);
 			}
 		}
 		return compatibility(surfaces.tables?.reason);
@@ -945,16 +947,29 @@ class ScopedIntegrationsStore {
 		) => Promise<T>,
 	): Promise<T> {
 		const { head, def, config } = await this.openResolvedBrowse(scope, id);
-		if (!def.objectBrowse) {
+		const objectBrowse = def.objectBrowse;
+		if (!objectBrowse) {
 			throw new ValidationError(
 				`Integration kind "${head.kind}" does not support object browsing.`,
 			);
 		}
-		const source = def.objectBrowse.source(config);
+		const source = objectBrowse.source(config);
 		const browser = this.objectBrowsers[source.provider];
 		if (!browser) throw new ValidationError('Object browsing is not enabled on this deployment.');
+		return this.guardObjectBrowse(async () => {
+			const capability = await browser.capability(source, context);
+			if (!capability.available) {
+				throw new ValidationError(
+					capability.reason ?? 'This integration cannot be browsed as an object store.',
+				);
+			}
+			return run(browser, source, head.name, objectBrowse.snippet);
+		});
+	}
+
+	private async guardObjectBrowse<T>(run: () => Promise<T> | T): Promise<T> {
 		try {
-			return await run(browser, source, head.name, def.objectBrowse.snippet);
+			return await run();
 		} catch (err) {
 			if (err instanceof ObjectBrowseError || err instanceof DomainError) throw err;
 			throw new UnavailableError('The object-store request failed.');

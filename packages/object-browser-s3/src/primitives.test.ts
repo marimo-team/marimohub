@@ -1,4 +1,5 @@
 import { Readable } from 'node:stream';
+import { V4MAPPED } from 'node:dns';
 import { describe, expect, it, vi } from 'vitest';
 import { ObjectBrowseError } from '@marimo-hub/core';
 import { createGuardedLookup, endpointsMatch, enforcedTimeouts } from './client';
@@ -10,18 +11,31 @@ import { assertBucket, assertObjectIdentity } from './validation';
 
 describe('cursor encoding', () => {
 	it('round trips opaque values and treats an absent cursor as empty', () => {
-		const cursor = encodeCursor({ token: 'opaque/+ value', count: 4 });
-		expect(decodeCursor(cursor)).toEqual({ v: 1, token: 'opaque/+ value', count: 4 });
-		expect(decodeCursor(undefined)).toEqual({});
+		const cursor = encodeCursor({ token: 'opaque/+ value' });
+		expect(decodeCursor(cursor, ['token'])).toEqual({ token: 'opaque/+ value' });
+		expect(decodeCursor(undefined, ['token'])).toEqual({});
 	});
 
 	it.each([
 		['malformed base64', '%%%'],
+		['trailing base64 garbage', `${encodeCursor({ token: 'valid' })}%`],
+		['non-canonical padding', `${encodeCursor({ token: 'valid' })}=`],
+		['invalid base64 length', 'A'],
+		['empty value', ''],
 		['malformed JSON', Buffer.from('{').toString('base64url')],
 		['wrong version', Buffer.from(JSON.stringify({ v: 2 })).toString('base64url')],
 		['null payload', Buffer.from('null').toString('base64url')],
+		['array payload', Buffer.from(JSON.stringify([1])).toString('base64url')],
+		['non-string marker', Buffer.from(JSON.stringify({ v: 1, token: 42 })).toString('base64url')],
+		[
+			'unknown marker',
+			Buffer.from(JSON.stringify({ v: 1, token: 'ok', extra: 'no' })).toString('base64url'),
+		],
+		['invalid UTF-8', Buffer.from([0x7b, 0x22, 0xff, 0x22, 0x7d]).toString('base64url')],
 	])('rejects %s', (_label, cursor) => {
-		expect(() => decodeCursor(cursor)).toThrow(expect.objectContaining({ code: 'invalid_cursor' }));
+		expect(() => decodeCursor(cursor, ['token'])).toThrow(
+			expect.objectContaining({ code: 'invalid_cursor' }),
+		);
 	});
 });
 
@@ -127,6 +141,28 @@ describe('guarded DNS lookup', () => {
 		expect(resolver).toHaveBeenCalledTimes(2);
 	});
 
+	it('honors requested address families and IPv4-mapped IPv6 hints', async () => {
+		const lookup = createGuardedLookup(async () => [
+			{ address: '2001:db8::1', family: 6 },
+			{ address: '192.0.2.1', family: 4 },
+		]);
+		await expect(lookupResult(lookup, 'objects.example.com', { family: 4 })).resolves.toEqual({
+			address: '192.0.2.1',
+			family: 4,
+		});
+		await expect(
+			lookupResult(lookup, 'objects.example.com', { all: true, family: 6 }),
+		).resolves.toEqual({ addresses: [{ address: '2001:db8::1', family: 6 }] });
+
+		const ipv4Only = createGuardedLookup(async () => [{ address: '192.0.2.2', family: 4 }]);
+		await expect(lookupResult(ipv4Only, 'objects.example.com', { family: 6 })).rejects.toThrow(
+			/did not resolve/,
+		);
+		await expect(
+			lookupResult(ipv4Only, 'objects.example.com', { family: 6, hints: V4MAPPED }),
+		).resolves.toEqual({ address: '::ffff:192.0.2.2', family: 6 });
+	});
+
 	it('fails closed for empty or rejected resolver output', async () => {
 		await expect(
 			lookupResult(
@@ -215,7 +251,7 @@ function iterableBody(values: number[]): AsyncIterable<Uint8Array> {
 function lookupResult(
 	lookup: ReturnType<typeof createGuardedLookup>,
 	hostname: string,
-	options: { all?: boolean },
+	options: { all?: boolean; family?: number; hints?: number },
 ): Promise<unknown> {
 	return new Promise((resolve, reject) => {
 		lookup(hostname, options, (error, address, family) => {

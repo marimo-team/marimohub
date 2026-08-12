@@ -1,5 +1,6 @@
 import { Agent as HttpAgent } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
+import { V4MAPPED } from 'node:dns';
 import type { LookupFunction } from 'node:net';
 import { S3Client } from '@aws-sdk/client-s3';
 import type { ObjectBrowseContext, ObjectStoreSource } from '@marimo-hub/core';
@@ -102,14 +103,31 @@ export function createGuardedLookup(resolveHost: GuardedHostResolver): LookupFun
 		const cb = callback as (err: Error | null, address?: unknown, family?: number) => void;
 		void resolveHost(hostname).then(
 			(addresses) => {
-				if (addresses.length === 0) {
+				const options =
+					typeof lookupOptions === 'object' && lookupOptions !== null
+						? (lookupOptions as { all?: boolean; family?: number; hints?: number })
+						: {};
+				const requestedFamily = options.family === 4 || options.family === 6 ? options.family : 0;
+				let candidates = requestedFamily
+					? addresses.filter((address) => address.family === requestedFamily)
+					: addresses;
+				if (
+					requestedFamily === 6 &&
+					candidates.length === 0 &&
+					((options.hints ?? 0) & V4MAPPED) !== 0
+				) {
+					candidates = addresses
+						.filter((address) => address.family === 4)
+						.map((address) => ({ address: `::ffff:${address.address}`, family: 6 }));
+				}
+				if (candidates.length === 0) {
 					cb(new Error('The object-store hostname did not resolve.'));
 					return;
 				}
-				if (typeof lookupOptions === 'object' && (lookupOptions as { all?: boolean } | null)?.all) {
-					cb(null, addresses);
+				if (options.all) {
+					cb(null, candidates);
 				} else {
-					cb(null, addresses[0].address, addresses[0].family);
+					cb(null, candidates[0].address, candidates[0].family);
 				}
 			},
 			() => cb(new Error('The object-store hostname is not permitted.')),

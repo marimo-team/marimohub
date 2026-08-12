@@ -2240,6 +2240,87 @@ describe('data browsing', () => {
 		).rejects.toThrow('The object-store request failed.');
 	});
 
+	it('scrubs capability exceptions before returning them or running an operation', async () => {
+		const registry = new IntegrationRegistry();
+		registry.register(objectKind);
+		const listBuckets = vi.fn(objectBrowser.listBuckets);
+		const leakingBrowser: ObjectBrowser = {
+			...objectBrowser,
+			capability: async () => {
+				throw new Error('provider rejected provider-secret');
+			},
+			listBuckets,
+		};
+		const guarded = new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			objectBrowsers: { s3: leakingBrowser },
+		});
+		const created = await guarded.create(
+			pid,
+			{ kind: 'objecty', name: 'guarded-capability', config: { token: 'provider-secret' } },
+			ACTOR,
+		);
+
+		await expect(guarded.browseCapability(pid, created.id, objectContext())).rejects.toEqual(
+			expect.objectContaining({
+				name: 'UnavailableError',
+				message: 'The object-store request failed.',
+			}),
+		);
+		await expect(
+			guarded.browseObjectBuckets(pid, created.id, objectContext(), { limit: 10 }),
+		).rejects.toEqual(
+			expect.objectContaining({
+				name: 'UnavailableError',
+				message: 'The object-store request failed.',
+			}),
+		);
+		expect(listBuckets).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['User credentials are unavailable.', 'User credentials are unavailable.'],
+		[undefined, 'This integration cannot be browsed as an object store.'],
+	] as const)(
+		'rejects object operations when the browser capability reason is %s',
+		async (reason, expected) => {
+			const registry = new IntegrationRegistry();
+			registry.register(objectKind);
+			const listBuckets = vi.fn(objectBrowser.listBuckets);
+			const unavailableBrowser: ObjectBrowser = {
+				...objectBrowser,
+				capability: () => ({
+					available: false,
+					preview: false,
+					download: false,
+					search: 'bounded-key-name',
+					versions: false,
+					preview_formats: [],
+					...(reason ? { reason } : {}),
+				}),
+				listBuckets,
+			};
+			const guarded = new ProjectIntegrationsStore({
+				bucket,
+				registry,
+				codec,
+				objectBrowsers: { s3: unavailableBrowser },
+			});
+			const created = await guarded.create(
+				pid,
+				{ kind: 'objecty', name: 'unavailable', config: { token: 'provider-secret' } },
+				ACTOR,
+			);
+
+			await expect(
+				guarded.browseObjectBuckets(pid, created.id, objectContext(), { limit: 10 }),
+			).rejects.toThrow(expected);
+			expect(listBuckets).not.toHaveBeenCalled();
+		},
+	);
+
 	it('reports the capability verdict without resolving secrets', async () => {
 		const created = await createBrowsy();
 		expect(await store.browseCapability(pid, created.id)).toEqual({

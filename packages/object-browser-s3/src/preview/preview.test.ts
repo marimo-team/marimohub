@@ -155,6 +155,61 @@ describe('preview format boundaries', () => {
 		});
 	});
 
+	it.each([
+		['array', '[{"x":1}]   ', { kind: 'tabular', rows: [[1]] }],
+		['object', '{"x":1}   ', { kind: 'tabular', rows: [['x', 1]] }],
+		['scalar', '42   ', { kind: 'text', text: '42' }],
+	] as const)(
+		'marks a byte-truncated but parseable JSON %s as truncated',
+		async (_name, json, expected) => {
+			const bytes = new TextEncoder().encode(json);
+			const test = harness(
+				[
+					{ ContentLength: bytes.length + 10, ContentType: 'application/json' },
+					{ Body: body(bytes) },
+				],
+				{ previewMaxBytes: bytes.length },
+			);
+			await expect(test.preview('data.json')).resolves.toMatchObject({
+				...expected,
+				truncated: true,
+			});
+		},
+	);
+
+	it('bounds CSV fields before normalizing excluded columns', async () => {
+		const headers = Array.from({ length: 201 }, (_, index) => `c${index}`);
+		const row = [...Array.from({ length: 200 }, () => 'ok'), 'x'.repeat(9 * 1024)];
+		const bytes = new TextEncoder().encode(`${headers.join(',')}\n${row.join(',')}\n`);
+		const test = harness([
+			{ ContentLength: bytes.length, ContentType: 'text/csv' },
+			{ Body: body(bytes) },
+		]);
+		const preview = await test.preview('wide.csv');
+		expect(preview).toMatchObject({ kind: 'tabular', truncated: true, warnings: [] });
+		if (preview.kind !== 'tabular') throw new Error('Expected tabular preview.');
+		expect(preview.columns).toHaveLength(200);
+		expect(preview.rows[0]).toHaveLength(200);
+	});
+
+	it('enforces the tabular response limit in UTF-8 bytes', async () => {
+		const record = Object.fromEntries(
+			Array.from({ length: 200 }, (_, index) => [`c${index}`, 'é'.repeat(5_000)]),
+		);
+		const bytes = new TextEncoder().encode(JSON.stringify([record, record]));
+		const test = harness([
+			{ ContentLength: bytes.length, ContentType: 'application/json' },
+			{ Body: body(bytes) },
+		]);
+		const preview = await test.preview('wide.json');
+		expect(preview).toMatchObject({ kind: 'tabular', truncated: true });
+		if (preview.kind !== 'tabular') throw new Error('Expected tabular preview.');
+		expect(preview.rows).toHaveLength(1);
+		expect(new TextEncoder().encode(JSON.stringify(preview)).byteLength).toBeLessThanOrEqual(
+			2 * 1024 * 1024,
+		);
+	});
+
 	it('returns unsupported for an empty unknown object and an oversized image', async () => {
 		const empty = harness([{ ContentLength: 0 }]);
 		await expect(empty.preview('unknown.bin')).resolves.toMatchObject({

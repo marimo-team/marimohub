@@ -84,5 +84,9 @@ export async function readObjectRange(
 		options.signal,
 	);
 	if (!output.Body) throw new ObjectBrowseError('unavailable', 'The object body was empty.');
-	return readBoundedBody(output.Body, end - start);
+	try {
+		return await readBoundedBody(output.Body, end - start);
+	} catch (error) {
+		throw mapS3Error(error);
+	}
 }

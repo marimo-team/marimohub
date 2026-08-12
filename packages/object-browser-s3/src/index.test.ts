@@ -374,6 +374,24 @@ describe('S3ObjectBrowser listing and metadata', () => {
 		});
 	});
 
+	it('retries HEAD without optional checksums when checksum retrieval is denied', async () => {
+		const denied = Object.assign(new Error('kms key detail'), {
+			name: 'AccessDenied',
+			$metadata: { httpStatusCode: 403 },
+		});
+		const test = harness([denied, { ContentLength: 12, ETag: 'etag' }, { TagSet: [] }]);
+		await expect(
+			test.browser.headObject(source, context, { bucket: 'lake', key: 'encrypted.txt' }),
+		).resolves.toMatchObject({ size: 12, etag: 'etag', checksums: [] });
+		expect(test.sent.map((call) => call.name)).toEqual([
+			'HeadObjectCommand',
+			'HeadObjectCommand',
+			'GetObjectTaggingCommand',
+		]);
+		expect(test.sent[0].input.ChecksumMode).toBe('ENABLED');
+		expect(test.sent[1].input.ChecksumMode).toBeUndefined();
+	});
+
 	it('propagates non-permission tag failures and still destroys the client', async () => {
 		const test = harness([
 			{ ContentLength: 12 },
@@ -737,6 +755,25 @@ describe('S3ObjectBrowser previews and streams', () => {
 		expect(upstreamCanceled).toBe(true);
 		expect(test.destroyed()).toBe(1);
 		opened.close();
+		expect(test.destroyed()).toBe(1);
+	});
+
+	it('cancels an unread upstream body when close is called', async () => {
+		const cancel = vi.fn();
+		const stream = new ReadableStream<Uint8Array>({
+			pull() {
+				return new Promise(() => {});
+			},
+			cancel,
+		});
+		const test = harness([{ Body: stream, ContentLength: 1 }]);
+		const opened = await test.browser.openObject(source, context, {
+			bucket: 'lake',
+			key: 'unread.bin',
+		});
+		opened.close();
+		opened.close();
+		expect(cancel).toHaveBeenCalledOnce();
 		expect(test.destroyed()).toBe(1);
 	});
 });

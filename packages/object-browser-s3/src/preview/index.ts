@@ -170,14 +170,20 @@ function previewDelimited(
 	} catch {
 		throw new ObjectBrowseError('unsupported', 'The delimited file is malformed.');
 	}
-	const header = normalizeHeaders(records.shift() ?? []);
-	const rows = records.slice(0, limit).map((row) => normalizeRow(row, warnings));
+	const rawHeader = records.shift() ?? [];
+	const visibleRows = records.slice(0, limit);
+	const header = normalizeHeaders(rawHeader.slice(0, MAX_COLUMNS));
+	const rows = visibleRows.map((row) => normalizeRow(row.slice(0, MAX_COLUMNS), warnings));
 	return boundTable({
 		kind: 'tabular',
 		format,
-		columns: header.slice(0, MAX_COLUMNS).map((name) => ({ name })),
-		rows: rows.map((row) => row.slice(0, MAX_COLUMNS)),
-		truncated: truncated || records.length > limit,
+		columns: header.map((name) => ({ name })),
+		rows,
+		truncated:
+			truncated ||
+			records.length > limit ||
+			rawHeader.length > MAX_COLUMNS ||
+			visibleRows.some((row) => row.length > MAX_COLUMNS),
 		bytes_read: bytes.byteLength,
 		total_bytes: totalBytes,
 		warnings,
@@ -209,17 +215,18 @@ function previewJsonLines(bytes: Uint8Array, totalBytes: number, limit: number):
 }
 
 function previewJson(bytes: Uint8Array, totalBytes: number, limit: number): ObjectPreview {
+	const truncated = bytes.byteLength < totalBytes;
 	let value: unknown;
 	try {
-		value = JSON.parse(decodeUtf8(bytes, bytes.byteLength < totalBytes));
+		value = JSON.parse(decodeUtf8(bytes, truncated));
 	} catch {
-		if (bytes.byteLength < totalBytes) {
+		if (truncated) {
 			return unsupported('The JSON value exceeds the preview byte limit.', 'json', totalBytes);
 		}
 		throw new ObjectBrowseError('unsupported', 'The JSON file is malformed.');
 	}
 	if (Array.isArray(value)) {
-		return valuesToTable(value, 'json', bytes.byteLength, totalBytes, false, limit);
+		return valuesToTable(value, 'json', bytes.byteLength, totalBytes, truncated, limit);
 	}
 	if (isRecord(value)) {
 		const warnings: string[] = [];
@@ -230,7 +237,7 @@ function previewJson(bytes: Uint8Array, totalBytes: number, limit: number): Obje
 			rows: Object.entries(value)
 				.slice(0, limit)
 				.map(([key, child]) => [key, normalizeValue(child, warnings)]),
-			truncated: Object.keys(value).length > limit,
+			truncated: truncated || Object.keys(value).length > limit,
 			bytes_read: bytes.byteLength,
 			total_bytes: totalBytes,
 			warnings,
@@ -241,7 +248,7 @@ function previewJson(bytes: Uint8Array, totalBytes: number, limit: number): Obje
 		kind: 'text',
 		format: 'json',
 		text,
-		truncated: false,
+		truncated,
 		bytes_read: bytes.byteLength,
 		total_bytes: totalBytes,
 		warnings: [],
@@ -486,15 +493,19 @@ function scalarText(value: unknown): string {
 }
 
 function boundTable(preview: TabularPreview): TabularPreview {
-	while (preview.rows.length > 0 && JSON.stringify(preview).length > MAX_RESULT_BYTES) {
+	preview.warnings = [...new Set(preview.warnings)];
+	while (preview.rows.length > 0 && serializedByteLength(preview) > MAX_RESULT_BYTES) {
 		preview.rows.pop();
 		preview.truncated = true;
 	}
-	if (JSON.stringify(preview).length > MAX_RESULT_BYTES) {
+	if (serializedByteLength(preview) > MAX_RESULT_BYTES) {
 		throw new ObjectBrowseError('unsupported', 'The preview result exceeds the response limit.');
 	}
-	preview.warnings = [...new Set(preview.warnings)];
 	return preview;
+}
+
+function serializedByteLength(value: unknown): number {
+	return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 function unsupported(reason: string, type: string | undefined, totalBytes: number): ObjectPreview {

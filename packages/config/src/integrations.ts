@@ -1,7 +1,7 @@
 import { defaultRegistry, OrgIntegrationsStore, ProjectIntegrationsStore } from '@marimo-hub/core';
 import type { Bucket, DataPreview, IntegrationProbe, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from '@marimo-hub/api';
-import { S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
+import { DEFAULT_S3_OBJECT_BROWSER_LIMITS, S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
 import { parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -47,18 +47,17 @@ export function makeIntegrations(
 		dataBrowser === 'off'
 			? undefined
 			: (() => {
-					const timeoutMs = parseSecondsEnv(
-						env,
-						'MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS',
-						{ dflt: 30 },
-					);
+					const deadlines = objectBrowserDeadlinesFromEnv(env, dataBrowser);
 					return {
 						s3: new S3ObjectBrowser({
 							mode: dataBrowser,
-							resolveHost: createGuardedHostResolver({ allowPrivate: policy === 'private' }),
+							resolveHost: createGuardedHostResolver({
+								allowPrivate: policy === 'private',
+								timeoutMs: deadlines.resolveTimeoutMs,
+							}),
 							limits: {
-								metadataTimeoutMs: timeoutMs,
-								previewTimeoutMs: timeoutMs,
+								metadataTimeoutMs: deadlines.metadataTimeoutMs,
+								previewTimeoutMs: deadlines.previewTimeoutMs,
 							},
 						}),
 					};
@@ -86,6 +85,31 @@ export function makeIntegrations(
 						...(dataBrowser === 'full' && sandboxPreview ? { sandboxPreview } : {}),
 					},
 				}),
+	};
+}
+
+const MAX_NODE_TIMER_SECONDS = Math.floor(2_147_483_647 / 1000);
+
+export function objectBrowserDeadlinesFromEnv(
+	env: Env,
+	mode: 'metadata' | 'full',
+): {
+	metadataTimeoutMs: number;
+	previewTimeoutMs: number;
+	resolveTimeoutMs: number;
+} {
+	const metadataTimeoutMs = DEFAULT_S3_OBJECT_BROWSER_LIMITS.metadataTimeoutMs;
+	const previewTimeoutMs =
+		mode === 'full'
+			? parseSecondsEnv(env, 'MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS', {
+					dflt: DEFAULT_S3_OBJECT_BROWSER_LIMITS.previewTimeoutMs / 1000,
+					max: MAX_NODE_TIMER_SECONDS,
+				})
+			: DEFAULT_S3_OBJECT_BROWSER_LIMITS.previewTimeoutMs;
+	return {
+		metadataTimeoutMs,
+		previewTimeoutMs,
+		resolveTimeoutMs: Math.max(metadataTimeoutMs, previewTimeoutMs),
 	};
 }
 
