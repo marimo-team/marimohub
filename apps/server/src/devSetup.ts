@@ -1,5 +1,5 @@
 import type { ApiDeps } from '@marimo-hub/api';
-import { UserId } from '@marimo-hub/core';
+import { UserId, ValidationError } from '@marimo-hub/core';
 import type { CreateIntegrationInput } from '@marimo-hub/core';
 
 const DEV_USER = {
@@ -14,6 +14,14 @@ const DEV_INTEGRATION = {
 	config: { vars: { LOCAL_DEV_EXAMPLE: 'true' } },
 	change_note: 'Seeded by pnpm dev',
 } satisfies CreateIntegrationInput;
+
+const DEV_INTEGRATION_CONFLICT = `An integration named "${DEV_INTEGRATION.name}" already exists at the org level.`;
+
+async function hasDevIntegration(integrations: NonNullable<ApiDeps['orgIntegrations']>) {
+	return (await integrations.list()).some(
+		({ kind, name }) => kind === DEV_INTEGRATION.kind && name === DEV_INTEGRATION.name,
+	);
+}
 
 export function localDevEnv(
 	env: Record<string, string | undefined>,
@@ -37,7 +45,17 @@ export function localDevEnv(
 export async function seedLocalDev(deps: Pick<ApiDeps, 'orgIntegrations'>): Promise<void> {
 	const integrations = deps.orgIntegrations;
 	if (!integrations) throw new Error('Local development integrations are not enabled.');
-	if ((await integrations.list()).some(({ name }) => name === DEV_INTEGRATION.name)) return;
+	if (await hasDevIntegration(integrations)) return;
 
-	await integrations.create(DEV_INTEGRATION, DEV_USER.id);
+	try {
+		await integrations.create(DEV_INTEGRATION, DEV_USER.id);
+	} catch (error) {
+		if (
+			error instanceof ValidationError &&
+			error.message === DEV_INTEGRATION_CONFLICT &&
+			(await hasDevIntegration(integrations))
+		)
+			return;
+		throw error;
+	}
 }

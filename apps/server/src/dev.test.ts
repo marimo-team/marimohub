@@ -1,10 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApi } from '@marimo-hub/api';
+import { ValidationError } from '@marimo-hub/core';
+import type { OrgIntegrationsService } from '@marimo-hub/core';
 import { createFromEnv } from '@marimo-hub/config';
 import { localDevEnv, seedLocalDev } from './devSetup';
 
 describe('local development setup', () => {
 	const createDevDeps = () => createFromEnv(localDevEnv({ PORT: '4321' }));
+	const nameConflict = () =>
+		new ValidationError(
+			'An integration named "local-development" already exists at the org level.',
+		);
 
 	it('overrides conflicting deployment values', () => {
 		const env = localDevEnv({
@@ -46,6 +52,38 @@ describe('local development setup', () => {
 				scope: 'org',
 			}),
 		]);
+	});
+
+	it('ignores an atomic name conflict from another startup', async () => {
+		const create = vi.fn().mockRejectedValue(nameConflict());
+		const list = vi
+			.fn()
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ name: 'local-development', kind: 'custom_env' }]);
+		const orgIntegrations = { list, create };
+
+		await expect(
+			seedLocalDev({ orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService }),
+		).resolves.toBeUndefined();
+		expect(create).toHaveBeenCalledOnce();
+	});
+
+	it('surfaces a name conflict with another integration kind', async () => {
+		const conflict = nameConflict();
+		const create = vi.fn().mockRejectedValue(conflict);
+		const orgIntegrations = {
+			list: vi.fn().mockResolvedValue([{ name: 'local-development', kind: 'postgres' }]),
+			create,
+		};
+
+		await expect(
+			seedLocalDev({ orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService }),
+		).rejects.toBe(conflict);
+
+		expect(create).toHaveBeenCalledWith(
+			expect.objectContaining({ name: 'local-development', kind: 'custom_env' }),
+			'user',
+		);
 	});
 
 	it('allows the authenticated dev user to reach the super-admin API', async () => {
