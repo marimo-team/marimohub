@@ -36,6 +36,15 @@ describe('nextIsoTimestamp', () => {
 		);
 	});
 
+	it('accepts fractional precision used by stored ISO timestamps', () => {
+		expect(nextIsoTimestamp(undefined, '2025-01-01T00:00:00.123456Z')).toBe(
+			'2025-01-01T00:00:00.123456Z',
+		);
+		expect(nextIsoTimestamp('2025-01-01T00:00:00.123456Z', '2025-01-01T00:00:00.123457Z')).toBe(
+			'2025-01-01T00:00:00.124Z',
+		);
+	});
+
 	it.each([
 		['invalid', '2025-01-01T00:00:00.000Z'],
 		['2025-01-01T00:00:00.000Z', 'invalid'],

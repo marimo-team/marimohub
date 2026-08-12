@@ -299,6 +299,33 @@ describe('NodeProjectAlertDispatcher', () => {
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
+	it('records a skipped event when a destination changes during fan-out', async () => {
+		const bucket = new MemoryBucket();
+		const store = new ProjectAlertStore(bucket, new AesGcmSecretCodec({ kek: KEK }));
+		const projectId = BROADCAST_NOTIFICATION_FIXTURE.data.project_id;
+		await enabledDestination(store, projectId, {
+			name: 'Slack',
+			type: 'slack',
+			webhook_url: 'https://hooks.example.com/raced',
+		});
+		vi.spyOn(store, 'resolve').mockResolvedValue([]);
+		const increment = vi.fn();
+		const fetch = vi.fn<IntegrationProbe['fetch']>();
+		const dispatcher = new NodeProjectAlertDispatcher(
+			store,
+			{ increment, gauge: vi.fn() },
+			probe(fetch),
+		);
+
+		await expect(
+			dispatcher.deliver(projectId, 'session.takeover', BROADCAST_NOTIFICATION_FIXTURE),
+		).resolves.toBe('skipped');
+		expect(fetch).not.toHaveBeenCalled();
+		expect(increment).toHaveBeenCalledWith('project_alert.skipped', 1, {
+			kind: 'session.takeover',
+		});
+	});
+
 	it('fails a test without verifying the destination or exposing the transport error', async () => {
 		const bucket = new MemoryBucket();
 		const store = new ProjectAlertStore(bucket, new AesGcmSecretCodec({ kek: KEK }));

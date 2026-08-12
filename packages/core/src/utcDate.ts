@@ -1,5 +1,5 @@
 export const UTC_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/;
+const ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$/;
 
 export function parseUtcDate(value: string): number | null {
 	if (!UTC_DATE_PATTERN.test(value)) return null;

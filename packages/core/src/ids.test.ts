@@ -57,7 +57,7 @@ describe('other id factories (contract)', () => {
 	});
 
 	it('createAlertDestinationId matches alert-<16-char body>', () => {
-		expect(createAlertDestinationId()).toMatch(/^alert-[0-9a-z]{16}$/);
+		expect(createAlertDestinationId()).toMatch(/^alert-[0-9a-hjkmnp-tv-z]{16}$/);
 	});
 });
 

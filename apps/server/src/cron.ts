@@ -4,6 +4,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import {
 	MaintenanceLock,
 	Millis,
+	mapWithConcurrency,
 	notificationRouter,
 	paths,
 	reapFilesystemSnapshots,
@@ -15,6 +16,7 @@ import { logEvent } from './log';
 import type { WideEventMetrics } from './metrics';
 
 const FIVE_MINUTES_MS = Millis.minutes(5);
+const APP_ALERT_CONTEXT_CONCURRENCY = 8;
 
 async function retryMetadataRead<T>(read: () => Promise<T>): Promise<T> {
 	try {
@@ -28,49 +30,47 @@ async function scheduleUnavailableAppAlerts(
 	deps: ApiDeps,
 	sessions: Awaited<ReturnType<ReconciliationService['reconcile']>>['markedDeadSessions'],
 ): Promise<void> {
-	await Promise.all(
-		sessions.map(async (session) => {
-			if (session.status !== 'running' || !sessionModePolicy(session).singleton) return;
-			try {
-				const [project, notebook] = await Promise.all([
-					retryMetadataRead(() => deps.services.projects.getProject(session.project_id)),
-					retryMetadataRead(() =>
-						deps.services.notebooks.getNotebook(session.project_id, session.notebook_id),
-					),
-				]);
-				scheduleProjectAlert(
-					deps,
-					session.project_id,
-					'app.unavailable',
-					{
-						project_id: session.project_id,
-						notebook_id: session.notebook_id,
-						session_id: session.session_id,
-					},
-					() =>
-						notificationRouter.render({
-							kind: 'app.unavailable',
-							project,
-							notebookId: session.notebook_id,
-							notebookTitle: notebook.meta.title,
-							sessionId: session.session_id,
-							startedByUserId: session.user_id,
-							errorCode: 'SANDBOX_DISAPPEARED',
-							baseUrl: deps.sandbox.appBaseUrl,
-						}),
-				);
-			} catch (error) {
-				logEvent({
-					level: 'error',
-					event: 'app_unavailable_alert_context_failed',
+	await mapWithConcurrency(sessions, APP_ALERT_CONTEXT_CONCURRENCY, async (session) => {
+		if (session.status !== 'running' || !sessionModePolicy(session).singleton) return;
+		try {
+			const [project, notebook] = await Promise.all([
+				retryMetadataRead(() => deps.services.projects.getProject(session.project_id)),
+				retryMetadataRead(() =>
+					deps.services.notebooks.getNotebook(session.project_id, session.notebook_id),
+				),
+			]);
+			scheduleProjectAlert(
+				deps,
+				session.project_id,
+				'app.unavailable',
+				{
 					project_id: session.project_id,
 					notebook_id: session.notebook_id,
 					session_id: session.session_id,
-					name: error instanceof Error ? error.name : undefined,
-				});
-			}
-		}),
-	);
+				},
+				() =>
+					notificationRouter.render({
+						kind: 'app.unavailable',
+						project,
+						notebookId: session.notebook_id,
+						notebookTitle: notebook.meta.title,
+						sessionId: session.session_id,
+						startedByUserId: session.user_id,
+						errorCode: 'SANDBOX_DISAPPEARED',
+						baseUrl: deps.sandbox.appBaseUrl,
+					}),
+			);
+		} catch (error) {
+			logEvent({
+				level: 'error',
+				event: 'app_unavailable_alert_context_failed',
+				project_id: session.project_id,
+				notebook_id: session.notebook_id,
+				session_id: session.session_id,
+				name: error instanceof Error ? error.name : undefined,
+			});
+		}
+	});
 }
 
 /**

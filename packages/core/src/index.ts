@@ -11,6 +11,7 @@ export * from './notifications';
 export * from './utcDate';
 export * from './url';
 export * from './rateLimit';
+export * from './concurrency';
 export * from './cache';
 
 // Port interfaces (also available at the '@marimo-hub/core/ports' subpath)

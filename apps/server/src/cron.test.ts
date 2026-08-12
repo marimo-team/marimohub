@@ -251,15 +251,14 @@ describe('startMaintenance', () => {
 		expect(getProject).toHaveBeenCalledTimes(2);
 	});
 
-	it('loads unavailable-app alert metadata concurrently across sessions', async () => {
-		const sessions = [
+	it('bounds concurrent unavailable-app alert metadata reads', async () => {
+		const sessions = Array.from({ length: 9 }, () =>
 			makeSession({ mode: 'app', sandbox_id: createSandboxId() }),
-			makeSession({ mode: 'app', sandbox_id: createSandboxId() }),
-		];
+		);
 		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
 			skipped: false,
 			reclaimed: 0,
-			markedDead: 2,
+			markedDead: sessions.length,
 			orphansReaped: 0,
 			orphanSandboxIds: [],
 			markedDeadSessions: sessions,
@@ -280,7 +279,9 @@ describe('startMaintenance', () => {
 
 		stop = startMaintenance(deps, metrics);
 		await flushRun();
-		expect(getProject).toHaveBeenCalledTimes(2);
+		expect(getProject).toHaveBeenCalledTimes(8);
+		for (const release of releases.splice(0)) release();
+		await vi.waitFor(() => expect(getProject).toHaveBeenCalledTimes(9));
 		for (const release of releases) release();
 		await flushRun();
 	});

@@ -155,7 +155,14 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 				return destination ? this.deliverTo(destination, notification) : 'skipped';
 			}),
 		);
-		return reduceNotificationDeliveryResults(results, 'No project alert destination delivered');
+		const outcome = reduceNotificationDeliveryResults(
+			results,
+			'No project alert destination delivered',
+		);
+		if (outcome === 'skipped') {
+			this.metrics.increment('project_alert.skipped', 1, { kind });
+		}
+		return outcome;
 	}
 
 	async test(
