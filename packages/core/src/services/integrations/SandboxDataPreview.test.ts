@@ -98,6 +98,11 @@ describe('SandboxDataPreview', () => {
 				'/tmp/marimohub-data-preview-request.json',
 			]),
 		);
+		const script = calls.writeFile.find(
+			({ path }) => path === '/tmp/marimohub-data-preview.py',
+		)?.content;
+		expect(script).toEqual(expect.stringContaining('not math.isfinite(value)'));
+		expect(script).toEqual(expect.stringContaining('allow_nan=False'));
 		expect(calls.setEnvVars.at(-1)).toEqual({
 			PYICEBERG_HOME: '/tmp/marimohub-integrations',
 			AWS_ACCESS_KEY_ID: 'temporary',
@@ -196,12 +201,19 @@ describe('SandboxDataPreview', () => {
 		vi.useFakeTimers();
 		try {
 			const { instance, calls } = makeFakeSandbox();
+			let scans = 0;
 			instance.exec = async (command) => {
-				if (command.includes('marimohub-data-preview.py')) return new Promise(() => {});
+				if (command.includes('marimohub-data-preview.py') && scans++ === 0) {
+					return new Promise(() => {});
+				}
+				if (command.includes('marimohub-data-preview.py')) {
+					return { success: true, stdout: '{"columns":[],"rows":[]}', stderr: '' };
+				}
 				return { success: true, stdout: '', stderr: '' };
 			};
 			const preview = new SandboxDataPreview(fakeComputeFrom(instance), {
 				...options,
+				maxConcurrent: 1,
 				executionTimeoutMs: 10,
 			});
 			await preview.check();
@@ -210,6 +222,38 @@ describe('SandboxDataPreview', () => {
 			await vi.advanceTimersByTimeAsync(10);
 			await rejection;
 			expect(calls.destroy).toBe(2);
+			await expect(preview.preview(request)).resolves.toEqual({ columns: [], rows: [] });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('holds admission during bounded sandbox destruction', async () => {
+		vi.useFakeTimers();
+		try {
+			const { instance } = makeFakeSandbox();
+			let destroyCalls = 0;
+			instance.destroy = async () => {
+				destroyCalls++;
+				if (destroyCalls === 2) return new Promise(() => {});
+			};
+			instance.exec = async (command) =>
+				command.includes('marimohub-data-preview.py')
+					? { success: true, stdout: '{"columns":[],"rows":[]}', stderr: '' }
+					: { success: true, stdout: '', stderr: '' };
+			const preview = new SandboxDataPreview(fakeComputeFrom(instance), {
+				...options,
+				maxConcurrent: 1,
+				destroyTimeoutMs: 10,
+			});
+			await preview.check();
+			const first = preview.preview(request);
+			await vi.waitFor(() => expect(destroyCalls).toBe(2));
+
+			await expect(preview.preview(request)).rejects.toMatchObject({ code: 'RESOURCE_EXHAUSTED' });
+			await vi.advanceTimersByTimeAsync(10);
+			await first;
+			await expect(preview.preview(request)).resolves.toEqual({ columns: [], rows: [] });
 		} finally {
 			vi.useRealTimers();
 		}

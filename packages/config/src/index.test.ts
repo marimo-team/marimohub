@@ -80,6 +80,14 @@ describe('createFromEnv auth backend selection', () => {
 		expect(
 			createFromEnv({ ...env, MARIMOHUB_COMPUTE_BACKEND: 'local' }).dataBrowser?.sandboxPreview,
 		).toBeUndefined();
+		expect(
+			createFromEnv({
+				...env,
+				MARIMOHUB_COMPUTE_BACKEND: 'e2b',
+				MARIMOHUB_COMPUTE_E2B_API_KEY: 'test-key',
+				MARIMOHUB_COMPUTE_E2B_TEMPLATE: 'base-template',
+			}).dataBrowser?.sandboxPreview,
+		).toBeUndefined();
 
 		const preview = createFromEnv({
 			...env,

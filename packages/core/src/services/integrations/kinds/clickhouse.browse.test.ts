@@ -21,6 +21,14 @@ function fakeProbe(body: unknown) {
 	return { probe, calls };
 }
 
+function queuedProbe(bodies: unknown[]) {
+	let index = 0;
+	const probe: IntegrationProbe = {
+		fetch: async () => ({ ok: true, status: 200, json: async () => bodies[index++] }),
+	};
+	return probe;
+}
+
 describe('clickhouse browse', () => {
 	it('blocks TLS modes the guarded probe cannot reproduce', () => {
 		expect(browse.available(config())).toEqual({ ok: true });
@@ -32,7 +40,7 @@ describe('clickhouse browse', () => {
 		const databases = fakeProbe(result(['name'], [['default'], ['system']]));
 		await expect(browse.listNamespaces(config(), databases.probe, { limit: 1 })).resolves.toEqual({
 			items: [['default']],
-			next_cursor: '1',
+			next_cursor: 'name:default',
 		});
 		const databaseUrl = new URL(databases.calls[0].url);
 		expect(databaseUrl.searchParams.has('readonly')).toBe(false);
@@ -50,13 +58,21 @@ describe('clickhouse browse', () => {
 		const schema = fakeProbe(
 			result(
 				['name', 'type', 'default_type', 'default_expression', 'comment'],
-				[['id', 'Nullable(UInt64)', '', '', 'identifier']],
+				[
+					['id', 'Nullable(UInt64)', '', '', 'identifier'],
+					['nickname', 'LowCardinality(Nullable(String))', '', '', ''],
+					['status', 'LowCardinality(String)', '', '', ''],
+				],
 			),
 		);
 		await expect(
 			browse.getTableSchema(config(), schema.probe, ['default'], 'orders'),
 		).resolves.toEqual({
-			columns: [{ name: 'id', type: 'Nullable(UInt64)', nullable: true, comment: 'identifier' }],
+			columns: [
+				{ name: 'id', type: 'Nullable(UInt64)', nullable: true, comment: 'identifier' },
+				{ name: 'nickname', type: 'LowCardinality(Nullable(String))', nullable: true },
+				{ name: 'status', type: 'LowCardinality(String)', nullable: false },
+			],
 		});
 
 		const preview = fakeProbe(result(['id', 'name'], [[1, 'Ada']]));
@@ -66,5 +82,25 @@ describe('clickhouse browse', () => {
 		expect(new URL(preview.calls[0].url).searchParams.get('query')).toBe(
 			'SELECT * FROM "default"."orders" LIMIT 20 FORMAT JSONCompact',
 		);
+	});
+
+	it('uses stable name cursors when metadata changes between pages', async () => {
+		const probe = queuedProbe([
+			result(['name'], [['alpha'], ['beta'], ['delta']]),
+			result(['name'], [['aardvark'], ['beta'], ['delta'], ['epsilon']]),
+		]);
+		const first = await browse.listNamespaces(config(), probe, { limit: 2 });
+		expect(first).toEqual({ items: [['alpha'], ['beta']], next_cursor: 'name:beta' });
+
+		await expect(
+			browse.listNamespaces(config(), probe, { limit: 2, cursor: first.next_cursor! }),
+		).resolves.toEqual({ items: [['delta'], ['epsilon']], next_cursor: null });
+	});
+
+	it('rejects malformed browse cursors', async () => {
+		const { probe } = fakeProbe(result(['name'], [['default']]));
+		await expect(
+			browse.listNamespaces(config(), probe, { limit: 1, cursor: 'offset:1' }),
+		).rejects.toThrow('Invalid browse cursor');
 	});
 });

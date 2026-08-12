@@ -10,7 +10,17 @@ const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 const PREFLIGHT_COMMAND = `python3 -c 'import pyarrow, pyiceberg'`;
 
 const PREVIEW_SCRIPT = `import json
+import math
 from pyiceberg.catalog import load_catalog
+
+def json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
 
 with open(${JSON.stringify(REQUEST_PATH)}, encoding="utf-8") as request_file:
     request = json.load(request_file)
@@ -19,8 +29,8 @@ catalog = load_catalog(request["integration_name"])
 identifier = tuple([*request["namespace"], request["table"]])
 arrow = catalog.load_table(identifier).scan(limit=request["limit"]).to_arrow()
 columns = [str(field.name) for field in arrow.schema]
-rows = [[record.get(column) for column in columns] for record in arrow.to_pylist()]
-print(json.dumps({"columns": columns, "rows": rows}, default=str, separators=(",", ":")))
+rows = [[json_safe(record.get(column)) for column in columns] for record in arrow.to_pylist()]
+print(json.dumps({"columns": columns, "rows": rows}, allow_nan=False, default=str, separators=(",", ":")))
 `;
 
 export interface SandboxDataPreviewOptions {
@@ -51,15 +61,6 @@ export class SandboxDataPreview implements DataPreview {
 			if (!Number.isInteger(value) || value < 1)
 				throw new Error(`${name} must be a positive integer`);
 		}
-	}
-
-	get preflightTimeoutMs(): number {
-		return (
-			this.options.startupTimeoutMs +
-			this.options.executionTimeoutMs +
-			(this.options.destroyTimeoutMs ?? this.options.executionTimeoutMs) +
-			1000
-		);
 	}
 
 	available(): boolean {

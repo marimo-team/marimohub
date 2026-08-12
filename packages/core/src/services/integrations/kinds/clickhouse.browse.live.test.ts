@@ -31,7 +31,6 @@ if (host) {
 			children: ['unused-a', 'unused-b'],
 			grandchild: 'unused',
 			table: 'orders',
-			tableNamespace: [database],
 			expectedColumns: [
 				{ name: 'id', type: 'UInt64', nullable: false },
 				{ name: 'name', type: 'String', nullable: false },

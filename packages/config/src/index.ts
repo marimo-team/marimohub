@@ -120,6 +120,7 @@ function dataPreviewFromEnv(
 		env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() !== 'full' ||
 		!image ||
 		computeBackendValue === 'local' ||
+		computeBackendValue === 'e2b' ||
 		computeBackendValue === 'none' ||
 		computeBackendValue === 'noop'
 	) {

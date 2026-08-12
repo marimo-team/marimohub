@@ -408,16 +408,14 @@ export const trino = defineIntegration({
 		},
 		async listNamespaces(config, probe, request) {
 			if (request.parent && request.parent.length > 1) return { items: [], next_cursor: null };
-			const sql = request.parent
-				? `SHOW SCHEMAS FROM ${quoteIdentifier(request.parent[0])}`
-				: 'SHOW CATALOGS';
+			const parent = request.parent?.length ? request.parent : undefined;
+			const sql = parent ? `SHOW SCHEMAS FROM ${quoteIdentifier(parent[0])}` : 'SHOW CATALOGS';
 			const result = await trinoQuery(config, probe, request.query_user, sql);
 			const names = result.rows.map((row) => String(row[0]));
 			return page(
-				request.parent
-					? names.map((name) => [request.parent![0], name])
-					: names.map((name) => [name]),
+				parent ? names.map((name) => [parent[0], name]) : names.map((name) => [name]),
 				request,
+				(namespace) => namespace.at(-1)!,
 			);
 		},
 		async listTables(config, probe, namespace, request) {
@@ -431,6 +429,7 @@ export const trino = defineIntegration({
 			return page(
 				result.rows.map((row) => String(row[0])),
 				request,
+				(table) => table,
 			);
 		},
 		async getTableSchema(config, probe, namespace, table, request) {
@@ -614,13 +613,28 @@ function propertyHeader(entries: readonly (readonly [string, string])[]): string
 		.join(',');
 }
 
-function page<T>(items: T[], request: BrowsePageRequest) {
-	const offset = request.cursor === undefined ? 0 : Number(request.cursor);
-	if (!Number.isSafeInteger(offset) || offset < 0)
+function page<T>(items: T[], request: BrowsePageRequest, key: (item: T) => string) {
+	const after = decodeCursor(request.cursor);
+	const byKey = new Map(items.map((item) => [key(item), item]));
+	const remaining = [...byKey.entries()]
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+		.filter(([itemKey]) => after === undefined || itemKey > after);
+	const selected = remaining.slice(0, request.limit);
+	return {
+		items: selected.map(([, item]) => item),
+		next_cursor:
+			remaining.length > selected.length ? `name:${encodeURIComponent(selected.at(-1)![0])}` : null,
+	};
+}
+
+function decodeCursor(cursor: string | undefined): string | undefined {
+	if (cursor === undefined) return undefined;
+	if (!cursor.startsWith('name:')) throw new ValidationError('Invalid browse cursor.');
+	try {
+		return decodeURIComponent(cursor.slice('name:'.length));
+	} catch {
 		throw new ValidationError('Invalid browse cursor.');
-	const selected = items.slice(offset, offset + request.limit);
-	const next = offset + selected.length;
-	return { items: selected, next_cursor: next < items.length ? String(next) : null };
+	}
 }
 
 function assertTableNamespace(namespace: string[]): void {

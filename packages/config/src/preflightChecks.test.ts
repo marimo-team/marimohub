@@ -360,8 +360,29 @@ describe('integrations.data-preview check', () => {
 			},
 		});
 		const { report, by } = await run({}, deps);
-		expect(by('integrations.data-preview')).toMatchObject({ status: 'fail' });
+		expect(by('integrations.data-preview')).toMatchObject({
+			status: 'fail',
+			remediation: expect.stringMatching(/compute credentials.*PyIceberg/i),
+		});
 		expect(report.fatal).toBe(false);
+	});
+
+	it('uses a bounded reporting timeout independent of sandbox lifecycle settings', () => {
+		const deps = makeDeps({
+			dataBrowser: {
+				preview: true,
+				sandboxPreview: {
+					available: () => false,
+					check: () => new Promise(() => {}),
+					preview: async () => ({ columns: [], rows: [] }),
+				},
+			},
+		});
+		const check = buildPreflightChecks({}, deps).find(
+			(candidate) => candidate.name === 'integrations.data-preview',
+		);
+
+		expect(check?.timeoutMs).toBe(30_000);
 	});
 });
 

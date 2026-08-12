@@ -339,10 +339,12 @@ async function checkDataPreview(deps: ApiDeps): Promise<CheckOutcome> {
 			status: 'fail',
 			message: `Data-preview runtime unavailable: ${errMsg(err)}`,
 			remediation:
-				'Set MARIMOHUB_DATA_PREVIEW_IMAGE to an image with Python, PyIceberg, and PyArrow.',
+				'Check compute credentials, connectivity, and capacity, then verify MARIMOHUB_DATA_PREVIEW_IMAGE provides Python, PyIceberg, and PyArrow.',
 		};
 	}
 }
+
+const DATA_PREVIEW_PREFLIGHT_TIMEOUT_MS = 30_000;
 
 export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] {
 	const checks: PreflightCheck[] = [
@@ -359,14 +361,10 @@ export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] 
 		checks.push({ name: 'integrations.secrets', run: () => checkIntegrationSecrets(deps) });
 	}
 	if (deps.dataBrowser?.sandboxPreview) {
-		const preview = deps.dataBrowser.sandboxPreview;
 		checks.push({
 			name: 'integrations.data-preview',
 			run: () => checkDataPreview(deps),
-			timeoutMs:
-				'preflightTimeoutMs' in preview && typeof preview.preflightTimeoutMs === 'number'
-					? preview.preflightTimeoutMs
-					: undefined,
+			timeoutMs: DATA_PREVIEW_PREFLIGHT_TIMEOUT_MS,
 		});
 	}
 	return checks;

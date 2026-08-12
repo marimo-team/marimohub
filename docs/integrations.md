@@ -63,8 +63,8 @@ These configurations continue to work in notebook sandboxes.
 
 Trino browsing supports no authentication, Basic authentication, and JWT with
 system TLS. OAuth2, client certificates, Kerberos, GSSAPI, and custom TLS are
-sandbox-only. ClickHouse requires certificate verification. Password
-authentication also requires HTTPS.
+sandbox-only. ClickHouse requires certificate verification when using HTTPS.
+Password authentication also requires HTTPS.
 
 The `GET …/integrations/{iid}/browse` route reports the capabilities of one
 integration and explains why a capability is unavailable.
@@ -80,7 +80,8 @@ browsable integrations use a new sandbox and a fixed PyIceberg scan.
 
 Sandbox previews require `MARIMOHUB_DATA_PREVIEW_IMAGE`. The image must contain
 Python, PyIceberg, and PyArrow. The compute backend must support per-sandbox
-image overrides. The `local`, `none`, and `noop` backends do not support them.
+OCI image overrides. The `local`, `e2b`, `none`, and `noop` backends do not
+support them.
 
 At startup, the hub verifies the image before it advertises sandbox previews.
 Each preview receives the selected integration configuration and applicable WIF

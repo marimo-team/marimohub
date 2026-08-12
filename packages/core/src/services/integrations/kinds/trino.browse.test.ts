@@ -66,6 +66,31 @@ describe('trino browse', () => {
 		expect(calls[1].url).toBe('https://trino.example.com/v1/statement/q1/1');
 	});
 
+	it('treats an empty parent as a root namespace request', async () => {
+		const { probe, calls } = queuedProbe([{ columns: [{ name: 'Catalog' }], data: [['iceberg']] }]);
+
+		await expect(
+			browse.listNamespaces(config(), probe, { limit: 10, parent: [] }),
+		).resolves.toEqual({
+			items: [['iceberg']],
+			next_cursor: null,
+		});
+		expect(calls[0].init?.body).toBe('SHOW CATALOGS');
+	});
+
+	it('uses stable name cursors when metadata changes between pages', async () => {
+		const { probe } = queuedProbe([
+			{ columns: [{ name: 'Catalog' }], data: [['alpha'], ['beta'], ['delta']] },
+			{ columns: [{ name: 'Catalog' }], data: [['aardvark'], ['beta'], ['delta'], ['epsilon']] },
+		]);
+		const first = await browse.listNamespaces(config(), probe, { limit: 2 });
+		expect(first).toEqual({ items: [['alpha'], ['beta']], next_cursor: 'name:beta' });
+
+		await expect(
+			browse.listNamespaces(config(), probe, { limit: 2, cursor: first.next_cursor! }),
+		).resolves.toEqual({ items: [['delta'], ['epsilon']], next_cursor: null });
+	});
+
 	it('quotes identifiers for schema reads and bounded previews', async () => {
 		const schemaProbe = queuedProbe([
 			{

@@ -95,11 +95,12 @@ export const clickhouse = defineIntegration({
 			return { ok: true };
 		},
 		async listNamespaces(config, probe, request) {
-			if (request.parent) return { items: [], next_cursor: null };
+			if (request.parent?.length) return { items: [], next_cursor: null };
 			const result = await clickhouseQuery(config, probe, 'SHOW DATABASES');
 			return page(
 				result.rows.map((row) => [String(row[0])]),
 				request,
+				(namespace) => namespace[0],
 			);
 		},
 		async listTables(config, probe, namespace, request) {
@@ -112,6 +113,7 @@ export const clickhouse = defineIntegration({
 			return page(
 				result.rows.map((row) => String(row[0])),
 				request,
+				(table) => table,
 			);
 		},
 		async getTableSchema(config, probe, namespace, table, _request) {
@@ -137,7 +139,7 @@ export const clickhouse = defineIntegration({
 					return {
 						name: row[name],
 						type: renderedType,
-						nullable: renderedType.startsWith('Nullable('),
+						nullable: isNullableType(renderedType),
 						...(renderedComment ? { comment: renderedComment } : {}),
 					};
 				}),
@@ -202,13 +204,37 @@ async function clickhouseQuery(
 	return { columns: columns as string[], rows: body.data as unknown[][] };
 }
 
-function page<T>(items: T[], request: BrowsePageRequest) {
-	const offset = request.cursor === undefined ? 0 : Number(request.cursor);
-	if (!Number.isSafeInteger(offset) || offset < 0)
+function page<T>(items: T[], request: BrowsePageRequest, key: (item: T) => string) {
+	const after = decodeCursor(request.cursor);
+	const byKey = new Map(items.map((item) => [key(item), item]));
+	const remaining = [...byKey.entries()]
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+		.filter(([itemKey]) => after === undefined || itemKey > after);
+	const selected = remaining.slice(0, request.limit);
+	return {
+		items: selected.map(([, item]) => item),
+		next_cursor:
+			remaining.length > selected.length ? `name:${encodeURIComponent(selected.at(-1)![0])}` : null,
+	};
+}
+
+function decodeCursor(cursor: string | undefined): string | undefined {
+	if (cursor === undefined) return undefined;
+	if (!cursor.startsWith('name:')) throw new ValidationError('Invalid browse cursor.');
+	try {
+		return decodeURIComponent(cursor.slice('name:'.length));
+	} catch {
 		throw new ValidationError('Invalid browse cursor.');
-	const selected = items.slice(offset, offset + request.limit);
-	const next = offset + selected.length;
-	return { items: selected, next_cursor: next < items.length ? String(next) : null };
+	}
+}
+
+function isNullableType(type: string): boolean {
+	const rendered = type.trim();
+	if (rendered.startsWith('Nullable(') && rendered.endsWith(')')) return true;
+	const prefix = 'LowCardinality(';
+	return rendered.startsWith(prefix) && rendered.endsWith(')')
+		? isNullableType(rendered.slice(prefix.length, -1))
+		: false;
 }
 
 function qualifiedName(parts: string[]): string {

@@ -294,6 +294,50 @@ describe('DataBrowserPage', () => {
 		expect(screen.getByRole('button', { name: 'Reload preview' })).toBeInTheDocument();
 	});
 
+	it('supports keyboard navigation and associates tabs with their panels', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
+			capability: { metadata: true, preview: true },
+		});
+
+		const schemaTab = await screen.findByRole('tab', { name: 'Schema' });
+		const previewTab = screen.getByRole('tab', { name: 'Preview' });
+		schemaTab.focus();
+		await user.keyboard('{ArrowRight}');
+
+		expect(previewTab).toHaveFocus();
+		expect(previewTab).toHaveAttribute('aria-selected', 'true');
+		const previewPanel = screen.getByRole('tabpanel');
+		expect(previewTab).toHaveAttribute('aria-controls', previewPanel.id);
+		expect(previewPanel).toHaveAttribute('aria-labelledby', previewTab.id);
+
+		await user.keyboard('{ArrowLeft}');
+		expect(schemaTab).toHaveFocus();
+		expect(schemaTab).toHaveAttribute('aria-selected', 'true');
+	});
+
+	it('returns to schema when refreshed capabilities disable previews', async () => {
+		const user = userEvent.setup();
+		const capability = { metadata: true, preview: true };
+		const fetchImpl = setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`, {
+			capability,
+		});
+		await user.click(await screen.findByRole('tab', { name: 'Preview' }));
+		expect(screen.getByRole('button', { name: 'Load preview' })).toBeInTheDocument();
+
+		capability.preview = false;
+		await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+		await waitFor(() =>
+			expect(screen.queryByRole('tab', { name: 'Preview' })).not.toBeInTheDocument(),
+		);
+		expect(screen.getByPlaceholderText('Filter columns...')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Load preview' })).not.toBeInTheDocument();
+		expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/browse/preview'))).toBe(
+			false,
+		);
+	});
+
 	it('reports when browsing is unavailable', async () => {
 		setup(`/projects/${PID}/data`, { available: false });
 		expect(await screen.findByText('Data browsing is not available')).toBeInTheDocument();

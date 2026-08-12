@@ -36,7 +36,7 @@ export interface BrowseContractFixture {
 	expectedColumns: TableColumn[];
 	/** Rendered partition fields, when the kind and upstream support them. */
 	expectedPartitioning?: string[];
-	/** Namespace containing `table`; defaults to `[root, children[0]]`. */
+	/** Namespace containing `table`; defaults to `[root]` for flat hierarchies. */
 	tableNamespace?: string[];
 	/** Expected bounded sample when the kind supports direct preview. */
 	expectedPreview?: { columns: string[]; rows?: unknown[][]; minimumRows?: number };
@@ -97,6 +97,9 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
 		};
 
 		const limit = () => opts.pageLimit ?? 2;
+		const tableNamespace = () =>
+			fixture.tableNamespace ??
+			(fixture.hierarchy === 'flat' ? [fixture.root] : [fixture.root, fixture.children[0]]);
 
 		it('lists the fixture root namespace, without leaking descendants', async () => {
 			const roots = await listAll((cursor) =>
@@ -142,7 +145,7 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
 		});
 
 		it('lists the fixture table in its namespace', async () => {
-			const namespace = fixture.tableNamespace ?? [fixture.root, fixture.children[0]];
+			const namespace = tableNamespace();
 			const tables = await listAll((cursor) =>
 				opts.browse.listTables(opts.config, opts.probe, namespace, {
 					limit: limit(),
@@ -154,7 +157,7 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
 		});
 
 		it('reads the table schema back', async () => {
-			const namespace = fixture.tableNamespace ?? [fixture.root, fixture.children[0]];
+			const namespace = tableNamespace();
 			const schema = await opts.browse.getTableSchema(
 				opts.config,
 				opts.probe,
@@ -170,7 +173,7 @@ export function browseContract<C>(name: string, options: () => BrowseContractOpt
 
 		it('reads a bounded row sample when direct preview is supported', async () => {
 			if (!opts.browse.previewRows || !fixture.expectedPreview) return;
-			const namespace = fixture.tableNamespace ?? [fixture.root, fixture.children[0]];
+			const namespace = tableNamespace();
 			const limit = Math.max(
 				fixture.expectedPreview.rows?.length ?? 0,
 				fixture.expectedPreview.minimumRows ?? 1,

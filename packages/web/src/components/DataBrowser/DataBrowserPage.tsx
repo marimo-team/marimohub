@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import { toast } from 'sonner';
 import {
 	ArrowLeft,
@@ -592,6 +593,7 @@ function TableDetail({
 	const { copied, copy } = useCopyToClipboard();
 	const [columnFilter, setColumnFilter] = useState('');
 	const [tab, setTab] = useState<'schema' | 'preview'>('schema');
+	const selectedTab = previewAvailable ? tab : 'schema';
 	const preview = useBrowseTablePreview(projectId, integration.id);
 	const createNotebook = useCreateNotebook(projectId);
 	const navigate = useNavigate();
@@ -632,6 +634,41 @@ function TableDetail({
 	const columns = schema.data.columns.filter(
 		(column) =>
 			columnFilter === '' || column.name.toLowerCase().includes(columnFilter.toLowerCase()),
+	);
+	const schemaContent = (
+		<div className="flex flex-col gap-2">
+			<TextField
+				aria-label="Filter columns"
+				placeholder="Filter columns..."
+				value={columnFilter}
+				onChange={setColumnFilter}
+			/>
+			<table className="w-full text-left text-xs">
+				<thead>
+					<tr className="border-b border-input text-muted-foreground">
+						<th className="py-1.5 pr-2 font-medium">Column</th>
+						<th className="py-1.5 pr-2 font-medium">Type</th>
+						<th className="py-1.5 pr-2 font-medium">Nullable</th>
+						<th className="py-1.5 font-medium">Comment</th>
+					</tr>
+				</thead>
+				<tbody>
+					{columns.map((column) => (
+						<tr key={column.name} className="border-b border-input/50">
+							<td className="py-1.5 pr-2 font-mono">{column.name}</td>
+							<td className="py-1.5 pr-2 font-mono text-muted-foreground">{column.type}</td>
+							<td className="py-1.5 pr-2 text-muted-foreground">
+								{column.nullable ? 'yes' : 'no'}
+							</td>
+							<td className="py-1.5 text-muted-foreground">{column.comment ?? ''}</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+			{columns.length === 0 && (
+				<p className="text-xs text-muted-foreground">No columns match "{columnFilter}".</p>
+			)}
+		</div>
 	);
 
 	return (
@@ -697,86 +734,60 @@ function TableDetail({
 				</p>
 			)}
 
-			{previewAvailable && (
-				<div role="tablist" aria-label="Table details" className="flex border-b border-input">
-					{(['schema', 'preview'] as const).map((value) => (
-						<button
-							key={value}
-							type="button"
-							role="tab"
-							aria-selected={tab === value}
-							onClick={() => setTab(value)}
-							className={cn(
-								'-mb-px border-b-2 px-3 py-2 text-xs font-medium capitalize',
-								tab === value
-									? 'border-primary text-foreground'
-									: 'border-transparent text-muted-foreground hover:text-foreground',
-							)}
-						>
-							{value === 'schema' ? 'Schema' : 'Preview'}
-						</button>
-					))}
-				</div>
-			)}
-
-			{tab === 'schema' ? (
-				<div role="tabpanel" aria-label="Schema" className="flex flex-col gap-2">
-					<TextField
-						aria-label="Filter columns"
-						placeholder="Filter columns..."
-						value={columnFilter}
-						onChange={setColumnFilter}
-					/>
-					<table className="w-full text-left text-xs">
-						<thead>
-							<tr className="border-b border-input text-muted-foreground">
-								<th className="py-1.5 pr-2 font-medium">Column</th>
-								<th className="py-1.5 pr-2 font-medium">Type</th>
-								<th className="py-1.5 pr-2 font-medium">Nullable</th>
-								<th className="py-1.5 font-medium">Comment</th>
-							</tr>
-						</thead>
-						<tbody>
-							{columns.map((column) => (
-								<tr key={column.name} className="border-b border-input/50">
-									<td className="py-1.5 pr-2 font-mono">{column.name}</td>
-									<td className="py-1.5 pr-2 font-mono text-muted-foreground">{column.type}</td>
-									<td className="py-1.5 pr-2 text-muted-foreground">
-										{column.nullable ? 'yes' : 'no'}
-									</td>
-									<td className="py-1.5 text-muted-foreground">{column.comment ?? ''}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-					{columns.length === 0 && (
-						<p className="text-xs text-muted-foreground">No columns match "{columnFilter}".</p>
-					)}
-				</div>
+			{previewAvailable ? (
+				<Tabs
+					selectedKey={selectedTab}
+					onSelectionChange={(key) => setTab(key as 'schema' | 'preview')}
+					className="flex flex-col gap-4"
+				>
+					<TabList aria-label="Table details" className="flex border-b border-input">
+						{(['schema', 'preview'] as const).map((value) => (
+							<Tab
+								key={value}
+								id={value}
+								className={({ isSelected, isFocusVisible }) =>
+									cn(
+										'-mb-px cursor-default border-b-2 px-3 py-2 text-xs font-medium capitalize outline-none',
+										isSelected
+											? 'border-primary text-foreground'
+											: 'border-transparent text-muted-foreground hover:text-foreground',
+										isFocusVisible && 'ring-2 ring-ring ring-offset-2',
+									)
+								}
+							>
+								{value === 'schema' ? 'Schema' : 'Preview'}
+							</Tab>
+						))}
+					</TabList>
+					<TabPanel id="schema" className="outline-none">
+						{schemaContent}
+					</TabPanel>
+					<TabPanel id="preview" className="flex flex-col gap-3 outline-none">
+						<div>
+							<Button
+								variant="primary"
+								onPress={() =>
+									preview.mutate({
+										namespace: selection.namespace,
+										table: selection.table,
+										limit: 20,
+									})
+								}
+								isDisabled={preview.isPending}
+							>
+								{preview.isPending ? 'Loading…' : preview.data ? 'Reload preview' : 'Load preview'}
+							</Button>
+						</div>
+						{preview.error && (
+							<p className="text-sm text-destructive">
+								{preview.error instanceof Error ? preview.error.message : 'Request failed'}
+							</p>
+						)}
+						{preview.data && <PreviewTable data={preview.data} />}
+					</TabPanel>
+				</Tabs>
 			) : (
-				<div role="tabpanel" aria-label="Preview" className="flex flex-col gap-3">
-					<div>
-						<Button
-							variant="primary"
-							onPress={() =>
-								preview.mutate({
-									namespace: selection.namespace,
-									table: selection.table,
-									limit: 20,
-								})
-							}
-							isDisabled={preview.isPending}
-						>
-							{preview.isPending ? 'Loading…' : preview.data ? 'Reload preview' : 'Load preview'}
-						</Button>
-					</div>
-					{preview.error && (
-						<p className="text-sm text-destructive">
-							{preview.error instanceof Error ? preview.error.message : 'Request failed'}
-						</p>
-					)}
-					{preview.data && <PreviewTable data={preview.data} />}
-				</div>
+				schemaContent
 			)}
 
 			{schema.data.partitioning && schema.data.partitioning.length > 0 && (
