@@ -15,8 +15,9 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
+import { bodyLimit } from 'hono/body-limit';
 import { proxy } from 'hono/proxy';
-import { verifyAiSessionToken } from '@marimo-hub/core';
+import { MAX_REQUEST_BYTES, verifyAiSessionToken } from '@marimo-hub/core';
 import type { AiTokenClaims } from '@marimo-hub/core';
 import type { HonoEnv } from '../context';
 import { logEvent } from '../log';
@@ -126,6 +127,18 @@ export function createAiProxy(): Hono<AiEnv> {
 				message: aiError('Malformed authorization header', 'invalid_request_error'),
 			},
 			invalidToken: { message: aiError('Invalid or expired token', 'invalid_request_error') },
+		}),
+	);
+	app.use(
+		'*',
+		bodyLimit({
+			maxSize: MAX_REQUEST_BYTES,
+			onError: () =>
+				openAiError(
+					`Request body exceeds the ${MAX_REQUEST_BYTES}-byte limit`,
+					'invalid_request_error',
+					413,
+				),
 		}),
 	);
 

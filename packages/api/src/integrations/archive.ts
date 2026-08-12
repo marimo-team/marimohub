@@ -1,5 +1,5 @@
 import { gunzipSync, unzipSync } from 'fflate';
-import { BadRequestError, isSafeWorkspacePath } from '@marimo-hub/core';
+import { BadRequestError, isSafeWorkspacePath, MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core';
 
 export interface ArchiveFile {
 	path: string;
@@ -8,6 +8,7 @@ export interface ArchiveFile {
 
 /** Guard against a decompression bomb: cap the inflated tar before we parse it. */
 const MAX_DECOMPRESSED_BYTES = 100 * 1024 * 1024;
+const MAX_ARCHIVE_FILES = 1000;
 
 const decoder = new TextDecoder();
 
@@ -37,18 +38,52 @@ function toArchiveFiles(files: Map<string, Uint8Array>): ArchiveFile[] {
 }
 
 function parseZip(bytes: Uint8Array): ArchiveFile[] {
+	const paths = new Set<string>();
+	let totalBytes = 0;
+	let fileCount = 0;
+	try {
+		// Read the central directory without inflating anything. fflate sizes each
+		// output allocation from this metadata, so rejecting the complete archive in
+		// this pass prevents a late entry from exceeding the budget after earlier
+		// entries have already consumed memory.
+		unzipSync(bytes, {
+			filter: ({ name, originalSize }) => {
+				if (name.endsWith('/')) {
+					assertSafeArchiveDirectoryPath(name);
+					return false;
+				}
+				assertSafeArchiveFilePath(name);
+				if (paths.has(name)) throw new BadRequestError(`Duplicate archive path: ${name}`);
+				paths.add(name);
+				fileCount += 1;
+				if (fileCount > MAX_ARCHIVE_FILES) {
+					throw new BadRequestError(`Archive exceeds the ${MAX_ARCHIVE_FILES}-file limit`);
+				}
+				if (!Number.isSafeInteger(originalSize) || originalSize > MAX_WORKSPACE_FILE_BYTES) {
+					throw new BadRequestError(
+						`Archive file exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit: ${name}`,
+					);
+				}
+				totalBytes += originalSize;
+				if (totalBytes > MAX_DECOMPRESSED_BYTES) {
+					throw new BadRequestError('Decompressed archive exceeds the size limit');
+				}
+				return false;
+			},
+		});
+	} catch (error) {
+		if (error instanceof BadRequestError) throw error;
+		throw new BadRequestError('Invalid zip archive');
+	}
+
 	let unzipped: Record<string, Uint8Array>;
 	try {
-		unzipped = unzipSync(bytes);
+		unzipped = unzipSync(bytes, { filter: ({ name }) => !name.endsWith('/') });
 	} catch {
 		throw new BadRequestError('Invalid zip archive');
 	}
 	const files = new Map<string, Uint8Array>();
 	for (const [path, body] of Object.entries(unzipped)) {
-		if (path.endsWith('/')) {
-			assertSafeArchiveDirectoryPath(path);
-			continue;
-		}
 		addFile(files, path, body);
 	}
 	return toArchiveFiles(files);

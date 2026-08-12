@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { gzipSync, zipSync } from 'fflate';
-import { BadRequestError } from '@marimo-hub/core';
+import { BadRequestError, MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core';
 import { parseWorkspaceArchive } from './archive';
 
 const encode = (s: string) => new TextEncoder().encode(s);
@@ -14,6 +14,22 @@ function concat(chunks: Uint8Array[]): Uint8Array {
 		offset += c.length;
 	}
 	return out;
+}
+
+function setZipOriginalSizes(archive: Uint8Array, sizes: number[]): Uint8Array {
+	const patched = new Uint8Array(archive);
+	const view = new DataView(patched.buffer, patched.byteOffset, patched.byteLength);
+	let entry = 0;
+	for (let offset = 0; offset <= patched.length - 4; offset += 1) {
+		if (view.getUint32(offset, true) !== 0x02014b50) continue;
+		if (entry >= sizes.length)
+			throw new Error('ZIP has more central-directory entries than expected');
+		view.setUint32(offset + 24, sizes[entry], true);
+		entry += 1;
+	}
+	if (entry !== sizes.length)
+		throw new Error('ZIP has fewer central-directory entries than expected');
+	return patched;
 }
 
 /** A single 512-byte tar header with the given name, body size, and typeflag. */
@@ -96,6 +112,45 @@ describe('parseWorkspaceArchive', () => {
 		expect(() => parseWorkspaceArchive(zipSync({ '../': new Uint8Array() }), 'zip', '')).toThrow(
 			BadRequestError,
 		);
+	});
+
+	it('rejects zip files and aggregate output beyond the decompressed byte limits', () => {
+		const oneFile = zipSync({ 'large.bin': new Uint8Array() });
+		expect(() =>
+			parseWorkspaceArchive(
+				setZipOriginalSizes(oneFile, [MAX_WORKSPACE_FILE_BYTES + 1]),
+				'zip',
+				'',
+			),
+		).toThrow(/Archive file exceeds/);
+
+		const fiveFiles = zipSync(
+			Object.fromEntries(
+				Array.from({ length: 5 }, (_, index) => [`${index}.bin`, new Uint8Array()]),
+			),
+		);
+		expect(() =>
+			parseWorkspaceArchive(
+				setZipOriginalSizes(fiveFiles, [
+					MAX_WORKSPACE_FILE_BYTES,
+					MAX_WORKSPACE_FILE_BYTES,
+					MAX_WORKSPACE_FILE_BYTES,
+					MAX_WORKSPACE_FILE_BYTES,
+					1,
+				]),
+				'zip',
+				'',
+			),
+		).toThrow(/Decompressed archive exceeds/);
+	});
+
+	it('rejects zip archives with more than 1000 files', () => {
+		const archive = zipSync(
+			Object.fromEntries(
+				Array.from({ length: 1001 }, (_, index) => [`${index}.txt`, new Uint8Array()]),
+			),
+		);
+		expect(() => parseWorkspaceArchive(archive, 'zip', '')).toThrow(/1000-file limit/);
 	});
 
 	it('parses a gzipped tar (.tar.gz)', () => {
