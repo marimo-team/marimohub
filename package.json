@@ -5,7 +5,7 @@
 	"license": "Apache-2.0",
 	"type": "module",
 	"scripts": {
-		"dev": "pnpm exec vp run --filter @marimo-hub/server build && concurrently -k -n build,server,web -c blue,green,magenta \"pnpm --filter @marimo-hub/server exec vp pack --watch --no-clean\" \"node --env-file-if-exists=apps/server/.env --watch apps/server/dist/dev.mjs\" \"pnpm --filter @marimo-hub/web dev\"",
+		"dev": "vp run --filter @marimo-hub/server --filter @marimo-hub/web --parallel --log labeled dev",
 		"ready": "vp fmt && vp lint && pnpm typecheck && vp run -r test && vp run -r build",
 		"check": "vp check",
 		"typecheck": "vp run -r typecheck",
@@ -22,7 +22,6 @@
 	},
 	"devDependencies": {
 		"@vitest/coverage-v8": "catalog:",
-		"concurrently": "catalog:",
 		"vite-plus": "catalog:"
 	},
 	"engines": {

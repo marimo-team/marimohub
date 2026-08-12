@@ -34,8 +34,8 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-The root `pnpm dev` script runs the server and web app with dependency-free
-local backends:
+The root `pnpm dev` script runs the server and web app in parallel, without a
+production build, using dependency-free local backends:
 
 - `memory` storage, which is non-durable
 - `local` compute, which starts `uv run marimo edit`

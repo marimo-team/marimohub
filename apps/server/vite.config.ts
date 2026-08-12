@@ -7,11 +7,14 @@ export default defineConfig({
 	// Cached build task: `output` archives/restores dist/ on a hit (a script can't).
 	run: {
 		tasks: {
+			dev: {
+				command: 'tsx watch --env-file-if-exists=.env src/dev.ts',
+				untrackedEnv: ['PORT', 'MARIMOHUB_*', 'OTEL_*'],
+			},
 			build: { command: 'vp pack', output: ['dist/**'] },
 		},
 	},
 	pack: {
-		entry: { index: 'src/index.ts', dev: 'src/dev.ts' },
 		platform: 'node',
 		format: ['esm'],
 		dts: false,

@@ -35,8 +35,9 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-`pnpm dev` builds the server package, watches it, runs the Node server, and runs
-the web dev server. It sets the local backend selectors for you:
+`pnpm dev` runs the server directly from TypeScript with restart-on-change and
+runs the Vite web dev server in parallel. It does not build the production
+server bundle. It sets the local backend selectors for you:
 
 ```bash
 MARIMOHUB_STORAGE_BACKEND=memory
