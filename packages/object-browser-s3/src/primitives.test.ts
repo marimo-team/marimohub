@@ -183,6 +183,30 @@ describe('guarded DNS lookup', () => {
 		expect(resolver).toHaveBeenCalledWith('objects.example.com', signal);
 	});
 
+	it('preserves cancellation identity while scrubbing resolver failures', async () => {
+		const aborted = createGuardedLookup(async () => {
+			throw Object.assign(new Error('private abort detail'), { name: 'AbortError' });
+		});
+		const abortError = await lookupResult(aborted, 'objects.example.com', {}).catch(
+			(error: unknown) => error,
+		);
+		expect(abortError).toMatchObject({
+			name: 'AbortError',
+			message: 'The object-store hostname resolution was canceled.',
+		});
+		expect(mapS3Error(abortError)).toMatchObject({ code: 'aborted' });
+
+		const denied = createGuardedLookup(async () => {
+			throw Object.assign(new Error('private resolver detail'), { name: 'ResolverFailure' });
+		});
+		await expect(lookupResult(denied, 'objects.example.com', {})).rejects.toEqual(
+			expect.objectContaining({
+				name: 'Error',
+				message: 'The object-store hostname is not permitted.',
+			}),
+		);
+	});
+
 	it('fails closed for empty or rejected resolver output', async () => {
 		await expect(
 			lookupResult(

@@ -139,7 +139,14 @@ export function createGuardedLookup(
 					cb(null, candidates[0].address, candidates[0].family);
 				}
 			},
-			() => cb(new Error('The object-store hostname is not permitted.')),
+			(error) => {
+				const name = (error as { name?: unknown } | null)?.name;
+				const message =
+					name === 'AbortError'
+						? 'The object-store hostname resolution was canceled.'
+						: 'The object-store hostname is not permitted.';
+				cb(Object.assign(new Error(message), { name: name === 'AbortError' ? name : 'Error' }));
+			},
 		);
 	}) as LookupFunction;
 }

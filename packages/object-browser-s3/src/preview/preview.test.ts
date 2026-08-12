@@ -218,17 +218,20 @@ describe('preview format boundaries', () => {
 			JSON.stringify(Array.from({ length: 100 }, () => record)),
 		);
 		const encode = vi.spyOn(TextEncoder.prototype, 'encode');
-		const test = harness([
-			{ ContentLength: bytes.length, ContentType: 'application/json' },
-			{ Body: body(bytes) },
-		]);
-		const preview = await test.preview('many-wide-rows.json', 100);
-		expect(preview).toMatchObject({ kind: 'tabular', truncated: true });
-		const previewSerializations = encode.mock.calls.filter(
-			([value]) => typeof value === 'string' && value.startsWith('{"kind":"tabular"'),
-		);
-		expect(previewSerializations.length).toBeLessThanOrEqual(10);
-		encode.mockRestore();
+		try {
+			const test = harness([
+				{ ContentLength: bytes.length, ContentType: 'application/json' },
+				{ Body: body(bytes) },
+			]);
+			const preview = await test.preview('many-wide-rows.json', 100);
+			expect(preview).toMatchObject({ kind: 'tabular', truncated: true });
+			const previewSerializations = encode.mock.calls.filter(
+				([value]) => typeof value === 'string' && value.startsWith('{"kind":"tabular"'),
+			);
+			expect(previewSerializations.length).toBeLessThanOrEqual(10);
+		} finally {
+			encode.mockRestore();
+		}
 	});
 
 	it('returns unsupported for an empty unknown object and an oversized image', async () => {
