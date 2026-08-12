@@ -279,6 +279,7 @@ const takeoverEditorSession = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebooks/{nid}/editor-session/takeover',
 	operationId: 'sessions.editor.takeover',
+	'x-cli-destructive': true,
 	tags: ['Sessions'],
 	summary: 'Gracefully take over an exclusive editor session',
 	request: {

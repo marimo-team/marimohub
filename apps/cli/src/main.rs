@@ -141,20 +141,18 @@ fn matching_server(override_url: Option<&str>, profile_url: Option<&str>) -> Res
     }
 }
 
-fn stored_token_profile<'a>(
-    profile_name: Option<&'a str>,
+fn stored_token_for_server(
+    profile_name: &str,
     override_url: Option<&str>,
     profile_url: Option<&str>,
-) -> Result<Option<&'a str>, Error> {
-    if !matching_server(override_url, profile_url)? {
-        if let Some(name) = profile_name {
-            return Err(Error::Usage(format!(
-				"refusing to send the stored token for profile {name:?} to a different server; pass --token or --token-file explicitly"
-			)));
-        }
-        return Ok(None);
+    token: Option<SecretString>,
+) -> Result<Option<SecretString>, Error> {
+    if token.is_some() && !matching_server(override_url, profile_url)? {
+        return Err(Error::Usage(format!(
+			"refusing to send the stored token for profile {profile_name:?} to a different server; pass --token or --token-file explicitly"
+		)));
     }
-    Ok(profile_name)
+    Ok(token)
 }
 
 fn selected_profile(matches: &ArgMatches) -> Result<(String, String), Error> {
@@ -345,12 +343,13 @@ fn resolve_runtime(matches: &ArgMatches) -> Result<(String, Option<SecretString>
         })?;
     let token = if let Some(token) = supplied_token {
         Some(token)
-    } else if let Some(name) = stored_token_profile(
-        profile_name.as_deref(),
-        override_url.as_deref(),
-        profile_url.as_deref(),
-    )? {
-        config::get_token(name)?
+    } else if let Some(name) = profile_name.as_deref() {
+        stored_token_for_server(
+            name,
+            override_url.as_deref(),
+            profile_url.as_deref(),
+            config::get_token(name)?,
+        )?
     } else {
         None
     };
@@ -446,7 +445,7 @@ mod tests {
     #[test]
     fn embedded_manifest_covers_the_api() {
         let manifest = manifest::load();
-        assert!(!manifest.operations.is_empty());
+        assert_eq!(manifest.operations.len(), 59);
         assert_eq!(manifest.api_version, "1.0.0");
         assert_eq!(
             manifest
@@ -492,24 +491,33 @@ mod tests {
     }
 
     #[test]
-    fn stored_tokens_are_rejected_for_other_servers() {
+    fn stored_tokens_are_only_rejected_for_other_servers() {
+        let token = SecretString::from("mhub_pat_test".to_owned());
         assert!(matches!(
-            stored_token_profile(
-                Some("default"),
+            stored_token_for_server(
+                "default",
                 Some("https://other.example.com"),
                 Some("https://hub.example.com"),
+                Some(token),
             ),
             Err(Error::Usage(_))
         ));
-        assert_eq!(
-            stored_token_profile(
-                Some("default"),
-                Some("https://hub.example.com/"),
-                Some("https://hub.example.com"),
-            )
-            .unwrap(),
-            Some("default"),
-        );
+        assert!(stored_token_for_server(
+            "default",
+            Some("https://other.example.com"),
+            Some("https://hub.example.com"),
+            None,
+        )
+        .unwrap()
+        .is_none());
+        assert!(stored_token_for_server(
+            "default",
+            Some("https://hub.example.com/"),
+            Some("https://hub.example.com"),
+            Some(SecretString::from("mhub_pat_test".to_owned())),
+        )
+        .unwrap()
+        .is_some());
     }
 
     #[test]

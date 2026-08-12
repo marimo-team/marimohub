@@ -48,12 +48,6 @@ export interface CliManifest {
 
 const HTTP_METHODS = ['delete', 'get', 'head', 'options', 'patch', 'post', 'put', 'trace'];
 
-const DESTRUCTIVE_OPERATION_IDS = new Set([
-	'notebooks.rotate-sync-token',
-	'notebooks.versions.restore',
-	'sessions.editor.takeover',
-]);
-
 function object(value: unknown, context: string): JsonObject {
 	if (value === null || typeof value !== 'object' || Array.isArray(value)) {
 		throw new Error(`Expected ${context} to be an object`);
@@ -229,7 +223,7 @@ export function generateCliManifest(documentValue: Record<string, unknown>): Cli
 					: {}),
 				parameters,
 				...(body ? { body } : {}),
-				destructive: method === 'delete' || DESTRUCTIVE_OPERATION_IDS.has(operation.operationId),
+				destructive: method === 'delete' || operation['x-cli-destructive'] === true,
 				paginated: isPaginated(document, operation),
 				response_kind: responseKind(document, operation),
 				session_only: isSessionOnly(operation),

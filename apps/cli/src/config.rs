@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+#[cfg(any(target_os = "linux", test))]
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -31,10 +33,61 @@ pub struct Profile {
     pub base_url: String,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 #[derive(Default, Deserialize, Serialize)]
 struct FileCredentials {
+    #[serde(default)]
     tokens: BTreeMap<String, String>,
+    // A marker is authoritative over the keyring when its removal could not be confirmed.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    deleted: BTreeSet<String>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FileCredential {
+    Missing,
+    Token(String),
+    Deleted,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl FileCredentials {
+    fn get(&self, profile: &str) -> FileCredential {
+        if let Some(token) = self.tokens.get(profile) {
+            FileCredential::Token(token.clone())
+        } else if self.deleted.contains(profile) {
+            FileCredential::Deleted
+        } else {
+            FileCredential::Missing
+        }
+    }
+
+    fn set(&mut self, profile: &str, credential: FileCredential) {
+        self.tokens.remove(profile);
+        self.deleted.remove(profile);
+        match credential {
+            FileCredential::Missing => {}
+            FileCredential::Token(token) => {
+                self.tokens.insert(profile.to_owned(), token);
+            }
+            FileCredential::Deleted => {
+                self.deleted.insert(profile.to_owned());
+            }
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn resolve_file_credential(
+    file: FileCredential,
+    keyring_token: impl FnOnce() -> Result<Option<String>, Error>,
+) -> Result<Option<SecretString>, Error> {
+    match file {
+        FileCredential::Token(token) => Ok(Some(SecretString::from(token))),
+        FileCredential::Deleted => Ok(None),
+        FileCredential::Missing => Ok(keyring_token()?.map(SecretString::from)),
+    }
 }
 
 pub fn path() -> Result<PathBuf, Error> {
@@ -166,17 +219,28 @@ fn keyring(profile: &str) -> Result<Entry, Error> {
 }
 
 pub fn get_token(profile: &str) -> Result<Option<SecretString>, Error> {
+    #[cfg(target_os = "linux")]
+    let _operation_lock = credential_operation_lock()?;
+    #[cfg(target_os = "linux")]
+    {
+        let file = get_file_credential(profile)?;
+        return resolve_file_credential(file, || match keyring(profile)?.get_password() {
+            Ok(token) => Ok(Some(token)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(
+                error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_)),
+            ) => {
+                warn_file_credentials(&error);
+                Ok(None)
+            }
+            Err(error) => Err(Error::Credential(error.to_string())),
+        });
+    }
+
+    #[cfg(not(target_os = "linux"))]
     match keyring(profile)?.get_password() {
         Ok(token) => Ok(Some(SecretString::from(token))),
-        #[cfg(not(target_os = "linux"))]
         Err(keyring::Error::NoEntry) => Ok(None),
-        #[cfg(target_os = "linux")]
-        Err(keyring::Error::NoEntry) => get_file_token(profile),
-        #[cfg(target_os = "linux")]
-        Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
-            warn_file_credentials(&error);
-            get_file_token(profile)
-        }
         Err(error) => Err(Error::Credential(error.to_string())),
     }
 }
@@ -194,40 +258,83 @@ pub fn read_token(mut reader: impl Read) -> Result<SecretString, Error> {
 }
 
 pub fn set_token(profile: &str, token: &SecretString) -> Result<(), Error> {
+    #[cfg(target_os = "linux")]
+    {
+        return set_token_linux(profile, token);
+    }
+
+    #[cfg(not(target_os = "linux"))]
     match keyring(profile)?.set_password(token.expose_secret()) {
-        Ok(()) => {
-            #[cfg(target_os = "linux")]
-            delete_file_token(profile)?;
-            Ok(())
-        }
-        #[cfg(target_os = "linux")]
-        Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
-            warn_file_credentials(&error);
-            set_file_token(profile, token)
-        }
+        Ok(()) => Ok(()),
         Err(error) => Err(Error::Credential(error.to_string())),
     }
 }
 
 pub fn delete_token(profile: &str) -> Result<(), Error> {
+    #[cfg(target_os = "linux")]
+    {
+        return delete_token_linux(profile);
+    }
+
+    #[cfg(not(target_os = "linux"))]
     match keyring(profile)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => {
-            #[cfg(target_os = "linux")]
-            delete_file_token(profile)?;
-            Ok(())
-        }
-        #[cfg(target_os = "linux")]
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(Error::Credential(error.to_string())),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn set_token_linux(profile: &str, token: &SecretString) -> Result<(), Error> {
+    let _operation_lock = credential_operation_lock()?;
+    let previous = get_file_credential(profile)?;
+    set_file_credential(
+        profile,
+        FileCredential::Token(token.expose_secret().to_owned()),
+    )?;
+
+    match keyring(profile)?.set_password(token.expose_secret()) {
+        Ok(()) => set_file_credential(profile, FileCredential::Missing),
         Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
             warn_file_credentials(&error);
-            delete_file_token(profile)
+            Ok(())
         }
-        Err(error) => Err(Error::Credential(error.to_string())),
+        Err(error) => {
+            set_file_credential(profile, previous)?;
+            Err(Error::Credential(error.to_string()))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn delete_token_linux(profile: &str) -> Result<(), Error> {
+    let _operation_lock = credential_operation_lock()?;
+    let previous = get_file_credential(profile)?;
+    set_file_credential(profile, FileCredential::Deleted)?;
+
+    match keyring(profile)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => {
+            set_file_credential(profile, FileCredential::Missing)
+        }
+        Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
+            warn_file_credentials(&error);
+            Ok(())
+        }
+        Err(error) => {
+            set_file_credential(profile, previous)?;
+            Err(Error::Credential(error.to_string()))
+        }
     }
 }
 
 #[cfg(target_os = "linux")]
 fn credentials_path() -> Result<PathBuf, Error> {
     Ok(path()?.with_file_name("credentials.json"))
+}
+
+#[cfg(target_os = "linux")]
+fn credential_operation_lock() -> Result<File, Error> {
+    let path = credentials_path()?.with_file_name("credentials-operation.json");
+    lock_for(&path)
 }
 
 #[cfg(target_os = "linux")]
@@ -247,7 +354,7 @@ fn update_file_credentials(
     let _lock = lock_for(&path)?;
     let mut credentials = read_file_credentials(&path)?;
     change(&mut credentials);
-    if credentials.tokens.is_empty() {
+    if credentials.tokens.is_empty() && credentials.deleted.is_empty() {
         remove_file_if_exists(&path)?;
     } else {
         atomic_write(&path, &serde_json::to_vec_pretty(&credentials)?, true)?;
@@ -256,31 +363,17 @@ fn update_file_credentials(
 }
 
 #[cfg(target_os = "linux")]
-fn get_file_token(profile: &str) -> Result<Option<SecretString>, Error> {
+fn get_file_credential(profile: &str) -> Result<FileCredential, Error> {
     let path = credentials_path()?;
     let _lock = lock_for(&path)?;
     let credentials = read_file_credentials(&path)?;
-    Ok(credentials
-        .tokens
-        .get(profile)
-        .cloned()
-        .map(SecretString::from))
+    Ok(credentials.get(profile))
 }
 
 #[cfg(target_os = "linux")]
-fn set_file_token(profile: &str, token: &SecretString) -> Result<(), Error> {
+fn set_file_credential(profile: &str, credential: FileCredential) -> Result<(), Error> {
     update_file_credentials(|credentials| {
-        credentials
-            .tokens
-            .insert(profile.to_owned(), token.expose_secret().to_owned());
-    })?;
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn delete_file_token(profile: &str) -> Result<(), Error> {
-    update_file_credentials(|credentials| {
-        credentials.tokens.remove(profile);
+        credentials.set(profile, credential);
     })?;
     Ok(())
 }
@@ -317,6 +410,46 @@ mod tests {
             read_token(" \n".as_bytes()),
             Err(Error::Config(_))
         ));
+    }
+
+    #[test]
+    fn file_token_overrides_a_stale_keyring_value() {
+        let resolved =
+            resolve_file_credential(FileCredential::Token("current-file-token".into()), || {
+                Ok(Some("stale-keyring-token".into()))
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(resolved.expose_secret(), "current-file-token");
+    }
+
+    #[test]
+    fn deletion_marker_hides_a_stale_keyring_value() {
+        let mut credentials = FileCredentials::default();
+        credentials.set("default", FileCredential::Deleted);
+
+        assert_eq!(credentials.get("default"), FileCredential::Deleted);
+        let restored: FileCredentials =
+            serde_json::from_str(&serde_json::to_string(&credentials).unwrap()).unwrap();
+        assert_eq!(restored.get("default"), FileCredential::Deleted);
+
+        let resolved = resolve_file_credential(restored.get("default"), || {
+            Ok(Some("stale-keyring-token".into()))
+        })
+        .unwrap();
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn replacing_a_file_credential_clears_the_previous_state() {
+        let mut credentials = FileCredentials::default();
+        credentials.set("default", FileCredential::Deleted);
+        credentials.set("default", FileCredential::Token("replacement".into()));
+        assert!(!credentials.deleted.contains("default"));
+
+        credentials.set("default", FileCredential::Missing);
+        assert_eq!(credentials.get("default"), FileCredential::Missing);
     }
 
     #[test]

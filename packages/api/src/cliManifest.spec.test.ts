@@ -102,4 +102,22 @@ describe('CLI manifest', () => {
 		expect(operations.get('projects.create')?.destructive).toBe(false);
 		expect(operations.get('projects.update')?.destructive).toBe(false);
 	});
+
+	it('reads disruptive behavior from OpenAPI operation metadata', () => {
+		const manifest = generateCliManifest({
+			openapi: '3.1.0',
+			info: { title: 'Test', version: '1.0.0' },
+			paths: {
+				'/items/rotate': {
+					post: {
+						operationId: 'items.rotate',
+						'x-cli-destructive': true,
+						responses: { 204: { description: 'Rotated' } },
+					},
+				},
+			},
+		});
+
+		expect(manifest.operations[0]?.destructive).toBe(true);
+	});
 });

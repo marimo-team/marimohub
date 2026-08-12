@@ -5107,6 +5107,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate:
     post:
       operationId: notebooks.rotate-sync-token
+      x-cli-destructive: true
       tags:
         - Notebooks
       summary: Rotate a notebook sync token
@@ -6411,6 +6412,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/versions/{vid}/restore:
     post:
       operationId: notebooks.versions.restore
+      x-cli-destructive: true
       tags:
         - Notebooks
       summary: Restore a version as a new save
@@ -7122,6 +7124,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/editor-session/takeover:
     post:
       operationId: sessions.editor.takeover
+      x-cli-destructive: true
       tags:
         - Sessions
       summary: Gracefully take over an exclusive editor session
