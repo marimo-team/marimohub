@@ -291,7 +291,7 @@ export class SyncedNotebookService {
 				if (current.status === 'deleted') {
 					throw new NotFoundError(`Notebook ${notebookId} not found`);
 				}
-				return { ...current, status: 'active' as const, updated_at: now };
+				return { ...current, status: 'active' as const, updated_at: new Date().toISOString() };
 			},
 		);
 

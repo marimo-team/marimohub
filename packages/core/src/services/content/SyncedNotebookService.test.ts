@@ -1,6 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { PreconditionFailedError } from '../../errors';
 import { ACTOR, setupTestEnv } from '../../testing';
+import type { MemoryBucket } from '../../testing';
 import type { ProjectId } from '../../ids';
+import { paths } from '../../paths';
 import { noopMetrics } from '../../ports/metrics';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { NotebookService } from './NotebookService';
@@ -30,6 +33,7 @@ function syncInput(commit: string) {
 }
 
 describe('SyncedNotebookService', () => {
+	let bucket: MemoryBucket;
 	let notebooks: NotebookService;
 	let projects: ProjectService;
 	let catalog: CatalogService;
@@ -37,6 +41,7 @@ describe('SyncedNotebookService', () => {
 
 	beforeEach(async () => {
 		const env = await setupTestEnv();
+		bucket = env.bucket;
 		notebooks = env.notebooks;
 		projects = env.projects;
 		catalog = env.catalog;
@@ -337,6 +342,61 @@ describe('SyncedNotebookService', () => {
 	});
 
 	describe('sync', () => {
+		it('does not roll back a concurrent metadata update token', async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			const nb = paths.project(projectId).notebook(meta.id);
+			const realPut = bucket.put.bind(bucket);
+			let sourcePutReached!: () => void;
+			let releaseSourcePut!: () => void;
+			const atSourcePut = new Promise<void>((resolve) => {
+				sourcePutReached = resolve;
+			});
+			const sourcePutGate = new Promise<void>((resolve) => {
+				releaseSourcePut = resolve;
+			});
+			let gated = false;
+			const putSpy = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (key === nb.source && options?.onlyIfEtagMatches && !gated) {
+					gated = true;
+					sourcePutReached();
+					await sourcePutGate;
+				}
+				return realPut(key, value, options);
+			});
+
+			const syncing = notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
+			try {
+				await atSourcePut;
+				vi.setSystemTime(new Date('2026-01-01T00:01:00.000Z'));
+				const concurrent = await notebooks.updateNotebook(
+					projectId,
+					meta.id,
+					{ title: 'Concurrent title' },
+					ACTOR,
+				);
+				releaseSourcePut();
+				const synced = await syncing;
+
+				expect(synced.updated_at).toBe(concurrent.updated_at);
+				await expect(
+					notebooks.updateNotebook(
+						projectId,
+						meta.id,
+						{ description: 'stale write' },
+						ACTOR,
+						meta.updated_at,
+					),
+				).rejects.toBeInstanceOf(PreconditionFailedError);
+			} finally {
+				releaseSourcePut();
+				await Promise.allSettled([syncing]);
+				putSpy.mockRestore();
+				vi.useRealTimers();
+			}
+		});
+
 		it('advances the source to a new version and flips status to active', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 
