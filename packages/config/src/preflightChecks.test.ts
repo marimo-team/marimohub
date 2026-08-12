@@ -343,6 +343,40 @@ describe('integrations.data-preview check', () => {
 		expect(ready).toBe(true);
 	});
 
+	it('invokes the preview check with its data-browser receiver', async () => {
+		const dataBrowser = {
+			preview: true,
+			ready: false,
+			async checkPreview() {
+				this.ready = true;
+			},
+		};
+		const deps = makeDeps({ dataBrowser });
+
+		expect((await run({}, deps)).by('integrations.data-preview')).toMatchObject({ status: 'ok' });
+		expect(dataBrowser.ready).toBe(true);
+	});
+
+	it('registers based on checkPreview rather than close', () => {
+		const withCheckOnly = makeDeps({
+			dataBrowser: { preview: true, checkPreview: async () => {} },
+		});
+		const withCloseOnly = makeDeps({
+			dataBrowser: { preview: true, close: async () => {} },
+		});
+
+		expect(
+			buildPreflightChecks({}, withCheckOnly).some(
+				(candidate) => candidate.name === 'integrations.data-preview',
+			),
+		).toBe(true);
+		expect(
+			buildPreflightChecks({}, withCloseOnly).some(
+				(candidate) => candidate.name === 'integrations.data-preview',
+			),
+		).toBe(false);
+	});
+
 	it('reports a failed runtime without making preflight fatal', async () => {
 		const deps = makeDeps({
 			dataBrowser: {

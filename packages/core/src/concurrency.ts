@@ -126,6 +126,8 @@ export class InFlightWork {
 	}
 
 	async drain(): Promise<void> {
-		await Promise.allSettled(this.work);
+		while (this.work.size > 0) {
+			await Promise.allSettled(this.work);
+		}
 	}
 }

@@ -504,6 +504,21 @@ function duckdbPreviewBlocker(config: IcebergRestConfig): string | undefined {
 	if (config.storage.scheme !== 'catalog') {
 		return 'explicit object-storage configuration is not supported by DuckDB-Wasm preview';
 	}
+	if (Object.keys(config.runtime).length > 0) {
+		return 'PyIceberg runtime options are not supported by DuckDB-Wasm preview';
+	}
+	if (
+		config.rest.snapshot_loading_mode !== 'all' ||
+		!config.rest.metrics_reporting_enabled ||
+		config.rest.page_size !== undefined ||
+		config.rest.view_endpoints_supported ||
+		config.rest.scan_planning_mode !== 'client' ||
+		config.rest.namespace_separator !== '%1F' ||
+		config.rest.table_cache_expire_after_write_ms !== 300_000 ||
+		config.rest.table_cache_max_entries !== 100
+	) {
+		return 'custom REST client options are not supported by DuckDB-Wasm preview';
+	}
 	return undefined;
 }
 
@@ -523,6 +538,7 @@ function duckdbAuthOptions(
 		case 'google':
 		case 'oauth2_client_credentials':
 		case 'sigv4':
+		default:
 			throw new ValidationError('This authentication method requires the preview sandbox.');
 	}
 }

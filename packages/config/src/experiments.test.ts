@@ -19,4 +19,13 @@ describe('parseExperiments', () => {
 			'Unknown MARIMOHUB_EXPERIMENTS value',
 		);
 	});
+
+	it.each(['constructor', 'toString', 'hasOwnProperty', '__proto__'])(
+		'rejects inherited object property %s',
+		(id) => {
+			expect(() => parseExperiments({ MARIMOHUB_EXPERIMENTS: id })).toThrow(
+				'Unknown MARIMOHUB_EXPERIMENTS value',
+			);
+		},
+	);
 });

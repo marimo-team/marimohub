@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IntegrationId, SessionId } from '../../../ids';
+import type { ExecResult } from '../../../ports/sandbox';
 import { fakeComputeFrom, makeFakeSandbox } from '../../../testing/fakes';
 import type { PythonPreviewProgram } from './programs';
 import { SandboxDataPreview } from './SandboxDataPreview';
@@ -109,5 +110,71 @@ describe('SandboxDataPreview', () => {
 
 		expect(preview.available()).toBe(false);
 		await expect(preview.preview(program)).rejects.toThrow('unavailable');
+	});
+
+	it('waits for an in-flight preview and its sandbox cleanup before closing', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		let finishExecution: ((result: ExecResult) => void) | undefined;
+		instance.exec = vi.fn(async (command): Promise<ExecResult> => {
+			calls.exec.push(command);
+			if (!command.includes('marimohub-data-preview.py')) {
+				return { success: true, stdout: '', stderr: '' };
+			}
+			return new Promise<ExecResult>((resolve) => {
+				finishExecution = resolve;
+			});
+		});
+		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
+		await preview.check();
+		const result = preview.preview(program);
+		await vi.waitFor(() => expect(finishExecution).toBeTypeOf('function'));
+
+		let closed = false;
+		const closing = preview.close().then(() => {
+			closed = true;
+		});
+		await Promise.resolve();
+		expect(closed).toBe(false);
+
+		finishExecution?.({
+			success: true,
+			stdout: '{"columns":["id"],"rows":[[1]]}',
+			stderr: '',
+		});
+		await expect(result).resolves.toEqual({ columns: ['id'], rows: [[1]] });
+		await closing;
+		expect(calls.destroy).toBe(2);
+		expect(preview.available()).toBe(false);
+	});
+
+	it('waits for an in-flight readiness check without becoming available after close', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		let finishCheck:
+			| ((result: { success: true; stdout: string; stderr: string }) => void)
+			| undefined;
+		const checkResult = new Promise<{ success: true; stdout: string; stderr: string }>(
+			(resolve) => {
+				finishCheck = resolve;
+			},
+		);
+		instance.exec = vi.fn((command) => {
+			calls.exec.push(command);
+			return checkResult;
+		});
+		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
+		const checking = preview.check();
+
+		let closed = false;
+		const closing = preview.close().then(() => {
+			closed = true;
+		});
+		await Promise.resolve();
+		expect(closed).toBe(false);
+
+		finishCheck?.({ success: true, stdout: '', stderr: '' });
+		await Promise.all([checking, closing]);
+		expect(calls.destroy).toBe(1);
+		expect(preview.available()).toBe(false);
+		await expect(preview.check()).rejects.toThrow('closed');
 	});
 });

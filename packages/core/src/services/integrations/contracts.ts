@@ -102,7 +102,7 @@ export interface ProjectIntegrationsService {
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
-		credentialVars?: Record<string, string>,
+		credentialVars?: Record<string, string> | (() => Promise<Record<string, string> | undefined>),
 	): Promise<TablePreview>;
 	browseObjectBuckets(
 		projectId: ProjectId,

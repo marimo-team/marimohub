@@ -19,6 +19,7 @@ import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import type { DataPreviewService } from './data-preview/DataPreviewService';
+import type { PreviewProgramAvailability, PreviewPrograms } from './data-preview/programs';
 import type {
 	BrowseCapabilityResult,
 	BrowseNamespacesRequest,
@@ -175,6 +176,13 @@ const ORG_SCOPE: IntegrationScope = {
  */
 function isTombstoned(raw: unknown): boolean {
 	return typeof (raw as { deleted_at?: unknown } | null)?.deleted_at === 'string';
+}
+
+function availabilityForPrograms(programs: PreviewPrograms): PreviewProgramAvailability {
+	return {
+		...(programs.duckdbWasm ? { duckdbWasm: programs.duckdbWasm.requires ?? [] } : {}),
+		...(programs.python ? { python: true } : {}),
+	};
 }
 
 /** Opaque keyset cursor: the last version number examined for the page. */
@@ -865,7 +873,7 @@ class ScopedIntegrationsStore {
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
-		credentialVars?: Record<string, string>,
+		credentialVars?: Record<string, string> | (() => Promise<Record<string, string> | undefined>),
 	): Promise<TablePreview> {
 		const { head, def, version, browse, config, probe } = await this.openBrowse(scope, id);
 		if (browse.previewRows) return browse.previewRows(config, probe, namespace, table, request);
@@ -874,6 +882,19 @@ class ScopedIntegrationsStore {
 				'This integration does not support row preview on this deployment.',
 			);
 		}
+		const verdict = def.preview.available(config);
+		if (!verdict.ok) {
+			throw new ValidationError(
+				`Integration "${head.name}" cannot preview rows: ${verdict.reason}.`,
+			);
+		}
+		if (!this.dataPreview.available(verdict.programs)) {
+			throw new ValidationError(
+				'This integration does not support row preview on this deployment.',
+			);
+		}
+		const resolvedCredentialVars =
+			typeof credentialVars === 'function' ? await credentialVars() : credentialVars;
 		const programs = def.preview.programs({
 			config,
 			integration: {
@@ -888,8 +909,13 @@ class ScopedIntegrationsStore {
 			namespace,
 			table,
 			limit: request.limit,
-			credentialVars,
+			credentialVars: resolvedCredentialVars,
 		});
+		if (!this.dataPreview.available(availabilityForPrograms(programs))) {
+			throw new ValidationError(
+				'This integration does not support row preview on this deployment.',
+			);
+		}
 		return this.dataPreview.preview(principal.userId, programs);
 	}
 
@@ -1620,7 +1646,7 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
-		credentialVars?: Record<string, string>,
+		credentialVars?: Record<string, string> | (() => Promise<Record<string, string> | undefined>),
 	): Promise<TablePreview> {
 		return this.withBrowseScope(projectId, id, (scope) =>
 			this.store.browseTablePreview(

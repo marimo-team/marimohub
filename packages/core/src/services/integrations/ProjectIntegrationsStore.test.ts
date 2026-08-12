@@ -27,6 +27,7 @@ import {
 import { IntegrationRegistry } from './registry';
 import { defineIntegration, envSegment } from './sdk';
 import { zSecret } from './secretFields';
+import { DataPreviewService } from './data-preview/DataPreviewService';
 
 const codec = new AesGcmSecretCodec({ kek: 'sFjp5R6eWYvc9SGtfeYEsQQlMKB8MfP4FdFAD7JAjsw=' });
 
@@ -2147,6 +2148,47 @@ describe('data browsing', () => {
 		}),
 	};
 
+	const previewBrowsyKind = defineIntegration({
+		kind: 'preview_browsy',
+		title: 'Preview browsy',
+		description: 'test kind',
+		category: 'catalog',
+		brand: { color: '#000000' },
+		schemaVersion: 1,
+		configSchema: z.object({
+			preview: z.enum(['available', 'blocked', 'incompatible']),
+			token: zSecret(),
+		}),
+		render: () => ({}),
+		preview: {
+			available: (config) =>
+				config.preview !== 'blocked'
+					? { ok: true, programs: { python: true } }
+					: { ok: false, reason: 'preview authentication is unsupported' },
+			programs: (input) =>
+				input.config.preview === 'incompatible'
+					? {}
+					: {
+							python: {
+								script: 'preview',
+								input: { credentialVars: input.credentialVars },
+								maxRows: input.limit,
+								render: {},
+								integration: input.integration,
+								sessionId: input.sessionId,
+								credentialVars: input.credentialVars,
+							},
+						},
+		},
+		browse: {
+			available: () => ({ ok: true }),
+			listNamespaces: async () => ({ items: [], next_cursor: null }),
+			listTables: async () => ({ items: [], next_cursor: null }),
+			getTableSchema: async () => ({ columns: [] }),
+			snippet: () => 'load',
+		},
+	});
+
 	let bucket: MemoryBucket;
 	let pid: ProjectId;
 	let store: ProjectIntegrationsStore;
@@ -2321,6 +2363,31 @@ describe('data browsing', () => {
 		},
 	);
 
+	function makePreviewStore(
+		available: () => boolean,
+		preview: NonNullable<ConstructorParameters<typeof DataPreviewService>[0]['sandbox']>['preview'],
+	) {
+		const registry = new IntegrationRegistry();
+		registry.register(previewBrowsyKind);
+		return new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			probe: stubProbe,
+			browseProbe: stubProbe,
+			dataPreview: new DataPreviewService({
+				maxConcurrent: 2,
+				maxConcurrentPerUser: 1,
+				sandbox: {
+					available,
+					check: async () => {},
+					preview,
+					close: async () => {},
+				},
+			}),
+		});
+	}
+
 	it('reports the capability verdict without resolving secrets', async () => {
 		const created = await createBrowsy();
 		expect(await store.browseCapability(pid, created.id)).toEqual({
@@ -2356,6 +2423,127 @@ describe('data browsing', () => {
 			metadata: false,
 			reason: expect.stringContaining('does not support browsing'),
 		});
+	});
+
+	it('refuses a runtime preview when the resolved config is not supported', async () => {
+		const execute = vi.fn(async () => ({ columns: [], rows: [] }));
+		const previewStore = makePreviewStore(() => true, execute);
+		const created = await previewStore.create(
+			pid,
+			{
+				kind: 'preview_browsy',
+				name: 'blocked-preview',
+				config: { preview: 'blocked', token: 'plain-token' },
+			},
+			ACTOR,
+		);
+		const credentials = vi.fn(async () => ({ AWS_ACCESS_KEY_ID: 'temporary-key' }));
+
+		await expect(
+			previewStore.browseTablePreview(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'user@example.com' },
+				createSessionId(),
+				['sales'],
+				'orders',
+				{ limit: 20 },
+				credentials,
+			),
+		).rejects.toThrow('preview authentication is unsupported');
+		expect(credentials).not.toHaveBeenCalled();
+		expect(execute).not.toHaveBeenCalled();
+	});
+
+	it('refuses a preview program that no configured runtime can execute', async () => {
+		const execute = vi.fn(async () => ({ columns: [], rows: [] }));
+		const previewStore = makePreviewStore(() => false, execute);
+		const created = await previewStore.create(
+			pid,
+			{
+				kind: 'preview_browsy',
+				name: 'unavailable-preview',
+				config: { preview: 'available', token: 'plain-token' },
+			},
+			ACTOR,
+		);
+		const credentials = vi.fn(async () => ({ AWS_ACCESS_KEY_ID: 'temporary-key' }));
+
+		await expect(
+			previewStore.browseTablePreview(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'user@example.com' },
+				createSessionId(),
+				['sales'],
+				'orders',
+				{ limit: 20 },
+				credentials,
+			),
+		).rejects.toThrow('does not support row preview');
+		expect(credentials).not.toHaveBeenCalled();
+		expect(execute).not.toHaveBeenCalled();
+	});
+
+	it('resolves credentials only after selecting the runtime preview path', async () => {
+		const execute = vi.fn(async () => ({ columns: ['id'], rows: [[1]] }));
+		const previewStore = makePreviewStore(() => true, execute);
+		const created = await previewStore.create(
+			pid,
+			{
+				kind: 'preview_browsy',
+				name: 'available-preview',
+				config: { preview: 'available', token: 'plain-token' },
+			},
+			ACTOR,
+		);
+		const credentials = vi.fn(async () => ({ AWS_ACCESS_KEY_ID: 'temporary-key' }));
+
+		expect(
+			await previewStore.browseTablePreview(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'user@example.com' },
+				createSessionId(),
+				['sales'],
+				'orders',
+				{ limit: 20 },
+				credentials,
+			),
+		).toEqual({ columns: ['id'], rows: [[1]] });
+		expect(credentials).toHaveBeenCalledOnce();
+		expect(execute).toHaveBeenCalledWith(
+			expect.objectContaining({
+				credentialVars: { AWS_ACCESS_KEY_ID: 'temporary-key' },
+			}),
+		);
+	});
+
+	it('refuses generated programs that do not match an available runtime', async () => {
+		const execute = vi.fn(async () => ({ columns: [], rows: [] }));
+		const previewStore = makePreviewStore(() => true, execute);
+		const created = await previewStore.create(
+			pid,
+			{
+				kind: 'preview_browsy',
+				name: 'incompatible-preview',
+				config: { preview: 'incompatible', token: 'plain-token' },
+			},
+			ACTOR,
+		);
+
+		await expect(
+			previewStore.browseTablePreview(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'user@example.com' },
+				createSessionId(),
+				['sales'],
+				'orders',
+				{ limit: 20 },
+			),
+		).rejects.toThrow('does not support row preview');
+		expect(execute).not.toHaveBeenCalled();
 	});
 
 	it('a disabled instance is not browsable', async () => {

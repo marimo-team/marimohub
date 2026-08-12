@@ -14,7 +14,7 @@ export function parseExperiments(env: Env): ReadonlySet<Experiment> {
 	for (const raw of env.MARIMOHUB_EXPERIMENTS?.split(',') ?? []) {
 		const id = raw.trim().toLowerCase();
 		if (!id) continue;
-		if (!(id in EXPERIMENTS)) {
+		if (!Object.hasOwn(EXPERIMENTS, id)) {
 			throw new ConfigError(`Unknown MARIMOHUB_EXPERIMENTS value: ${id}.`, {
 				variable: 'MARIMOHUB_EXPERIMENTS',
 				remediation: `Use one or more of: ${Object.keys(EXPERIMENTS).join(', ')}.`,

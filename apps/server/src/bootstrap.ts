@@ -164,7 +164,7 @@ export async function bootstrap(
 			const result = await settleAllWithin(
 				[
 					closed,
-					...(deps.dataBrowser?.close ? [deps.dataBrowser.close()] : []),
+					...(deps.dataBrowser?.close ? [closed.then(() => deps.dataBrowser?.close?.())] : []),
 					...(otel ? [Promise.resolve().then(() => otel.shutdown())] : []),
 				],
 				DRAIN_TIMEOUT_MS,

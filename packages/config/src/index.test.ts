@@ -98,11 +98,16 @@ describe('createFromEnv auth backend selection', () => {
 	});
 
 	it('registers DuckDB-Wasm only behind its experiment', () => {
-		const deps = createFromEnv({
+		const env = {
 			...baseEnv,
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_DATA_BROWSER: 'full',
+		};
+		expect(createFromEnv(env).dataBrowser).toEqual({ preview: true });
+
+		const deps = createFromEnv({
+			...env,
 			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
 		});
 		expect(deps.dataBrowser?.checkPreview).toBeTypeOf('function');

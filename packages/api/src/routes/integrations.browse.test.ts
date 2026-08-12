@@ -712,6 +712,41 @@ describe('Data browser routes', () => {
 		});
 	});
 
+	it('rechecks runtime preview support instead of rejecting a stale capability verdict', async () => {
+		const pid = await createProject();
+		const selected = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 'sandbox_browsy',
+				name: 'preview-recovered',
+				config: {},
+			}),
+			201,
+		);
+		let availabilityChecks = 0;
+		const dataPreview = previewService(
+			async () => ({ columns: ['id'], rows: [[1]] }),
+			() => ++availabilityChecks > 1,
+		);
+		const full = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: {
+				...browserDeps(bucket, dataPreview),
+				dataBrowser: { preview: true },
+			},
+		}).request;
+
+		expect(
+			await expectOk(
+				await full('POST', `/projects/${pid}/integrations/${selected.id}/browse/preview`, {
+					namespace: ['sales'],
+					table: 'orders',
+				}),
+			),
+		).toEqual({ columns: ['id'], rows: [[1]] });
+		expect(availabilityChecks).toBeGreaterThanOrEqual(2);
+	});
+
 	it('injects project WIF credentials into sandbox previews', async () => {
 		const pid = await createProject();
 		await expectOk(await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }));
@@ -884,6 +919,45 @@ describe('Data browser routes', () => {
 		});
 	});
 
+	it('does not exchange project WIF credentials for native previews', async () => {
+		const pid = await createProject();
+		await expectOk(await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }));
+		const selected = await createBrowsable(pid, 'native-wif');
+		const mint = vi.fn(async () => 'jwt');
+		const exchange = vi.fn(async () => ({
+			accessKeyId: 'temporary-key',
+			secretAccessKey: 'temporary-secret',
+			sessionToken: 'temporary-token',
+		}));
+		const full = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: {
+				...browserDeps(bucket),
+				wif: {
+					issuer: { mint, jwks: async () => ({ keys: [] }) } as never,
+					issuerUrl: 'https://hub.example.com',
+					target: {
+						broker: { exchange },
+						storage: { region: 'us-east-1' },
+						audience: 'storage',
+					},
+				},
+				dataBrowser: { preview: true },
+			},
+		}).request;
+
+		expect(
+			await expectOk(
+				await full('POST', `/projects/${pid}/integrations/${selected.id}/browse/preview`, {
+					namespace: ['sales'],
+					table: 'orders',
+				}),
+			),
+		).toEqual({ columns: ['qualified', 'limit'], rows: [['sales.orders', 20]] });
+		expect(mint).not.toHaveBeenCalled();
+		expect(exchange).not.toHaveBeenCalled();
+	});
 	it('editor can browse; viewer cannot', async () => {
 		const pid = await createProject();
 		const created = await createBrowsable(pid);

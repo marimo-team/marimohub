@@ -329,12 +329,11 @@ async function checkIntegrationSecrets(deps: ApiDeps): Promise<CheckOutcome> {
 }
 
 async function checkDataPreview(deps: ApiDeps): Promise<CheckOutcome> {
-	const preview = deps.dataBrowser?.checkPreview;
-	if (!preview) {
+	if (!deps.dataBrowser?.checkPreview) {
 		return { status: 'skipped', message: 'dedicated data-preview runtime disabled' };
 	}
 	try {
-		await preview();
+		await deps.dataBrowser.checkPreview();
 		return { status: 'ok', message: 'data-preview runtime is ready' };
 	} catch (err) {
 		return {
@@ -362,7 +361,7 @@ export function buildPreflightChecks(env: Env, deps: ApiDeps): PreflightCheck[] 
 	if (deps.integrations) {
 		checks.push({ name: 'integrations.secrets', run: () => checkIntegrationSecrets(deps) });
 	}
-	if (deps.dataBrowser?.close) {
+	if (deps.dataBrowser?.checkPreview) {
 		checks.push({
 			name: 'integrations.data-preview',
 			run: () => checkDataPreview(deps),

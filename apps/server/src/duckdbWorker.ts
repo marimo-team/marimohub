@@ -1,1 +1,1 @@
-import '../../../packages/duckdb-wasm-runtime/src/worker';
+import '@marimo-hub/duckdb-wasm-runtime/worker';

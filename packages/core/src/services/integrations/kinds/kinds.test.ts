@@ -809,6 +809,18 @@ describe('kind renders (golden)', () => {
 		['custom headers', { headers: { 'X-Trace': 'trace' } }],
 		['extra properties', { extra_properties: { 'rest.custom-option': 'true' } }],
 		['explicit storage', { storage: { scheme: 's3', region: 'us-east-1' } }],
+		['runtime worker count', { runtime: { max_workers: 2 } }],
+		['runtime snapshot compatibility', { runtime: { legacy_current_snapshot_id: false } }],
+		['runtime timestamp downcast', { runtime: { downcast_ns_timestamp_to_us_on_write: false } }],
+		['runtime Arrow types', { runtime: { pyarrow_use_large_types_on_read: false } }],
+		['snapshot loading mode', { rest: { snapshot_loading_mode: 'refs' } }],
+		['metrics reporting', { rest: { metrics_reporting_enabled: false } }],
+		['REST page size', { rest: { page_size: 10 } }],
+		['view endpoints', { rest: { view_endpoints_supported: true } }],
+		['server scan planning', { rest: { scan_planning_mode: 'server' } }],
+		['namespace separator', { rest: { namespace_separator: '.' } }],
+		['table cache expiration', { rest: { table_cache_expire_after_write_ms: 0 } }],
+		['table cache size', { rest: { table_cache_max_entries: 1 } }],
 	] as const)('iceberg_rest routes %s previews only to the sandbox', (_name, patch) => {
 		const config = icebergRest.configSchema.parse({
 			uri: 'https://catalog.example.com',

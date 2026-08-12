@@ -114,6 +114,58 @@ describe('DuckDBWasmDataPreview', () => {
 		expect(preview.available()).toBe(false);
 	});
 
+	it('does not start a second preview before a failing preview is disposed', async () => {
+		let rejectFirst: ((error: Error) => void) | undefined;
+		const instance = runtime({
+			execute: vi
+				.fn()
+				.mockImplementationOnce(
+					() =>
+						new Promise((_resolve, reject) => {
+							rejectFirst = reject;
+						}),
+				)
+				.mockResolvedValueOnce({ columns: ['id'], rows: [[2]] }),
+		});
+		const preview = new DuckDBWasmDataPreview(async () => instance, options);
+		await preview.check();
+
+		const first = preview.preview({ setup: [], query: { text: 'SELECT 1' } });
+		const second = preview.preview({ setup: [], query: { text: 'SELECT 2' } });
+		await vi.waitFor(() => expect(instance.execute).toHaveBeenCalledOnce());
+		rejectFirst?.(new Error('first failed'));
+
+		await expect(first).rejects.toThrow('could not preview');
+		await expect(second).rejects.toThrow('cannot execute');
+		expect(instance.execute).toHaveBeenCalledOnce();
+		expect(instance.close).toHaveBeenCalledOnce();
+	});
+
+	it('waits for an active preview before closing its runtime', async () => {
+		let finish: ((value: { columns: string[]; rows: number[][] }) => void) | undefined;
+		const instance = runtime({
+			execute: vi.fn(
+				() =>
+					new Promise<{ columns: string[]; rows: number[][] }>((resolve) => {
+						finish = resolve;
+					}),
+			),
+		});
+		const preview = new DuckDBWasmDataPreview(async () => instance, options);
+		await preview.check();
+
+		const executing = preview.preview({ setup: [], query: { text: 'SELECT 1' } });
+		await vi.waitFor(() => expect(instance.execute).toHaveBeenCalledOnce());
+		const closing = preview.close();
+		await Promise.resolve();
+		expect(instance.close).not.toHaveBeenCalled();
+
+		finish?.({ columns: ['id'], rows: [[1]] });
+		await expect(executing).resolves.toEqual({ columns: ['id'], rows: [[1]] });
+		await expect(closing).resolves.toBeUndefined();
+		expect(instance.close).toHaveBeenCalledOnce();
+	});
+
 	it('disposes a runtime when initialization times out', async () => {
 		const instance = runtime({ initialize: () => new Promise(() => {}) });
 		const preview = new DuckDBWasmDataPreview(async () => instance, {
@@ -124,6 +176,33 @@ describe('DuckDBWasmDataPreview', () => {
 		await expect(preview.check()).rejects.toThrow('initialization timed out');
 		expect(instance.close).toHaveBeenCalledOnce();
 		expect(preview.available()).toBe(false);
+	});
+
+	it('includes runtime factory creation in the initialization deadline', async () => {
+		const preview = new DuckDBWasmDataPreview(() => new Promise(() => {}), {
+			...options,
+			startupTimeoutMs: 5,
+		});
+
+		await expect(preview.check()).rejects.toThrow('initialization timed out');
+		expect(preview.available()).toBe(false);
+	});
+
+	it('disposes a runtime created after the initialization deadline', async () => {
+		let resolveFactory: ((value: DuckDBWasmRuntime) => void) | undefined;
+		const instance = runtime();
+		const preview = new DuckDBWasmDataPreview(
+			() =>
+				new Promise((resolve) => {
+					resolveFactory = resolve;
+				}),
+			{ ...options, startupTimeoutMs: 5 },
+		);
+
+		await expect(preview.check()).rejects.toThrow('initialization timed out');
+		resolveFactory?.(instance);
+		await vi.waitFor(() => expect(instance.close).toHaveBeenCalledOnce());
+		expect(instance.initialize).not.toHaveBeenCalled();
 	});
 
 	it('disposes a runtime when ping fails and permits a later preflight retry', async () => {

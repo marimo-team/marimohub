@@ -277,8 +277,15 @@ function guardedPreview<C>(
 	preview: NonNullable<IntegrationDefinition<z.ZodType<C>>['preview']>,
 	pathsOf: () => SecretPath[],
 ): NonNullable<IntegrationDefinition<z.ZodType<C>>['preview']> {
+	const available = preview.available.bind(preview);
 	return {
-		available: preview.available.bind(preview),
+		available(config) {
+			const verdict = available(config);
+			if (!verdict.ok && echoesSecret(verdict.reason, config, pathsOf())) {
+				return { ok: false, reason: 'this instance cannot be previewed from the hub' };
+			}
+			return verdict;
+		},
 		programs(input) {
 			try {
 				return preview.programs(input);

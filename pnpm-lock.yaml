@@ -308,6 +308,9 @@ importers:
       '@marimo-hub/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@marimo-hub/duckdb-wasm-runtime':
+        specifier: workspace:*
+        version: link:../../packages/duckdb-wasm-runtime
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.9.1

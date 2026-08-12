@@ -54,4 +54,33 @@ describe('InFlightWork', () => {
 		await Promise.all([tracked, drain]);
 		expect(drained).toBe(true);
 	});
+
+	it('waits for work tracked while an earlier drain snapshot is settling', async () => {
+		const inFlight = new InFlightWork();
+		let finishFirst: (() => void) | undefined;
+		let finishSecond: (() => void) | undefined;
+		const first = inFlight.track(
+			new Promise<void>((resolve) => {
+				finishFirst = resolve;
+			}),
+		);
+		let drained = false;
+		const drain = inFlight.drain().then(() => {
+			drained = true;
+		});
+		const second = inFlight.track(
+			new Promise<void>((resolve) => {
+				finishSecond = resolve;
+			}),
+		);
+
+		finishFirst?.();
+		await first;
+		await Promise.resolve();
+		expect(drained).toBe(false);
+
+		finishSecond?.();
+		await Promise.all([second, drain]);
+		expect(drained).toBe(true);
+	});
 });

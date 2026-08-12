@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { DuckDBWasmRuntime } from '@marimo-hub/core';
+import type { DuckDBPreviewProgram, DuckDBWasmRuntime } from '@marimo-hub/core';
 import { createNodeDuckDBWasmRuntimeFactory } from './node';
 
 const open: DuckDBWasmRuntime[] = [];
@@ -14,6 +14,55 @@ async function initialized(mode: 'worker' | 'inline'): Promise<DuckDBWasmRuntime
 	await runtime.initialize({ memoryLimitMb: 64 });
 	return runtime;
 }
+
+describe('DuckDB-Wasm worker lifecycle', () => {
+	it('preserves request order while initialization is pending', async () => {
+		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker')();
+		open.push(runtime);
+
+		const initializing = runtime.initialize({ memoryLimitMb: 64 });
+		const executing = runtime.execute({ setup: [], query: { text: 'SELECT 1 AS value' } });
+
+		await expect(Promise.all([initializing, executing])).resolves.toEqual([
+			undefined,
+			{ columns: ['value'], rows: [[1]] },
+		]);
+	});
+
+	it('removes requests rejected synchronously by postMessage', async () => {
+		const runtime = await initialized('worker');
+		const internals = runtime as unknown as { pending: Map<number, unknown> };
+		const invalidProgram = {
+			setup: [],
+			query: { text: 'SELECT 1', params: [() => {}] },
+		} as unknown as DuckDBPreviewProgram;
+
+		await expect(runtime.execute(invalidProgram)).rejects.toThrow(/clone/i);
+		expect(internals.pending.size).toBe(0);
+		await expect(
+			runtime.execute({ setup: [], query: { text: 'SELECT 2 AS value' } }),
+		).resolves.toEqual({ columns: ['value'], rows: [[2]] });
+	});
+
+	it('becomes closed when its worker fails', async () => {
+		const runtime = await initialized('worker');
+		const internals = runtime as unknown as {
+			worker: {
+				emit(event: 'error', error: Error): boolean;
+				terminate(): Promise<number>;
+			};
+			pending: Map<number, unknown>;
+		};
+		const pending = runtime.ping();
+
+		internals.worker.emit('error', new Error('worker failed'));
+
+		await expect(pending).rejects.toThrow('worker failed');
+		await expect(runtime.ping()).rejects.toThrow('closed');
+		expect(internals.pending.size).toBe(0);
+		await internals.worker.terminate();
+	});
+});
 
 describe.each(['worker', 'inline'] as const)('DuckDB-Wasm %s runtime', (mode) => {
 	it('rejects work before initialization and after close', async () => {

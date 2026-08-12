@@ -15,6 +15,7 @@
 		"@marimo-hub/api": "workspace:*",
 		"@marimo-hub/config": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
+		"@marimo-hub/duckdb-wasm-runtime": "workspace:*",
 		"@opentelemetry/api": "catalog:",
 		"@opentelemetry/exporter-metrics-otlp-http": "catalog:",
 		"@opentelemetry/exporter-prometheus": "catalog:",

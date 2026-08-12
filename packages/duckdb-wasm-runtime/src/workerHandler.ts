@@ -6,9 +6,15 @@ if (!parentPort) throw new Error('DuckDB-Wasm worker started without a parent po
 const port = parentPort;
 
 const engine = new BlockingDuckDBEngine();
+let requestQueue = Promise.resolve();
 
 port.on('message', (request: RuntimeRequest) => {
-	void handle(request);
+	requestQueue = requestQueue
+		.then(
+			() => handle(request),
+			() => handle(request),
+		)
+		.catch(() => {});
 });
 
 async function handle(request: RuntimeRequest): Promise<void> {

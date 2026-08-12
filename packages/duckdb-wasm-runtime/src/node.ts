@@ -66,11 +66,9 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 				: './worker.mjs';
 		this.worker = new Worker(new URL(source, import.meta.url));
 		this.worker.on('message', (response: RuntimeResponse) => this.onResponse(response));
-		this.worker.on('error', (error: Error) => this.rejectAll(error));
+		this.worker.on('error', (error: Error) => this.fail(error));
 		this.worker.on('exit', (code) => {
-			if (!this.closed && code !== 0) {
-				this.rejectAll(new Error(`DuckDB-Wasm worker exited with code ${code}.`));
-			}
+			if (!this.closed) this.fail(new Error(`DuckDB-Wasm worker exited with code ${code}.`));
 		});
 	}
 
@@ -89,8 +87,11 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	async close(): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
-		await this.worker.terminate();
-		this.rejectAll(new Error('DuckDB-Wasm worker is closed.'));
+		try {
+			await this.worker.terminate();
+		} finally {
+			this.rejectAll(new Error('DuckDB-Wasm worker is closed.'));
+		}
 	}
 
 	private request<T>(request: RuntimeRequestInput): Promise<T> {
@@ -98,7 +99,12 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		const id = this.nextId++;
 		return new Promise<T>((resolve, reject) => {
 			this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
-			this.worker.postMessage({ ...request, id });
+			try {
+				this.worker.postMessage({ ...request, id });
+			} catch (error) {
+				this.pending.delete(id);
+				reject(error instanceof Error ? error : new Error(String(error)));
+			}
 		});
 	}
 
@@ -113,6 +119,12 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	private rejectAll(error: Error): void {
 		for (const pending of this.pending.values()) pending.reject(error);
 		this.pending.clear();
+	}
+
+	private fail(error: Error): void {
+		if (this.closed) return;
+		this.closed = true;
+		this.rejectAll(error);
 	}
 }
 

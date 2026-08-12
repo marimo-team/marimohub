@@ -1,4 +1,5 @@
 import { UnavailableError } from '../../../errors';
+import { InFlightWork } from '../../../concurrency';
 import { createSandboxId } from '../../../ids';
 import { withDeadline } from '../../../internal/async';
 import { assertPositiveInteger } from '../../../internal/validation';
@@ -24,6 +25,7 @@ export interface SandboxDataPreviewOptions {
 export class SandboxDataPreview {
 	private readyForTraffic = false;
 	private checking: Promise<void> | undefined;
+	private readonly inFlight = new InFlightWork();
 	private closed = false;
 
 	constructor(
@@ -46,7 +48,7 @@ export class SandboxDataPreview {
 		if (this.available()) return Promise.resolve();
 		if (this.closed) return Promise.reject(new UnavailableError('The preview sandbox is closed.'));
 		if (this.checking) return this.checking;
-		this.checking = this.checkRuntime().finally(() => {
+		this.checking = this.inFlight.track(this.checkRuntime()).finally(() => {
 			this.checking = undefined;
 		});
 		return this.checking;
@@ -54,6 +56,16 @@ export class SandboxDataPreview {
 
 	async preview(program: PythonPreviewProgram): Promise<TablePreview> {
 		if (!this.available()) throw new UnavailableError('The data-preview runtime is unavailable.');
+		return this.inFlight.track(this.runPreview(program));
+	}
+
+	async close(): Promise<void> {
+		this.closed = true;
+		this.readyForTraffic = false;
+		await this.inFlight.drain();
+	}
+
+	private async runPreview(program: PythonPreviewProgram): Promise<TablePreview> {
 		const sandbox = this.createSandbox();
 		try {
 			await sandboxDeadline(ready(sandbox), this.options.startupTimeoutMs, 'start');
@@ -95,12 +107,6 @@ export class SandboxDataPreview {
 		}
 	}
 
-	close(): Promise<void> {
-		this.closed = true;
-		this.readyForTraffic = false;
-		return Promise.resolve();
-	}
-
 	private async checkRuntime(): Promise<void> {
 		const sandbox = this.createSandbox();
 		try {
@@ -113,7 +119,7 @@ export class SandboxDataPreview {
 			if (!result.success) {
 				throw new UnavailableError('The preview image does not provide PyIceberg and PyArrow.');
 			}
-			this.readyForTraffic = true;
+			if (!this.closed) this.readyForTraffic = true;
 		} finally {
 			await this.destroy(sandbox);
 		}

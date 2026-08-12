@@ -19,6 +19,8 @@ export interface DuckDBWasmDataPreviewOptions {
 export class DuckDBWasmDataPreview {
 	private runtime: DuckDBWasmRuntime | undefined;
 	private checking: Promise<void> | undefined;
+	private previewQueue = Promise.resolve();
+	private closing: Promise<void> | undefined;
 	private readyForTraffic = false;
 	private closed = false;
 
@@ -62,12 +64,30 @@ export class DuckDBWasmDataPreview {
 		return this.checking;
 	}
 
-	async preview(program: DuckDBPreviewProgram): Promise<TablePreview> {
+	preview(program: DuckDBPreviewProgram): Promise<TablePreview> {
+		const result = this.previewQueue.then(() => this.executePreview(program));
+		this.previewQueue = result.then(
+			() => {},
+			() => {},
+		);
+		return result;
+	}
+
+	close(): Promise<void> {
+		if (this.closing) return this.closing;
+		this.closed = true;
+		this.readyForTraffic = false;
+		this.closing = this.closeAfterPreviews();
+		return this.closing;
+	}
+
+	private async executePreview(program: DuckDBPreviewProgram): Promise<TablePreview> {
 		if (!this.supports(program) || !this.runtime) {
 			throw new UnavailableError('DuckDB-Wasm cannot execute this preview program.');
 		}
+		const runtime = this.runtime;
 		try {
-			return await withDeadline(this.runtime.execute(program), {
+			return await withDeadline(runtime.execute(program), {
 				timeoutMs: this.options.executionTimeoutMs,
 				timeoutError: () => new UnavailableError('DuckDB-Wasm preview timed out.'),
 			});
@@ -77,36 +97,50 @@ export class DuckDBWasmDataPreview {
 		}
 	}
 
-	async close(): Promise<void> {
-		if (this.closed) return;
-		this.closed = true;
-		this.readyForTraffic = false;
+	private async closeAfterPreviews(): Promise<void> {
+		await this.previewQueue;
 		const runtime = this.runtime;
 		this.runtime = undefined;
 		await runtime?.close();
 	}
 
 	private async initialize(): Promise<void> {
-		const runtime = await this.runtimeFactory();
+		let runtime: DuckDBWasmRuntime | undefined;
+		let abandoned = false;
+		let disposed = false;
+		const dispose = async (): Promise<void> => {
+			if (!runtime || disposed) return;
+			disposed = true;
+			await runtime.close().catch(() => {});
+		};
+		const ensureNotAbandoned = async (): Promise<void> => {
+			if (!abandoned) return;
+			await dispose();
+			throw new UnavailableError('DuckDB-Wasm initialization was abandoned.');
+		};
+		const startup = (async (): Promise<DuckDBWasmRuntime> => {
+			runtime = await this.runtimeFactory();
+			await ensureNotAbandoned();
+			await runtime.initialize({ memoryLimitMb: this.options.memoryLimitMb });
+			await ensureNotAbandoned();
+			await runtime.ping();
+			await ensureNotAbandoned();
+			return runtime;
+		})();
 		try {
-			await withDeadline(
-				(async () => {
-					await runtime.initialize({ memoryLimitMb: this.options.memoryLimitMb });
-					await runtime.ping();
-				})(),
-				{
-					timeoutMs: this.options.startupTimeoutMs,
-					timeoutError: () => new UnavailableError('DuckDB-Wasm initialization timed out.'),
-				},
-			);
+			const initialized = await withDeadline(startup, {
+				timeoutMs: this.options.startupTimeoutMs,
+				timeoutError: () => new UnavailableError('DuckDB-Wasm initialization timed out.'),
+			});
 			if (this.closed) {
-				await runtime.close();
+				await dispose();
 				throw new UnavailableError('DuckDB-Wasm was closed during initialization.');
 			}
-			this.runtime = runtime;
+			this.runtime = initialized;
 			this.readyForTraffic = true;
 		} catch (error) {
-			await runtime.close().catch(() => {});
+			abandoned = true;
+			await dispose();
 			throw error;
 		}
 	}

@@ -1563,14 +1563,12 @@ app.openapi(browseTablePreview, async (c) => {
 	const { namespace, table, limit } = c.req.valid('json');
 	const { integrations, preview } = requireDataBrowser(deps);
 	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
+	const wif = deps.wif;
 	if (!preview) throw new NotFoundError('Row preview is not enabled on this deployment');
 	assertBrowseBudget(user.id);
 	const capability = await integrations.browseCapability(pid, iid);
 	if (!capability.metadata) {
 		throw new ValidationError(capability.reason ?? 'This integration cannot be browsed.');
-	}
-	if (!capability.hub_preview) {
-		throw new ValidationError('This integration does not support row preview on this deployment.');
 	}
 	const sessionId = createSessionId();
 	const data = await integrations.browseTablePreview(
@@ -1581,14 +1579,8 @@ app.openapi(browseTablePreview, async (c) => {
 		namespace,
 		table,
 		{ limit, query_user: user.email },
-		deps.wif && project.federation?.enabled
-			? await exchangeFederatedStorageEnv(
-					deps.wif.issuer,
-					deps.wif.issuerUrl,
-					deps.wif.target,
-					pid,
-					sessionId,
-				)
+		wif && project.federation?.enabled
+			? () => exchangeFederatedStorageEnv(wif.issuer, wif.issuerUrl, wif.target, pid, sessionId)
 			: undefined,
 	);
 	await appendAudit(

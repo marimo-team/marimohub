@@ -19,13 +19,15 @@ type PreflightReport = Awaited<ReturnType<NonNullable<ApiDeps['preflight']>>>;
 const BASE_ENV = { MARIMOHUB_STATIC_ROOT: './public' };
 
 function fakeServer(closeImmediately = true) {
+	let finishClose: (() => void) | undefined;
 	const close = vi.fn((callback?: () => void) => {
 		if (closeImmediately) callback?.();
+		else finishClose = callback;
 	});
 	const closeIdleConnections = vi.fn();
 	const on = vi.fn();
 	const server = { close, closeIdleConnections, on } as unknown as ServerType;
-	return { server, close, closeIdleConnections };
+	return { server, close, closeIdleConnections, finishClose: () => finishClose?.() };
 }
 
 function makeHarness(
@@ -195,6 +197,21 @@ describe('bootstrap', () => {
 
 		expect(shutdown).toHaveBeenCalledOnce();
 		expect(harness.exit).toHaveBeenCalledWith(0);
+	});
+
+	it('closes the data-preview backend after active HTTP requests have drained', async () => {
+		const closePreview = vi.fn().mockResolvedValue(undefined);
+		deps.dataBrowser = { preview: true, close: closePreview };
+		const harness = makeHarness(deps, { closeImmediately: false });
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+
+		const draining = handle?.drain();
+		expect(harness.close).toHaveBeenCalledOnce();
+		expect(closePreview).not.toHaveBeenCalled();
+
+		harness.finishClose();
+		await draining;
+		expect(closePreview).toHaveBeenCalledOnce();
 	});
 
 	it.each([
