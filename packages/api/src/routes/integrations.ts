@@ -1001,8 +1001,8 @@ function slidingWindowBudget(perMinute: number, message: string) {
 }
 
 const testBudget = slidingWindowBudget(10, 'Too many connection tests — try again in a minute.');
-// Sized against the browse probe's process-wide cap (240/min): a bounded Trino
-// statement spends at most 8 probe requests, so one user can hold at most 160
+// Sized against the browse probe's process-wide cap (360/min): a bounded Trino
+// statement spends at most 12 probe requests, so one user can hold at most 240
 // of the shared allowance.
 const browseBudget = slidingWindowBudget(20, 'Too many browse requests — try again in a minute.');
 

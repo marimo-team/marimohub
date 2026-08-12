@@ -90,8 +90,8 @@ function dataBrowserSetting(env: Env): 'off' | 'metadata' | 'full' {
  * connection tests (and vice versa). Catalog pages are also larger than probe
  * responses, hence the 1 MiB cap; kinds always request upstream pagination.
  *
- * The 240/min cap pairs with the API's 20 ops/min/user budget: Trino bounds one
- * statement at 8 requests, so one editor can spend at most 160 of the shared
+ * The 360/min cap pairs with the API's 20 ops/min/user budget: Trino bounds one
+ * statement at 12 requests, so one editor can spend at most 240 of the shared
  * allowance. Other kinds use fewer requests per operation.
  */
 function makeBrowseProbe(
@@ -108,7 +108,7 @@ function makeBrowseProbe(
 	return createGuardedProbe({
 		allowPrivate: policy === 'private',
 		maxResponseBytes: 1024 * 1024,
-		maxProbesPerMinute: 240,
+		maxProbesPerMinute: 360,
 	});
 }
 

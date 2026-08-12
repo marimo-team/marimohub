@@ -15,7 +15,7 @@ import { discoveryEnvField, HTTP_HEADER_NAME_REGEX } from './common';
 
 const IDENTIFIER_REGEX = /^[A-Za-z0-9_.-]+$/;
 const TIMEZONE_REGEX = /^[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)*$/;
-const MAX_STATEMENT_PAGES = 8;
+const MAX_STATEMENT_PAGES = 12;
 const mutualAuthenticationSchema = z.enum(['required', 'optional', 'disabled']);
 
 const authSchema = z.discriminatedUnion('method', [
