@@ -495,6 +495,8 @@ describe('SyncedNotebookService', () => {
 				pruneVersions: async (_projectId, _notebookId, keep) => {
 					protectedVersionId = keep;
 				},
+				withNotebookWriteLock: async (_projectId, _notebookId, operation) =>
+					operation(async () => {}),
 			});
 			await expect(racing.sync(pid, meta.id, syncInput('commit-bbbb'))).resolves.toBeDefined();
 
@@ -532,6 +534,8 @@ describe('SyncedNotebookService', () => {
 			const racing = new SyncedNotebookService(env.bucket, env.catalog, noopMetrics, {
 				getNotebook: async () => ({ meta: stale.meta, source: stale.source }),
 				pruneVersions: async () => {},
+				withNotebookWriteLock: async (_projectId, _notebookId, operation) =>
+					operation(async () => {}),
 			});
 
 			await expect(racing.sync(pid, meta.id, syncInput('commit-bbbb'))).rejects.toThrow(

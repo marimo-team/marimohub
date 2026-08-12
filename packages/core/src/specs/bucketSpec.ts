@@ -115,7 +115,7 @@ const OBJECTS: BucketObject[] = [
 		name: 'SessionCommitLock',
 		key: notebook.sessionCommitLock,
 		schema: SessionCommitLockSchema,
-		summary: 'Serializes session commit and notebook deletion.',
+		summary: 'Serializes content publication and notebook deletion.',
 		mutability: 'cas',
 		owner: 'NotebookService',
 		tag: 'notebook',

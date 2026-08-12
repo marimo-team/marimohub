@@ -40,14 +40,19 @@ interface SyncedNotebookServiceHooks {
 		notebookId: NotebookId,
 	) => Promise<{ meta: NotebookMeta; source: Source }>;
 	pruneVersions: (projectId: ProjectId, notebookId: NotebookId, keep: VersionId) => Promise<void>;
+	withNotebookWriteLock: <T>(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		operation: (assertLeaseHeld: () => Promise<void>) => Promise<T>,
+	) => Promise<T>;
 }
 
 /**
  * Notebooks whose source is push-synced from an external git repo (see
  * `GitSource`). A version per push is the unit of truth: each sync writes a fresh,
  * immutable `versions/{vid}/workspace/` mirror and then compare-and-swaps the
- * notebook's `source.json` pointer to it. There is no mutable workspace mirror to
- * corrupt, so concurrent pushes can only orphan a version, never interleave one.
+ * notebook's `source.json` pointer to it. The notebook write lease serializes sync
+ * with deletion, while the source CAS protects configuration changes.
  */
 export class SyncedNotebookService {
 	constructor(
@@ -211,6 +216,18 @@ export class SyncedNotebookService {
 		input: SyncNotebookInput,
 		actor: UserId = SYSTEM_ACTOR,
 	): Promise<NotebookMeta> {
+		return this.hooks.withNotebookWriteLock(projectId, notebookId, (assertLeaseHeld) =>
+			this.syncWithLock(projectId, notebookId, input, actor, assertLeaseHeld),
+		);
+	}
+
+	private async syncWithLock(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		input: SyncNotebookInput,
+		actor: UserId,
+		assertLeaseHeld: () => Promise<void>,
+	): Promise<NotebookMeta> {
 		const { meta: existing, source } = await this.hooks.getNotebook(projectId, notebookId);
 		if (existing.status === 'deleted') {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
@@ -276,6 +293,7 @@ export class SyncedNotebookService {
 							last_synced_at: now,
 						};
 					},
+					{ beforeWrite: assertLeaseHeld },
 				);
 				versionToKeep = assertSyncedSource(advancedSource).current_version_id ?? versionId;
 			})
@@ -293,6 +311,7 @@ export class SyncedNotebookService {
 				}
 				return { ...current, status: 'active' as const, updated_at: now };
 			},
+			{ beforeWrite: assertLeaseHeld },
 		);
 
 		await this.catalog.updateNotebookEntry(

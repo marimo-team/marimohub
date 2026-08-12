@@ -215,7 +215,7 @@ paths:
         '204':
           description: Stored.
   /projects/{pid}/notebooks/{nid}/_session_commit_lock.json:
-    summary: Serializes session commit and notebook deletion.
+    summary: Serializes content publication and notebook deletion.
     parameters:
       - name: pid
         in: path

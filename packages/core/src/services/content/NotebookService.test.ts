@@ -307,37 +307,38 @@ describe('NotebookService', () => {
 			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(1);
 		});
 
-		it('does not resurrect a notebook deleted before sync metadata publication', async () => {
+		it('rejects a sync queued behind deletion without changing Git storage', async () => {
 			const { meta } = await create();
 			const nb = paths.project(projectId).notebook(meta.id);
+			const sourceBefore = await (await bucket.get(nb.source))!.text();
 			const realPut = bucket.put.bind(bucket);
-			let metaPutReached!: () => void;
-			let releaseMetaPut!: () => void;
-			const atMetaPut = new Promise<void>((resolve) => {
-				metaPutReached = resolve;
+			let tombstoneReached!: () => void;
+			let releaseTombstone!: () => void;
+			const atTombstone = new Promise<void>((resolve) => {
+				tombstoneReached = resolve;
 			});
-			const metaPutGate = new Promise<void>((resolve) => {
-				releaseMetaPut = resolve;
+			const tombstoneGate = new Promise<void>((resolve) => {
+				releaseTombstone = resolve;
 			});
 			let gated = false;
 			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
 				const status =
 					typeof value === 'string' ? (JSON.parse(value) as { status?: string }).status : undefined;
-				if (key === nb.meta && status === 'active' && options?.onlyIfEtagMatches && !gated) {
+				if (key === nb.meta && status === 'deleted' && options?.onlyIfEtagMatches && !gated) {
 					gated = true;
-					metaPutReached();
-					await metaPutGate;
+					tombstoneReached();
+					await tombstoneGate;
 				}
 				return realPut(key, value, options);
 			});
 
+			const deletion = notebooks.deleteNotebook(projectId, meta.id, ACTOR);
+			await atTombstone;
 			const syncing = sync(meta.id, 'abc123', [{ path: 'app.py', bytes: enc('v1') }]);
-			const rejected = expect(syncing).rejects.toThrow(NotFoundError);
 			try {
-				await atMetaPut;
-				await notebooks.deleteNotebook(projectId, meta.id, ACTOR);
-				releaseMetaPut();
-				await rejected;
+				releaseTombstone();
+				await deletion;
+				await expect(syncing).rejects.toThrow(NotFoundError);
 
 				const stored = await (await bucket.get(nb.meta))!.json<any>();
 				const snapshot = await catalog.getCurrentSnapshot();
@@ -345,9 +346,11 @@ describe('NotebookService', () => {
 				expect(stored.status).toBe('deleted');
 				expect(project.notebooks[0].status).toBe('deleted');
 				expect(project.notebook_count).toBe(0);
+				expect(await (await bucket.get(nb.source))!.text()).toBe(sourceBefore);
+				expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
 			} finally {
-				releaseMetaPut();
-				await Promise.allSettled([syncing]);
+				releaseTombstone();
+				await Promise.allSettled([deletion, syncing]);
 			}
 		});
 

@@ -139,6 +139,8 @@ export class NotebookService {
 			getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
 			pruneVersions: (projectId, notebookId, keep) =>
 				this.pruneVersions(projectId, notebookId, MAX_VERSIONS, keep),
+			withNotebookWriteLock: (projectId, notebookId, operation) =>
+				this.withSessionCommitLock(projectId, notebookId, operation),
 		});
 	}
 
