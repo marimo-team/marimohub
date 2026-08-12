@@ -214,6 +214,21 @@ describe('bootstrap', () => {
 		expect(closePreview).toHaveBeenCalledOnce();
 	});
 
+	it('closes the data-preview backend when WebSockets outlive the drain deadline', async () => {
+		const closePreview = vi.fn().mockResolvedValue(undefined);
+		deps.dataBrowser = { preview: true, close: closePreview };
+		const harness = makeHarness(deps, { closeImmediately: false });
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+
+		const draining = handle?.drain();
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(closePreview).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(1);
+		await draining;
+		expect(closePreview).toHaveBeenCalledOnce();
+	});
+
 	it.each([
 		['starts', 'true', 1],
 		['does not start', undefined, 0],

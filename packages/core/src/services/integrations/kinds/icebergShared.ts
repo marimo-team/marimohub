@@ -44,6 +44,8 @@ export const unifiedAwsCredentialsSchema = z
 	])
 	.default({ method: 'none' });
 
+export const ICEBERG_RUNTIME_DEFAULTS = {};
+
 export const icebergRuntimeSchema = z
 	.strictObject({
 		max_workers: z.number().int().positive().optional(),
@@ -51,7 +53,7 @@ export const icebergRuntimeSchema = z
 		downcast_ns_timestamp_to_us_on_write: z.boolean().optional(),
 		pyarrow_use_large_types_on_read: z.boolean().optional(),
 	})
-	.default({});
+	.default(ICEBERG_RUNTIME_DEFAULTS);
 
 const s3Storage = z.strictObject({
 	scheme: z.literal('s3'),

@@ -14,6 +14,7 @@ import { zSecret } from '../secretFields';
 import {
 	extraPropertiesSchema,
 	ICEBERG_BRAND_COLOR,
+	ICEBERG_RUNTIME_DEFAULTS,
 	icebergRuntimeSchema,
 	icebergRequirements,
 	icebergStorageSchema,
@@ -64,6 +65,16 @@ const authSchema = z.discriminatedUnion('method', [
 
 const isInsecureUrl = (url: string) => url.startsWith('http://');
 
+const ICEBERG_REST_DEFAULTS = {
+	snapshot_loading_mode: 'all' as const,
+	metrics_reporting_enabled: true,
+	view_endpoints_supported: false,
+	scan_planning_mode: 'client' as const,
+	namespace_separator: '%1F',
+	table_cache_expire_after_write_ms: 300_000,
+	table_cache_max_entries: 100,
+};
+
 const icebergRestConfig = z.strictObject({
 	uri: httpUrl().describe('REST catalog base URI, e.g. https://catalog.internal/api/catalog'),
 	warehouse: z.string().optional().describe('Warehouse name/path if the server hosts several'),
@@ -86,24 +97,30 @@ const icebergRestConfig = z.strictObject({
 		.default({}),
 	rest: z
 		.strictObject({
-			snapshot_loading_mode: z.enum(['all', 'refs']).default('all'),
-			metrics_reporting_enabled: z.boolean().default(true),
+			snapshot_loading_mode: z
+				.enum(['all', 'refs'])
+				.default(ICEBERG_REST_DEFAULTS.snapshot_loading_mode),
+			metrics_reporting_enabled: z
+				.boolean()
+				.default(ICEBERG_REST_DEFAULTS.metrics_reporting_enabled),
 			page_size: z.number().int().positive().optional(),
-			view_endpoints_supported: z.boolean().default(false),
-			scan_planning_mode: z.enum(['client', 'server']).default('client'),
-			namespace_separator: z.string().min(1).default('%1F'),
-			table_cache_expire_after_write_ms: z.number().int().nonnegative().default(300_000),
-			table_cache_max_entries: z.number().int().positive().default(100),
+			view_endpoints_supported: z.boolean().default(ICEBERG_REST_DEFAULTS.view_endpoints_supported),
+			scan_planning_mode: z
+				.enum(['client', 'server'])
+				.default(ICEBERG_REST_DEFAULTS.scan_planning_mode),
+			namespace_separator: z.string().min(1).default(ICEBERG_REST_DEFAULTS.namespace_separator),
+			table_cache_expire_after_write_ms: z
+				.number()
+				.int()
+				.nonnegative()
+				.default(ICEBERG_REST_DEFAULTS.table_cache_expire_after_write_ms),
+			table_cache_max_entries: z
+				.number()
+				.int()
+				.positive()
+				.default(ICEBERG_REST_DEFAULTS.table_cache_max_entries),
 		})
-		.default({
-			snapshot_loading_mode: 'all',
-			metrics_reporting_enabled: true,
-			view_endpoints_supported: false,
-			scan_planning_mode: 'client',
-			namespace_separator: '%1F',
-			table_cache_expire_after_write_ms: 300_000,
-			table_cache_max_entries: 100,
-		}),
+		.default(ICEBERG_REST_DEFAULTS),
 	headers: z
 		.record(z.string().regex(HTTP_HEADER_NAME_REGEX), z.string())
 		.default({})
@@ -504,19 +521,10 @@ function duckdbPreviewBlocker(config: IcebergRestConfig): string | undefined {
 	if (config.storage.scheme !== 'catalog') {
 		return 'explicit object-storage configuration is not supported by DuckDB-Wasm preview';
 	}
-	if (Object.keys(config.runtime).length > 0) {
+	if (JSON.stringify(config.runtime) !== JSON.stringify(ICEBERG_RUNTIME_DEFAULTS)) {
 		return 'PyIceberg runtime options are not supported by DuckDB-Wasm preview';
 	}
-	if (
-		config.rest.snapshot_loading_mode !== 'all' ||
-		!config.rest.metrics_reporting_enabled ||
-		config.rest.page_size !== undefined ||
-		config.rest.view_endpoints_supported ||
-		config.rest.scan_planning_mode !== 'client' ||
-		config.rest.namespace_separator !== '%1F' ||
-		config.rest.table_cache_expire_after_write_ms !== 300_000 ||
-		config.rest.table_cache_max_entries !== 100
-	) {
+	if (JSON.stringify(config.rest) !== JSON.stringify(ICEBERG_REST_DEFAULTS)) {
 		return 'custom REST client options are not supported by DuckDB-Wasm preview';
 	}
 	return undefined;

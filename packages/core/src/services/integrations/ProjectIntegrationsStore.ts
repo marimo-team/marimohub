@@ -19,7 +19,11 @@ import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import type { DataPreviewService } from './data-preview/DataPreviewService';
-import type { PreviewProgramAvailability, PreviewPrograms } from './data-preview/programs';
+import type {
+	PreviewCredentialVars,
+	PreviewProgramAvailability,
+	PreviewPrograms,
+} from './data-preview/programs';
 import type {
 	BrowseCapabilityResult,
 	BrowseNamespacesRequest,
@@ -873,7 +877,7 @@ class ScopedIntegrationsStore {
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
-		credentialVars?: Record<string, string> | (() => Promise<Record<string, string> | undefined>),
+		credentialVars?: PreviewCredentialVars,
 	): Promise<TablePreview> {
 		const { head, def, version, browse, config, probe } = await this.openBrowse(scope, id);
 		if (browse.previewRows) return browse.previewRows(config, probe, namespace, table, request);
@@ -893,8 +897,6 @@ class ScopedIntegrationsStore {
 				'This integration does not support row preview on this deployment.',
 			);
 		}
-		const resolvedCredentialVars =
-			typeof credentialVars === 'function' ? await credentialVars() : credentialVars;
 		const programs = def.preview.programs({
 			config,
 			integration: {
@@ -909,7 +911,7 @@ class ScopedIntegrationsStore {
 			namespace,
 			table,
 			limit: request.limit,
-			credentialVars: resolvedCredentialVars,
+			credentialVars,
 		});
 		if (!this.dataPreview.available(availabilityForPrograms(programs))) {
 			throw new ValidationError(
@@ -1646,7 +1648,7 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
-		credentialVars?: Record<string, string> | (() => Promise<Record<string, string> | undefined>),
+		credentialVars?: PreviewCredentialVars,
 	): Promise<TablePreview> {
 		return this.withBrowseScope(projectId, id, (scope) =>
 			this.store.browseTablePreview(

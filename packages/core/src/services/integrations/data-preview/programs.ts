@@ -3,6 +3,9 @@ import type { TablePreview } from '../../../ports/integrations';
 import type { RenderOutput } from '../sdk';
 
 export type PreviewRuntimeFeature = 'iceberg-http';
+export type PreviewCredentialVars =
+	| Record<string, string>
+	| (() => Promise<Record<string, string> | undefined>);
 
 export interface DuckDBPreviewStatement {
 	text: string;
@@ -30,7 +33,7 @@ export interface PythonPreviewProgram {
 		version: number;
 	};
 	sessionId: SessionId;
-	credentialVars?: Record<string, string>;
+	credentialVars?: PreviewCredentialVars;
 }
 
 export interface PreviewPrograms {
@@ -52,7 +55,7 @@ export interface PreviewProgramInput<C> {
 	namespace: string[];
 	table: string;
 	limit: number;
-	credentialVars?: Record<string, string>;
+	credentialVars?: PreviewCredentialVars;
 }
 
 export interface PreviewExecutorStatus {

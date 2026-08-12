@@ -39,6 +39,7 @@ import type {
 	ObjectVersion,
 	ObjectVersionRequest,
 } from '../../ports/objectBrowser';
+import type { PreviewCredentialVars } from './data-preview/programs';
 
 /** Application service for project integrations and inherited organization integrations. */
 export interface ProjectIntegrationsService {
@@ -102,7 +103,7 @@ export interface ProjectIntegrationsService {
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
-		credentialVars?: Record<string, string> | (() => Promise<Record<string, string> | undefined>),
+		credentialVars?: PreviewCredentialVars,
 	): Promise<TablePreview>;
 	browseObjectBuckets(
 		projectId: ProjectId,

@@ -85,7 +85,9 @@ export class SandboxDataPreview {
 						{ path: SCRIPT_PATH, content: program.script },
 						{ path: REQUEST_PATH, content: JSON.stringify(program.input) },
 					]),
-					sandbox.setEnvVars({ ...bundle.vars, ...program.credentialVars }),
+					resolveCredentialVars(program).then((credentialVars) =>
+						sandbox.setEnvVars({ ...bundle.vars, ...credentialVars }),
+					),
 				]),
 				this.options.startupTimeoutMs,
 				'prepare',
@@ -140,6 +142,14 @@ export class SandboxDataPreview {
 			logOperationalError('data_preview_sandbox_destroy_failed', {}, error);
 		}
 	}
+}
+
+async function resolveCredentialVars(
+	program: PythonPreviewProgram,
+): Promise<Record<string, string> | undefined> {
+	return typeof program.credentialVars === 'function'
+		? program.credentialVars()
+		: program.credentialVars;
 }
 
 async function ready(sandbox: SandboxInstance): Promise<void> {

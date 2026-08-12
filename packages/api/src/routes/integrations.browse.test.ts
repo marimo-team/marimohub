@@ -758,9 +758,14 @@ describe('Data browser routes', () => {
 			}),
 			201,
 		);
-		const calls: unknown[] = [];
+		const calls: PythonPreviewProgram[] = [];
+		let credentialVars: Record<string, string> | undefined;
 		const dataPreview = previewService(async (program) => {
 			calls.push(program);
+			credentialVars =
+				typeof program.credentialVars === 'function'
+					? await program.credentialVars()
+					: program.credentialVars;
 			return { columns: [], rows: [] };
 		});
 		const full = createTestApi({
@@ -793,13 +798,12 @@ describe('Data browser routes', () => {
 				table: 'orders',
 			}),
 		);
-		expect(calls[0]).toMatchObject({
-			credentialVars: {
-				AWS_ACCESS_KEY_ID: 'temporary-key',
-				AWS_SECRET_ACCESS_KEY: 'temporary-secret',
-				AWS_SESSION_TOKEN: 'temporary-token',
-				AWS_REGION: 'us-east-1',
-			},
+		expect(calls[0]?.credentialVars).toBeTypeOf('function');
+		expect(credentialVars).toEqual({
+			AWS_ACCESS_KEY_ID: 'temporary-key',
+			AWS_SECRET_ACCESS_KEY: 'temporary-secret',
+			AWS_SESSION_TOKEN: 'temporary-token',
+			AWS_REGION: 'us-east-1',
 		});
 	});
 

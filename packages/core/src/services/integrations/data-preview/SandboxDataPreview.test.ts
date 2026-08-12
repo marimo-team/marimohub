@@ -70,6 +70,41 @@ describe('SandboxDataPreview', () => {
 		expect(calls.destroy).toBe(2);
 	});
 
+	it('resolves credentials only when the Python program executes', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		instance.exec = async (command) => {
+			calls.exec.push(command);
+			return command.includes('marimohub-data-preview.py')
+				? { success: true, stdout: '{"columns":["id"],"rows":[[1]]}', stderr: '' }
+				: { success: true, stdout: '', stderr: '' };
+		};
+		const credentials = vi.fn(async () => ({ AWS_ACCESS_KEY_ID: 'lazy-temporary' }));
+		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
+		await preview.check();
+		expect(credentials).not.toHaveBeenCalled();
+
+		await preview.preview({ ...program, credentialVars: credentials });
+
+		expect(credentials).toHaveBeenCalledOnce();
+		expect(calls.setEnvVars.at(-1)).toMatchObject({ AWS_ACCESS_KEY_ID: 'lazy-temporary' });
+	});
+
+	it('destroys the sandbox when credential resolution fails', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const preview = new SandboxDataPreview(fakeComputeFrom(instance), options);
+		await preview.check();
+
+		await expect(
+			preview.preview({
+				...program,
+				credentialVars: async () => {
+					throw new Error('WIF exchange failed');
+				},
+			}),
+		).rejects.toThrow('WIF exchange failed');
+		expect(calls.destroy).toBe(2);
+	});
+
 	it('destroys the sandbox after execution failure', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		instance.exec = async (command) => {
