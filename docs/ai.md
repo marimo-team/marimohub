@@ -31,7 +31,7 @@ The full set of variables:
 | `MARIMOHUB_AI_UPSTREAM_PROJECT`  | no       | Optional `OpenAI-Project` header forwarded upstream (e.g. W&B Inference `entity/project` attribution).               |
 | `MARIMOHUB_AI_MAX_TOKENS`        | no       | `[ai] max_tokens` written into the notebook config.                                                                  |
 | `MARIMOHUB_AI_RULES`             | no       | `[ai] rules` — custom assistant instructions.                                                                        |
-| `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | no       | Session-token lifetime in seconds (default 3600).                                                                    |
+| `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | no       | AI session-token lifetime in seconds (default: `3600`). Shorter lifetimes reduce the revocation window.              |
 
 Managed AI also requires `MARIMOHUB_AUTH_SESSION_SECRET` — the per-session tokens
 are signed with it (the same secret that signs login cookies).
@@ -64,6 +64,19 @@ a sandbox — only a minted, expiring, session-scoped token. This mirrors how
 [Workload Identity Federation](/workload-identity-federation) avoids long-lived storage
 keys.
 
+::: warning Token revocation is not immediate
+AI session tokens are self-contained. The proxy checks the signature and expiration
+of each token without reading object storage. This avoids an object-storage read for
+each AI request.
+
+An issued token remains valid until it expires. Stopping the session, removing
+project access, or suspending the user does not invalidate the token.
+
+The default lifetime is one hour. Set `MARIMOHUB_AI_TOKEN_TTL_SECONDS` to a lower
+value to reduce the revocation window. AI access ends when the token expires, even
+if the notebook session remains active.
+:::
+
 ## Proxy contract
 
 The proxy implements the subset of the OpenAI API that marimo calls server-side.
@@ -75,6 +88,10 @@ server-side.
 - `POST /api/ai/v1/responses` — the same passthrough for the OpenAI Responses API,
   so a client pointed at marimo's built-in `[ai.open_ai]` provider also works.
 - `GET /api/ai/v1/models` — returns the configured/allowed models.
+
+Each request body can contain at most 10 MB. This total includes embedded file
+content. The proxy rejects larger requests with HTTP `413` and does not send them
+upstream.
 
 This is a deliberate allowlist, not a generic OpenAI passthrough: the session token
 authorizes untrusted notebook code, so the proxy exposes only the endpoints clients

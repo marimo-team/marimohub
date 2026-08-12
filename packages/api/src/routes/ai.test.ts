@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mintAiSessionToken } from '@marimo-hub/core';
+import { MAX_REQUEST_BYTES, mintAiSessionToken } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing';
 import type { ApiDeps } from '../context';
 import { createApi } from '../createApi';
@@ -89,6 +89,49 @@ describe('POST /api/ai/v1/chat/completions', () => {
 		expect(res.status).toBe(400);
 		const json = (await res.json()) as { error: { type: string } };
 		expect(json.error.type).toBe('invalid_request_error');
+	});
+
+	it('rejects a request body over 10 MB before forwarding it', async () => {
+		const fetchMock = vi.spyOn(globalThis, 'fetch');
+		const res = await app().request('/api/ai/v1/chat/completions', {
+			method: 'POST',
+			headers: {
+				authorization: `Bearer ${await token()}`,
+				'content-type': 'application/json',
+				'content-length': String(MAX_REQUEST_BYTES + 1),
+			},
+			body: '{}',
+		});
+
+		expect(res.status).toBe(413);
+		await expectOpenAiError(
+			res,
+			`Request body exceeds the ${MAX_REQUEST_BYTES}-byte limit`,
+			'invalid_request_error',
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('allows a request body exactly at the 10 MB limit', async () => {
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response('ok', { status: 200 }));
+		const base = { model: 'm', padding: '' };
+		const overhead = JSON.stringify(base).length;
+		const body = JSON.stringify({ ...base, padding: 'x'.repeat(MAX_REQUEST_BYTES - overhead) });
+		expect(new TextEncoder().encode(body)).toHaveLength(MAX_REQUEST_BYTES);
+
+		const res = await app().request('/api/ai/v1/chat/completions', {
+			method: 'POST',
+			headers: {
+				authorization: `Bearer ${await token()}`,
+				'content-type': 'application/json',
+			},
+			body,
+		});
+
+		expect(res.status).toBe(200);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	it('returns 502 when the upstream provider is unreachable', async () => {
