@@ -67,11 +67,7 @@ export interface ProjectDeleteMutationResult {
 }
 
 function normalizeProjectName(name: string): string {
-	let normalized = '';
-	for (let index = 0; index < name.length; index++) {
-		const code = name.charCodeAt(index);
-		if (code > 31 && (code < 127 || code > 159)) normalized += name[index];
-	}
+	const normalized = name.replaceAll(/[\p{Cc}\p{Cf}]/gu, '');
 	if (normalized.trim().length === 0) {
 		throw new ValidationError('Project name must contain a visible character.');
 	}

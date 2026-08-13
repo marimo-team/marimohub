@@ -11,7 +11,7 @@ import { SmtpNotifier } from '@marimo-hub/notify-smtp';
 import { WebhookNotifier } from '@marimo-hub/notify-webhook';
 import { ConfigError } from './errors';
 import type { Env } from './env';
-import { parseList, required } from './env';
+import { parseBool, parseList, required } from './env';
 import { createGuardedProbe } from './integrationProbe';
 import type { ProbeTransport } from './integrationProbe';
 
@@ -82,6 +82,7 @@ export function makeNotifier(env: Env, metrics?: Metrics, transport?: ProbeTrans
 	// Deliveries are notification volume, not connection tests, so lift the probe
 	// default of 30/minute out of the way (projectAlerts.ts does the same).
 	const guardedProbe = createGuardedProbe({
+		allowPrivate: parseBool(env, 'MARIMOHUB_NOTIFY_ALLOW_PRIVATE'),
 		timeoutMs: 10_000,
 		maxResponseBytes: 1024,
 		maxProbesPerMinute: 10_000,

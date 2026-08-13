@@ -16,6 +16,7 @@ import {
 	composeAuthenticators,
 	createServices,
 	Millis,
+	MAX_TIMER_DELAY_MS,
 	ProxyExposure,
 	ASSIGNABLE_ROLES,
 	EDITOR_SANDBOX_SHARING_VALUES,
@@ -115,7 +116,7 @@ const DEFAULT_DATA_QUERY_ROWS = 10_000;
 const DEFAULT_DATA_QUERY_BYTES = 2 * 1024 * 1024;
 const DEFAULT_DATA_QUERY_TIMEOUT_S = 30;
 const DEFAULT_DATA_QUERY_MEMORY_LIMIT_MB = 128;
-const MAX_NODE_TIMER_SECONDS = Math.floor(2_147_483_647 / 1000);
+const MAX_NODE_TIMER_SECONDS = Math.floor(MAX_TIMER_DELAY_MS / 1000);
 
 /**
  * Parse a concurrency cap. `0` disables the cap (unlimited); unset falls back to
@@ -184,7 +185,11 @@ function dataPreviewFromEnv(
 				createNodeDuckDBWasmRuntimeFactory(embeddedPreviewRuntimeMode(env)),
 				{
 					memoryLimitMb: parsePositiveIntEnv(
-						env,
+						legacyDuckDBFallback(
+							env,
+							'MARIMOHUB_DATA_PREVIEW_EMBEDDED_MEMORY_LIMIT_MB',
+							'MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB',
+						),
 						'MARIMOHUB_DATA_PREVIEW_EMBEDDED_MEMORY_LIMIT_MB',
 						DEFAULT_EMBEDDED_PREVIEW_MEMORY_LIMIT_MB,
 					),
@@ -192,7 +197,11 @@ function dataPreviewFromEnv(
 					executionTimeoutMs,
 					maxPoolSize: maxConcurrent,
 					idleTimeoutMs: parseSecondsEnv(
-						env,
+						legacyDuckDBFallback(
+							env,
+							'MARIMOHUB_DATA_PREVIEW_EMBEDDED_IDLE_TIMEOUT_SECONDS',
+							'MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS',
+						),
 						'MARIMOHUB_DATA_PREVIEW_EMBEDDED_IDLE_TIMEOUT_SECONDS',
 						{
 							dflt: DEFAULT_EMBEDDED_PREVIEW_IDLE_TIMEOUT_S,
@@ -213,12 +222,29 @@ function dataPreviewFromEnv(
 }
 
 function embeddedPreviewRuntimeMode(env: Env): DuckDBWasmRuntimeMode {
-	return parseEnumOr(
-		env,
-		'MARIMOHUB_DATA_PREVIEW_EMBEDDED_RUNTIME',
-		['auto', 'worker'] as const,
+	const key = 'MARIMOHUB_DATA_PREVIEW_EMBEDDED_RUNTIME';
+	if (env[key]?.trim()) return parseEnumOr(env, key, ['auto', 'worker'] as const, 'auto');
+	const legacyKey = 'MARIMOHUB_DUCKDB_WASM_RUNTIME';
+	const legacy = env[legacyKey]?.trim();
+	if (!legacy) return 'auto';
+	warnLegacyEnv(legacyKey, key);
+	const mode = parseEnumOr(
+		{ [legacyKey]: legacy },
+		legacyKey,
+		['auto', 'worker', 'inline'],
 		'auto',
 	);
+	return mode === 'inline' ? 'worker' : mode;
+}
+
+function legacyDuckDBFallback(env: Env, key: string, legacyKey: string): Env {
+	if (env[key]?.trim() || !env[legacyKey]?.trim()) return env;
+	warnLegacyEnv(legacyKey, key);
+	return { ...env, [key]: env[legacyKey] };
+}
+
+function warnLegacyEnv(legacyKey: string, key: string): void {
+	console.warn(`[marimohub] ${legacyKey} is deprecated; use ${key}.`);
 }
 
 function dataQueryFromEnv(env: Env): DataQueryService | undefined {

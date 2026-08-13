@@ -210,7 +210,7 @@ const deleteProject = createRoute({
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'Project deleted'),
 		...commonErrors(),
-		...errorResponses(403, 404, 412),
+		...errorResponses(403, 404, 412, 429),
 	},
 });
 
@@ -264,7 +264,7 @@ const updateMember = createRoute({
 			'Member role updated',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404, 409),
+		...errorResponses(403, 404, 409, 429),
 	},
 });
 
@@ -277,7 +277,7 @@ const removeMember = createRoute({
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'Member removed'),
 		...commonErrors(),
-		...errorResponses(403, 404, 409),
+		...errorResponses(403, 404, 409, 429),
 	},
 });
 
@@ -339,7 +339,7 @@ app.openapi(deleteProject, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
-	assertNotificationMutationAllowed(deps, user.id);
+	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const deleted = await projects.deleteProjectWithMutation(pid, user.id, ifMatchToken(c));
 	if (deleted) {
 		scheduleProjectAlert(deps, pid, 'project.deleted', { project_id: pid, user: user.id }, () =>
@@ -389,11 +389,10 @@ app.openapi(addMember, async (c) => {
 		memberIdentity = await identities.get(userId);
 		member = { user_id: userId, email: memberIdentity?.email };
 	}
-	assertNotificationMutationAllowed(
-		deps,
-		user.id,
-		memberIdentity?.email ?? ('user_id' in member ? member.user_id : member.email),
-	);
+	assertNotificationMutationAllowed(deps, user.id, {
+		recipient: memberIdentity?.email ?? ('user_id' in member ? member.user_id : member.email),
+		recipientScope: pid,
+	});
 	const { project, mutationId } = await projects.addMemberWithMutation(
 		pid,
 		member,
@@ -442,7 +441,7 @@ app.openapi(updateMember, async (c) => {
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
-	assertNotificationMutationAllowed(deps, user.id);
+	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const body = c.req.valid('json');
 	const result = await projects.updateMemberRoleWithMutation(pid, uid, body.role, user.id);
 	const member = result.project.members.find(
@@ -475,7 +474,7 @@ app.openapi(removeMember, async (c) => {
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
-	assertNotificationMutationAllowed(deps, user.id);
+	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const result = await projects.removeMemberWithMutation(pid, uid, user.id);
 	scheduleProjectAlert(deps, pid, 'member.removed', { project_id: pid, user: user.id }, () =>
 		notificationRouter.render({

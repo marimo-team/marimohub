@@ -5,6 +5,7 @@ import { ObjectBrowseError, UserId, createProjectId } from '@marimo-hub/core';
 import {
 	assertBucket,
 	assertObjectIdentity,
+	assertPermittedHost,
 	decodeCursor,
 	detectRasterImage,
 	encodeCursor,
@@ -18,6 +19,7 @@ import {
 	createS3ClientFactory,
 	endpointsMatch,
 	enforcedTimeouts,
+	s3ResponseLimit,
 } from './client';
 
 function browseContext(): ObjectBrowseContext {
@@ -77,6 +79,7 @@ describe('provider error mapping', () => {
 
 	it.each([
 		['AbortError', undefined, 'aborted'],
+		['TimeoutError', undefined, 'aborted'],
 		['AccessDenied', 500, 'access_denied'],
 		['Other', 403, 'access_denied'],
 		['NoSuchKey', 500, 'not_found'],
@@ -100,6 +103,26 @@ describe('provider error mapping', () => {
 			request_id: code === 'aborted' ? undefined : 'request-id',
 		});
 		expect(mapped.message).not.toContain('secret provider detail');
+	});
+
+	it('keeps an explicit permission status ahead of a conflicting provider name', () => {
+		const mapped = mapS3Error(
+			Object.assign(new Error('provider detail'), {
+				name: 'NoSuchKey',
+				$metadata: { httpStatusCode: 403 },
+			}),
+		);
+		expect(mapped).toMatchObject({ code: 'access_denied' });
+	});
+
+	it('keeps an explicit permission status ahead of an unsupported provider name', () => {
+		const mapped = mapS3Error(
+			Object.assign(new Error('provider detail'), {
+				name: 'NotImplemented',
+				$metadata: { httpStatusCode: 403 },
+			}),
+		);
+		expect(mapped).toMatchObject({ code: 'access_denied' });
 	});
 });
 
@@ -140,6 +163,16 @@ describe('format and identity validation', () => {
 });
 
 describe('guarded DNS lookup', () => {
+	it('uses separate response caps for list and metadata operations and does not cap HEAD', () => {
+		const request = (method: string, query: Record<string, string>) =>
+			({ method, query }) as Parameters<typeof s3ResponseLimit>[0];
+		expect(s3ResponseLimit(request('GET', { 'list-type': '2' }), 10, 100)).toBe(100);
+		expect(s3ResponseLimit(request('GET', { versions: '' }), 10, 100)).toBe(100);
+		expect(s3ResponseLimit(request('GET', { 'x-id': 'ListBuckets' }), 10, 100)).toBe(100);
+		expect(s3ResponseLimit(request('GET', { tagging: '' }), 10, 100)).toBe(10);
+		expect(s3ResponseLimit(request('HEAD', {}), 10, 100)).toBeUndefined();
+	});
+
 	it('configures enforcing connection and socket timeouts', () => {
 		expect(enforcedTimeouts({})).toEqual({
 			connectionTimeout: 10_000,
@@ -291,6 +324,9 @@ describe('guarded DNS lookup', () => {
 	});
 
 	it('fails closed for empty or rejected resolver output', async () => {
+		await expect(assertPermittedHost('127.0.0.1', async () => [])).rejects.toThrow(
+			/did not resolve/,
+		);
 		await expect(
 			lookupResult(
 				createGuardedLookup(async () => []),

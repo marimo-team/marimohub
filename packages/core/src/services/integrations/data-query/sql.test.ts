@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { assertValidDataQuerySql } from './DataQueryService';
 import { singleDataQueryStatement } from './sql';
 
 describe('singleDataQueryStatement', () => {
@@ -37,6 +38,21 @@ describe('singleDataQueryStatement', () => {
 		expect(singleDataQueryStatement("select e'\\';'")).toBe("select e'\\';'");
 		expect(singleDataQueryStatement("SELECT E'a''b'")).toBe("SELECT E'a''b'");
 	});
+
+	it('honors backslash escapes in ordinary ClickHouse strings only when enabled', () => {
+		const sql = "SELECT 'a\\';b'";
+		expect(() => singleDataQueryStatement(sql)).toThrow('exactly one statement');
+		expect(singleDataQueryStatement(sql, { backslashEscapes: true })).toBe(sql);
+		expect(() => assertValidDataQuerySql(sql, 'clickhouse')).not.toThrow();
+		expect(() => assertValidDataQuerySql(sql, 'postgres')).toThrow('exactly one statement');
+	});
+
+	it.each(["select 'abc", 'select "abc', 'select `abc', 'select /* abc', 'select $tag$abc'])(
+		'rejects an unterminated quoted region: %s',
+		(sql) => {
+			expect(() => singleDataQueryStatement(sql)).toThrow('exactly one statement');
+		},
+	);
 
 	it('does not treat a quote after an identifier ending in E as an escape string', () => {
 		expect(() => singleDataQueryStatement("select CASE'\\';'")).toThrow('exactly one statement');

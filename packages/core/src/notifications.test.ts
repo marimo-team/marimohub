@@ -626,6 +626,34 @@ describe('fanOutNotifier', () => {
 		expect(first[Symbol.asyncDispose]).toHaveBeenCalledOnce();
 		expect(second.close).toHaveBeenCalledOnce();
 	});
+
+	it('waits for every adapter disposal before reporting a failure', async () => {
+		let finishSecond: (() => void) | undefined;
+		const firstFailure = new Error('first close failed');
+		const first = {
+			deliver: vi.fn(async () => 'skipped' as const),
+			close: vi.fn(async () => {
+				throw firstFailure;
+			}),
+		};
+		const second = {
+			deliver: vi.fn(async () => 'skipped' as const),
+			close: vi.fn(() => new Promise<void>((resolve) => (finishSecond = resolve))),
+		};
+		const notifier = fanOutNotifier([
+			{ name: 'first', notifier: first },
+			{ name: 'second', notifier: second },
+		]);
+
+		let settled = false;
+		const disposing = Promise.resolve(notifier.close?.()).finally(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		finishSecond?.();
+		await expect(disposing).rejects.toBe(firstFailure);
+	});
 });
 
 describe('NotificationSchema', () => {

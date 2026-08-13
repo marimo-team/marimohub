@@ -965,8 +965,8 @@ class ScopedIntegrationsStore {
 		if (!this.dataQuery) {
 			throw new ValidationError('Run SQL is not enabled on this deployment.');
 		}
-		assertValidDataQuerySql(sql);
 		const head = await this.getHead(scope, id);
+		assertValidDataQuerySql(sql, head.kind);
 		if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
 		const rendered = await this.renderOne(scope, head, projectId, { sessionId, principal });
 		const bundled = bundleIntegrations([rendered], sessionId);

@@ -1339,6 +1339,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 							'Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, and `session.takeover`. Set `none` to disable all kinds, including per-backend overrides. An unknown kind causes a startup error.',
 						example: 'member.invited,member.added',
 					},
+					{
+						id: 'MARIMOHUB_NOTIFY_ALLOW_PRIVATE',
+						name: 'Allow private notification targets',
+						description:
+							'Allow Slack and webhook delivery to private, loopback, link-local, or reserved IP addresses. Enable only for operator-controlled internal destinations.',
+						default: 'false',
+						example: 'true',
+					},
 				],
 			},
 			{

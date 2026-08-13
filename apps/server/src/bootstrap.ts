@@ -195,7 +195,7 @@ export async function bootstrap(
 			if (result === 'timed-out') {
 				logEvent({ level: 'warn', event: 'drain_timeout', timeoutMs: DRAIN_TIMEOUT_MS });
 				await settleAllWithin(
-					[closeDataBrowser(), waitForBackgroundTasks(), closeNotifier()],
+					[closeDataBrowser(), waitForBackgroundTasks().then(closeNotifier)],
 					DRAIN_TIMEOUT_MS,
 				);
 			}

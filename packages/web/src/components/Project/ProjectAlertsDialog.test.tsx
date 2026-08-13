@@ -299,6 +299,24 @@ describe('ProjectAlertsDialog', () => {
 		expect(body).toMatchObject({ kinds: ['app.unavailable', 'app.start_failed'] });
 	});
 
+	it('preserves unknown kinds when a visible selection changes', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-edit-00000004', {
+			name: 'Production Slack',
+			kinds: ['app.unavailable', 'unknown'],
+		});
+		const { fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			return method === 'PATCH' ? ok(destination) : ok(destinationPage([destination]));
+		});
+		await user.click(await screen.findByRole('button', { name: 'Edit Production Slack' }));
+		await user.click(screen.getByRole('checkbox', { name: 'App start failed' }));
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+
+		const body = await patchBody(fetchMock);
+		expect(body).toMatchObject({ kinds: ['app.unavailable', 'app.start_failed', 'unknown'] });
+	});
+
 	it('sends only replacement material entered during an edit', async () => {
 		const user = userEvent.setup();
 		const destination = slackDestination('alert-edit-00000001', {

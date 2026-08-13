@@ -34,11 +34,13 @@ export function createS3ClientFactory(options: {
 	connectionTimeoutMs?: number;
 	requestTimeoutMs?: number;
 	metadataMaxResponseBytes?: number;
+	listMaxResponseBytes?: number;
 }): S3ClientFactory {
 	return (source, context) => {
 		const lookup = createGuardedLookup(options.resolveHost, context.signal);
 		const requestHandler = new MetadataCappedNodeHttpHandler(
 			options.metadataMaxResponseBytes ?? DEFAULT_OBJECT_BROWSER_LIMITS.metadataMaxResponseBytes,
+			options.listMaxResponseBytes ?? DEFAULT_OBJECT_BROWSER_LIMITS.listMaxResponseBytes,
 			{
 				httpAgent: new HttpAgent({ lookup }),
 				httpsAgent: new HttpsAgent({ lookup }),
@@ -67,7 +69,8 @@ export function createS3ClientFactory(options: {
 
 class MetadataCappedNodeHttpHandler extends NodeHttpHandler {
 	constructor(
-		private readonly maxBytes: number,
+		private readonly metadataMaxBytes: number,
+		private readonly listMaxBytes: number,
 		options: NodeHttpHandlerOptions,
 	) {
 		super(options);
@@ -78,28 +81,34 @@ class MetadataCappedNodeHttpHandler extends NodeHttpHandler {
 		options?: Parameters<NodeHttpHandler['handle']>[1],
 	) {
 		const result = await super.handle(request, options);
-		if (isS3MetadataRequest(request)) {
+		const maxBytes = s3ResponseLimit(request, this.metadataMaxBytes, this.listMaxBytes);
+		if (maxBytes !== undefined) {
 			const declaredBytes = Number(result.response.headers['content-length']);
-			if (Number.isFinite(declaredBytes) && declaredBytes > this.maxBytes) {
+			if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
 				(result.response.body as { destroy?: () => void } | undefined)?.destroy?.();
 				throw metadataResponseTooLarge();
 			}
-			result.response.body = boundedResponseBody(result.response.body, this.maxBytes);
+			result.response.body = boundedResponseBody(result.response.body, maxBytes);
 		}
 		return result;
 	}
 }
 
-function isS3MetadataRequest(request: Parameters<NodeHttpHandler['handle']>[0]): boolean {
-	if (request.method === 'HEAD') return true;
-	if (request.method !== 'GET') return false;
+export function s3ResponseLimit(
+	request: Parameters<NodeHttpHandler['handle']>[0],
+	metadataMaxBytes: number,
+	listMaxBytes: number,
+): number | undefined {
+	if (request.method !== 'GET') return undefined;
 	const query = request.query ?? {};
-	return (
+	if (
 		query['x-id'] === 'ListBuckets' ||
 		Object.hasOwn(query, 'list-type') ||
-		Object.hasOwn(query, 'versions') ||
-		Object.hasOwn(query, 'tagging')
-	);
+		Object.hasOwn(query, 'versions')
+	) {
+		return listMaxBytes;
+	}
+	return Object.hasOwn(query, 'tagging') ? metadataMaxBytes : undefined;
 }
 
 function boundedResponseBody(body: unknown, maxBytes: number): unknown {

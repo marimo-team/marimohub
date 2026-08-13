@@ -65,7 +65,7 @@ export interface ProbeTransportRequest {
 
 export type ProbeTransport = (
 	request: ProbeTransportRequest,
-) => Promise<{ status: number; body: string }>;
+) => Promise<{ status: number; body: string; headers?: Readonly<Record<string, string>> }>;
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 256 * 1024;
@@ -125,6 +125,7 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 			return {
 				ok: response.status >= 200 && response.status < 300,
 				status: response.status,
+				headers: response.headers,
 				json: () => {
 					try {
 						return Promise.resolve<unknown>(JSON.parse(response.body));
@@ -164,6 +165,11 @@ const nodeTransport: ProbeTransport = (probeRequest) =>
 			probeRequest.url,
 			requestOptions,
 			(response) => {
+				const headers = Object.fromEntries(
+					Object.entries(response.headers).flatMap(([name, value]) =>
+						value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]],
+					),
+				);
 				const chunks: Buffer[] = [];
 				let total = 0;
 				response.on('data', (chunk: Buffer) => {
@@ -171,7 +177,7 @@ const nodeTransport: ProbeTransport = (probeRequest) =>
 					if (total > probeRequest.maxResponseBytes) {
 						// Truncated bodies parse as "not JSON"; the status is already known.
 						response.destroy();
-						settle(() => resolve({ status: response.statusCode ?? 0, body: '' }));
+						settle(() => resolve({ status: response.statusCode ?? 0, body: '', headers }));
 						return;
 					}
 					chunks.push(chunk);
@@ -181,6 +187,7 @@ const nodeTransport: ProbeTransport = (probeRequest) =>
 						resolve({
 							status: response.statusCode ?? 0,
 							body: Buffer.concat(chunks).toString('utf8'),
+							headers,
 						}),
 					),
 				);

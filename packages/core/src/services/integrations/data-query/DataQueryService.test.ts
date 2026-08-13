@@ -55,6 +55,14 @@ describe('DataQueryService', () => {
 		).toThrow(name);
 	});
 
+	it('rejects an execution timeout that overflows the platform timer', () => {
+		expect(() =>
+			setup(async () => ({ columns: [], rows: [], truncated: false }), {
+				executionTimeoutMs: 2_147_483_648,
+			}),
+		).toThrow(/executionTimeoutMs/);
+	});
+
 	it('passes fixed isolation controls to a fresh executor and terminates it', async () => {
 		const executions: DataQueryExecution[] = [];
 		let signal: AbortSignal | undefined;

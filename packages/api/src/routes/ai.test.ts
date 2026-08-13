@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_REQUEST_BYTES, mintAiSessionToken } from '@marimo-hub/core';
+import { MAX_REQUEST_BYTES, UnavailableError, mintAiSessionToken } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing';
 import type { ApiDeps } from '../context';
 import { createApi } from '../createApi';
@@ -174,7 +174,9 @@ describe('POST /api/ai/v1/chat/completions', () => {
 
 	it('fails closed when suspension status cannot be checked', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { ai: AI });
-		vi.spyOn(deps.services.identities, 'isSuspended').mockRejectedValue(new Error('storage down'));
+		vi.spyOn(deps.services.identities, 'isSuspended').mockRejectedValue(
+			new UnavailableError('storage down'),
+		);
 		const fetchMock = vi.spyOn(globalThis, 'fetch');
 		const res = await createApi(deps).request('/api/ai/v1/chat/completions', {
 			method: 'POST',
@@ -188,6 +190,27 @@ describe('POST /api/ai/v1/chat/completions', () => {
 		expect(res.status).toBe(503);
 		await expectOpenAiError(res, 'Unable to verify account status', 'api_error');
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('does not mask unexpected suspension-check failures as unavailable', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), { ai: AI });
+		vi.spyOn(deps.services.identities, 'isSuspended').mockRejectedValue(
+			new TypeError('bad binding'),
+		);
+		const res = await createApi(deps).request('/api/ai/v1/chat/completions', {
+			method: 'POST',
+			headers: {
+				authorization: `Bearer ${await token()}`,
+				'content-type': 'application/json',
+			},
+			body: JSON.stringify({ model: 'm', messages: [] }),
+		});
+
+		expect(res.status).toBe(500);
+		expect(await res.json()).toMatchObject({
+			success: false,
+			error: { code: 'INTERNAL_ERROR' },
+		});
 	});
 
 	it('forwards to the upstream with the real key and streams back', async () => {

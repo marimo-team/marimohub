@@ -674,10 +674,26 @@ app.openapi(takeoverEditorSession, async (c) => {
 	};
 	try {
 		const subject = await assertAccess();
-		assertNotificationMutationAllowed(deps, user.id);
 		const currentClaim = await deps.services.sessions.getEditorClaim(pid, nid);
 		if (effectiveEditorSharing(currentClaim, deps.policy.editorSandboxSharing) !== 'exclusive') {
 			throw new ConflictError('Takeover is only available in exclusive editor mode');
+		}
+		assertNotificationMutationAllowed(deps, user.id);
+		let holderIdentity: Awaited<ReturnType<typeof deps.services.identities.get>> | undefined;
+		if (
+			currentClaim?.session_id === body.expected_holder_session_id &&
+			currentClaim.transfer?.takeover_id !== body.takeover_id
+		) {
+			const displaced = await deps.services.sessions.getSession(
+				pid,
+				body.expected_holder_session_id,
+			);
+			holderIdentity = await deps.services.identities.get(displaced.user_id).catch(() => null);
+			assertNotificationMutationAllowed(deps, user.id, {
+				recipient: holderIdentity?.email ?? displaced.user_id,
+				recipientScope: pid,
+				consumeActor: false,
+			});
 		}
 		const claim = await deps.services.sessions.reserveTakeover(pid, nid, {
 			takeoverId: body.takeover_id,
@@ -688,8 +704,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 		observer.tag('phase', claim.transfer?.phase ?? 'changed');
 		await audit('session.takeover.request');
 		const notifyTakeover = (holderUserId: UserId) => {
-			const rendered = Promise.resolve().then(async () => {
-				const identity = await deps.services.identities.get(holderUserId).catch(() => null);
+			const rendered = Promise.resolve().then(() => {
 				return notificationRouter.render({
 					kind: 'session.takeover',
 					project: subject.project,
@@ -698,7 +713,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 					notebookId: nid,
 					takeoverId: body.takeover_id,
 					displacedUserId: holderUserId,
-					recipient: recipientFromIdentity(identity),
+					recipient: recipientFromIdentity(holderIdentity),
 					actor: user,
 					baseUrl: deps.sandbox.appBaseUrl,
 				});
@@ -723,6 +738,9 @@ app.openapi(takeoverEditorSession, async (c) => {
 			return c.json({ success: true }, 200);
 		}
 		const holder = await deps.services.sessions.getSession(pid, body.expected_holder_session_id);
+		if (holderIdentity === undefined) {
+			holderIdentity = await deps.services.identities.get(holder.user_id).catch(() => null);
+		}
 		if (claim.transfer?.phase === 'draining') {
 			try {
 				const completed = await sessionRetirer(deps).completeTakeoverDrain(

@@ -83,6 +83,7 @@ export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 				connectionTimeoutMs: transportTimeoutMs,
 				requestTimeoutMs: transportTimeoutMs,
 				metadataMaxResponseBytes: this.limits.metadataMaxResponseBytes,
+				listMaxResponseBytes: this.limits.listMaxResponseBytes,
 			});
 		} else {
 			throw new Error('S3ObjectBrowser requires a guarded host resolver.');

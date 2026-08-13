@@ -896,13 +896,14 @@ export function useBrowseTableSchemaQuery(
 
 function useAbortableBrowseMutation<TInput, TData>(
 	run: (input: TInput, signal: AbortSignal) => Promise<TData>,
+	identityKey: string,
 ) {
 	const active = useRef<AbortController | undefined>(undefined);
 	useEffect(
 		() => () => {
 			active.current?.abort();
 		},
-		[],
+		[identityKey],
 	);
 	return useMutation({
 		mutationFn: (input: TInput) => {
@@ -929,6 +930,7 @@ export function useBrowseTablePreview(projectId: string, integrationId: string) 
 					signal,
 				}),
 			),
+		`${projectId}\0${integrationId}`,
 	);
 }
 
@@ -947,7 +949,7 @@ export function useDataQuerySchemaQuery(
 		),
 		enabled,
 		staleTime: BROWSE_SCHEMA_STALE_MS,
-		queryFn: () =>
+		queryFn: ({ signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/query/schema', {
 					params: {
@@ -959,6 +961,7 @@ export function useDataQuerySchemaQuery(
 								}
 							: {},
 					},
+					signal,
 				}),
 			),
 	});
@@ -1137,6 +1140,7 @@ export function useObjectPreview(projectId: string, integrationId: string) {
 					signal,
 				}),
 			),
+		`${projectId}\0${integrationId}`,
 	);
 }
 

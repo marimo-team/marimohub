@@ -444,6 +444,7 @@ These variables control all notification backends.
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_NOTIFY_BACKENDS` | Comma-separated backends. Accepted values are `smtp`, `slack`, and `webhook`. An empty value disables notifications. | — | — | `smtp,slack,webhook` |
 | `MARIMOHUB_NOTIFY_KINDS` | Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, and `session.takeover`. Set `none` to disable all kinds, including per-backend overrides. An unknown kind causes a startup error. | — | — | `member.invited,member.added` |
+| `MARIMOHUB_NOTIFY_ALLOW_PRIVATE` | Allow Slack and webhook delivery to private, loopback, link-local, or reserved IP addresses. Enable only for operator-controlled internal destinations. | — | `false` | `true` |
 
 ### SMTP
 

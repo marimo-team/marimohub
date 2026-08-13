@@ -61,7 +61,7 @@ export class LazyMap<K, V> {
 
 	reload(key: K, options: { force?: boolean; load?: (key: K) => Promise<V> } = {}): Promise<V> {
 		const existing = this.pending.get(key);
-		if (existing && !options.force) return existing.promise;
+		if (existing && !existing.state.superseded && !options.force) return existing.promise;
 		if (existing) existing.state.superseded = true;
 
 		const state = { superseded: false };

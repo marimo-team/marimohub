@@ -495,6 +495,41 @@ describe('Project member routes', () => {
 		expect(members.some((member) => member.email === email)).toBe(false);
 	});
 
+	it('scopes the recipient notification budget to a project', async () => {
+		const email = 'shared-recipient@example.com';
+		const selector = encodeURIComponent(email);
+		for (let index = 0; index < 5; index += 1) {
+			await expectOk(
+				await owner('POST', `/projects/${pid}/members`, { email, role: 'viewer' }),
+				201,
+			);
+			await expectOk(await owner('DELETE', `/projects/${pid}/members/${selector}`));
+		}
+		const second = await expectOk<any>(
+			await owner('POST', '/projects', { name: 'Second team', description: 'd' }),
+			201,
+		);
+
+		await expectOk(
+			await owner('POST', `/projects/${second.id}/members`, { email, role: 'viewer' }),
+			201,
+		);
+	});
+
+	it('does not apply project-alert mutation limits when only personal notifications are on', async () => {
+		await expectOk(
+			await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'viewer' }),
+			201,
+		);
+		for (let index = 0; index < 25; index += 1) {
+			await expectOk(
+				await owner('PUT', `/projects/${pid}/members/${bob}`, {
+					role: index % 2 === 0 ? 'editor' : 'viewer',
+				}),
+			);
+		}
+	});
+
 	it('rate-limits repeated additions of a member whose identity has no email', async () => {
 		// The target never logs in, so no identity (and no email) exists for them;
 		// the recipient budget must fall back to keying by user id.

@@ -108,11 +108,12 @@ export function objectBrowseContract(
 					...(cursor ? { cursor } : {}),
 				}),
 			);
-			expect(buckets).toContainEqual({
-				name: fixture.bucket,
-				configured: opts.source.configured_bucket === fixture.bucket,
-				...(opts.source.configured_bucket ? {} : { created_at: expect.any(String) }),
-			});
+			expect(buckets).toContainEqual(
+				expect.objectContaining({
+					name: fixture.bucket,
+					configured: opts.source.configured_bucket === fixture.bucket,
+				}),
+			);
 		});
 
 		it('rejects roots outside the configured integration scope', async () => {

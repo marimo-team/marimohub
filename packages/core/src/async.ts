@@ -5,10 +5,16 @@ export interface DeadlineOptions {
 	abortError?: () => Error;
 }
 
-export function deadlineSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
-	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
-		throw new RangeError('timeoutMs must be a non-negative integer');
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function assertTimerDelay(timeoutMs: number): void {
+	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
+		throw new RangeError(`timeoutMs must be an integer between 0 and ${MAX_TIMER_DELAY_MS}`);
 	}
+}
+
+export function deadlineSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+	assertTimerDelay(timeoutMs);
 	const timeout = AbortSignal.timeout(timeoutMs);
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
@@ -37,8 +43,10 @@ export function withDeadline<T>(
 	work: PromiseLike<T> | ((signal: AbortSignal) => PromiseLike<T>),
 	options: DeadlineOptions,
 ): Promise<T> {
-	if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 0) {
-		return Promise.reject(new RangeError('timeoutMs must be a non-negative integer'));
+	try {
+		assertTimerDelay(options.timeoutMs);
+	} catch (error) {
+		return Promise.reject(error instanceof Error ? error : new RangeError('Invalid timeoutMs'));
 	}
 	if (options.signal?.aborted) {
 		if (typeof work !== 'function') void Promise.resolve(work).catch(() => {});

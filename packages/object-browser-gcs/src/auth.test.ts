@@ -80,6 +80,13 @@ describe('GCS ambient authentication', () => {
 		});
 	});
 
+	it('classifies custom caller abort reasons during standard ADC calls', async () => {
+		const signal = AbortSignal.abort(new Error('caller stopped'));
+		const auth = new GcsAuth(source, { ...context, signal }, fetch);
+		await expect(auth.headers()).rejects.toMatchObject({ code: 'aborted' });
+		await expect(auth.projectId()).rejects.toMatchObject({ code: 'aborted' });
+	});
+
 	it('classifies a metadata-server timeout as aborted in the pinned-fetch flow', async () => {
 		const signal = AbortSignal.abort(new DOMException('The operation timed out.', 'TimeoutError'));
 		const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {

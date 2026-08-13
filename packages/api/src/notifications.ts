@@ -26,14 +26,32 @@ interface NotificationMutationBudgets {
 	recipient: SlidingWindowBudget<string>;
 }
 
+type NotificationDeliveryMechanism = 'either' | 'notifier' | 'project-alert';
+
+interface NotificationMutationOptions {
+	delivery?: NotificationDeliveryMechanism;
+	recipient?: string;
+	recipientScope?: string;
+	consumeActor?: boolean;
+}
+
 const mutationBudgets = new WeakMap<ApiDeps, NotificationMutationBudgets>();
 
 export function assertNotificationMutationAllowed(
 	deps: ApiDeps,
 	actor: UserId,
-	recipient?: string,
+	options: NotificationMutationOptions = {},
 ): void {
-	if ((!deps.notifier || deps.notifier === noopNotifier) && !deps.projectAlerts) return;
+	const notifierEnabled = Boolean(deps.notifier && deps.notifier !== noopNotifier);
+	const projectAlertsEnabled = Boolean(deps.projectAlerts);
+	const delivery = options.delivery ?? 'either';
+	const deliveryEnabled =
+		delivery === 'notifier'
+			? notifierEnabled
+			: delivery === 'project-alert'
+				? projectAlertsEnabled
+				: notifierEnabled || projectAlertsEnabled;
+	if (!deliveryEnabled) return;
 	let budgets = mutationBudgets.get(deps);
 	if (!budgets) {
 		budgets = {
@@ -42,10 +60,16 @@ export function assertNotificationMutationAllowed(
 		};
 		mutationBudgets.set(deps, budgets);
 	}
-	if (!budgets.actor.consume(actor)) {
+	if (options.consumeActor !== false && !budgets.actor.consume(actor)) {
 		throw new ResourceExhaustedError('Too many notification-triggering changes; try again later.');
 	}
-	if (recipient && !budgets.recipient.consume(recipient.toLowerCase())) {
+	if (
+		notifierEnabled &&
+		options.recipient &&
+		!budgets.recipient.consume(
+			`${options.recipientScope ?? actor}\0${options.recipient.toLowerCase()}`,
+		)
+	) {
 		throw new ResourceExhaustedError(
 			'Too many notifications were requested for this recipient; try again later.',
 		);

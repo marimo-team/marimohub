@@ -15,6 +15,10 @@ limited to one project, see [Project alerts](./project-alerts.md).
 2. Set the required variables for each enabled backend.
 3. Set the global or per-backend kind allowlists.
 
+Slack and webhook targets resolve through a guarded transport. Private, loopback, link-local, and
+reserved addresses are blocked by default. Set `MARIMOHUB_NOTIFY_ALLOW_PRIVATE=true` only when an
+operator-managed destination intentionally runs on an internal network.
+
 This example sends member changes by email and session takeovers to Slack:
 
 ```dotenv

@@ -1,4 +1,5 @@
 import { KeyedAdmission } from '../../../concurrency';
+import { MAX_TIMER_DELAY_MS } from '../../../async';
 import { ResourceExhaustedError, UnavailableError, ValidationError } from '../../../errors';
 import type { UserId } from '../../../ids';
 import { assertPositiveIntegers } from '../../../internal/validation';
@@ -45,6 +46,9 @@ export class DataQueryService extends DrainableService {
 			maxBytes: options.maxBytes,
 			executionTimeoutMs: options.executionTimeoutMs,
 		});
+		if (options.executionTimeoutMs > MAX_TIMER_DELAY_MS) {
+			throw new RangeError(`executionTimeoutMs must be <= ${MAX_TIMER_DELAY_MS}`);
+		}
 		this.admission = new KeyedAdmission(options.maxConcurrent, options.maxConcurrentPerUser, {
 			global: () =>
 				new ResourceExhaustedError('The deployment data-query limit is currently full.'),
@@ -58,7 +62,7 @@ export class DataQueryService extends DrainableService {
 		signal?: AbortSignal,
 	): Promise<DataQueryResult> {
 		if (this.closed) throw new UnavailableError('The data-query service is closed.');
-		assertValidDataQuerySql(input.sql);
+		assertValidDataQuerySql(input.sql, input.connection.integration.kind);
 		return this.track(this.admission.run(userId, () => this.execute(input, signal)));
 	}
 
@@ -182,13 +186,13 @@ export class DataQueryService extends DrainableService {
 	}
 }
 
-export function assertValidDataQuerySql(sql: string): void {
+export function assertValidDataQuerySql(sql: string, integrationKind?: string): void {
 	if (sql.trim().length === 0) throw new ValidationError('SQL must not be empty.');
 	if (new TextEncoder().encode(sql).byteLength > MAX_DATA_QUERY_SQL_BYTES) {
 		throw new ValidationError(`SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`);
 	}
 	try {
-		singleDataQueryStatement(sql);
+		singleDataQueryStatement(sql, { backslashEscapes: integrationKind === 'clickhouse' });
 	} catch {
 		throw new ValidationError('SQL must contain exactly one statement.');
 	}

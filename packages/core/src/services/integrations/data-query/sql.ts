@@ -11,7 +11,11 @@ function isEscapeStringPrefix(sql: string, quoteIndex: number): boolean {
 	return before === undefined || !/[A-Za-z0-9_$]/.test(before);
 }
 
-export function singleDataQueryStatement(sql: string): string {
+export interface DataQuerySqlOptions {
+	backslashEscapes?: boolean;
+}
+
+export function singleDataQueryStatement(sql: string, options: DataQuerySqlOptions = {}): string {
 	const statements: string[] = [];
 	let start = 0;
 	let hasToken = false;
@@ -54,7 +58,10 @@ export function singleDataQueryStatement(sql: string): string {
 		if (mode !== 'normal') {
 			const quote =
 				mode === 'single' || mode === 'escape-single' ? "'" : mode === 'double' ? '"' : '`';
-			if (mode === 'escape-single' && character === '\\') {
+			if (
+				(mode === 'escape-single' || (mode === 'single' && options.backslashEscapes)) &&
+				character === '\\'
+			) {
 				index++;
 			} else if (character === quote) {
 				if (next === quote) index++;
@@ -103,6 +110,9 @@ export function singleDataQueryStatement(sql: string): string {
 			continue;
 		}
 		if (!/\s/.test(character)) hasToken = true;
+	}
+	if (dollarDelimiter !== undefined || (mode !== 'normal' && mode !== 'line-comment')) {
+		throw new Error('SQL must contain exactly one statement.');
 	}
 	if (hasToken) statements.push(sql.slice(start).trim());
 	if (statements.length !== 1) throw new Error('SQL must contain exactly one statement.');

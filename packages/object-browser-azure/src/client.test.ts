@@ -24,6 +24,16 @@ describe('Azure guarded HTTP client', () => {
 		expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
 	});
 
+	it('classifies transport deadline errors as aborted', async () => {
+		const client = guardedHttpClient(
+			resolver,
+			vi.fn<typeof fetch>(async () => {
+				throw new DOMException('deadline exceeded', 'TimeoutError');
+			}),
+		);
+		await expect(client.sendRequest(request())).rejects.toMatchObject({ code: 'aborted' });
+	});
+
 	it('keeps download cancellation linked after response headers arrive', async () => {
 		const requestController = new AbortController();
 		const client = guardedHttpClient(resolver, (async (_input, init) => {

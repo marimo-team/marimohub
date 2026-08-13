@@ -27,7 +27,14 @@ export async function boundedKeySearch<T>(
 	const { request, cursorStyle } = options;
 	const batchSize = options.batchSize ?? 1_000;
 	const decoded = decodeCursor(request.cursor, ['token', 'start_after', 'skip']);
-	if (cursorStyle === 'start-after' && decoded.token && decoded.start_after) throw invalidCursor();
+	if (decoded.token === '') throw invalidCursor();
+	if (
+		cursorStyle === 'start-after' &&
+		decoded.token !== undefined &&
+		decoded.start_after !== undefined
+	) {
+		throw invalidCursor();
+	}
 	if (cursorStyle === 'start-after' && decoded.skip !== undefined) throw invalidCursor();
 	if (cursorStyle === 'page-offset' && decoded.start_after !== undefined) throw invalidCursor();
 	const initialSkip = cursorStyle === 'page-offset' ? Number(decoded.skip ?? 0) : 0;
@@ -40,7 +47,7 @@ export async function boundedKeySearch<T>(
 	let nextCursor: string | null = null;
 	const items: ObjectEntry[] = [];
 	const prefix = request.prefix ?? '';
-	const query = request.query.toLocaleLowerCase();
+	const query = request.query.toLowerCase();
 
 	while (scanned < options.maxKeys && items.length < request.limit) {
 		const requestedToken = token;
@@ -54,7 +61,7 @@ export async function boundedKeySearch<T>(
 			const entry = options.toEntry(page.items[index]);
 			scanned += 1;
 			if (
-				entry.key.slice(prefix.length).toLocaleLowerCase().includes(query) &&
+				entry.key.slice(prefix.length).toLowerCase().includes(query) &&
 				matchesObjectSearchFilters(entry, request)
 			) {
 				items.push(entry);
@@ -64,7 +71,10 @@ export async function boundedKeySearch<T>(
 				nextCursor =
 					cursorStyle === 'start-after'
 						? encodeCursor({ start_after: entry.key })
-						: encodeCursor({ token: requestedToken ?? '', skip: String(index + 1) });
+						: encodeCursor({
+								...(requestedToken === undefined ? {} : { token: requestedToken }),
+								skip: String(index + 1),
+							});
 			} else if (page.hasMore && page.nextToken) {
 				nextCursor = encodeCursor(
 					cursorStyle === 'start-after'

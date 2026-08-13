@@ -540,6 +540,17 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Internal server error */
 				500: {
 					headers: {
@@ -1013,6 +1024,17 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Internal server error */
 				500: {
 					headers: {
@@ -1107,6 +1129,17 @@ export interface paths {
 				/** @description Validation error */
 				422: {
 					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
 						[name: string]: unknown;
 					};
 					content: {

@@ -96,6 +96,8 @@ export function ProjectAlertsDialog({
 	const kindsPristine =
 		editor?.destination !== undefined &&
 		sameKinds(editor.kinds, knownKinds(editor.destination.kinds));
+	const unknownKinds =
+		editor?.destination?.kinds.filter((kind) => !Object.hasOwn(LABELS, kind)) ?? [];
 
 	const save = async () => {
 		if (!editor?.name.trim() || (editor.kinds.length === 0 && !kindsPristine)) return;
@@ -124,7 +126,9 @@ export function ProjectAlertsDialog({
 					id: editor.destination.id,
 					updatedAt: editor.destination.updated_at,
 					name: editor.name.trim(),
-					...(kindsPristine ? {} : { kinds: editor.kinds }),
+					...(kindsPristine
+						? {}
+						: { kinds: [...editor.kinds, ...unknownKinds] as ProjectAlertKind[] }),
 					...(editor.type === 'slack' && editor.endpoint.trim()
 						? { webhook_url: editor.endpoint.trim() }
 						: {}),

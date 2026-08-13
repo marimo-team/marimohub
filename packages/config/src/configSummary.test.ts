@@ -118,6 +118,8 @@ describe('buildConfigSummary', () => {
 			'MARIMOHUB_SECRETS_AWS',
 			'MARIMOHUB_SECRETS_AWS_REGION',
 			'MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS',
+			// Egress-policy toggle, not private key material.
+			'MARIMOHUB_NOTIFY_ALLOW_PRIVATE',
 		]);
 		const suspicious = /SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE|CONNECTION_STRING/;
 		const unflagged = CONFIG_SPEC.flatMap((g) => g.backends)

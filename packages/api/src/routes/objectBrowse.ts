@@ -172,7 +172,13 @@ export async function runObjectBrowse<T>(operation: () => Promise<T>): Promise<T
 	}
 }
 
-const downloadGates = new WeakMap<object, KeyedAdmission<string>>();
+interface DownloadGate {
+	gate: KeyedAdmission<string>;
+	maxConcurrent: number;
+	maxConcurrentPerUser: number;
+}
+
+const downloadGates = new WeakMap<object, DownloadGate>();
 
 export function acquireDownload(
 	deps: ApiDeps,
@@ -181,16 +187,29 @@ export function acquireDownload(
 ): () => void {
 	const limits = deps.dataBrowser?.objectBrowser;
 	if (!limits) throw new NotFoundError('Object downloads are not enabled on this deployment.');
-	let gate = downloadGates.get(limits);
-	if (!gate) {
+	let cached = downloadGates.get(limits);
+	if (
+		!cached ||
+		cached.maxConcurrent !== limits.maxConcurrentDownloads ||
+		cached.maxConcurrentPerUser !== limits.maxConcurrentDownloadsPerUser
+	) {
 		const exhausted = () =>
 			new ResourceExhaustedError('Too many object downloads are active — try again later.');
-		gate = new KeyedAdmission(limits.maxConcurrentDownloads, limits.maxConcurrentDownloadsPerUser, {
-			global: exhausted,
-			perKey: exhausted,
-		});
-		downloadGates.set(limits, gate);
+		cached = {
+			gate: new KeyedAdmission(
+				limits.maxConcurrentDownloads,
+				limits.maxConcurrentDownloadsPerUser,
+				{
+					global: exhausted,
+					perKey: exhausted,
+				},
+			),
+			maxConcurrent: limits.maxConcurrentDownloads,
+			maxConcurrentPerUser: limits.maxConcurrentDownloadsPerUser,
+		};
+		downloadGates.set(limits, cached);
 	}
+	const gate = cached.gate;
 	const tags = { operation };
 	const emitter = deps.metrics ?? noopMetrics;
 	let release: () => void;

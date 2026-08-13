@@ -32,6 +32,7 @@ import {
 	detectRasterImage,
 	encodeCursor,
 	guardObjectStream,
+	isAbortError,
 	ObjectBrowserObserver,
 	objectBrowseCapability,
 	objectBrowseHttpError,
@@ -574,7 +575,7 @@ function mapAzureError(error: unknown): ObjectBrowseError {
 	};
 	const status = value?.statusCode;
 	const code = value?.code ?? value?.details?.errorCode ?? '';
-	if (value?.name === 'AbortError') {
+	if (isAbortError(error)) {
 		return new ObjectBrowseError('aborted', 'The request was canceled.');
 	}
 	if (isVersioningUnsupported(error) || code === 'UnsupportedQueryParameter') {

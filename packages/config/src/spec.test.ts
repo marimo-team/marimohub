@@ -20,7 +20,12 @@ const WIRING_SOURCES = [
 ];
 
 // Literals that appear in the wiring sources but aren't config vars.
-const IGNORED = new Set<string>();
+const IGNORED = new Set([
+	// Compatibility-only fallbacks. Keep the engine-specific names out of the public config surface.
+	'MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS',
+	'MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB',
+	'MARIMOHUB_DUCKDB_WASM_RUNTIME',
+]);
 
 function scanReferencedIds(): Set<string> {
 	const found = new Set<string>();

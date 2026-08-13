@@ -189,6 +189,7 @@ export interface ProbeRequestInit {
 export interface ProbeResponse {
 	ok: boolean;
 	status: number;
+	headers?: Readonly<Record<string, string>>;
 	/** Body parsed as JSON, or `undefined` when it is not JSON (or was truncated). */
 	json(): Promise<unknown>;
 }

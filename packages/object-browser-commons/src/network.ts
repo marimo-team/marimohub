@@ -27,7 +27,8 @@ export async function assertPermittedHost(
 	// A URL brackets an IPv6 literal; strip them for isIP and the resolver.
 	const bare = hostname.replaceAll(/^\[|\]$/g, '');
 	if (isIP(bare) === 0) return;
-	await resolveHost(bare, signal);
+	const addresses = await resolveHost(bare, signal);
+	if (addresses.length === 0) throw new Error('The object-store hostname did not resolve.');
 }
 
 export function createGuardedFetch(

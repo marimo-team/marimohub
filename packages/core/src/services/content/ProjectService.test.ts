@@ -32,6 +32,9 @@ describe('ProjectService', () => {
 			await expect(
 				projects.createProject({ name: '\n\u0000\u007f', description: 'D' }, ACTOR),
 			).rejects.toThrow(/visible character/);
+			await expect(
+				projects.createProject({ name: '\u200b\u200d\u202e', description: 'D' }, ACTOR),
+			).rejects.toThrow(/visible character/);
 		});
 
 		it('creates a project and adds it to the snapshot', async () => {

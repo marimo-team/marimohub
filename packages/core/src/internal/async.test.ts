@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { withAbortSignal, withDeadline } from '../async';
+import { deadlineSignal, MAX_TIMER_DELAY_MS, withAbortSignal, withDeadline } from '../async';
 
 describe('withDeadline', () => {
 	it('returns work that finishes before the deadline', async () => {
@@ -51,5 +51,15 @@ describe('withDeadline', () => {
 		const result = withAbortSignal(new Promise(() => {}), controller.signal);
 		controller.abort();
 		await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+	});
+
+	it('rejects delays that overflow the platform timer', async () => {
+		expect(() => deadlineSignal(MAX_TIMER_DELAY_MS + 1)).toThrow(RangeError);
+		await expect(
+			withDeadline(Promise.resolve(), {
+				timeoutMs: MAX_TIMER_DELAY_MS + 1,
+				timeoutError: () => new Error('late'),
+			}),
+		).rejects.toThrow(RangeError);
 	});
 });

@@ -17,6 +17,7 @@ import { ObjectBrowseError } from '@marimo-hub/core';
 import {
 	createGuardedFetch,
 	DEFAULT_OBJECT_BROWSER_LIMITS,
+	isAbortError,
 	readBoundedBody,
 } from '@marimo-hub/object-browser-commons';
 import type { GuardedHostResolver, ObjectBrowserLimits } from '@marimo-hub/object-browser-commons';
@@ -137,7 +138,7 @@ export function guardedHttpClient(
 						: '',
 				};
 			} catch (error) {
-				if ((error as { name?: unknown } | null)?.name === 'AbortError') {
+				if (isAbortError(error) || controller.signal.aborted) {
 					throw new ObjectBrowseError('aborted', 'The request was canceled.');
 				}
 				if (error instanceof ObjectBrowseError) throw error;

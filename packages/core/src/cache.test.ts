@@ -200,6 +200,23 @@ describe('LazyMap', () => {
 		expect(load).toHaveBeenCalledTimes(2);
 	});
 
+	it('starts a new load after deleting an in-flight load', async () => {
+		const old = deferred<string>();
+		const load = vi
+			.fn()
+			.mockImplementationOnce(() => old.promise)
+			.mockResolvedValueOnce('new');
+		const map = new LazyMap(load, { maxSize: 2 });
+		const superseded = map.get('a');
+		map.delete('a');
+
+		expect(await map.get('a')).toBe('new');
+		old.resolve('old');
+		expect(await superseded).toBe('new');
+		expect(map.getIfPresent('a')).toBe('new');
+		expect(load).toHaveBeenCalledTimes(2);
+	});
+
 	it('deletes cached values idempotently', () => {
 		const map = new LazyMap<string, number>(async () => 0, { maxSize: 2 });
 		map.set('a', 1);

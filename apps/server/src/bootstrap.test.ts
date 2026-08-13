@@ -285,7 +285,7 @@ describe('bootstrap', () => {
 		expect(disposeNotifier).toHaveBeenCalledOnce();
 	});
 
-	it('closes the notifier at the drain deadline when a background delivery is stuck', async () => {
+	it('does not close the notifier underneath a stuck background delivery', async () => {
 		const closeNotifier = vi.fn();
 		deps.notifier = { deliver: vi.fn(async () => 'delivered' as const), close: closeNotifier };
 		const harness = makeHarness(deps, { closeImmediately: false });
@@ -297,9 +297,10 @@ describe('bootstrap', () => {
 		expect(closeNotifier).not.toHaveBeenCalled();
 
 		await vi.advanceTimersByTimeAsync(1);
-		expect(closeNotifier).toHaveBeenCalledOnce();
+		expect(closeNotifier).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(10_000);
 		await draining;
+		expect(closeNotifier).not.toHaveBeenCalled();
 	});
 
 	it('closes the notifier only once across repeated drains', async () => {

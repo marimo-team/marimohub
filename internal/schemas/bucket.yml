@@ -143,6 +143,10 @@ paths:
           type: string
     x-mutability: cas
     x-owner: ProjectAlertStore
+    x-secret-paths:
+      - destinations.*.webhook_url
+      - destinations.*.url
+      - destinations.*.signing_secret
     get:
       operationId: read_projects_alerts_json
       summary: Read ProjectAlertConfig

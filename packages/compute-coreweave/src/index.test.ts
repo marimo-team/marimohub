@@ -888,10 +888,10 @@ computeContract(
 		makeCompute(
 			makeWorld({
 				runImpl: async (command) =>
-					command.at(-1) === 'false'
+					command.at(-1)?.includes('mh-contract-fail')
 						? procResult({ exitCode: 1, failed: true, ok: false, stderr: 'failed' })
 						: procResult(),
 			}),
 		),
-	{ mountFallsBack: true, semantics: { failingCommand: 'false' } },
+	{ mountFallsBack: true, semantics: { failingCommand: 'mh-contract-fail' } },
 );

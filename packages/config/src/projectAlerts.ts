@@ -35,10 +35,21 @@ const MAX_PROJECT_ALERT_EVENTS_PER_MINUTE = 100;
 const RATE_LIMIT_RETRY_DELAY_MS = 1_000;
 
 class AlertHttpError extends Error {
-	constructor(readonly status: number) {
+	constructor(
+		readonly status: number,
+		readonly retryAfterMs?: number,
+	) {
 		super(`Alert destination returned HTTP ${status}`);
 		this.name = 'AlertHttpError';
 	}
+}
+
+function retryAfterMilliseconds(value: string | undefined): number | undefined {
+	if (!value) return undefined;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1_000);
+	const at = Date.parse(value);
+	return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
 }
 
 function retryableAlertError(error: unknown): boolean {
@@ -220,7 +231,7 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 										lastError = error;
 										if (attempt === options.retry || !retryableAlertError(error)) throw error;
 										if (error instanceof AlertHttpError && error.status === 429) {
-											await this.delay(RATE_LIMIT_RETRY_DELAY_MS);
+											await this.delay(error.retryAfterMs ?? RATE_LIMIT_RETRY_DELAY_MS);
 										}
 									}
 								}
@@ -246,6 +257,11 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 		options: { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: string },
 	): Promise<void> {
 		const response = await this.probe.fetch(url, options);
-		if (!response.ok) throw new AlertHttpError(response.status);
+		if (!response.ok) {
+			throw new AlertHttpError(
+				response.status,
+				retryAfterMilliseconds(response.headers?.['retry-after']),
+			);
+		}
 	}
 }

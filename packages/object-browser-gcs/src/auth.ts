@@ -62,7 +62,7 @@ export class GcsAuth {
 			try {
 				return await withAbortSignal(this.googleAuth().getProjectId(), this.context.signal);
 			} catch (error) {
-				if (isAbortError(error)) {
+				if (this.context.signal?.aborted || isAbortError(error)) {
 					throw new ObjectBrowseError('aborted', 'The request was canceled.');
 				}
 				return undefined;
@@ -74,7 +74,10 @@ export class GcsAuth {
 				signal: this.context.signal,
 			});
 			return response.ok ? (await response.text()).trim() || undefined : undefined;
-		} catch {
+		} catch (error) {
+			if (this.context.signal?.aborted || isAbortError(error)) {
+				throw new ObjectBrowseError('aborted', 'The request was canceled.');
+			}
 			return undefined;
 		}
 	}
@@ -103,7 +106,7 @@ export class GcsAuth {
 				if (!token) throw new Error('missing token');
 				return token;
 			} catch (error) {
-				if (isAbortError(error)) {
+				if (this.context.signal?.aborted || isAbortError(error)) {
 					throw new ObjectBrowseError('aborted', 'The request was canceled.');
 				}
 				throw new ObjectBrowseError(
@@ -132,7 +135,7 @@ export class GcsAuth {
 			this.cached = { token, expires_at: Date.now() + seconds * 1000 };
 			return token;
 		} catch (error) {
-			if (isAbortError(error)) {
+			if (this.context.signal?.aborted || isAbortError(error)) {
 				throw new ObjectBrowseError('aborted', 'The request was canceled.');
 			}
 			throw new ObjectBrowseError('access_denied', 'GCS application credentials are unavailable.');
@@ -199,7 +202,7 @@ export class GcsAuth {
 			return token;
 		} catch (error) {
 			if (error instanceof ObjectBrowseError) throw error;
-			if (isAbortError(error)) {
+			if (this.context.signal?.aborted || isAbortError(error)) {
 				throw new ObjectBrowseError('aborted', 'The request was canceled.');
 			}
 			throw new ObjectBrowseError('access_denied', 'GCS authentication failed.');

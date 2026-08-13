@@ -47,6 +47,29 @@ describe('makeNotifier', () => {
 		);
 	});
 
+	it('allows private HTTP notification targets only with explicit operator policy', async () => {
+		const transport = vi.fn<ProbeTransport>(async () => ({ status: 204, body: '' }));
+		const notifier = makeNotifier(
+			{
+				MARIMOHUB_NOTIFY_BACKENDS: 'webhook',
+				MARIMOHUB_NOTIFY_WEBHOOK_URL: 'https://127.0.0.1/hook',
+				MARIMOHUB_NOTIFY_WEBHOOK_SECRET: 'secret',
+				MARIMOHUB_NOTIFY_ALLOW_PRIVATE: 'true',
+			},
+			undefined,
+			transport,
+		);
+
+		await expect(notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE)).resolves.toBe('delivered');
+		expect(transport).toHaveBeenCalledOnce();
+	});
+
+	it('rejects an invalid private-target policy', () => {
+		expect(() => makeNotifier({ MARIMOHUB_NOTIFY_ALLOW_PRIVATE: 'sometimes' })).toThrow(
+			/MARIMOHUB_NOTIFY_ALLOW_PRIVATE/,
+		);
+	});
+
 	it('is not capped by the connection-test rate limit', async () => {
 		const transport = vi.fn<ProbeTransport>(async () => ({ status: 204, body: '' }));
 		const notifier = makeNotifier(WEBHOOK_ENV, undefined, transport);
