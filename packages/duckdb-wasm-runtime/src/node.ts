@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import type {
 	DataQueryExecution,
@@ -97,12 +99,7 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	private closed = false;
 
 	constructor() {
-		const source = import.meta.url.endsWith('.ts')
-			? './worker.ts'
-			: import.meta.url.includes('/apps/server/dist/')
-				? './duckdbWorker.mjs'
-				: './worker.mjs';
-		this.worker = new Worker(new URL(source, import.meta.url), {
+		this.worker = new Worker(resolveWorkerUrl(), {
 			resourceLimits: DUCKDB_WORKER_RESOURCE_LIMITS,
 		});
 		this.worker.on('message', (response: RuntimeResponse) => this.onResponse(response));
@@ -200,6 +197,22 @@ function assertSupported(program: DuckDBPreviewProgram): void {
 			`DuckDB-Wasm runtime does not support required feature ${feature}.${reason ? ` ${reason}` : ''}`,
 		);
 	}
+}
+
+/**
+ * The worker filename depends on who built us: the server bundle emits the
+ * entry as duckdbWorker.mjs next to the main bundle; the package's own build
+ * emits worker.mjs. Resolve by existence — sniffing import.meta.url for a repo
+ * path fails in the Docker image, where the bundle lives at /app/dist and the
+ * missing file otherwise only surfaces as an async worker "error" event.
+ */
+function resolveWorkerUrl(): URL {
+	if (import.meta.url.endsWith('.ts')) return new URL('./worker.ts', import.meta.url);
+	for (const candidate of ['./duckdbWorker.mjs', './worker.mjs']) {
+		const url = new URL(candidate, import.meta.url);
+		if (existsSync(fileURLToPath(url))) return url;
+	}
+	throw new Error('DuckDB-Wasm worker file not found next to the runtime module.');
 }
 
 function isStructuralWorkerError(error: unknown): boolean {
