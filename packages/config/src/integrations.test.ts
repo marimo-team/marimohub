@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createProjectId } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
 import { ConfigError } from './errors';
-import { makeIntegrations, objectBrowserDeadlinesFromEnv } from './integrations';
+import {
+	makeIntegrations,
+	objectBrowserDeadlinesFromEnv,
+	objectBrowserLimitsFromEnv,
+} from './integrations';
 
 const PG_CONFIG = { host: 'db.internal', database: 'db', username: 'u', password: 'pw' };
 
@@ -111,7 +115,15 @@ describe('makeIntegrations data browser', () => {
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'metadata' },
 			new MemoryBucket(),
 		);
-		expect(wired.dataBrowser).toEqual({ preview: false });
+		expect(wired.dataBrowser).toMatchObject({
+			preview: false,
+			objectBrowser: {
+				allowServerAmbientCredentials: false,
+				maxConcurrentDownloads: 16,
+				maxConcurrentDownloadsPerUser: 2,
+				downloadTimeoutMs: 3_600_000,
+			},
+		});
 		expect(wired.integrations?.listKinds().some((k) => k.supports_browse)).toBe(true);
 		expect(wired.integrations?.listKinds().find((kind) => kind.kind === 's3')).toMatchObject({
 			supports_browse: true,
@@ -122,7 +134,7 @@ describe('makeIntegrations data browser', () => {
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
 			new MemoryBucket(),
 		);
-		expect(full.dataBrowser).toEqual({ preview: true });
+		expect(full.dataBrowser).toMatchObject({ preview: true });
 	});
 
 	it('ignores stale preview timeout values while data browsing is disabled', () => {
@@ -144,14 +156,15 @@ describe('makeIntegrations data browser', () => {
 				{
 					MARIMOHUB_INTEGRATIONS: 'on',
 					MARIMOHUB_DATA_BROWSER: 'metadata',
-					MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: 'stale-invalid-value',
+					MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS: 'stale-invalid-value',
+					MARIMOHUB_OBJECT_BROWSER_DOWNLOAD_TIMEOUT_SECONDS: 'stale-invalid-value',
 				},
 				new MemoryBucket(),
 			),
 		).not.toThrow();
 		expect(
 			objectBrowserDeadlinesFromEnv(
-				{ MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: 'stale-invalid-value' },
+				{ MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS: 'stale-invalid-value' },
 				'metadata',
 			),
 		).toEqual({
@@ -164,7 +177,7 @@ describe('makeIntegrations data browser', () => {
 	it('gives DNS resolution enough time for the longest active browser operation', () => {
 		expect(
 			objectBrowserDeadlinesFromEnv(
-				{ MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: '45' },
+				{ MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS: '45' },
 				'full',
 			),
 		).toEqual({
@@ -174,13 +187,16 @@ describe('makeIntegrations data browser', () => {
 		});
 		expect(
 			objectBrowserDeadlinesFromEnv(
-				{ MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: '5' },
+				{
+					MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS: '20',
+					MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS: '5',
+				},
 				'full',
 			),
 		).toEqual({
-			metadataTimeoutMs: 30_000,
+			metadataTimeoutMs: 20_000,
 			previewTimeoutMs: 5_000,
-			resolveTimeoutMs: 30_000,
+			resolveTimeoutMs: 20_000,
 		});
 	});
 
@@ -285,18 +301,66 @@ describe('makeIntegrations data browser', () => {
 		}
 	});
 
-	it('rejects invalid full-preview operation deadlines', () => {
+	it('rejects invalid object-browser operation deadlines', () => {
 		for (const value of ['0', '-1', 'not-a-number', '2147484']) {
+			for (const key of [
+				'MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS',
+				'MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS',
+			] as const) {
+				expect(() =>
+					makeIntegrations(
+						{
+							MARIMOHUB_INTEGRATIONS: 'on',
+							MARIMOHUB_DATA_BROWSER: 'full',
+							[key]: value,
+						},
+						new MemoryBucket(),
+					),
+				).toThrow(/expected .*integer/);
+			}
+		}
+	});
+
+	it('parses object-browser limits and rejects unsafe combinations', () => {
+		expect(
+			objectBrowserLimitsFromEnv(
+				{
+					MARIMOHUB_OBJECT_BROWSER_PREVIEW_MAX_BYTES: '1024',
+					MARIMOHUB_OBJECT_BROWSER_INLINE_IMAGE_MAX_BYTES: '2048',
+					MARIMOHUB_OBJECT_BROWSER_PARQUET_MAX_RANGED_BYTES: '4096',
+					MARIMOHUB_OBJECT_BROWSER_SEARCH_MAX_KEYS: '250',
+				},
+				'full',
+			),
+		).toEqual({
+			previewMaxBytes: 1024,
+			inlineImageMaxBytes: 2048,
+			parquetMaxRangedBytes: 4096,
+			searchMaxKeys: 250,
+		});
+
+		for (const value of ['0', '-1', 'not-an-integer', '9007199254740992']) {
 			expect(() =>
 				makeIntegrations(
 					{
 						MARIMOHUB_INTEGRATIONS: 'on',
 						MARIMOHUB_DATA_BROWSER: 'full',
-						MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS: value,
+						MARIMOHUB_OBJECT_BROWSER_SEARCH_MAX_KEYS: value,
 					},
 					new MemoryBucket(),
 				),
-			).toThrow(/expected .*integer/);
+			).toThrow(ConfigError);
 		}
+		expect(() =>
+			makeIntegrations(
+				{
+					MARIMOHUB_INTEGRATIONS: 'on',
+					MARIMOHUB_DATA_BROWSER: 'full',
+					MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS: '2',
+					MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS_PER_USER: '3',
+				},
+				new MemoryBucket(),
+			),
+		).toThrow(/cannot exceed/);
 	});
 });

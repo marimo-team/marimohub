@@ -1,8 +1,13 @@
-import { defaultRegistry, OrgIntegrationsStore, ProjectIntegrationsStore } from '@marimo-hub/core';
+import {
+	defaultRegistry,
+	Millis,
+	OrgIntegrationsStore,
+	ProjectIntegrationsStore,
+} from '@marimo-hub/core';
 import type { Bucket, DataPreview, IntegrationProbe, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from '@marimo-hub/api';
 import { DEFAULT_S3_OBJECT_BROWSER_LIMITS, S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
-import { parseSecondsEnv } from './env';
+import { parseBool, parseIntEnv, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
@@ -48,6 +53,7 @@ export function makeIntegrations(
 			? undefined
 			: (() => {
 					const deadlines = objectBrowserDeadlinesFromEnv(env, dataBrowser);
+					const limits = objectBrowserLimitsFromEnv(env, dataBrowser);
 					return {
 						s3: new S3ObjectBrowser({
 							mode: dataBrowser,
@@ -56,6 +62,7 @@ export function makeIntegrations(
 								timeoutMs: deadlines.resolveTimeoutMs,
 							}),
 							limits: {
+								...limits,
 								metadataTimeoutMs: deadlines.metadataTimeoutMs,
 								previewTimeoutMs: deadlines.previewTimeoutMs,
 							},
@@ -82,13 +89,119 @@ export function makeIntegrations(
 			: {
 					dataBrowser: {
 						preview: dataBrowser === 'full',
+						objectBrowser: objectBrowserApiConfigFromEnv(env, dataBrowser),
 						...(dataBrowser === 'full' && sandboxPreview ? { sandboxPreview } : {}),
 					},
 				}),
 	};
 }
 
+const DEFAULT_MAX_CONCURRENT_DOWNLOADS = 16;
+const DEFAULT_MAX_CONCURRENT_DOWNLOADS_PER_USER = 2;
+const DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 3600;
 const MAX_NODE_TIMER_SECONDS = Math.floor(2_147_483_647 / 1000);
+
+function positiveIntFromEnv(env: Env, key: string, dflt: number): number {
+	const value = parseIntEnv(env, key) ?? dflt;
+	if (!Number.isSafeInteger(value) || value < 1) {
+		throw new ConfigError(`Invalid ${key}: ${value} (expected a positive safe integer)`, {
+			variable: key,
+			docs: 'docs/integrations.md',
+		});
+	}
+	return value;
+}
+
+function fullModePositiveIntFromEnv(
+	env: Env,
+	mode: 'metadata' | 'full',
+	key: string,
+	dflt: number,
+): number {
+	return mode === 'full' ? positiveIntFromEnv(env, key, dflt) : dflt;
+}
+
+function objectBrowserTimeoutFromEnv(env: Env, key: string, dfltMs: number) {
+	return parseSecondsEnv(env, key, {
+		dflt: dfltMs / 1000,
+		max: MAX_NODE_TIMER_SECONDS,
+	});
+}
+
+export function objectBrowserLimitsFromEnv(
+	env: Env,
+	mode: 'metadata' | 'full',
+): Pick<
+	typeof DEFAULT_S3_OBJECT_BROWSER_LIMITS,
+	'previewMaxBytes' | 'inlineImageMaxBytes' | 'parquetMaxRangedBytes' | 'searchMaxKeys'
+> {
+	return {
+		previewMaxBytes: fullModePositiveIntFromEnv(
+			env,
+			mode,
+			'MARIMOHUB_OBJECT_BROWSER_PREVIEW_MAX_BYTES',
+			DEFAULT_S3_OBJECT_BROWSER_LIMITS.previewMaxBytes,
+		),
+		inlineImageMaxBytes: fullModePositiveIntFromEnv(
+			env,
+			mode,
+			'MARIMOHUB_OBJECT_BROWSER_INLINE_IMAGE_MAX_BYTES',
+			DEFAULT_S3_OBJECT_BROWSER_LIMITS.inlineImageMaxBytes,
+		),
+		parquetMaxRangedBytes: fullModePositiveIntFromEnv(
+			env,
+			mode,
+			'MARIMOHUB_OBJECT_BROWSER_PARQUET_MAX_RANGED_BYTES',
+			DEFAULT_S3_OBJECT_BROWSER_LIMITS.parquetMaxRangedBytes,
+		),
+		searchMaxKeys: positiveIntFromEnv(
+			env,
+			'MARIMOHUB_OBJECT_BROWSER_SEARCH_MAX_KEYS',
+			DEFAULT_S3_OBJECT_BROWSER_LIMITS.searchMaxKeys,
+		),
+	};
+}
+
+function objectBrowserApiConfigFromEnv(env: Env, mode: 'metadata' | 'full') {
+	const maxConcurrentDownloads = fullModePositiveIntFromEnv(
+		env,
+		mode,
+		'MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS',
+		DEFAULT_MAX_CONCURRENT_DOWNLOADS,
+	);
+	const maxConcurrentDownloadsPerUser = fullModePositiveIntFromEnv(
+		env,
+		mode,
+		'MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS_PER_USER',
+		DEFAULT_MAX_CONCURRENT_DOWNLOADS_PER_USER,
+	);
+	if (maxConcurrentDownloadsPerUser > maxConcurrentDownloads) {
+		throw new ConfigError(
+			'MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS_PER_USER cannot exceed ' +
+				'MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS.',
+			{
+				variable: 'MARIMOHUB_OBJECT_BROWSER_MAX_CONCURRENT_DOWNLOADS_PER_USER',
+				docs: 'docs/integrations.md',
+			},
+		);
+	}
+	return {
+		allowServerAmbientCredentials: parseBool(
+			env,
+			'MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS',
+		),
+		maxConcurrentDownloads,
+		maxConcurrentDownloadsPerUser,
+		downloadTimeoutMs:
+			mode === 'full'
+				? objectBrowserTimeoutFromEnv(
+						env,
+						'MARIMOHUB_OBJECT_BROWSER_DOWNLOAD_TIMEOUT_SECONDS',
+						Millis.seconds(DEFAULT_DOWNLOAD_TIMEOUT_SECONDS),
+					)
+				: Millis.seconds(DEFAULT_DOWNLOAD_TIMEOUT_SECONDS),
+	};
+}
 
 export function objectBrowserDeadlinesFromEnv(
 	env: Env,
@@ -98,13 +211,18 @@ export function objectBrowserDeadlinesFromEnv(
 	previewTimeoutMs: number;
 	resolveTimeoutMs: number;
 } {
-	const metadataTimeoutMs = DEFAULT_S3_OBJECT_BROWSER_LIMITS.metadataTimeoutMs;
+	const metadataTimeoutMs = objectBrowserTimeoutFromEnv(
+		env,
+		'MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS',
+		DEFAULT_S3_OBJECT_BROWSER_LIMITS.metadataTimeoutMs,
+	);
 	const previewTimeoutMs =
 		mode === 'full'
-			? parseSecondsEnv(env, 'MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS', {
-					dflt: DEFAULT_S3_OBJECT_BROWSER_LIMITS.previewTimeoutMs / 1000,
-					max: MAX_NODE_TIMER_SECONDS,
-				})
+			? objectBrowserTimeoutFromEnv(
+					env,
+					'MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS',
+					DEFAULT_S3_OBJECT_BROWSER_LIMITS.previewTimeoutMs,
+				)
 			: DEFAULT_S3_OBJECT_BROWSER_LIMITS.previewTimeoutMs;
 	return {
 		metadataTimeoutMs,

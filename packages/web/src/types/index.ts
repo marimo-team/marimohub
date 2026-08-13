@@ -28,6 +28,11 @@ import type {
 	IntegrationBrowseTablePage as ClientIntegrationBrowseTablePage,
 	IntegrationTableSchema as ClientIntegrationTableSchema,
 	IntegrationTablePreview as ClientIntegrationTablePreview,
+	IntegrationObjectBucket as ClientIntegrationObjectBucket,
+	IntegrationObjectEntry as ClientIntegrationObjectEntry,
+	IntegrationObjectDetail as ClientIntegrationObjectDetail,
+	IntegrationObjectVersion as ClientIntegrationObjectVersion,
+	IntegrationObjectPreview as ClientIntegrationObjectPreview,
 	ResolvedUser as ClientResolvedUser,
 	ApiToken as ClientApiToken,
 	ApiTokenCreated as ClientApiTokenCreated,
@@ -81,6 +86,11 @@ export type IntegrationBrowseTablePage = ClientIntegrationBrowseTablePage;
 /** Columns, partitioning, and load snippet for a browsed table. */
 export type IntegrationTableSchema = ClientIntegrationTableSchema;
 export type IntegrationTablePreview = ClientIntegrationTablePreview;
+export type IntegrationObjectBucket = ClientIntegrationObjectBucket;
+export type IntegrationObjectEntry = ClientIntegrationObjectEntry;
+export type IntegrationObjectDetail = ClientIntegrationObjectDetail;
+export type IntegrationObjectVersion = ClientIntegrationObjectVersion;
+export type IntegrationObjectPreview = ClientIntegrationObjectPreview;
 /** A resolved user identity ({ id, email, name }) from `GET /api/v1/users`. */
 export type ResolvedUser = ClientResolvedUser;
 /** A personal access token's metadata (never the secret). */

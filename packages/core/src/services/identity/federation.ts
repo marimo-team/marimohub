@@ -5,7 +5,7 @@
  * mint → exchange → env-map pipeline in one place.
  */
 import type { ProjectId, SessionId } from '../../ids';
-import type { FederationTarget } from '../../ports/credentialBroker';
+import type { FederationTarget, TempS3Creds } from '../../ports/credentialBroker';
 import { s3CredsToEnv } from './s3CredsEnv';
 import type { WorkloadIdentityIssuer } from './WorkloadIdentityIssuer';
 
@@ -32,12 +32,28 @@ export async function exchangeFederatedStorageEnv(
 	projectId: ProjectId,
 	sessionId: SessionId,
 ): Promise<Record<string, string>> {
+	const creds = await exchangeFederatedStorageCredentials(
+		issuer,
+		issuerUrl,
+		target,
+		projectId,
+		sessionId,
+	);
+	return s3CredsToEnv(creds, target.storage.endpoint, target.storage.region);
+}
+
+export async function exchangeFederatedStorageCredentials(
+	issuer: WorkloadIdentityIssuer,
+	issuerUrl: string,
+	target: FederationTarget,
+	projectId: ProjectId,
+	sessionId: SessionId,
+): Promise<TempS3Creds> {
 	const jwt = await issuer.mint({
 		iss: issuerUrl,
 		sub: projectSubject(projectId),
 		aud: target.audience,
 		extraClaims: { project_id: projectId, session_id: sessionId },
 	});
-	const creds = await target.broker.exchange(jwt);
-	return s3CredsToEnv(creds, target.storage.endpoint, target.storage.region);
+	return target.broker.exchange(jwt);
 }

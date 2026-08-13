@@ -3,7 +3,6 @@ import type { ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
-import { toast } from 'sonner';
 import {
 	ArrowLeft,
 	Check,
@@ -34,17 +33,25 @@ import {
 	useBrowseTablePreview,
 	useBrowseTablesQuery,
 	useCapabilitiesQuery,
-	useCreateNotebook,
 	useIntegrationKindsQuery,
 	useIntegrationsQuery,
 	useProjectQuery,
 } from '@/api/hooks';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { BRAND_ICONS } from '@/components/Project/brandIcons';
-import { supportsTableBrowse, tableBrowseCapability } from '@/lib/integrationBrowse';
+import {
+	objectBrowseCapability,
+	supportsObjectBrowse,
+	supportsTableBrowse,
+	tableBrowseCapability,
+} from '@/lib/integrationBrowse';
 import { formatRelative } from '@/lib/time';
+import { errorMessage } from '@/lib/errors';
 import { cn } from '@/lib/utils';
 import type { IntegrationEntry, IntegrationKind } from '@/types';
+import { useSeededNotebook } from './notebookSeed';
+import { ObjectBrowser } from './ObjectBrowser';
+import { TabularPreviewGrid } from './TabularPreviewGrid';
 
 /** Namespace parts join with U+001F in the `ns` query param, so dots round-trip. */
 const NS_JOIN = '\u001f';
@@ -85,42 +92,6 @@ function expandedWithAncestry(
 	return next;
 }
 
-/** A marimo notebook seeded with the table's load snippet as its data cell. */
-function seededNotebookCode(heading: string, snippet: string): string {
-	const cellBody = snippet
-		.split('\n')
-		.map((line) => (line === '' ? '' : `    ${line}`))
-		.join('\n');
-	return [
-		'import marimo',
-		'',
-		'app = marimo.App(width="medium", sql_output="native")',
-		'',
-		'',
-		'@app.cell',
-		'def _():',
-		'    import marimo as mo',
-		'    return (mo,)',
-		'',
-		'',
-		'@app.cell(hide_code=True)',
-		'def _(mo):',
-		`    mo.md(${JSON.stringify(`# ${heading}`)})`,
-		'    return',
-		'',
-		'',
-		'@app.cell',
-		'def _():',
-		cellBody,
-		'    return',
-		'',
-		'',
-		'if __name__ == "__main__":',
-		'    app.run()',
-		'',
-	].join('\n');
-}
-
 /**
  * Full-page, deep-linkable browser over the project's integrations:
  * `/projects/:pid/data/:iid?ns=…&table=…&q=…`. The tree is lazy and paged;
@@ -145,7 +116,10 @@ export default function DataBrowserPage() {
 		() =>
 			(entries ?? []).filter(
 				(entry) =>
-					entry.enabled && !entry.shadowed && supportsTableBrowse(kindsByName.get(entry.kind)),
+					entry.enabled &&
+					!entry.shadowed &&
+					(supportsTableBrowse(kindsByName.get(entry.kind)) ||
+						supportsObjectBrowse(kindsByName.get(entry.kind))),
 			),
 		[entries, kindsByName],
 	);
@@ -203,9 +177,11 @@ export default function DataBrowserPage() {
 		});
 	};
 
-	const selectIntegration = (id: string) => {
+	const selectIntegration = (entry: IntegrationEntry) => {
 		// A different integration means a different tree; selection does not carry.
-		void navigate(`/projects/${pid}/data/${id}${query ? `?q=${encodeURIComponent(query)}` : ''}`);
+		const kind = kindsByName.get(entry.kind);
+		const surface = supportsTableBrowse(kind) ? 'tables' : 'objects';
+		void navigate(`/projects/${pid}/data/${entry.id}?surface=${surface}`);
 	};
 
 	const refresh = async () => {
@@ -218,8 +194,32 @@ export default function DataBrowserPage() {
 	};
 
 	const selected = browsable.find((entry) => entry.id === iid);
+	const selectedKind = selected ? kindsByName.get(selected.kind) : undefined;
+	const requestedSurface = searchParams.get('surface');
+	const selectedSurface =
+		requestedSurface === 'objects' && supportsObjectBrowse(selectedKind)
+			? 'objects'
+			: supportsTableBrowse(selectedKind)
+				? 'tables'
+				: supportsObjectBrowse(selectedKind)
+					? 'objects'
+					: undefined;
 	const selectedCapability = useBrowseCapabilityQuery(pid!, iid ?? '', selected !== undefined);
 	const selectedTableCapability = tableBrowseCapability(selectedCapability.data);
+	const selectedObjectCapability = objectBrowseCapability(selectedCapability.data);
+	const selectSurface = (surface: 'tables' | 'objects') => {
+		setSearchParams((current) => {
+			const next = new URLSearchParams(current);
+			next.set('surface', surface);
+			for (const name of surface === 'objects'
+				? ['ns', 'table']
+				: ['bucket', 'prefix', 'key', 'version']) {
+				next.delete(name);
+			}
+			next.delete('q');
+			return next;
+		});
+	};
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-6 max-md:overflow-y-auto max-md:p-3">
@@ -245,6 +245,24 @@ export default function DataBrowserPage() {
 					</Button>
 				)}
 			</div>
+			{selectedKind && supportsTableBrowse(selectedKind) && supportsObjectBrowse(selectedKind) && (
+				<div className="flex w-fit rounded-md border border-input p-1" aria-label="Browse surface">
+					<Button
+						size="sm"
+						variant={selectedSurface === 'tables' ? 'primary' : 'ghost'}
+						onPress={() => selectSurface('tables')}
+					>
+						Tables
+					</Button>
+					<Button
+						size="sm"
+						variant={selectedSurface === 'objects' ? 'primary' : 'ghost'}
+						onPress={() => selectSurface('objects')}
+					>
+						Objects
+					</Button>
+				</div>
+			)}
 
 			{!available ? (
 				<EmptyState
@@ -261,12 +279,14 @@ export default function DataBrowserPage() {
 			) : (
 				<div className="grid min-h-0 flex-1 grid-cols-[minmax(18rem,1fr)_minmax(0,2fr)] gap-4 text-sm max-lg:grid-cols-1 max-lg:overflow-y-auto">
 					<div className="flex min-h-0 flex-col gap-2 overflow-hidden rounded-xl border bg-card p-3 max-lg:max-h-[50vh]">
-						<SearchField
-							aria-label="Filter tables"
-							placeholder="Filter tables..."
-							value={query}
-							onChange={setQuery}
-						/>
+						{selectedSurface !== 'objects' && (
+							<SearchField
+								aria-label="Filter tables"
+								placeholder="Filter tables..."
+								value={query}
+								onChange={setQuery}
+							/>
+						)}
 						<div className="min-h-0 flex-1 overflow-y-auto">
 							{browsable.map((entry) => (
 								<IntegrationSection
@@ -275,18 +295,45 @@ export default function DataBrowserPage() {
 									entry={entry}
 									kind={kindsByName.get(entry.kind)}
 									active={entry.id === iid}
+									showTree={entry.id === iid && selectedSurface === 'tables'}
 									query={query}
 									selection={entry.id === iid ? selection : null}
 									isExpanded={isExpanded}
 									toggleExpanded={toggleExpanded}
-									onActivate={() => selectIntegration(entry.id)}
+									onActivate={() => selectIntegration(entry)}
 									onSelectTable={selectTable}
 								/>
 							))}
 						</div>
 					</div>
-					<div className="min-h-0 overflow-y-auto rounded-xl border bg-card p-4">
-						{selected && selection ? (
+					<div
+						className={cn(
+							'min-h-0',
+							selectedSurface !== 'objects' && 'overflow-y-auto rounded-xl border bg-card p-4',
+						)}
+					>
+						{selected && selectedSurface === 'objects' ? (
+							selectedObjectCapability?.available ? (
+								<ObjectBrowser
+									projectId={pid!}
+									integration={selected}
+									previewAvailable={selectedObjectCapability.preview}
+									downloadAvailable={selectedObjectCapability.download}
+									searchAvailable={selectedObjectCapability.search === 'bounded-key-name'}
+									versionsAvailable={selectedObjectCapability.versions}
+								/>
+							) : (
+								<EmptyState
+									icon={<Folder />}
+									message="Object browsing unavailable"
+									description={
+										selectedCapability.error
+											? errorMessage(selectedCapability.error)
+											: (selectedObjectCapability?.reason ?? 'Checking object-store access…')
+									}
+								/>
+							)
+						) : selected && selection ? (
 							<TableDetail
 								// Remount per table so per-table state (the column filter)
 								// never carries over and blanks the next table's columns.
@@ -323,6 +370,7 @@ function IntegrationSection({
 	entry,
 	kind,
 	active,
+	showTree,
 	onActivate,
 	...handlers
 }: {
@@ -330,6 +378,7 @@ function IntegrationSection({
 	entry: IntegrationEntry;
 	kind: IntegrationKind | undefined;
 	active: boolean;
+	showTree: boolean;
 	onActivate: () => void;
 } & TreeHandlers) {
 	const capability = useBrowseCapabilityQuery(projectId, entry.id, active);
@@ -360,6 +409,7 @@ function IntegrationSection({
 				</span>
 			</button>
 			{active &&
+				showTree &&
 				(capability.data === undefined ? (
 					<LoadState depth={1} error={capability.error ?? undefined} />
 				) : tables?.available ? (
@@ -597,25 +647,19 @@ function TableDetail({
 	);
 	const { copied, copy } = useCopyToClipboard();
 	const [columnFilter, setColumnFilter] = useState('');
-	const createNotebook = useCreateNotebook(projectId);
-	const navigate = useNavigate();
+	const seededNotebook = useSeededNotebook(projectId);
 	const qualifiedName = [...selection.namespace, selection.table].join('.');
 
 	const openInNotebook = async () => {
 		const snippet = schema.data?.snippet;
 		if (!snippet) return;
 		const title = `explore_${selection.table}`;
-		try {
-			const created = await createNotebook.mutateAsync({
-				title,
-				description: `Explore ${qualifiedName} via the ${integration.name} integration`,
-				code: seededNotebookCode(qualifiedName, snippet),
-			});
-			toast.success(`Created "${title}"`);
-			void navigate(`/projects/${projectId}/notebooks/${created.id}`, { state: { title } });
-		} catch {
-			// Keep the page state; the global mutation handler reports the error.
-		}
+		await seededNotebook.create({
+			title,
+			heading: qualifiedName,
+			description: `Explore ${qualifiedName} via the ${integration.name} integration`,
+			snippet,
+		});
 	};
 
 	if (schema.data === undefined) {
@@ -698,10 +742,10 @@ function TableDetail({
 					<Button
 						variant="primary"
 						onPress={() => void openInNotebook()}
-						isDisabled={createNotebook.isPending}
+						isDisabled={seededNotebook.isPending}
 					>
 						<NotebookPen className="size-4" />
-						{createNotebook.isPending ? 'Creating…' : 'Open in notebook'}
+						{seededNotebook.isPending ? 'Creating…' : 'Open in notebook'}
 					</Button>
 				)}
 			</div>
@@ -839,65 +883,14 @@ function TableDetailTabs({
 						{preview.error instanceof Error ? preview.error.message : 'Request failed'}
 					</p>
 				)}
-				{preview.data && <PreviewTable data={preview.data} />}
+				{preview.data && (
+					<TabularPreviewGrid
+						columns={preview.data.columns}
+						rows={preview.data.rows}
+						emptyMessage="This table returned no rows."
+					/>
+				)}
 			</TabPanel>
 		</Tabs>
 	);
-}
-
-function PreviewTable({ data }: { data: { columns: string[]; rows: unknown[][] } }) {
-	if (data.rows.length === 0) {
-		return <p className="text-xs text-muted-foreground">This table returned no rows.</p>;
-	}
-	return (
-		<div className="overflow-x-auto rounded-md border border-input">
-			<table className="w-full whitespace-nowrap text-left text-xs">
-				<thead className="bg-muted/40">
-					<tr>
-						{data.columns.map((column) => (
-							<th key={column} className="px-3 py-2 font-medium">
-								{column}
-							</th>
-						))}
-					</tr>
-				</thead>
-				<tbody>
-					{keyedRows(data.rows).map(({ key, row }) => (
-						<tr key={key} className="border-t border-input/50">
-							{data.columns.map((column, columnIndex) => (
-								<td
-									key={column}
-									className="max-w-80 truncate px-3 py-2 font-mono"
-									title={renderCell(row[columnIndex])}
-								>
-									{renderCell(row[columnIndex])}
-								</td>
-							))}
-						</tr>
-					))}
-				</tbody>
-			</table>
-		</div>
-	);
-}
-
-function keyedRows(rows: unknown[][]): { key: string; row: unknown[] }[] {
-	const counts = new Map<string, number>();
-	return rows.map((row) => {
-		const base = JSON.stringify(row) ?? '[unserializable]';
-		const occurrence = counts.get(base) ?? 0;
-		counts.set(base, occurrence + 1);
-		return { key: `${base}:${occurrence}`, row };
-	});
-}
-
-function renderCell(value: unknown): string {
-	if (value === null) return 'null';
-	if (typeof value === 'string') return value;
-	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-	try {
-		return JSON.stringify(value) ?? '';
-	} catch {
-		return '[unserializable]';
-	}
 }

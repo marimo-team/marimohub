@@ -74,9 +74,14 @@ export class S3ObjectBrowser implements ObjectBrowser {
 		this.limits = { ...DEFAULT_S3_OBJECT_BROWSER_LIMITS, ...options.limits };
 		if (options.clientFactory) this.clientFactory = options.clientFactory;
 		else if (options.resolveHost) {
+			const transportTimeoutMs = Math.max(
+				this.limits.metadataTimeoutMs,
+				this.limits.previewTimeoutMs,
+			);
 			this.clientFactory = createS3ClientFactory({
 				resolveHost: options.resolveHost,
-				requestTimeoutMs: this.limits.metadataTimeoutMs,
+				connectionTimeoutMs: transportTimeoutMs,
+				requestTimeoutMs: transportTimeoutMs,
 			});
 		} else {
 			throw new Error('S3ObjectBrowser requires a guarded host resolver.');
@@ -100,7 +105,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 				available: false,
 				preview: false,
 				download: false,
-				search: 'bounded-key-name',
+				search: 'none',
 				versions: false,
 				preview_formats: [],
 				reason: mapped.message,
@@ -478,8 +483,16 @@ function matchesFilters(entry: ObjectEntry, filters: ObjectSearchRequest): boole
 	if (filters.formats?.length && (!extension || !filters.formats.includes(extension))) return false;
 	if (filters.min_size !== undefined && (entry.size ?? 0) < filters.min_size) return false;
 	if (filters.max_size !== undefined && (entry.size ?? 0) > filters.max_size) return false;
-	if (filters.modified_after && (entry.last_modified ?? '') < filters.modified_after) return false;
-	if (filters.modified_before && (entry.last_modified ?? '') > filters.modified_before)
+	if (
+		filters.modified_after &&
+		(!entry.last_modified || Date.parse(entry.last_modified) < Date.parse(filters.modified_after))
+	)
+		return false;
+	if (
+		filters.modified_before &&
+		entry.last_modified &&
+		Date.parse(entry.last_modified) > Date.parse(filters.modified_before)
+	)
 		return false;
 	return true;
 }

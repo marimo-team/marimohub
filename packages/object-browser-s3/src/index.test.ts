@@ -310,7 +310,7 @@ describe('S3ObjectBrowser listing and metadata', () => {
 					{
 						Key: 'events/match.csv',
 						Size: 20,
-						LastModified: new Date('2026-08-02T00:00:00Z'),
+						LastModified: new Date('2026-08-02T00:00:00.100Z'),
 					},
 					{
 						Key: 'events/match.json',
@@ -338,8 +338,8 @@ describe('S3ObjectBrowser listing and metadata', () => {
 			formats: ['csv'],
 			min_size: 10,
 			max_size: 30,
-			modified_after: '2026-08-01T00:00:00.000Z',
-			modified_before: '2026-08-03T00:00:00.000Z',
+			modified_after: '2026-08-02T00:00:00.1Z',
+			modified_before: '2026-08-02T00:00:00.1000Z',
 			limit: 10,
 		});
 		expect(page).toMatchObject({
@@ -819,6 +819,7 @@ describe('capabilities and metadata-only mode', () => {
 			available: false,
 			preview: false,
 			download: false,
+			search: 'none',
 			versions: false,
 			reason: expect.stringContaining('not enabled'),
 		});
