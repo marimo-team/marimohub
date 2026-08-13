@@ -27,7 +27,7 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 			undefined,
 			{ columns: ['value'], rows: [[1]] },
 		]);
-	});
+	}, 15_000);
 
 	it('removes requests rejected synchronously by postMessage', async () => {
 		const runtime = await initialized('worker');

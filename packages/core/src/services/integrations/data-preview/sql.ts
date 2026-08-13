@@ -1,9 +1,8 @@
-import format from 'pg-format';
-
 export function sqlIdentifier(value: string): string {
-	return format.ident(value);
+	return `"${value.replaceAll('"', '""')}"`;
 }
 
 export function sqlLiteral(value: string): string {
-	return format.literal(value);
+	const escaped = value.replaceAll("'", "''");
+	return escaped.includes('\\') ? `E'${escaped.replaceAll('\\', '\\\\')}'` : `'${escaped}'`;
 }

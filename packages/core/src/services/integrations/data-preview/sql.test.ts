@@ -3,7 +3,7 @@ import { sqlIdentifier, sqlLiteral } from './sql';
 
 describe('data-preview SQL helpers', () => {
 	it.each([
-		['plain_name', 'plain_name'],
+		['plain_name', '"plain_name"'],
 		['select', '"select"'],
 		['two.parts', '"two.parts"'],
 		['sales"archive', '"sales""archive"'],

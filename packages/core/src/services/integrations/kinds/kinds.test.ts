@@ -748,7 +748,7 @@ describe('kind renders (golden)', () => {
 			'vended_credentials',
 		]);
 		expect(programs?.duckdbWasm?.query).toEqual({
-			text: expect.stringContaining('"sales""archive".orders LIMIT ?'),
+			text: expect.stringContaining('"sales""archive"."orders" LIMIT ?'),
 			params: [20],
 		});
 		expect(programs?.python?.maxRows).toBe(20);

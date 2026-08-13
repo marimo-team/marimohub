@@ -17,7 +17,6 @@ const ALLOWED_DEPENDENCIES = new Set([
 	// unless an entrypoint registers a provider (the SDK stays in apps/server).
 	'@opentelemetry/api',
 	'better-all',
-	'pg-format',
 	'smol-toml',
 	'ulidx',
 	'yaml',
