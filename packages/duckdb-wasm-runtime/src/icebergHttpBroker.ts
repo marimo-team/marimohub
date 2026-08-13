@@ -228,11 +228,12 @@ function normalizeCapability(capability: IcebergHttpBrokerCapability, now: numbe
 	) {
 		throw invalidCapability();
 	}
-	const forwarded = new Set(
-		(capability.forwardRequestHeaders ?? DEFAULT_FORWARDED_REQUEST_HEADERS).map((header) =>
-			normalizeHeaderName(header),
-		),
-	);
+	const rawForwardedHeaders: readonly unknown[] =
+		capability.forwardRequestHeaders ?? DEFAULT_FORWARDED_REQUEST_HEADERS;
+	if (!rawForwardedHeaders.every((header): header is string => typeof header === 'string')) {
+		throw invalidCapability();
+	}
+	const forwarded = new Set(rawForwardedHeaders.map(normalizeHeaderName));
 	if ([...forwarded].some((header) => !header || FORBIDDEN_WORKER_HEADERS.has(header))) {
 		throw invalidCapability();
 	}
@@ -295,15 +296,18 @@ function authorize(session: Session, request: IcebergHttpBrokerRequest): Iceberg
 	const target = new URL(request.url);
 	const candidates = session.routes
 		.filter((route) => routeMatches(route, target))
-		.sort((left, right) => right.url.pathname.length - left.url.pathname.length);
-	if (candidates.length === 0) {
+		.sort((left, right) => {
+			if (left.match !== right.match) return left.match === 'exact' ? -1 : 1;
+			return right.url.pathname.length - left.url.pathname.length;
+		});
+	const route = candidates[0];
+	if (!route) {
 		throw new IcebergHttpBrokerError(
 			'target_denied',
 			'Iceberg HTTP broker target is outside the execution capability.',
 		);
 	}
-	const route = candidates.find((candidate) => candidate.methods.has(request.method));
-	if (!route) {
+	if (!route.methods.has(request.method)) {
 		throw new IcebergHttpBrokerError(
 			'method_denied',
 			'Iceberg HTTP broker method is not allowed for this target.',

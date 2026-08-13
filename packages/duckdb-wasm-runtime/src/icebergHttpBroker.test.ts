@@ -72,6 +72,24 @@ describe('IcebergHttpBroker', () => {
 		).toThrow(IcebergHttpBrokerError);
 	});
 
+	it('rejects non-string forwarded header names as an invalid capability', () => {
+		const { broker } = setup();
+		let error: unknown;
+
+		try {
+			broker.open(
+				capability({
+					forwardRequestHeaders: ['range', 42] as unknown as string[],
+				}),
+			);
+		} catch (cause) {
+			error = cause;
+		}
+
+		expect(error).toBeInstanceOf(IcebergHttpBrokerError);
+		expect(error).toMatchObject({ code: 'invalid_capability' });
+	});
+
 	it('keeps credentials in the parent and forwards only approved worker headers', async () => {
 		const { broker, calls } = setup([
 			{
@@ -144,6 +162,37 @@ describe('IcebergHttpBroker', () => {
 			'method_denied',
 		);
 		expect(transport).not.toHaveBeenCalled();
+	});
+
+	it('uses an exact route before an equal-path prefix route', async () => {
+		const { broker, calls } = setup();
+		const url = 'https://objects.example.test/warehouse/table.parquet';
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'storage',
+						url,
+						match: 'prefix',
+						methods: ['GET', 'HEAD'],
+						headers: { Authorization: 'Bearer prefix-secret' },
+					},
+					{
+						kind: 'storage',
+						url,
+						match: 'exact',
+						methods: ['GET'],
+						headers: { Authorization: 'Bearer exact-secret' },
+					},
+				],
+			}),
+		);
+
+		await broker.fetch(id, { url, method: 'GET' });
+		expect(calls[0].headers).toMatchObject({ authorization: 'Bearer exact-secret' });
+
+		await expectCode(broker.fetch(id, { url, method: 'HEAD' }), 'method_denied');
+		expect(calls).toHaveLength(1);
 	});
 
 	it('reauthorizes redirects and switches to credentials for the destination route', async () => {
