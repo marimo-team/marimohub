@@ -167,6 +167,27 @@ describe('LocalCompute file ops', () => {
 		expect(list.files.map((f) => f.name)).toContain('notebook.py');
 	});
 
+	it('waits for active writes before destroying and rejects later writes', async () => {
+		const id = `sb-write-destroy-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
+		created.push(id);
+		const sb = compute.create(id);
+		const root = path.join(os.tmpdir(), `marimohub-sandbox-${id}`);
+		const writes = Array.from({ length: 100 }, (_, index) => ({
+			path: `/workspace/${index}/file.txt`,
+			content: 'content',
+		}));
+
+		const writing = sb.writeFiles(writes);
+		const destroying = sb.destroy();
+		await expect(writing).resolves.toBeUndefined();
+		await expect(destroying).resolves.toBeUndefined();
+
+		await expect(access(root)).rejects.toThrow();
+		await expect(sb.writeFiles([{ path: '/workspace/late.txt', content: 'late' }])).rejects.toThrow(
+			/destroyed/,
+		);
+	});
+
 	it('returns NOT_FOUND reading a missing file', async () => {
 		const sb = newSandbox();
 		const read = await sb.readFile('/workspace/nope.py');
@@ -402,6 +423,33 @@ describe('LocalCompute registry & teardown', () => {
 
 	it('proxy is a no-op', async () => {
 		expect(await compute.proxy()).toBeNull();
+	});
+
+	it('disposes every sandbox and rejects later creates', async () => {
+		const local = new LocalCompute();
+		try {
+			const first = local.create('sb-dispose-first' as SandboxId);
+			const second = local.create('sb-dispose-second' as SandboxId);
+			const firstProcess = await first.startProcess(SERVER_CMD, { cwd: '/workspace' });
+			const secondProcess = await second.startProcess(SERVER_CMD, { cwd: '/workspace' });
+			await Promise.all([
+				firstProcess.waitForPort(2718, { timeout: 15_000 }),
+				secondProcess.waitForPort(2718, { timeout: 15_000 }),
+			]);
+			const urls = await Promise.all([
+				first.exposePort(2718, { hostname: '' }),
+				second.exposePort(2718, { hostname: '' }),
+			]);
+
+			await local[Symbol.asyncDispose]();
+			await expect(local[Symbol.asyncDispose]()).resolves.toBeUndefined();
+
+			for (const { url } of urls) await expect(fetch(url)).rejects.toThrow();
+			await expect(first.startProcess(SERVER_CMD)).rejects.toThrow(/destroyed/);
+			expect(() => local.create('sb-after-dispose' as SandboxId)).toThrow(/disposed/);
+		} finally {
+			await local[Symbol.asyncDispose]();
+		}
 	});
 });
 

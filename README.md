@@ -40,7 +40,11 @@ parallel. It skips the production server build. The local stack uses:
 - `memory` storage, which is non-durable
 - `local` compute, which starts `uv run marimo edit`
 - `dev` auth, which signs everyone in as a fixed local super admin
-- integrations and the metadata data browser, with one org-wide sample integration
+- integrations and metadata browsing, with a welcome notebook and sample environment
+
+Set `MARIMOHUB_DEV_PERSIST=true` to keep local state in the Git-ignored
+`.context/dev-storage` directory. Run `pnpm dev:reset` after stopping the dev
+stack to clear it.
 
 See [Testing locally](./docs/testing-locally.md) for the full local path and the
 production swaps for each backend.

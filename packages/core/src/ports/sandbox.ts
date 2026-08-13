@@ -237,6 +237,7 @@ export interface SandboxProvider {
 	 * provider sandbox back to its record (or detect that none exists).
 	 */
 	listActive?(): Promise<ActiveSandbox[]>;
+	[Symbol.asyncDispose]?(): PromiseLike<void>;
 }
 
 /**

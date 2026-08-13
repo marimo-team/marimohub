@@ -24,6 +24,7 @@ export { MaintenanceService } from './catalog/MaintenanceService';
 export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/MaintenanceService';
 export { MaintenanceLock } from './catalog/MaintenanceLock';
 export { MAX_VERSIONS, NotebookService } from './content/NotebookService';
+export type { CreateNotebookInput } from './content/NotebookService';
 export type {
 	CreateSyncedNotebookInput,
 	SyncNotebookInput,
@@ -132,8 +133,10 @@ export type { CreatedToken, CreateTokenInput } from './tokens/TokenService';
 export { composeAuthenticators } from './tokens/composeAuthenticators';
 export { listAllKeys } from './catalog/storage';
 export {
+	acquireSingletonClaim,
 	mutateObject,
 	mutateObjectWithOutcome,
+	releaseSingletonClaim,
 	withCasRetry,
 	type CasRetryOptions,
 	type CasWriter,

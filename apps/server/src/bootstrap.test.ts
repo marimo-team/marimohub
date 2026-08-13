@@ -246,6 +246,18 @@ describe('bootstrap', () => {
 		expect(harness.exit).toHaveBeenCalledWith(0);
 	});
 
+	it('disposes compute during drain', async () => {
+		const dispose = vi.fn().mockResolvedValue(undefined);
+		const compute = { ...deps.compute, [Symbol.asyncDispose]: dispose };
+		const harness = makeHarness({ ...deps, compute });
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+
+		await handle?.drain();
+		await handle?.drain();
+
+		expect(dispose).toHaveBeenCalledOnce();
+	});
+
 	it.each([
 		['starts', 'true', 1],
 		['does not start', undefined, 0],

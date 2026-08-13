@@ -217,8 +217,10 @@ class LocalSandboxInstance implements SandboxInstance {
 	private readonly children = new Set<ChildProcess>();
 	/** Logical port (as named in core, e.g. 2718) → real allocated host port. */
 	private readonly portMap = new Map<number, number>();
+	private readonly pendingWrites = new Set<Promise<unknown>>();
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
+	private destroyPromise?: Promise<void>;
 	/** ISO timestamp the instance was constructed — surfaced via listActive(). */
 	readonly createdAt = new Date().toISOString();
 
@@ -270,13 +272,20 @@ class LocalSandboxInstance implements SandboxInstance {
 	}
 
 	private async ensureRoot(): Promise<void> {
+		this.assertActive();
 		await mkdir(this.root, { recursive: true });
+		this.assertActive();
+	}
+
+	private assertActive(): void {
+		if (this.destroyPromise) throw new Error('local sandbox has been destroyed');
 	}
 
 	private spawnShell(
 		command: string,
 		options: { cwd?: string; env?: NodeJS.ProcessEnv; detached?: boolean } = {},
 	): ChildProcess {
+		this.assertActive();
 		// Spawn env entries are forced; guarded defaults defer to the inherited host env.
 		return spawn('sh', ['-c', withEnvPrefix(command, {}, this.envDefaults)], {
 			cwd: options.cwd ?? this.root,
@@ -285,31 +294,35 @@ class LocalSandboxInstance implements SandboxInstance {
 		});
 	}
 
+	private trackChild(child: ChildProcess): ChildProcess {
+		this.children.add(child);
+		const forget = () => this.children.delete(child);
+		child.once('exit', forget);
+		child.once('error', forget);
+		return child;
+	}
+
 	async exec(cmd: string): Promise<ExecResult> {
 		await this.ensureRoot();
 		return new Promise((resolve) => {
-			const child = this.spawnShell(this.rewriteCmd(cmd));
+			const child = this.trackChild(this.spawnShell(this.rewriteCmd(cmd), { detached: true }));
 			const { stdout, stderr } = captureOutput(child);
-			child.on('error', (err) =>
+			child.on('error', (err) => {
 				resolve(
 					execResult(false, stdout.toString(), stderr.toString() + String(err), 'SPAWN_FAILED'),
-				),
-			);
-			child.on('close', (code) =>
-				resolve(execResult(code === 0, stdout.toString(), stderr.toString())),
-			);
+				);
+			});
+			child.on('close', (code) => {
+				resolve(execResult(code === 0, stdout.toString(), stderr.toString()));
+			});
 		});
 	}
 
 	async execStream(cmd: string, _options?: ExecStreamOptions): Promise<ReadableStream> {
 		await this.ensureRoot();
-		const child = this.spawnShell(this.rewriteCmd(cmd), { detached: true });
-		this.children.add(child);
+		const child = this.trackChild(this.spawnShell(this.rewriteCmd(cmd), { detached: true }));
 		// An undrained stderr pipe can fill and block the child before stdout completes.
 		child.stderr?.resume();
-		const forget = () => this.children.delete(child);
-		child.once('exit', forget);
-		child.once('error', forget);
 		const stdout = child.stdout ?? Readable.from([]);
 		stdout.once('close', () => {
 			if (stdout.readableAborted) killProcessGroup(child, 'SIGKILL');
@@ -362,8 +375,9 @@ class LocalSandboxInstance implements SandboxInstance {
 	}
 
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
+		this.assertActive();
 		// Local writes are cheap (no round-trip), so a plain bounded loop is enough.
-		await mapWithConcurrency(files, WRITE_CONCURRENCY, async (f) => {
+		const pending = mapWithConcurrency(files, WRITE_CONCURRENCY, async (f) => {
 			const abs = this.resolveContained(f.path);
 			if (abs === null) {
 				console.warn(`writeFiles: skipping path outside sandbox root: ${f.path}`);
@@ -373,6 +387,12 @@ class LocalSandboxInstance implements SandboxInstance {
 			// `encoding` applies to string content only; bytes are written verbatim.
 			await writeFile(abs, f.content, typeof f.content === 'string' ? 'utf-8' : null);
 		});
+		this.pendingWrites.add(pending);
+		try {
+			await pending;
+		} finally {
+			this.pendingWrites.delete(pending);
+		}
 	}
 
 	async gitCheckout(repo: string, options?: GitCheckoutOptions): Promise<void> {
@@ -416,20 +436,21 @@ class LocalSandboxInstance implements SandboxInstance {
 
 		const cwd = options?.cwd ? this.mapPath(options.cwd) : this.root;
 		await mkdir(cwd, { recursive: true });
+		this.assertActive();
 
-		const child = this.spawnShell(command, {
-			cwd,
-			env: options?.env,
-			detached: true,
-		});
-		this.children.add(child);
+		const child = this.trackChild(
+			this.spawnShell(command, {
+				cwd,
+				env: options?.env,
+				detached: true,
+			}),
+		);
 
 		const { stdout, stderr } = captureOutput(child);
 
 		let exitInfo: { code: number | null; signal: NodeJS.Signals | null } | null = null;
 		child.on('exit', (code, signal) => {
 			exitInfo = { code, signal };
-			this.children.delete(child);
 		});
 
 		const portMap = this.portMap;
@@ -476,13 +497,16 @@ class LocalSandboxInstance implements SandboxInstance {
 	}
 
 	async destroy(): Promise<void> {
-		for (const child of this.children) {
-			killProcessGroup(child, 'SIGKILL');
-		}
+		if (this.destroyPromise) return this.destroyPromise;
+		for (const child of this.children) killProcessGroup(child, 'SIGKILL');
 		this.children.clear();
 		this.portMap.clear();
-		await rm(this.root, { recursive: true, force: true });
-		this.onDestroyed?.();
+		this.destroyPromise = Promise.allSettled(this.pendingWrites)
+			.then(() => rm(this.root, { recursive: true, force: true }))
+			.then(() => {
+				this.onDestroyed?.();
+			});
+		return this.destroyPromise;
 	}
 }
 
@@ -493,6 +517,7 @@ export class LocalCompute implements SandboxProvider {
 	// Re-resolution must return the same live instance so teardown can find its
 	// child process; destroy evicts it so a later create gets fresh state.
 	private readonly instances = new Map<SandboxId, LocalSandboxInstance>();
+	private disposePromise?: Promise<void>;
 
 	constructor(options?: LocalComputeOptions) {
 		this.host = options?.host || 'localhost';
@@ -501,6 +526,7 @@ export class LocalCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId): SandboxInstance {
+		if (this.disposePromise) throw new Error('local compute has been disposed');
 		let instance = this.instances.get(id);
 		if (!instance) {
 			const next = new LocalSandboxInstance(
@@ -536,5 +562,13 @@ export class LocalCompute implements SandboxProvider {
 			}
 		}
 		return active;
+	}
+
+	private async destroyInstances(): Promise<void> {
+		await Promise.all([...this.instances.values()].map((instance) => instance.destroy()));
+	}
+
+	[Symbol.asyncDispose](): Promise<void> {
+		return (this.disposePromise ??= this.destroyInstances());
 	}
 }

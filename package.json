@@ -5,7 +5,8 @@
 	"license": "Apache-2.0",
 	"type": "module",
 	"scripts": {
-		"dev": "vp run --filter @marimo-hub/server --filter @marimo-hub/web --parallel --log labeled dev",
+		"dev": "node scripts/dev-ports.mjs",
+		"dev:reset": "node scripts/reset-dev-storage.mjs",
 		"ready": "vp fmt && vp lint && pnpm typecheck && vp run -r test && vp run -r build",
 		"check": "vp check",
 		"typecheck": "vp run -r typecheck",
