@@ -1199,6 +1199,8 @@ components:
               type: number
             memory_bytes:
               type: number
+            gpu:
+              type: string
         owner_user_id:
           type: string
       required:
@@ -1391,6 +1393,8 @@ components:
               type: number
             memory_bytes:
               type: number
+            gpu:
+              type: string
         compute_from_snapshot:
           type: boolean
         sandbox_origin_url:

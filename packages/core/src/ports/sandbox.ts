@@ -190,6 +190,8 @@ export interface ComputeResources {
 	cpu?: number;
 	/** Memory in bytes. */
 	memoryBytes?: number;
+	/** Provider GPU type, optionally suffixed with a count (for example, `A100:2`). */
+	gpu?: string;
 }
 
 /** A per-user directory selected before the sandbox Pod is created. */

@@ -101,7 +101,7 @@ Read regardless of the selected compute backend.
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_COMPUTE_IMAGE` | Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
-| `MARIMOHUB_COMPUTE_PROFILES` | Ordered named CPU/memory profiles (`name:cpu=<cores>;mem=<Mi\|Gi\|Ti>`). The first is the default; supported backends apply the notebook choice when overrides are enabled. | — | — | `small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi` |
+| `MARIMOHUB_COMPUTE_PROFILES` | Ordered named CPU, memory, and optional GPU profiles (`name:cpu=<cores>;mem=<Mi\|Gi\|Ti>;gpu=<type>[:<count>]`). The first is the default; supported backends apply the notebook choice when overrides are enabled. Modal applies GPU requests; other backends ignore them with a startup warning. | — | — | `small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100` |
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |

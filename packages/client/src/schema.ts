@@ -8771,6 +8771,7 @@ export interface components {
 		ComputeResources: {
 			cpu?: number;
 			memory_bytes?: number;
+			gpu?: string;
 		};
 		ProjectPage: {
 			items: components['schemas']['SnapshotProjectEntry'][];

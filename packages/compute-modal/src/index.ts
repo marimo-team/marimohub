@@ -101,6 +101,7 @@ export interface ModalClientLike {
 				idleTimeoutMs?: number;
 				cpu?: number;
 				memoryMiB?: number;
+				gpu?: string;
 			},
 		): Promise<ModalSandboxLike>;
 		fromName(appName: string, name: string): Promise<ModalSandboxLike>;
@@ -117,12 +118,14 @@ const SANDBOX_ID_TAG = 'marimohub.sandbox-id';
 export function modalProfileResources(resources: ComputeResources | undefined): {
 	cpu?: number;
 	memoryMiB?: number;
+	gpu?: string;
 } {
 	return {
 		...(resources?.cpu !== undefined ? { cpu: resources.cpu } : {}),
 		...(resources?.memoryBytes !== undefined
 			? { memoryMiB: Math.ceil(resources.memoryBytes / 1024 ** 2) }
 			: {}),
+		...(resources?.gpu !== undefined ? { gpu: resources.gpu } : {}),
 	};
 }
 

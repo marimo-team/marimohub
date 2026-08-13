@@ -805,7 +805,7 @@ describe('Session routes', () => {
 			compute,
 			deps: {
 				sandbox: sandboxConfig({
-					resources: { cpu: 0.5, memoryBytes: 512 * 1024 ** 2 },
+					resources: { cpu: 0.5, memoryBytes: 512 * 1024 ** 2, gpu: 'T4' },
 					computeProfile: 'small',
 				}),
 			},
@@ -815,11 +815,13 @@ describe('Session routes', () => {
 		expect(compute.lastCreateOptions?.resources).toEqual({
 			cpu: 0.5,
 			memoryBytes: 512 * 1024 ** 2,
+			gpu: 'T4',
 		});
 		expect(data.compute_profile).toBe('small');
 		expect(data.compute_resources).toEqual({
 			cpu: 0.5,
 			memory_bytes: 512 * 1024 ** 2,
+			gpu: 'T4',
 		});
 		expect(data.compute_from_snapshot).toBeUndefined();
 		const stored = await createServices(bucket).sessions.getSession(pid, data.session_id);
@@ -827,6 +829,7 @@ describe('Session routes', () => {
 		expect(stored.compute_resources).toEqual({
 			cpu: 0.5,
 			memory_bytes: 512 * 1024 ** 2,
+			gpu: 'T4',
 		});
 	});
 

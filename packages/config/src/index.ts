@@ -44,6 +44,7 @@ import { computeBackend, makeCompute, resolveSandboxImages } from './compute';
 import {
 	parseComputeProfileOverride,
 	parseComputeProfiles,
+	profilesForBackend,
 	resolveResources,
 	supportsComputeProfiles,
 	unsupportedBackendNotice,
@@ -71,8 +72,10 @@ export {
 	hasConfiguredResources,
 	parseComputeProfileOverride,
 	parseComputeProfiles,
+	profilesForBackend,
 	resolveResources,
 	supportsComputeProfiles,
+	supportsGpuProfiles,
 	unsupportedBackendNotice,
 } from './computeProfiles';
 export type {
@@ -395,7 +398,8 @@ export function createFromEnv(
 	const computeProfiles = parseComputeProfiles(env.MARIMOHUB_COMPUTE_PROFILES);
 	const computeBackendValue = computeBackend(env) ?? 'unset';
 	const profilesSupported = supportsComputeProfiles(computeBackendValue);
-	const computeResources = profilesSupported ? resolveResources(computeProfiles) : {};
+	const appliedComputeProfiles = profilesForBackend(computeBackendValue, computeProfiles);
+	const computeResources = profilesSupported ? resolveResources(appliedComputeProfiles) : {};
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
 	);
@@ -443,8 +447,8 @@ export function createFromEnv(
 			sessionLifetime,
 			images: sandboxImages,
 			resources: computeResources,
-			computeProfile: profilesSupported ? computeProfiles.defaultProfile?.name : undefined,
-			computeProfiles: profilesSupported ? [...computeProfiles.profiles] : [],
+			computeProfile: profilesSupported ? appliedComputeProfiles.defaultProfile?.name : undefined,
+			computeProfiles: profilesSupported ? [...appliedComputeProfiles.profiles] : [],
 			computeProfileOverride: profilesSupported ? computeProfileOverride : 'none',
 			userHome,
 		},

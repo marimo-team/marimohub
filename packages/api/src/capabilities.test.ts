@@ -160,14 +160,14 @@ describe('GET /api/v1/capabilities', () => {
 		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		deps.sandbox.computeProfiles = [
 			{ name: 'small', resources: { cpu: 1, memoryBytes: 2 * 1024 ** 3 } },
-			{ name: 'large', resources: { cpu: 8 } },
+			{ name: 'large', resources: { cpu: 8, gpu: 'A100:2' } },
 		];
 		deps.sandbox.computeProfileOverride = 'editors';
 
 		expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
 			compute_profiles: [
 				{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
-				{ name: 'large', cpu: 8 },
+				{ name: 'large', cpu: 8, gpu: 'A100:2' },
 			],
 			compute_profile_override: 'editors',
 		});

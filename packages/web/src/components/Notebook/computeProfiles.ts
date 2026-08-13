@@ -29,11 +29,12 @@ function formatMemory(bytes: number): string {
 }
 
 export function computeProfileResources(
-	profile: Pick<ComputeProfile, 'cpu' | 'memory_bytes'> | ComputeProfileResources,
+	profile: Pick<ComputeProfile, 'cpu' | 'memory_bytes' | 'gpu'> | ComputeProfileResources,
 ): string {
 	const resources = [
 		profile.cpu === undefined ? undefined : `${profile.cpu} CPU`,
 		profile.memory_bytes === undefined ? undefined : formatMemory(profile.memory_bytes),
+		profile.gpu === undefined ? undefined : `${profile.gpu} GPU`,
 	].filter((value): value is string => value !== undefined);
 	return resources.length > 0 ? resources.join(' · ') : 'platform default';
 }
@@ -94,7 +95,11 @@ export function compareComputeResources(
 	right: ComputeProfileResources | undefined,
 ): ComputeResourceComparison {
 	if (!left || !right) return 'unknown';
-	return left.cpu === right.cpu && left.memory_bytes === right.memory_bytes ? 'same' : 'different';
+	return left.cpu === right.cpu &&
+		left.memory_bytes === right.memory_bytes &&
+		left.gpu === right.gpu
+		? 'same'
+		: 'different';
 }
 
 export function computeSessionPresentation(
