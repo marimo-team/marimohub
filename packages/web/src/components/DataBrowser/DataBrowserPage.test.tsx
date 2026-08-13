@@ -354,18 +354,17 @@ afterEach(() => {
 });
 
 describe('DataBrowserPage', () => {
-	it('renders only supported surface buttons when Query is blocked', async () => {
+	it('hides Query when the server reports it unavailable', async () => {
 		setup(`/projects/${PID}/data/${IID}`, {
 			role: 'manager',
 			querySurface: { available: false, reason: 'Broker unavailable.' },
 		});
 
-		expect(
-			await screen.findByRole('button', { name: 'Tables' }, { timeout: 5000 }),
-		).toBeInTheDocument();
-		expect(screen.getByRole('button', { name: 'Query' })).toBeDisabled();
+		await screen.findByTestId('browse-namespace', undefined, { timeout: 5000 });
+		expect(screen.queryByRole('button', { name: 'Tables' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Query' })).not.toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Objects' })).not.toBeInTheDocument();
-		expect(screen.getByText('Run SQL unavailable: Broker unavailable.')).toBeInTheDocument();
+		expect(screen.queryByText(/Run SQL unavailable/)).not.toBeInTheDocument();
 	});
 
 	it('restores a deep link: tree expanded to the namespace, table selected, schema shown', async () => {
@@ -567,6 +566,10 @@ describe('DataBrowserPage', () => {
 		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('/browse/objects'))).toBe(
 			true,
 		);
+		expect(screen.getByRole('group', { name: 'Object filters' })).toHaveClass(
+			'grid-cols-2',
+			'xl:grid-cols-4',
+		);
 	});
 
 	it('selects among discovered buckets and reports empty or failed discovery', async () => {
@@ -710,6 +713,25 @@ describe('DataBrowserPage', () => {
 		expect(
 			await screen.findByText('Object listing failed. Check ListBucket access.'),
 		).toBeInTheDocument();
+		expect(screen.queryByLabelText('Filter loaded objects')).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Retry loading objects' })).toBeInTheDocument();
+	});
+
+	it('keeps parent-prefix navigation available when the initial listing fails', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&prefix=daily%2F`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectFailures: { objects: 'Object listing failed. Check ListBucket access.' },
+		});
+
+		const parentPrefix = await screen.findByRole('button', { name: 'Parent prefix' });
+		expect(
+			await screen.findByRole('button', { name: 'Retry loading objects' }),
+		).toBeInTheDocument();
+		await user.click(parentPrefix);
+
+		await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('prefix='));
 	});
 
 	it('round-trips object selection in the URL and loads previews only on request', async () => {

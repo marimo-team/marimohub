@@ -29,7 +29,7 @@ import {
 	ProjectIdParam,
 } from '../shared';
 import type { ApiDeps } from '../shared';
-import { appendAudit } from '../log';
+import { appendAudit, logEvent } from '../log';
 import {
 	acquireDownload,
 	makeObjectBrowseContext,
@@ -1188,6 +1188,16 @@ app.openapi(browseCapability, async (c) => {
 		iid,
 		c.req.raw.signal,
 	);
+	const querySurface = capability.surfaces.query;
+	if (deps.dataBrowser?.query === true && querySurface?.available === false) {
+		logEvent({
+			level: 'warn',
+			event: 'integration_query_unavailable',
+			project_id: pid,
+			integration_id: iid,
+			reason: querySurface.reason ?? 'No reason provided.',
+		});
+	}
 	const tablePreview = preview && capability.metadata && capability.hub_preview;
 	return c.json(
 		{

@@ -258,7 +258,7 @@ export default function DataBrowserPage() {
 				[
 					supportsTableBrowse(selectedKind),
 					supportsObjectBrowse(selectedKind),
-					canManageQueries && querySurface !== undefined,
+					querySurfaceAvailable,
 				].filter(Boolean).length > 1 && (
 					<div
 						className="flex w-fit rounded-md border border-input p-1"
@@ -282,22 +282,17 @@ export default function DataBrowserPage() {
 								Objects
 							</Button>
 						) : null}
-						{canManageQueries && querySurface ? (
+						{querySurfaceAvailable ? (
 							<Button
 								size="sm"
 								variant={selectedSurface === 'query' ? 'primary' : 'ghost'}
 								onPress={() => selectSurface('query')}
-								isDisabled={!querySurface.available}
 							>
 								Query
 							</Button>
 						) : null}
 					</div>
 				)}
-			{canManageQueries && querySurface?.available === false && querySurface.reason ? (
-				<p className="text-xs text-muted-foreground">Run SQL unavailable: {querySurface.reason}</p>
-			) : null}
-
 			{!available ? (
 				<EmptyState
 					icon={<Database />}

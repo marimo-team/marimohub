@@ -175,7 +175,8 @@ A positive live scan suite must be added with the broker API so its fixture can
 assert that every catalog, redirect, and vended object request crossed the
 parent probe. Until then, conformance asserts the negative contract: both Node
 runtime modes omit `iceberg-http` and reject a program that requires it before
-executing setup.
+executing setup. See [the broker policy mock](./duckdb_wasm_iceberg_broker.md)
+for the proposed capability boundary and remaining transport work.
 
 The sandbox adapter renders only the selected integration. It uses the image
 from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It

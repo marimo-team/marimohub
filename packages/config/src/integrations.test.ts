@@ -135,6 +135,7 @@ describe('makeIntegrations data browser', () => {
 		});
 		expect(wired.integrations?.listKinds().some((k) => k.supports_browse)).toBe(true);
 		expect(wired.integrations?.listKinds().find((kind) => kind.kind === 's3')).toMatchObject({
+			supports_test: true,
 			supports_browse: true,
 			browse_surfaces: ['objects'],
 		});

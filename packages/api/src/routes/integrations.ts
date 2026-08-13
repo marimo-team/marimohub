@@ -11,6 +11,7 @@ import {
 import type {
 	IntegrationDetail,
 	IntegrationEntry,
+	ObjectBrowseContext,
 	ProjectIntegrationsService,
 	OrgIntegrationsService,
 	SlidingWindowBudget,
@@ -43,6 +44,7 @@ import {
 } from '../pagination';
 import { appendAudit } from '../log';
 import integrationBrowseApp from './integrationBrowse';
+import { makeObjectBrowseContext } from './objectBrowse';
 
 export { clearIntegrationBrowseStateForTests } from './integrationBrowse';
 
@@ -727,10 +729,22 @@ app.openapi(testIntegration, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	const integrations = requireIntegrations(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	const project = await assertProjectRole(
+		deps.services.projects,
+		pid,
+		user,
+		'manager',
+		deps.policy,
+	);
 	assertTestBudget(user.id);
 	const body = c.req.valid('json') as TestIntegrationRequest;
-	return c.json({ success: true, data: await integrations.test(pid, body) }, 200);
+	const objectContext = await objectTestContext(
+		integrations.listKinds(),
+		body,
+		(id) => integrations.get(pid, id),
+		() => makeObjectBrowseContext(deps, project, user, c.req.raw.signal),
+	);
+	return c.json({ success: true, data: await integrations.test(pid, body, objectContext) }, 200);
 });
 
 app.route('/', integrationBrowseApp);
@@ -850,7 +864,36 @@ app.openapi(testOrgIntegration, async (c) => {
 	assertSuperAdmin(user, deps.policy);
 	assertTestBudget(user.id);
 	const body = c.req.valid('json') as TestIntegrationRequest;
-	return c.json({ success: true, data: await integrations.test(body) }, 200);
+	const objectContext = await objectTestContext(
+		integrations.listKinds(),
+		body,
+		(id) => integrations.get(id),
+		() =>
+			Promise.resolve({
+				user_id: user.id,
+				user_email: user.email,
+				allow_server_ambient: {
+					s3: deps.dataBrowser?.objectBrowser?.allowServerAmbientCredentials ?? false,
+					gcs: deps.dataBrowser?.objectBrowser?.allowServerAmbientCredentials ?? false,
+					azure_blob: deps.dataBrowser?.objectBrowser?.allowServerAmbientCredentials ?? false,
+				},
+				signal: c.req.raw.signal,
+			}),
+	);
+	return c.json({ success: true, data: await integrations.test(body, objectContext) }, 200);
 });
+
+async function objectTestContext(
+	kinds: ReturnType<ProjectIntegrationsService['listKinds']>,
+	request: TestIntegrationRequest,
+	getStored: (id: IntegrationId) => Promise<IntegrationDetail>,
+	makeContext: () => Promise<ObjectBrowseContext>,
+): Promise<ObjectBrowseContext | undefined> {
+	const kind = request.source === 'draft' ? request.kind : (await getStored(request.id)).kind;
+	if (!kinds.find((item) => item.kind === kind)?.browse_surfaces.includes('objects')) {
+		return undefined;
+	}
+	return makeContext();
+}
 
 export default app;

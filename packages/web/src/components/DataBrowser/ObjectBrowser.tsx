@@ -171,6 +171,8 @@ export function ObjectBrowser({
 	const parentPrefix = prefix ? prefix.replace(/[^/]+\/$/, '') : '';
 	const searchSummary = search.data?.pages.at(-1);
 	const listError = activeSearchQuery ? search.error : listing.error;
+	const results = activeSearchQuery ? search : listing;
+	const initialListError = listError && results.data === undefined;
 	const { copy: copySelection } = useCopyToClipboard();
 	const copySelectedUris = () => {
 		const keys = selectedKeys.size > 0 ? [...selectedKeys] : key ? [key] : [];
@@ -308,63 +310,68 @@ export function ObjectBrowser({
 								)}
 							</div>
 						)}
-						<TextField
-							name="loaded-object-filter"
-							autoComplete="off"
-							spellCheck="false"
-							aria-label="Filter loaded objects"
-							placeholder="Filter loaded results…"
-							value={filter}
-							onChange={setFilter}
-						/>
-						<div className="grid grid-cols-2 gap-2 text-xs xl:grid-cols-4">
-							<ObjectFilterSelect
-								label="Type"
-								name="object-format-filter"
-								value={formatFilter}
-								onChange={setFormatFilter}
-							>
-								<option value="all">All loaded types</option>
-								<option value="data">Data</option>
-								<option value="text">Text</option>
-								<option value="image">Images</option>
-								<option value="other">Other</option>
-							</ObjectFilterSelect>
-							<ObjectFilterSelect
-								label="Size"
-								name="object-size-filter"
-								value={sizeFilter}
-								onChange={setSizeFilter}
-							>
-								<option value="all">Any loaded size</option>
-								<option value="small">Under 1 MiB</option>
-								<option value="medium">1–100 MiB</option>
-								<option value="large">100 MiB+</option>
-							</ObjectFilterSelect>
-							<label className="flex flex-col gap-1 text-muted-foreground">
-								Modified after
-								<input
-									type="date"
-									aria-label="Modified after"
-									name="object-modified-after"
-									autoComplete="off"
-									value={modifiedAfter}
-									onChange={(event) => setModifiedAfter(event.target.value)}
-									className="h-9 rounded-md border border-input bg-background px-2 text-foreground"
-								/>
-							</label>
-							<ObjectFilterSelect
-								label="Sort loaded results"
-								name="object-sort"
-								value={sort}
-								onChange={setSort}
-							>
-								<option value="name-asc">Name A–Z</option>
-								<option value="name-desc">Name Z–A</option>
-								<option value="size-desc">Largest first</option>
-								<option value="modified-desc">Newest first</option>
-							</ObjectFilterSelect>
-						</div>
+						{!initialListError && (
+							<TextField
+								name="loaded-object-filter"
+								autoComplete="off"
+								spellCheck="false"
+								aria-label="Filter loaded objects"
+								placeholder="Filter loaded results…"
+								value={filter}
+								onChange={setFilter}
+							/>
+						)}
+						{!initialListError && (
+							<fieldset className="grid grid-cols-2 gap-2 text-xs xl:grid-cols-4">
+								<legend className="sr-only">Object filters</legend>
+								<ObjectFilterSelect
+									label="Type"
+									name="object-format-filter"
+									value={formatFilter}
+									onChange={setFormatFilter}
+								>
+									<option value="all">All loaded types</option>
+									<option value="data">Data</option>
+									<option value="text">Text</option>
+									<option value="image">Images</option>
+									<option value="other">Other</option>
+								</ObjectFilterSelect>
+								<ObjectFilterSelect
+									label="Size"
+									name="object-size-filter"
+									value={sizeFilter}
+									onChange={setSizeFilter}
+								>
+									<option value="all">Any loaded size</option>
+									<option value="small">Under 1 MiB</option>
+									<option value="medium">1–100 MiB</option>
+									<option value="large">100 MiB+</option>
+								</ObjectFilterSelect>
+								<label className="flex flex-col gap-1 text-muted-foreground">
+									Modified after
+									<input
+										type="date"
+										aria-label="Modified after"
+										name="object-modified-after"
+										autoComplete="off"
+										value={modifiedAfter}
+										onChange={(event) => setModifiedAfter(event.target.value)}
+										className="h-9 rounded-md border border-input bg-background px-2 text-foreground"
+									/>
+								</label>
+								<ObjectFilterSelect
+									label="Sort loaded results"
+									name="object-sort"
+									value={sort}
+									onChange={setSort}
+								>
+									<option value="name-asc">Name A–Z</option>
+									<option value="name-desc">Name Z–A</option>
+									<option value="size-desc">Largest first</option>
+									<option value="modified-desc">Newest first</option>
+								</ObjectFilterSelect>
+							</fieldset>
+						)}
 						{selectedKeys.size > 0 && (
 							<Button size="sm" onPress={copySelectedUris}>
 								Copy {selectedKeys.size} selected URI{selectedKeys.size === 1 ? '' : 's'}
@@ -377,9 +384,19 @@ export function ObjectBrowser({
 								{searchSummary.complete ? '.' : '; more may exist.'}
 							</output>
 						)}
-						{listError && <p className="text-sm text-destructive">{errorMessage(listError)}</p>}
 						<fieldset className="min-h-0 flex-1 overflow-y-auto">
 							<legend className="sr-only">Objects</legend>
+							{initialListError && (
+								<div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-4 text-center">
+									<p className="text-sm text-destructive">{errorMessage(listError)}</p>
+									<Button onPress={() => void results.refetch()}>
+										{activeSearchQuery ? 'Retry search' : 'Retry loading objects'}
+									</Button>
+								</div>
+							)}
+							{listError && !initialListError && (
+								<p className="p-3 text-sm text-destructive">{errorMessage(listError)}</p>
+							)}
 							{prefix && !activeSearchQuery && (
 								<button
 									type="button"
@@ -390,57 +407,59 @@ export function ObjectBrowser({
 									<ArrowUp className="size-4" aria-hidden /> Parent prefix
 								</button>
 							)}
-							{entries.map((entry) => (
-								<button
-									key={`${entry.kind}:${entry.key}`}
-									data-object-row
-									type="button"
-									aria-pressed={entry.kind === 'object' && selectedKeys.has(entry.key)}
-									onKeyDown={handleListKeyDown}
-									onClick={(event) => selectEntry(entry, event)}
-									className={cn(
-										'grid w-full touch-manipulation grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 [content-visibility:auto] [contain-intrinsic-size:auto_44px]',
-										entry.kind === 'object' &&
-											selectedKeys.has(entry.key) &&
-											'bg-primary/10 text-primary',
-									)}
-								>
-									{entry.kind === 'prefix' ? (
-										<Folder className="size-4" aria-hidden />
-									) : (
-										<File className="size-4" aria-hidden />
-									)}
-									<span className="min-w-0">
-										<span className="block truncate">{entry.name}</span>
-										{entry.kind === 'object' && (
-											<span className="block truncate text-[11px] text-muted-foreground">
-												{[objectFormatLabel(entry.name), entry.storage_class, entry.etag]
-													.filter(Boolean)
-													.join(' · ')}
-											</span>
+							{!initialListError &&
+								entries.map((entry) => (
+									<button
+										key={`${entry.kind}:${entry.key}`}
+										data-object-row
+										type="button"
+										aria-pressed={entry.kind === 'object' && selectedKeys.has(entry.key)}
+										onKeyDown={handleListKeyDown}
+										onClick={(event) => selectEntry(entry, event)}
+										className={cn(
+											'grid w-full touch-manipulation grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 [content-visibility:auto] [contain-intrinsic-size:auto_44px]',
+											entry.kind === 'object' &&
+												selectedKeys.has(entry.key) &&
+												'bg-primary/10 text-primary',
 										)}
-									</span>
-									<span className="text-right text-xs text-muted-foreground tabular-nums">
-										{entry.size === undefined ? '' : formatBytes(entry.size)}
-										{entry.last_modified && (
-											<span className="block">{formatDateTime(entry.last_modified)}</span>
+									>
+										{entry.kind === 'prefix' ? (
+											<Folder className="size-4" aria-hidden />
+										) : (
+											<File className="size-4" aria-hidden />
 										)}
-									</span>
-								</button>
-							))}
-							{entries.length === 0 && (listing.data || search.data) && (
+										<span className="min-w-0">
+											<span className="block truncate">{entry.name}</span>
+											{entry.kind === 'object' && (
+												<span className="block truncate text-[11px] text-muted-foreground">
+													{[objectFormatLabel(entry.name), entry.storage_class, entry.etag]
+														.filter(Boolean)
+														.join(' · ')}
+												</span>
+											)}
+										</span>
+										<span className="text-right text-xs text-muted-foreground tabular-nums">
+											{entry.size === undefined ? '' : formatBytes(entry.size)}
+											{entry.last_modified && (
+												<span className="block">{formatDateTime(entry.last_modified)}</span>
+											)}
+										</span>
+									</button>
+								))}
+							{!initialListError && entries.length === 0 && (listing.data || search.data) && (
 								<p className="p-4 text-center text-xs text-muted-foreground">No objects found.</p>
 							)}
-							{(activeSearchQuery ? search.hasNextPage : listing.hasNextPage) && (
-								<Button
-									className="mt-2 w-full"
-									onPress={() =>
-										void (activeSearchQuery ? search.fetchNextPage() : listing.fetchNextPage())
-									}
-								>
-									{activeSearchQuery ? 'Continue search' : 'Load more'}
-								</Button>
-							)}
+							{!initialListError &&
+								(activeSearchQuery ? search.hasNextPage : listing.hasNextPage) && (
+									<Button
+										className="mt-2 w-full"
+										onPress={() =>
+											void (activeSearchQuery ? search.fetchNextPage() : listing.fetchNextPage())
+										}
+									>
+										{activeSearchQuery ? 'Continue search' : 'Load more'}
+									</Button>
+								)}
 						</fieldset>
 					</>
 				)}

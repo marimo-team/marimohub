@@ -13,6 +13,19 @@ import type {
 import { ICEBERG_HTTP_UNAVAILABLE } from './networkPolicy';
 import type { RuntimeRequestInput, RuntimeResponse } from './protocol';
 
+export {
+	IcebergHttpBroker,
+	IcebergHttpBrokerError,
+	type IcebergHttpBrokerCapability,
+	type IcebergHttpBrokerErrorCode,
+	type IcebergHttpBrokerMethod,
+	type IcebergHttpBrokerRequest,
+	type IcebergHttpBrokerResponse,
+	type IcebergHttpBrokerRoute,
+	type IcebergHttpBrokerTransport,
+	type IcebergHttpBrokerTransportRequest,
+} from './icebergHttpBroker';
+
 export type DuckDBWasmRuntimeMode = 'auto' | 'worker' | 'inline';
 
 export interface NodeDuckDBWasmCapabilities {

@@ -12,6 +12,7 @@ import { createIntegrationId, createProjectId, createSessionId } from '../../ids
 import type { ProjectId, SessionId } from '../../ids';
 import { paths } from '../../paths';
 import type { Bucket, BucketListOptions } from '../../ports/bucket';
+import { ObjectBrowseError } from '../../ports/objectBrowser';
 import type { ObjectBrowseContext, ObjectBrowser } from '../../ports/objectBrowser';
 import { SecretResolutionError } from '../../ports/secrets';
 import type { SecretResolver } from '../../ports/secrets';
@@ -2108,13 +2109,13 @@ describe('data browsing', () => {
 		category: 'storage',
 		brand: { color: '#000000' },
 		schemaVersion: 1,
-		configSchema: z.object({ token: zSecret() }),
+		configSchema: z.object({ discover: z.boolean().default(false), token: zSecret() }),
 		render: () => ({}),
 		objectBrowse: {
 			provider: 's3',
 			source: (config) => ({
 				provider: 's3',
-				configured_bucket: 'lake',
+				configured_bucket: config.discover ? undefined : 'lake',
 				path_style: true,
 				auth: {
 					method: 'static',
@@ -2294,6 +2295,61 @@ describe('data browsing', () => {
 		await expect(
 			bare.browseObjectBuckets(pid, created.id, objectContext(), { limit: 10 }),
 		).rejects.toThrow(/not enabled/);
+	});
+
+	it('probes a configured object-store bucket through its guarded browser', async () => {
+		const listBuckets = vi.fn(async () => ({ items: [], next_cursor: null }));
+		const listObjects = vi.fn(objectBrowser.listObjects);
+		const registry = new IntegrationRegistry();
+		registry.register(objectKind);
+		const probeStore = new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			probe: stubProbe,
+			objectBrowsers: { s3: { ...objectBrowser, listBuckets, listObjects } },
+		});
+
+		expect(probeStore.listKinds().find(({ kind }) => kind === 'objecty')?.supports_test).toBe(true);
+		await expect(
+			probeStore.test(
+				pid,
+				{ source: 'draft', kind: 'objecty', config: { token: 'provider-secret' } },
+				objectContext(),
+			),
+		).resolves.toMatchObject({ ok: true, details: 'bucket reachable' });
+		expect(listObjects).toHaveBeenCalledWith(
+			expect.objectContaining({ configured_bucket: 'lake' }),
+			objectContext(),
+			{ bucket: 'lake', limit: 1 },
+		);
+		await expect(
+			probeStore.test(
+				pid,
+				{
+					source: 'draft',
+					kind: 'objecty',
+					config: { discover: true, token: 'provider-secret' },
+				},
+				objectContext(),
+			),
+		).resolves.toMatchObject({ ok: true, details: 'bucket discovery succeeded' });
+		expect(listBuckets).toHaveBeenCalledWith(
+			expect.objectContaining({ configured_bucket: undefined }),
+			objectContext(),
+			{ limit: 1 },
+		);
+
+		listObjects.mockRejectedValueOnce(
+			new ObjectBrowseError('not_found', 'provider-secret must never reach the response'),
+		);
+		await expect(
+			probeStore.test(
+				pid,
+				{ source: 'draft', kind: 'objecty', config: { token: 'provider-secret' } },
+				objectContext(),
+			),
+		).resolves.toMatchObject({ ok: false, details: 'bucket not found' });
 	});
 
 	it('does not expose provider exceptions containing resolved object credentials', async () => {

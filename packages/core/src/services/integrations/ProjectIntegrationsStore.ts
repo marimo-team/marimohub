@@ -279,7 +279,8 @@ class ScopedIntegrationsStore {
 		const tableBrowsable = this.browseProbe !== undefined;
 		const secret_sources = this.secretSources();
 		return this.registry.describeAll().map((descriptor) => {
-			const objectProvider = this.registry.get(descriptor.kind).objectBrowse?.provider;
+			const def = this.registry.get(descriptor.kind);
+			const objectProvider = def.objectBrowse?.provider;
 			const browse_surfaces = descriptor.browse_surfaces.filter(
 				(surface) =>
 					(surface === 'tables' && tableBrowsable) ||
@@ -287,9 +288,14 @@ class ScopedIntegrationsStore {
 						objectProvider !== undefined &&
 						this.objectBrowsers[objectProvider]?.provider === objectProvider),
 			);
+			const supportsTest =
+				descriptor.supports_test &&
+				(def.testConnection !== undefined ||
+					(objectProvider !== undefined &&
+						this.objectBrowsers[objectProvider]?.provider === objectProvider));
 			return {
 				...descriptor,
-				supports_test: testable && descriptor.supports_test,
+				supports_test: testable && supportsTest,
 				supports_browse: browse_surfaces.length > 0,
 				browse_surfaces,
 				secret_sources,
@@ -710,7 +716,11 @@ class ScopedIntegrationsStore {
 		);
 	}
 
-	async test(scope: IntegrationScope, request: TestIntegrationRequest): Promise<TestResult> {
+	async test(
+		scope: IntegrationScope,
+		request: TestIntegrationRequest,
+		objectContext?: ObjectBrowseContext,
+	): Promise<TestResult> {
 		let def: IntegrationDefinition;
 		let resolved: Record<string, unknown>;
 		if (request.source === 'stored') {
@@ -750,7 +760,7 @@ class ScopedIntegrationsStore {
 				});
 			}
 		}
-		if (!def.testConnection) {
+		if (!def.testConnection && !def.objectBrowse) {
 			throw new ValidationError(`Integration kind "${def.kind}" does not support testing.`);
 		}
 		const probe = this.probe;
@@ -764,7 +774,51 @@ class ScopedIntegrationsStore {
 				`Stored config no longer matches kind "${def.kind}" — edit and re-save it.`,
 			);
 		}
-		return def.testConnection(parsed.data, probe);
+		if (def.testConnection) return def.testConnection(parsed.data, probe);
+		if (!objectContext) {
+			throw new ValidationError('Object-store connection testing requires a user context.');
+		}
+		const objectBrowse = def.objectBrowse!;
+		const source = objectBrowse.source(parsed.data);
+		const browser = this.browserFor(source);
+		if (!browser) {
+			throw new ValidationError(
+				'Object-store connection testing is not enabled on this deployment.',
+			);
+		}
+		const startedAt = performance.now();
+		const metadata = OBJECT_BROWSE_PROVIDER_METADATA[source.provider];
+		try {
+			const capability = await browser.capability(source, objectContext);
+			if (!capability.available) {
+				return {
+					ok: false,
+					latency_ms: Math.round(performance.now() - startedAt),
+					details: capability.reason ?? 'object-store access is unavailable',
+				};
+			}
+			if (source.configured_bucket) {
+				await browser.listObjects(source, objectContext, {
+					bucket: source.configured_bucket,
+					limit: 1,
+				});
+			} else {
+				await browser.listBuckets(source, objectContext, { limit: 1 });
+			}
+			return {
+				ok: true,
+				latency_ms: Math.round(performance.now() - startedAt),
+				details: source.configured_bucket
+					? `${metadata.root_kind} reachable`
+					: `${metadata.root_kind} discovery succeeded`,
+			};
+		} catch (error) {
+			return {
+				ok: false,
+				latency_ms: Math.round(performance.now() - startedAt),
+				details: objectTestFailure(error, metadata.root_kind),
+			};
+		}
 	}
 
 	/**
@@ -1658,8 +1712,12 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		return this.store.listVersions(projectScope(projectId), id, page);
 	}
 
-	test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult> {
-		return this.store.test(projectScope(projectId), request);
+	test(
+		projectId: ProjectId,
+		request: TestIntegrationRequest,
+		objectContext?: ObjectBrowseContext,
+	): Promise<TestResult> {
+		return this.store.test(projectScope(projectId), request, objectContext);
 	}
 
 	copy(
@@ -1936,8 +1994,26 @@ export class OrgIntegrationsStore implements OrgIntegrationsService {
 		return this.store.listVersions(ORG_SCOPE, id, page);
 	}
 
-	test(request: TestIntegrationRequest): Promise<TestResult> {
-		return this.store.test(ORG_SCOPE, request);
+	test(request: TestIntegrationRequest, objectContext?: ObjectBrowseContext): Promise<TestResult> {
+		return this.store.test(ORG_SCOPE, request, objectContext);
+	}
+}
+
+function objectTestFailure(error: unknown, rootKind: 'bucket' | 'container'): string {
+	if (!(error instanceof ObjectBrowseError)) return 'object-store request failed';
+	switch (error.code) {
+		case 'access_denied':
+			return 'access denied';
+		case 'not_found':
+			return `${rootKind} not found`;
+		case 'aborted':
+			return 'object-store request timed out';
+		case 'invalid_cursor':
+		case 'precondition_failed':
+		case 'range_not_satisfiable':
+		case 'unavailable':
+		case 'unsupported':
+			return 'object store unavailable';
 	}
 }
 

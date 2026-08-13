@@ -67,7 +67,11 @@ export interface ProjectIntegrationsService {
 		id: IntegrationId,
 		page?: IntegrationVersionPageRequest,
 	): Promise<IntegrationVersionPage>;
-	test(projectId: ProjectId, request: TestIntegrationRequest): Promise<TestResult>;
+	test(
+		projectId: ProjectId,
+		request: TestIntegrationRequest,
+		objectContext?: ObjectBrowseContext,
+	): Promise<TestResult>;
 	/**
 	 * Read-only catalog browsing. Unlike `get`/`test`, the id resolves
 	 * project-first, then the inherited org tier (shadowed org instances read
@@ -188,5 +192,5 @@ export interface OrgIntegrationsService {
 		id: IntegrationId,
 		page?: IntegrationVersionPageRequest,
 	): Promise<IntegrationVersionPage>;
-	test(request: TestIntegrationRequest): Promise<TestResult>;
+	test(request: TestIntegrationRequest, objectContext?: ObjectBrowseContext): Promise<TestResult>;
 }
