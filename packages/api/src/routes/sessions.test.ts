@@ -137,6 +137,128 @@ describe('Session routes', () => {
 		expect(await services.sessions.listSessions(meta.id)).toHaveLength(0);
 	});
 
+	describe('launch strategy inference', () => {
+		const enc = (s: string) => new TextEncoder().encode(s);
+		const INLINE_CODE = '# /// script\n# dependencies = ["cowsay==6.1"]\n# ///\nimport cowsay';
+		// Nested on purpose: catches a workspace-relative vs repo-relative join bug.
+		const ENTRY = 'apps/dash.py';
+
+		async function createSyncedNotebook(entryCode: string): Promise<NotebookId> {
+			const services = createServices(bucket);
+			const { meta } = await services.notebooks.synced.create(
+				pid,
+				{
+					title: 'GitHub NB',
+					description: 'd',
+					repo: 'org/repo',
+					branch: 'main',
+					entry_notebook: ENTRY,
+				},
+				ACTOR,
+			);
+			await services.notebooks.synced.sync(pid, meta.id, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				commit: 'commit-aaaa',
+				files: [{ path: ENTRY, bytes: enc(entryCode) }],
+			});
+			return meta.id;
+		}
+
+		const entryReads = (spy: { mock: { calls: unknown[][] } }) =>
+			spy.mock.calls.filter(([key]) => String(key).endsWith(ENTRY)).length;
+
+		async function startSessionApi(notebookId: NotebookId) {
+			const sb = makeFakeSandbox();
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(sb.instance),
+			}).request;
+			return {
+				sb,
+				post: () => api('POST', `/projects/${pid}/notebooks/${notebookId}/sessions`),
+			};
+		}
+
+		it('installs PEP 723 pins for a git-synced entry notebook that declares them', async () => {
+			const synced = await createSyncedNotebook(INLINE_CODE);
+			const { sb, post } = await startSessionApi(synced);
+			await expectOk<ApiSession>(await post());
+			const cmd = sb.calls.startProcess[0].cmd;
+			expect(cmd).toContain("uv export --script 'apps/dash.py'");
+			expect(cmd).toContain('uv pip install');
+			// The repo pyproject layer still applies underneath the pins.
+			expect(cmd).toContain('uv sync --inexact');
+		});
+
+		it('uses the project-managed env for a git-synced notebook without inline metadata', async () => {
+			const synced = await createSyncedNotebook('import marimo');
+			const { sb, post } = await startSessionApi(synced);
+			await expectOk<ApiSession>(await post());
+			expect(sb.calls.startProcess[0].cmd).toContain('uv sync --inexact');
+			expect(sb.calls.startProcess[0].cmd).not.toContain('uv export');
+		});
+
+		it('ignores inline metadata in a local notebook (deps live in pyproject.toml)', async () => {
+			const services = createServices(bucket);
+			const local = await services.notebooks.createNotebook(
+				pid,
+				{ title: 'Local NB', description: 'd', code: INLINE_CODE },
+				ACTOR,
+			);
+			const { sb, post } = await startSessionApi(local.id as NotebookId);
+			await expectOk<ApiSession>(await post());
+			expect(sb.calls.startProcess[0].cmd).toContain('uv sync --inexact');
+			expect(sb.calls.startProcess[0].cmd).not.toContain('uv export');
+		});
+
+		it('does not re-read the entry file when reusing an existing session', async () => {
+			const synced = await createSyncedNotebook(INLINE_CODE);
+			const { post } = await startSessionApi(synced);
+			await expectOk<ApiSession>(await post());
+			const get = vi.spyOn(bucket, 'get');
+			const reused = await expectOk<ApiSession>(await post());
+			expect(reused.reused).toBe(true);
+			expect(entryReads(get)).toBe(0);
+		});
+
+		it('still starts the session with the default strategy when the entry file is unreadable', async () => {
+			const synced = await createSyncedNotebook(INLINE_CODE);
+			// Simulate a torn read of the immutable workspace (object missing).
+			const { objects } = await bucket.list();
+			const entryKey = objects.find((o) => o.key.endsWith(ENTRY))!.key;
+			await bucket.delete(entryKey);
+			const { sb, post } = await startSessionApi(synced);
+			await expectOk<ApiSession>(await post());
+			expect(sb.calls.startProcess[0].cmd).toContain('uv sync --inexact');
+			expect(sb.calls.startProcess[0].cmd).not.toContain('uv export');
+		});
+
+		it('rejects an unsynced notebook before reading any entry file', async () => {
+			const services = createServices(bucket);
+			const { meta } = await services.notebooks.synced.create(
+				pid,
+				{
+					title: 'Unsynced',
+					description: 'd',
+					repo: 'org/repo',
+					branch: 'main',
+					entry_notebook: ENTRY,
+				},
+				ACTOR,
+			);
+			const get = vi.spyOn(bucket, 'get');
+			await expectError(
+				await owner('POST', `/projects/${pid}/notebooks/${meta.id}/sessions`),
+				409,
+				'CONFLICT',
+			);
+			expect(entryReads(get)).toBe(0);
+		});
+	});
+
 	it('POST /sessions as the owner (editor) creates a running session', async () => {
 		const data = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
 		expect(data.session_id).toMatch(/^sess-/);

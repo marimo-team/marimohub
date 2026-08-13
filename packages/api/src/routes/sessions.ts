@@ -30,6 +30,7 @@ import {
 	requireRole,
 	roleAtLeast,
 	resolveBaseImage,
+	resolveLaunchStrategyForSession,
 	resolveRestoreSnapshot,
 	recipientFromIdentity,
 	ResourceExhaustedError,
@@ -1249,7 +1250,19 @@ app.openapi(createSession, async (c) => {
 					const sessionEnv = resolveSessionEnv();
 					void sessionEnv.catch(() => {});
 
+					// Inside this step on purpose: only a create that survived the reuse
+					// fast path and cap_recheck pays the synced-entry GET. Never rejects
+					// (a failed read falls back to the default strategy).
+					const launchStrategyPromise = resolveLaunchStrategyForSession({
+						entryNotebook: workspacePolicy.entryNotebook,
+						workspacePrefix,
+						bucket: bucketHandle,
+					});
+
 					const { baseUrl } = await sandboxExposure.prepare(exposureCtx);
+					const resolvedLaunchStrategy = await launchStrategyPromise;
+					observer.tag('launch_strategy', resolvedLaunchStrategy.strategy);
+					observer.tag('launch_strategy_detection_failed', resolvedLaunchStrategy.detectionFailed);
 
 					const provisionResult = await provisioner.provision({
 						sandboxId,
@@ -1268,6 +1281,7 @@ app.openapi(createSession, async (c) => {
 						userHome,
 						sessionEnv,
 						entryNotebook: workspacePolicy.entryNotebook,
+						launchStrategy: resolvedLaunchStrategy.strategy,
 						launchMode: mode,
 						// Ephemeral and app sandboxes never mount the live workspace: a mount
 						// writes straight through to the bucket (bypassing every persistEdits

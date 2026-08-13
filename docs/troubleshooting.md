@@ -121,6 +121,21 @@ provide, or the namespace may lack sufficient quota. Check the Pod's
 out-of-memory during dependency installation, use a larger compute profile and
 start a new session.
 
+### Session fails with a uv resolver error
+
+When a git-synced notebook contains [PEP 723](https://peps.python.org/pep-0723/)
+inline metadata, marimohub installs its dependencies at session start. If uv
+cannot resolve these dependencies, the session fails. Fix the versions in the
+repository, and then push again. marimohub also disables source builds with
+`--no-build`, so use package versions that provide wheels.
+
+### Git-synced session with heavy inline dependencies times out
+
+marimohub installs inline dependencies before the kernel binds its port. A large
+package, such as torch, can exceed the startup timeout. Increase
+`MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS`, or pre-install large packages in the
+sandbox image. See [Sandbox image](/sandbox-image).
+
 ## Check a live deployment
 
 `GET /api/health?deep=true` probes every downstream dependency and reports each

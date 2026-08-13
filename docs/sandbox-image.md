@@ -59,6 +59,22 @@ uv sync --inexact --no-compile-bytecode   # add the notebook's deps to the base 
 uv run --no-sync marimo edit notebook.py --headless --no-token --host 0.0.0.0 --port 2718
 ```
 
+If a git-synced notebook's entry file contains
+[PEP 723](https://peps.python.org/pep-0723/) inline metadata, marimohub runs three
+more setup commands. These commands run after the project sync and install the
+inline dependencies into the base environment:
+
+```sh
+[ -d "${UV_PROJECT_ENVIRONMENT:-.venv}" ] || uv venv "${UV_PROJECT_ENVIRONMENT:-.venv}"
+uv export --script notebook.py --format requirements-txt --no-hashes -o "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
+uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" --no-build -r "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
+```
+
+A failed project sync does not stop the session. In contrast, a failure in these
+three commands stops the session, so marimohub never ignores inline dependencies.
+If the metadata pins `marimo`, it replaces the image's version for that sandbox.
+The replacement can be incompatible with a frontend served through `--asset-url`.
+
 So your image must provide:
 
 1. **`uv` on `PATH`** — the launch command is `uv sync` + `uv run …`.

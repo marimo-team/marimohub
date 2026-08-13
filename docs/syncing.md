@@ -253,6 +253,23 @@ POST /api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate
 
 Returns a fresh `sync_url` + `sync_token`.
 
+## Dependencies
+
+A session environment starts with the packages in the sandbox image. marimohub
+then applies dependency sources from the pushed archive in this order:
+
+- If the synced root contains `pyproject.toml`, `uv sync --inexact` adds its
+  dependencies to the base environment. If this command fails, the session
+  continues with the base environment.
+- [PEP 723](https://peps.python.org/pep-0723/) inline metadata
+  (`# /// script … # ///`) in the entry notebook adds another dependency layer.
+  marimohub installs these dependencies with `uv export --script` and
+  `uv pip install`. If uv cannot resolve them, the session fails.
+
+If both sources declare the same package, the inline metadata takes precedence.
+No configuration is necessary. marimohub selects the dependency strategy when
+the session starts.
+
 ## Read-only sessions
 
 Sessions on a synced notebook are **ephemeral**: the sandbox is populated from

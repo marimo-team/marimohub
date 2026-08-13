@@ -196,6 +196,10 @@ export {
 } from './runtime/sessionAuthz';
 export { signProxyToken, verifyProxyToken } from './runtime/proxyToken';
 export { resolveBaseImage } from './runtime/resolveBaseImage';
+export { resolveLaunchStrategyForSession } from './runtime/launchStrategy';
+export type { ResolvedLaunchStrategy } from './runtime/launchStrategy';
+export { buildMarimoLaunch } from './runtime/marimoLaunch';
+export type { MarimoLaunchStrategyName } from './runtime/marimoLaunch';
 export { probeKernelLiveness } from './runtime/kernelProbe';
 export type { KernelLiveness, KernelProbe, KernelProbeOptions } from './runtime/kernelProbe';
 export { runPreflight } from './runtime/preflight';

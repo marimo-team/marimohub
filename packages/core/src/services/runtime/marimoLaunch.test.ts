@@ -81,4 +81,63 @@ describe('buildMarimoLaunch', () => {
 		expect(setup).toContain('--name notebook');
 		expect(setup).toContain('--description "Built in marimohub"');
 	});
+
+	describe('uv-script-pins', () => {
+		const plan = buildMarimoLaunch({ ...BASE, notebookFile: 'apps/my app.py' }, 'uv-script-pins');
+
+		it('layers pyproject first, then exports and installs the script pins', () => {
+			expect(plan.setup).toHaveLength(4);
+			const [pyproject, ensureEnv, exportCmd, installCmd] = plan.setup;
+			expect(pyproject).toContain('uv sync --inexact');
+			expect(ensureEnv).toContain('uv venv');
+			expect(exportCmd).toContain("uv export --script 'apps/my app.py'");
+			expect(exportCmd).toContain('--format requirements-txt');
+			expect(installCmd).toContain('uv pip install');
+			// The env `uv run --no-sync` resolves — never VIRTUAL_ENV, which uv run
+			// ignores and would leave the pins invisible to the kernel.
+			expect(installCmd).toContain('--python "${UV_PROJECT_ENVIRONMENT:-.venv}"');
+			expect(installCmd).toContain('--no-build');
+			expect(plan.start).toMatch(/^uv run --no-sync marimo /);
+		});
+
+		it('writes the requirements file inside the pin env', () => {
+			// Per-sandbox and lifecycle-managed on every backend — nothing left on a
+			// shared host /tmp, no clobbering between concurrent local launches.
+			const [, , exportCmd, installCmd] = plan.setup;
+			const [, exportTarget] = /-o (\S+)/.exec(exportCmd) ?? [];
+			expect(exportTarget).toBe(
+				'"${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"',
+			);
+			expect(installCmd).toContain(`-r ${exportTarget}`);
+		});
+
+		it('keeps the pyproject layer lenient and the pin layers strict', () => {
+			const [pyproject, ensureEnv, exportCmd, installCmd] = plan.setup;
+			expect(pyproject).toContain('|| true');
+			expect(ensureEnv).not.toContain('|| true');
+			expect(exportCmd).not.toContain('|| true');
+			expect(installCmd).not.toContain('|| true');
+		});
+
+		it('reuses the exact uv-sync-edit pyproject layer', () => {
+			expect(plan.setup[0]).toBe(buildMarimoLaunch(BASE, 'uv-sync-edit').setup[0]);
+		});
+
+		it('installs the pins in app mode too (setup is mode-invariant)', () => {
+			const app = buildMarimoLaunch(
+				{ ...BASE, notebookFile: 'apps/my app.py', mode: 'app' },
+				'uv-script-pins',
+			);
+			expect(app.setup).toEqual(plan.setup);
+		});
+
+		it('shell-quotes a hostile notebook filename in the export command', () => {
+			// Filenames come from synced repos and ride a single `&&`-joined shell string.
+			const hostile = buildMarimoLaunch(
+				{ ...BASE, notebookFile: "apps/it's a && b.py" },
+				'uv-script-pins',
+			);
+			expect(hostile.setup[2]).toContain(`--script 'apps/it'\\''s a && b.py'`);
+		});
+	});
 });
