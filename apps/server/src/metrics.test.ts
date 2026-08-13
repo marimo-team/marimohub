@@ -102,6 +102,12 @@ describe('OtelMetrics', () => {
 });
 
 describe('fanoutMetrics', () => {
+	it('omits histogram support when no target implements it', () => {
+		const target: Metrics = { increment: vi.fn(), gauge: vi.fn() };
+
+		expect(fanoutMetrics(target).histogram).toBeUndefined();
+	});
+
 	it('forwards every call to all targets', () => {
 		const target: Metrics = { increment: vi.fn(), gauge: vi.fn() };
 		const wide = new WideEventMetrics();
@@ -109,12 +115,16 @@ describe('fanoutMetrics', () => {
 
 		fan.increment('catalog.cas.conflict', 2, { source: 'test' });
 		fan.gauge('sessions.live', 7);
+		fan.histogram?.('object_browser.latency_ms', 12, { operation: 'list_objects' });
 
 		expect(target.increment).toHaveBeenCalledWith('catalog.cas.conflict', 2, { source: 'test' });
 		expect(target.gauge).toHaveBeenCalledWith('sessions.live', 7, undefined);
 		expect(wide.collect()).toEqual({
 			'counter.catalog.cas.conflict': 2,
 			'gauge.sessions.live': 7,
+			'histogram.object_browser.latency_ms.count': 1,
+			'histogram.object_browser.latency_ms.max': 12,
+			'histogram.object_browser.latency_ms.sum': 12,
 		});
 	});
 });

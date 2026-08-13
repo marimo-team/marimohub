@@ -38,19 +38,17 @@ describe('S3 request utilities', () => {
 		expect(success.destroy).toHaveBeenCalledOnce();
 
 		const failure = mockClient();
+		const programmingError = new Error('failed');
 		await expect(
 			withS3Client(
 				() => failure,
 				source,
 				context,
 				async () => {
-					throw new Error('failed');
+					throw programmingError;
 				},
 			),
-		).rejects.toMatchObject({
-			code: 'unavailable',
-			message: 'The object-store request failed.',
-		});
+		).rejects.toBe(programmingError);
 		expect(failure.destroy).toHaveBeenCalledOnce();
 	});
 

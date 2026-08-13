@@ -1882,7 +1882,7 @@ app.get('/projects/:pid/integrations/:iid/browse/objects/content', async (c) => 
 	c.req.raw.signal.addEventListener('abort', abort, { once: true });
 	const timeout = setTimeout(() => {
 		deps.metrics?.increment('object_browser.download.timeouts', 1, { operation });
-		controller.abort();
+		controller.abort(new DOMException('The object download timed out.', 'TimeoutError'));
 	}, deps.dataBrowser!.objectBrowser!.downloadTimeoutMs);
 	const finish = () => {
 		clearTimeout(timeout);

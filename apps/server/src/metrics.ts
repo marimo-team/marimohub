@@ -95,15 +95,20 @@ export class OtelMetrics implements Metrics {
 
 /** Emit every signal to all targets (e.g. wide-event flush + OTEL export). */
 export function fanoutMetrics(...targets: Metrics[]): Metrics {
-	return {
+	const fanout: Metrics = {
 		increment(name, value, tags) {
 			for (const t of targets) t.increment(name, value, tags);
 		},
 		gauge(name, value, tags) {
 			for (const t of targets) t.gauge(name, value, tags);
 		},
-		histogram(name, value, tags) {
-			for (const t of targets) t.histogram?.(name, value, tags);
-		},
 	};
+
+	if (targets.some((target) => target.histogram !== undefined)) {
+		fanout.histogram = (name, value, tags) => {
+			for (const t of targets) t.histogram?.(name, value, tags);
+		};
+	}
+
+	return fanout;
 }

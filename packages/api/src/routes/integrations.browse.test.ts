@@ -560,6 +560,15 @@ describe('Data browser routes', () => {
 		const metrics = { increment: vi.fn(), gauge: vi.fn() };
 		(deps as typeof deps & { metrics: typeof metrics }).metrics = metrics;
 		request = createTestApi({ bucket, userId: ACTOR, deps }).request;
+		const canceledWith = vi.fn();
+		vi.spyOn(objectBrowser, 'openObject').mockResolvedValueOnce({
+			body: new ReadableStream({ cancel: canceledWith }),
+			status: 200,
+			content_type: 'text/plain',
+			content_length: 12,
+			total_size: 12,
+			close: () => {},
+		});
 		const pid = await createProject();
 		const created = await createObjectStore(pid);
 		deps.dataBrowser.objectBrowser.downloadTimeoutMs = Millis.of(5);
@@ -570,6 +579,9 @@ describe('Data browser routes', () => {
 			expect(metrics.increment).toHaveBeenCalledWith('object_browser.download.timeouts', 1, {
 				operation: 'download',
 			}),
+		);
+		await vi.waitFor(() =>
+			expect(canceledWith).toHaveBeenCalledWith(expect.objectContaining({ name: 'TimeoutError' })),
 		);
 		expect(metrics.increment).not.toHaveBeenCalledWith('object_browser.download.cancellations', 1, {
 			operation: 'download',

@@ -554,7 +554,8 @@ describe('S3ObjectBrowser listing and metadata', () => {
 
 describe('S3ObjectBrowser previews and streams', () => {
 	it('aborts a preview when its request deadline is exhausted', async () => {
-		vi.useFakeTimers();
+		const deadline = new AbortController();
+		const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
 		try {
 			const test = harness(
 				(sent) =>
@@ -574,11 +575,12 @@ describe('S3ObjectBrowser previews and streams', () => {
 				content_url: '/content',
 			});
 			const rejected = expect(operation).rejects.toMatchObject({ code: 'aborted' });
-			await vi.advanceTimersByTimeAsync(25);
+			deadline.abort(new DOMException('deadline exceeded', 'TimeoutError'));
 			await rejected;
+			expect(timeout).toHaveBeenCalledWith(25);
 			expect(test.destroyed()).toBe(1);
 		} finally {
-			vi.useRealTimers();
+			timeout.mockRestore();
 		}
 	});
 

@@ -286,6 +286,28 @@ describe('object content response helpers', () => {
 		]);
 	});
 
+	it('uses the current metrics emitter when limits are shared', () => {
+		const firstDeps = wifDeps(async () => ({ accessKeyId: 'unused', secretAccessKey: 'unused' }));
+		const firstMetrics = { increment: vi.fn(), gauge: vi.fn() };
+		const secondMetrics = { increment: vi.fn(), gauge: vi.fn() };
+		firstDeps.metrics = firstMetrics;
+		const secondDeps = { ...firstDeps, metrics: secondMetrics };
+
+		const releaseFirst = acquireDownload(firstDeps, 'user-a');
+		releaseFirst();
+		const releaseSecond = acquireDownload(secondDeps, 'user-b');
+		releaseSecond();
+
+		expect(firstMetrics.gauge.mock.calls).toEqual([
+			['object_browser.download.active', 1],
+			['object_browser.download.active', 0],
+		]);
+		expect(secondMetrics.gauge.mock.calls).toEqual([
+			['object_browser.download.active', 1],
+			['object_browser.download.active', 0],
+		]);
+	});
+
 	it('reports downstream stream cancellation once', async () => {
 		const cancel = vi.fn();
 		const stream = streamObjectBody(

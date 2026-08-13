@@ -166,30 +166,32 @@ class DownloadGate {
 	private active = 0;
 	private readonly activeByUser = new Map<string, number>();
 
-	constructor(
-		private readonly limits: DownloadLimits,
-		private readonly metrics: ApiDeps['metrics'],
-	) {}
+	constructor(private readonly limits: DownloadLimits) {}
 
-	acquire(userId: string, operation: 'download' | 'inline'): () => void {
+	acquire(
+		userId: string,
+		operation: 'download' | 'inline',
+		metrics: ApiDeps['metrics'],
+	): () => void {
 		const tags = { operation };
+		const emitter = metrics ?? noopMetrics;
 		const userActive = this.activeByUser.get(userId) ?? 0;
 		if (
 			this.active >= this.limits.maxConcurrentDownloads ||
 			userActive >= this.limits.maxConcurrentDownloadsPerUser
 		) {
-			(this.metrics ?? noopMetrics).increment('object_browser.download.rejected', 1, tags);
+			emitter.increment('object_browser.download.rejected', 1, tags);
 			throw new ResourceExhaustedError('Too many object downloads are active — try again later.');
 		}
 		this.active += 1;
 		this.activeByUser.set(userId, userActive + 1);
-		(this.metrics ?? noopMetrics).gauge('object_browser.download.active', this.active);
+		emitter.gauge('object_browser.download.active', this.active);
 		let released = false;
 		return () => {
 			if (released) return;
 			released = true;
 			this.active -= 1;
-			(this.metrics ?? noopMetrics).gauge('object_browser.download.active', this.active);
+			emitter.gauge('object_browser.download.active', this.active);
 			const remaining = (this.activeByUser.get(userId) ?? 1) - 1;
 			if (remaining === 0) this.activeByUser.delete(userId);
 			else this.activeByUser.set(userId, remaining);
@@ -208,10 +210,10 @@ export function acquireDownload(
 	if (!limits) throw new NotFoundError('Object downloads are not enabled on this deployment.');
 	let gate = downloadGates.get(limits);
 	if (!gate) {
-		gate = new DownloadGate(limits, deps.metrics);
+		gate = new DownloadGate(limits);
 		downloadGates.set(limits, gate);
 	}
-	return gate.acquire(userId, operation);
+	return gate.acquire(userId, operation, deps.metrics);
 }
 
 export function streamObjectBody(

@@ -145,7 +145,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 						scopedContext.signal,
 					);
 					return {
-						items: (output.Buckets ?? [])
+						items: providerArray(output.Buckets)
 							.filter((bucket): bucket is { Name: string; CreationDate?: Date } =>
 								Boolean(bucket.Name),
 							)
@@ -186,7 +186,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 						scopedContext.signal,
 					);
 					const prefixes = new Set(
-						(output.CommonPrefixes ?? []).flatMap(({ Prefix }) => (Prefix ? [Prefix] : [])),
+						providerArray(output.CommonPrefixes).flatMap(({ Prefix }) => (Prefix ? [Prefix] : [])),
 					);
 					const items: ObjectEntry[] = [
 						...prefixes.values().map((key) => ({
@@ -194,7 +194,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 							key,
 							name: key.slice(prefix.length).replace(/\/$/, ''),
 						})),
-						...(output.Contents ?? [])
+						...providerArray(output.Contents)
 							.filter(({ Key, Size }) => Key && !(Size === 0 && prefixes.has(Key)))
 							.map((object) => objectEntry(object, prefix)),
 					].sort((left, right) => left.key.localeCompare(right.key));
@@ -244,7 +244,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 							}),
 							scopedContext.signal,
 						);
-						const contents = (output.Contents ?? []).filter(
+						const contents = providerArray(output.Contents).filter(
 							(object): object is typeof object & { Key: string } => object.Key !== undefined,
 						);
 						for (let index = 0; index < contents.length; index += 1) {
@@ -339,7 +339,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 							}),
 							scopedContext.signal,
 						);
-						tags = (tagged.TagSet ?? []).flatMap((tag) =>
+						tags = providerArray(tagged.TagSet).flatMap((tag) =>
 							tag.Key !== undefined && tag.Value !== undefined
 								? [{ key: tag.Key, value: tag.Value }]
 								: [],
@@ -377,12 +377,12 @@ export class S3ObjectBrowser implements ObjectBrowser {
 						scopedContext.signal,
 					);
 					const versions: ObjectVersion[] = [
-						...(output.Versions ?? []).flatMap((version) =>
+						...providerArray(output.Versions).flatMap((version) =>
 							version.Key === request.key && version.VersionId
 								? [versionEntry(request.bucket, version, 'version')]
 								: [],
 						),
-						...(output.DeleteMarkers ?? []).flatMap((version) =>
+						...providerArray(output.DeleteMarkers).flatMap((version) =>
 							version.Key === request.key && version.VersionId
 								? [versionEntry(request.bucket, version, 'delete-marker')]
 								: [],
@@ -511,7 +511,11 @@ export class S3ObjectBrowser implements ObjectBrowser {
 					}
 				},
 				async cancel(reason) {
-					metrics.increment('object_browser.s3.cancellations', 1, tags);
+					const metric =
+						(reason as { name?: unknown } | null)?.name === 'TimeoutError'
+							? 'object_browser.s3.timeouts'
+							: 'object_browser.s3.cancellations';
+					metrics.increment(metric, 1, tags);
 					try {
 						await reader.cancel(reason);
 					} finally {
@@ -553,6 +557,12 @@ interface ListObjectsOutput {
 	CommonPrefixes?: { Prefix?: string }[];
 	IsTruncated?: boolean;
 	NextContinuationToken?: string;
+}
+
+function providerArray<T>(value: T[] | undefined): T[] {
+	if (value === undefined) return [];
+	if (Array.isArray(value)) return value;
+	throw new ObjectBrowseError('unavailable', 'The object-store request failed.');
 }
 
 interface HeadOutput {

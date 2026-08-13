@@ -151,6 +151,27 @@ describe('S3 object browser metrics', () => {
 		});
 	});
 
+	it('records a timed-out download separately from caller cancellation', async () => {
+		const metrics = mockMetrics();
+		const browser = harness([{ Body: body('partial'), ContentLength: 7 }], metrics);
+		const opened = await browser.openObject(source, context, {
+			bucket: 'private-bucket',
+			key: 'secret.bin',
+		});
+		const reader = opened.body.getReader();
+		await reader.read();
+		await reader.cancel(new DOMException('deadline exceeded', 'TimeoutError'));
+
+		expect(metrics.increment).toHaveBeenCalledWith('object_browser.s3.timeouts', 1, {
+			operation: 'open_object',
+			mode: 'full',
+		});
+		expect(metrics.increment).not.toHaveBeenCalledWith('object_browser.s3.cancellations', 1, {
+			operation: 'open_object',
+			mode: 'full',
+		});
+	});
+
 	it('records failures that happen after download headers arrive', async () => {
 		const metrics = mockMetrics();
 		const failing = new ReadableStream<Uint8Array>({

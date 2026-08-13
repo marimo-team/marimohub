@@ -24,9 +24,11 @@ if (endpoint) {
 			forcePathStyle: true,
 			credentials: { accessKeyId, secretAccessKey },
 		});
+		let bucketCreated = false;
 
 		beforeAll(async () => {
 			await client.send(new CreateBucketCommand({ Bucket: bucket }));
+			bucketCreated = true;
 			await client.send(
 				new PutObjectCommand({
 					Bucket: bucket,
@@ -38,9 +40,30 @@ if (endpoint) {
 		}, 30_000);
 
 		afterAll(async () => {
-			await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
-			await client.send(new DeleteBucketCommand({ Bucket: bucket }));
-			client.destroy();
+			const cleanupErrors: unknown[] = [];
+			try {
+				if (!bucketCreated) {
+					return;
+				}
+
+				try {
+					await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+				} catch (error) {
+					cleanupErrors.push(error);
+				}
+
+				try {
+					await client.send(new DeleteBucketCommand({ Bucket: bucket }));
+				} catch (error) {
+					cleanupErrors.push(error);
+				}
+
+				if (cleanupErrors.length > 0) {
+					throw new AggregateError(cleanupErrors, `Failed to remove MinIO smoke bucket ${bucket}`);
+				}
+			} finally {
+				client.destroy();
+			}
 		}, 30_000);
 
 		it('wires config through API routes to the production S3 browser', async () => {
