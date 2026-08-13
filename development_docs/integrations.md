@@ -169,13 +169,13 @@ DuckDB extension requests must not bypass the guarded integration transport.
 The installed Node binding's file callbacks are synchronous and its HTTP and S3
 protocols are unsupported, while `IntegrationProbe.fetch` is asynchronous. A
 future parent-worker bridge must revalidate catalog requests, redirects, and
-vended object URLs. Until its live conformance fixture passes, the runtime
-advertises no Iceberg HTTP support and rejects remote protocols before they
-reach the vendor runtime.
-`MARIMOHUB_TEST_DUCKDB_WASM_ICEBERG_URI` and
-`MARIMOHUB_TEST_DUCKDB_WASM_ICEBERG_TABLE` enable the live scan acceptance
-suite. Do not add them to CI until the fixture can assert that all catalog,
-redirect, and vended object requests crossed the parent probe.
+vended object URLs. The current runtime advertises no Iceberg HTTP support and
+rejects remote protocols before they reach the vendor runtime.
+A positive live scan suite must be added with the broker API so its fixture can
+assert that every catalog, redirect, and vended object request crossed the
+parent probe. Until then, conformance asserts the negative contract: both Node
+runtime modes omit `iceberg-http` and reject a program that requires it before
+executing setup.
 
 The sandbox adapter renders only the selected integration. It uses the image
 from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It

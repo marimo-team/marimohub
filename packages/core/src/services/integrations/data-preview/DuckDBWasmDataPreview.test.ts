@@ -354,6 +354,7 @@ describe('DuckDBWasmDataPreview', () => {
 			runtime: 'worker',
 			reason: 'health_check',
 		});
+		await vi.waitFor(() => expect(failed.close).toHaveResolved());
 		await expect(preview.preview({ setup: [], query: { text: 'SELECT 2' } })).resolves.toEqual({
 			columns: ['id'],
 			rows: [[1]],
@@ -412,6 +413,96 @@ describe('DuckDBWasmDataPreview', () => {
 		finishClose?.();
 		await closing;
 		expect(closed).toBe(true);
+	});
+
+	it('counts repeated health-check recycling against pool capacity and shutdown', async () => {
+		const finishClose: (() => void)[] = [];
+		const unhealthy = (id: number): DuckDBWasmRuntime =>
+			runtime({
+				execute: vi.fn(async () => ({ columns: ['id'], rows: [[id]] })),
+				ping: vi
+					.fn()
+					.mockResolvedValueOnce(undefined)
+					.mockRejectedValueOnce(new Error('unhealthy')),
+				close: vi.fn(
+					() =>
+						new Promise<void>((resolve) => {
+							finishClose.push(resolve);
+						}),
+				),
+			});
+		const first = unhealthy(1);
+		const second = unhealthy(2);
+		const factory = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+		const preview = new DuckDBWasmDataPreview(factory, {
+			...options,
+			maxPoolSize: 2,
+			startupTimeoutMs: 10_000,
+		});
+		await preview.check();
+
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 1' } })).resolves.toEqual({
+			columns: ['id'],
+			rows: [[1]],
+		});
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 2' } })).resolves.toEqual({
+			columns: ['id'],
+			rows: [[2]],
+		});
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 3' } })).rejects.toThrow(
+			'pool is currently full',
+		);
+		expect(factory).toHaveBeenCalledTimes(2);
+		await vi.waitFor(() => expect(finishClose).toHaveLength(2));
+
+		let closed = false;
+		const closing = preview.close().then(() => {
+			closed = true;
+		});
+		await Promise.resolve();
+		expect(closed).toBe(false);
+		for (const finish of finishClose) finish();
+		await closing;
+		expect(closed).toBe(true);
+	});
+
+	it('keeps a timed-out close charged against pool capacity until it settles', async () => {
+		let finishClose: (() => void) | undefined;
+		const first = runtime({
+			ping: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('unhealthy')),
+			close: vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishClose = resolve;
+					}),
+			),
+		});
+		const second = runtime();
+		const factory = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+		const preview = new DuckDBWasmDataPreview(factory, {
+			...options,
+			startupTimeoutMs: 5,
+		});
+		await preview.check();
+
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 1' } })).resolves.toEqual({
+			columns: ['id'],
+			rows: [[1]],
+		});
+		await vi.waitFor(() => expect(first.close).toHaveBeenCalledOnce());
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 2' } })).rejects.toThrow(
+			'pool is currently full',
+		);
+		expect(factory).toHaveBeenCalledOnce();
+
+		finishClose?.();
+		await vi.waitFor(() => expect(first.close).toHaveResolved());
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 2' } })).resolves.toEqual({
+			columns: ['id'],
+			rows: [[1]],
+		});
+		expect(factory).toHaveBeenCalledTimes(2);
 	});
 
 	it('emits low-cardinality pool, execution, and recycle metrics', async () => {

@@ -203,7 +203,7 @@ export class DuckDBWasmDataPreview {
 			slot.busy = true;
 			return slot;
 		}
-		if (this.slots.size + this.initializations.size >= this.maxPoolSize) {
+		if (this.liveRuntimeCount() >= this.maxPoolSize) {
 			throw new ResourceExhaustedError('The DuckDB-Wasm preview pool is currently full.');
 		}
 		const slot = await this.startSlot();
@@ -326,18 +326,19 @@ export class DuckDBWasmDataPreview {
 			reason,
 		});
 		this.recordPoolSize(slot.runtime.mode);
-		slot.disposing = this.track(this.disposals, this.closeRuntime(slot.runtime));
+		slot.disposing = this.closeRuntime(slot.runtime);
 		return slot.disposing;
 	}
 
 	private async closeRuntime(runtime: DuckDBWasmRuntime): Promise<void> {
-		await withDeadline(
+		const close = this.track(
+			this.disposals,
 			Promise.resolve().then(() => runtime.close()),
-			{
-				timeoutMs: this.options.startupTimeoutMs,
-				timeoutError: () => new UnavailableError('DuckDB-Wasm cleanup timed out.'),
-			},
-		).catch(() => {});
+		);
+		await withDeadline(close, {
+			timeoutMs: this.options.startupTimeoutMs,
+			timeoutError: () => new UnavailableError('DuckDB-Wasm cleanup timed out.'),
+		}).catch(() => {});
 	}
 
 	private async closeAll(): Promise<void> {
@@ -365,6 +366,10 @@ export class DuckDBWasmDataPreview {
 		let active = 0;
 		for (const slot of this.slots) if (slot.busy) active++;
 		return active;
+	}
+
+	private liveRuntimeCount(): number {
+		return this.slots.size + this.initializations.size + this.disposals.size;
 	}
 
 	private recordPoolSize(runtime: DuckDBWasmRuntime['mode']): void {

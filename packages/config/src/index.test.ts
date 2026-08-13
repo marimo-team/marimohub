@@ -128,7 +128,7 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_DATA_BROWSER: 'full',
 		};
 		const withoutExperiment = createFromEnv(env).dataBrowser;
-		expect(withoutExperiment).toMatchObject({ preview: true });
+		expect(withoutExperiment).toMatchObject({ preview: true, query: false });
 		expect(withoutExperiment?.checkPreview).toBeUndefined();
 
 		const deps = createFromEnv({
@@ -137,6 +137,7 @@ describe('createFromEnv auth backend selection', () => {
 		});
 		expect(deps.dataBrowser?.checkPreview).toBeTypeOf('function');
 		expect(deps.dataBrowser?.close).toBeTypeOf('function');
+		expect(deps.dataBrowser?.query).toBe(false);
 	});
 
 	it('wires DuckDB-Wasm pool and idle lifecycle settings', () => {

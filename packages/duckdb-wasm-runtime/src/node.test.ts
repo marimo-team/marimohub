@@ -91,6 +91,7 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 describe.each(['worker', 'inline'] as const)('DuckDB-Wasm %s runtime', (mode) => {
 	it('rejects remote-required programs before executing their setup', async () => {
 		const runtime = await initialized(mode);
+		expect(runtime.features).not.toContain('iceberg-http');
 		await expect(
 			runtime.execute({
 				setup: [{ text: 'CREATE TABLE must_not_exist(value INTEGER)' }],
