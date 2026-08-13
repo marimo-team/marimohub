@@ -4,8 +4,13 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
 
-const apiPort = Number(process.env.PORT ?? 3000);
-const webPort = Number(process.env.WEB_PORT ?? 5175);
+function envPort(value: string | undefined, fallback: number): number {
+	const port = Number(value);
+	return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : fallback;
+}
+
+const apiPort = envPort(process.env.PORT, 3000);
+const webPort = envPort(process.env.WEB_PORT, 5175);
 
 // React SPA. The Cloudflare vite-plugin is intentionally absent — the SPA is a
 // pure consumer of the /api/* surface and is served as static assets by whatever

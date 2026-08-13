@@ -248,8 +248,8 @@ describe('bootstrap', () => {
 
 	it('disposes compute during drain', async () => {
 		const dispose = vi.fn().mockResolvedValue(undefined);
-		deps.compute[Symbol.asyncDispose] = dispose;
-		const harness = makeHarness(deps);
+		const compute = { ...deps.compute, [Symbol.asyncDispose]: dispose };
+		const harness = makeHarness({ ...deps, compute });
 		const handle = await bootstrap(BASE_ENV, harness.overrides);
 
 		await handle?.drain();

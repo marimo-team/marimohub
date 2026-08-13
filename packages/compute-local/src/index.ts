@@ -217,6 +217,7 @@ class LocalSandboxInstance implements SandboxInstance {
 	private readonly children = new Set<ChildProcess>();
 	/** Logical port (as named in core, e.g. 2718) → real allocated host port. */
 	private readonly portMap = new Map<number, number>();
+	private readonly pendingWrites = new Set<Promise<unknown>>();
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
 	private destroyPromise?: Promise<void>;
@@ -374,8 +375,9 @@ class LocalSandboxInstance implements SandboxInstance {
 	}
 
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
+		this.assertActive();
 		// Local writes are cheap (no round-trip), so a plain bounded loop is enough.
-		await mapWithConcurrency(files, WRITE_CONCURRENCY, async (f) => {
+		const pending = mapWithConcurrency(files, WRITE_CONCURRENCY, async (f) => {
 			const abs = this.resolveContained(f.path);
 			if (abs === null) {
 				console.warn(`writeFiles: skipping path outside sandbox root: ${f.path}`);
@@ -385,6 +387,12 @@ class LocalSandboxInstance implements SandboxInstance {
 			// `encoding` applies to string content only; bytes are written verbatim.
 			await writeFile(abs, f.content, typeof f.content === 'string' ? 'utf-8' : null);
 		});
+		this.pendingWrites.add(pending);
+		try {
+			await pending;
+		} finally {
+			this.pendingWrites.delete(pending);
+		}
 	}
 
 	async gitCheckout(repo: string, options?: GitCheckoutOptions): Promise<void> {
@@ -493,9 +501,11 @@ class LocalSandboxInstance implements SandboxInstance {
 		for (const child of this.children) killProcessGroup(child, 'SIGKILL');
 		this.children.clear();
 		this.portMap.clear();
-		this.destroyPromise = rm(this.root, { recursive: true, force: true }).then(() => {
-			this.onDestroyed?.();
-		});
+		this.destroyPromise = Promise.allSettled(this.pendingWrites)
+			.then(() => rm(this.root, { recursive: true, force: true }))
+			.then(() => {
+				this.onDestroyed?.();
+			});
 		return this.destroyPromise;
 	}
 }

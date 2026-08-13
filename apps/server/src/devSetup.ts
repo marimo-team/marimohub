@@ -1,9 +1,17 @@
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { ApiDeps } from '@marimo-hub/api';
-import { ensureInitialized, UserId, ValidationError } from '@marimo-hub/core';
+import {
+	acquireSingletonClaim,
+	ensureInitialized,
+	releaseSingletonClaim,
+	UserId,
+	ValidationError,
+} from '@marimo-hub/core';
 import type { CreateIntegrationInput, CreateNotebookInput } from '@marimo-hub/core';
 
 const DEV_STORAGE_ROOT = fileURLToPath(new URL('../../../.context/dev-storage', import.meta.url));
+const DEV_NOTEBOOK_SEED_CLAIM = '_system/dev/local-notebook-seed.json';
 
 const DEV_USER = {
 	id: UserId.parse('user'),
@@ -61,6 +69,52 @@ async function hasDevIntegration(integrations: NonNullable<ApiDeps['orgIntegrati
 	);
 }
 
+function parseSeedClaim(raw: unknown): string | null {
+	if (typeof raw !== 'object' || raw === null || !('holder' in raw)) {
+		throw new Error('Invalid local development seed claim');
+	}
+	const holder = raw.holder;
+	if (holder === null || typeof holder === 'string') return holder;
+	throw new Error('Invalid local development seed claim');
+}
+
+async function isSeedProcessLive(holder: string): Promise<boolean> {
+	const match = /^(\d+):/.exec(holder);
+	const pid = Number(match?.[1]);
+	if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
+	}
+}
+
+async function seedWelcomeNotebook(deps: Pick<ApiDeps, 'bucket' | 'services'>): Promise<void> {
+	const holder = `${process.pid}:${randomUUID()}`;
+	const claim = {
+		bucket: deps.bucket,
+		key: DEV_NOTEBOOK_SEED_CLAIM,
+		serialize: (value: string | null) => JSON.stringify({ holder: value }),
+		parseHolder: parseSeedClaim,
+		isHolderLive: isSeedProcessLive,
+	};
+	const { acquired } = await acquireSingletonClaim(claim, holder);
+	if (!acquired) return;
+
+	try {
+		const projects = await deps.services.projects.listProjects();
+		const project = projects.find(({ name }) => name === 'My Projects') ?? projects[0];
+		if (!project) return;
+		const notebooks = await deps.services.notebooks.listNotebooks(project.id);
+		if (!notebooks.some(({ title }) => title === DEV_NOTEBOOK.title)) {
+			await deps.services.notebooks.createNotebook(project.id, DEV_NOTEBOOK, DEV_USER.id);
+		}
+	} finally {
+		await releaseSingletonClaim(claim, holder);
+	}
+}
+
 export function localDevEnv(
 	env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
@@ -85,18 +139,11 @@ export function localDevEnv(
 export async function seedLocalDev(
 	deps: Pick<ApiDeps, 'bucket' | 'orgIntegrations' | 'services'>,
 ): Promise<void> {
-	await ensureInitialized(deps.bucket, DEV_USER.id);
-	const projects = await deps.services.projects.listProjects();
-	const project = projects.find(({ name }) => name === 'My Projects') ?? projects[0];
-	if (project) {
-		const notebooks = await deps.services.notebooks.listNotebooks(project.id);
-		if (!notebooks.some(({ title }) => title === DEV_NOTEBOOK.title)) {
-			await deps.services.notebooks.createNotebook(project.id, DEV_NOTEBOOK, DEV_USER.id);
-		}
-	}
-
 	const integrations = deps.orgIntegrations;
 	if (!integrations) throw new Error('Local development integrations are not enabled.');
+
+	await ensureInitialized(deps.bucket, DEV_USER.id);
+	await seedWelcomeNotebook(deps);
 	if (await hasDevIntegration(integrations)) return;
 
 	try {

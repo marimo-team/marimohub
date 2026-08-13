@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createApi } from '@marimo-hub/api';
-import { ValidationError } from '@marimo-hub/core';
+import { ensureInitialized, UserId, ValidationError } from '@marimo-hub/core';
 import type { OrgIntegrationsService } from '@marimo-hub/core';
 import { createFromEnv } from '@marimo-hub/config';
 import { localDevEnv, seedLocalDev } from './devSetup';
@@ -68,6 +68,28 @@ describe('local development setup', () => {
 				scope: 'org',
 			}),
 		]);
+	});
+
+	it('does not mutate storage when integrations are unavailable', async () => {
+		const deps = createDevDeps();
+
+		await expect(seedLocalDev({ ...deps, orgIntegrations: undefined })).rejects.toThrow(
+			'Local development integrations are not enabled.',
+		);
+
+		expect((await deps.bucket.list()).objects).toEqual([]);
+	});
+
+	it('creates one welcome notebook across concurrent startups', async () => {
+		const deps = createDevDeps();
+		await ensureInitialized(deps.bucket, UserId.parse('user'));
+		const createNotebook = vi.spyOn(deps.services.notebooks, 'createNotebook');
+
+		await Promise.all([seedLocalDev(deps), seedLocalDev(deps)]);
+
+		expect(createNotebook).toHaveBeenCalledOnce();
+		const [project] = await deps.services.projects.listProjects();
+		expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
 	});
 
 	it('ignores an atomic name conflict from another startup', async () => {

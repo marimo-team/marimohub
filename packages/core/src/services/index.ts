@@ -133,8 +133,10 @@ export type { CreatedToken, CreateTokenInput } from './tokens/TokenService';
 export { composeAuthenticators } from './tokens/composeAuthenticators';
 export { listAllKeys } from './catalog/storage';
 export {
+	acquireSingletonClaim,
 	mutateObject,
 	mutateObjectWithOutcome,
+	releaseSingletonClaim,
 	withCasRetry,
 	type CasRetryOptions,
 	type CasWriter,
