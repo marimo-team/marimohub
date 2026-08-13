@@ -22,30 +22,32 @@ import type {
 	ObjectPreviewRequest,
 	ObjectSearchPage,
 	ObjectSearchRequest,
-	ObjectStoreSource,
 	ObjectVersion,
 	ObjectVersionRequest,
 	Metrics,
+	S3ObjectStoreSource,
 } from '@marimo-hub/core';
-import { noopMetrics, ObjectBrowseError } from '@marimo-hub/core';
+import { OBJECT_BROWSE_PROVIDER_METADATA, ObjectBrowseError } from '@marimo-hub/core';
+import {
+	decodeCursor,
+	DEFAULT_OBJECT_BROWSER_LIMITS,
+	encodeCursor,
+	matchesObjectSearchFilters,
+	OBJECT_PREVIEW_FORMATS,
+	ObjectBrowserObserver,
+	assertBucket,
+	assertObjectIdentity,
+	previewObject,
+	withOperationDeadline,
+} from '@marimo-hub/object-browser-commons';
+import type { ObjectBrowserLimits, ObjectPreviewReader } from '@marimo-hub/object-browser-commons';
 import { createS3ClientFactory, credentialsFor } from './client';
 import type { GuardedHostResolver, S3ClientFactory } from './client';
-import { decodeCursor, encodeCursor } from './cursors';
 import { mapS3Error } from './errors';
-import { S3_PREVIEW_FORMATS } from './formats';
 import { openS3Object } from './open';
-import { previewS3Object } from './preview';
-import { sendS3, withOperationDeadline, withS3Client } from './s3Request';
-import { assertBucket, assertObjectIdentity } from './validation';
+import { readObjectRange, sendS3, withS3Client } from './s3Request';
 
-export interface S3ObjectBrowserLimits {
-	previewMaxBytes: number;
-	inlineImageMaxBytes: number;
-	parquetMaxRangedBytes: number;
-	searchMaxKeys: number;
-	metadataTimeoutMs: number;
-	previewTimeoutMs: number;
-}
+export type S3ObjectBrowserLimits = ObjectBrowserLimits;
 
 export interface S3ObjectBrowserOptions {
 	mode: 'metadata' | 'full';
@@ -55,26 +57,20 @@ export interface S3ObjectBrowserOptions {
 	clientFactory?: S3ClientFactory;
 }
 
-export const DEFAULT_S3_OBJECT_BROWSER_LIMITS: S3ObjectBrowserLimits = {
-	previewMaxBytes: 8 * 1024 * 1024,
-	inlineImageMaxBytes: 10 * 1024 * 1024,
-	parquetMaxRangedBytes: 32 * 1024 * 1024,
-	searchMaxKeys: 5_000,
-	metadataTimeoutMs: 30_000,
-	previewTimeoutMs: 30_000,
-};
+export const DEFAULT_S3_OBJECT_BROWSER_LIMITS = DEFAULT_OBJECT_BROWSER_LIMITS;
 
 const SEARCH_BATCH_SIZE = 1_000;
 
-export class S3ObjectBrowser implements ObjectBrowser {
+export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
+	readonly provider = 's3' as const;
 	private readonly mode: 'metadata' | 'full';
 	private readonly limits: S3ObjectBrowserLimits;
 	private readonly clientFactory: S3ClientFactory;
-	private readonly metrics: Metrics;
+	private readonly observer: ObjectBrowserObserver;
 
 	constructor(options: S3ObjectBrowserOptions) {
 		this.mode = options.mode;
-		this.metrics = options.metrics ?? noopMetrics;
+		this.observer = new ObjectBrowserObserver(this.provider, options.mode, options.metrics);
 		this.limits = { ...DEFAULT_S3_OBJECT_BROWSER_LIMITS, ...options.limits };
 		if (options.clientFactory) this.clientFactory = options.clientFactory;
 		else if (options.resolveHost) {
@@ -92,20 +88,22 @@ export class S3ObjectBrowser implements ObjectBrowser {
 		}
 	}
 
-	capability(source: ObjectStoreSource, context: ObjectBrowseContext): ObjectBrowseCapability {
+	capability(source: S3ObjectStoreSource, context: ObjectBrowseContext): ObjectBrowseCapability {
 		try {
 			credentialsFor(source, context);
 			return {
+				...OBJECT_BROWSE_PROVIDER_METADATA.s3,
 				available: true,
 				preview: this.mode === 'full',
 				download: this.mode === 'full',
 				search: 'bounded-key-name',
 				versions: true,
-				preview_formats: this.mode === 'full' ? [...S3_PREVIEW_FORMATS] : [],
+				preview_formats: this.mode === 'full' ? [...OBJECT_PREVIEW_FORMATS] : [],
 			};
 		} catch (error) {
 			const mapped = mapS3Error(error);
 			return {
+				...OBJECT_BROWSE_PROVIDER_METADATA.s3,
 				available: false,
 				preview: false,
 				download: false,
@@ -118,7 +116,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 	}
 
 	async listBuckets(
-		source: ObjectStoreSource,
+		source: S3ObjectStoreSource,
 		context: ObjectBrowseContext,
 		request: ObjectPageRequest,
 	): Promise<ObjectPage<ObjectBucket>> {
@@ -164,7 +162,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 	}
 
 	async listObjects(
-		source: ObjectStoreSource,
+		source: S3ObjectStoreSource,
 		context: ObjectBrowseContext,
 		request: ObjectListRequest,
 	): Promise<ObjectPage<ObjectEntry>> {
@@ -210,7 +208,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 	}
 
 	async searchObjects(
-		source: ObjectStoreSource,
+		source: S3ObjectStoreSource,
 		context: ObjectBrowseContext,
 		request: ObjectSearchRequest,
 	): Promise<ObjectSearchPage> {
@@ -252,7 +250,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 							scanned += 1;
 							if (object.Key.slice(prefix.length).toLocaleLowerCase().includes(query)) {
 								const entry = objectEntry(object, prefix);
-								if (matchesFilters(entry, request)) items.push(entry);
+								if (matchesObjectSearchFilters(entry, request)) items.push(entry);
 							}
 							if (scanned < this.limits.searchMaxKeys && items.length < request.limit) {
 								continue;
@@ -289,16 +287,13 @@ export class S3ObjectBrowser implements ObjectBrowser {
 					};
 				}),
 			);
-			this.metrics.increment('object_browser.s3.keys_scanned', result.scanned, {
-				operation: 'search_objects',
-				mode: this.mode,
-			});
+			this.observer.keysScanned(result.scanned);
 			return result;
 		});
 	}
 
 	async headObject(
-		source: ObjectStoreSource,
+		source: S3ObjectStoreSource,
 		context: ObjectBrowseContext,
 		request: ObjectIdentity,
 	): Promise<ObjectDetail> {
@@ -356,7 +351,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 	}
 
 	async listVersions(
-		source: ObjectStoreSource,
+		source: S3ObjectStoreSource,
 		context: ObjectBrowseContext,
 		request: ObjectVersionRequest,
 	): Promise<ObjectPage<ObjectVersion>> {
@@ -403,7 +398,7 @@ export class S3ObjectBrowser implements ObjectBrowser {
 	}
 
 	previewObject(
-		source: ObjectStoreSource,
+		source: S3ObjectStoreSource,
 		context: ObjectBrowseContext,
 		request: ObjectPreviewRequest,
 	): Promise<ObjectPreview> {
@@ -412,23 +407,14 @@ export class S3ObjectBrowser implements ObjectBrowser {
 				throw new ObjectBrowseError('access_denied', 'Object previews are disabled.');
 			}
 			assertObjectIdentity(source, request);
-			const result = await previewS3Object(
-				this.clientFactory,
-				this.limits,
-				source,
-				context,
-				request,
-			);
-			this.metrics.increment('object_browser.s3.bytes_read', this.previewBytesRead(result), {
-				operation: 'preview_object',
-				mode: this.mode,
-			});
+			const result = await this.preview(source, context, request);
+			this.observer.previewRead(result, this.limits);
 			return result;
 		});
 	}
 
 	openObject(
-		source: ObjectStoreSource,
+		source: S3ObjectStoreSource,
 		context: ObjectBrowseContext,
 		request: ObjectOpenRequest,
 	): Promise<ObjectBody> {
@@ -438,7 +424,10 @@ export class S3ObjectBrowser implements ObjectBrowser {
 			}
 			assertObjectIdentity(source, request);
 			const object = await openS3Object(this.clientFactory, this.limits, source, context, request);
-			return this.observeBody(object, request.inline ? Math.min(object.total_size, 16) : 0);
+			return this.observer.observeBody(
+				object,
+				request.inline ? Math.min(object.total_size, 16) : 0,
+			);
 		});
 	}
 
@@ -447,95 +436,37 @@ export class S3ObjectBrowser implements ObjectBrowser {
 		context: ObjectBrowseContext,
 		run: () => Promise<T>,
 	): Promise<T> {
-		const tags = { operation, mode: this.mode };
-		const startedAt = performance.now();
-		this.metrics.increment('object_browser.s3.operations', 1, tags);
-		try {
-			return await run();
-		} catch (error) {
-			this.metrics.increment('object_browser.s3.failures', 1, {
-				...tags,
-				code: error instanceof ObjectBrowseError ? error.code : 'unavailable',
-			});
-			if (error instanceof ObjectBrowseError && error.code === 'aborted') {
-				this.metrics.increment(
-					context.signal?.aborted
-						? 'object_browser.s3.cancellations'
-						: 'object_browser.s3.timeouts',
-					1,
-					tags,
-				);
-			}
-			throw error;
-		} finally {
-			const latency = performance.now() - startedAt;
-			if (this.metrics.histogram) {
-				this.metrics.histogram('object_browser.s3.latency_ms', latency, tags);
-			} else {
-				this.metrics.gauge('object_browser.s3.latency_ms', latency, tags);
-			}
-		}
+		return this.observer.observe(operation, context, run);
 	}
 
-	private observeBody(object: ObjectBody, probeBytes: number): ObjectBody {
-		const reader = object.body.getReader();
-		let bytesRead = probeBytes;
-		let finished = false;
-		const tags = { operation: 'open_object', mode: this.mode };
-		const metrics = this.metrics;
-		const finish = () => {
-			if (finished) return;
-			finished = true;
-			this.metrics.increment('object_browser.s3.bytes_read', bytesRead, tags);
-		};
-		return {
-			...object,
-			body: new ReadableStream<Uint8Array>({
-				async pull(controller) {
-					try {
-						const next = await reader.read();
-						if (next.done) {
-							finish();
-							controller.close();
-						} else {
-							bytesRead += next.value.byteLength;
-							controller.enqueue(next.value);
-						}
-					} catch (error) {
-						finish();
-						metrics.increment('object_browser.s3.failures', 1, {
-							...tags,
-							code: error instanceof ObjectBrowseError ? error.code : 'unavailable',
-						});
-						controller.error(error);
-					}
+	private preview(
+		source: S3ObjectStoreSource,
+		context: ObjectBrowseContext,
+		request: ObjectPreviewRequest,
+	): Promise<ObjectPreview> {
+		return withS3Client(this.clientFactory, source, context, (client) => {
+			const reader: ObjectPreviewReader = {
+				async head(identity, signal) {
+					const head = await sendS3<HeadOutput>(
+						client,
+						new HeadObjectCommand({
+							Bucket: identity.bucket,
+							Key: identity.key,
+							VersionId: identity.version_id,
+						}),
+						signal,
+					);
+					return {
+						total_bytes: head.ContentLength ?? 0,
+						content_type: head.ContentType,
+						etag: head.ETag,
+					};
 				},
-				async cancel(reason) {
-					const metric =
-						(reason as { name?: unknown } | null)?.name === 'TimeoutError'
-							? 'object_browser.s3.timeouts'
-							: 'object_browser.s3.cancellations';
-					metrics.increment(metric, 1, tags);
-					try {
-						await reader.cancel(reason);
-					} finally {
-						finish();
-					}
-				},
-			}),
-			close() {
-				finish();
-				object.close();
-			},
-		};
-	}
-
-	private previewBytesRead(result: ObjectPreview): number {
-		const probeBytes = Math.min(result.total_bytes ?? 0, this.limits.previewMaxBytes);
-		if (!('bytes_read' in result) || result.bytes_read === undefined) return probeBytes;
-		return result.kind === 'tabular' && result.format === 'parquet'
-			? result.bytes_read + probeBytes
-			: result.bytes_read;
+				readRange: (identity, start, end, options) =>
+					readObjectRange(client, identity, start, end, options),
+			};
+			return previewObject(reader, this.limits, context, request);
+		});
 	}
 
 	private metadataOperation<T>(
@@ -614,25 +545,6 @@ function objectEntry(
 		etag: object.ETag,
 		storage_class: object.StorageClass,
 	};
-}
-
-function matchesFilters(entry: ObjectEntry, filters: ObjectSearchRequest): boolean {
-	const extension = entry.key.split('.').at(-1)?.toLowerCase();
-	if (filters.formats?.length && (!extension || !filters.formats.includes(extension))) return false;
-	if (filters.min_size !== undefined && (entry.size ?? 0) < filters.min_size) return false;
-	if (filters.max_size !== undefined && (entry.size ?? 0) > filters.max_size) return false;
-	if (
-		filters.modified_after &&
-		(!entry.last_modified || Date.parse(entry.last_modified) < Date.parse(filters.modified_after))
-	)
-		return false;
-	if (
-		filters.modified_before &&
-		entry.last_modified &&
-		Date.parse(entry.last_modified) > Date.parse(filters.modified_before)
-	)
-		return false;
-	return true;
 }
 
 function detailFromHead(

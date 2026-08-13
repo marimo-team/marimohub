@@ -11,7 +11,10 @@ export interface ObjectBrowseContractFixture {
 	prefix: string;
 	directObject: string;
 	nestedObject: string;
+	unicodeObject: string;
+	emptyObject: string;
 	versionedObject: string;
+	versions?: boolean;
 }
 
 export interface ObjectBrowseContractOptions {
@@ -64,6 +67,31 @@ export function objectBrowseContract(
 			});
 		});
 
+		it('rejects roots outside the configured integration scope', async () => {
+			await expect(
+				opts.browser.listObjects(opts.source, opts.context, {
+					bucket: `${fixture.bucket}-outside`,
+					limit: 1,
+				}),
+			).rejects.toMatchObject({ code: 'access_denied' });
+		});
+
+		it('rejects malformed cursors and invalid object identities', async () => {
+			await expect(
+				opts.browser.listObjects(opts.source, opts.context, {
+					bucket: fixture.bucket,
+					limit: 1,
+					cursor: '!',
+				}),
+			).rejects.toMatchObject({ code: 'invalid_cursor' });
+			await expect(
+				opts.browser.headObject(opts.source, opts.context, {
+					bucket: fixture.bucket,
+					key: '',
+				}),
+			).rejects.toMatchObject({ code: 'not_found' });
+		});
+
 		it('lists only direct children with stable pagination and no duplicates', async () => {
 			const items = await collect((cursor) =>
 				opts.browser.listObjects(opts.source, opts.context, {
@@ -100,6 +128,29 @@ export function objectBrowseContract(
 				content_url: '/unused',
 			});
 			expect(preview).toMatchObject({ kind: 'tabular', format: 'csv', truncated: true });
+		});
+
+		it('handles Unicode keys and empty objects', async () => {
+			await expect(
+				opts.browser.headObject(opts.source, opts.context, {
+					bucket: fixture.bucket,
+					key: fixture.unicodeObject,
+				}),
+			).resolves.toMatchObject({ key: fixture.unicodeObject });
+			const detail = await opts.browser.headObject(opts.source, opts.context, {
+				bucket: fixture.bucket,
+				key: fixture.emptyObject,
+			});
+			expect(detail.size).toBe(0);
+			const body = await opts.browser.openObject(opts.source, opts.context, {
+				bucket: fixture.bucket,
+				key: fixture.emptyObject,
+			});
+			try {
+				expect(await readAll(body.body)).toHaveLength(0);
+			} finally {
+				body.close();
+			}
 		});
 
 		it('searches progressively and preserves a continuation cursor', async () => {
@@ -141,10 +192,57 @@ export function objectBrowseContract(
 				key: fixture.versionedObject,
 				limit: 10,
 			});
-			expect(
-				versions.items.filter((item) => item.kind === 'version').length,
-			).toBeGreaterThanOrEqual(2);
-			expect(versions.items.every((item) => item.key === fixture.versionedObject)).toBe(true);
+			if (fixture.versions !== false) {
+				expect(
+					versions.items.filter((item) => item.kind === 'version').length,
+				).toBeGreaterThanOrEqual(2);
+				expect(versions.items.every((item) => item.key === fixture.versionedObject)).toBe(true);
+			} else {
+				expect(versions).toEqual({ items: [], next_cursor: null });
+			}
+		});
+
+		it('reports missing objects and invalid byte ranges without leaking provider details', async () => {
+			await expect(
+				opts.browser.headObject(opts.source, opts.context, {
+					bucket: fixture.bucket,
+					key: `${fixture.prefix}missing-object`,
+				}),
+			).rejects.toMatchObject({ code: 'not_found' });
+			await expect(
+				opts.browser.openObject(opts.source, opts.context, {
+					bucket: fixture.bucket,
+					key: fixture.directObject,
+					range: 'bytes=999999999-',
+				}),
+			).rejects.toMatchObject({ code: 'range_not_satisfiable' });
+			const detail = await opts.browser.headObject(opts.source, opts.context, {
+				bucket: fixture.bucket,
+				key: fixture.directObject,
+			});
+			expect(detail.etag).toBeTruthy();
+			await expect(
+				opts.browser.openObject(opts.source, opts.context, {
+					bucket: fixture.bucket,
+					key: fixture.directObject,
+					if_match: `not-${detail.etag}`,
+				}),
+			).rejects.toMatchObject({ code: 'precondition_failed' });
+		});
+
+		it('honors cancellation before provider metadata is read', async () => {
+			const controller = new AbortController();
+			controller.abort();
+			await expect(
+				opts.browser.listObjects(
+					opts.source,
+					{ ...opts.context, signal: controller.signal },
+					{
+						bucket: fixture.bucket,
+						limit: 1,
+					},
+				),
+			).rejects.toMatchObject({ code: 'aborted' });
 		});
 	});
 }

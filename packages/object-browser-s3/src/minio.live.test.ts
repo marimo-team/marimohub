@@ -34,7 +34,7 @@ const context = {
 	project_id: createProjectId(),
 	user_id: UserId.parse('object-contract'),
 	user_email: 'object-contract@example.com',
-	allow_server_ambient: false,
+	allow_server_ambient: {},
 };
 
 if (endpoint)
@@ -61,6 +61,8 @@ if (endpoint)
 			);
 			const directObject = `${prefix}contract.csv`;
 			const nestedObject = `${prefix}nested/contract.txt`;
+			const unicodeObject = `${prefix}résumé-雪.txt`;
+			const emptyObject = `${prefix}empty.bin`;
 			const versionedObject = `${prefix}versioned.txt`;
 			await client.send(
 				new PutObjectCommand({
@@ -74,13 +76,25 @@ if (endpoint)
 				new PutObjectCommand({ Bucket: bucket, Key: nestedObject, Body: 'nested contract' }),
 			);
 			await client.send(
+				new PutObjectCommand({ Bucket: bucket, Key: unicodeObject, Body: 'unicode contract' }),
+			);
+			await client.send(new PutObjectCommand({ Bucket: bucket, Key: emptyObject, Body: '' }));
+			await client.send(
 				new PutObjectCommand({ Bucket: bucket, Key: versionedObject, Body: 'version one' }),
 			);
 			await client.send(
 				new PutObjectCommand({ Bucket: bucket, Key: versionedObject, Body: 'version two' }),
 			);
 			client.destroy();
-			return { bucket, prefix, directObject, nestedObject, versionedObject };
+			return {
+				bucket,
+				prefix,
+				directObject,
+				nestedObject,
+				unicodeObject,
+				emptyObject,
+				versionedObject,
+			};
 		},
 		async teardown() {
 			const client = setupClient();

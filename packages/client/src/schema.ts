@@ -9340,6 +9340,12 @@ export interface components {
 					reason?: string;
 				};
 				objects?: {
+					/** @enum {string} */
+					provider: 's3' | 'gcs' | 'azure_blob';
+					/** @enum {string} */
+					root_kind: 'bucket' | 'container';
+					/** @enum {string} */
+					uri_scheme: 's3' | 'gs' | 'az';
 					available: boolean;
 					preview: boolean;
 					download: boolean;

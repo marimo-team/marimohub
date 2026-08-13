@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { IntegrationRegistry } from './registry';
+import { defineIntegration } from './sdk';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -26,6 +27,7 @@ describe('IntegrationRegistry', () => {
 			snippet: () => '',
 		};
 		const objectBrowse = {
+			provider: 's3' as const,
 			source: () => ({
 				provider: 's3' as const,
 				path_style: false,
@@ -54,6 +56,32 @@ describe('IntegrationRegistry', () => {
 			supports_browse: true,
 			browse_surfaces: ['tables', 'objects'],
 		});
+	});
+
+	it('rejects a generated object source whose provider differs from its definition', () => {
+		const registry = new IntegrationRegistry();
+		registry.register(
+			defineIntegration({
+				kind: 'mismatch',
+				title: 'Mismatch',
+				description: 'test',
+				category: 'other',
+				brand: { color: '#000000' },
+				schemaVersion: 1,
+				configSchema: z.object({}),
+				render: () => ({}),
+				objectBrowse: {
+					provider: 's3',
+					source: () =>
+						({
+							provider: 'gcs',
+							auth: { method: 'ambient' },
+						}) as never,
+					snippet: () => '',
+				},
+			}),
+		);
+		expect(() => registry.get('mismatch').objectBrowse?.source({})).toThrow(/does not match/);
 	});
 
 	it('disables an unrepresentable kind schema and logs without exception text', () => {

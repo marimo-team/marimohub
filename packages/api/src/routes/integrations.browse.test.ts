@@ -98,13 +98,17 @@ const sandboxBrowsyKind = defineIntegration({
 	},
 });
 
-const objectBrowser: ObjectBrowser = {
+const objectBrowser: ObjectBrowser<'s3'> = {
+	provider: 's3',
 	capability: (source, context) => {
 		const available =
 			source.auth.method === 'static' ||
-			context.temporary_s3_credentials !== undefined ||
-			context.allow_server_ambient;
+			context.federation?.provider === 's3' ||
+			context.allow_server_ambient.s3 === true;
 		return {
+			provider: 's3',
+			root_kind: 'bucket',
+			uri_scheme: 's3',
 			available,
 			preview: available,
 			download: available,
@@ -351,6 +355,9 @@ describe('Data browser routes', () => {
 			preview: false,
 			surfaces: {
 				objects: {
+					provider: 's3',
+					root_kind: 'bucket',
+					uri_scheme: 's3',
 					available: true,
 					preview: true,
 					download: true,
@@ -480,6 +487,9 @@ describe('Data browser routes', () => {
 		const pid = await createProject();
 		const created = await createObjectStore(pid);
 		vi.spyOn(objectBrowser, 'capability').mockReturnValue({
+			provider: 's3',
+			root_kind: 'bucket',
+			uri_scheme: 's3',
 			available: true,
 			preview: false,
 			download: false,

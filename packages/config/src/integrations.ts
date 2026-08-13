@@ -7,6 +7,8 @@ import {
 import type { Bucket, DataPreviewService, IntegrationProbe, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from '@marimo-hub/api';
 import { DEFAULT_S3_OBJECT_BROWSER_LIMITS, S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
+import { GcsObjectBrowser } from '@marimo-hub/object-browser-gcs';
+import { AzureBlobObjectBrowser } from '@marimo-hub/object-browser-azure';
 import { parseBool, parseIntEnv, parseSecondsEnv } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -54,20 +56,24 @@ export function makeIntegrations(
 			: (() => {
 					const deadlines = objectBrowserDeadlinesFromEnv(env, dataBrowser);
 					const limits = objectBrowserLimitsFromEnv(env, dataBrowser);
+					const resolveHost = createGuardedHostResolver({
+						allowPrivate: policy === 'private',
+						timeoutMs: deadlines.resolveTimeoutMs,
+					});
+					const browserOptions = {
+						mode: dataBrowser,
+						metrics,
+						resolveHost,
+						limits: {
+							...limits,
+							metadataTimeoutMs: deadlines.metadataTimeoutMs,
+							previewTimeoutMs: deadlines.previewTimeoutMs,
+						},
+					};
 					return {
-						s3: new S3ObjectBrowser({
-							mode: dataBrowser,
-							metrics,
-							resolveHost: createGuardedHostResolver({
-								allowPrivate: policy === 'private',
-								timeoutMs: deadlines.resolveTimeoutMs,
-							}),
-							limits: {
-								...limits,
-								metadataTimeoutMs: deadlines.metadataTimeoutMs,
-								previewTimeoutMs: deadlines.previewTimeoutMs,
-							},
-						}),
+						s3: new S3ObjectBrowser(browserOptions),
+						gcs: new GcsObjectBrowser(browserOptions),
+						azure_blob: new AzureBlobObjectBrowser(browserOptions),
 					};
 				})();
 	const options = {

@@ -3,7 +3,7 @@ import { Agent as HttpsAgent } from 'node:https';
 import { ALL, V4MAPPED } from 'node:dns';
 import type { LookupFunction } from 'node:net';
 import { S3Client } from '@aws-sdk/client-s3';
-import type { ObjectBrowseContext, ObjectStoreSource } from '@marimo-hub/core';
+import type { ObjectBrowseContext, S3ObjectStoreSource } from '@marimo-hub/core';
 import { ObjectBrowseError } from '@marimo-hub/core';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 
@@ -23,7 +23,7 @@ export interface S3ClientLike {
 }
 
 export type S3ClientFactory = (
-	source: ObjectStoreSource,
+	source: S3ObjectStoreSource,
 	context: ObjectBrowseContext,
 ) => S3ClientLike;
 
@@ -41,7 +41,7 @@ export function createS3ClientFactory(options: {
 		});
 		const credentials = credentialsFor(source, context);
 		return new S3Client({
-			region: source.region ?? context.temporary_storage?.region ?? 'us-east-1',
+			region: source.region ?? context.federation?.storage.region ?? 'us-east-1',
 			endpoint: source.endpoint,
 			forcePathStyle: source.path_style,
 			maxAttempts: 3,
@@ -62,7 +62,7 @@ export function enforcedTimeouts(options: {
 	} as const;
 }
 
-export function credentialsFor(source: ObjectStoreSource, context: ObjectBrowseContext) {
+export function credentialsFor(source: S3ObjectStoreSource, context: ObjectBrowseContext) {
 	if (source.auth.method === 'static') {
 		return {
 			accessKeyId: source.auth.access_key_id,
@@ -70,20 +70,20 @@ export function credentialsFor(source: ObjectStoreSource, context: ObjectBrowseC
 			sessionToken: source.auth.session_token,
 		};
 	}
-	if (context.temporary_s3_credentials) {
-		if (!endpointsMatch(source.endpoint, context.temporary_storage?.endpoint)) {
+	if (context.federation?.provider === 's3') {
+		if (!endpointsMatch(source.endpoint, context.federation.storage.endpoint)) {
 			throw new ObjectBrowseError(
 				'access_denied',
 				'Federated credentials are not valid for this object-store endpoint.',
 			);
 		}
 		return {
-			accessKeyId: context.temporary_s3_credentials.accessKeyId,
-			secretAccessKey: context.temporary_s3_credentials.secretAccessKey,
-			sessionToken: context.temporary_s3_credentials.sessionToken,
+			accessKeyId: context.federation.credentials.accessKeyId,
+			secretAccessKey: context.federation.credentials.secretAccessKey,
+			sessionToken: context.federation.credentials.sessionToken,
 		};
 	}
-	if (!context.allow_server_ambient) {
+	if (!context.allow_server_ambient.s3) {
 		throw new ObjectBrowseError(
 			'access_denied',
 			'Ambient object-store access is not enabled for this integration.',

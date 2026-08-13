@@ -40,6 +40,7 @@ export async function makeObjectBrowseContext(
 		integrationId?: string;
 		includeFederated?: boolean;
 		allowServerAmbient?: boolean;
+		disableS3Ambient?: boolean;
 	} = {},
 ): Promise<ObjectBrowseContext> {
 	const browser = deps.dataBrowser?.objectBrowser;
@@ -49,9 +50,14 @@ export async function makeObjectBrowseContext(
 		project_id: project.id,
 		user_id: user.id,
 		user_email: user.email,
-		allow_server_ambient: wif
-			? false
-			: (options.allowServerAmbient ?? browser?.allowServerAmbientCredentials ?? false),
+		allow_server_ambient: {
+			s3:
+				wif || options.disableS3Ambient
+					? false
+					: (options.allowServerAmbient ?? browser?.allowServerAmbientCredentials ?? false),
+			gcs: options.allowServerAmbient ?? browser?.allowServerAmbientCredentials ?? false,
+			azure_blob: options.allowServerAmbient ?? browser?.allowServerAmbientCredentials ?? false,
+		},
 		...(signal ? { signal } : {}),
 	};
 	if (!wif) {
@@ -67,8 +73,11 @@ export async function makeObjectBrowseContext(
 	return temporary
 		? {
 				...context,
-				temporary_s3_credentials: temporary,
-				temporary_storage: wif.target.storage,
+				federation: {
+					provider: 's3',
+					credentials: temporary,
+					storage: wif.target.storage,
+				},
 			}
 		: context;
 }

@@ -60,7 +60,7 @@ describe('object browse credentials', () => {
 			makeObjectBrowseContext(deps, project, user, undefined, { integrationId: 'a' }),
 		]);
 		expect(
-			contexts.every((context) => context.temporary_s3_credentials?.accessKeyId === 'temporary'),
+			contexts.every((context) => context.federation?.credentials.accessKeyId === 'temporary'),
 		).toBe(true);
 		await makeObjectBrowseContext(deps, project, user, undefined, { integrationId: 'a' });
 		expect(exchange).toHaveBeenCalledTimes(1);
@@ -126,12 +126,14 @@ describe('object browse credentials', () => {
 			includeFederated: false,
 			allowServerAmbient: true,
 		});
-		expect(withoutWif).toMatchObject({ allow_server_ambient: true });
+		expect(withoutWif).toMatchObject({
+			allow_server_ambient: { s3: true, gcs: true, azure_blob: true },
+		});
 		expect(exchange).not.toHaveBeenCalled();
 
 		const failed = await makeObjectBrowseContext(deps, project, user);
-		expect(failed.temporary_s3_credentials).toBeUndefined();
-		expect(failed.allow_server_ambient).toBe(false);
+		expect(failed.federation).toBeUndefined();
+		expect(failed.allow_server_ambient).toEqual({ s3: false, gcs: true, azure_blob: true });
 		expect(exchange).toHaveBeenCalledTimes(1);
 	});
 
@@ -148,11 +150,11 @@ describe('object browse credentials', () => {
 			signal,
 		);
 		expect(context).toMatchObject({
-			allow_server_ambient: false,
+			allow_server_ambient: { s3: false, gcs: false, azure_blob: false },
 			project_id: project.id,
 			signal,
 		});
-		expect(context.temporary_s3_credentials).toBeUndefined();
+		expect(context.federation).toBeUndefined();
 		expect(exchange).not.toHaveBeenCalled();
 	});
 });

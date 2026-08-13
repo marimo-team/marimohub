@@ -3,7 +3,9 @@ import type { TempS3Creds } from './credentialBroker';
 
 export type BrowseSurface = 'tables' | 'objects';
 
-export interface ObjectStoreSource {
+export type ObjectStoreProvider = 's3' | 'gcs' | 'azure_blob';
+
+export interface S3ObjectStoreSource {
 	provider: 's3';
 	configured_bucket?: string;
 	region?: string;
@@ -19,13 +21,53 @@ export interface ObjectStoreSource {
 		| { method: 'ambient' };
 }
 
+export interface GcsObjectStoreSource {
+	provider: 'gcs';
+	configured_bucket?: string;
+	project_id?: string;
+	auth: { method: 'service_account'; credentials_json: string } | { method: 'ambient' };
+}
+
+export interface AzureBlobObjectStoreSource {
+	provider: 'azure_blob';
+	configured_bucket?: string;
+	account_name: string;
+	endpoint_suffix: string;
+	auth:
+		| { method: 'ambient' }
+		| { method: 'account_key'; account_key: string }
+		| { method: 'sas_token'; sas_token: string }
+		| { method: 'connection_string'; connection_string: string }
+		| {
+				method: 'service_principal';
+				tenant_id: string;
+				client_id: string;
+				client_secret: string;
+		  };
+}
+
+export type ObjectStoreSource =
+	| S3ObjectStoreSource
+	| GcsObjectStoreSource
+	| AzureBlobObjectStoreSource;
+
+export type ObjectStoreSourceFor<P extends ObjectStoreProvider> = Extract<
+	ObjectStoreSource,
+	{ provider: P }
+>;
+
+export interface S3FederationContext {
+	provider: 's3';
+	credentials: TempS3Creds;
+	storage: { endpoint?: string; region?: string };
+}
+
 export interface ObjectBrowseContext {
 	project_id: ProjectId;
 	user_id: UserId;
 	user_email: string;
-	temporary_s3_credentials?: TempS3Creds;
-	temporary_storage?: { endpoint?: string; region?: string };
-	allow_server_ambient: boolean;
+	federation?: S3FederationContext;
+	allow_server_ambient: Partial<Record<ObjectStoreProvider, boolean>>;
 	signal?: AbortSignal;
 }
 
@@ -206,6 +248,9 @@ export class ObjectBrowseError extends Error {
 }
 
 export interface ObjectBrowseCapability {
+	provider: ObjectStoreProvider;
+	root_kind: 'bucket' | 'container';
+	uri_scheme: 's3' | 'gs' | 'az';
 	available: boolean;
 	preview: boolean;
 	download: boolean;
@@ -215,44 +260,58 @@ export interface ObjectBrowseCapability {
 	reason?: string;
 }
 
-export interface ObjectBrowser {
+export interface ObjectBrowser<P extends ObjectStoreProvider = ObjectStoreProvider> {
+	readonly provider: P;
 	capability(
-		source: ObjectStoreSource,
+		source: ObjectStoreSourceFor<P>,
 		context: ObjectBrowseContext,
 	): Promise<ObjectBrowseCapability> | ObjectBrowseCapability;
 	listBuckets(
-		source: ObjectStoreSource,
+		source: ObjectStoreSourceFor<P>,
 		context: ObjectBrowseContext,
 		request: ObjectPageRequest,
 	): Promise<ObjectPage<ObjectBucket>>;
 	listObjects(
-		source: ObjectStoreSource,
+		source: ObjectStoreSourceFor<P>,
 		context: ObjectBrowseContext,
 		request: ObjectListRequest,
 	): Promise<ObjectPage<ObjectEntry>>;
 	searchObjects(
-		source: ObjectStoreSource,
+		source: ObjectStoreSourceFor<P>,
 		context: ObjectBrowseContext,
 		request: ObjectSearchRequest,
 	): Promise<ObjectSearchPage>;
 	headObject(
-		source: ObjectStoreSource,
+		source: ObjectStoreSourceFor<P>,
 		context: ObjectBrowseContext,
 		request: ObjectIdentity,
 	): Promise<ObjectDetail>;
 	listVersions(
-		source: ObjectStoreSource,
+		source: ObjectStoreSourceFor<P>,
 		context: ObjectBrowseContext,
 		request: ObjectVersionRequest,
 	): Promise<ObjectPage<ObjectVersion>>;
 	previewObject(
-		source: ObjectStoreSource,
+		source: ObjectStoreSourceFor<P>,
 		context: ObjectBrowseContext,
 		request: ObjectPreviewRequest,
 	): Promise<ObjectPreview>;
 	openObject(
-		source: ObjectStoreSource,
+		source: ObjectStoreSourceFor<P>,
 		context: ObjectBrowseContext,
 		request: ObjectOpenRequest,
 	): Promise<ObjectBody>;
 }
+
+export type ObjectBrowserRegistry = {
+	[P in ObjectStoreProvider]?: ObjectBrowser<P>;
+};
+
+export const OBJECT_BROWSE_PROVIDER_METADATA = {
+	s3: { provider: 's3', root_kind: 'bucket', uri_scheme: 's3' },
+	gcs: { provider: 'gcs', root_kind: 'bucket', uri_scheme: 'gs' },
+	azure_blob: { provider: 'azure_blob', root_kind: 'container', uri_scheme: 'az' },
+} as const satisfies Record<
+	ObjectStoreProvider,
+	Pick<ObjectBrowseCapability, 'provider' | 'root_kind' | 'uri_scheme'>
+>;

@@ -1,19 +1,16 @@
-import { HeadObjectCommand } from '@aws-sdk/client-s3';
 import type {
 	ObjectBrowseContext,
+	ObjectIdentity,
 	ObjectPreview,
 	ObjectPreviewRequest,
-	ObjectStoreSource,
 	TabularPreview,
 } from '@marimo-hub/core';
 import { ObjectBrowseError } from '@marimo-hub/core';
 import { parse } from 'csv-parse/sync';
 import { parquetMetadataAsync, parquetReadObjects, parquetSchema } from 'hyparquet';
 import type { AsyncBuffer } from 'hyparquet';
-import type { S3ClientFactory, S3ClientLike } from '../client';
 import { decodeAscii, detectRasterImage } from '../formats';
-import type { S3ObjectBrowserLimits } from '../index';
-import { readObjectRange, sendS3, withS3Client } from '../s3Request';
+import type { ObjectBrowserLimits } from '../limits';
 import { arrayBuffer } from '../streams';
 
 const MAX_TEXT_BYTES = 512 * 1024;
@@ -22,85 +19,76 @@ const MAX_CELL_BYTES = 8 * 1024;
 const MAX_RESULT_BYTES = 2 * 1024 * 1024;
 const MAX_PARQUET_REQUESTS = 64;
 
-interface HeadOutput {
-	ContentLength?: number;
-	ContentType?: string;
-	ETag?: string;
-	VersionId?: string;
+export interface ObjectPreviewHead {
+	total_bytes: number;
+	content_type?: string;
+	etag?: string;
 }
 
-export async function previewS3Object(
-	clientFactory: S3ClientFactory,
-	limits: S3ObjectBrowserLimits,
-	source: ObjectStoreSource,
+export interface ObjectPreviewReader {
+	head(request: ObjectIdentity, signal: AbortSignal): Promise<ObjectPreviewHead>;
+	readRange(
+		request: ObjectIdentity,
+		start: number,
+		end: number,
+		options: { etag?: string; signal: AbortSignal },
+	): Promise<Uint8Array>;
+}
+
+export async function previewObject(
+	reader: ObjectPreviewReader,
+	limits: ObjectBrowserLimits,
 	context: ObjectBrowseContext,
 	request: ObjectPreviewRequest,
 ): Promise<ObjectPreview> {
 	const deadline = AbortSignal.timeout(limits.previewTimeoutMs);
 	const signal = context.signal ? AbortSignal.any([context.signal, deadline]) : deadline;
-	const scopedContext = { ...context, signal };
-	return withS3Client(clientFactory, source, scopedContext, async (client) => {
-		const head = await sendS3<HeadOutput>(
-			client,
-			new HeadObjectCommand({
-				Bucket: request.bucket,
-				Key: request.key,
-				VersionId: request.version_id,
-			}),
-			signal,
-		);
-		const totalBytes = head.ContentLength ?? 0;
-		const probeLength = Math.min(totalBytes, limits.previewMaxBytes);
-		const bytes =
-			probeLength === 0
-				? new Uint8Array()
-				: await readObjectRange(client, request, 0, probeLength, {
-						etag: head.ETag,
-						signal,
-					});
-		const detected = detectFormat(
-			bytes,
-			request.key,
-			head.ContentType,
-			bytes.byteLength < totalBytes,
-		);
-		if (detected.kind === 'image') {
-			if (totalBytes > limits.inlineImageMaxBytes) {
-				return unsupported(
-					'The image exceeds the inline preview limit.',
-					detected.format,
-					totalBytes,
-				);
-			}
-			return {
-				kind: 'image',
-				format: detected.format,
-				content_url: request.content_url,
-				total_bytes: totalBytes,
-				warnings: [],
-			};
-		}
-		if (detected.kind === 'parquet') {
-			return previewParquet(client, limits, request, head, signal);
-		}
-		if (detected.kind === 'csv') {
-			return previewDelimited(
-				bytes,
-				totalBytes,
-				request.limit,
-				detected.delimiter,
+	const head = await reader.head(request, signal);
+	const totalBytes = head.total_bytes;
+	const probeLength = Math.min(totalBytes, limits.previewMaxBytes);
+	const bytes =
+		probeLength === 0
+			? new Uint8Array()
+			: await reader.readRange(request, 0, probeLength, {
+					etag: head.etag,
+					signal,
+				});
+	const detected = detectFormat(
+		bytes,
+		request.key,
+		head.content_type,
+		bytes.byteLength < totalBytes,
+	);
+	if (detected.kind === 'image') {
+		if (totalBytes > limits.inlineImageMaxBytes) {
+			return unsupported(
+				'The image exceeds the inline preview limit.',
 				detected.format,
+				totalBytes,
 			);
 		}
-		if (detected.kind === 'jsonl') {
-			return previewJsonLines(bytes, totalBytes, request.limit);
-		}
-		if (detected.kind === 'json') return previewJson(bytes, totalBytes, request.limit);
-		if (detected.kind === 'text') {
-			return previewText(bytes, totalBytes, detected.format);
-		}
-		return unsupported('This object format cannot be previewed safely.', detected.type, totalBytes);
-	});
+		return {
+			kind: 'image',
+			format: detected.format,
+			content_url: request.content_url,
+			total_bytes: totalBytes,
+			warnings: [],
+		};
+	}
+	if (detected.kind === 'parquet') {
+		return previewParquet(reader, limits, request, head, signal);
+	}
+	if (detected.kind === 'csv') {
+		return previewDelimited(bytes, totalBytes, request.limit, detected.delimiter, detected.format);
+	}
+	if (detected.kind === 'jsonl') {
+		return previewJsonLines(bytes, totalBytes, request.limit);
+	}
+	if (detected.kind === 'json') return previewJson(bytes, totalBytes, request.limit);
+	if (detected.kind === 'text') {
+		return previewText(bytes, totalBytes, detected.format);
+	}
+	return unsupported('This object format cannot be previewed safely.', detected.type, totalBytes);
 }
 
 type Detected =
@@ -319,13 +307,13 @@ function previewText(
 }
 
 async function previewParquet(
-	client: S3ClientLike,
-	limits: S3ObjectBrowserLimits,
+	reader: ObjectPreviewReader,
+	limits: ObjectBrowserLimits,
 	request: ObjectPreviewRequest,
-	head: HeadOutput,
+	head: ObjectPreviewHead,
 	signal: AbortSignal,
 ): Promise<TabularPreview> {
-	const total = head.ContentLength ?? 0;
+	const total = head.total_bytes;
 	let requests = 0;
 	let bytesRead = 0;
 	const cache = new Map<string, Promise<ArrayBuffer>>();
@@ -354,10 +342,12 @@ async function previewParquet(
 			}
 			requests += 1;
 			bytesRead += length;
-			const pending = readObjectRange(client, request, start, end, {
-				etag: head.ETag,
-				signal,
-			}).then(arrayBuffer);
+			const pending = reader
+				.readRange(request, start, end, {
+					etag: head.etag,
+					signal,
+				})
+				.then(arrayBuffer);
 			cache.set(key, pending);
 			return pending;
 		},

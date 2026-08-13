@@ -1670,6 +1670,23 @@ components:
             objects:
               type: object
               properties:
+                provider:
+                  type: string
+                  enum:
+                    - s3
+                    - gcs
+                    - azure_blob
+                root_kind:
+                  type: string
+                  enum:
+                    - bucket
+                    - container
+                uri_scheme:
+                  type: string
+                  enum:
+                    - s3
+                    - gs
+                    - az
                 available:
                   type: boolean
                 preview:
@@ -1690,6 +1707,9 @@ components:
                 reason:
                   type: string
               required:
+                - provider
+                - root_kind
+                - uri_scheme
                 - available
                 - preview
                 - download

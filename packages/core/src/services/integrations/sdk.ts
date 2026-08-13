@@ -15,7 +15,7 @@ import type {
 	UiHints,
 } from '../../ports/integrations';
 import type { ProjectId, SessionId, UserId } from '../../ids';
-import type { ObjectStoreSource } from '../../ports/objectBrowser';
+import type { ObjectStoreProvider, ObjectStoreSourceFor } from '../../ports/objectBrowser';
 import type {
 	PreviewProgramAvailability,
 	PreviewProgramInput,
@@ -97,6 +97,14 @@ export interface BrowseCapability<C> {
 	/** Notebook code that loads the table through this instance's rendered config. */
 	snippet(instanceName: string, namespace: string[], table: string): string;
 }
+
+export type ObjectBrowseDefinition<C> = {
+	[P in ObjectStoreProvider]: {
+		provider: P;
+		source(config: C): ObjectStoreSourceFor<P>;
+		snippet(instanceName: string, bucket: string, key: string): string;
+	};
+}[ObjectStoreProvider];
 
 export function pageByNameCursor<T>(
 	items: T[],
@@ -182,10 +190,7 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	 * degraded to a generic one — the same posture as `testConnection`.
 	 */
 	browse?: BrowseCapability<z.infer<S>>;
-	objectBrowse?: {
-		source(config: z.infer<S>): ObjectStoreSource;
-		snippet(instanceName: string, bucket: string, key: string): string;
-	};
+	objectBrowse?: ObjectBrowseDefinition<z.infer<S>>;
 	preview?: {
 		available(
 			config: z.infer<S>,
@@ -252,17 +257,40 @@ export function defineIntegration<S extends z.ZodType>(
 }
 
 function guardedObjectBrowse<C>(
+	objectBrowse: ObjectBrowseDefinition<C>,
+	pathsOf: () => SecretPath[],
+): ObjectBrowseDefinition<C> {
+	switch (objectBrowse.provider) {
+		case 's3':
+			return guardedObjectBrowseProvider(objectBrowse, pathsOf);
+		case 'gcs':
+			return guardedObjectBrowseProvider(objectBrowse, pathsOf);
+		case 'azure_blob':
+			return guardedObjectBrowseProvider(objectBrowse, pathsOf);
+	}
+}
+
+function guardedObjectBrowseProvider<C, P extends ObjectStoreProvider>(
 	objectBrowse: {
-		source(config: C): ObjectStoreSource;
+		provider: P;
+		source(config: C): ObjectStoreSourceFor<P>;
 		snippet(instanceName: string, bucket: string, key: string): string;
 	},
 	pathsOf: () => SecretPath[],
 ) {
 	return {
+		provider: objectBrowse.provider,
 		source(config: C) {
 			try {
-				return objectBrowse.source(config);
+				const source = objectBrowse.source(config);
+				if (source.provider !== objectBrowse.provider) {
+					throw new ProviderMismatchError();
+				}
+				return source;
 			} catch (err) {
+				if (err instanceof ProviderMismatchError) {
+					throw new UnavailableError('The object-store provider does not match its integration.');
+				}
 				if (err instanceof DomainError && !echoesSecret(err.message, config, pathsOf())) {
 					throw err;
 				}
@@ -271,6 +299,10 @@ function guardedObjectBrowse<C>(
 		},
 		snippet: objectBrowse.snippet.bind(objectBrowse),
 	};
+}
+
+class ProviderMismatchError extends Error {
+	override readonly name = 'ProviderMismatchError';
 }
 
 function guardedPreview<C>(

@@ -1,6 +1,6 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { describe, expect, it, vi } from 'vitest';
-import type { ObjectBrowseContext, ObjectStoreSource } from '@marimo-hub/core';
+import type { ObjectBrowseContext, S3ObjectStoreSource } from '@marimo-hub/core';
 import type { S3ClientLike } from './client';
 import {
 	readObjectRange,
@@ -10,7 +10,7 @@ import {
 	withS3Client,
 } from './s3Request';
 
-const source = {} as ObjectStoreSource;
+const source = {} as S3ObjectStoreSource;
 const context = {} as ObjectBrowseContext;
 
 describe('S3 request utilities', () => {

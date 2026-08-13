@@ -50,11 +50,12 @@ import type {
 } from '../../ports/integrations';
 import type { ManagedSecretCodec, SecretRef, SecretResolver } from '../../ports/secrets';
 import { SecretResolutionError } from '../../ports/secrets';
-import { ObjectBrowseError } from '../../ports/objectBrowser';
+import { OBJECT_BROWSE_PROVIDER_METADATA, ObjectBrowseError } from '../../ports/objectBrowser';
 import type {
 	ObjectBody,
 	ObjectBrowseContext,
 	ObjectBrowser,
+	ObjectBrowserRegistry,
 	ObjectBucket,
 	ObjectDetail,
 	ObjectEntry,
@@ -113,8 +114,9 @@ function unavailableTableCapability(reason: string) {
 	return { available: false, preview: false, reason };
 }
 
-function unavailableObjectCapability(reason: string) {
+function unavailableObjectCapability(provider: ObjectStoreSource['provider'], reason: string) {
 	return {
+		...OBJECT_BROWSE_PROVIDER_METADATA[provider],
 		available: false,
 		preview: false,
 		download: false,
@@ -227,7 +229,7 @@ export interface IntegrationsStoreOptions {
 	 * expansion) has its own budget and response cap; absence disables browsing.
 	 */
 	browseProbe?: IntegrationProbe;
-	objectBrowsers?: Partial<Record<ObjectStoreSource['provider'], ObjectBrowser>>;
+	objectBrowsers?: ObjectBrowserRegistry;
 	/** Injectable clock for deterministic tests. */
 	now?: () => string;
 	metrics?: Metrics;
@@ -245,7 +247,7 @@ class ScopedIntegrationsStore {
 	private readonly resolvers: Map<string, SecretResolver>;
 	private readonly probe?: IntegrationProbe;
 	private readonly browseProbe?: IntegrationProbe;
-	private readonly objectBrowsers: Partial<Record<ObjectStoreSource['provider'], ObjectBrowser>>;
+	private readonly objectBrowsers: ObjectBrowserRegistry;
 	private readonly now: () => string;
 	private readonly metrics: Metrics;
 	private readonly dataPreview?: DataPreviewService;
@@ -272,10 +274,13 @@ class ScopedIntegrationsStore {
 		const tableBrowsable = this.browseProbe !== undefined;
 		const secret_sources = this.secretSources();
 		return this.registry.describeAll().map((descriptor) => {
+			const objectProvider = this.registry.get(descriptor.kind).objectBrowse?.provider;
 			const browse_surfaces = descriptor.browse_surfaces.filter(
 				(surface) =>
 					(surface === 'tables' && tableBrowsable) ||
-					(surface === 'objects' && Object.values(this.objectBrowsers).some(Boolean)),
+					(surface === 'objects' &&
+						objectProvider !== undefined &&
+						this.objectBrowsers[objectProvider]?.provider === objectProvider),
 			);
 			return {
 				...descriptor,
@@ -778,6 +783,7 @@ class ScopedIntegrationsStore {
 		}
 		if (def.objectBrowse) {
 			surfaces.objects = unavailableObjectCapability(
+				def.objectBrowse.provider,
 				objectContext
 					? 'Object browsing is not enabled on this deployment.'
 					: 'Object browsing requires a user credential context.',
@@ -796,7 +802,9 @@ class ScopedIntegrationsStore {
 		if (!head.enabled) {
 			const reason = `Integration "${head.name}" is disabled.`;
 			if (surfaces.tables) surfaces.tables = unavailableTableCapability(reason);
-			if (surfaces.objects) surfaces.objects = unavailableObjectCapability(reason);
+			if (surfaces.objects && def.objectBrowse) {
+				surfaces.objects = unavailableObjectCapability(def.objectBrowse.provider, reason);
+			}
 			return compatibility(reason);
 		}
 		const { config } = await this.loadCurrent(scope, head);
@@ -808,7 +816,9 @@ class ScopedIntegrationsStore {
 		if (parsed === undefined) {
 			const reason = `The stored config no longer matches kind "${head.kind}" — edit and re-save it.`;
 			if (surfaces.tables) surfaces.tables = unavailableTableCapability(reason);
-			if (surfaces.objects) surfaces.objects = unavailableObjectCapability(reason);
+			if (surfaces.objects && def.objectBrowse) {
+				surfaces.objects = unavailableObjectCapability(def.objectBrowse.provider, reason);
+			}
 			return compatibility(reason);
 		}
 		if (def.browse && this.browseProbe) {
@@ -823,7 +833,7 @@ class ScopedIntegrationsStore {
 		}
 		if (def.objectBrowse && objectContext) {
 			const source = def.objectBrowse.source(parsed);
-			const browser = this.objectBrowsers[source.provider];
+			const browser = this.browserFor(source);
 			if (browser) {
 				surfaces.objects = await this.guardObjectBrowse(() =>
 					browser.capability(source, objectContext),
@@ -1018,7 +1028,7 @@ class ScopedIntegrationsStore {
 			);
 		}
 		const source = objectBrowse.source(config);
-		const browser = this.objectBrowsers[source.provider];
+		const browser = this.browserFor(source);
 		if (!browser) throw new ValidationError('Object browsing is not enabled on this deployment.');
 		return this.guardObjectBrowse(async () => {
 			const capability = await browser.capability(source, context);
@@ -1029,6 +1039,11 @@ class ScopedIntegrationsStore {
 			}
 			return run(browser, source, head.name, objectBrowse.snippet);
 		});
+	}
+
+	private browserFor(source: ObjectStoreSource): ObjectBrowser | undefined {
+		const browser = this.objectBrowsers[source.provider];
+		return browser?.provider === source.provider ? (browser as ObjectBrowser) : undefined;
 	}
 
 	private async guardObjectBrowse<T>(run: () => Promise<T> | T): Promise<T> {
