@@ -11,6 +11,7 @@ import type {
 } from '../ids';
 import { SyncTokenRecordSchema } from '../integrations/syncedSource';
 import { paths } from '../paths';
+import { ProjectAlertConfigSchema } from '../services/notifications/ProjectAlertStore';
 import {
 	AppClaimSchema,
 	CatalogSchema,
@@ -91,6 +92,15 @@ const OBJECTS: BucketObject[] = [
 		schema: ProjectSchema,
 		summary: 'Project record: members, federation opt-in, status.',
 		mutability: 'last-writer-wins',
+		tag: 'project',
+	},
+	{
+		name: 'ProjectAlertConfig',
+		key: project.alerts,
+		schema: ProjectAlertConfigSchema,
+		summary: 'Project-scoped Slack and signed-webhook alert destinations.',
+		mutability: 'cas',
+		owner: 'ProjectAlertStore',
 		tag: 'project',
 	},
 	{

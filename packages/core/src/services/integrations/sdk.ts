@@ -86,7 +86,7 @@ export interface BrowseCapability<C> {
 		probe: IntegrationProbe,
 		namespace: string[],
 		table: string,
-		request?: Pick<TablePreviewRequest, 'query_user'>,
+		request?: Pick<TablePreviewRequest, 'query_user' | 'signal'>,
 	): Promise<TableSchema>;
 	/** Optional cheap row preview executed by this kind's read-only HTTP API. */
 	previewRows?(

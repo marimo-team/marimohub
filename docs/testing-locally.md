@@ -110,7 +110,7 @@ In another terminal, check the unauthenticated health endpoint:
 curl --fail --silent http://localhost:3000/api/health
 ```
 
-It should return `{"status":"ok"}`. Then:
+The expected response is `{"status":"ok"}`. Then:
 
 1. Open `http://localhost:5175`.
 2. Open the seeded welcome notebook, or create a project and notebook.
@@ -118,8 +118,8 @@ It should return `{"status":"ok"}`. Then:
 4. Stop and restart `pnpm dev`.
 
 Projects disappear after restart when you use the default memory storage. That
-is expected. Set `MARIMOHUB_DEV_PERSIST=true` for durable local state; deployed
-environments should use a production storage configuration.
+is expected. Set `MARIMOHUB_DEV_PERSIST=true` for durable local state. Use a
+production storage configuration in a deployed environment.
 
 ## Next
 

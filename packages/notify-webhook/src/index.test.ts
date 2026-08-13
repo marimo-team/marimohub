@@ -1,11 +1,22 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing';
+import { notifierContract, NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing';
 import { signWebhook, WebhookNotifier } from './index';
+
+notifierContract(
+	'Webhook',
+	() =>
+		new WebhookNotifier({
+			url: 'https://events.example.com/hook',
+			secret: 'secret',
+			fetcher: async () => ({ ok: true }),
+		}),
+	{ personal: 'delivered', broadcast: 'delivered' },
+);
 
 describe('WebhookNotifier', () => {
 	it('posts the full notification with a verifiable HMAC signature', async () => {
-		const fetcher = vi.fn(async () => ({}));
+		const fetcher = vi.fn(async () => ({ ok: true }));
 		const now = 1_786_446_400_000;
 		const notifier = new WebhookNotifier({
 			url: 'https://events.example.com/marimohub',
@@ -48,7 +59,7 @@ describe('WebhookNotifier', () => {
 	});
 
 	it('rejects an invalid notification before making a request', async () => {
-		const fetcher = vi.fn(async () => ({}));
+		const fetcher = vi.fn(async () => ({ ok: true }));
 		const notifier = new WebhookNotifier({
 			url: 'https://events.example.com/hook',
 			secret: 'secret',
@@ -78,5 +89,17 @@ describe('WebhookNotifier', () => {
 		const delivery = notifier.deliver(NOTIFICATION_FIXTURE);
 		await expect(delivery).rejects.toThrow('Webhook notification delivery failed');
 		await expect(delivery).rejects.not.toThrow('secret-path');
+	});
+
+	it('maps a non-2xx webhook response to the stable delivery error', async () => {
+		const notifier = new WebhookNotifier({
+			url: 'https://events.example.com/hook',
+			secret: 'secret',
+			fetcher: async () => ({ ok: false }),
+		});
+
+		await expect(notifier.deliver(NOTIFICATION_FIXTURE)).rejects.toThrow(
+			'Webhook notification delivery failed',
+		);
 	});
 });

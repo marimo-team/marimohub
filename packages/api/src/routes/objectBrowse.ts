@@ -3,6 +3,8 @@ import {
 	createSessionId,
 	exchangeFederatedStorageCredentials,
 	ForbiddenError,
+	KeyedAdmission,
+	LazyMap,
 	noopMetrics,
 	NotFoundError,
 	ObjectBrowseError,
@@ -28,8 +30,27 @@ interface CachedCredentials {
 	expiresAt: number;
 }
 
-const credentials = new Map<string, CachedCredentials>();
-const credentialLoads = new Map<string, Promise<TempS3Creds | undefined>>();
+type CredentialCache = LazyMap<string, CachedCredentials>;
+
+function createCredentialCache(): CredentialCache {
+	return new LazyMap(
+		async () => {
+			throw new Error('A credential load function is required.');
+		},
+		{ maxSize: MAX_CREDENTIAL_CACHE_ENTRIES },
+	);
+}
+
+let credentialCaches = new WeakMap<ApiDeps, CredentialCache>();
+
+function credentialCache(deps: ApiDeps): CredentialCache {
+	let cache = credentialCaches.get(deps);
+	if (!cache) {
+		cache = createCredentialCache();
+		credentialCaches.set(deps, cache);
+	}
+	return cache;
+}
 
 export async function makeObjectBrowseContext(
 	deps: ApiDeps,
@@ -98,48 +119,33 @@ async function cachedFederatedCredentials(
 		wif.target.storage.endpoint ?? null,
 		wif.target.storage.region ?? null,
 	]);
+	const credentials = credentialCache(deps);
 	const now = Date.now();
-	const cached = credentials.get(key);
+	const cached = credentials.getIfPresent(key);
 	if (cached && cached.expiresAt - CACHE_REFRESH_SKEW_MS > now) return cached.credentials;
 	if (cached) credentials.delete(key);
 
-	const pending = credentialLoads.get(key);
-	if (pending) return pending;
-	const load = exchangeFederatedStorageCredentials(
-		wif.issuer,
-		wif.issuerUrl,
-		wif.target,
-		projectId,
-		createSessionId(),
-	)
-		.then((value) => {
+	try {
+		const loaded = await credentials.getOrLoad(key, async () => {
+			const value = await exchangeFederatedStorageCredentials(
+				wif.issuer,
+				wif.issuerUrl,
+				wif.target,
+				projectId,
+				createSessionId(),
+			);
 			const expiresAt = value.expiration ? Date.parse(value.expiration) : Number.NaN;
-			if (Number.isFinite(expiresAt) && expiresAt - CACHE_REFRESH_SKEW_MS > Date.now()) {
-				sweepCredentialCache(Date.now());
-				credentials.set(key, { credentials: value, expiresAt });
-			}
-			return value;
-		})
-		.catch((): undefined => {})
-		.finally(() => credentialLoads.delete(key));
-	credentialLoads.set(key, load);
-	return load;
-}
-
-function sweepCredentialCache(now: number): void {
-	for (const [key, cached] of credentials) {
-		if (cached.expiresAt <= now) credentials.delete(key);
-	}
-	while (credentials.size >= MAX_CREDENTIAL_CACHE_ENTRIES) {
-		const oldest = credentials.keys().next().value;
-		if (oldest === undefined) break;
-		credentials.delete(oldest);
+			return { credentials: value, expiresAt };
+		});
+		if (loaded.expiresAt - CACHE_REFRESH_SKEW_MS <= Date.now()) credentials.delete(key);
+		return loaded.credentials;
+	} catch {
+		return undefined;
 	}
 }
 
 export function clearObjectCredentialCacheForTests(): void {
-	credentials.clear();
-	credentialLoads.clear();
+	credentialCaches = new WeakMap();
 }
 
 export async function runObjectBrowse<T>(operation: () => Promise<T>): Promise<T> {
@@ -166,49 +172,7 @@ export async function runObjectBrowse<T>(operation: () => Promise<T>): Promise<T
 	}
 }
 
-interface DownloadLimits {
-	maxConcurrentDownloads: number;
-	maxConcurrentDownloadsPerUser: number;
-}
-
-class DownloadGate {
-	private active = 0;
-	private readonly activeByUser = new Map<string, number>();
-
-	constructor(private readonly limits: DownloadLimits) {}
-
-	acquire(
-		userId: string,
-		operation: 'download' | 'inline',
-		metrics: ApiDeps['metrics'],
-	): () => void {
-		const tags = { operation };
-		const emitter = metrics ?? noopMetrics;
-		const userActive = this.activeByUser.get(userId) ?? 0;
-		if (
-			this.active >= this.limits.maxConcurrentDownloads ||
-			userActive >= this.limits.maxConcurrentDownloadsPerUser
-		) {
-			emitter.increment('object_browser.download.rejected', 1, tags);
-			throw new ResourceExhaustedError('Too many object downloads are active — try again later.');
-		}
-		this.active += 1;
-		this.activeByUser.set(userId, userActive + 1);
-		emitter.gauge('object_browser.download.active', this.active);
-		let released = false;
-		return () => {
-			if (released) return;
-			released = true;
-			this.active -= 1;
-			emitter.gauge('object_browser.download.active', this.active);
-			const remaining = (this.activeByUser.get(userId) ?? 1) - 1;
-			if (remaining === 0) this.activeByUser.delete(userId);
-			else this.activeByUser.set(userId, remaining);
-		};
-	}
-}
-
-const downloadGates = new WeakMap<object, DownloadGate>();
+const downloadGates = new WeakMap<object, KeyedAdmission<string>>();
 
 export function acquireDownload(
 	deps: ApiDeps,
@@ -219,10 +183,31 @@ export function acquireDownload(
 	if (!limits) throw new NotFoundError('Object downloads are not enabled on this deployment.');
 	let gate = downloadGates.get(limits);
 	if (!gate) {
-		gate = new DownloadGate(limits);
+		const exhausted = () =>
+			new ResourceExhaustedError('Too many object downloads are active — try again later.');
+		gate = new KeyedAdmission(limits.maxConcurrentDownloads, limits.maxConcurrentDownloadsPerUser, {
+			global: exhausted,
+			perKey: exhausted,
+		});
 		downloadGates.set(limits, gate);
 	}
-	return gate.acquire(userId, operation, deps.metrics);
+	const tags = { operation };
+	const emitter = deps.metrics ?? noopMetrics;
+	let release: () => void;
+	try {
+		release = gate.acquire(userId);
+	} catch (error) {
+		emitter.increment('object_browser.download.rejected', 1, tags);
+		throw error;
+	}
+	emitter.gauge('object_browser.download.active', gate.activeCount);
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		release();
+		emitter.gauge('object_browser.download.active', gate.activeCount);
+	};
 }
 
 export function streamObjectBody(
@@ -234,18 +219,25 @@ export function streamObjectBody(
 ): ReadableStream<Uint8Array> {
 	const reader = object.body.getReader();
 	let finished = false;
+	let closed = false;
 	let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
 	const finish = () => {
 		if (finished) return;
 		finished = true;
 		signal?.removeEventListener('abort', abort);
 		try {
-			onFinish();
+			reader.releaseLock();
 		} finally {
-			release();
+			try {
+				onFinish();
+			} finally {
+				release();
+			}
 		}
 	};
 	const close = () => {
+		if (closed) return;
+		closed = true;
 		try {
 			object.close();
 		} finally {
@@ -259,8 +251,10 @@ export function streamObjectBody(
 		try {
 			streamController?.error(reason);
 		} finally {
-			void reader.cancel(reason).catch(() => {});
-			close();
+			void reader
+				.cancel(reason)
+				.catch(() => {})
+				.finally(close);
 		}
 	};
 	return new ReadableStream<Uint8Array>({
@@ -275,7 +269,7 @@ export function streamObjectBody(
 				if (finished) return;
 				if (next.done) {
 					controller.close();
-					finish();
+					close();
 				} else {
 					controller.enqueue(next.value);
 				}

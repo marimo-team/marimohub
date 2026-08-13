@@ -5,6 +5,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createApi } from '@marimo-hub/api';
 import { createFromEnv, isConfigError } from '@marimo-hub/config';
+import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
 import { startMaintenance, startSessionLifecycle } from './cron';
 import { validateServerEnv } from './env';
 import { logEvent } from './log';
@@ -78,6 +79,12 @@ export async function bootstrap(
 		}
 		throw err;
 	}
+	const backgroundTasks = new InFlightWork();
+	deps.backgroundTasks = {
+		defer(task) {
+			void backgroundTasks.track(task).catch(() => {});
+		},
+	};
 	// Installed for metrics-only mode too: RED metrics still record, spans don't.
 	if (otel)
 		deps.tracingMiddleware = httpInstrumentationMiddleware({ disableTracing: !otel.tracing });
@@ -147,6 +154,12 @@ export async function bootstrap(
 
 	const unregisterSignals: (() => void)[] = [];
 	let drainPromise: Promise<void> | undefined;
+	let notifierClose: Promise<void> | undefined;
+	const waitForBackgroundTasks = (): Promise<void> => backgroundTasks.drain();
+	const closeNotifier = (): Promise<void> => {
+		notifierClose ??= deps.notifier ? disposeNotifier(deps.notifier) : Promise.resolve();
+		return notifierClose;
+	};
 	const drain = (): Promise<void> => {
 		drainPromise ??= (async () => {
 			for (const unregisterSignal of unregisterSignals.splice(0)) unregisterSignal();
@@ -167,6 +180,7 @@ export async function bootstrap(
 			const shutdowns: PromiseLike<unknown>[] = [
 				closed,
 				...(deps.dataBrowser?.close ? [closed.then(closeDataBrowser)] : []),
+				closed.then(waitForBackgroundTasks).then(closeNotifier),
 			];
 			if (disposeCompute) {
 				shutdowns.push(Promise.resolve().then(() => disposeCompute.call(deps.compute)));
@@ -180,7 +194,10 @@ export async function bootstrap(
 			// here or the forced termination looks like a clean shutdown.
 			if (result === 'timed-out') {
 				logEvent({ level: 'warn', event: 'drain_timeout', timeoutMs: DRAIN_TIMEOUT_MS });
-				await settleAllWithin([closeDataBrowser()], DRAIN_TIMEOUT_MS);
+				await settleAllWithin(
+					[closeDataBrowser(), waitForBackgroundTasks(), closeNotifier()],
+					DRAIN_TIMEOUT_MS,
+				);
 			}
 		})();
 		return drainPromise;

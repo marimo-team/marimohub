@@ -60,7 +60,7 @@ built on `cloudflare/sandbox:0.7.1`:
 
 A managed OIDC front door for multi-user deployments. The worker reads the
 `CF-Access-JWT-Assertion` header and verifies it against the team's JWKS endpoint.
-Authentication is **OAuth/OIDC only**; Access is simply a hosted OIDC gateway, and
+Authentication is **OAuth/OIDC only**. Access is a hosted OIDC gateway, and
 any compliant provider (Auth0, Google, Okta, Keycloak) can take its place.
 
 ---

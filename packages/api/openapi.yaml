@@ -159,6 +159,10 @@ components:
                 enum:
                   - slack
                   - webhook
+                  - unknown
+                description: 'Known values: slack, webhook. Unrecognized values normalize to
+                  unknown.'
+                example: slack
             selectable_kinds:
               type: array
               items:
@@ -174,6 +178,12 @@ components:
                   - app.start_failed
                   - app.unavailable
                   - sync.failed
+                  - unknown
+                description: 'Known values: member.invited, member.added, member.role_changed,
+                  member.removed, session.takeover, notebook.deleted,
+                  project.deleted, app.start_failed, app.unavailable,
+                  sync.failed. Unrecognized values normalize to unknown.'
+                example: member.invited
             max_destinations:
               type: integer
               exclusiveMinimum: 0
@@ -452,6 +462,20 @@ components:
         - editor
         - viewer
       example: editor
+    ProjectAlertDestinationPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectAlertDestination'
+        next_cursor:
+          type:
+            - string
+            - 'null'
+      required:
+        - items
+        - next_cursor
     ProjectAlertDestination:
       oneOf:
         - type: object
@@ -465,7 +489,7 @@ components:
               type: array
               items:
                 type: string
-                enum:
+                enum: &a1
                   - member.invited
                   - member.added
                   - member.role_changed
@@ -476,6 +500,12 @@ components:
                   - app.start_failed
                   - app.unavailable
                   - sync.failed
+                  - unknown
+                description: 'Known values: member.invited, member.added, member.role_changed,
+                  member.removed, session.takeover, notebook.deleted,
+                  project.deleted, app.start_failed, app.unavailable,
+                  sync.failed. Unrecognized values normalize to unknown.'
+                example: member.invited
             enabled:
               type: boolean
             verified_at:
@@ -524,17 +554,12 @@ components:
               type: array
               items:
                 type: string
-                enum:
-                  - member.invited
-                  - member.added
-                  - member.role_changed
-                  - member.removed
-                  - session.takeover
-                  - notebook.deleted
-                  - project.deleted
-                  - app.start_failed
-                  - app.unavailable
-                  - sync.failed
+                enum: *a1
+                description: 'Known values: member.invited, member.added, member.role_changed,
+                  member.removed, session.takeover, notebook.deleted,
+                  project.deleted, app.start_failed, app.unavailable,
+                  sync.failed. Unrecognized values normalize to unknown.'
+                example: member.invited
             enabled:
               type: boolean
             verified_at:
@@ -1432,6 +1457,10 @@ components:
             enum:
               - tables
               - objects
+              - unknown
+            description: 'Known values: tables, objects. Unrecognized values normalize to
+              unknown.'
+            example: tables
         secret_sources:
           type: object
           properties:
@@ -1682,17 +1711,29 @@ components:
                     - s3
                     - gcs
                     - azure_blob
+                    - unknown
+                  description: 'Known values: s3, gcs, azure_blob. Unrecognized values normalize
+                    to unknown.'
+                  example: s3
                 root_kind:
                   type: string
                   enum:
                     - bucket
                     - container
+                    - unknown
+                  description: 'Known values: bucket, container. Unrecognized values normalize to
+                    unknown.'
+                  example: bucket
                 uri_scheme:
                   type: string
                   enum:
                     - s3
                     - gs
                     - az
+                    - unknown
+                  description: 'Known values: s3, gs, az. Unrecognized values normalize to
+                    unknown.'
+                  example: s3
                 available:
                   type: boolean
                 preview:
@@ -1704,6 +1745,10 @@ components:
                   enum:
                     - none
                     - bounded-key-name
+                    - unknown
+                  description: 'Known values: none, bounded-key-name. Unrecognized values
+                    normalize to unknown.'
+                  example: bounded-key-name
                 versions:
                   type: boolean
                 preview_formats:
@@ -1731,16 +1776,8 @@ components:
                   type: string
               required:
                 - available
-        metadata:
-          type: boolean
-        preview:
-          type: boolean
-        reason:
-          type: string
       required:
         - surfaces
-        - metadata
-        - preview
     IntegrationBrowseNamespacePage:
       type: object
       properties:
@@ -2057,6 +2094,10 @@ components:
                 - json
                 - jsonl
                 - parquet
+                - unknown
+              description: 'Known values: table, csv, tsv, json, jsonl, parquet. Unrecognized
+                values normalize to unknown.'
+              example: csv
             columns:
               type: array
               items:
@@ -2106,6 +2147,10 @@ components:
                 - code
                 - log
                 - json
+                - unknown
+              description: 'Known values: text, markdown, code, log, json. Unrecognized values
+                normalize to unknown.'
+              example: text
             text:
               type: string
             truncated:
@@ -2141,6 +2186,10 @@ components:
                 - jpeg
                 - gif
                 - webp
+                - unknown
+              description: 'Known values: png, jpeg, gif, webp. Unrecognized values normalize
+                to unknown.'
+              example: png
             content_url:
               type: string
             width:
@@ -2962,6 +3011,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
           content:
@@ -3198,9 +3261,7 @@ paths:
                     enum:
                       - true
                   data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ProjectAlertDestination'
+                    $ref: '#/components/schemas/ProjectAlertDestinationPage'
                 required:
                   - success
                   - data
@@ -4043,7 +4104,7 @@ paths:
       description: 'Every user who has signed in at least once, name-sorted. Currently
         a single page (`next_cursor` is always null). Super-admin only, and
         session-only: a PAT — even a super admin’s — is rejected with 403.'
-      security: &a1
+      security: &a2
         - cookieAuth: []
       responses:
         '200':
@@ -4115,7 +4176,7 @@ paths:
       description: Blocks the user at authentication time, including personal access
         tokens. Super-admin only and session-only. A super admin cannot suspend
         their own account.
-      security: *a1
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -4199,7 +4260,7 @@ paths:
       summary: Reactivate a suspended user
       description: Restores authentication for a known user. Super-admin only and
         session-only.
-      security: *a1
+      security: *a2
       parameters:
         - schema:
             type: string
@@ -4285,7 +4346,7 @@ paths:
         auth, …) as resolved from the serving replica's environment at boot;
         secret values are never included, only whether they are set. Super-admin
         only, session-only.
-      security: *a1
+      security: *a2
       responses:
         '200':
           description: The deployment configuration, secrets redacted
@@ -6449,6 +6510,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
           content:
@@ -8204,9 +8279,8 @@ paths:
       tags:
         - Integrations
       summary: Run SQL against one integration (manager or above)
-      description: Experimental, separately gated SQL execution. Each request uses a
-        fresh isolated worker or process with hard execution, row, and byte
-        limits.
+      description: SQL execution gated by deployment configuration. Each request uses
+        a fresh isolated worker with hard execution, row, and byte limits.
       parameters:
         - schema:
             type: string
@@ -9441,6 +9515,165 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/objects/content:
+    get:
+      tags:
+        - Integrations
+      summary: Stream object content (editor or above)
+      description: 'Streams the object bytes raw — the target of the `content_url`
+        embedded in preview responses. `inline=true` serves a sandboxed inline
+        rendering (CSP forces an opaque origin); otherwise the response is a
+        download (`Content-Disposition: attachment`). Supports single-part
+        `Range` requests and an `etag` precondition (412 on mismatch).'
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            example: analytics-lake
+          required: true
+          name: bucket
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            example: events/2026/part-001.jsonl
+          required: true
+          name: key
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          required: false
+          name: version_id
+          in: query
+        - schema:
+            type: string
+            enum:
+              - 'true'
+              - 'false'
+            default: 'false'
+          required: false
+          name: inline
+          in: query
+        - schema:
+            type: string
+            maxLength: 1024
+          required: false
+          name: etag
+          in: query
+        - schema:
+            type: string
+            example: bytes=0-1023
+          required: false
+          name: range
+          in: header
+      responses:
+        '200':
+          description: The object bytes, streamed
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: The requested byte range (`Content-Range` identifies it)
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '412':
+          description: Precondition failed (If-Match did not match the current version)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '416':
+          description: Range not satisfiable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/org/integrations:
     get:
       tags:
@@ -10227,7 +10460,7 @@ paths:
         scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The
         plaintext token is returned once, in this response, and never again.
         Requires session (SSO) auth — a token cannot mint tokens.'
-      security: *a1
+      security: *a2
       requestBody:
         required: true
         content:
@@ -10328,7 +10561,7 @@ paths:
         - Auth
       summary: List the caller's personal access tokens
       description: Metadata only — the secret is never retrievable after creation.
-      security: *a1
+      security: *a2
       responses:
         '200':
           description: Tokens, newest first
@@ -10400,7 +10633,7 @@ paths:
       description: Deletes the token; API requests using it fail within the
         verification-cache TTL (~30 seconds) on other replicas, immediately on
         this one.
-      security: *a1
+      security: *a2
       parameters:
         - schema:
             type: string

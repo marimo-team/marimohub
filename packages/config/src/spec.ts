@@ -238,7 +238,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_PROFILES',
 						name: 'Compute profiles',
 						description:
-							'Ordered named CPU, memory, and optional GPU profiles (`name:cpu=<cores>;mem=<Mi|Gi|Ti>;gpu=<type>[:<count>]`, with a maximum GPU count of 8). The first is the default; supported backends apply the notebook choice when overrides are enabled. Modal applies GPU requests; other backends ignore them with a startup warning.',
+							'Ordered named CPU, memory, and optional GPU profiles. Use `name:cpu=<cores>;mem=<Mi|Gi|Ti>;gpu=<type>[:<count>]`. The maximum GPU count is 8. The first profile is the default. Supported backends apply the selected profile when overrides are enabled. The Modal backend applies GPU requests. Other backends ignore GPU values and log a startup warning.',
 						example: 'small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100',
 						optIn: true,
 					},
@@ -908,7 +908,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_EXPERIMENTS',
 						name: 'Experiments',
 						description:
-							'Comma-separated experimental feature IDs. Unknown IDs fail startup. Current values: `duckdb-wasm-preview`.',
+							'Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current values: `duckdb-wasm-preview`.',
 						example: 'duckdb-wasm-preview',
 					},
 					{
@@ -1469,7 +1469,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_DATA_BROWSER',
 						name: 'Data browser',
 						description:
-							'Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews. Requires `MARIMOHUB_INTEGRATIONS=on` and an enabled integration probe. `off` disables browsing.',
+							'Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. Requires `MARIMOHUB_INTEGRATIONS=on` and an enabled integration probe. `off` disables browsing.',
 						default: 'off',
 					},
 					{
@@ -1504,55 +1504,62 @@ See the [secret-source guide](./integration-secrets.md).`,
 						default: '30',
 					},
 					{
+						id: 'MARIMOHUB_DATA_PREVIEW_EMBEDDED_RUNTIME',
+						name: 'Embedded data-preview runtime',
+						description:
+							'Isolation mode for the embedded preview executor. `auto` and `worker` both require a worker thread; blocking inline execution is rejected because its deadline cannot preempt a query.',
+						default: 'auto',
+					},
+					{
+						id: 'MARIMOHUB_DATA_PREVIEW_EMBEDDED_MEMORY_LIMIT_MB',
+						name: 'Embedded data-preview memory limit',
+						description:
+							'Engine memory limit in MiB for the embedded preview executor. This does not cap all runtime and result-buffer allocations.',
+						default: '128',
+					},
+					{
+						id: 'MARIMOHUB_DATA_PREVIEW_EMBEDDED_IDLE_TIMEOUT_SECONDS',
+						name: 'Embedded data-preview idle timeout',
+						description:
+							'Maximum idle time before a warm embedded preview executor is released. Set to 0 to keep warm executors until shutdown.',
+						default: '300',
+					},
+					{
 						id: 'MARIMOHUB_DATA_QUERY_MAX_CONCURRENT',
 						name: 'Max concurrent data queries',
-						description: 'Maximum number of isolated SQL queries in this server process.',
+						description: 'Maximum number of Run SQL workers in this server process.',
 						default: '4',
 					},
 					{
 						id: 'MARIMOHUB_DATA_QUERY_MAX_CONCURRENT_PER_USER',
 						name: 'Max data queries per user',
-						description: 'Maximum number of isolated SQL queries for one user.',
+						description: 'Maximum number of active Run SQL workers for one user.',
 						default: '1',
 					},
 					{
 						id: 'MARIMOHUB_DATA_QUERY_MAX_ROWS',
 						name: 'Data-query row limit',
-						description: 'Maximum number of rows returned by one SQL query.',
+						description: 'Maximum rows returned by one Run SQL request.',
 						default: '10000',
 					},
 					{
 						id: 'MARIMOHUB_DATA_QUERY_MAX_BYTES',
 						name: 'Data-query response limit',
-						description: 'Maximum serialized response size in bytes for one SQL query.',
+						description: 'Maximum serialized response bytes returned by one Run SQL request.',
 						default: '2097152',
 					},
 					{
 						id: 'MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS',
 						name: 'Data-query timeout',
-						description: 'Maximum execution time for one isolated SQL query.',
+						description: 'Hard deadline for one Run SQL worker, including startup.',
 						default: '30',
 					},
 					{
-						id: 'MARIMOHUB_DUCKDB_WASM_RUNTIME',
-						name: 'DuckDB-Wasm runtime',
+						id: 'MARIMOHUB_DATA_QUERY_MEMORY_LIMIT_MB',
+						name: 'Data-query memory limit',
 						description:
-							'Runtime selected by the `duckdb-wasm-preview` experiment. `auto` uses a worker thread and falls back to inline only when workers are structurally unsupported. `worker` and `inline` force one mode.',
-						default: 'auto',
-					},
-					{
-						id: 'MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB',
-						name: 'DuckDB-Wasm memory limit',
-						description:
-							'DuckDB engine memory limit in MiB. This does not cap all WebAssembly and Arrow allocations.',
+							'Engine memory limit in MiB for each Run SQL worker. The worker also has fixed V8 heap and stack limits.',
 						default: '128',
-					},
-					{
-						id: 'MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS',
-						name: 'DuckDB-Wasm idle timeout',
-						description:
-							'Maximum idle time before a warm DuckDB-Wasm engine is released. Set to 0 to keep warm engines until shutdown.',
-						default: '300',
 					},
 					{
 						id: 'MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS',

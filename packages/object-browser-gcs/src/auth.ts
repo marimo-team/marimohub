@@ -1,7 +1,8 @@
 import { GoogleAuth } from 'google-auth-library';
 import { importPKCS8, SignJWT } from 'jose';
 import type { GcsObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
-import { ObjectBrowseError } from '@marimo-hub/core';
+import { ObjectBrowseError, withAbortSignal } from '@marimo-hub/core';
+import { isAbortError } from '@marimo-hub/object-browser-commons';
 
 const TOKEN_URI = 'https://oauth2.googleapis.com/token';
 const STORAGE_SCOPE = 'https://www.googleapis.com/auth/devstorage.read_only';
@@ -59,9 +60,9 @@ export class GcsAuth {
 		if (environment) return environment;
 		if (this.useStandardAdc) {
 			try {
-				return await abortable(this.googleAuth().getProjectId(), this.context.signal);
+				return await withAbortSignal(this.googleAuth().getProjectId(), this.context.signal);
 			} catch (error) {
-				if ((error as { name?: unknown } | null)?.name === 'AbortError') {
+				if (isAbortError(error)) {
 					throw new ObjectBrowseError('aborted', 'The request was canceled.');
 				}
 				return undefined;
@@ -95,11 +96,14 @@ export class GcsAuth {
 		}
 		if (this.useStandardAdc) {
 			try {
-				const token = await abortable(this.googleAuth().getAccessToken(), this.context.signal);
+				const token = await withAbortSignal(
+					this.googleAuth().getAccessToken(),
+					this.context.signal,
+				);
 				if (!token) throw new Error('missing token');
 				return token;
 			} catch (error) {
-				if ((error as { name?: unknown } | null)?.name === 'AbortError') {
+				if (isAbortError(error)) {
 					throw new ObjectBrowseError('aborted', 'The request was canceled.');
 				}
 				throw new ObjectBrowseError(
@@ -128,7 +132,7 @@ export class GcsAuth {
 			this.cached = { token, expires_at: Date.now() + seconds * 1000 };
 			return token;
 		} catch (error) {
-			if ((error as { name?: unknown })?.name === 'AbortError') {
+			if (isAbortError(error)) {
 				throw new ObjectBrowseError('aborted', 'The request was canceled.');
 			}
 			throw new ObjectBrowseError('access_denied', 'GCS application credentials are unavailable.');
@@ -149,7 +153,13 @@ export class GcsAuth {
 
 	private async serviceAccountToken(account: GcsServiceAccount): Promise<string> {
 		const tokenUri = account.token_uri || TOKEN_URI;
-		if (new URL(tokenUri).origin !== new URL(TOKEN_URI).origin) {
+		let parsedTokenUri: URL;
+		try {
+			parsedTokenUri = new URL(tokenUri);
+		} catch {
+			throw new ObjectBrowseError('access_denied', 'The GCS token endpoint is not permitted.');
+		}
+		if (parsedTokenUri.href !== TOKEN_URI) {
 			throw new ObjectBrowseError('access_denied', 'The GCS token endpoint is not permitted.');
 		}
 		try {
@@ -189,29 +199,10 @@ export class GcsAuth {
 			return token;
 		} catch (error) {
 			if (error instanceof ObjectBrowseError) throw error;
-			if ((error as { name?: unknown })?.name === 'AbortError') {
+			if (isAbortError(error)) {
 				throw new ObjectBrowseError('aborted', 'The request was canceled.');
 			}
 			throw new ObjectBrowseError('access_denied', 'GCS authentication failed.');
 		}
 	}
-}
-
-async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-	if (!signal) return promise;
-	if (signal.aborted) throw new DOMException('The request was canceled.', 'AbortError');
-	return new Promise<T>((resolve, reject) => {
-		const abort = () => reject(new DOMException('The request was canceled.', 'AbortError'));
-		signal.addEventListener('abort', abort, { once: true });
-		void promise.then(
-			(value) => {
-				signal.removeEventListener('abort', abort);
-				resolve(value);
-			},
-			(error: unknown) => {
-				signal.removeEventListener('abort', abort);
-				reject(error instanceof Error ? error : new Error('GCS authentication failed.'));
-			},
-		);
-	});
 }

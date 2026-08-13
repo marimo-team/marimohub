@@ -175,6 +175,14 @@ describe('createGuardedProbe policy', () => {
 		});
 	});
 
+	it('forwards the caller signal to the pinned transport', async () => {
+		const { transport, calls } = stubTransport();
+		const probe = createGuardedProbe({ transport });
+		const controller = new AbortController();
+		await probe.fetch('https://93.184.216.34/health', { signal: controller.signal });
+		expect(calls[0].signal).toBe(controller.signal);
+	});
+
 	it('rate-limits probes per probe instance', async () => {
 		const { transport } = stubTransport();
 		const probe = createGuardedProbe({ transport, allowPrivate: true, maxProbesPerMinute: 2 });

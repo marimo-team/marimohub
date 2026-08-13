@@ -237,7 +237,7 @@ describe('object content response helpers', () => {
 		const secondRelease = acquireDownload(deps, user.id);
 		const second = body(new ReadableStream({ pull() {} }), close);
 		await streamObjectBody(second, secondRelease, () => {}).cancel('gone');
-		expect(close).toHaveBeenCalledTimes(1);
+		expect(close).toHaveBeenCalledTimes(2);
 		const thirdRelease = acquireDownload(deps, user.id);
 		thirdRelease();
 	});

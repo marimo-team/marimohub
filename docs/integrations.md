@@ -33,115 +33,28 @@ revision. Each session records the revisions that it uses.
 ## Browse data
 
 Set `MARIMOHUB_DATA_BROWSER=metadata` to enable the Data page and browse API.
-Set it to `full` to also enable row and object previews and object downloads. Integrations must be enabled, and
-the integration probe must not be `off`.
+Set it to `full` to also enable row previews, object previews, and object
+downloads. Browsing requires integrations and an integration probe that is not
+`off`.
 
 Editors and higher roles can use the Data page at `/projects/{pid}/data`.
-They do not need to start a session. The URL stores the selected integration,
-surface, table or object identity, and search scope, so a link restores the same view.
+They do not need a notebook session. The URL stores the selected integration,
+surface, item, and search scope. A shared link restores the same view.
 
-The Data page lists namespaces, tables, and table schemas for catalog integrations. S3 and GCS use
-bucket, prefix, and object semantics; Azure Blob uses containers. They are not presented as tables. The schema view
-shows columns, partition fields, and available snapshot statistics. It also
-provides notebook code that loads the table through the integration. The
-**Open in notebook** action creates a notebook in the project with that code
-already in place and opens it. Add the kind's listed packages to the
-notebook's dependencies before you run it.
+For catalog integrations, the Data page lists namespaces, tables, and schemas.
+The schema view shows columns, partition fields, and available snapshot
+statistics. S3 and GCS use buckets, prefixes, and objects. Azure Blob uses
+containers, prefixes, and blobs.
+
+Each detail view provides notebook code for the selected table or object.
+**Open in notebook** creates and opens a notebook with this code. Before you run
+the notebook, add the packages listed for that integration kind.
 
 Browsing is read-only. Iceberg REST and ClickHouse use HTTP GET requests. Trino
 submits hub-generated `SHOW`, `DESCRIBE`, and bounded `SELECT` statements. All
 requests use the egress policy from `MARIMOHUB_INTEGRATIONS_PROBE`.
 
-### Object-store browsing
-
-S3, GCS, and Azure Blob browsing support configured-root or accessible-root navigation, direct prefix
-listing, bounded key-name search, object metadata and tags, read-only version history, explicit
-previews, notebook snippets, and streamed downloads. It never uploads, deletes, restores, renames,
-or edits upstream objects or metadata.
-
-The API retains `bucket`, `key`, and `version_id` as provider-neutral compatibility fields. The UI
-calls Azure roots containers. Copied and detail URIs use `s3://`, `gs://`, and `az://` respectively.
-
-When an S3 integration sets `bucket`, the browser exposes only that bucket and does not call
-`ListBuckets`. This is a user-interface scope, not an IAM restriction: notebook code still has every
-permission granted to the integration credentials. Without `bucket`, the browser calls
-`ListBuckets` and shows the accessible result.
-
-Metadata mode prevents the hub from returning object bodies; full mode permits explicit previews
-and downloads. S3 authorizes `HeadObject` with the same read actions as content, so IAM cannot grant
-metadata-only HEAD access separately. Grant only the actions needed by the selected features:
-
-- `s3:ListAllMyBuckets` only when the integration has no configured bucket;
-- `s3:ListBucket` for prefixes and bounded key-name search;
-- `s3:GetObject` for current-object metadata and, in full mode, previews and downloads;
-- `s3:GetObjectVersion` for selected-version metadata and, in full mode, previews and downloads;
-- `s3:ListBucketVersions` for version history;
-- `s3:GetObjectTagging` when tags should appear. A denied tag request does not hide other metadata.
-
-Substring search is a bounded recursive S3 listing, not a persistent index or content search. The
-Data page reports how many keys were scanned and whether more keys may exist. Continue the search
-to scan the next bounded segment. Prefix navigation uses S3's native `Prefix` operation and is less
-expensive.
-
-Selecting an object performs metadata reads only. Content is fetched after **Load preview** or
-**Download**. CSV, TSV, JSON, JSON Lines, Parquet, UTF-8 text/code/Markdown/logs, and magic-byte-
-validated PNG, JPEG, GIF, and WebP files can be previewed within configured byte, row, column,
-request, result, and deadline limits. HTML, SVG, PDF, archives, executables, unknown binary files,
-and oversized images are never rendered inline. Truncated previews say so.
-
-Downloads stay behind hub authorization and stream from the object store through the server. They support one
-HTTP byte range, preserve ETag/version preconditions, use safe attachment filenames, and propagate
-client cancellation upstream. The hub does not return provider credentials or presigned URLs.
-
-The raw content endpoint is
-`GET /api/v1/projects/{pid}/integrations/{iid}/browse/objects/content`. It requires `bucket` and
-`key`; `version_id`, `etag`, and `inline=true` are optional. Editors and higher roles can send one
-`Range: bytes=…` header and receive `200` or `206`. Pre-stream failures use the standard JSON error
-envelope, including `403`, `404`, `412`, `416`, `429`, and `503` responses.
-
-Static integration credentials are used only for that integration. S3 ambient-auth integrations use
-short-lived project WIF credentials when the project enables a compatible target. The WIF storage
-endpoint and integration endpoint must be the same canonical origin. Otherwise, ambient object
-browsing for S3 remains unavailable unless the operator explicitly sets
-`MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS=true`. That setting grants project
-editors access through the control-plane AWS identity and should be enabled only intentionally.
-
-GCS service-account integrations use `storage.buckets.list` for discovery, `storage.objects.list`
-for navigation and versions, and `storage.objects.get` for metadata and content. Ambient GCS uses
-ADC only when the same server-ambient operator opt-in is enabled. Bucket discovery needs a project
-from the integration, service-account key, ADC environment, or metadata service. GCS generations
-map to `version_id`; version history uses the native `versions=true` listing and has no delete-marker
-records.
-
-Azure supports account keys, SAS tokens, connection strings, service principals, and
-`DefaultAzureCredential`. Grant container listing only when discovery is needed, blob listing for
-navigation and versions, and blob read/tag permissions for metadata and content. Azure blob version
-IDs map to `version_id`; accounts without Blob Versions return an empty terminal history while
-current blobs remain browsable. Soft-deleted blobs are not labeled as S3 delete markers.
-
-Enabling server-ambient browsing gives project editors access through the hub control-plane identity
-for each ambient provider. GCS accepts standard ADC service-account, authorized-user,
-external-account, and metadata credentials. GCS external-account and Azure Entra token acquisition
-can therefore expose every object those identities may read. Keep this off unless that authority is
-intended. Provider data-plane traffic uses the guarded resolver. Provider SDKs manage ambient
-control-plane authentication, and Azure Entra traffic is limited to fixed authority hosts. All
-browser operations are read-only.
-
-Custom endpoints use the configured guarded/private integration egress policy. `guarded` rejects
-private, loopback, link-local, metadata, and other reserved targets. Use `private` only when an
-on-premises S3-compatible endpoint must be reachable. Every final SDK hostname, including generated
-virtual-host names and retries, is resolved, checked, and pinned before transport.
-
-Successful object previews and opened downloads create `integration.object.preview` and
-`integration.object.download` audit events. Routine listing, search, and metadata navigation do not.
-Object content, credentials, signed headers, and provider error text are not stored in browse
-caches or audit events.
-
-S3-compatible implementations can omit operations such as bucket discovery, tags, checksums, or
-versioning. Configure a bucket when `ListBuckets` is unavailable; the Data page reports optional
-features that the target or credentials do not support. For a private endpoint that times out,
-verify `MARIMOHUB_INTEGRATIONS_PROBE=private`, DNS visibility from the server, TLS trust, and the
-object-browser timeout/limit settings in [Configuration](./configuration.md).
+### Catalog browsing
 
 The hub supports Iceberg REST Catalog, Trino, and ClickHouse. Trino uses the
 catalog → schema → table hierarchy. ClickHouse uses database → table.
@@ -161,6 +74,110 @@ Password authentication also requires HTTPS.
 The `GET …/integrations/{iid}/browse` route reports the capabilities of one
 integration and explains why a capability is unavailable.
 
+### Object-store browsing
+
+S3, GCS, and Azure Blob browsing supports these read-only operations:
+
+- Navigate configured or accessible roots and prefixes.
+- Search a bounded number of object names.
+- Read metadata, tags, and version history.
+- Load explicit previews and notebook snippets.
+- Stream downloads through the hub.
+
+The browser cannot upload, delete, restore, rename, or edit upstream objects or
+metadata.
+
+The API retains `bucket`, `key`, and `version_id` as provider-neutral compatibility fields. The UI
+calls Azure roots containers. Copied and detail URIs use `s3://`, `gs://`, and `az://` respectively.
+
+When an S3 integration sets `bucket`, the browser exposes only that bucket and does not call
+`ListBuckets`. This is a user-interface scope, not an IAM restriction: notebook code still has every
+permission granted to the integration credentials. Without `bucket`, the browser calls
+`ListBuckets` and shows the accessible result.
+
+Metadata mode prevents the hub from returning object bodies. Full mode permits
+explicit previews and downloads. S3 authorizes `HeadObject` with the same read
+actions as content. Thus, IAM cannot grant separate metadata-only HEAD access.
+Grant only the actions required by the selected features:
+
+- `s3:ListAllMyBuckets` when the integration has no configured bucket.
+- `s3:ListBucket` for prefixes and bounded key-name search.
+- `s3:GetObject` for current-object metadata, previews, and downloads.
+- `s3:GetObjectVersion` for selected-version metadata, previews, and downloads.
+- `s3:ListBucketVersions` for version history.
+- `s3:GetObjectTagging` to show tags. A denied tag request does not hide other
+  metadata.
+
+Substring search is a bounded recursive S3 listing, not a persistent index or content search. The
+Data page reports how many keys were scanned and whether more keys may exist. Continue the search
+to scan the next bounded segment. Prefix navigation uses S3's native `Prefix` operation and is less
+expensive.
+
+Selecting an object performs metadata reads only. Content is fetched after **Load preview** or
+**Download**. CSV, TSV, JSON, JSON Lines, Parquet, UTF-8 text/code/Markdown/logs, and magic-byte-
+validated PNG, JPEG, GIF, and WebP files can be previewed within configured byte, row, column,
+request, result, and deadline limits. HTML, SVG, PDF, archives, executables, unknown binary files,
+and oversized images are never rendered inline. Truncated previews say so.
+
+Downloads remain behind hub authorization and stream through the server. They
+support one HTTP byte range and preserve ETag or version preconditions. They
+also use safe attachment filenames and propagate client cancellation upstream.
+The hub does not return provider credentials or presigned URLs.
+
+The raw content endpoint is
+`GET /api/v1/projects/{pid}/integrations/{iid}/browse/objects/content`. It requires `bucket` and
+`key`; `version_id`, `etag`, and `inline=true` are optional. Editors and higher roles can send one
+`Range: bytes=…` header and receive `200` or `206`. Pre-stream failures use the standard JSON error
+envelope, including `403`, `404`, `412`, `416`, `429`, and `503` responses.
+
+Static integration credentials are used only for that integration. S3 ambient-auth integrations use
+short-lived project WIF credentials when the project enables a compatible target. The WIF storage
+endpoint and integration endpoint must be the same canonical origin. Otherwise, ambient object
+browsing for S3 remains unavailable unless the operator explicitly sets
+`MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS=true`. That setting grants project
+editors access through the control-plane AWS identity. Enable it only when that
+access is intentional.
+
+GCS service-account integrations use `storage.buckets.list` for discovery.
+They use `storage.objects.list` for navigation and versions. They use
+`storage.objects.get` for metadata and content. Ambient GCS uses ADC only when
+the server-ambient option is enabled. Bucket discovery requires a project ID
+from the integration, service-account key, ADC environment, or metadata
+service. GCS generations map to `version_id`. Version history uses the native
+`versions=true` listing and has no delete-marker records.
+
+Azure supports account keys, SAS tokens, connection strings, service principals, and
+`DefaultAzureCredential`. Grant container listing only when discovery is needed, blob listing for
+navigation and versions, and blob read/tag permissions for metadata and content. Azure blob version
+IDs map to `version_id`; accounts without Blob Versions return an empty terminal history while
+current blobs remain browsable. Soft-deleted blobs are not labeled as S3 delete markers.
+
+Server-ambient browsing gives project editors the hub control-plane identity for
+each ambient provider. GCS accepts standard ADC service-account,
+authorized-user, external-account, and metadata credentials. GCS external
+accounts and Azure Entra tokens can expose every object that these identities
+can read. Keep this option off unless that access is intentional. Provider data
+traffic uses the guarded resolver. Provider SDKs manage ambient authentication.
+Azure Entra traffic is limited to fixed authority hosts. All browser operations
+are read-only.
+
+Custom endpoints use the configured guarded/private integration egress policy. `guarded` rejects
+private, loopback, link-local, metadata, and other reserved targets. Use `private` only when an
+on-premises S3-compatible endpoint must be reachable. Every final SDK hostname, including generated
+virtual-host names and retries, is resolved, checked, and pinned before transport.
+
+Successful object previews and opened downloads create `integration.object.preview` and
+`integration.object.download` audit events. Routine listing, search, and metadata navigation do not.
+Object content, credentials, signed headers, and provider error text are not stored in browse
+caches or audit events.
+
+S3-compatible implementations can omit bucket discovery, tags, checksums, or
+versioning. If `ListBuckets` is unavailable, configure a bucket. The Data page
+shows optional features that the target or credentials do not support. For a
+private endpoint timeout, make sure that the probe is set to `private`. Then
+make sure that server DNS and TLS trust are correct. See the object-browser
+limits in [Configuration](./configuration.md).
+
 ### Row previews
 
 The Preview tab does not load data automatically. Select **Load preview** to
@@ -178,12 +195,11 @@ Enable the experimental DuckDB executor with:
 MARIMOHUB_EXPERIMENTS=duckdb-wasm-preview
 ```
 
-The Node server uses a worker thread by default. Set
-`MARIMOHUB_DUCKDB_WASM_RUNTIME=inline` only for trusted, server-authored preview
-programs when a worker is unavailable. Each query runs in a read-only
-transaction after the runtime disables external access, sets its memory limit,
-and locks configuration. DuckDB-Wasm does not currently advertise Iceberg HTTP
-support because its traffic cannot use the hub's guarded browse transport;
+The Node server uses a worker thread. Blocking inline execution is unavailable
+because a query cannot be preempted at its deadline. Each query runs in a
+read-only transaction after the runtime disables external access, sets its
+memory limit, and locks configuration. DuckDB-Wasm does not currently advertise
+Iceberg HTTP support because its traffic cannot use the hub's guarded browse transport;
 Iceberg therefore continues to use the sandbox executor. The installed Node
 binding exposes synchronous file callbacks and rejects HTTP and S3, while the
 guarded transport is asynchronous. The runtime adds its own fail-closed remote
@@ -200,6 +216,23 @@ At startup, the hub verifies each configured executor before advertising it.
 Each preview receives the selected integration configuration and applicable WIF
 credentials. Concurrency limits and deadlines bound resource use. The hub
 destroys the sandbox after the request, including after a failure.
+
+### Run SQL
+
+The `POST …/integrations/{iid}/browse/query` operation is always present in the
+API contract. It returns `404` unless integrations are enabled and full data
+browsing is selected:
+
+```bash
+MARIMOHUB_DATA_BROWSER=full
+```
+
+Only project managers and administrators can run SQL. Each request receives a
+fresh DuckDB-Wasm worker, runs one statement in a read-only transaction, and is
+hard-terminated at its deadline. External access, extension installation,
+automatic extension loading, and configuration changes are disabled. Row,
+response-byte, concurrency, per-user, memory, and time limits apply. Successful
+queries create an audit event that records sizes and row counts, never SQL text.
 
 ### Scope and caching
 

@@ -102,6 +102,7 @@ export interface BrowsePageRequest {
 	cursor?: string;
 	/** Effective upstream identity for engines that authorize each query. */
 	query_user?: string;
+	signal?: AbortSignal;
 }
 
 export interface BrowseNamespacesRequest extends BrowsePageRequest {
@@ -143,6 +144,7 @@ export interface TablePreview {
 export interface TablePreviewRequest {
 	limit: number;
 	query_user?: string;
+	signal?: AbortSignal;
 }
 
 /**
@@ -181,6 +183,7 @@ export interface ProbeRequestInit {
 	method?: 'GET' | 'POST';
 	headers?: Record<string, string>;
 	body?: string;
+	signal?: AbortSignal;
 }
 
 export interface ProbeResponse {

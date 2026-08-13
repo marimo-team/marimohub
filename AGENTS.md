@@ -34,9 +34,10 @@ Use these as the done-criteria for any change.
   serializer is a pure function, not a vendor, so a
   port around it would buy no substitutability.
   Anything that _reaches_ something — a store, a cluster, an IdP — is a port.
-- **Adapters** (`packages/storage-*`, `packages/compute-*`, `packages/auth-*`)
-  implement the ports. `packages/api` wires the services to Hono/OpenAPI routes
-  via `@hono/zod-openapi`.
+- **Adapters** (`packages/storage-*`, `packages/compute-*`, `packages/auth-*`,
+  `packages/object-browser-*`, `packages/notify-*`, and the credential, secret,
+  and DuckDB runtime packages) implement the ports. `packages/api` wires the
+  services to Hono/OpenAPI routes via `@hono/zod-openapi`.
 - **`packages/config`** is the ONLY package that imports concrete adapters: it
   reads `MARIMOHUB_*` env vars, selects an adapter per `*_BACKEND` selector, and
   wires the system together.
@@ -49,12 +50,14 @@ Use these as the done-criteria for any change.
 Dependencies point **inward only**. `core` and `api` never import an adapter;
 adapters depend on `core`'s port interfaces. `config` (and the entrypoints) are
 the only places concrete adapters are imported. **Reject PRs that violate this**
-— e.g. an `@marimo-hub/storage-*` / `compute-*` / `auth-*` import appearing in
-`packages/core` or `packages/api`. The rule is enforced mechanically: a
+— for example, an adapter import in `packages/core` or `packages/api`. The rule
+is enforced mechanically: a
 `no-restricted-imports` override in `vite.config.ts` (files `packages/core/**`,
 `packages/api/**`) bans `@marimo-hub/{storage,compute,auth,credentials,secrets}-*`
-imports, and a colocated `package-dependencies.test.ts` in each of `core` and
-`api` fails if an adapter appears in their `package.json`.
+imports, `@marimo-hub/{notify,object-browser}-*` imports, and
+`@marimo-hub/duckdb-wasm-runtime`. A colocated `package-dependencies.test.ts` in
+each of `core` and `api` fails if one of these packages appears in its
+`package.json`.
 
 ## Conventions
 
@@ -108,6 +111,8 @@ ETag compare-and-swap (conditional PUT) with retries.
 These CAS-managed records also have one writer each:
 
 - `IdentityService` owns each identity at `_system/identities/{user-id}.json`.
+- `ProjectAlertStore` owns each project alert configuration at
+  `projects/{pid}/alerts.json`.
 - `SessionService` owns each editor claim at
   `_system/editors/{pid}/{nid}.json`.
 - `SessionService.claimApp`/`releaseApp` owns each app claim at

@@ -55,6 +55,10 @@ that differs from the base branch it posts an oasdiff changelog to the job
 summary and fails on error-level breaking changes
 (`oasdiff breaking --fail-on ERR`).
 
+`response-property-enum-value-added` remains warning-level. Response enums may
+grow when their runtime schema normalizes unrecognized strings to an explicit
+`unknown` member, so generated clients retain an exhaustive fallback.
+
 To land a vetted breaking change, add a line to the matching file in
 [`allowed-breaking/`](./allowed-breaking). A line suppresses a finding when it
 contains both the endpoint (e.g. `GET /example/{id}`) and the finding's

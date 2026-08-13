@@ -32,6 +32,7 @@ import { makeSecretSources } from './secrets';
 
 const DOCS = 'docs/project-alerts.md';
 const MAX_PROJECT_ALERT_EVENTS_PER_MINUTE = 100;
+const RATE_LIMIT_RETRY_DELAY_MS = 1_000;
 
 class AlertHttpError extends Error {
 	constructor(readonly status: number) {
@@ -99,6 +100,10 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 		private readonly metrics: Metrics,
 		probe?: IntegrationProbe,
 		deliveryBudget?: SlidingWindowBudget<ProjectId>,
+		private readonly delay: (milliseconds: number) => Promise<void> = (milliseconds) =>
+			new Promise((resolve) => {
+				setTimeout(resolve, milliseconds);
+			}),
 	) {
 		this.probe =
 			probe ??
@@ -199,6 +204,7 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 									headers: { 'content-type': 'application/json' },
 									body: JSON.stringify(options.body),
 								});
+								return { ok: true };
 							},
 						}).deliver(notification)
 					: await new WebhookNotifier({
@@ -209,10 +215,13 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 								for (let attempt = 0; attempt <= options.retry; attempt++) {
 									try {
 										await this.request(url, options);
-										return;
+										return { ok: true };
 									} catch (error) {
 										lastError = error;
 										if (attempt === options.retry || !retryableAlertError(error)) throw error;
+										if (error instanceof AlertHttpError && error.status === 429) {
+											await this.delay(RATE_LIMIT_RETRY_DELAY_MS);
+										}
 									}
 								}
 								throw lastError;

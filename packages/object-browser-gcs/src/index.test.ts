@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createProjectId, ObjectBrowseError, UserId } from '@marimo-hub/core';
 import type { GcsObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
+import type { ObjectBrowserLimits } from '@marimo-hub/object-browser-commons';
 import { GcsObjectBrowser } from './index';
 
 const source: GcsObjectStoreSource = {
@@ -15,10 +16,11 @@ const context: ObjectBrowseContext = {
 	allow_server_ambient: { gcs: true },
 };
 
-function browser(fetchImpl: typeof fetch) {
+function browser(fetchImpl: typeof fetch, limits?: Partial<ObjectBrowserLimits>) {
 	return new GcsObjectBrowser({
 		mode: 'full',
 		fetchImpl,
+		...(limits === undefined ? {} : { limits }),
 		resolveHost: async () => [{ address: '142.250.1.1', family: 4 }],
 	});
 }
@@ -100,6 +102,61 @@ describe('GCS object browser', () => {
 				message: 'GCS returned a malformed response.',
 			}),
 		);
+	});
+
+	it('requests only the consumed fields from list pages', async () => {
+		const listUrls: string[] = [];
+		const fetchImpl = (async (input: URL | RequestInfo) => {
+			const url = String(input);
+			if (url.includes('metadata.google.internal')) {
+				return Response.json({ access_token: 'token', expires_in: 3600 });
+			}
+			listUrls.push(url);
+			return Response.json({ items: [] });
+		}) as typeof fetch;
+		await browser(fetchImpl).listObjects(source, context, { bucket: 'lake', limit: 2 });
+		await browser(fetchImpl).searchObjects(source, context, {
+			bucket: 'lake',
+			query: 'report',
+			limit: 2,
+		});
+		expect(listUrls).toHaveLength(2);
+		for (const url of listUrls) {
+			expect(new URL(url).searchParams.get('fields')).toBe(
+				'items(name,generation,size,updated,etag,storageClass),prefixes,nextPageToken',
+			);
+		}
+	});
+
+	it('caps list and metadata response bodies independently', async () => {
+		const fetchImpl = (async (input: URL | RequestInfo) => {
+			const url = String(input);
+			if (url.includes('metadata.google.internal')) {
+				return Response.json({ access_token: 'token', expires_in: 3600 });
+			}
+			if (url.includes('/o/report.csv')) {
+				return Response.json({ name: 'report.csv', generation: '9', size: '3' });
+			}
+			return Response.json({ items: [], padding: 'x'.repeat(64) });
+		}) as typeof fetch;
+		await expect(
+			browser(fetchImpl, { listMaxResponseBytes: 16 }).listObjects(source, context, {
+				bucket: 'lake',
+				limit: 1,
+			}),
+		).rejects.toMatchObject({ code: 'unsupported' });
+		await expect(
+			browser(fetchImpl, { metadataMaxResponseBytes: 16 }).listObjects(source, context, {
+				bucket: 'lake',
+				limit: 1,
+			}),
+		).resolves.toMatchObject({ items: [] });
+		await expect(
+			browser(fetchImpl, { metadataMaxResponseBytes: 16 }).headObject(source, context, {
+				bucket: 'lake',
+				key: 'report.csv',
+			}),
+		).rejects.toMatchObject({ code: 'unsupported' });
 	});
 
 	it('marks the current generation as latest independently of version pagination', async () => {

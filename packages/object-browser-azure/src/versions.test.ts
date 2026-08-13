@@ -3,13 +3,22 @@ import { createProjectId, UserId } from '@marimo-hub/core';
 import type { AzureBlobObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
 import { AzureBlobObjectBrowser } from './index';
 
-const azure = vi.hoisted(() => ({ next: vi.fn(), hierarchyNext: vi.fn() }));
+const azure = vi.hoisted(() => ({
+	next: vi.fn(),
+	hierarchyNext: vi.fn(),
+	getProperties: vi.fn(),
+	getTags: vi.fn(),
+}));
 
 vi.mock('./client', () => ({
 	createAzureClient: () => ({
 		getContainerClient: () => ({
 			listBlobsFlat: () => ({ byPage: () => ({ next: azure.next }) }),
 			listBlobsByHierarchy: () => ({ byPage: () => ({ next: azure.hierarchyNext }) }),
+			getBlobClient: () => ({
+				getProperties: azure.getProperties,
+				getTags: azure.getTags,
+			}),
 		}),
 	}),
 }));
@@ -35,6 +44,8 @@ const browser = new AzureBlobObjectBrowser({
 beforeEach(() => {
 	azure.next.mockReset();
 	azure.hierarchyNext.mockReset();
+	azure.getProperties.mockReset();
+	azure.getTags.mockReset();
 });
 
 describe('Azure Blob hierarchy', () => {
@@ -58,6 +69,25 @@ describe('Azure Blob hierarchy', () => {
 				{ kind: 'object', key: 'file.csv' },
 				{ kind: 'prefix', key: 'folder/' },
 			],
+		});
+	});
+
+	it('returns metadata when tag access is denied', async () => {
+		azure.getProperties.mockResolvedValue({
+			contentLength: 3,
+			contentType: 'text/csv',
+			metadata: { owner: 'analytics' },
+		});
+		azure.getTags.mockRejectedValue({ statusCode: 403 });
+
+		await expect(
+			browser.headObject(source, context, { bucket: 'raw', key: 'report.csv' }),
+		).resolves.toMatchObject({
+			key: 'report.csv',
+			size: 3,
+			content_type: 'text/csv',
+			metadata: { owner: 'analytics' },
+			tags_available: false,
 		});
 	});
 });

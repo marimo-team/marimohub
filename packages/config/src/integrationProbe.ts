@@ -8,9 +8,10 @@ import { request as httpRequest } from 'node:http';
 import type { RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
-import type { LookupFunction } from 'node:net';
-import { createSlidingWindowBudget, parseHttpUrl } from '@marimo-hub/core';
+import { createSlidingWindowBudget, parseHttpUrl, withDeadline } from '@marimo-hub/core';
 import type { IntegrationProbe, ProbeRequestInit, ProbeResponse } from '@marimo-hub/core';
+import { createPinnedLookup } from '@marimo-hub/object-browser-commons';
+import type { GuardedHostResolver, PinnedAddress } from '@marimo-hub/object-browser-commons';
 
 export interface GuardedProbeOptions {
 	/** Allow private and loopback targets for deployments with on-prem services. */
@@ -28,15 +29,7 @@ export interface GuardedProbeOptions {
 	transport?: ProbeTransport;
 }
 
-export interface PinnedAddress {
-	address: string;
-	family: number;
-}
-
-export type GuardedHostResolver = (
-	hostname: string,
-	signal?: AbortSignal,
-) => Promise<PinnedAddress[]>;
+export type { GuardedHostResolver, PinnedAddress } from '@marimo-hub/object-browser-commons';
 
 export function createGuardedHostResolver(
 	options: {
@@ -46,7 +39,12 @@ export function createGuardedHostResolver(
 ): GuardedHostResolver {
 	const { allowPrivate = false, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
 	return (hostname, signal) =>
-		withDeadline(resolveAndValidate(hostname, allowPrivate), Date.now() + timeoutMs, signal);
+		withDeadline(resolveAndValidate(hostname, allowPrivate), {
+			timeoutMs,
+			timeoutError: timedOut,
+			signal,
+			abortError: aborted,
+		});
 }
 
 /**
@@ -62,6 +60,7 @@ export interface ProbeTransportRequest {
 	pinned: PinnedAddress[];
 	timeoutMs: number;
 	maxResponseBytes: number;
+	signal?: AbortSignal;
 }
 
 export type ProbeTransport = (
@@ -105,10 +104,12 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 			// share instead of granting it a fresh timeout (worst case ~2x the limit).
 			const deadline = now + timeoutMs;
 			const target = parseTarget(url);
-			const pinned = await withDeadline(
-				resolveAndValidate(target.hostname, allowPrivate),
-				deadline,
-			);
+			const pinned = await withDeadline(resolveAndValidate(target.hostname, allowPrivate), {
+				timeoutMs: Math.max(0, deadline - Date.now()),
+				timeoutError: timedOut,
+				signal: init.signal,
+				abortError: aborted,
+			});
 			const remainingMs = deadline - Date.now();
 			if (remainingMs <= 0) throw timedOut();
 			const response = await transport({
@@ -119,6 +120,7 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 				pinned,
 				timeoutMs: remainingMs,
 				maxResponseBytes,
+				signal: init.signal,
 			});
 			return {
 				ok: response.status >= 200 && response.status < 300,
@@ -152,9 +154,11 @@ const nodeTransport: ProbeTransport = (probeRequest) =>
 		const requestOptions: RequestOptions & { autoSelectFamily?: boolean } = {
 			method: probeRequest.method,
 			headers: probeRequest.headers,
-			lookup: pinnedLookup(probeRequest.pinned),
+			lookup: createPinnedLookup(probeRequest.pinned),
 			autoSelectFamily: true,
-			signal: AbortSignal.timeout(probeRequest.timeoutMs),
+			signal: probeRequest.signal
+				? AbortSignal.any([probeRequest.signal, AbortSignal.timeout(probeRequest.timeoutMs)])
+				: AbortSignal.timeout(probeRequest.timeoutMs),
 		};
 		const request = (probeRequest.url.protocol === 'https:' ? httpsRequest : httpRequest)(
 			probeRequest.url,
@@ -187,18 +191,6 @@ const nodeTransport: ProbeTransport = (probeRequest) =>
 		if (probeRequest.body !== undefined) request.write(probeRequest.body);
 		request.end();
 	});
-
-/** A DNS lookup function that returns only the pre-validated addresses. */
-function pinnedLookup(pinned: PinnedAddress[]): LookupFunction {
-	return ((_hostname: string, lookupOptions: unknown, callback: unknown) => {
-		const cb = callback as (err: Error | null, addr: unknown, fam?: number) => void;
-		if (typeof lookupOptions === 'object' && (lookupOptions as { all?: boolean } | null)?.all) {
-			cb(null, pinned);
-		} else {
-			cb(null, pinned[0].address, pinned[0].family);
-		}
-	}) as LookupFunction;
-}
 
 function parseTarget(url: string): URL {
 	const parsed = parseHttpUrl(url);
@@ -233,32 +225,6 @@ async function resolveAndValidate(
 		throw forbidden(hostname);
 	}
 	return addresses;
-}
-
-/** `dns.lookup` honours no timeout of its own, so bound it from the outside. */
-function withDeadline<T>(work: Promise<T>, deadline: number, signal?: AbortSignal): Promise<T> {
-	if (signal?.aborted) return Promise.reject(aborted());
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	let onAbort: (() => void) | undefined;
-	const candidates: Promise<T>[] = [
-		work,
-		new Promise<never>((_resolve, reject) => {
-			timer = setTimeout(() => reject(timedOut()), Math.max(0, deadline - Date.now()));
-		}),
-	];
-	if (signal) {
-		candidates.push(
-			new Promise<never>((_resolve, reject) => {
-				onAbort = () => reject(aborted());
-				signal.addEventListener('abort', onAbort, { once: true });
-				if (signal.aborted) onAbort();
-			}),
-		);
-	}
-	return Promise.race(candidates).finally(() => {
-		clearTimeout(timer);
-		if (onAbort) signal?.removeEventListener('abort', onAbort);
-	});
 }
 
 function timedOut(): Error {

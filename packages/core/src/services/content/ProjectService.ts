@@ -6,7 +6,7 @@ import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import type { AssignableRole } from '../../constants';
 import { Millis } from '../../duration';
-import { assertVersionMatch, ConflictError, NotFoundError } from '../../errors';
+import { assertVersionMatch, ConflictError, NotFoundError, ValidationError } from '../../errors';
 import { createProjectId, SYSTEM_ACTOR } from '../../ids';
 import type { ProjectId, SnapshotId, UserId } from '../../ids';
 import { noopMetrics } from '../../ports/metrics';
@@ -66,6 +66,18 @@ export interface ProjectDeleteMutationResult {
 	mutationId: SnapshotId;
 }
 
+function normalizeProjectName(name: string): string {
+	let normalized = '';
+	for (let index = 0; index < name.length; index++) {
+		const code = name.charCodeAt(index);
+		if (code > 31 && (code < 127 || code > 159)) normalized += name[index];
+	}
+	if (normalized.trim().length === 0) {
+		throw new ValidationError('Project name must contain a visible character.');
+	}
+	return normalized;
+}
+
 export class ProjectService {
 	constructor(
 		private bucket: Bucket,
@@ -120,11 +132,12 @@ export class ProjectService {
 	async createProject(input: CreateProjectInput, actor: UserId): Promise<Project> {
 		const id = createProjectId();
 		const now = new Date().toISOString();
+		const name = normalizeProjectName(input.name);
 
 		const project: Project = {
 			schema_version: 1,
 			id,
-			name: input.name,
+			name,
 			description: input.description,
 			owner: actor,
 			members: [{ user_id: actor, role: 'admin' }],
@@ -183,6 +196,7 @@ export class ProjectService {
 		expectedVersion?: string,
 	): Promise<Project> {
 		const key = paths.project(id).meta;
+		const name = input.name === undefined ? undefined : normalizeProjectName(input.name);
 
 		const updated = await mutateObject(
 			this.bucket,
@@ -195,7 +209,7 @@ export class ProjectService {
 				}
 				return {
 					...current,
-					name: input.name ?? current.name,
+					name: name ?? current.name,
 					description: input.description ?? current.description,
 					tags: input.tags ?? current.tags,
 					federation: input.federation ?? current.federation,

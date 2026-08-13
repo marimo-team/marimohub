@@ -279,27 +279,31 @@ function browserDeps(
 
 function queryService(
 	executions: DataQueryExecution[],
-	execute = async () => ({
+	execute: () => Promise<{
+		columns: string[];
+		rows: unknown[][];
+		truncated: boolean;
+	}> = async () => ({
 		columns: ['value'],
 		rows: [[1]],
 		truncated: false,
 	}),
-) {
+): DataQueryService {
 	return new DataQueryService({
 		executorFactory: {
 			create: async () => ({
 				runtime: 'worker',
-				execute: async (request) => {
-					executions.push(request);
+				execute: async (execution) => {
+					executions.push(execution);
 					return execute();
 				},
 				terminate: () => {},
 			}),
 		},
-		maxConcurrent: 2,
+		maxConcurrent: 1,
 		maxConcurrentPerUser: 1,
-		maxRows: 100,
-		maxBytes: 64 * 1024,
+		maxRows: 10,
+		maxBytes: 4096,
 		executionTimeoutMs: 1000,
 	});
 }
@@ -389,8 +393,6 @@ describe('Data browser routes', () => {
 			await request('GET', `/projects/${pid}/integrations/${created.id}/browse`),
 		);
 		expect(capability).toEqual({
-			metadata: true,
-			preview: false,
 			surfaces: {
 				tables: { available: true, preview: false },
 				query: {
@@ -412,9 +414,6 @@ describe('Data browser routes', () => {
 			await request('GET', `/projects/${pid}/integrations/${closed.id}/browse`),
 		);
 		expect(closedCapability).toEqual({
-			metadata: false,
-			preview: false,
-			reason: 'sandbox only',
 			surfaces: {
 				tables: { available: false, preview: false, reason: 'sandbox only' },
 				query: {
@@ -446,8 +445,6 @@ describe('Data browser routes', () => {
 			await request('GET', `/projects/${pid}/integrations/${created.id}/browse`),
 		);
 		expect(capability).toEqual({
-			metadata: false,
-			preview: false,
 			surfaces: {
 				objects: {
 					provider: 's3',
@@ -679,6 +676,31 @@ describe('Data browser routes', () => {
 		expect(detailCalls).toBe(2);
 	});
 
+	it('does not run streaming downloads through response ETag middleware', async () => {
+		vi.spyOn(objectBrowser, 'openObject').mockResolvedValueOnce({
+			body: new ReadableStream({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode('stream'));
+					controller.close();
+				},
+			}),
+			status: 200,
+			content_type: 'text/plain',
+			content_length: 6,
+			total_size: 6,
+			close: () => {},
+		});
+		const pid = await createProject();
+		const created = await createObjectStore(pid);
+		const response = await request(
+			'GET',
+			`/projects/${pid}/integrations/${created.id}/browse/objects/content?bucket=lake&key=stream.txt`,
+		);
+
+		expect(response.headers.get('etag')).toBeNull();
+		expect(await response.text()).toBe('stream');
+	});
+
 	it('rejects excess concurrent downloads and releases the permit after cancellation', async () => {
 		const pid = await createProject();
 		const created = await createObjectStore(pid);
@@ -766,8 +788,6 @@ describe('Data browser routes', () => {
 			await request('GET', `/projects/${pid}/integrations/${created.id}/browse`),
 		);
 		expect(capability).toEqual({
-			metadata: true,
-			preview: true,
 			surfaces: {
 				tables: { available: true, preview: true },
 				query: {
@@ -794,7 +814,20 @@ describe('Data browser routes', () => {
 		expect(events).toContainEqual(expect.objectContaining({ event: 'integration.preview' }));
 	});
 
-	it('runs SQL only through the separate gated executor and audits without SQL text', async () => {
+	it('keeps the query route declared but returns 404 while its runtime gate is off', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+
+		await expectError(
+			await request('POST', `/projects/${pid}/integrations/${created.id}/browse/query`, {
+				sql: 'select 1',
+			}),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('runs bounded SQL through the isolated service and audits without SQL text', async () => {
 		const pid = await createProject();
 		const created = await createBrowsable(pid);
 		const executions: DataQueryExecution[] = [];
@@ -808,6 +841,7 @@ describe('Data browser routes', () => {
 			`/projects/${pid}/integrations/${created.id}/browse/query`,
 			{ sql },
 		);
+
 		expect(response.headers.get('cache-control')).toBe('no-store');
 		expect(await expectOk(response)).toEqual({
 			columns: ['value'],
@@ -1078,8 +1112,8 @@ describe('Data browser routes', () => {
 		const pid = await createProject();
 		const created = await createBrowsable(pid);
 		deps.dataBrowser.preview = true;
-		const captured: unknown[] = [];
 		const original = deps.integrations.browseTablePreview.bind(deps.integrations);
+		const captured: Parameters<typeof original>[6][] = [];
 		deps.integrations.browseTablePreview = (async (...args: Parameters<typeof original>) => {
 			captured.push(args[6]);
 			return original(...args);
@@ -1091,7 +1125,9 @@ describe('Data browser routes', () => {
 				table: 'orders',
 			}),
 		);
-		expect(captured).toEqual([{ limit: 20, query_user: `${ACTOR}@example.com` }]);
+		expect(captured).toHaveLength(1);
+		expect(captured[0]).toMatchObject({ limit: 20, query_user: `${ACTOR}@example.com` });
+		expect(captured[0].signal).toBeInstanceOf(AbortSignal);
 	});
 
 	it('renders only the selected integration for the sandbox preview fallback', async () => {
@@ -1159,14 +1195,10 @@ describe('Data browser routes', () => {
 		const url = `/projects/${pid}/integrations/${selected.id}/browse`;
 
 		expect(await expectOk(await full('GET', url))).toEqual({
-			metadata: true,
-			preview: false,
 			surfaces: { tables: { available: true, preview: false } },
 		});
 		ready = true;
 		expect(await expectOk(await full('GET', url))).toEqual({
-			metadata: true,
-			preview: true,
 			surfaces: { tables: { available: true, preview: true } },
 		});
 	});
@@ -1507,10 +1539,7 @@ describe('Data browser routes', () => {
 		const capability = await expectOk<Record<string, unknown>>(
 			await request('GET', `/projects/${pid}/integrations/${pg.id}/browse`),
 		);
-		expect(capability).toMatchObject({
-			metadata: false,
-			reason: expect.stringContaining('does not support browsing'),
-		});
+		expect(capability).toEqual({ surfaces: {} });
 	});
 
 	it('serves repeat lookups from the cache and enforces the per-user budget', async () => {
@@ -1713,8 +1742,6 @@ describe('Data browser routes', () => {
 			await request('GET', `/projects/${pid}/integrations/${orgInstance.id}/browse`),
 		);
 		expect(capability).toEqual({
-			metadata: true,
-			preview: false,
 			surfaces: {
 				tables: { available: true, preview: false },
 				query: {

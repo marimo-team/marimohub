@@ -26,3 +26,10 @@ export function parseHttpUrl(value: string, options: ParseHttpUrlOptions = {}): 
 	}
 	return { ok: true, url };
 }
+
+export function requireHttpsUrl(value: string, label: string): string {
+	const parsed = parseHttpUrl(value, { protocols: ['https:'] });
+	if (!parsed.ok && parsed.issue === 'protocol') throw new Error(`${label} must use HTTPS`);
+	if (!parsed.ok) throw new Error(`Invalid ${label}`);
+	return value;
+}

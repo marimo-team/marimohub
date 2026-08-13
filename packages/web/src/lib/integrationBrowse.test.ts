@@ -34,8 +34,6 @@ describe('tableBrowseCapability', () => {
 	it('uses the table surface when it is present', () => {
 		const capability = {
 			surfaces: { tables: { available: false, preview: false, reason: 'disabled' } },
-			metadata: true,
-			preview: true,
 		} satisfies IntegrationBrowseCapability;
 		expect(tableBrowseCapability(capability)).toEqual({
 			available: false,
@@ -46,8 +44,6 @@ describe('tableBrowseCapability', () => {
 
 	it('handles missing capabilities and table surfaces', () => {
 		expect(tableBrowseCapability(undefined)).toBeUndefined();
-		expect(
-			tableBrowseCapability({ surfaces: {}, metadata: false, preview: false }),
-		).toBeUndefined();
+		expect(tableBrowseCapability({ surfaces: {} })).toBeUndefined();
 	});
 });

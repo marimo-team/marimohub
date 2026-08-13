@@ -6,8 +6,8 @@ description: Configure a server-managed OpenAI-compatible provider for notebook 
 
 Give every notebook a working AI assistant without asking users for their own
 API key. When managed AI is on, marimohub points marimo's assistant at a provider
-**you** configure and pays for, so chat, autocomplete, and "generate with AI" just
-work the moment someone opens a notebook.
+**you** configure and pays for. Chat, autocomplete, and "generate with AI" work
+when someone opens a notebook.
 
 It's optional and off by default. Turn it on by setting one upstream provider; the
 real provider key stays on the server and is never exposed to notebook code.

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { withDeadline } from './async';
+import { describe, expect, it } from 'vitest';
+import { withAbortSignal, withDeadline } from '../async';
 
 describe('withDeadline', () => {
 	it('returns work that finishes before the deadline', async () => {
@@ -12,17 +12,44 @@ describe('withDeadline', () => {
 	});
 
 	it('uses the caller-provided timeout error', async () => {
-		vi.useFakeTimers();
-		try {
-			const result = withDeadline(new Promise(() => {}), {
-				timeoutMs: 10,
+		await expect(
+			withDeadline(new Promise(() => {}), {
+				timeoutMs: 5,
 				timeoutError: () => new RangeError('late'),
-			});
-			const expectation = expect(result).rejects.toThrow(new RangeError('late'));
-			await vi.advanceTimersByTimeAsync(10);
-			await expectation;
-		} finally {
-			vi.useRealTimers();
-		}
+			}),
+		).rejects.toThrow(new RangeError('late'));
+	});
+
+	it('passes a signal that aborts at the deadline', async () => {
+		let observed: AbortSignal | undefined;
+		const result = withDeadline(
+			async (signal) => {
+				observed = signal;
+				await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+				return 'late';
+			},
+			{ timeoutMs: 5, timeoutError: () => new Error('timed out') },
+		);
+		await expect(result).rejects.toThrow('timed out');
+		expect(observed?.aborted).toBe(true);
+	});
+
+	it('distinguishes caller cancellation from its deadline', async () => {
+		const controller = new AbortController();
+		const result = withDeadline(new Promise(() => {}), {
+			timeoutMs: 60_000,
+			timeoutError: () => new Error('timed out'),
+			signal: controller.signal,
+			abortError: () => new Error('cancelled'),
+		});
+		controller.abort();
+		await expect(result).rejects.toThrow('cancelled');
+	});
+
+	it('races a promise against an AbortSignal', async () => {
+		const controller = new AbortController();
+		const result = withAbortSignal(new Promise(() => {}), controller.signal);
+		controller.abort();
+		await expect(result).rejects.toMatchObject({ name: 'AbortError' });
 	});
 });

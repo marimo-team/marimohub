@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { UnavailableError, ValidationError } from '../../../errors';
 import { isRecord } from '../../../internal/validation';
 import type { IntegrationProbe } from '../../../ports/integrations';
+import { validateTableData } from '../data-preview/previewResult';
+import { sqlIdentifier } from '../data-preview/sql';
 import {
 	basicAuthHeader,
 	defineIntegration,
@@ -103,7 +105,7 @@ export const clickhouse = defineIntegration({
 		},
 		async listNamespaces(config, probe, request) {
 			if (request.parent?.length) return { items: [], next_cursor: null };
-			const result = await clickhouseQuery(config, probe, 'SHOW DATABASES');
+			const result = await clickhouseQuery(config, probe, 'SHOW DATABASES', request.signal);
 			return pageByNameCursor(
 				result.rows.map((row) => [String(row[0])]),
 				request,
@@ -115,7 +117,8 @@ export const clickhouse = defineIntegration({
 			const result = await clickhouseQuery(
 				config,
 				probe,
-				`SHOW TABLES FROM ${quoteIdentifier(namespace[0])}`,
+				`SHOW TABLES FROM ${sqlIdentifier(namespace[0])}`,
+				request.signal,
 			);
 			return pageByNameCursor(
 				result.rows.map((row) => String(row[0])),
@@ -129,6 +132,7 @@ export const clickhouse = defineIntegration({
 				config,
 				probe,
 				`DESCRIBE TABLE ${qualifiedName([...namespace, table])}`,
+				_request?.signal,
 			);
 			const name = result.columns.indexOf('name');
 			const type = result.columns.indexOf('type');
@@ -170,6 +174,7 @@ export const clickhouse = defineIntegration({
 				config,
 				probe,
 				`SELECT * FROM ${qualifiedName([...namespace, table])} LIMIT ${request.limit}`,
+				request.signal,
 			);
 			return { columns: result.columns, rows: result.rows };
 		},
@@ -185,6 +190,7 @@ async function clickhouseQuery(
 	config: z.infer<typeof clickhouseConfig>,
 	probe: IntegrationProbe,
 	query: string,
+	signal?: AbortSignal,
 ): Promise<ClickHouseResult> {
 	const url = new URL(`${config.secure ? 'https' : 'http'}://${config.host}:${config.port}/`);
 	url.searchParams.set('database', config.database);
@@ -193,6 +199,7 @@ async function clickhouseQuery(
 	const response = await probe.fetch(url.toString(), {
 		method: 'GET',
 		headers: { Authorization: basicAuthHeader(config.username, config.password ?? '') },
+		signal,
 	});
 	if (!response.ok) throw new UnavailableError(`ClickHouse answered HTTP ${response.status}.`);
 	const body = await response.json();
@@ -205,10 +212,9 @@ async function clickhouseQuery(
 	if (columns.some((column) => column === undefined)) {
 		throw new UnavailableError('ClickHouse returned an invalid result.');
 	}
-	if (!body.data.every((row) => Array.isArray(row) && row.length === columns.length)) {
-		throw new UnavailableError('ClickHouse returned an invalid result.');
-	}
-	return { columns: columns as string[], rows: body.data as unknown[][] };
+	return validateTableData(columns, body.data, {
+		invalid: () => new UnavailableError('ClickHouse returned an invalid result.'),
+	});
 }
 
 function isNullableType(type: string): boolean {
@@ -221,9 +227,5 @@ function isNullableType(type: string): boolean {
 }
 
 function qualifiedName(parts: string[]): string {
-	return parts.map(quoteIdentifier).join('.');
-}
-
-function quoteIdentifier(value: string): string {
-	return `"${value.replaceAll('"', '""')}"`;
+	return parts.map(sqlIdentifier).join('.');
 }

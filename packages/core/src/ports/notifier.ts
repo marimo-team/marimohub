@@ -11,6 +11,8 @@ export interface Notifier {
 	 * delivers. Receivers must use `dedupe_key` as the idempotency key.
 	 */
 	deliver(notification: Notification): Promise<NotificationDeliveryOutcome>;
+	[Symbol.asyncDispose]?(): PromiseLike<void>;
+	close?(): Promise<void> | void;
 }
 
 export const noopNotifier: Notifier = {
@@ -22,6 +24,12 @@ export const noopNotifier: Notifier = {
 export interface NamedNotifier {
 	name: string;
 	notifier: Notifier;
+}
+
+export async function disposeNotifier(notifier: Notifier): Promise<void> {
+	const dispose = notifier[Symbol.asyncDispose];
+	if (dispose) await dispose.call(notifier);
+	else await notifier.close?.();
 }
 
 export function reduceNotificationDeliveryResults(
@@ -50,6 +58,9 @@ export function reduceNotificationDeliveryResults(
 
 export function fanOutNotifier(targets: NamedNotifier[], metrics: Metrics = noopMetrics): Notifier {
 	if (targets.length === 0) return noopNotifier;
+	const dispose = async (): Promise<void> => {
+		await Promise.all(targets.map(({ notifier }) => disposeNotifier(notifier)));
+	};
 	return {
 		async deliver(notification) {
 			const results = await Promise.allSettled(
@@ -72,14 +83,19 @@ export function fanOutNotifier(targets: NamedNotifier[], metrics: Metrics = noop
 			);
 			return reduceNotificationDeliveryResults(results, 'No notification adapter delivered');
 		},
+		close: dispose,
+		[Symbol.asyncDispose]: dispose,
 	};
 }
 
 export function filterNotifier(notifier: Notifier, enabledKinds: ReadonlySet<string>): Notifier {
+	const dispose = () => disposeNotifier(notifier);
 	return {
 		async deliver(notification) {
 			if (!enabledKinds.has(notification.kind)) return 'skipped';
 			return notifier.deliver(notification);
 		},
+		close: dispose,
+		[Symbol.asyncDispose]: dispose,
 	};
 }

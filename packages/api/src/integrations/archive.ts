@@ -146,6 +146,8 @@ function parseTar(bytes: Uint8Array): ArchiveFile[] {
 	const files = new Map<string, Uint8Array>();
 	let offset = 0;
 	let pathOverride: string | undefined;
+	let totalBytes = 0;
+	let fileCount = 0;
 	while (offset + 512 <= bytes.length) {
 		const block = bytes.subarray(offset, offset + 512);
 		if (block.every((b) => b === 0)) break;
@@ -187,6 +189,19 @@ function parseTar(bytes: Uint8Array): ArchiveFile[] {
 		pathOverride = undefined;
 
 		if (typeFlag === '0' || typeFlag === '\0' || typeFlag === '7') {
+			fileCount += 1;
+			if (fileCount > MAX_ARCHIVE_FILES) {
+				throw new BadRequestError(`Archive exceeds the ${MAX_ARCHIVE_FILES}-file limit`);
+			}
+			if (size > MAX_WORKSPACE_FILE_BYTES) {
+				throw new BadRequestError(
+					`Archive file exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit: ${path}`,
+				);
+			}
+			totalBytes += size;
+			if (totalBytes > MAX_DECOMPRESSED_BYTES) {
+				throw new BadRequestError('Decompressed archive exceeds the size limit');
+			}
 			addFile(files, path, bytes.slice(dataOffset, dataOffset + size));
 		} else if (typeFlag === '5') {
 			assertSafeArchiveDirectoryPath(path);

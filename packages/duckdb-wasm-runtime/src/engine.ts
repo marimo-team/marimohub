@@ -15,36 +15,41 @@ type Database = Awaited<ReturnType<typeof duckdb.createDuckDB>>;
 
 export class BlockingDuckDBEngine {
 	private db: Database | undefined;
+	private readonly createDatabase: () => Promise<Database>;
+
+	constructor(createDatabase: () => Promise<Database> = defaultDatabase) {
+		this.createDatabase = createDatabase;
+	}
 
 	async initialize(memoryLimitMb: number): Promise<void> {
 		if (this.db) return;
-		const mainModule = modulePath();
-		const db = await duckdb.createDuckDB(
-			{
-				eh: { mainModule, mainWorker: '' },
-				mvp: { mainModule, mainWorker: '' },
-			},
-			new duckdb.VoidLogger(),
-			createFailClosedNodeRuntime(),
-		);
-		await db.instantiate();
-		db.open({ path: ':memory:' });
-		const connection = db.connect();
+		let db: Database | undefined;
 		try {
-			runStatement(connection, { text: 'SET memory_limit = ?', params: [`${memoryLimitMb}MB`] });
-			connection.query('SET allow_community_extensions=false');
-			connection.query('SET autoinstall_known_extensions=false');
-			connection.query('SET autoload_known_extensions=false');
-			connection.query('SET enable_external_access=false');
-			connection.query('SET lock_configuration=true');
-			connection.query('SELECT 1');
+			db = await this.createDatabase();
+			await db.instantiate();
+			db.open({ path: ':memory:' });
+			const connection = db.connect();
+			try {
+				runStatement(connection, {
+					text: 'SET memory_limit = ?',
+					params: [`${memoryLimitMb}MB`],
+				});
+				connection.query('SET allow_community_extensions=false');
+				connection.query('SET autoinstall_known_extensions=false');
+				connection.query('SET autoload_known_extensions=false');
+				connection.query('SET enable_external_access=false');
+				connection.query('SET lock_configuration=true');
+				connection.query('SELECT 1');
+			} finally {
+				connection.close();
+			}
+			this.db = db;
 		} catch (error) {
-			db.reset();
+			try {
+				db?.reset();
+			} catch {}
 			throw error;
-		} finally {
-			connection.close();
 		}
-		this.db = db;
 	}
 
 	ping(): void {
@@ -139,14 +144,27 @@ export class BlockingDuckDBEngine {
 	}
 
 	close(): void {
-		this.db?.reset();
+		const db = this.db;
 		this.db = undefined;
+		db?.reset();
 	}
 
 	private requireDatabase(): Database {
 		if (!this.db) throw new Error('DuckDB-Wasm is not initialized.');
 		return this.db;
 	}
+}
+
+async function defaultDatabase(): Promise<Database> {
+	const mainModule = modulePath();
+	return duckdb.createDuckDB(
+		{
+			eh: { mainModule, mainWorker: '' },
+			mvp: { mainModule, mainWorker: '' },
+		},
+		new duckdb.VoidLogger(),
+		createFailClosedNodeRuntime(),
+	);
 }
 
 type Connection = ReturnType<Database['connect']>;

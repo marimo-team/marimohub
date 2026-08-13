@@ -882,4 +882,16 @@ describe('CoreWeaveCompute', () => {
 	});
 });
 
-computeContract('CoreWeaveCompute', () => makeCompute(makeWorld()), { mountFallsBack: true });
+computeContract(
+	'CoreWeaveCompute',
+	() =>
+		makeCompute(
+			makeWorld({
+				runImpl: async (command) =>
+					command.at(-1) === 'false'
+						? procResult({ exitCode: 1, failed: true, ok: false, stderr: 'failed' })
+						: procResult(),
+			}),
+		),
+	{ mountFallsBack: true, semantics: { failingCommand: 'false' } },
+);

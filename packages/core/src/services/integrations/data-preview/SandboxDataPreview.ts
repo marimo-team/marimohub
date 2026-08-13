@@ -1,5 +1,4 @@
 import { UnavailableError } from '../../../errors';
-import { InFlightWork } from '../../../concurrency';
 import { createSandboxId } from '../../../ids';
 import { withDeadline } from '../../../internal/async';
 import { assertPositiveIntegers } from '../../../internal/validation';
@@ -9,6 +8,7 @@ import type { SandboxInstance, SandboxProvider } from '../../../ports/sandbox';
 import { bundleIntegrations } from '../bundle';
 import type { PythonPreviewProgram } from './programs';
 import { parseTablePreviewJson } from './previewResult';
+import { DrainableService } from '../DrainableService';
 
 const SCRIPT_PATH = '/tmp/marimohub-data-preview.py';
 const REQUEST_PATH = '/tmp/marimohub-data-preview-request.json';
@@ -22,16 +22,15 @@ export interface SandboxDataPreviewOptions {
 	destroyTimeoutMs?: number;
 }
 
-export class SandboxDataPreview {
+export class SandboxDataPreview extends DrainableService {
 	private readyForTraffic = false;
 	private checking: Promise<void> | undefined;
-	private readonly inFlight = new InFlightWork();
-	private closed = false;
 
 	constructor(
 		private readonly compute: SandboxProvider,
 		private readonly options: SandboxDataPreviewOptions,
 	) {
+		super();
 		assertPositiveIntegers({
 			startupTimeoutMs: options.startupTimeoutMs,
 			executionTimeoutMs: options.executionTimeoutMs,
@@ -46,7 +45,7 @@ export class SandboxDataPreview {
 		if (this.available()) return Promise.resolve();
 		if (this.closed) return Promise.reject(new UnavailableError('The preview sandbox is closed.'));
 		if (this.checking) return this.checking;
-		this.checking = this.inFlight.track(this.checkRuntime()).finally(() => {
+		this.checking = this.track(this.checkRuntime()).finally(() => {
 			this.checking = undefined;
 		});
 		return this.checking;
@@ -54,13 +53,14 @@ export class SandboxDataPreview {
 
 	async preview(program: PythonPreviewProgram): Promise<TablePreview> {
 		if (!this.available()) throw new UnavailableError('The data-preview runtime is unavailable.');
-		return this.inFlight.track(this.runPreview(program));
+		return this.track(this.runPreview(program));
 	}
 
-	async close(): Promise<void> {
-		this.closed = true;
-		this.readyForTraffic = false;
-		await this.inFlight.drain();
+	close(): Promise<void> {
+		return this.closeOnce(async () => {
+			this.readyForTraffic = false;
+			await this.inFlight.drain();
+		});
 	}
 
 	private async runPreview(program: PythonPreviewProgram): Promise<TablePreview> {

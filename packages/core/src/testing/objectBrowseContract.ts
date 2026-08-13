@@ -1,10 +1,53 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
+	ObjectBucket,
 	ObjectBrowseContext,
 	ObjectBrowser,
 	ObjectEntry,
+	ObjectPage,
 	ObjectStoreSource,
 } from '../ports/objectBrowser';
+
+export const OBJECT_BROWSE_PARQUET_FIXTURE = Uint8Array.from(
+	atob(
+		'UEFSMRUAFRwVICwVBBUAFQYVBgAADjQCAAAABAEBAAAAAgAAABUAFSgVLCwVBBUAFQYVBgAAFEwCAAAABAEDAAAAQWRhAwAAAExpbhUCGTw1ABgNZHVja2RiX3NjaGVtYRUEABUCJQIYAmlkJSIAFQwlAhgEbmFtZSUAABYEGRwZLCYAHBUCGRUAGRgCaWQVAhYEFj4WQiYIPBgEAgAAABgEAQAAABYAKAQCAAAAGAQBAAAAEREAAAAmABwVDBkVABkYBG5hbWUVAhYEFkoWTiZKPBgDTGluGANBZGEWACgDTGluGANBZGEREQAAABaIARYEJggWkAEAKChEdWNrREIgdmVyc2lvbiB2MS40LjMgKGJ1aWxkIGQxZGM4OGY5NTApANgAAABQQVIx',
+	),
+	(character) => character.charCodeAt(0),
+);
+
+export const OBJECT_BROWSE_CONTRACT_SEED = Object.freeze({
+	direct: Object.freeze({
+		path: 'contract.csv',
+		body: 'name,value\nfirst,1\nsecond,2\n',
+		contentType: 'text/csv',
+	}),
+	nested: Object.freeze({
+		path: 'nested/contract.txt',
+		body: 'nested contract',
+		contentType: 'text/plain',
+	}),
+	unicode: Object.freeze({
+		path: 'résumé-雪.txt',
+		body: 'unicode contract',
+		contentType: 'text/plain',
+	}),
+	empty: Object.freeze({
+		path: 'empty.bin',
+		body: '',
+		contentType: 'application/octet-stream',
+	}),
+	parquet: Object.freeze({
+		path: 'people.parquet',
+		body: OBJECT_BROWSE_PARQUET_FIXTURE,
+		contentType: 'application/vnd.apache.parquet',
+	}),
+	versioned: Object.freeze({
+		path: 'versioned.txt',
+		firstBody: 'version one',
+		secondBody: 'version two',
+		contentType: 'text/plain',
+	}),
+});
 
 export interface ObjectBrowseContractFixture {
 	bucket: string;
@@ -13,6 +56,7 @@ export interface ObjectBrowseContractFixture {
 	nestedObject: string;
 	unicodeObject: string;
 	emptyObject: string;
+	parquetObject: string;
 	versionedObject: string;
 	versions?: boolean;
 }
@@ -42,10 +86,8 @@ export function objectBrowseContract(
 			if (fixture) await opts.teardown?.(fixture);
 		});
 
-		async function collect(
-			load: (cursor?: string) => Promise<{ items: ObjectEntry[]; next_cursor: string | null }>,
-		): Promise<ObjectEntry[]> {
-			const items: ObjectEntry[] = [];
+		async function collect<T>(load: (cursor?: string) => Promise<ObjectPage<T>>): Promise<T[]> {
+			const items: T[] = [];
 			const cursors = new Set<string>();
 			let cursor: string | undefined;
 			for (let page = 0; page < 100; page++) {
@@ -59,15 +101,22 @@ export function objectBrowseContract(
 			throw new Error('object pagination did not terminate');
 		}
 
-		it('lists the configured bucket without discovering unrelated buckets', async () => {
-			const page = await opts.browser.listBuckets(opts.source, opts.context, { limit: 1 });
-			expect(page).toEqual({
-				items: [{ name: fixture.bucket, configured: true }],
-				next_cursor: null,
+		it('lists the integration bucket', async () => {
+			const buckets = await collect<ObjectBucket>((cursor) =>
+				opts.browser.listBuckets(opts.source, opts.context, {
+					limit: 1,
+					...(cursor ? { cursor } : {}),
+				}),
+			);
+			expect(buckets).toContainEqual({
+				name: fixture.bucket,
+				configured: opts.source.configured_bucket === fixture.bucket,
+				...(opts.source.configured_bucket ? {} : { created_at: expect.any(String) }),
 			});
 		});
 
 		it('rejects roots outside the configured integration scope', async () => {
+			if (!opts.source.configured_bucket) return;
 			await expect(
 				opts.browser.listObjects(opts.source, opts.context, {
 					bucket: `${fixture.bucket}-outside`,
@@ -130,6 +179,25 @@ export function objectBrowseContract(
 			expect(preview).toMatchObject({ kind: 'tabular', format: 'csv', truncated: true });
 		});
 
+		it('previews real Parquet bytes through provider range reads', async () => {
+			const preview = await opts.browser.previewObject(opts.source, opts.context, {
+				bucket: fixture.bucket,
+				key: fixture.parquetObject,
+				limit: 20,
+				content_url: '/unused',
+			});
+			expect(preview).toMatchObject({
+				kind: 'tabular',
+				format: 'parquet',
+				columns: [{ name: 'id' }, { name: 'name' }],
+				rows: [
+					[1, 'Ada'],
+					[2, 'Lin'],
+				],
+				truncated: false,
+			});
+		});
+
 		it('handles Unicode keys and empty objects', async () => {
 			await expect(
 				opts.browser.headObject(opts.source, opts.context, {
@@ -154,28 +222,38 @@ export function objectBrowseContract(
 		});
 
 		it('searches progressively and preserves a continuation cursor', async () => {
-			const first = await opts.browser.searchObjects(opts.source, opts.context, {
-				bucket: fixture.bucket,
-				prefix: fixture.prefix,
-				query: 'contract',
-				limit: 1,
-			});
-			expect(first.scanned).toBeGreaterThan(0);
-			expect(first.items.length).toBeLessThanOrEqual(1);
-			if (!first.complete) {
-				expect(first.next_cursor).not.toBeNull();
-				const second = await opts.browser.searchObjects(opts.source, opts.context, {
+			const items: ObjectEntry[] = [];
+			const cursors = new Set<string>();
+			let cursor: string | undefined;
+			let complete = false;
+			for (let page = 0; page < 20; page++) {
+				const result = await opts.browser.searchObjects(opts.source, opts.context, {
 					bucket: fixture.bucket,
 					prefix: fixture.prefix,
 					query: 'contract',
-					limit: 10,
-					cursor: first.next_cursor!,
+					limit: 1,
+					...(cursor ? { cursor } : {}),
 				});
-				expect(second.scanned).toBeGreaterThan(0);
+				expect(result.scanned).toBeGreaterThan(0);
+				expect(result.items.length).toBeLessThanOrEqual(1);
+				items.push(...result.items);
+				if (result.complete) {
+					complete = true;
+					break;
+				}
+				expect(result.next_cursor).not.toBeNull();
+				expect(cursors.has(result.next_cursor!)).toBe(false);
+				cursors.add(result.next_cursor!);
+				cursor = result.next_cursor!;
 			}
+			expect(items.map((item) => item.key)).toEqual(
+				expect.arrayContaining([fixture.directObject, fixture.nestedObject]),
+			);
+			expect(complete).toBe(true);
+			expect(new Set(items.map((item) => item.key)).size).toBe(items.length);
 		});
 
-		it('streams an exact byte range and reports version identity', async () => {
+		it('streams exact and suffix byte ranges and reports version identity', async () => {
 			const body = await opts.browser.openObject(opts.source, opts.context, {
 				bucket: fixture.bucket,
 				key: fixture.directObject,
@@ -186,6 +264,17 @@ export function objectBrowseContract(
 				expect(new TextDecoder().decode(await readAll(body.body))).toBe('name');
 			} finally {
 				body.close();
+			}
+			const suffix = await opts.browser.openObject(opts.source, opts.context, {
+				bucket: fixture.bucket,
+				key: fixture.directObject,
+				range: 'bytes=-4',
+			});
+			try {
+				expect(suffix.status).toBe(206);
+				expect(new TextDecoder().decode(await readAll(suffix.body))).toBe('d,2\n');
+			} finally {
+				suffix.close();
 			}
 			const versions = await opts.browser.listVersions(opts.source, opts.context, {
 				bucket: fixture.bucket,

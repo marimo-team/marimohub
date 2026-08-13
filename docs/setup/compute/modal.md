@@ -20,12 +20,12 @@ Modal is fully serverless — nothing to provision or scale, and you pay only fo
 running kernels. The easiest path if you don't already run a cluster.
 :::
 
-The adapter creates and reconnects to sandboxes through Modal's supported
-JavaScript SDK. When `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT` is set, apps and
-sandboxes are isolated in that Modal environment. Compute profiles are passed as
-the SDK's `cpu`, `memoryMiB`, and `gpu` sandbox options. The adapter sets Modal's
-provider-side idle timeout to 1.5 times `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`.
-This leaves time for the hub to save and stop the session first.
+The adapter uses the supported Modal JavaScript SDK to create and reconnect to
+sandboxes. When `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT` is set, apps and sandboxes
+are isolated in that Modal environment. It passes compute profiles through the
+SDK's `cpu`, `memoryMiB`, and `gpu` options. The provider idle timeout is 1.5
+times `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`. This interval gives the hub time
+to save and stop the session first.
 
 ::: warning Cold starts & shared workspaces
 A freshly-started kernel can take a few seconds to boot; a warm sandbox image

@@ -25,6 +25,15 @@ describe('ProjectService', () => {
 	});
 
 	describe('createProject', () => {
+		it('strips control characters from names and rejects control-only names', async () => {
+			await expect(
+				projects.createProject({ name: 'Forecasts\n\u0000Prod', description: 'D' }, ACTOR),
+			).resolves.toMatchObject({ name: 'ForecastsProd' });
+			await expect(
+				projects.createProject({ name: '\n\u0000\u007f', description: 'D' }, ACTOR),
+			).rejects.toThrow(/visible character/);
+		});
+
 		it('creates a project and adds it to the snapshot', async () => {
 			const project = await projects.createProject(
 				{ name: 'ML Pipeline', description: 'ML notebooks' },
@@ -341,6 +350,13 @@ describe('ProjectService', () => {
 	});
 
 	describe('updateProject', () => {
+		it('strips control characters from replacement names', async () => {
+			const created = await projects.createProject({ name: 'Original', description: 'D' }, ACTOR);
+			await expect(
+				projects.updateProject(created.id, { name: 'Safe\r\nName' }, ACTOR),
+			).resolves.toMatchObject({ name: 'SafeName' });
+		});
+
 		it('uses the CAS read as the authoritative precondition check', async () => {
 			const created = await projects.createProject({ name: 'Original', description: 'D' }, ACTOR);
 			const metaKey = paths.project(created.id).meta;

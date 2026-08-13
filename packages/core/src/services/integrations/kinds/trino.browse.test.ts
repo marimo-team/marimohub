@@ -66,6 +66,17 @@ describe('trino browse', () => {
 		expect(calls[1].url).toBe('https://trino.example.com/v1/statement/q1/1');
 	});
 
+	it('forwards the browse cancellation signal across statement pages', async () => {
+		const { probe, calls } = queuedProbe([
+			{ nextUri: 'https://trino.example.com/v1/statement/q1/1' },
+			{ columns: [{ name: 'Catalog' }], data: [] },
+		]);
+		const controller = new AbortController();
+		await browse.listNamespaces(config(), probe, { limit: 10, signal: controller.signal });
+		expect(calls).toHaveLength(2);
+		expect(calls.every(({ init }) => init?.signal === controller.signal)).toBe(true);
+	});
+
 	it('treats an empty parent as a root namespace request', async () => {
 		const { probe, calls } = queuedProbe([{ columns: [{ name: 'Catalog' }], data: [['iceberg']] }]);
 

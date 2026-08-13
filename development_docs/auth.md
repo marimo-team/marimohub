@@ -63,8 +63,8 @@ register byte-for-byte. The issuer, redirect URI, and discovered authorization
 and logout endpoints must use HTTPS and cannot contain credentials.
 
 `trusted-issuer` permits an omitted `email_verified` claim, including when a
-domain allowlist is active. Any present value other than boolean `true` is
-rejected.
+domain allowlist is active. If the claim is present, its value must be boolean
+`true`.
 
 **Cookies**: `mh_session` is an issuer-, audience-, and type-bound HS256 JWT.
 It is HttpOnly, Secure, and SameSite=Lax. Its default lifetime is 8 hours, or

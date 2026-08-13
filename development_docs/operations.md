@@ -157,8 +157,9 @@ summary:
   that understands both shapes) and let it fully roll out, _then_ ship the
   writers. Never both in one release.
 
-Operationally: a standard release needs no special handling. A release that bumps
-a `schema_version` should be checked against the two-phase rule before rollout.
+Operationally, a standard release needs no special handling. Before you deploy a
+release that increments `schema_version`, make sure that it obeys the two-phase
+rule.
 
 ---
 
@@ -204,20 +205,27 @@ rates from deltas between lines.
 
 Signals emitted today:
 
-| Signal                                                              | Type      | Source                          |
-| ------------------------------------------------------------------- | --------- | ------------------------------- |
-| `catalog.cas.attempt` / `.conflict` / `.exhausted`                  | counter   | `CatalogService.mutateSnapshot` |
-| `sessions.live`                                                     | gauge     | `SessionService.expireStale`    |
-| `sessions.expired` / `sessions.reaped`                              | counter   | `SessionService`                |
-| `snapshots.count` / `snapshots.bytes`                               | gauge     | `MaintenanceService`            |
-| `maintenance.snapshots_pruned` / `.events_pruned`                   | counter   | `MaintenanceService`            |
-| `object_browser.s3.operations` / `.failures`                        | counter   | `S3ObjectBrowser`               |
-| `object_browser.s3.latency_ms`                                      | histogram | `S3ObjectBrowser`               |
-| `object_browser.s3.bytes_read` / `.keys_scanned`                    | counter   | `S3ObjectBrowser`               |
-| `object_browser.cache.requests`                                     | counter   | object browse API cache         |
-| `object_browser.download.active`                                    | gauge     | object download gate            |
-| `object_browser.download.rejected` / `.timeouts` / `.cancellations` | counter   | object download API             |
-| Per-cycle: `sessions_expired`, `snapshots_pruned`, …                | fields    | the `maintenance_cycle` event   |
+| Signal                                                                   | Type      | Source                          |
+| ------------------------------------------------------------------------ | --------- | ------------------------------- |
+| `catalog.cas.attempt` / `.conflict` / `.exhausted`                       | counter   | `CatalogService.mutateSnapshot` |
+| `sessions.live`                                                          | gauge     | `SessionService.expireStale`    |
+| `sessions.expired` / `sessions.reaped`                                   | counter   | `SessionService`                |
+| `snapshots.count` / `snapshots.bytes`                                    | gauge     | `MaintenanceService`            |
+| `maintenance.snapshots_pruned` / `.events_pruned`                        | counter   | `MaintenanceService`            |
+| `object_browser.s3.operations` / `.failures`                             | counter   | `S3ObjectBrowser`               |
+| `object_browser.s3.latency_ms`                                           | histogram | `S3ObjectBrowser`               |
+| `object_browser.s3.bytes_read` / `.keys_scanned`                         | counter   | `S3ObjectBrowser`               |
+| `object_browser.cache.requests`                                          | counter   | object browse API cache         |
+| `object_browser.download.active`                                         | gauge     | object download gate            |
+| `object_browser.download.rejected` / `.timeouts` / `.cancellations`      | counter   | object download API             |
+| `notify.delivered` / `.skipped` / `.deliver_failed`                      | counter   | `Notifier` fan-out              |
+| `project_alert.delivered` / `.skipped` / `.deliver_failed`               | counter   | `NodeProjectAlertDispatcher`    |
+| `project_alert.rate_limited`                                             | counter   | project alert delivery budget   |
+| `data_preview.selected`                                                  | counter   | `DataPreviewService`            |
+| `data_preview.duckdb.initialize` / `.execution` / `.recycle`             | counter   | `DuckDBWasmDataPreview`         |
+| `data_preview.duckdb.pool_size` / `.active` / `.rows`                    | gauge     | `DuckDBWasmDataPreview`         |
+| `data_preview.duckdb.queue_wait_ms` / `.initialize_ms` / `.execution_ms` | gauge     | `DuckDBWasmDataPreview`         |
+| Per-cycle: `sessions_expired`, `snapshots_pruned`, …                     | fields    | the `maintenance_cycle` event   |
 
 Object-browser metric attributes are deliberately low-cardinality: operation,
 mode, outcome, and sanitized error code only. Never add bucket names, keys,

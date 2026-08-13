@@ -258,6 +258,62 @@ describe('bootstrap', () => {
 		expect(dispose).toHaveBeenCalledOnce();
 	});
 
+	it('tracks background deliveries and disposes their notifier after they settle', async () => {
+		let finishDelivery: (() => void) | undefined;
+		const delivery = new Promise<void>((resolve) => {
+			finishDelivery = resolve;
+		});
+		const disposeNotifier = vi.fn(async () => {});
+		deps.notifier = {
+			deliver: vi.fn(async () => 'delivered' as const),
+			[Symbol.asyncDispose]: disposeNotifier,
+		};
+		const harness = makeHarness(deps);
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+		deps.backgroundTasks?.defer(delivery);
+
+		let drained = false;
+		const draining = handle?.drain().then(() => {
+			drained = true;
+		});
+		await Promise.resolve();
+		expect(drained).toBe(false);
+		expect(disposeNotifier).not.toHaveBeenCalled();
+
+		finishDelivery?.();
+		await draining;
+		expect(disposeNotifier).toHaveBeenCalledOnce();
+	});
+
+	it('closes the notifier at the drain deadline when a background delivery is stuck', async () => {
+		const closeNotifier = vi.fn();
+		deps.notifier = { deliver: vi.fn(async () => 'delivered' as const), close: closeNotifier };
+		const harness = makeHarness(deps, { closeImmediately: false });
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+		deps.backgroundTasks?.defer(new Promise<void>(() => {}));
+
+		const draining = handle?.drain();
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(closeNotifier).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(closeNotifier).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(10_000);
+		await draining;
+	});
+
+	it('closes the notifier only once across repeated drains', async () => {
+		const closeNotifier = vi.fn();
+		deps.notifier = { deliver: vi.fn(async () => 'delivered' as const), close: closeNotifier };
+		const harness = makeHarness(deps);
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+
+		await handle?.drain();
+		await handle?.drain();
+
+		expect(closeNotifier).toHaveBeenCalledOnce();
+	});
+
 	it.each([
 		['starts', 'true', 1],
 		['does not start', undefined, 0],

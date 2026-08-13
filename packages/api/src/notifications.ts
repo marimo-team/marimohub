@@ -1,10 +1,17 @@
-import { noopNotifier, reduceNotificationDeliveryResults } from '@marimo-hub/core';
+import {
+	createSlidingWindowBudget,
+	noopNotifier,
+	reduceNotificationDeliveryResults,
+	ResourceExhaustedError,
+} from '@marimo-hub/core';
 import type {
 	Notification,
 	NotificationDeliveryOutcome,
 	NotificationKind,
 	ProjectAlertKind,
 	ProjectId,
+	SlidingWindowBudget,
+	UserId,
 } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
@@ -13,6 +20,37 @@ type RenderNotifications = () =>
 	| Notification
 	| readonly Notification[]
 	| Promise<Notification | readonly Notification[]>;
+
+interface NotificationMutationBudgets {
+	actor: SlidingWindowBudget<UserId>;
+	recipient: SlidingWindowBudget<string>;
+}
+
+const mutationBudgets = new WeakMap<ApiDeps, NotificationMutationBudgets>();
+
+export function assertNotificationMutationAllowed(
+	deps: ApiDeps,
+	actor: UserId,
+	recipient?: string,
+): void {
+	if ((!deps.notifier || deps.notifier === noopNotifier) && !deps.projectAlerts) return;
+	let budgets = mutationBudgets.get(deps);
+	if (!budgets) {
+		budgets = {
+			actor: createSlidingWindowBudget({ limit: 20, windowMs: 60_000 }),
+			recipient: createSlidingWindowBudget({ limit: 5, windowMs: 10 * 60_000 }),
+		};
+		mutationBudgets.set(deps, budgets);
+	}
+	if (!budgets.actor.consume(actor)) {
+		throw new ResourceExhaustedError('Too many notification-triggering changes; try again later.');
+	}
+	if (recipient && !budgets.recipient.consume(recipient.toLowerCase())) {
+		throw new ResourceExhaustedError(
+			'Too many notifications were requested for this recipient; try again later.',
+		);
+	}
+}
 
 function scheduleDelivery(
 	deps: ApiDeps,

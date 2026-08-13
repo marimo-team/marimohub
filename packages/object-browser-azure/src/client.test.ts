@@ -48,6 +48,39 @@ describe('Azure guarded HTTP client', () => {
 		requestController.abort();
 		await closed;
 	});
+
+	it('cancels metadata responses that exceed the configured cap', async () => {
+		const cancel = vi.fn();
+		const response = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('too large'));
+			},
+			cancel,
+		});
+		const client = guardedHttpClient(
+			resolver,
+			(async () => new Response(response)) as typeof fetch,
+			undefined,
+			{ metadataMaxResponseBytes: 4, listMaxResponseBytes: 1024 },
+		);
+
+		await expect(client.sendRequest(request())).rejects.toMatchObject({ code: 'unsupported' });
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
+	it('bounds list responses with the list cap instead of the metadata cap', async () => {
+		const client = guardedHttpClient(
+			resolver,
+			(async () => new Response('<EnumerationResults></EnumerationResults>')) as typeof fetch,
+			undefined,
+			{ metadataMaxResponseBytes: 4, listMaxResponseBytes: 1024 },
+		);
+
+		const response = await client.sendRequest(
+			request({ url: 'https://lake.blob.core.windows.net/raw?restype=container&comp=list' }),
+		);
+		expect(response.bodyAsText).toBe('<EnumerationResults></EnumerationResults>');
+	});
 });
 
 function request(overrides: Partial<WebResource> = {}): WebResource {

@@ -1,22 +1,28 @@
 import { Buffer } from 'node:buffer';
 import { createProjectId, UserId } from '@marimo-hub/core';
-import { objectBrowseContract } from '@marimo-hub/core/testing/object-browse-contract';
+import {
+	OBJECT_BROWSE_CONTRACT_SEED,
+	objectBrowseContract,
+} from '@marimo-hub/core/testing/object-browse-contract';
 import { GcsObjectBrowser } from './index';
 
 const bucket = 'contract-lake';
 const prefix = 'contract/';
-const directObject = `${prefix}contract.csv`;
-const nestedObject = `${prefix}nested/contract.txt`;
-const unicodeObject = `${prefix}résumé-雪.txt`;
-const emptyObject = `${prefix}empty.bin`;
-const versionedObject = `${prefix}versioned.txt`;
+const seed = OBJECT_BROWSE_CONTRACT_SEED;
+const directObject = `${prefix}${seed.direct.path}`;
+const nestedObject = `${prefix}${seed.nested.path}`;
+const unicodeObject = `${prefix}${seed.unicode.path}`;
+const emptyObject = `${prefix}${seed.empty.path}`;
+const parquetObject = `${prefix}${seed.parquet.path}`;
+const versionedObject = `${prefix}${seed.versioned.path}`;
 const objects = [
-	object(directObject, '13', 'name,value\nfirst,1\nsecond,2\n', 'text/csv'),
-	object(nestedObject, '12', 'nested contract', 'text/plain'),
-	object(unicodeObject, '9', 'unicode contract', 'text/plain'),
-	object(emptyObject, '8', '', 'application/octet-stream'),
-	object(versionedObject, '11', 'version two', 'text/plain'),
-	object(versionedObject, '10', 'version one', 'text/plain'),
+	object(parquetObject, '14', seed.parquet.body, seed.parquet.contentType),
+	object(directObject, '13', seed.direct.body, seed.direct.contentType),
+	object(nestedObject, '12', seed.nested.body, seed.nested.contentType),
+	object(unicodeObject, '9', seed.unicode.body, seed.unicode.contentType),
+	object(emptyObject, '8', seed.empty.body, seed.empty.contentType),
+	object(versionedObject, '11', seed.versioned.secondBody, seed.versioned.contentType),
+	object(versionedObject, '10', seed.versioned.firstBody, seed.versioned.contentType),
 ];
 
 objectBrowseContract('hermetic GCS JSON API', () => ({
@@ -44,6 +50,7 @@ objectBrowseContract('hermetic GCS JSON API', () => ({
 			nestedObject,
 			unicodeObject,
 			emptyObject,
+			parquetObject,
 			versionedObject,
 		};
 	},
@@ -58,11 +65,16 @@ interface FakeObject {
 	etag: string;
 }
 
-function object(name: string, generation: string, value: string, contentType: string): FakeObject {
+function object(
+	name: string,
+	generation: string,
+	value: string | Uint8Array,
+	contentType: string,
+): FakeObject {
 	return {
 		name,
 		generation,
-		data: new TextEncoder().encode(value),
+		data: typeof value === 'string' ? new TextEncoder().encode(value) : value,
 		contentType,
 		updated: `2026-08-13T00:00:${generation}Z`,
 		etag: `etag-${generation}`,
@@ -159,6 +171,22 @@ function media(item: FakeObject, headers: HeadersInit | undefined): Response {
 	if (!range) {
 		return new Response(Buffer.from(item.data), {
 			headers: mediaHeaders(item, item.data.byteLength),
+		});
+	}
+	const suffixMatch = /^bytes=-(\d+)$/.exec(range);
+	if (suffixMatch) {
+		const length = Number(suffixMatch[1]);
+		if (!Number.isSafeInteger(length) || length < 1 || item.data.byteLength === 0) {
+			return new Response(null, { status: 416 });
+		}
+		const start = Math.max(0, item.data.byteLength - length);
+		const data = item.data.slice(start);
+		return new Response(Buffer.from(data), {
+			status: 206,
+			headers: {
+				...mediaHeaders(item, data.byteLength),
+				'Content-Range': `bytes ${start}-${item.data.byteLength - 1}/${item.data.byteLength}`,
+			},
 		});
 	}
 	const match = /^bytes=(\d+)-(\d*)$/.exec(range);

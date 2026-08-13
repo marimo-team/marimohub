@@ -62,8 +62,10 @@ describe('project alert destination routes', () => {
 		expect(destination.kinds).toHaveLength(10);
 		expect(destination).not.toHaveProperty('webhook_url');
 		expect(
-			await expectOk<any[]>(await request('GET', `/projects/${pid}/alert-destinations`)),
-		).toEqual([destination]);
+			await expectOk<{ items: any[]; next_cursor: string | null }>(
+				await request('GET', `/projects/${pid}/alert-destinations`),
+			),
+		).toEqual({ items: [destination], next_cursor: null });
 	});
 
 	it('requires a successful test before enabling', async () => {
@@ -193,8 +195,10 @@ describe('project alert destination routes', () => {
 			'VALIDATION_ERROR',
 		);
 		expect(
-			await expectOk<any[]>(await request('GET', `/projects/${pid}/alert-destinations`)),
-		).toEqual([]);
+			await expectOk<{ items: any[]; next_cursor: string | null }>(
+				await request('GET', `/projects/${pid}/alert-destinations`),
+			),
+		).toEqual({ items: [], next_cursor: null });
 	});
 
 	it('rejects stale updates and deletes while preserving the latest value', async () => {
@@ -233,8 +237,10 @@ describe('project alert destination routes', () => {
 			'PRECONDITION_FAILED',
 		);
 		expect(
-			await expectOk<any[]>(await request('GET', `/projects/${pid}/alert-destinations`)),
-		).toEqual([current]);
+			await expectOk<{ items: any[]; next_cursor: string | null }>(
+				await request('GET', `/projects/${pid}/alert-destinations`),
+			),
+		).toEqual({ items: [current], next_cursor: null });
 	});
 
 	it('rejects an empty update without advancing the destination version', async () => {

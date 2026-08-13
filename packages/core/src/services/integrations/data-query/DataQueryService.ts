@@ -1,4 +1,4 @@
-import { InFlightWork, KeyedAdmission } from '../../../concurrency';
+import { KeyedAdmission } from '../../../concurrency';
 import { ResourceExhaustedError, UnavailableError, ValidationError } from '../../../errors';
 import type { UserId } from '../../../ids';
 import { assertPositiveIntegers } from '../../../internal/validation';
@@ -8,6 +8,8 @@ import type {
 	DataQueryResult,
 	DisposableDataQueryExecutor,
 } from './contracts';
+import { validateTableData } from '../data-preview/previewResult';
+import { DrainableService } from '../DrainableService';
 import { singleDataQueryStatement } from './sql';
 
 export const MAX_DATA_QUERY_SQL_BYTES = 32 * 1024;
@@ -30,14 +32,12 @@ interface ActiveQuery {
 	stop(error: UnavailableError): void;
 }
 
-export class DataQueryService {
+export class DataQueryService extends DrainableService {
 	private readonly admission: KeyedAdmission<UserId>;
-	private readonly inFlight = new InFlightWork();
 	private readonly active = new Set<ActiveQuery>();
-	private closed = false;
-	private closing: Promise<void> | undefined;
 
 	constructor(private readonly options: DataQueryServiceOptions) {
+		super();
 		assertPositiveIntegers({
 			maxConcurrent: options.maxConcurrent,
 			maxConcurrentPerUser: options.maxConcurrentPerUser,
@@ -59,17 +59,16 @@ export class DataQueryService {
 	): Promise<DataQueryResult> {
 		if (this.closed) throw new UnavailableError('The data-query service is closed.');
 		assertValidDataQuerySql(input.sql);
-		return this.inFlight.track(this.admission.run(userId, () => this.execute(input, signal)));
+		return this.track(this.admission.run(userId, () => this.execute(input, signal)));
 	}
 
 	close(): Promise<void> {
-		if (this.closing) return this.closing;
-		this.closed = true;
-		for (const query of this.active) {
-			query.stop(new UnavailableError('The data-query service is closed.'));
-		}
-		this.closing = this.inFlight.drain();
-		return this.closing;
+		return this.closeOnce(async () => {
+			for (const query of this.active) {
+				query.stop(new UnavailableError('The data-query service is closed.'));
+			}
+			await this.inFlight.drain();
+		});
 	}
 
 	private async execute(
@@ -155,29 +154,31 @@ export class DataQueryService {
 	}
 
 	private validateResult(result: DataQueryResult): DataQueryResult {
+		const invalid = () =>
+			new UnavailableError('The data-query runtime returned an invalid result.');
+		const table = validateTableData(result.columns, result.rows, {
+			maxRows: this.options.maxRows,
+			invalid,
+		});
 		if (
-			!Array.isArray(result.columns) ||
-			!result.columns.every((column) => typeof column === 'string') ||
-			!Array.isArray(result.rows) ||
-			result.rows.length > this.options.maxRows ||
-			!result.rows.every((row) => Array.isArray(row) && row.length === result.columns.length) ||
 			typeof result.truncated !== 'boolean' ||
 			typeof result.execution_ms !== 'number' ||
 			!Number.isSafeInteger(result.execution_ms) ||
 			result.execution_ms < 0
 		) {
-			throw new UnavailableError('The data-query runtime returned an invalid result.');
+			throw invalid();
 		}
+		const validated = { ...result, ...table };
 		let bytes: number;
 		try {
-			bytes = new TextEncoder().encode(JSON.stringify(result)).byteLength;
+			bytes = new TextEncoder().encode(JSON.stringify(validated)).byteLength;
 		} catch {
-			throw new UnavailableError('The data-query runtime returned an invalid result.');
+			throw invalid();
 		}
 		if (bytes > this.options.maxBytes) {
 			throw new UnavailableError('The data-query result exceeded its byte limit.');
 		}
-		return result;
+		return validated;
 	}
 }
 

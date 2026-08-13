@@ -145,6 +145,33 @@ describe('LazyMap', () => {
 		expect(map.getIfPresent('a')).toBe('newer');
 	});
 
+	it('lets a forced load supersede an older in-flight load', async () => {
+		const old = deferred<string>();
+		const fresh = deferred<string>();
+		const map = new LazyMap(() => old.promise, { maxSize: 2 });
+		const loading = map.get('a');
+		const refreshing = map.getOrLoad('a', () => fresh.promise, { force: true });
+		expect(map.hasPending('a')).toBe(true);
+		fresh.resolve('fresh');
+		expect(await refreshing).toBe('fresh');
+		old.resolve('old');
+		expect(await loading).toBe('fresh');
+		expect(map.getIfPresent('a')).toBe('fresh');
+	});
+
+	it('clears cached and pending entries', async () => {
+		const pending = deferred<string>();
+		const map = new LazyMap(() => pending.promise, { maxSize: 2 });
+		const loading = map.get('a');
+		map.set('b', 'cached');
+		map.clear();
+		expect(map.size).toBe(0);
+		expect(map.hasPending('a')).toBe(false);
+		pending.resolve('old');
+		expect(await loading).toBe('old');
+		expect(map.getIfPresent('a')).toBeUndefined();
+	});
+
 	it('lets an explicit undefined supersede an in-flight load', async () => {
 		const pending = deferred<string | undefined>();
 		const map = new LazyMap(() => pending.promise, { maxSize: 2 });

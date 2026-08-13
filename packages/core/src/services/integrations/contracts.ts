@@ -94,7 +94,7 @@ export interface ProjectIntegrationsService {
 		id: IntegrationId,
 		namespace: string[],
 		table: string,
-		request?: Pick<TablePreviewRequest, 'query_user'>,
+		request?: Pick<TablePreviewRequest, 'query_user' | 'signal'>,
 	): Promise<TableSchema>;
 	browseTablePreview(
 		projectId: ProjectId,

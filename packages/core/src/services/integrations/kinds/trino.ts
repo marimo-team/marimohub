@@ -3,6 +3,8 @@ import { UnavailableError, ValidationError } from '../../../errors';
 import { isRecord } from '../../../internal/validation';
 import type { IntegrationProbe } from '../../../ports/integrations';
 import { INTEGRATIONS_DIR } from '../bundle';
+import { validateTableData } from '../data-preview/previewResult';
+import { sqlIdentifier } from '../data-preview/sql';
 import {
 	basicAuthHeader,
 	defineIntegration,
@@ -411,8 +413,8 @@ export const trino = defineIntegration({
 		async listNamespaces(config, probe, request) {
 			if (request.parent && request.parent.length > 1) return { items: [], next_cursor: null };
 			const parent = request.parent?.length ? request.parent : undefined;
-			const sql = parent ? `SHOW SCHEMAS FROM ${quoteIdentifier(parent[0])}` : 'SHOW CATALOGS';
-			const result = await trinoQuery(config, probe, request.query_user, sql);
+			const sql = parent ? `SHOW SCHEMAS FROM ${sqlIdentifier(parent[0])}` : 'SHOW CATALOGS';
+			const result = await trinoQuery(config, probe, request.query_user, sql, request.signal);
 			const names = result.rows.map((row) => String(row[0]));
 			return pageByNameCursor(
 				parent ? names.map((name) => [parent[0], name]) : names.map((name) => [name]),
@@ -427,6 +429,7 @@ export const trino = defineIntegration({
 				probe,
 				request.query_user,
 				`SHOW TABLES FROM ${qualifiedName(namespace)}`,
+				request.signal,
 			);
 			return pageByNameCursor(
 				result.rows.map((row) => String(row[0])),
@@ -441,6 +444,7 @@ export const trino = defineIntegration({
 				probe,
 				request?.query_user,
 				`DESCRIBE ${qualifiedName([...namespace, table])}`,
+				request?.signal,
 			);
 			const normalized = result.columns.map((column) => column.toLowerCase());
 			const name = normalized.indexOf('column');
@@ -483,6 +487,7 @@ export const trino = defineIntegration({
 				probe,
 				request.query_user,
 				`SELECT * FROM ${qualifiedName([...namespace, table])} LIMIT ${request.limit}`,
+				request.signal,
 			);
 			return { columns: result.columns, rows: result.rows };
 		},
@@ -514,6 +519,7 @@ async function trinoQuery(
 	probe: IntegrationProbe,
 	queryUser: string | undefined,
 	query: string,
+	signal?: AbortSignal,
 ): Promise<TrinoResult> {
 	assertSafeHttpHeaders(config.http_headers);
 	const statement = new URL(
@@ -525,6 +531,7 @@ async function trinoQuery(
 		method: 'POST',
 		headers,
 		body: query,
+		signal,
 	});
 	let columns: string[] | undefined;
 	const rows: unknown[][] = [];
@@ -556,10 +563,9 @@ async function trinoQuery(
 		}
 		if (body.nextUri === undefined) {
 			const resolvedColumns = columns ?? [];
-			if (!rows.every((row) => row.length === resolvedColumns.length)) {
-				throw new UnavailableError('Trino returned an invalid result.');
-			}
-			return { columns: resolvedColumns, rows };
+			return validateTableData(resolvedColumns, rows, {
+				invalid: () => new UnavailableError('Trino returned an invalid result.'),
+			});
 		}
 		if (typeof body.nextUri !== 'string')
 			throw new UnavailableError('Trino returned an invalid result.');
@@ -573,7 +579,7 @@ async function trinoQuery(
 		}
 		seen.add(next.toString());
 		if (pageNumber + 1 >= MAX_STATEMENT_PAGES) break;
-		response = await probe.fetch(next.toString(), { headers });
+		response = await probe.fetch(next.toString(), { headers, signal });
 	}
 	throw new UnavailableError('The Trino query did not finish.');
 }
@@ -620,11 +626,7 @@ function assertTableNamespace(namespace: string[]): void {
 }
 
 function qualifiedName(parts: string[]): string {
-	return parts.map(quoteIdentifier).join('.');
-}
-
-function quoteIdentifier(value: string): string {
-	return `"${value.replaceAll('"', '""')}"`;
+	return parts.map(sqlIdentifier).join('.');
 }
 
 function assertSafeHttpHeaders(headers: { name: string; value: string }[]): void {

@@ -893,7 +893,7 @@ class ScopedIntegrationsStore {
 		id: IntegrationId,
 		namespace: string[],
 		table: string,
-		request?: Pick<TablePreviewRequest, 'query_user'>,
+		request?: Pick<TablePreviewRequest, 'query_user' | 'signal'>,
 	): Promise<TableSchema> {
 		const { head, browse, config, probe } = await this.openBrowse(scope, id);
 		const schema = await browse.getTableSchema(config, probe, namespace, table, request);

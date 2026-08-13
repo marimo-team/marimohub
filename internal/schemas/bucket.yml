@@ -133,6 +133,42 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/alerts.json:
+    summary: Project-scoped Slack and signed-webhook alert destinations.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ProjectAlertStore
+    get:
+      operationId: read_projects_alerts_json
+      summary: Read ProjectAlertConfig
+      tags:
+        - project
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectAlertConfig'
+    put:
+      operationId: write_projects_alerts_json
+      summary: Write ProjectAlertConfig
+      tags:
+        - project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectAlertConfig'
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/meta.json:
     summary: Notebook metadata record.
     parameters:
@@ -965,6 +1001,200 @@ components:
         - created_at
         - updated_at
         - tags
+    ProjectAlertConfig:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        project_id:
+          type: string
+        destinations:
+          maxItems: 10
+          type: array
+          items:
+            oneOf:
+              - type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                    minLength: 1
+                    maxLength: 100
+                  kinds:
+                    minItems: 1
+                    type: array
+                    items:
+                      type: string
+                      enum:
+                        - member.invited
+                        - member.added
+                        - member.role_changed
+                        - member.removed
+                        - session.takeover
+                        - notebook.deleted
+                        - project.deleted
+                        - app.start_failed
+                        - app.unavailable
+                        - sync.failed
+                  enabled:
+                    type: boolean
+                  verified_at:
+                    anyOf:
+                      - type: string
+                        format: date-time
+                        pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                      - type: 'null'
+                  endpoint_host:
+                    type: string
+                    minLength: 1
+                  created_by:
+                    type: string
+                  created_at:
+                    type: string
+                    format: date-time
+                    pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                  updated_at:
+                    type: string
+                    format: date-time
+                    pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                  type:
+                    type: string
+                    const: slack
+                  webhook_url:
+                    type: object
+                    properties:
+                      kek_id:
+                        type: string
+                      alg:
+                        type: string
+                        const: A256GCM
+                      iv:
+                        type: string
+                      ciphertext:
+                        type: string
+                    required:
+                      - kek_id
+                      - alg
+                      - iv
+                      - ciphertext
+                required:
+                  - id
+                  - name
+                  - kinds
+                  - enabled
+                  - verified_at
+                  - endpoint_host
+                  - created_by
+                  - created_at
+                  - updated_at
+                  - type
+                  - webhook_url
+              - type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                    minLength: 1
+                    maxLength: 100
+                  kinds:
+                    minItems: 1
+                    type: array
+                    items:
+                      type: string
+                      enum:
+                        - member.invited
+                        - member.added
+                        - member.role_changed
+                        - member.removed
+                        - session.takeover
+                        - notebook.deleted
+                        - project.deleted
+                        - app.start_failed
+                        - app.unavailable
+                        - sync.failed
+                  enabled:
+                    type: boolean
+                  verified_at:
+                    anyOf:
+                      - type: string
+                        format: date-time
+                        pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                      - type: 'null'
+                  endpoint_host:
+                    type: string
+                    minLength: 1
+                  created_by:
+                    type: string
+                  created_at:
+                    type: string
+                    format: date-time
+                    pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                  updated_at:
+                    type: string
+                    format: date-time
+                    pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                  type:
+                    type: string
+                    const: webhook
+                  url:
+                    type: object
+                    properties:
+                      kek_id:
+                        type: string
+                      alg:
+                        type: string
+                        const: A256GCM
+                      iv:
+                        type: string
+                      ciphertext:
+                        type: string
+                    required:
+                      - kek_id
+                      - alg
+                      - iv
+                      - ciphertext
+                  signing_secret:
+                    type: object
+                    properties:
+                      kek_id:
+                        type: string
+                      alg:
+                        type: string
+                        const: A256GCM
+                      iv:
+                        type: string
+                      ciphertext:
+                        type: string
+                    required:
+                      - kek_id
+                      - alg
+                      - iv
+                      - ciphertext
+                required:
+                  - id
+                  - name
+                  - kinds
+                  - enabled
+                  - verified_at
+                  - endpoint_host
+                  - created_by
+                  - created_at
+                  - updated_at
+                  - type
+                  - url
+                  - signing_secret
+        updated_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+      required:
+        - schema_version
+        - project_id
+        - destinations
+        - updated_at
     NotebookMeta:
       type: object
       properties:

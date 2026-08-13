@@ -1,4 +1,5 @@
 import { ObjectBrowseError } from '@marimo-hub/core';
+import { objectBrowseHttpError } from '@marimo-hub/object-browser-commons';
 
 export function mapS3Error(error: unknown): ObjectBrowseError {
 	if (error instanceof ObjectBrowseError) return error;
@@ -11,30 +12,6 @@ export function mapS3Error(error: unknown): ObjectBrowseError {
 	const status = value?.$metadata?.httpStatusCode;
 	const requestId = value?.$metadata?.requestId;
 	if (name === 'AbortError') return new ObjectBrowseError('aborted', 'The request was canceled.');
-	if (status === 403 || name === 'AccessDenied') {
-		return new ObjectBrowseError(
-			'access_denied',
-			'Access to the object store was denied.',
-			requestId,
-		);
-	}
-	if (status === 404 || name === 'NoSuchKey' || name === 'NotFound') {
-		return new ObjectBrowseError('not_found', 'The requested object was not found.', requestId);
-	}
-	if (status === 412 || name === 'PreconditionFailed') {
-		return new ObjectBrowseError(
-			'precondition_failed',
-			'The object changed before it could be read.',
-			requestId,
-		);
-	}
-	if (status === 416 || name === 'InvalidRange') {
-		return new ObjectBrowseError(
-			'range_not_satisfiable',
-			'The requested byte range is not available.',
-			requestId,
-		);
-	}
 	if (name === 'NotImplemented' || name === 'UnsupportedOperation') {
 		return new ObjectBrowseError(
 			'unsupported',
@@ -42,5 +19,19 @@ export function mapS3Error(error: unknown): ObjectBrowseError {
 			requestId,
 		);
 	}
-	return new ObjectBrowseError('unavailable', 'The object-store request failed.', requestId);
+	const namedStatus =
+		name === 'AccessDenied'
+			? 403
+			: name === 'NoSuchKey' || name === 'NotFound'
+				? 404
+				: name === 'PreconditionFailed'
+					? 412
+					: name === 'InvalidRange'
+						? 416
+						: status;
+	return objectBrowseHttpError(namedStatus, {
+		accessDenied: 'Access to the object store was denied.',
+		unavailable: 'The object-store request failed.',
+		requestId,
+	});
 }

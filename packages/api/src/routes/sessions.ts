@@ -54,7 +54,11 @@ import {
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
 import { appendAudit, errorMetadata, logEvent } from '../log';
-import { scheduleNotification, scheduleProjectAlert } from '../notifications';
+import {
+	assertNotificationMutationAllowed,
+	scheduleNotification,
+	scheduleProjectAlert,
+} from '../notifications';
 import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
 	assertSessionAccess,
@@ -276,7 +280,7 @@ const takeoverEditorSession = createRoute({
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'The prior editor was saved and stopped'),
 		...commonErrors(),
-		...errorResponses(400, 403, 404, 409, 503),
+		...errorResponses(400, 403, 404, 409, 429, 503),
 	},
 });
 
@@ -670,6 +674,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 	};
 	try {
 		const subject = await assertAccess();
+		assertNotificationMutationAllowed(deps, user.id);
 		const currentClaim = await deps.services.sessions.getEditorClaim(pid, nid);
 		if (effectiveEditorSharing(currentClaim, deps.policy.editorSandboxSharing) !== 'exclusive') {
 			throw new ConflictError('Takeover is only available in exclusive editor mode');

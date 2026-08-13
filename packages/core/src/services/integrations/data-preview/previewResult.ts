@@ -9,20 +9,25 @@ export function parseTablePreviewJson(serialized: string, maxRows: number): Tabl
 	} catch {
 		throw invalidPreview();
 	}
-	if (!isRecord(value) || !Array.isArray(value.columns) || !Array.isArray(value.rows)) {
-		throw invalidPreview();
-	}
-	if (!value.columns.every((column) => typeof column === 'string')) throw invalidPreview();
-	const columns = value.columns;
+	if (!isRecord(value)) throw invalidPreview();
+	return validateTableData(value.columns, value.rows, { maxRows, invalid: invalidPreview });
+}
+
+export function validateTableData(
+	columns: unknown,
+	rows: unknown,
+	options: { maxRows?: number; invalid: () => Error },
+): TablePreview {
 	if (
-		value.rows.length > maxRows ||
-		!value.rows.every(
-			(row): row is unknown[] => Array.isArray(row) && row.length === columns.length,
-		)
+		!Array.isArray(columns) ||
+		!columns.every((column): column is string => typeof column === 'string') ||
+		!Array.isArray(rows) ||
+		(options.maxRows !== undefined && rows.length > options.maxRows) ||
+		!rows.every((row): row is unknown[] => Array.isArray(row) && row.length === columns.length)
 	) {
-		throw invalidPreview();
+		throw options.invalid();
 	}
-	return { columns, rows: value.rows };
+	return { columns, rows };
 }
 
 function invalidPreview(): UnavailableError {

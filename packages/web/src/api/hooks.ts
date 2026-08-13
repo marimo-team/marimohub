@@ -6,6 +6,7 @@ import {
 	keepPreviousData,
 } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from './client';
 import { useApiMutation, useInvalidate } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
@@ -288,12 +289,14 @@ export type CreateProjectAlertDestination =
 export function useProjectAlertsQuery(projectId: string, enabled = true) {
 	return useQuery({
 		queryKey: projectKeys.alerts(projectId),
-		queryFn: () =>
-			apiData(
-				apiClient.GET('/api/v1/projects/{pid}/alert-destinations', {
-					params: { path: { pid: projectId } },
-				}),
-			),
+		queryFn: async () =>
+			(
+				await apiData(
+					apiClient.GET('/api/v1/projects/{pid}/alert-destinations', {
+						params: { path: { pid: projectId } },
+					}),
+				)
+			).items,
 		enabled,
 	});
 }
@@ -799,10 +802,11 @@ export function useBrowseCapabilityQuery(projectId: string, integrationId: strin
 		queryKey: browseKeys.capability(projectId, integrationId),
 		enabled,
 		staleTime: BROWSE_LIST_STALE_MS,
-		queryFn: () =>
+		queryFn: ({ signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse', {
 					params: { path: browsePath(projectId, integrationId) },
+					signal,
 				}),
 			),
 	});
@@ -819,7 +823,7 @@ export function useBrowseNamespacesQuery(
 		enabled,
 		staleTime: BROWSE_LIST_STALE_MS,
 		initialPageParam: null as string | null,
-		queryFn: ({ pageParam }) =>
+		queryFn: ({ pageParam, signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/namespaces', {
 					params: {
@@ -830,6 +834,7 @@ export function useBrowseNamespacesQuery(
 							...freshQuery(),
 						},
 					},
+					signal,
 				}),
 			),
 		getNextPageParam: nextCursor,
@@ -847,7 +852,7 @@ export function useBrowseTablesQuery(
 		enabled,
 		staleTime: BROWSE_LIST_STALE_MS,
 		initialPageParam: null as string | null,
-		queryFn: ({ pageParam }) =>
+		queryFn: ({ pageParam, signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/tables', {
 					params: {
@@ -858,6 +863,7 @@ export function useBrowseTablesQuery(
 							...freshQuery(),
 						},
 					},
+					signal,
 				}),
 			),
 		getNextPageParam: nextCursor,
@@ -875,28 +881,55 @@ export function useBrowseTableSchemaQuery(
 		queryKey: browseKeys.schema(projectId, integrationId, namespace, table),
 		enabled,
 		staleTime: BROWSE_SCHEMA_STALE_MS,
-		queryFn: () =>
+		queryFn: ({ signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/schema', {
 					params: {
 						path: browsePath(projectId, integrationId),
 						query: { namespace: namespace.join(NAMESPACE_JOINER), table, ...freshQuery() },
 					},
+					signal,
 				}),
 			),
 	});
 }
 
-export function useBrowseTablePreview(projectId: string, integrationId: string) {
+function useAbortableBrowseMutation<TInput, TData>(
+	run: (input: TInput, signal: AbortSignal) => Promise<TData>,
+) {
+	const active = useRef<AbortController | undefined>(undefined);
+	useEffect(
+		() => () => {
+			active.current?.abort();
+		},
+		[],
+	);
 	return useMutation({
-		mutationFn: (input: { namespace: string[]; table: string; limit?: number }) =>
+		mutationFn: (input: TInput) => {
+			active.current?.abort();
+			const controller = new AbortController();
+			active.current = controller;
+			return run(input, controller.signal).finally(() => {
+				if (active.current === controller) active.current = undefined;
+			});
+		},
+		// Consumers render preview failures inline; aborts (unmount, supersede)
+		// must not surface as toasts either.
+		meta: { suppressErrorToast: true },
+	});
+}
+
+export function useBrowseTablePreview(projectId: string, integrationId: string) {
+	return useAbortableBrowseMutation(
+		(input: { namespace: string[]; table: string; limit?: number }, signal) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/preview', {
 					params: { path: browsePath(projectId, integrationId) },
 					body: input,
+					signal,
 				}),
 			),
-	});
+	);
 }
 
 export function useDataQuerySchemaQuery(
@@ -962,13 +995,14 @@ export function useObjectBucketsQuery(projectId: string, integrationId: string, 
 		enabled,
 		staleTime: BROWSE_LIST_STALE_MS,
 		initialPageParam: null as string | null,
-		queryFn: ({ pageParam }) =>
+		queryFn: ({ pageParam, signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/buckets', {
 					params: {
 						path: browsePath(projectId, integrationId),
 						query: { ...cursorQuery(pageParam), ...freshQuery() },
 					},
+					signal,
 				}),
 			),
 		getNextPageParam: nextCursor,
@@ -987,7 +1021,7 @@ export function useObjectsQuery(
 		enabled: enabled && bucket !== '',
 		staleTime: BROWSE_LIST_STALE_MS,
 		initialPageParam: null as string | null,
-		queryFn: ({ pageParam }) =>
+		queryFn: ({ pageParam, signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects', {
 					params: {
@@ -999,6 +1033,7 @@ export function useObjectsQuery(
 							...freshQuery(),
 						},
 					},
+					signal,
 				}),
 			),
 		getNextPageParam: nextCursor,
@@ -1016,7 +1051,7 @@ export function useObjectSearchQuery(
 		queryKey: browseKeys.objectSearch(projectId, integrationId, bucket, prefix, query),
 		enabled: bucket !== '' && query.trim().length >= 2,
 		initialPageParam: null as string | null,
-		queryFn: ({ pageParam }) =>
+		queryFn: ({ pageParam, signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/search', {
 					params: {
@@ -1028,6 +1063,7 @@ export function useObjectSearchQuery(
 							...cursorQuery(pageParam),
 						},
 					},
+					signal,
 				}),
 			),
 		getNextPageParam: nextCursor,
@@ -1045,7 +1081,7 @@ export function useObjectDetailQuery(
 		queryKey: browseKeys.objectDetail(projectId, integrationId, bucket, key, versionId),
 		enabled: bucket !== '' && key !== '',
 		staleTime: BROWSE_LIST_STALE_MS,
-		queryFn: () =>
+		queryFn: ({ signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/head', {
 					params: {
@@ -1056,6 +1092,7 @@ export function useObjectDetailQuery(
 							...(versionId ? { version_id: versionId } : {}),
 						},
 					},
+					signal,
 				}),
 			),
 	});
@@ -1072,7 +1109,7 @@ export function useObjectVersionsQuery(
 		queryKey: browseKeys.objectVersions(projectId, integrationId, bucket, key),
 		enabled: enabled && bucket !== '' && key !== '',
 		initialPageParam: null as string | null,
-		queryFn: ({ pageParam }) =>
+		queryFn: ({ pageParam, signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/versions', {
 					params: {
@@ -1083,6 +1120,7 @@ export function useObjectVersionsQuery(
 							...cursorQuery(pageParam),
 						},
 					},
+					signal,
 				}),
 			),
 		getNextPageParam: nextCursor,
@@ -1090,15 +1128,16 @@ export function useObjectVersionsQuery(
 }
 
 export function useObjectPreview(projectId: string, integrationId: string) {
-	return useMutation({
-		mutationFn: (input: { bucket: string; key: string; version_id?: string; limit?: number }) =>
+	return useAbortableBrowseMutation(
+		(input: { bucket: string; key: string; version_id?: string; limit?: number }, signal) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/objects/preview', {
 					params: { path: browsePath(projectId, integrationId) },
 					body: input,
+					signal,
 				}),
 			),
-	});
+	);
 }
 
 export function objectContentUrl(input: {

@@ -62,10 +62,12 @@ HTTP 408, HTTP 429, or a 5xx response. Other 4xx responses are not retried. Webh
 same `schema_version: 1` notification envelope documented in
 [Notifications](./notifications.md). Only the destination's selected kinds are sent. Error
 events contain a sanitized error code, not provider messages, URLs, credentials, or secrets.
+Project alert webhooks use the same `X-Marimohub-Signature` header and HMAC construction as
+deployment-wide [generic webhooks](./notifications.md#generic-webhook).
 
 Delivery is best-effort. It begins only after the related storage mutation commits, and a
 delivery failure never changes the API response. There is no durable queue, history, digest, or
-user-visible retry. Webhook consumers should deduplicate on `dedupe_key`.
+user-visible retry. Webhook consumers must deduplicate on `dedupe_key`.
 
 Operational logs use `project_alert_delivery_failed` and `project_alert_delivery_partial`.
 Metrics use `project_alert.delivered`, `project_alert.skipped`, and

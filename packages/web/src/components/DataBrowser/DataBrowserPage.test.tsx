@@ -124,10 +124,10 @@ function makeFetch({
 	namespacesDown?: boolean;
 	kind?: IntegrationKind;
 	entry?: IntegrationEntry;
-	objectSearch?: 'none' | 'bounded-key-name';
-	objectProvider?: 's3' | 'gcs' | 'azure_blob';
-	objectRootKind?: 'bucket' | 'container';
-	objectUriScheme?: 's3' | 'gs' | 'az';
+	objectSearch?: 'none' | 'bounded-key-name' | 'unknown';
+	objectProvider?: 's3' | 'gcs' | 'azure_blob' | 'unknown';
+	objectRootKind?: 'bucket' | 'container' | 'unknown';
+	objectUriScheme?: 's3' | 'gs' | 'az' | 'unknown';
 	objectBuckets?: { name: string; configured: boolean }[];
 	objectBucketsSecond?: { name: string; configured: boolean }[];
 	objectBucketNextCursor?: string | null;
@@ -264,8 +264,6 @@ function makeFetch({
 			if (objectFailures.capability) return failed(objectFailures.capability);
 			if (kind.browse_surfaces.includes('objects')) {
 				return ok({
-					metadata: false,
-					preview: false,
 					surfaces: {
 						objects: {
 							provider: objectProvider,
@@ -282,7 +280,6 @@ function makeFetch({
 				});
 			}
 			return ok({
-				...capability,
 				surfaces: {
 					tables: {
 						available: capability.metadata,
@@ -660,6 +657,21 @@ describe('DataBrowserPage', () => {
 		expect(
 			screen.getByText('The integration credentials did not return an accessible container.'),
 		).toBeInTheDocument();
+	});
+
+	it('handles unknown object capability vocabulary without fabricating a URI', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectProvider: 'unknown',
+			objectRootKind: 'unknown',
+			objectUriScheme: 'unknown',
+		});
+
+		await user.click(await screen.findByRole('button', { name: /events\.jsonl/i }));
+		expect(await screen.findByText('lake/events.jsonl')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Copy URI' })).not.toBeInTheDocument();
 	});
 
 	it('shows a refetch failure instead of a cached empty bucket state', async () => {

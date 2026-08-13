@@ -5,3 +5,8 @@ import { twMerge } from 'tailwind-merge';
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
+
+export function logNever<T>(value: never, context: string, fallback: T): T {
+	console.warn(`Unexpected ${context}`, value);
+	return fallback;
+}

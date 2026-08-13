@@ -11,9 +11,9 @@ import {
 	NotebookId,
 	NotFoundError,
 	NOTEBOOK_STATUSES,
+	PROJECT_ALERT_KINDS,
 	PROJECT_STATUSES,
 	ProjectId,
-	ProjectAlertKindSchema,
 	requireRole,
 	ROLES,
 	SESSION_MODES,
@@ -46,6 +46,22 @@ import { describeError, logEvent } from './log';
 
 // Re-export the injected-context types for route modules that import from './shared'.
 export type { ApiDeps, HonoEnv } from './context';
+
+export function extensibleResponseEnum<const Values extends readonly [string, ...string[]]>(
+	knownValues: Values,
+	example: Values[number],
+) {
+	const fallbackEnum = z.enum(knownValues).or(z.literal('unknown')).catch('unknown');
+	return z
+		.string()
+		.pipe(fallbackEnum)
+		.openapi({
+			type: 'string',
+			enum: [...knownValues, 'unknown'],
+			description: `Known values: ${knownValues.join(', ')}. Unrecognized values normalize to unknown.`,
+			example,
+		});
+}
 
 /**
  * Enforce that the caller holds at least `min` role on the project. Loads
@@ -512,6 +528,7 @@ const ERROR_DESCRIPTIONS: Record<number, string> = {
 	409: 'Conflict',
 	412: 'Precondition failed (If-Match did not match the current version)',
 	413: 'Request body too large',
+	416: 'Range not satisfiable',
 	422: 'Validation error',
 	429: 'Resource limit reached',
 	503: 'Service unavailable',
@@ -950,8 +967,10 @@ export const CapabilitiesResponseSchema = z
 		integrations: z.object({ available: z.boolean() }),
 		project_alerts: z.object({
 			available: z.boolean(),
-			destination_types: z.array(z.enum(['slack', 'webhook'])),
-			selectable_kinds: z.array(ProjectAlertKindSchema),
+			destination_types: z.array(extensibleResponseEnum(['slack', 'webhook'], 'slack')),
+			selectable_kinds: z.array(
+				extensibleResponseEnum(PROJECT_ALERT_KINDS, PROJECT_ALERT_KINDS[0]),
+			),
 			max_destinations: z.number().int().positive(),
 		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */

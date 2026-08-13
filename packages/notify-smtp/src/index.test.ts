@@ -1,6 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BROADCAST_NOTIFICATION_FIXTURE, NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing';
-import { SmtpNotifier } from './index';
+import {
+	BROADCAST_NOTIFICATION_FIXTURE,
+	notifierContract,
+	NOTIFICATION_FIXTURE,
+} from '@marimo-hub/core/testing';
+import { smtpTransportUrl, SmtpNotifier } from './index';
+
+notifierContract(
+	'SMTP',
+	() =>
+		new SmtpNotifier({
+			url: 'smtp://smtp.example.com:587',
+			from: 'hub@example.com',
+			adminTo: ['ops@example.com'],
+			mailer: { sendMail: vi.fn(async () => ({})) },
+		}),
+	{ personal: 'delivered', broadcast: 'delivered' },
+);
 
 describe('SmtpNotifier', () => {
 	it('sends one plain-text message to the notification recipients', async () => {
@@ -82,6 +98,30 @@ describe('SmtpNotifier', () => {
 					mailer: { sendMail: vi.fn() },
 				}),
 		).toThrow('hostname is required');
+	});
+
+	it('enforces bounded connection, greeting, and socket timeouts', () => {
+		const url = new URL(
+			smtpTransportUrl(
+				'smtps://user:secret@smtp.example.com:465?socketTimeout=999999&connectionTimeout=0',
+			),
+		);
+		expect(url.searchParams.get('connectionTimeout')).toBe('10000');
+		expect(url.searchParams.get('greetingTimeout')).toBe('10000');
+		expect(url.searchParams.get('socketTimeout')).toBe('30000');
+	});
+
+	it('disposes the SMTP transport', async () => {
+		const close = vi.fn();
+		const notifier = new SmtpNotifier({
+			url: 'smtp://smtp.example.com:587',
+			from: 'hub@example.com',
+			mailer: { sendMail: vi.fn(), close },
+		});
+
+		await notifier[Symbol.asyncDispose]();
+
+		expect(close).toHaveBeenCalledOnce();
 	});
 
 	it.each([

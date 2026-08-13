@@ -9,7 +9,10 @@ import {
 } from '@aws-sdk/client-s3';
 import { describe, it } from 'vitest';
 import { createProjectId, UserId } from '@marimo-hub/core';
-import { objectBrowseContract } from '@marimo-hub/core/testing/object-browse-contract';
+import {
+	OBJECT_BROWSE_CONTRACT_SEED,
+	objectBrowseContract,
+} from '@marimo-hub/core/testing/object-browse-contract';
 import { S3ObjectBrowser } from './index';
 
 const endpoint = process.env.MARIMOHUB_TEST_S3_ENDPOINT;
@@ -51,6 +54,7 @@ if (endpoint)
 		source,
 		context,
 		async setup() {
+			const seed = OBJECT_BROWSE_CONTRACT_SEED;
 			const client = setupClient();
 			await client.send(new CreateBucketCommand({ Bucket: bucket }));
 			await client.send(
@@ -59,31 +63,50 @@ if (endpoint)
 					VersioningConfiguration: { Status: 'Enabled' },
 				}),
 			);
-			const directObject = `${prefix}contract.csv`;
-			const nestedObject = `${prefix}nested/contract.txt`;
-			const unicodeObject = `${prefix}résumé-雪.txt`;
-			const emptyObject = `${prefix}empty.bin`;
-			const versionedObject = `${prefix}versioned.txt`;
+			const directObject = `${prefix}${seed.direct.path}`;
+			const nestedObject = `${prefix}${seed.nested.path}`;
+			const unicodeObject = `${prefix}${seed.unicode.path}`;
+			const emptyObject = `${prefix}${seed.empty.path}`;
+			const parquetObject = `${prefix}${seed.parquet.path}`;
+			const versionedObject = `${prefix}${seed.versioned.path}`;
 			await client.send(
 				new PutObjectCommand({
 					Bucket: bucket,
 					Key: directObject,
-					Body: 'name,value\nfirst,1\nsecond,2\n',
-					ContentType: 'text/csv',
+					Body: seed.direct.body,
+					ContentType: seed.direct.contentType,
 				}),
 			);
 			await client.send(
-				new PutObjectCommand({ Bucket: bucket, Key: nestedObject, Body: 'nested contract' }),
+				new PutObjectCommand({ Bucket: bucket, Key: nestedObject, Body: seed.nested.body }),
 			);
 			await client.send(
-				new PutObjectCommand({ Bucket: bucket, Key: unicodeObject, Body: 'unicode contract' }),
-			);
-			await client.send(new PutObjectCommand({ Bucket: bucket, Key: emptyObject, Body: '' }));
-			await client.send(
-				new PutObjectCommand({ Bucket: bucket, Key: versionedObject, Body: 'version one' }),
+				new PutObjectCommand({ Bucket: bucket, Key: unicodeObject, Body: seed.unicode.body }),
 			);
 			await client.send(
-				new PutObjectCommand({ Bucket: bucket, Key: versionedObject, Body: 'version two' }),
+				new PutObjectCommand({ Bucket: bucket, Key: emptyObject, Body: seed.empty.body }),
+			);
+			await client.send(
+				new PutObjectCommand({
+					Bucket: bucket,
+					Key: parquetObject,
+					Body: seed.parquet.body,
+					ContentType: seed.parquet.contentType,
+				}),
+			);
+			await client.send(
+				new PutObjectCommand({
+					Bucket: bucket,
+					Key: versionedObject,
+					Body: seed.versioned.firstBody,
+				}),
+			);
+			await client.send(
+				new PutObjectCommand({
+					Bucket: bucket,
+					Key: versionedObject,
+					Body: seed.versioned.secondBody,
+				}),
 			);
 			client.destroy();
 			return {
@@ -93,6 +116,7 @@ if (endpoint)
 				nestedObject,
 				unicodeObject,
 				emptyObject,
+				parquetObject,
 				versionedObject,
 			};
 		},

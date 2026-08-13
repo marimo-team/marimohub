@@ -879,6 +879,17 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Internal server error */
 				500: {
 					headers: {
@@ -1157,7 +1168,7 @@ export interface paths {
 						'application/json': {
 							/** @enum {boolean} */
 							success: true;
-							data: components['schemas']['ProjectAlertDestination'][];
+							data: components['schemas']['ProjectAlertDestinationPage'];
 						};
 					};
 				};
@@ -4753,6 +4764,17 @@ export interface paths {
 						'application/json': components['schemas']['ErrorResponse'];
 					};
 				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
 				/** @description Internal server error */
 				500: {
 					headers: {
@@ -6687,7 +6709,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Run SQL against one integration (manager or above)
-		 * @description Experimental, separately gated SQL execution. Each request uses a fresh isolated worker or process with hard execution, row, and byte limits.
+		 * @description SQL execution gated by deployment configuration. Each request uses a fresh isolated worker with hard execution, row, and byte limits.
 		 */
 		post: {
 			parameters: {
@@ -7822,6 +7844,159 @@ export interface paths {
 				};
 			};
 		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/integrations/{iid}/browse/objects/content': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Stream object content (editor or above)
+		 * @description Streams the object bytes raw — the target of the `content_url` embedded in preview responses. `inline=true` serves a sandboxed inline rendering (CSP forces an opaque origin); otherwise the response is a download (`Content-Disposition: attachment`). Supports single-part `Range` requests and an `etag` precondition (412 on mismatch).
+		 */
+		get: {
+			parameters: {
+				query: {
+					bucket: string;
+					key: string;
+					version_id?: string;
+					inline?: 'true' | 'false';
+					etag?: string;
+				};
+				header?: {
+					range?: string;
+				};
+				path: {
+					pid: string;
+					iid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description The object bytes, streamed */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/octet-stream': string;
+					};
+				};
+				/** @description The requested byte range (`Content-Range` identifies it) */
+				206: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/octet-stream': string;
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Precondition failed (If-Match did not match the current version) */
+				412: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Range not satisfiable */
+				416: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -9106,7 +9281,7 @@ export interface components {
 			};
 			project_alerts: {
 				available: boolean;
-				destination_types: ('slack' | 'webhook')[];
+				destination_types: ('slack' | 'webhook' | 'unknown')[];
 				selectable_kinds: (
 					| 'member.invited'
 					| 'member.added'
@@ -9118,6 +9293,7 @@ export interface components {
 					| 'app.start_failed'
 					| 'app.unavailable'
 					| 'sync.failed'
+					| 'unknown'
 				)[];
 				max_destinations: number;
 			};
@@ -9226,6 +9402,10 @@ export interface components {
 		 * @enum {string}
 		 */
 		AssignableRole: 'manager' | 'editor' | 'viewer';
+		ProjectAlertDestinationPage: {
+			items: components['schemas']['ProjectAlertDestination'][];
+			next_cursor: string | null;
+		};
 		ProjectAlertDestination:
 			| {
 					id: string;
@@ -9241,6 +9421,7 @@ export interface components {
 						| 'app.start_failed'
 						| 'app.unavailable'
 						| 'sync.failed'
+						| 'unknown'
 					)[];
 					enabled: boolean;
 					/** Format: date-time */
@@ -9270,6 +9451,7 @@ export interface components {
 						| 'app.start_failed'
 						| 'app.unavailable'
 						| 'sync.failed'
+						| 'unknown'
 					)[];
 					enabled: boolean;
 					/** Format: date-time */
@@ -9634,7 +9816,7 @@ export interface components {
 			};
 			supports_test: boolean;
 			supports_browse: boolean;
-			browse_surfaces: ('tables' | 'objects')[];
+			browse_surfaces: ('tables' | 'objects' | 'unknown')[];
 			secret_sources: {
 				inline: boolean;
 				references: {
@@ -9722,17 +9904,33 @@ export interface components {
 					reason?: string;
 				};
 				objects?: {
-					/** @enum {string} */
-					provider: 's3' | 'gcs' | 'azure_blob';
-					/** @enum {string} */
-					root_kind: 'bucket' | 'container';
-					/** @enum {string} */
-					uri_scheme: 's3' | 'gs' | 'az';
+					/**
+					 * @description Known values: s3, gcs, azure_blob. Unrecognized values normalize to unknown.
+					 * @example s3
+					 * @enum {string}
+					 */
+					provider: 's3' | 'gcs' | 'azure_blob' | 'unknown';
+					/**
+					 * @description Known values: bucket, container. Unrecognized values normalize to unknown.
+					 * @example bucket
+					 * @enum {string}
+					 */
+					root_kind: 'bucket' | 'container' | 'unknown';
+					/**
+					 * @description Known values: s3, gs, az. Unrecognized values normalize to unknown.
+					 * @example s3
+					 * @enum {string}
+					 */
+					uri_scheme: 's3' | 'gs' | 'az' | 'unknown';
 					available: boolean;
 					preview: boolean;
 					download: boolean;
-					/** @enum {string} */
-					search: 'none' | 'bounded-key-name';
+					/**
+					 * @description Known values: none, bounded-key-name. Unrecognized values normalize to unknown.
+					 * @example bounded-key-name
+					 * @enum {string}
+					 */
+					search: 'none' | 'bounded-key-name' | 'unknown';
 					versions: boolean;
 					preview_formats: string[];
 					reason?: string;
@@ -9742,9 +9940,6 @@ export interface components {
 					reason?: string;
 				};
 			};
-			metadata: boolean;
-			preview: boolean;
-			reason?: string;
 		};
 		IntegrationBrowseNamespacePage: {
 			items: string[][];
@@ -9862,8 +10057,12 @@ export interface components {
 			| {
 					/** @enum {string} */
 					kind: 'tabular';
-					/** @enum {string} */
-					format: 'table' | 'csv' | 'tsv' | 'json' | 'jsonl' | 'parquet';
+					/**
+					 * @description Known values: table, csv, tsv, json, jsonl, parquet. Unrecognized values normalize to unknown.
+					 * @example csv
+					 * @enum {string}
+					 */
+					format: 'table' | 'csv' | 'tsv' | 'json' | 'jsonl' | 'parquet' | 'unknown';
 					columns: {
 						name: string;
 						type?: string;
@@ -9877,8 +10076,12 @@ export interface components {
 			| {
 					/** @enum {string} */
 					kind: 'text';
-					/** @enum {string} */
-					format: 'text' | 'markdown' | 'code' | 'log' | 'json';
+					/**
+					 * @description Known values: text, markdown, code, log, json. Unrecognized values normalize to unknown.
+					 * @example text
+					 * @enum {string}
+					 */
+					format: 'text' | 'markdown' | 'code' | 'log' | 'json' | 'unknown';
 					text: string;
 					truncated: boolean;
 					bytes_read: number;
@@ -9888,8 +10091,12 @@ export interface components {
 			| {
 					/** @enum {string} */
 					kind: 'image';
-					/** @enum {string} */
-					format: 'png' | 'jpeg' | 'gif' | 'webp';
+					/**
+					 * @description Known values: png, jpeg, gif, webp. Unrecognized values normalize to unknown.
+					 * @example png
+					 * @enum {string}
+					 */
+					format: 'png' | 'jpeg' | 'gif' | 'webp' | 'unknown';
 					content_url: string;
 					width?: number;
 					height?: number;

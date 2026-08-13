@@ -51,6 +51,40 @@ describe('guarded fetch', () => {
 		});
 	});
 
+	// Node skips the pinned `lookup` for IP literals, so these would otherwise
+	// reach link-local and loopback addresses unchecked.
+	it.each([
+		'http://169.254.169.254/latest/meta-data/',
+		'http://127.0.0.1:9/',
+		'http://[::1]:9/',
+		'http://10.0.0.5/internal',
+	])('rejects the IP-literal target %j through the host policy', async (url) => {
+		let asked: string | undefined;
+		const guardedFetch = createGuardedFetch(async (hostname) => {
+			asked = hostname;
+			throw new Error('The object-store hostname is not permitted.');
+		});
+		await expect(guardedFetch(url)).rejects.toThrow(/not permitted/);
+		expect(asked).toBeDefined();
+	});
+
+	it('allows an IP literal the host policy permits', async () => {
+		const server = createServer((_request, response) => response.end('ok'));
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		try {
+			const port = (server.address() as AddressInfo).port;
+			const guardedFetch = createGuardedFetch(async (hostname) => [
+				{ address: hostname, family: 4 },
+			]);
+			const response = await guardedFetch(`http://127.0.0.1:${port}/`);
+			await expect(response.text()).resolves.toBe('ok');
+		} finally {
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+		}
+	});
+
 	it('propagates a Request signal to the guarded transport', async () => {
 		const controller = new AbortController();
 		const guardedFetch = createGuardedFetch(
@@ -66,5 +100,26 @@ describe('guarded fetch', () => {
 		);
 		controller.abort();
 		await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+	});
+
+	it('terminates a response whose socket stops making progress', async () => {
+		const server = createServer((_request, response) => {
+			response.writeHead(200, { 'content-type': 'application/octet-stream' });
+			response.write('partial');
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		try {
+			const port = (server.address() as AddressInfo).port;
+			const guardedFetch = createGuardedFetch(async () => [{ address: '127.0.0.1', family: 4 }], {
+				socketTimeoutMs: 5,
+			});
+			const response = await guardedFetch(`http://objects.example.test:${port}/`);
+			await expect(response.arrayBuffer()).rejects.toThrow(/timed out/);
+		} finally {
+			server.closeAllConnections();
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+		}
 	});
 });

@@ -1,8 +1,7 @@
 # Ports & Adapters — Status
 
-Every external dependency sits behind a port (`Bucket`, `SandboxProvider`,
-`Authenticator`). This is the implementation + verification status of each
-adapter.
+Every external dependency sits behind a port. This page shows the implementation
+and verification status of each adapter.
 
 **Legend**
 
@@ -56,3 +55,28 @@ adapter.
 | ⬜     | GitHub OAuth (native)                            | —                        | Partly covered by `auth-oidc` today                     |
 | ⬜     | Tailscale identity                               | —                        | `Tailscale-User-Login` via tsnet/serve                  |
 | ⬜     | Native SAML                                      | —                        | Usually better bridged via WorkOS/Auth0 → OIDC          |
+
+## Object browsing (`ObjectBrowser`)
+
+| Status | Provider             | Adapter                  | Notes                                      |
+| ------ | -------------------- | ------------------------ | ------------------------------------------ |
+| ✅     | Amazon S3 / MinIO    | `object-browser-s3`      | S3-compatible object browsing              |
+| 🟡     | Google Cloud Storage | `object-browser-gcs`     | Native GCS API                             |
+| 🟡     | Azure Blob Storage   | `object-browser-azure`   | Containers map to provider-neutral roots   |
+| 🟡     | Shared helpers       | `object-browser-commons` | Guarded transport, formats, and validation |
+
+## Notifications (`Notifier`)
+
+| Status | Delivery channel | Adapter          | Notes                       |
+| ------ | ---------------- | ---------------- | --------------------------- |
+| 🟡     | SMTP             | `notify-smtp`    | Personal and broadcast mail |
+| 🟡     | Slack            | `notify-slack`   | Broadcast incoming webhook  |
+| 🟡     | Signed webhook   | `notify-webhook` | JSON with HMAC-SHA256       |
+
+## Data preview and query runtimes
+
+`DataPreviewService` selects server-authored preview programs. The
+`duckdb-wasm-runtime` package implements the isolated Node runtime for
+DuckDB-Wasm previews. `DataQueryService` uses a separate disposable-executor
+contract for user SQL. The Node composition root creates a fresh worker for
+each query when full data-browser mode is enabled.

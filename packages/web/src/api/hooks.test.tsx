@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
+import { toast } from 'sonner';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import { browseKeys, notebookKeys, projectKeys, sessionKeys } from './queryKeys';
 import {
 	refreshBrowseQueries,
 	resetBrowseRefreshBudgetForTests,
 	useBrowseCapabilityQuery,
+	useBrowseTablePreview,
 	useBrowseTablesQuery,
 	useCapabilitiesQuery,
 	useDownloadWorkspace,
@@ -615,6 +617,75 @@ describe('useEditorSessionQuery', () => {
 	});
 });
 
+describe('browse request cancellation', () => {
+	it('forwards the query signal when a browse view unmounts', async () => {
+		let requestSignal: AbortSignal | undefined;
+		const fetchMock = stubFetch(async (_url, init) => {
+			requestSignal = (init instanceof Request ? init.signal : init?.signal) ?? undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				requestSignal?.addEventListener('abort', () =>
+					reject(new DOMException('canceled', 'AbortError')),
+				);
+			});
+		});
+		const { unmount } = renderHookWithClient(() => useBrowseTablesQuery(PID, 'int-1', ['sales']), {
+			toaster: false,
+		});
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+		unmount();
+
+		expect(requestSignal?.aborted).toBe(true);
+	});
+
+	it('aborts an in-flight preview mutation when its owner unmounts', async () => {
+		let requestSignal: AbortSignal | undefined;
+		const fetchMock = stubFetch(async (_url, init) => {
+			requestSignal = (init instanceof Request ? init.signal : init?.signal) ?? undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				requestSignal?.addEventListener('abort', () =>
+					reject(new DOMException('canceled', 'AbortError')),
+				);
+			});
+		});
+		const { result, unmount } = renderHookWithClient(() => useBrowseTablePreview(PID, 'int-1'), {
+			toaster: false,
+		});
+		act(() => result.current.mutate({ namespace: ['sales'], table: 'orders' }));
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+		unmount();
+
+		expect(requestSignal?.aborted).toBe(true);
+	});
+
+	it('does not toast when an abort cancels an in-flight preview', async () => {
+		const errorToast = vi.spyOn(toast, 'error');
+		let requestSignal: AbortSignal | undefined;
+		const fetchMock = stubFetch(async (_url, init) => {
+			requestSignal = (init instanceof Request ? init.signal : init?.signal) ?? undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				requestSignal?.addEventListener('abort', () =>
+					reject(new DOMException('The user aborted a request.', 'AbortError')),
+				);
+			});
+		});
+		const { result, client, unmount } = renderHookWithClient(
+			() => useBrowseTablePreview(PID, 'int-1'),
+			{ toaster: false },
+		);
+		act(() => result.current.mutate({ namespace: ['sales'], table: 'orders' }));
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+		unmount();
+
+		await waitFor(() =>
+			expect(client.getMutationCache().getAll().at(-1)?.state.status).toBe('error'),
+		);
+		expect(errorToast).not.toHaveBeenCalled();
+	});
+});
+
 describe('refreshBrowseQueries', () => {
 	beforeEach(() => {
 		resetBrowseRefreshBudgetForTests();
@@ -708,7 +779,7 @@ describe('refreshBrowseQueries budget', () => {
 		const fetchMock = stubFetch(async (url) =>
 			String(url).includes('/browse/tables')
 				? jsonOk({ items: ['orders'], next_cursor: null })
-				: jsonOk({ metadata: true, preview: false }),
+				: jsonOk({ surfaces: { tables: { available: true, preview: false } } }),
 		);
 		const { result, client } = renderHookWithClient(
 			() => ({

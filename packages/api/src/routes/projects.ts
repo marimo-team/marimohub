@@ -38,7 +38,11 @@ import {
 } from '../shared';
 import { idempotentCreate } from '../idempotency';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
-import { scheduleNotification, scheduleProjectAlert } from '../notifications';
+import {
+	assertNotificationMutationAllowed,
+	scheduleNotification,
+	scheduleProjectAlert,
+} from '../notifications';
 
 // --- Request body schemas ---
 
@@ -244,7 +248,7 @@ const addMember = createRoute({
 			'Member added',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404, 409),
+		...errorResponses(403, 404, 409, 429),
 	},
 });
 
@@ -335,6 +339,7 @@ app.openapi(deleteProject, async (c) => {
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
+	assertNotificationMutationAllowed(deps, user.id);
 	const deleted = await projects.deleteProjectWithMutation(pid, user.id, ifMatchToken(c));
 	if (deleted) {
 		scheduleProjectAlert(deps, pid, 'project.deleted', { project_id: pid, user: user.id }, () =>
@@ -384,6 +389,11 @@ app.openapi(addMember, async (c) => {
 		memberIdentity = await identities.get(userId);
 		member = { user_id: userId, email: memberIdentity?.email };
 	}
+	assertNotificationMutationAllowed(
+		deps,
+		user.id,
+		memberIdentity?.email ?? ('user_id' in member ? member.user_id : member.email),
+	);
 	const { project, mutationId } = await projects.addMemberWithMutation(
 		pid,
 		member,
@@ -432,6 +442,7 @@ app.openapi(updateMember, async (c) => {
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
+	assertNotificationMutationAllowed(deps, user.id);
 	const body = c.req.valid('json');
 	const result = await projects.updateMemberRoleWithMutation(pid, uid, body.role, user.id);
 	const member = result.project.members.find(
@@ -464,6 +475,7 @@ app.openapi(removeMember, async (c) => {
 	const user = c.get('user');
 	const { pid, uid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'manager', deps.policy);
+	assertNotificationMutationAllowed(deps, user.id);
 	const result = await projects.removeMemberWithMutation(pid, uid, user.id);
 	scheduleProjectAlert(deps, pid, 'member.removed', { project_id: pid, user: user.id }, () =>
 		notificationRouter.render({

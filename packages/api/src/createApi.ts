@@ -384,7 +384,10 @@ export function createApi(rawDeps: ApiDeps) {
 	// serve the cached body on a 304 — turning the session-status poll loop into
 	// tiny 304s. `etag` is registered first so the Cache-Control hook's header lands
 	// before `etag` builds the 304 (which retains cache-control).
-	app.use(`${API_PREFIX}/*`, etag({ weak: true }));
+	const conditionalGet = etag({ weak: true });
+	app.use(`${API_PREFIX}/*`, (c, next) =>
+		c.req.path.endsWith('/browse/objects/content') ? next() : conditionalGet(c, next),
+	);
 	app.use(`${API_PREFIX}/*`, async (c, next) => {
 		await next();
 		// Routes that set their own Cache-Control (e.g. the no-store HTML snapshot)

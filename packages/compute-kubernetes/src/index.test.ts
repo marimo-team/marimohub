@@ -810,4 +810,14 @@ describe('KubernetesCompute', () => {
 	});
 });
 
-computeContract('KubernetesCompute', () => makeCompute(makeWorld()), { mountFallsBack: true });
+computeContract(
+	'KubernetesCompute',
+	() =>
+		makeCompute(
+			makeWorld({
+				execImpl: (command) =>
+					command.at(-1) === 'false' ? { stdout: '', stderr: 'failed', exitCode: 1 } : undefined,
+			}),
+		),
+	{ mountFallsBack: true, semantics: { failingCommand: 'false' } },
+);

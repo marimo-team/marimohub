@@ -8,6 +8,7 @@ interface Mailer {
 		subject: string;
 		text: string;
 	}): Promise<unknown>;
+	close?(): void;
 }
 
 export interface SmtpNotifierOptions {
@@ -21,7 +22,7 @@ function rejectHeaderBreaks(value: string, field: string): void {
 	if (/\r|\n/.test(value)) throw new Error(`Invalid ${field}: line breaks are not allowed`);
 }
 
-function smtpUrl(value: string): string {
+export function smtpTransportUrl(value: string): string {
 	let url: URL;
 	try {
 		url = new URL(value);
@@ -32,7 +33,10 @@ function smtpUrl(value: string): string {
 		throw new Error('Invalid SMTP URL protocol');
 	}
 	if (!url.hostname) throw new Error('Invalid SMTP URL: hostname is required');
-	return value;
+	url.searchParams.set('connectionTimeout', '10000');
+	url.searchParams.set('greetingTimeout', '10000');
+	url.searchParams.set('socketTimeout', '30000');
+	return url.toString();
 }
 
 export class SmtpNotifier implements Notifier {
@@ -41,7 +45,7 @@ export class SmtpNotifier implements Notifier {
 	private readonly mailer: Mailer;
 
 	constructor(options: SmtpNotifierOptions) {
-		const url = smtpUrl(options.url);
+		const url = smtpTransportUrl(options.url);
 		rejectHeaderBreaks(options.from, 'SMTP sender');
 		for (const email of options.adminTo ?? []) rejectHeaderBreaks(email, 'SMTP admin recipient');
 		this.from = options.from;
@@ -55,6 +59,14 @@ export class SmtpNotifier implements Notifier {
 				throw new Error('Invalid SMTP transport configuration');
 			}
 		}
+	}
+
+	close(): void {
+		this.mailer.close?.();
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		this.close();
 	}
 
 	async deliver(notification: Notification): Promise<NotificationDeliveryOutcome> {

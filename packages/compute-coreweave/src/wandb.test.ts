@@ -6,7 +6,7 @@ import { expectExecResult } from '@marimo-hub/core/testing';
 import { CoreWeaveCompute } from './index';
 import { buildWandbMetadata, createWandbCompute, serviceAddressResolver } from './wandb';
 import type { WandbConfig } from './wandb';
-import { makeWorld } from './testWorld';
+import { makeWorld, procResult } from './testWorld';
 
 const SANDBOX_ID = 'sb-abc' as SandboxId;
 
@@ -105,6 +105,17 @@ describe('createWandbCompute', () => {
 	});
 });
 
-computeContract('WandbCompute', () => createWandbCompute(baseConfig, makeWorld().client), {
-	mountFallsBack: true,
-});
+computeContract(
+	'WandbCompute',
+	() =>
+		createWandbCompute(
+			baseConfig,
+			makeWorld({
+				runImpl: async (command) =>
+					command.at(-1) === 'false'
+						? procResult({ exitCode: 1, failed: true, ok: false, stderr: 'failed' })
+						: procResult(),
+			}).client,
+		),
+	{ mountFallsBack: true, semantics: { failingCommand: 'false' } },
+);

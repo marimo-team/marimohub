@@ -1,10 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BROADCAST_NOTIFICATION_FIXTURE, NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing';
+import {
+	BROADCAST_NOTIFICATION_FIXTURE,
+	notifierContract,
+	NOTIFICATION_FIXTURE,
+} from '@marimo-hub/core/testing';
 import { escapeSlackText, SlackNotifier } from './index';
+
+notifierContract(
+	'Slack',
+	() =>
+		new SlackNotifier({
+			webhookUrl: 'https://hooks.slack.com/services/example',
+			fetcher: async () => ({ ok: true }),
+		}),
+	{ personal: 'skipped', broadcast: 'delivered' },
+);
 
 describe('SlackNotifier', () => {
 	it('escapes Slack metacharacters and disables unfurls', async () => {
-		const fetcher = vi.fn(async () => ({}));
+		const fetcher = vi.fn(async () => ({ ok: true }));
 		const notifier = new SlackNotifier({
 			webhookUrl: 'https://hooks.slack.com/services/example',
 			fetcher,
@@ -29,7 +43,7 @@ describe('SlackNotifier', () => {
 	});
 
 	it('skips personal notifications', async () => {
-		const fetcher = vi.fn(async () => ({}));
+		const fetcher = vi.fn(async () => ({ ok: true }));
 		const notifier = new SlackNotifier({
 			webhookUrl: 'https://hooks.slack.com/services/example',
 			fetcher,
@@ -58,6 +72,17 @@ describe('SlackNotifier', () => {
 		const delivery = notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE);
 		await expect(delivery).rejects.toThrow('Slack notification delivery failed');
 		await expect(delivery).rejects.not.toThrow('secret');
+	});
+
+	it('maps a non-2xx Slack response to the stable delivery error', async () => {
+		const notifier = new SlackNotifier({
+			webhookUrl: 'https://hooks.example.com/services/example',
+			fetcher: async () => ({ ok: false }),
+		});
+
+		await expect(notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE)).rejects.toThrow(
+			'Slack notification delivery failed',
+		);
 	});
 
 	it('escapes ampersands before angle brackets', () => {

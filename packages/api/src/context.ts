@@ -350,7 +350,6 @@ export interface ApiDeps {
 	 */
 	dataBrowser?: {
 		preview: boolean;
-		/** Experimental arbitrary SQL; absent/false keeps the route fail-closed. */
 		query?: boolean;
 		checkPreview?: () => Promise<void>;
 		close?: () => Promise<void>;

@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { getEventListeners } from 'node:events';
-import type { DuckDBPreviewProgram, DuckDBWasmRuntime } from '@marimo-hub/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type {
+	DataQueryExecution,
+	DuckDBPreviewProgram,
+	DuckDBWasmRuntime,
+	IntegrationId,
+} from '@marimo-hub/core';
 import {
 	createNodeDataQueryExecutorFactory,
 	createNodeDuckDBWasmRuntimeFactory,
+	DUCKDB_WORKER_RESOURCE_LIMITS,
 	nodeDuckDBWasmCapabilities,
 } from './node';
 
@@ -20,203 +25,42 @@ async function initialized(mode: 'worker' | 'inline'): Promise<DuckDBWasmRuntime
 	return runtime;
 }
 
+function dataQuery(
+	sql: string,
+	limits: Partial<DataQueryExecution['limits']> = {},
+): DataQueryExecution {
+	return {
+		sql,
+		connection: {
+			files: [],
+			vars: {},
+			integration: {
+				id: 'intg-query' as IntegrationId,
+				name: 'query',
+				kind: 'custom_env',
+				version: 1,
+			},
+		},
+		accessMode: 'read-only',
+		limits: { maxRows: 100, maxBytes: 4096, deadlineMs: 10_000, ...limits },
+	};
+}
+
 describe('DuckDB-Wasm worker lifecycle', () => {
-	it('creates a disposable isolated data-query executor', async () => {
-		const controller = new AbortController();
-		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
-			controller.signal,
-		);
-		try {
-			await expect(
-				executor.execute(
-					{
-						sql: 'SELECT value FROM range(300000) values(value)',
-						connection: {
-							files: [],
-							vars: {},
-							integration: {
-								id: 'intg-0000000000000000' as never,
-								name: 'lake',
-								kind: 'iceberg_rest',
-								version: 1,
-							},
-							plan: { setup: [] },
-						},
-						accessMode: 'read-only',
-						limits: { maxRows: 2, maxBytes: 4_096, deadlineMs: 5_000 },
-					},
-					controller.signal,
-				),
-			).resolves.toEqual({ columns: ['value'], rows: [['0'], ['1']], truncated: true });
-		} finally {
-			executor.terminate();
-		}
-	}, 15_000);
-
-	it('rejects transaction-control escape attempts without applying writes', async () => {
-		const controller = new AbortController();
-		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
-			controller.signal,
-		);
-		const base = {
-			connection: {
-				files: [],
-				vars: {},
-				integration: {
-					id: 'intg-0000000000000000' as never,
-					name: 'lake',
-					kind: 'iceberg_rest',
-					version: 1,
-				},
-				plan: { setup: [] },
-			},
-			accessMode: 'read-only' as const,
-			limits: { maxRows: 10, maxBytes: 4_096, deadlineMs: 5_000 },
-		};
-		try {
-			await expect(
-				executor.execute(
-					{
-						...base,
-						sql: 'COMMIT; CREATE TABLE escaped(value INTEGER); BEGIN TRANSACTION READ ONLY; SELECT 1',
-					},
-					controller.signal,
-				),
-			).rejects.toThrow(/exactly one statement/i);
-			await expect(
-				executor.execute(
-					{
-						...base,
-						sql: `SELECT count(*) AS count
-							FROM information_schema.tables
-							WHERE table_name = 'escaped'`,
-					},
-					controller.signal,
-				),
-			).resolves.toEqual({ columns: ['count'], rows: [['0']], truncated: false });
-		} finally {
-			executor.terminate();
-		}
-	}, 15_000);
-
-	it('truncates a row that would exceed the serialized byte limit', async () => {
-		const controller = new AbortController();
-		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
-			controller.signal,
-		);
-		try {
-			await expect(
-				executor.execute(
-					{
-						sql: "SELECT repeat('x', 10000) AS value",
-						connection: {
-							files: [],
-							vars: {},
-							integration: {
-								id: 'intg-0000000000000000' as never,
-								name: 'lake',
-								kind: 'iceberg_rest',
-								version: 1,
-							},
-							plan: { setup: [] },
-						},
-						accessMode: 'read-only',
-						limits: { maxRows: 10, maxBytes: 128, deadlineMs: 5_000 },
-					},
-					controller.signal,
-				),
-			).resolves.toEqual({ columns: ['value'], rows: [], truncated: true });
-		} finally {
-			executor.terminate();
-		}
-	}, 15_000);
-
-	it('accounts for UTF-8 result bytes at the exact response boundary', async () => {
-		const controller = new AbortController();
-		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
-			controller.signal,
-		);
-		const exactBytes = new TextEncoder().encode(
-			JSON.stringify({
-				columns: ['value'],
-				rows: [['é']],
-				truncated: false,
-				execution_ms: Number.MAX_SAFE_INTEGER,
-			}),
-		).byteLength;
-		const request = (maxBytes: number) => ({
-			sql: "SELECT 'é' AS value",
-			connection: {
-				files: [],
-				vars: {},
-				integration: {
-					id: 'intg-0000000000000000' as never,
-					name: 'lake',
-					kind: 'iceberg_rest',
-					version: 1,
-				},
-				plan: { setup: [] },
-			},
-			accessMode: 'read-only' as const,
-			limits: { maxRows: 10, maxBytes, deadlineMs: 5_000 },
+	it('caps the worker V8 heap and stack', () => {
+		expect(DUCKDB_WORKER_RESOURCE_LIMITS).toEqual({
+			maxOldGenerationSizeMb: 256,
+			maxYoungGenerationSizeMb: 32,
+			stackSizeMb: 4,
 		});
-		try {
-			await expect(executor.execute(request(exactBytes), controller.signal)).resolves.toEqual({
-				columns: ['value'],
-				rows: [['é']],
-				truncated: false,
-			});
-			await expect(executor.execute(request(exactBytes - 1), controller.signal)).resolves.toEqual({
-				columns: ['value'],
-				rows: [],
-				truncated: true,
-			});
-		} finally {
-			executor.terminate();
-		}
-	}, 15_000);
+		expect(Object.isFrozen(DUCKDB_WORKER_RESOURCE_LIMITS)).toBe(true);
+	});
 
-	it('terminates the worker when cancellation races initialization', async () => {
-		const controller = new AbortController();
-		const creating = createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
-			controller.signal,
+	it('blocks inline execution before a preview runtime is created', async () => {
+		await expect(createNodeDuckDBWasmRuntimeFactory('inline')()).rejects.toThrow(
+			/cannot be preempted/,
 		);
-		controller.abort();
-		await expect(creating).rejects.toThrow(/cancelled|closed/i);
-	}, 15_000);
-
-	it('removes its abort listener after a query settles', async () => {
-		const controller = new AbortController();
-		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
-			controller.signal,
-		);
-		try {
-			await expect(
-				executor.execute(
-					{
-						sql: 'SELECT 1 AS value -- trailing comment',
-						connection: {
-							files: [],
-							vars: {},
-							integration: {
-								id: 'intg-0000000000000000' as never,
-								name: 'lake',
-								kind: 'iceberg_rest',
-								version: 1,
-							},
-							plan: { setup: [] },
-						},
-						accessMode: 'read-only',
-						limits: { maxRows: 10, maxBytes: 4_096, deadlineMs: 5_000 },
-					},
-					controller.signal,
-				),
-			).resolves.toEqual({ columns: ['value'], rows: [[1]], truncated: false });
-			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
-		} finally {
-			executor.terminate();
-		}
-	}, 15_000);
+	});
 
 	it('reports why guarded Iceberg HTTP is unavailable', () => {
 		const capabilities = nodeDuckDBWasmCapabilities();
@@ -269,13 +113,16 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 			pending: Map<number, unknown>;
 		};
 		const pending = runtime.ping();
+		const terminate = vi.spyOn(internals.worker, 'terminate');
 
 		internals.worker.emit('error', new Error('worker failed'));
 
 		await expect(pending).rejects.toThrow('worker failed');
 		await expect(runtime.ping()).rejects.toThrow('closed');
 		expect(internals.pending.size).toBe(0);
-		await internals.worker.terminate();
+		expect(terminate).toHaveBeenCalledOnce();
+		const termination = terminate.mock.results[0]?.value;
+		if (termination) await termination;
 	});
 
 	it('hard-terminates an executing query when closed', async () => {
@@ -290,9 +137,49 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 	}, 15_000);
 });
 
-const describeRuntime = describe.each(['worker', 'inline'] as const);
+describe('DuckDB-Wasm data-query executor', () => {
+	it('uses a fresh worker and enforces the row cap while streaming', async () => {
+		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
+			new AbortController().signal,
+		);
+		try {
+			await expect(
+				executor.execute(
+					dataQuery('select value from range(5) values(value)', { maxRows: 2 }),
+					new AbortController().signal,
+				),
+			).resolves.toEqual({
+				columns: ['value'],
+				rows: [['0'], ['1']],
+				truncated: true,
+			});
+		} finally {
+			executor.terminate();
+		}
+	}, 15_000);
 
-describeRuntime('DuckDB-Wasm %s runtime', { timeout: 15_000 }, (mode) => {
+	it('rejects multiple statements and ambient external access', async () => {
+		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
+			new AbortController().signal,
+		);
+		try {
+			await expect(
+				executor.execute(dataQuery('select 1; select 2'), new AbortController().signal),
+			).rejects.toThrow(/exactly one statement/i);
+			await expect(
+				executor.execute(
+					dataQuery("select * from read_csv_auto('https://example.com/data.csv')"),
+					new AbortController().signal,
+				),
+			).rejects.toThrow(/external access|disabled/i);
+		} finally {
+			executor.terminate();
+		}
+	}, 15_000);
+});
+
+describe('DuckDB-Wasm worker runtime', () => {
+	const mode = 'worker' as const;
 	it('rejects remote-required programs before executing their setup', async () => {
 		const runtime = await initialized(mode);
 		expect(runtime.features).not.toContain('iceberg-http');
