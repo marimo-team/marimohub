@@ -111,10 +111,10 @@ describe('guarded fetch', () => {
 		try {
 			const port = (server.address() as AddressInfo).port;
 			const guardedFetch = createGuardedFetch(async () => [{ address: '127.0.0.1', family: 4 }], {
-				socketTimeoutMs: 5,
+				socketTimeoutMs: 50,
 			});
 			const response = await guardedFetch(`http://objects.example.test:${port}/`);
-			await expect(response.arrayBuffer()).rejects.toThrow(/timed out/);
+			await expect(response.arrayBuffer()).rejects.toThrow('The object-store response timed out.');
 		} finally {
 			server.closeAllConnections();
 			await new Promise<void>((resolve, reject) =>

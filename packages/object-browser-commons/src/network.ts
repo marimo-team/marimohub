@@ -56,6 +56,7 @@ export function createGuardedFetch(
 					signal: effective.signal,
 				},
 				(incoming) => {
+					outgoing.setTimeout(0);
 					incoming.setTimeout(socketTimeoutMs, () => {
 						incoming.destroy(new Error('The object-store response timed out.'));
 					});
