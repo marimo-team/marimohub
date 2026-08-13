@@ -103,8 +103,8 @@ describe('parseComputeProfiles', () => {
 
 	it('accepts exact numeric resource boundaries', () => {
 		expect(
-			parseComputeProfiles('max:cpu=4096;mem=64Ti;gpu=A100:4294967295').defaultProfile?.resources,
-		).toEqual({ cpu: 4096, memoryBytes: 64 * 1024 ** 4, gpu: 'A100:4294967295' });
+			parseComputeProfiles('max:cpu=4096;mem=64Ti;gpu=A100:8').defaultProfile?.resources,
+		).toEqual({ cpu: 4096, memoryBytes: 64 * 1024 ** 4, gpu: 'A100:8' });
 	});
 
 	const fatal = (raw: string, messagePart: string) => {
@@ -144,8 +144,10 @@ describe('parseComputeProfiles', () => {
 		]) {
 			fatal(`gpu:gpu=${value}`, 'gpu must match');
 		}
-		fatal('gpu:gpu=A100:4294967296', 'transport limit');
-		fatal('gpu:gpu=A100:999999999999999999999999999999999999', 'transport limit');
+		fatal('gpu:gpu=A100:9', 'sanity limit of 8');
+		fatal('gpu:gpu=A100:100000', 'sanity limit of 8');
+		fatal('gpu:gpu=A100:4294967295', 'sanity limit of 8');
+		fatal('gpu:gpu=A100:999999999999999999999999999999999999', 'sanity limit of 8');
 	});
 
 	it('rejects unsupported or missing memory units', () => {

@@ -49,8 +49,8 @@ const MAX_CPU_CORES = 4096;
 const MAX_MEMORY_BYTES = 64 * 1024 ** 4;
 const MIN_CPU_CORES = 0.001;
 const MIN_MEMORY_BYTES = 1024 ** 2;
-// Modal serializes the count as protobuf uint32.
-const MAX_GPU_COUNT = 0xffff_ffff;
+// Modal currently schedules at most eight GPUs in one container.
+const MAX_GPU_COUNT = 8;
 const COMPUTE_BACKENDS =
 	CONFIG_SPEC.find((group) => group.selector === 'MARIMOHUB_COMPUTE_BACKEND')?.backends ?? [];
 
@@ -159,7 +159,7 @@ function parseGpu(value: string, profile: string): string {
 	const count = match[2] === undefined ? undefined : Number(match[2]);
 	if (count !== undefined && (!Number.isSafeInteger(count) || count > MAX_GPU_COUNT)) {
 		throw new ComputeProfileConfigError(
-			`gpu count exceeds transport limit of ${MAX_GPU_COUNT}, got ${JSON.stringify(match[2])}`,
+			`gpu count exceeds sanity limit of ${MAX_GPU_COUNT}, got ${JSON.stringify(match[2])}`,
 			profile,
 			'gpu',
 		);
