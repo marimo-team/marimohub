@@ -566,7 +566,10 @@ describe('DataBrowserPage', () => {
 		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('/browse/objects'))).toBe(
 			true,
 		);
-		expect(screen.getByRole('group', { name: 'Object filters' })).toHaveClass('grid-cols-2');
+		expect(screen.getByRole('group', { name: 'Object filters' })).toHaveClass(
+			'grid-cols-2',
+			'xl:grid-cols-4',
+		);
 	});
 
 	it('selects among discovered buckets and reports empty or failed discovery', async () => {

@@ -322,7 +322,7 @@ export function ObjectBrowser({
 							/>
 						)}
 						{!initialListError && (
-							<fieldset className="grid grid-cols-2 gap-2 text-xs">
+							<fieldset className="grid grid-cols-2 gap-2 text-xs xl:grid-cols-4">
 								<legend className="sr-only">Object filters</legend>
 								<ObjectFilterSelect
 									label="Type"
