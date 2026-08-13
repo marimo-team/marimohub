@@ -306,26 +306,61 @@ describe('DuckDBWasmDataPreview', () => {
 		}
 	});
 
-	it('replaces a slot whose post-request health check fails', async () => {
+	it('does not clamp idle timeouts above the platform timer limit', async () => {
+		vi.useFakeTimers();
+		try {
+			const instance = runtime();
+			const preview = new DuckDBWasmDataPreview(async () => instance, {
+				...options,
+				idleTimeoutMs: 2_147_483_747,
+			});
+			await preview.check();
+
+			await vi.advanceTimersByTimeAsync(2_147_483_647);
+			expect(instance.close).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(99);
+			expect(instance.close).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(instance.close).toHaveBeenCalledOnce();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('returns a completed preview and replaces its slot when the health check fails', async () => {
+		const increment = vi.fn();
 		const failed = runtime({
 			ping: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('unhealthy')),
 		});
 		const healthy = runtime();
 		const factory = vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(healthy);
-		const preview = new DuckDBWasmDataPreview(factory, options);
+		const preview = new DuckDBWasmDataPreview(factory, {
+			...options,
+			metrics: { increment, gauge: vi.fn() },
+		});
 		await preview.check();
 
-		await expect(preview.preview({ setup: [], query: { text: 'SELECT 1' } })).rejects.toThrow(
-			'could not preview',
-		);
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 1' } })).resolves.toEqual({
+			columns: ['id'],
+			rows: [[1]],
+		});
 		expect(failed.close).toHaveBeenCalledOnce();
+		expect(increment).toHaveBeenCalledWith('data_preview.duckdb.execution', 1, {
+			executor: 'duckdb_wasm',
+			runtime: 'worker',
+			outcome: 'success',
+		});
+		expect(increment).toHaveBeenCalledWith('data_preview.duckdb.recycle', 1, {
+			runtime: 'worker',
+			reason: 'health_check',
+		});
 		await expect(preview.preview({ setup: [], query: { text: 'SELECT 2' } })).resolves.toEqual({
 			columns: ['id'],
 			rows: [[1]],
 		});
 	});
 
-	it('bounds a hanging post-request health check and recycles the slot', async () => {
+	it('returns a completed preview after bounding a hanging health check', async () => {
 		const instance = runtime({
 			ping: vi
 				.fn()
@@ -338,10 +373,45 @@ describe('DuckDBWasmDataPreview', () => {
 		});
 		await preview.check();
 
-		await expect(preview.preview({ setup: [], query: { text: 'SELECT 1' } })).rejects.toThrow(
-			'could not preview',
-		);
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 1' } })).resolves.toEqual({
+			columns: ['id'],
+			rows: [[1]],
+		});
 		expect(instance.close).toHaveBeenCalledOnce();
+	});
+
+	it('returns a completed preview before recycling finishes and tracks cleanup on close', async () => {
+		let finishClose: (() => void) | undefined;
+		const instance = runtime({
+			ping: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('unhealthy')),
+			close: vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishClose = resolve;
+					}),
+			),
+		});
+		const preview = new DuckDBWasmDataPreview(async () => instance, {
+			...options,
+			startupTimeoutMs: 10_000,
+		});
+		await preview.check();
+
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 1' } })).resolves.toEqual({
+			columns: ['id'],
+			rows: [[1]],
+		});
+		await vi.waitFor(() => expect(instance.close).toHaveBeenCalledOnce());
+		let closed = false;
+		const closing = preview.close().then(() => {
+			closed = true;
+		});
+		await Promise.resolve();
+		expect(closed).toBe(false);
+
+		finishClose?.();
+		await closing;
+		expect(closed).toBe(true);
 	});
 
 	it('emits low-cardinality pool, execution, and recycle metrics', async () => {

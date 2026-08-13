@@ -19,6 +19,7 @@ import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import type { DataPreviewService } from './data-preview/DataPreviewService';
+import { assertValidDataQuerySql } from './data-query';
 import type { DataQueryResult, DataQueryService } from './data-query';
 import type {
 	PreviewCredentialVars,
@@ -946,6 +947,7 @@ class ScopedIntegrationsStore {
 		if (!this.dataQuery) {
 			throw new ValidationError('Run SQL is not enabled on this deployment.');
 		}
+		assertValidDataQuerySql(sql);
 		const head = await this.getHead(scope, id);
 		if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
 		const rendered = await this.renderOne(scope, head, projectId, { sessionId, principal });

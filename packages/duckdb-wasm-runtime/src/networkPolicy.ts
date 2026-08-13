@@ -6,6 +6,13 @@ export const ICEBERG_HTTP_UNAVAILABLE =
 	'DuckDB-Wasm 1.32 Node file callbacks are synchronous, but IntegrationProbe is asynchronous; ' +
 	'no policy-enforcing broker exists for catalog, redirect, and object-store requests.';
 
+const LOCAL_PROTOCOLS = new Set<duckdb.DuckDBDataProtocol>([
+	duckdb.DuckDBDataProtocol.BUFFER,
+	duckdb.DuckDBDataProtocol.NODE_FS,
+	duckdb.DuckDBDataProtocol.BROWSER_FILEREADER,
+	duckdb.DuckDBDataProtocol.BROWSER_FSACCESS,
+]);
+
 export function createFailClosedNodeRuntime(base: NodeRuntime = duckdb.NODE_RUNTIME): NodeRuntime {
 	const assertFileAllowed = (module: Parameters<NodeRuntime['openFile']>[0], fileId: number) => {
 		const file = base.resolveFileInfo(module, fileId);
@@ -55,7 +62,8 @@ export function createFailClosedNodeRuntime(base: NodeRuntime = duckdb.NODE_RUNT
 }
 
 export function assertProtocolAllowed(protocol: duckdb.DuckDBDataProtocol | undefined): void {
-	if (protocol === duckdb.DuckDBDataProtocol.HTTP || protocol === duckdb.DuckDBDataProtocol.S3) {
-		throw new Error(`DuckDB-Wasm remote data access is unavailable. ${ICEBERG_HTTP_UNAVAILABLE}`);
-	}
+	if (protocol !== undefined && LOCAL_PROTOCOLS.has(protocol)) return;
+	throw new Error(
+		`DuckDB-Wasm access through a non-local or unknown data protocol is unavailable. ${ICEBERG_HTTP_UNAVAILABLE}`,
+	);
 }

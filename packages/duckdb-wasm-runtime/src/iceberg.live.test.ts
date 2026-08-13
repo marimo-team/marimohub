@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createNodeDuckDBWasmRuntimeFactory } from './node';
+import { createNodeDuckDBWasmRuntimeFactory, nodeDuckDBWasmCapabilities } from './node';
 
 const uri = process.env.MARIMOHUB_TEST_DUCKDB_WASM_ICEBERG_URI;
 const table = process.env.MARIMOHUB_TEST_DUCKDB_WASM_ICEBERG_TABLE;
+const supportsIcebergHttp = nodeDuckDBWasmCapabilities().features.includes('iceberg-http');
 
-if (uri && table) {
+if (uri && table && supportsIcebergHttp) {
 	describe('DuckDB-Wasm guarded Iceberg transport (live)', () => {
 		it('scans Iceberg only after the brokered runtime advertises support', async () => {
 			const runtime = await createNodeDuckDBWasmRuntimeFactory('worker')();
@@ -32,7 +33,7 @@ if (uri && table) {
 		});
 	});
 } else {
-	describe.skip('DuckDB-Wasm guarded Iceberg transport (set URI and TABLE fixture variables)', () => {
+	describe.skip('DuckDB-Wasm guarded Iceberg transport (requires fixture and iceberg-http support)', () => {
 		it('requires a live broker fixture', () => {});
 	});
 }

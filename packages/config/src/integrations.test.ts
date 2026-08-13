@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectId, DataPreviewService } from '@marimo-hub/core';
+import {
+	createProjectId,
+	createSessionId,
+	DataPreviewService,
+	DataQueryService,
+} from '@marimo-hub/core';
+import type { DataQueryExecution } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
 import { ConfigError } from './errors';
 import {
@@ -222,6 +228,50 @@ describe('makeIntegrations data browser', () => {
 		);
 		expect(withRuntime.dataBrowser?.checkPreview).toBeTypeOf('function');
 		expect(withRuntime.dataBrowser?.close).toBeTypeOf('function');
+	});
+
+	it('keeps Run SQL off by default and exposes an explicitly injected isolated service', async () => {
+		const env = { MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' };
+		const without = makeIntegrations(env, new MemoryBucket());
+		expect(without.dataBrowser?.query).toBe(false);
+
+		const executions: DataQueryExecution[] = [];
+		const dataQuery = new DataQueryService({
+			executorFactory: {
+				create: async () => ({
+					runtime: 'worker',
+					execute: async (request) => {
+						executions.push(request);
+						return { columns: ['value'], rows: [[1]], truncated: false };
+					},
+					terminate: () => {},
+				}),
+			},
+			maxConcurrent: 1,
+			maxConcurrentPerUser: 1,
+			maxRows: 10,
+			maxBytes: 4096,
+			executionTimeoutMs: 1000,
+		});
+		const wired = makeIntegrations(env, new MemoryBucket(), undefined, undefined, dataQuery);
+		expect(wired.dataBrowser?.query).toBe(true);
+		const pid = createProjectId();
+		const created = await wired.integrations?.create(
+			pid,
+			{ kind: 'custom_env', name: 'source', config: { vars: { SOURCE: 'test' } } },
+			ACTOR,
+		);
+		await expect(
+			wired.integrations?.runDataQuery(
+				pid,
+				created!.id,
+				{ userId: ACTOR, email: 'actor@example.com' },
+				createSessionId(),
+				'select 1',
+			),
+		).resolves.toEqual({ columns: ['value'], rows: [[1]], truncated: false });
+		expect(executions).toHaveLength(1);
+		await wired.dataBrowser?.close?.();
 	});
 
 	it('passes metadata and full modes to every production object browser', async () => {

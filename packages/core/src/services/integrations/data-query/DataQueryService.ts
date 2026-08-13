@@ -53,7 +53,7 @@ export class DataQueryService {
 
 	async query(userId: UserId, input: DataQueryInput): Promise<DataQueryResult> {
 		if (this.closed) throw new UnavailableError('The data-query service is closed.');
-		this.validateSql(input.sql);
+		assertValidDataQuerySql(input.sql);
 		return this.inFlight.track(this.admission.run(userId, () => this.execute(input)));
 	}
 
@@ -138,13 +138,6 @@ export class DataQueryService {
 		}
 	}
 
-	private validateSql(sql: string): void {
-		if (sql.trim().length === 0) throw new ValidationError('SQL must not be empty.');
-		if (new TextEncoder().encode(sql).byteLength > MAX_DATA_QUERY_SQL_BYTES) {
-			throw new ValidationError(`SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`);
-		}
-	}
-
 	private validateResult(result: DataQueryResult): DataQueryResult {
 		if (
 			!Array.isArray(result.columns) ||
@@ -166,5 +159,12 @@ export class DataQueryService {
 			throw new UnavailableError('The data-query result exceeded its byte limit.');
 		}
 		return result;
+	}
+}
+
+export function assertValidDataQuerySql(sql: string): void {
+	if (sql.trim().length === 0) throw new ValidationError('SQL must not be empty.');
+	if (new TextEncoder().encode(sql).byteLength > MAX_DATA_QUERY_SQL_BYTES) {
+		throw new ValidationError(`SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`);
 	}
 }

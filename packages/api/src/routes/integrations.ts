@@ -518,7 +518,6 @@ const DataQueryBody = z
 		sql: z
 			.string()
 			.min(1)
-			.max(MAX_DATA_QUERY_SQL_BYTES)
 			.refine((value) => utf8ByteLength(value) <= MAX_DATA_QUERY_SQL_BYTES, {
 				message: `SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`,
 			}),

@@ -28,6 +28,7 @@ import { IntegrationRegistry } from './registry';
 import { defineIntegration, envSegment } from './sdk';
 import { zSecret } from './secretFields';
 import { DataPreviewService } from './data-preview/DataPreviewService';
+import { DataQueryService } from './data-query';
 
 const codec = new AesGcmSecretCodec({ kek: 'sFjp5R6eWYvc9SGtfeYEsQQlMKB8MfP4FdFAD7JAjsw=' });
 
@@ -2493,6 +2494,70 @@ describe('data browsing', () => {
 			metadata: false,
 			reason: expect.stringContaining('does not support browsing'),
 		});
+	});
+
+	it('rejects invalid SQL before resolving or rendering integration secrets', async () => {
+		const resolve = vi.fn(vaultResolver.resolve);
+		const render = vi.fn(() => ({}));
+		const registry = new IntegrationRegistry();
+		registry.register(
+			defineIntegration({
+				kind: 'query_source',
+				title: 'Query source',
+				description: 'test kind',
+				category: 'catalog',
+				brand: { color: '#000000' },
+				schemaVersion: 1,
+				configSchema: z.object({ token: zSecret() }),
+				render,
+			}),
+		);
+		const dataQuery = new DataQueryService({
+			executorFactory: {
+				create: async () => ({
+					runtime: 'worker',
+					execute: async () => ({ columns: [], rows: [], truncated: false }),
+					terminate: () => {},
+				}),
+			},
+			maxConcurrent: 1,
+			maxConcurrentPerUser: 1,
+			maxRows: 10,
+			maxBytes: 1024,
+			executionTimeoutMs: 1000,
+		});
+		const queryStore = new ProjectIntegrationsStore({
+			bucket,
+			registry,
+			codec,
+			resolvers: [{ ...vaultResolver, resolve }],
+			dataQuery,
+		});
+		const created = await queryStore.create(
+			pid,
+			{
+				kind: 'query_source',
+				name: 'query-source',
+				config: {
+					token: {
+						$secret: { kind: 'reference', backend: 'vault', locator: 'query/token' },
+					},
+				},
+			},
+			ACTOR,
+		);
+
+		await expect(
+			queryStore.runDataQuery(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'actor@example.com' },
+				createSessionId(),
+				'   ',
+			),
+		).rejects.toThrow('SQL must not be empty');
+		expect(resolve).not.toHaveBeenCalled();
+		expect(render).not.toHaveBeenCalled();
 	});
 
 	it('refuses a runtime preview when the resolved config is not supported', async () => {

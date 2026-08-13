@@ -55,7 +55,11 @@ export {
 } from './integrations/ProjectIntegrationsStore';
 export type { IntegrationsStoreOptions } from './integrations/ProjectIntegrationsStore';
 export type { OrgIntegrationsService, ProjectIntegrationsService } from './integrations/contracts';
-export { DataQueryService, MAX_DATA_QUERY_SQL_BYTES } from './integrations/data-query';
+export {
+	assertValidDataQuerySql,
+	DataQueryService,
+	MAX_DATA_QUERY_SQL_BYTES,
+} from './integrations/data-query';
 export type {
 	DataQueryConnection,
 	DataQueryExecution,

@@ -8164,7 +8164,6 @@ paths:
                 sql:
                   type: string
                   minLength: 1
-                  maxLength: 32768
               required:
                 - sql
               additionalProperties: false

@@ -3,21 +3,36 @@ import { describe, expect, it, vi } from 'vitest';
 import { assertProtocolAllowed, createFailClosedNodeRuntime } from './networkPolicy';
 
 describe('DuckDB-Wasm network policy', () => {
-	it.each([duckdb.DuckDBDataProtocol.HTTP, duckdb.DuckDBDataProtocol.S3])(
-		'rejects remote protocol %s',
+	it.each([undefined, duckdb.DuckDBDataProtocol.HTTP, duckdb.DuckDBDataProtocol.S3, 999])(
+		'rejects non-local or unknown protocol %s',
 		(protocol) => {
-			expect(() => assertProtocolAllowed(protocol)).toThrow(/policy-enforcing broker/i);
+			expect(() =>
+				assertProtocolAllowed(protocol as duckdb.DuckDBDataProtocol | undefined),
+			).toThrow(/non-local or unknown.*policy-enforcing broker/i);
 		},
 	);
 
 	it.each([
-		undefined,
 		duckdb.DuckDBDataProtocol.BUFFER,
 		duckdb.DuckDBDataProtocol.NODE_FS,
 		duckdb.DuckDBDataProtocol.BROWSER_FILEREADER,
 		duckdb.DuckDBDataProtocol.BROWSER_FSACCESS,
-	] as const)('allows non-network protocol %s', (protocol) => {
+	] as const)('allows explicitly listed local protocol %s', (protocol) => {
 		expect(() => assertProtocolAllowed(protocol)).not.toThrow();
+	});
+
+	it('blocks missing file metadata before delegating', () => {
+		const openFile = vi.fn(() => 1);
+		const runtime = createFailClosedNodeRuntime({
+			...duckdb.NODE_RUNTIME,
+			resolveFileInfo: vi.fn(() => null),
+			openFile,
+		});
+
+		expect(() => runtime.openFile({} as never, 7, duckdb.FileFlags.FILE_FLAGS_READ)).toThrow(
+			/non-local or unknown/i,
+		);
+		expect(openFile).not.toHaveBeenCalled();
 	});
 
 	it('blocks remote files before delegating even if the SDK runtime gains HTTP support', () => {

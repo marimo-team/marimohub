@@ -869,8 +869,8 @@ describe('Data browser routes', () => {
 		const asManager = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
 		const url = `/projects/${pid}/integrations/${created.id}/browse/query`;
 
-		await expectError(await asEditor('POST', url, { sql: 'select 1' }), 403, 'FORBIDDEN');
 		queryDeps.dataBrowser.query = true;
+		await expectError(await asEditor('POST', url, { sql: 'select 1' }), 403, 'FORBIDDEN');
 		for (let index = 0; index < 5; index++) {
 			await expectOk(await asManager('POST', url, { sql: `select ${index}` }));
 		}

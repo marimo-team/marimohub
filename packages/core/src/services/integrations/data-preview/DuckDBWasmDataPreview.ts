@@ -35,6 +35,7 @@ interface RuntimeCapabilities {
 }
 
 type RecycleReason = 'execution_error' | 'timeout' | 'health_check' | 'idle' | 'shutdown';
+const MAX_TIMER_DURATION_MS = 2_147_483_647;
 
 class DuckDBExecutionTimeoutError extends Error {
 	name = 'DuckDBExecutionTimeoutError';
@@ -48,6 +49,7 @@ export class DuckDBWasmDataPreview {
 	private readonly initializations = new Set<Promise<unknown>>();
 	private readonly initializationDisposers = new Set<() => Promise<void>>();
 	private readonly activeWork = new Set<Promise<unknown>>();
+	private readonly disposals = new Set<Promise<unknown>>();
 	private readonly maxPoolSize: number;
 	private readonly idleTimeoutMs: number;
 	private readonly metrics: Metrics;
@@ -159,26 +161,24 @@ export class DuckDBWasmDataPreview {
 			if (this.closed || controller.signal.aborted) {
 				throw new UnavailableError('DuckDB-Wasm was closed during preview execution.');
 			}
+			let healthy = true;
 			try {
 				await withDeadline(runtime.ping(), {
 					timeoutMs: this.options.executionTimeoutMs,
 					timeoutError: () => new DuckDBHealthCheckError(),
 				});
 			} catch {
-				throw new DuckDBHealthCheckError();
+				healthy = false;
+				void this.disposeSlot(slot, 'health_check');
 			}
 			this.metrics.increment('data_preview.duckdb.execution', 1, { ...tags, outcome: 'success' });
 			this.metrics.gauge('data_preview.duckdb.rows', result.rows.length, tags);
-			this.releaseSlot(slot);
+			if (healthy) this.releaseSlot(slot);
 			return result;
 		} catch (error) {
 			controller.abort();
 			const reason: RecycleReason =
-				error instanceof DuckDBExecutionTimeoutError
-					? 'timeout'
-					: error instanceof DuckDBHealthCheckError
-						? 'health_check'
-						: 'execution_error';
+				error instanceof DuckDBExecutionTimeoutError ? 'timeout' : 'execution_error';
 			this.metrics.increment('data_preview.duckdb.execution', 1, { ...tags, outcome: reason });
 			await this.disposeSlot(slot, reason);
 			throw new UnavailableError(
@@ -293,9 +293,21 @@ export class DuckDBWasmDataPreview {
 	private scheduleIdle(slot: RuntimeSlot): void {
 		if (this.idleTimeoutMs === 0 || this.closed || slot.busy || slot.disposing) return;
 		this.clearIdle(slot);
+		this.armIdleTimer(slot, Date.now());
+	}
+
+	private armIdleTimer(slot: RuntimeSlot, idleStartedAt: number): void {
+		const elapsed = Math.max(0, Date.now() - idleStartedAt);
+		const remaining = Math.max(0, this.idleTimeoutMs - elapsed);
+		const delay = Math.min(remaining, MAX_TIMER_DURATION_MS);
 		slot.idleTimer = setTimeout(() => {
-			if (!slot.busy && !this.closed) void this.disposeSlot(slot, 'idle');
-		}, this.idleTimeoutMs);
+			if (slot.busy || this.closed || slot.disposing) return;
+			if (Date.now() - idleStartedAt < this.idleTimeoutMs) {
+				this.armIdleTimer(slot, idleStartedAt);
+				return;
+			}
+			void this.disposeSlot(slot, 'idle');
+		}, delay);
 		unrefTimer(slot.idleTimer);
 	}
 
@@ -314,7 +326,7 @@ export class DuckDBWasmDataPreview {
 			reason,
 		});
 		this.recordPoolSize(slot.runtime.mode);
-		slot.disposing = this.closeRuntime(slot.runtime);
+		slot.disposing = this.track(this.disposals, this.closeRuntime(slot.runtime));
 		return slot.disposing;
 	}
 
@@ -337,6 +349,10 @@ export class DuckDBWasmDataPreview {
 		await withDeadline(Promise.allSettled(this.initializations), {
 			timeoutMs: this.options.startupTimeoutMs,
 			timeoutError: () => new UnavailableError('DuckDB-Wasm initialization did not stop in time.'),
+		}).catch(() => {});
+		await withDeadline(Promise.allSettled(this.disposals), {
+			timeoutMs: this.options.startupTimeoutMs,
+			timeoutError: () => new UnavailableError('DuckDB-Wasm cleanup did not stop in time.'),
 		}).catch(() => {});
 		await withDeadline(Promise.allSettled(this.activeWork), {
 			timeoutMs: this.options.executionTimeoutMs + this.options.startupTimeoutMs,
