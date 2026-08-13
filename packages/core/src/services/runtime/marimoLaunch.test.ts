@@ -24,6 +24,21 @@ describe('buildMarimoLaunch', () => {
 		expect(start).toContain('--base-url="/proxy/tok"');
 	});
 
+	// --convert's fallback can rewrite a file as Python, so it must never reach a
+	// markdown-family notebook.
+	for (const file of ['docs/page.md', 'page.markdown', 'reports/q3.qmd']) {
+		it(`edit drops --convert for ${file}`, () => {
+			const { start } = buildMarimoLaunch({ ...BASE, mode: 'edit', notebookFile: file });
+			expect(start).toContain('marimo edit');
+			expect(start).not.toContain('--convert');
+		});
+	}
+
+	it('edit keeps --convert for a nested .py entry (synced sources set entryNotebook)', () => {
+		const { start } = buildMarimoLaunch({ ...BASE, mode: 'edit', notebookFile: 'apps/main.py' });
+		expect(start).toContain('--convert');
+	});
+
 	it('app drops --convert but keeps host/port/asset-url/base-url', () => {
 		const { start } = buildMarimoLaunch({ ...BASE, mode: 'app' });
 		expect(start).toContain('marimo run');

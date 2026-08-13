@@ -147,6 +147,149 @@ describe('Git sync routes', () => {
 		expect(versions.items[0]?.commit).toBe('abc123');
 	});
 
+	it('syncs a markdown entry notebook end to end', async () => {
+		const markdown = '# Report\n\n```python {.marimo}\nx = 1\n```\n';
+		const { notebook, sync_token } = await expectOk<{
+			notebook: { id: string };
+			sync_token: string;
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Markdown app',
+				description: 'Synced',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'docs/page.md',
+			}),
+			201,
+		);
+
+		const response = await app.request(
+			`/api/sync/git/v1/projects/${projectId}/notebooks/${notebook.id}`,
+			{
+				method: 'POST',
+				body: zipSync({ 'docs/page.md': new TextEncoder().encode(markdown) }),
+				headers: { 'Content-Type': 'application/zip', ...requiredHeaders(sync_token) },
+			},
+		);
+		await expectOk(response);
+
+		const content = await expectOk<{ code: string }>(
+			await request('GET', `/projects/${projectId}/notebooks/${notebook.id}/content`),
+		);
+		expect(content.code).toBe(markdown);
+	});
+
+	// `.ipynb` isn't in NOTEBOOK_FILE_EXTENSIONS yet; a bare `.md` has no stem, so
+	// marimo would refuse to open it.
+	for (const entry of ['notes.ipynb', 'notes.txt', '.md', 'docs/.qmd', 'page.MD']) {
+		it(`rejects creating a synced notebook with entry_notebook ${JSON.stringify(entry)} (400)`, async () => {
+			await expectError(
+				await request('POST', `/projects/${projectId}/notebooks/git`, {
+					title: 'Bad entry',
+					description: 'd',
+					repo: 'org/repo',
+					branch: 'main',
+					entry_notebook: entry,
+				}),
+				400,
+				'BAD_REQUEST',
+			);
+		});
+	}
+
+	it('syncs a prose-only markdown notebook (no code fences)', async () => {
+		// marimo compiles prose into mo.md cells, so a page with zero code fences is
+		// still a real notebook — the sync path must not gate on "has Python".
+		const prose = '# Quarterly report\n\nAll numbers are up and to the right.\n';
+		const { notebook, sync_token } = await expectOk<{
+			notebook: { id: string };
+			sync_token: string;
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Prose page',
+				description: 'Synced',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'report.md',
+			}),
+			201,
+		);
+
+		await expectOk(
+			await app.request(`/api/sync/git/v1/projects/${projectId}/notebooks/${notebook.id}`, {
+				method: 'POST',
+				body: zipSync({ 'report.md': new TextEncoder().encode(prose) }),
+				headers: { 'Content-Type': 'application/zip', ...requiredHeaders(sync_token) },
+			}),
+		);
+
+		const content = await expectOk<{ code: string }>(
+			await request('GET', `/projects/${projectId}/notebooks/${notebook.id}/content`),
+		);
+		expect(content.code).toBe(prose);
+	});
+
+	it('rejects a sync whose archive is missing the markdown entry notebook (422)', async () => {
+		const { notebook, sync_token } = await expectOk<{
+			notebook: { id: string };
+			sync_token: string;
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Markdown app',
+				description: 'Synced',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'page.md',
+			}),
+			201,
+		);
+
+		const error = await expectError(
+			await app.request(`/api/sync/git/v1/projects/${projectId}/notebooks/${notebook.id}`, {
+				method: 'POST',
+				body: zipSync({ 'other.md': new TextEncoder().encode('# not the entry') }),
+				headers: { 'Content-Type': 'application/zip', ...requiredHeaders(sync_token) },
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(error.message).toContain('page.md');
+	});
+
+	it('switches a synced notebook from a .py to a .md entry via pending config', async () => {
+		const { notebookId, syncToken } = await createSyncedNotebook();
+		await expectOk(await syncRequest({ notebookId, headers: requiredHeaders(syncToken) }));
+
+		// Staged (not applied) until an archive matching the new config arrives.
+		const patched = await expectOk<{ source: { entry_notebook: string } }>(
+			await request('PATCH', `/projects/${projectId}/notebooks/${notebookId}/source`, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'page.md',
+			}),
+		);
+		expect(patched.source.entry_notebook).toBe('app.py');
+
+		const markdown = '# Ported\n\n```python {.marimo}\ny = 2\n```\n';
+		await expectOk(
+			await app.request(`/api/sync/git/v1/projects/${projectId}/notebooks/${notebookId}`, {
+				method: 'POST',
+				body: zipSync({ 'page.md': new TextEncoder().encode(markdown) }),
+				headers: { 'Content-Type': 'application/zip', ...requiredHeaders(syncToken) },
+			}),
+		);
+
+		const detail = await expectOk<{ source: { entry_notebook: string } }>(
+			await request('GET', `/projects/${projectId}/notebooks/${notebookId}`),
+		);
+		expect(detail.source.entry_notebook).toBe('page.md');
+		const content = await expectOk<{ code: string }>(
+			await request('GET', `/projects/${projectId}/notebooks/${notebookId}/content`),
+		);
+		expect(content.code).toBe(markdown);
+	});
+
 	it('does not perform alert metadata reads before a successful sync', async () => {
 		const { notebookId, syncToken } = await createSyncedNotebook();
 		const services = createServices(bucket);

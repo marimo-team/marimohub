@@ -183,3 +183,10 @@ export function isRepoInput(input: string): boolean {
 
 export const REPO_INPUT_HINT =
 	'Use owner/repo or a repository URL, e.g. acme/analytics or https://gitlab.example.com/group/project';
+
+// Mirrors the server's notebook-extension gate (core `isNotebookFilePath`),
+// including its non-empty-stem rule: a bare dotfile like `.md` is not a notebook.
+export const ENTRY_NOTEBOOK_PATTERN = /[^/]\.(py|md|markdown|qmd)$/;
+
+export const ENTRY_NOTEBOOK_HINT =
+	'Must point to a marimo notebook (.py, .md, .markdown, or .qmd), e.g. dashboard.py';

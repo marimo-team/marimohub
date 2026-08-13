@@ -18,7 +18,12 @@ import {
 	WriteOnceWarning,
 } from '@/components/ui';
 import { useNotebookQuery, useRotateSyncToken, useUpdateGitSource } from '@/api/hooks';
-import { isRepoInput, REPO_INPUT_HINT } from '@/lib/git';
+import {
+	ENTRY_NOTEBOOK_HINT,
+	ENTRY_NOTEBOOK_PATTERN,
+	isRepoInput,
+	REPO_INPUT_HINT,
+} from '@/lib/git';
 import { DOCS_SYNCING_URL } from '@/lib/links';
 import { formatRelative } from '@/lib/time';
 
@@ -37,10 +42,7 @@ const settingsSchema = z.object({
 	repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
 	branch: requiredText('Branch'),
 	rootPath: optionalText(),
-	entryNotebook: requiredText('Notebook file').regex(
-		/\.py$/,
-		'Must point to a .py file, e.g. dashboard.py',
-	),
+	entryNotebook: requiredText('Notebook file').regex(ENTRY_NOTEBOOK_PATTERN, ENTRY_NOTEBOOK_HINT),
 });
 
 const EMPTY = { repo: '', branch: '', rootPath: '', entryNotebook: '' };

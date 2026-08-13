@@ -60,13 +60,13 @@ Content-Type: application/json
 }
 ```
 
-| Field            | Required | Notes                                                                       |
-| ---------------- | -------- | --------------------------------------------------------------------------- |
-| `provider`       | no       | `github` or `gitlab`. Usually derived from `repo`; see below.               |
-| `repo`           | yes      | `owner/name` or a repository URL. Informational + matched on each push.     |
-| `branch`         | yes      | Branch this notebook tracks.                                                |
-| `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`). |
-| `entry_notebook` | yes      | The `.py` notebook to open, **relative to `root_path`**.                    |
+| Field            | Required | Notes                                                                                     |
+| ---------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `provider`       | no       | `github` or `gitlab`. Usually derived from `repo`; see below.                             |
+| `repo`           | yes      | `owner/name` or a repository URL. Informational + matched on each push.                   |
+| `branch`         | yes      | Branch this notebook tracks.                                                              |
+| `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`).               |
+| `entry_notebook` | yes      | The notebook to open (`.py`, `.md`, `.markdown`, or `.qmd`), **relative to `root_path`**. |
 
 `repo` accepts `owner/repo` (GitHub shorthand; gitlab.com when `provider` is
 `gitlab`) or a repository URL such as

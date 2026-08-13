@@ -41,10 +41,26 @@ export function normalizeWorkspaceRootPath(path: string | undefined): string {
 	return normalized;
 }
 
+/**
+ * Extensions marimo treats as first-class notebooks (mirrors marimo's
+ * `MarimoPath.is_valid`, minus `.ipynb` which the runtime can't open yet).
+ * Extend this list to admit new formats everywhere at once.
+ */
+export const NOTEBOOK_FILE_EXTENSIONS = ['.py', '.md', '.markdown', '.qmd'] as const;
+
+export function isNotebookFilePath(path: string): boolean {
+	const name = path.slice(path.lastIndexOf('/') + 1);
+	// Require a non-empty stem: to `Path.suffix` a dotfile like `.md` has NO
+	// extension, so marimo would refuse to open it.
+	return NOTEBOOK_FILE_EXTENSIONS.some((ext) => name.endsWith(ext) && name.length > ext.length);
+}
+
 export function normalizeEntryNotebook(path: string): string {
 	const normalized = path.trim().replace(/\/+$/, '');
-	if (!isSafeWorkspacePath(normalized) || !normalized.endsWith('.py')) {
-		throw new BadRequestError('entry_notebook must be a relative .py file path');
+	if (!isSafeWorkspacePath(normalized) || !isNotebookFilePath(normalized)) {
+		throw new BadRequestError(
+			`entry_notebook must be a relative notebook file path (${NOTEBOOK_FILE_EXTENSIONS.join(', ')})`,
+		);
 	}
 	return normalized;
 }
