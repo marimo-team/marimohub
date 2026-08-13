@@ -846,6 +846,25 @@ describe('OIDC routes', () => {
 		expect(res.headers.get('set-cookie') ?? '').toMatch(/mh_session=[^;,]+/);
 	});
 
+	it('rejects an omitted email_verified when the email domain is not allowed', async () => {
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 'user@example.org',
+		});
+		const { routes } = makeOidc({
+			emailVerification: 'trusted-issuer',
+			allowedEmailDomains: ['example.com'],
+		});
+		const txn = await beginOidcTransaction(routes);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+
+		expect(res.headers.get('location')).toBe('/?auth_error=domain_not_allowed');
+		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+	});
+
 	it('allows an omitted UserInfo email_verified with a domain allowlist under trusted-issuer', async () => {
 		oauthMock.processDiscoveryResponse.mockReturnValue({
 			issuer: 'https://issuer.example.com',
@@ -869,6 +888,37 @@ describe('OIDC routes', () => {
 		});
 
 		expect(res.headers.get('set-cookie') ?? '').toMatch(/mh_session=[^;,]+/);
+	});
+
+	it('rejects ID-token email_verified false when UserInfo omits the claim', async () => {
+		oauthMock.processDiscoveryResponse.mockReturnValue({
+			issuer: 'https://issuer.example.com',
+			authorization_endpoint: 'https://issuer.example.com/authorize',
+			token_endpoint: 'https://issuer.example.com/token',
+			jwks_uri: 'https://issuer.example.com/jwks',
+			userinfo_endpoint: 'https://issuer.example.com/userinfo',
+		});
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 'user-1',
+			email: 'user@example.com',
+			email_verified: false,
+		});
+		oauthMock.processUserInfoResponse.mockResolvedValue({
+			sub: 'user-1',
+			email: 'user@example.com',
+		});
+		const { routes } = makeOidc({
+			emailVerification: 'trusted-issuer',
+			allowedEmailDomains: ['example.com'],
+		});
+		const txn = await beginOidcTransaction(routes);
+
+		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+
+		expect(res.headers.get('location')).toBe('/?auth_error=email_not_verified');
+		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
 	});
 
 	it('rejects explicit false with a domain allowlist under trusted-issuer', async () => {

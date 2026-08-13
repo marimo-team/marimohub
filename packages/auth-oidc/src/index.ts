@@ -672,10 +672,15 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		if (!validEmail(identityClaims.email)) return callbackError(c, 'auth_failed', returnTo);
 		const email = identityClaims.email;
 		const emailVerified = identityClaims.email_verified;
+		const emailVerificationClaims = [claims.email_verified, userInfo?.email_verified];
 
-		// Email participates in project authorization, so a present verification
-		// claim must be exactly true. Only omission is covered by trusted-issuer.
-		if (emailVerified !== undefined && emailVerified !== true) {
+		// Email participates in project authorization, so every validated source
+		// that provides a verification claim must set it to exactly true.
+		if (
+			emailVerificationClaims.some(
+				(verification) => verification !== undefined && verification !== true,
+			)
+		) {
 			return callbackError(c, 'email_not_verified', returnTo);
 		}
 		if (emailVerification === 'required' && emailVerified !== true) {
