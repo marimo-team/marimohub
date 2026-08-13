@@ -70,7 +70,7 @@ ENV VIRTUAL_ENV=/opt/venv \
 # /etc/profile resets PATH — dropping the venv set by ENV above. profile.d runs
 # after that reset, so login shells keep python3/pyarrow/pyiceberg resolvable
 # (the data-preview preflight depends on it).
-RUN echo 'export PATH=/opt/venv/bin:$PATH' > /etc/profile.d/venv-path.sh
+RUN echo 'export PATH=$VIRTUAL_ENV/bin:$PATH' > /etc/profile.d/venv-path.sh
 
 USER appuser
 WORKDIR /workspace
