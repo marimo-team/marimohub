@@ -38,11 +38,27 @@ describe('local development setup', () => {
 		});
 	});
 
-	it('seeds one org-wide integration once', async () => {
+	it('uses filesystem storage only when persistence is requested', () => {
+		const env = localDevEnv({ MARIMOHUB_DEV_PERSIST: 'true' });
+
+		expect(env).toMatchObject({
+			MARIMOHUB_STORAGE_BACKEND: 'fs',
+			MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'false',
+		});
+		expect(env.MARIMOHUB_STORAGE_FS_ROOT).toMatch(/\.context\/dev-storage$/);
+	});
+
+	it('seeds a welcome notebook and one org-wide integration once', async () => {
 		const deps = createDevDeps();
 
 		await seedLocalDev(deps);
 		await seedLocalDev(deps);
+
+		const projects = await deps.services.projects.listProjects();
+		expect(projects).toHaveLength(1);
+		expect(await deps.services.notebooks.listNotebooks(projects[0].id)).toEqual([
+			expect.objectContaining({ title: 'Welcome to marimohub', tags: ['example'] }),
+		]);
 
 		expect(await deps.orgIntegrations?.list()).toEqual([
 			expect.objectContaining({
@@ -61,9 +77,13 @@ describe('local development setup', () => {
 			.mockResolvedValueOnce([])
 			.mockResolvedValueOnce([{ name: 'local-development', kind: 'custom_env' }]);
 		const orgIntegrations = { list, create };
+		const deps = createDevDeps();
 
 		await expect(
-			seedLocalDev({ orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService }),
+			seedLocalDev({
+				...deps,
+				orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService,
+			}),
 		).resolves.toBeUndefined();
 		expect(create).toHaveBeenCalledOnce();
 	});
@@ -75,9 +95,13 @@ describe('local development setup', () => {
 			list: vi.fn().mockResolvedValue([{ name: 'local-development', kind: 'postgres' }]),
 			create,
 		};
+		const deps = createDevDeps();
 
 		await expect(
-			seedLocalDev({ orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService }),
+			seedLocalDev({
+				...deps,
+				orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService,
+			}),
 		).rejects.toBe(conflict);
 
 		expect(create).toHaveBeenCalledWith(

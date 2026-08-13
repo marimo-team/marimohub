@@ -403,6 +403,29 @@ describe('LocalCompute registry & teardown', () => {
 	it('proxy is a no-op', async () => {
 		expect(await compute.proxy()).toBeNull();
 	});
+
+	it('disposes every sandbox and rejects later creates', async () => {
+		const local = new LocalCompute();
+		const first = local.create('sb-dispose-first' as SandboxId);
+		const second = local.create('sb-dispose-second' as SandboxId);
+		const firstProcess = await first.startProcess(SERVER_CMD, { cwd: '/workspace' });
+		const secondProcess = await second.startProcess(SERVER_CMD, { cwd: '/workspace' });
+		await Promise.all([
+			firstProcess.waitForPort(2718, { timeout: 15_000 }),
+			secondProcess.waitForPort(2718, { timeout: 15_000 }),
+		]);
+		const urls = await Promise.all([
+			first.exposePort(2718, { hostname: '' }),
+			second.exposePort(2718, { hostname: '' }),
+		]);
+
+		await local[Symbol.asyncDispose]();
+		await expect(local[Symbol.asyncDispose]()).resolves.toBeUndefined();
+
+		for (const { url } of urls) await expect(fetch(url)).rejects.toThrow();
+		await expect(first.startProcess(SERVER_CMD)).rejects.toThrow(/destroyed/);
+		expect(() => local.create('sb-after-dispose' as SandboxId)).toThrow(/disposed/);
+	});
 });
 
 describe('LocalCompute listActive', () => {

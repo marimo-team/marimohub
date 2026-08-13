@@ -53,6 +53,14 @@ Startup is ready when the `server` process is listening on port `3000` and the
 `web` process prints a Vite local URL on port `5175`. The server owns the API;
 the web dev server proxies `/api` requests to it.
 
+`PORT` overrides the API port and `WEB_PORT` overrides the Vite port. For
+parallel worktrees, set `DEV_PORT_BASE`; the API uses that port and the web app
+uses the next port. Explicit `PORT` and `WEB_PORT` values take precedence:
+
+```bash
+DEV_PORT_BASE=4100 pnpm dev
+```
+
 ## What the local backends mean
 
 | Part    | Local backend           | Production swap                                                         |
@@ -61,10 +69,24 @@ the web dev server proxies `/api` requests to it.
 | Compute | `local`, host process   | CoreWeave, Modal, Kubernetes, Docker, Podman -> [Compute](./compute.md) |
 | Auth    | `dev`, fixed local user | OIDC or Cloudflare Access -> [Auth](./auth.md)                          |
 
-The local stack stores nothing durably. It starts kernels on your machine and
-authenticates every request as a fixed super admin. It enables integrations and
-metadata browsing, then seeds an org-wide `local-development` integration. The
-development entrypoint does not change deployed defaults.
+By default, state is held in memory and disappears on restart. The stack starts
+kernels on your machine, signs every request in as a fixed super admin, enables
+integrations and metadata browsing, and seeds a welcome notebook plus an
+org-wide `local-development` environment. Browsing requires a live Trino,
+ClickHouse, or Iceberg REST service. None of this changes deployed defaults.
+
+To keep projects and notebooks across restarts, opt into filesystem storage:
+
+```bash
+MARIMOHUB_DEV_PERSIST=true pnpm dev
+```
+
+This stores local state in `.context/dev-storage`, which is ignored by Git. Stop
+the dev stack before clearing it:
+
+```bash
+pnpm dev:reset
+```
 
 ## Run the server manually
 
@@ -75,8 +97,10 @@ the example when you want persistent local overrides:
 cp apps/server/.env.example apps/server/.env
 ```
 
-The development entrypoint overrides its storage, compute, auth, access, and
-feature values. The file can set other values, such as `PORT`.
+The development entrypoint overrides storage, compute, auth, access, and feature
+values. The file can set other values such as `MARIMOHUB_DEV_PERSIST=true`.
+Set port overrides on the root command so the server and web proxy receive the
+same values.
 
 ## Validate the local run
 
@@ -89,15 +113,13 @@ curl --fail --silent http://localhost:3000/api/health
 It should return `{"status":"ok"}`. Then:
 
 1. Open `http://localhost:5175`.
-2. Create a project.
-3. Create or upload a notebook.
-4. Start a kernel. If `uv` and Python are unavailable, stop after step 3.
-5. Stop and restart `pnpm dev`.
+2. Open the seeded welcome notebook, or create a project and notebook.
+3. Start a kernel. If `uv` and Python are unavailable, stop after step 2.
+4. Stop and restart `pnpm dev`.
 
-The project will disappear after restart when you use memory storage. That is
-expected. The local trial succeeded if the health check passed, the web app
-loaded, and you could create a project. Switch to a durable storage backend
-before keeping real notebooks.
+Projects disappear after restart when you use the default memory storage. That
+is expected. Set `MARIMOHUB_DEV_PERSIST=true` for durable local state; deployed
+environments should use a production storage configuration.
 
 ## Next
 

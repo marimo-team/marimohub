@@ -4,6 +4,9 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
 
+const apiPort = Number(process.env.PORT ?? 3000);
+const webPort = Number(process.env.WEB_PORT ?? 5175);
+
 // React SPA. The Cloudflare vite-plugin is intentionally absent — the SPA is a
 // pure consumer of the /api/* surface and is served as static assets by whatever
 // fronts the deployment (apps/server in Node, or Cloudflare in the reference).
@@ -16,17 +19,15 @@ export default defineConfig({
 		},
 	},
 	server: {
-		port: 5175,
+		port: webPort,
+		strictPort: true,
 		open: true,
 		// Proxy API calls to the local Node server (apps/server) so the SPA dev
 		// server can reach the /api/* surface during development.
 		proxy: {
 			'/api': {
-				target: 'http://localhost:3000',
-				// Keep the browser's Host header (localhost:5175) instead of rewriting it
-				// to the target. The API's CSRF guard compares the full request origin;
-				// with changeOrigin the proxied Host becomes
-				// localhost:3000 while Origin stays localhost:5175, tripping the guard.
+				target: `http://localhost:${apiPort}`,
+				// Rewriting Host would make it differ from Origin and trip the CSRF guard.
 				changeOrigin: false,
 			},
 		},
@@ -37,6 +38,10 @@ export default defineConfig({
 	// Cached build task: `output` archives/restores dist/ on a hit (a script can't).
 	run: {
 		tasks: {
+			dev: {
+				command: 'vp dev',
+				untrackedEnv: ['PORT', 'WEB_PORT'],
+			},
 			build: { command: 'vp build', output: ['dist/**'] },
 		},
 	},

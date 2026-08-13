@@ -8,6 +8,7 @@ coverage
 .vite-hooks
 *.tsbuildinfo
 .context
+.conductor/
 pnpm-debug.log*
 
 # Playwright e2e artifacts

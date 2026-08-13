@@ -155,7 +155,7 @@ classes rather than plain CSS.
 ### Vite + vite-plus
 
 Build tool and dev server. The web app builds with `vite-plus` (`vp`), using
-`@vitejs/plugin-react-swc` for fast JSX transforms and `@tailwindcss/vite` for
+`@vitejs/plugin-react` for JSX transforms and `@tailwindcss/vite` for
 Tailwind. The SPA dev server runs on port **5175** and proxies `/api/*` to the
 local Node server (`apps/server`, port 3000); the Cloudflare vite-plugin is
 intentionally absent — the SPA is a pure consumer of the API, served as static
@@ -251,7 +251,7 @@ Shared primitives in `packages/web/src/components/ui/`, built with
 | `lucide-react`                      | Icon set                   | Frontend     |
 | `sonner`                            | Toast notifications        | Frontend     |
 | `vite` / `vite-plus`                | Build tool & dev server    | Dev          |
-| `@vitejs/plugin-react-swc`          | Fast JSX transform         | Dev          |
+| `@vitejs/plugin-react`              | JSX transform              | Dev          |
 | `@cloudflare/workers-types`         | Worker API types           | Dev          |
 | `typescript`                        | Type checking              | Dev          |
 | `oxlint` / `oxfmt`                  | Lint & format (oxc)        | Dev          |
