@@ -4,6 +4,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import {
 	acquireSingletonClaim,
 	ensureInitialized,
+	mutateObjectWithOutcome,
 	releaseSingletonClaim,
 	sleep,
 	UserId,
@@ -14,6 +15,7 @@ import type { CreateIntegrationInput, CreateNotebookInput } from '@marimo-hub/co
 const DEV_STORAGE_ROOT = fileURLToPath(new URL('../../../.context/dev-storage', import.meta.url));
 const DEV_NOTEBOOK_SEED_CLAIM = '_system/dev/local-notebook-seed.json';
 const DEV_NOTEBOOK_SEED_LEASE_MS = 30_000;
+const DEV_NOTEBOOK_SEED_RENEW_MS = DEV_NOTEBOOK_SEED_LEASE_MS / 3;
 const DEV_NOTEBOOK_SEED_WAIT_MS = DEV_NOTEBOOK_SEED_LEASE_MS + 5_000;
 const DEV_NOTEBOOK_SEED_POLL_MS = 25;
 
@@ -82,6 +84,11 @@ function parseSeedClaim(raw: unknown): string | null {
 	throw new Error('Invalid local development seed claim');
 }
 
+function renewSeedHolder(holder: string): string | null {
+	const match = /^(\d+):\d+:(.+)$/.exec(holder);
+	return match ? `${match[1]}:${Date.now()}:${match[2]}` : null;
+}
+
 async function isSeedProcessLive(holder: string): Promise<boolean> {
 	const match = /^(\d+):(\d+):/.exec(holder);
 	const pid = Number(match?.[1]);
@@ -117,8 +124,23 @@ async function acquireSeedClaim(
 	}
 }
 
+async function renewSeedClaim(
+	deps: Pick<ApiDeps, 'bucket'>,
+	holder: string,
+): Promise<string | null> {
+	const renewed = renewSeedHolder(holder);
+	if (!renewed) return null;
+	const result = await mutateObjectWithOutcome(
+		deps.bucket,
+		DEV_NOTEBOOK_SEED_CLAIM,
+		(raw) => ({ holder: parseSeedClaim(raw) }),
+		(current) => (current.holder === holder ? { holder: renewed } : null),
+	);
+	return result.written ? renewed : null;
+}
+
 async function seedWelcomeNotebook(deps: Pick<ApiDeps, 'bucket' | 'services'>): Promise<void> {
-	const holder = `${process.pid}:${Date.now()}:${randomUUID()}`;
+	let holder = `${process.pid}:${Date.now()}:${randomUUID()}`;
 	const claim = {
 		bucket: deps.bucket,
 		key: DEV_NOTEBOOK_SEED_CLAIM,
@@ -127,6 +149,26 @@ async function seedWelcomeNotebook(deps: Pick<ApiDeps, 'bucket' | 'services'>): 
 		isHolderLive: isSeedProcessLive,
 	};
 	await acquireSeedClaim(claim, holder);
+	let renewal: Promise<void> | undefined;
+	let renewalError: Error | undefined;
+	const renew = (): Promise<void> => {
+		if (renewal) return renewal;
+		const pending = renewSeedClaim(deps, holder).then((next) => {
+			if (!next) throw new Error('Lost the local development notebook seed lease.');
+			holder = next;
+		});
+		const tracked = pending
+			.catch((error: unknown) => {
+				renewalError = error instanceof Error ? error : new Error(String(error));
+				throw renewalError;
+			})
+			.finally(() => {
+				if (renewal === tracked) renewal = undefined;
+			});
+		renewal = tracked;
+		return tracked;
+	};
+	const renewalTimer = setInterval(() => void renew().catch(() => {}), DEV_NOTEBOOK_SEED_RENEW_MS);
 
 	try {
 		const projects = await deps.services.projects.listProjects();
@@ -134,9 +176,14 @@ async function seedWelcomeNotebook(deps: Pick<ApiDeps, 'bucket' | 'services'>): 
 		if (!project) return;
 		const notebooks = await deps.services.notebooks.listNotebooks(project.id);
 		if (!notebooks.some(({ title }) => title === DEV_NOTEBOOK.title)) {
+			await renew();
 			await deps.services.notebooks.createNotebook(project.id, DEV_NOTEBOOK, DEV_USER.id);
 		}
+		await renewal;
+		if (renewalError) throw renewalError;
 	} finally {
+		clearInterval(renewalTimer);
+		await renewal?.catch(() => {});
 		await releaseSingletonClaim(claim, holder);
 	}
 }

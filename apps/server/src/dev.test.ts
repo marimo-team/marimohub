@@ -100,6 +100,44 @@ describe('local development setup', () => {
 		expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
 	});
 
+	it('renews the seed claim while notebook creation is in progress', async () => {
+		const deps = createDevDeps();
+		await ensureInitialized(deps.bucket, UserId.parse('user'));
+		const originalCreate = deps.services.notebooks.createNotebook.bind(deps.services.notebooks);
+		const createDidStart = deferred();
+		const createCanFinish = deferred();
+		const createNotebook = vi
+			.spyOn(deps.services.notebooks, 'createNotebook')
+			.mockImplementationOnce(async (...args) => {
+				createDidStart.resolve();
+				await createCanFinish.promise;
+				return originalCreate(...args);
+			});
+
+		vi.useFakeTimers();
+		try {
+			const first = seedLocalDev(deps);
+			await createDidStart.promise;
+			await vi.advanceTimersByTimeAsync(31_000);
+
+			const second = seedLocalDev(deps);
+			await vi.advanceTimersByTimeAsync(25);
+			expect(createNotebook).toHaveBeenCalledOnce();
+
+			createCanFinish.resolve();
+			await first;
+			await vi.advanceTimersByTimeAsync(25);
+			await second;
+
+			expect(createNotebook).toHaveBeenCalledOnce();
+			const [project] = await deps.services.projects.listProjects();
+			expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
+		} finally {
+			createCanFinish.resolve();
+			vi.useRealTimers();
+		}
+	});
+
 	it('retries the notebook seed when the concurrent holder fails', async () => {
 		const deps = createDevDeps();
 		await ensureInitialized(deps.bucket, UserId.parse('user'));
