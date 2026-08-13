@@ -66,6 +66,12 @@ RUN python3 -m compileall -j 0 -q /usr/local/lib/python3.13 || true
 ENV VIRTUAL_ENV=/opt/venv \
     PATH=/opt/venv/bin:$PATH
 
+# The hub's compute adapters exec commands via a login shell (`sh -lc`), and
+# /etc/profile resets PATH — dropping the venv set by ENV above. profile.d runs
+# after that reset, so login shells keep python3/pyarrow/pyiceberg resolvable
+# (the data-preview preflight depends on it).
+RUN echo 'export PATH=/opt/venv/bin:$PATH' > /etc/profile.d/venv-path.sh
+
 USER appuser
 WORKDIR /workspace
 
