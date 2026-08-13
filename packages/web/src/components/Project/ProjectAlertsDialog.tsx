@@ -98,9 +98,10 @@ export function ProjectAlertsDialog({
 		sameKinds(editor.kinds, knownKinds(editor.destination.kinds));
 	const unknownKinds =
 		editor?.destination?.kinds.filter((kind) => !Object.hasOwn(LABELS, kind)) ?? [];
+	const hasSelectedKinds = (editor?.kinds.length ?? 0) > 0 || unknownKinds.length > 0;
 
 	const save = async () => {
-		if (!editor?.name.trim() || (editor.kinds.length === 0 && !kindsPristine)) return;
+		if (!editor?.name.trim() || (!hasSelectedKinds && !kindsPristine)) return;
 		try {
 			if (!editor.destination) {
 				if (!editor.endpoint.trim() || (editor.type === 'webhook' && !editor.secret)) return;
@@ -259,7 +260,7 @@ export function ProjectAlertsDialog({
 								isDisabled={
 									pending ||
 									!editor.name.trim() ||
-									(editor.kinds.length === 0 && !kindsPristine) ||
+									(!hasSelectedKinds && !kindsPristine) ||
 									(!editor.destination &&
 										(!editor.endpoint.trim() || (editor.type === 'webhook' && !editor.secret)))
 								}

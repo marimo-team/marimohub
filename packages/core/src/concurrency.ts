@@ -88,12 +88,19 @@ export class KeyedAdmission<K> {
 	private readonly activeByKey = new Map<K, number>();
 
 	constructor(
-		private readonly maxConcurrent: number,
-		private readonly maxConcurrentPerKey: number,
+		private maxConcurrent: number,
+		private maxConcurrentPerKey: number,
 		private readonly errors: { global: () => Error; perKey: () => Error },
 	) {
 		assertPositiveInteger('maxConcurrent', maxConcurrent);
 		assertPositiveInteger('maxConcurrentPerKey', maxConcurrentPerKey);
+	}
+
+	reconfigure(maxConcurrent: number, maxConcurrentPerKey: number): void {
+		assertPositiveInteger('maxConcurrent', maxConcurrent);
+		assertPositiveInteger('maxConcurrentPerKey', maxConcurrentPerKey);
+		this.maxConcurrent = maxConcurrent;
+		this.maxConcurrentPerKey = maxConcurrentPerKey;
 	}
 
 	async run<T>(key: K, work: () => Promise<T>): Promise<T> {

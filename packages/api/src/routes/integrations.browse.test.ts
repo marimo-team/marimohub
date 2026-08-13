@@ -15,6 +15,7 @@ import {
 } from '@marimo-hub/core';
 import type {
 	DataQueryExecution,
+	IntegrationProbe,
 	ObjectBrowser,
 	PythonPreviewProgram,
 	TablePreview,
@@ -245,25 +246,31 @@ function browserDeps(
 	bucket: MemoryBucket,
 	dataPreview?: DataPreviewService,
 	dataQuery?: DataQueryService,
+	options: { probe?: IntegrationProbe; testClickhouse?: boolean } = {},
 ) {
 	const registry = new IntegrationRegistry();
 	registry.register(browsyKind);
 	registry.register(sandboxBrowsyKind);
-	for (const def of defaultRegistry().list()) registry.register(def);
-	const stubProbe = { fetch: () => Promise.reject(new Error('no network in tests')) };
-	const options = {
+	if (options.testClickhouse) registry.register({ ...browsyKind, kind: 'clickhouse' });
+	for (const def of defaultRegistry().list()) {
+		if (!options.testClickhouse || def.kind !== 'clickhouse') registry.register(def);
+	}
+	const probe = options.probe ?? {
+		fetch: () => Promise.reject(new Error('no network in tests')),
+	};
+	const storeOptions = {
 		bucket,
 		registry,
 		codec,
-		probe: stubProbe,
-		browseProbe: stubProbe,
+		probe,
+		browseProbe: probe,
 		objectBrowsers: { s3: objectBrowser },
 		dataPreview,
 		dataQuery,
 	};
 	return {
-		integrations: new ProjectIntegrationsStore(options),
-		orgIntegrations: new OrgIntegrationsStore(options),
+		integrations: new ProjectIntegrationsStore(storeOptions),
+		orgIntegrations: new OrgIntegrationsStore(storeOptions),
 		dataBrowser: {
 			preview: false,
 			query: false,
@@ -1032,6 +1039,37 @@ describe('Data browser routes', () => {
 			'VALIDATION_ERROR',
 		);
 		expect(generateSql).toHaveBeenCalledOnce();
+	});
+
+	it('validates managed-AI output with the resolved integration SQL dialect', async () => {
+		const pid = await createProject();
+		const sql = "SELECT 'a\\';b'";
+		const generateSql = vi.fn(async () => sql);
+		const queryDeps = browserDeps(bucket, undefined, queryService([]), {
+			testClickhouse: true,
+		});
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: { ...queryDeps, ai: { generateSql } as never },
+		}).request;
+		const created = await expectOk<{ id: string }>(
+			await query('POST', `/projects/${pid}/integrations`, {
+				kind: 'clickhouse',
+				name: 'warehouse',
+				config: { token: 'tok' },
+			}),
+			201,
+		);
+
+		const generated = await expectOk<{ sql: string }>(
+			await query('POST', `/projects/${pid}/integrations/${created.id}/browse/query/generate`, {
+				mode: 'generate',
+				instruction: 'Show a string literal',
+			}),
+		);
+		expect(generated.sql).toBe(sql);
 	});
 
 	it('redacts executor failures and does not audit unsuccessful SQL', async () => {

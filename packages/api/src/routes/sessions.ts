@@ -680,27 +680,23 @@ app.openapi(takeoverEditorSession, async (c) => {
 		}
 		assertNotificationMutationAllowed(deps, user.id);
 		let holderIdentity: Awaited<ReturnType<typeof deps.services.identities.get>> | undefined;
-		if (
-			currentClaim?.session_id === body.expected_holder_session_id &&
-			currentClaim.transfer?.takeover_id !== body.takeover_id
-		) {
-			const displaced = await deps.services.sessions.getSession(
-				pid,
-				body.expected_holder_session_id,
-			);
-			holderIdentity = await deps.services.identities.get(displaced.user_id).catch(() => null);
-			assertNotificationMutationAllowed(deps, user.id, {
-				recipient: holderIdentity?.email ?? displaced.user_id,
-				recipientScope: pid,
-				consumeActor: false,
-			});
-		}
-		const claim = await deps.services.sessions.reserveTakeover(pid, nid, {
+		let holder: Session | undefined;
+		const reserved = await deps.services.sessions.reserveTakeoverWithOutcome(pid, nid, {
 			takeoverId: body.takeover_id,
 			requestedBy: user.id,
 			expectedHolder: body.expected_holder_session_id,
 			expectedActivity: body.expected_activity,
 		});
+		const claim = reserved.value;
+		if (reserved.written) {
+			holder = await deps.services.sessions.getSession(pid, claim.session_id!);
+			holderIdentity = await deps.services.identities.get(holder.user_id).catch(() => null);
+			assertNotificationMutationAllowed(deps, user.id, {
+				recipient: holderIdentity?.email ?? holder.user_id,
+				recipientScope: pid,
+				consumeActor: false,
+			});
+		}
 		observer.tag('phase', claim.transfer?.phase ?? 'changed');
 		await audit('session.takeover.request');
 		const notifyTakeover = (holderUserId: UserId) => {
@@ -737,7 +733,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 			await audit('session.takeover.success');
 			return c.json({ success: true }, 200);
 		}
-		const holder = await deps.services.sessions.getSession(pid, body.expected_holder_session_id);
+		holder ??= await deps.services.sessions.getSession(pid, claim.session_id!);
 		if (holderIdentity === undefined) {
 			holderIdentity = await deps.services.identities.get(holder.user_id).catch(() => null);
 		}

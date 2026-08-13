@@ -1465,7 +1465,7 @@ app.openapi(generateDataQuerySql, async (c) => {
 		throw new ValidationError('Managed AI returned invalid SQL.');
 	}
 	try {
-		assertValidDataQuerySql(sql);
+		assertValidDataQuerySql(sql, capability.integration_kind);
 	} catch {
 		throw new ValidationError('Managed AI returned invalid SQL.');
 	}

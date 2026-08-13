@@ -800,6 +800,7 @@ class ScopedIntegrationsStore {
 				: { available: false, reason: 'Run SQL is not enabled on this deployment.' };
 		}
 		const compatibility = (reason?: string): BrowseCapabilityResult => ({
+			integration_kind: head.kind,
 			metadata: surfaces.tables?.available ?? false,
 			hub_preview: surfaces.tables?.preview ?? false,
 			surfaces,

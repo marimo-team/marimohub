@@ -268,17 +268,18 @@ describe('object content response helpers', () => {
 		expect(metrics.gauge).toHaveBeenLastCalledWith('object_browser.download.active', 0);
 	});
 
-	it('refreshes the download gate when mutable limits change', () => {
+	it('updates mutable download limits without forgetting active downloads', () => {
 		const deps = wifDeps(async () => ({ accessKeyId: 'unused', secretAccessKey: 'unused' }));
 		const first = acquireDownload(deps, 'user-a');
 		expect(() => acquireDownload(deps, 'user-b')).toThrow(ResourceExhaustedError);
-		first();
 
 		deps.dataBrowser!.objectBrowser!.maxConcurrentDownloads = 2;
 		deps.dataBrowser!.objectBrowser!.maxConcurrentDownloadsPerUser = 2;
 		const second = acquireDownload(deps, 'user-a');
-		const third = acquireDownload(deps, 'user-a');
+		expect(() => acquireDownload(deps, 'user-a')).toThrow(ResourceExhaustedError);
 		expect(() => acquireDownload(deps, 'user-b')).toThrow(ResourceExhaustedError);
+		first();
+		const third = acquireDownload(deps, 'user-b');
 		second();
 		third();
 	});

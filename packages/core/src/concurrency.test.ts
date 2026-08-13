@@ -51,6 +51,25 @@ describe('KeyedAdmission', () => {
 		expect(admission.activeCount).toBe(0);
 	});
 
+	it('reconfigures limits without forgetting active work', () => {
+		const admission = new KeyedAdmission(1, 1, {
+			global: () => new Error('global limit'),
+			perKey: () => new Error('key limit'),
+		});
+		const first = admission.acquire('a');
+
+		admission.reconfigure(2, 2);
+		const second = admission.acquire('a');
+		expect(admission.activeCount).toBe(2);
+		expect(admission.activeFor('a')).toBe(2);
+		expect(() => admission.acquire('a')).toThrow('key limit');
+		expect(() => admission.acquire('b')).toThrow('global limit');
+
+		first();
+		second();
+		expect(admission.activeCount).toBe(0);
+	});
+
 	it('enforces global and keyed limits and releases completed work', async () => {
 		const admission = new KeyedAdmission(2, 1, {
 			global: () => new Error('global limit'),

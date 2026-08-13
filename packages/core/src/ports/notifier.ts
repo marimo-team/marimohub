@@ -63,7 +63,9 @@ export function fanOutNotifier(targets: NamedNotifier[], metrics: Metrics = noop
 			targets.map(({ notifier }) => disposeNotifier(notifier)),
 		);
 		const failures = results.filter((result) => result.status === 'rejected');
-		if (failures.length === 1) throw failures[0].reason;
+		if (failures.length === 1) {
+			throw failures[0].reason ?? new Error('Notification adapter disposal failed');
+		}
 		if (failures.length > 1) {
 			throw new AggregateError(
 				failures.map((failure) => failure.reason),

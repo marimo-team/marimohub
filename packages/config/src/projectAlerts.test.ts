@@ -181,7 +181,7 @@ describe('NodeProjectAlertDispatcher', () => {
 			.mockResolvedValueOnce({
 				ok: false,
 				status: 429,
-				headers: { 'retry-after': '7' },
+				headers: { 'retry-after': '999999' },
 				json: async () => null,
 			})
 			.mockResolvedValueOnce({ ok: true, status: 204, json: async () => null });
@@ -198,7 +198,7 @@ describe('NodeProjectAlertDispatcher', () => {
 			dispatcher.deliver(projectId, 'session.takeover', BROADCAST_NOTIFICATION_FIXTURE),
 		).resolves.toBe('delivered');
 		expect(fetch).toHaveBeenCalledTimes(2);
-		expect(delay).toHaveBeenCalledWith(7_000);
+		expect(delay).toHaveBeenCalledWith(60_000);
 	});
 
 	it('isolates a failed destination and reports partial fan-out', async () => {

@@ -86,7 +86,7 @@ class MetadataCappedNodeHttpHandler extends NodeHttpHandler {
 			const declaredBytes = Number(result.response.headers['content-length']);
 			if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
 				(result.response.body as { destroy?: () => void } | undefined)?.destroy?.();
-				throw metadataResponseTooLarge();
+				throw responseTooLarge();
 			}
 			result.response.body = boundedResponseBody(result.response.body, maxBytes);
 		}
@@ -114,15 +114,15 @@ export function s3ResponseLimit(
 function boundedResponseBody(body: unknown, maxBytes: number): unknown {
 	if (body === undefined || body === null) return body;
 	if (typeof body === 'string') {
-		if (Buffer.byteLength(body) > maxBytes) throw metadataResponseTooLarge();
+		if (Buffer.byteLength(body) > maxBytes) throw responseTooLarge();
 		return body;
 	}
 	if (body instanceof Uint8Array) {
-		if (body.byteLength > maxBytes) throw metadataResponseTooLarge();
+		if (body.byteLength > maxBytes) throw responseTooLarge();
 		return body;
 	}
 	if (body instanceof ArrayBuffer) {
-		if (body.byteLength > maxBytes) throw metadataResponseTooLarge();
+		if (body.byteLength > maxBytes) throw responseTooLarge();
 		return body;
 	}
 	if (body instanceof ReadableStream) {
@@ -131,7 +131,7 @@ function boundedResponseBody(body: unknown, maxBytes: number): unknown {
 			new TransformStream<Uint8Array, Uint8Array>({
 				transform(chunk, controller) {
 					seen += chunk.byteLength;
-					if (seen > maxBytes) throw metadataResponseTooLarge();
+					if (seen > maxBytes) throw responseTooLarge();
 					controller.enqueue(chunk);
 				},
 			}),
@@ -152,13 +152,13 @@ class BoundedMetadataTransform extends Transform {
 
 	_transform(chunk: Buffer | string, encoding: BufferEncoding, callback: TransformCallback): void {
 		this.seen += typeof chunk === 'string' ? Buffer.byteLength(chunk, encoding) : chunk.byteLength;
-		if (this.seen > this.maxBytes) callback(metadataResponseTooLarge());
+		if (this.seen > this.maxBytes) callback(responseTooLarge());
 		else callback(null, chunk);
 	}
 }
 
-function metadataResponseTooLarge(): ObjectBrowseError {
-	return new ObjectBrowseError('unavailable', 'The object-store metadata response was too large.');
+function responseTooLarge(): ObjectBrowseError {
+	return new ObjectBrowseError('unavailable', 'The object-store response was too large.');
 }
 
 /**

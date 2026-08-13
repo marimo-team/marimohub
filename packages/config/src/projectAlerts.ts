@@ -33,6 +33,7 @@ import { makeSecretSources } from './secrets';
 const DOCS = 'docs/project-alerts.md';
 const MAX_PROJECT_ALERT_EVENTS_PER_MINUTE = 100;
 const RATE_LIMIT_RETRY_DELAY_MS = 1_000;
+const MAX_RATE_LIMIT_RETRY_DELAY_MS = 60_000;
 
 class AlertHttpError extends Error {
 	constructor(
@@ -47,9 +48,13 @@ class AlertHttpError extends Error {
 function retryAfterMilliseconds(value: string | undefined): number | undefined {
 	if (!value) return undefined;
 	const seconds = Number(value);
-	if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1_000);
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(Math.ceil(seconds * 1_000), MAX_RATE_LIMIT_RETRY_DELAY_MS);
+	}
 	const at = Date.parse(value);
-	return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
+	return Number.isNaN(at)
+		? undefined
+		: Math.min(Math.max(0, at - Date.now()), MAX_RATE_LIMIT_RETRY_DELAY_MS);
 }
 
 function retryableAlertError(error: unknown): boolean {

@@ -827,7 +827,20 @@ export class SessionService {
 			expectedActivity: 'active' | 'idle' | 'unknown' | 'starting';
 		},
 	): Promise<EditorClaim> {
-		return mutateObject(
+		return (await this.reserveTakeoverWithOutcome(projectId, notebookId, input)).value;
+	}
+
+	async reserveTakeoverWithOutcome(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		input: {
+			takeoverId: string;
+			requestedBy: UserId;
+			expectedHolder: SessionId;
+			expectedActivity: 'active' | 'idle' | 'unknown' | 'starting';
+		},
+	): Promise<{ value: EditorClaim; written: boolean }> {
+		return mutateObjectWithOutcome(
 			this.bucket,
 			paths.editorClaim(projectId, notebookId),
 			(raw) => parseStored(EditorClaimSchema, raw, paths.editorClaim(projectId, notebookId)),

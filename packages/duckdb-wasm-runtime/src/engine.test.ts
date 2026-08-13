@@ -225,4 +225,82 @@ describe('BlockingDuckDBEngine initialization', () => {
 			else process.env[envName] = previous;
 		}
 	});
+
+	it('serializes query environment materialization at the engine boundary', async () => {
+		const envName = 'MARIMOHUB_ENGINE_TEST_SERIAL';
+		const previous = process.env[envName];
+		delete process.env[envName];
+		const result = {
+			schema: { fields: [{ name: 'value', type: { typeId: 0 } }] },
+			open: vi.fn(),
+			cancel: vi.fn(),
+			*[Symbol.iterator]() {
+				yield [{ toJSON: () => ({ value: 1 }) }];
+			},
+		};
+		let finishFirst: ((value: typeof result) => void) | undefined;
+		const firstSend = vi.fn(
+			() =>
+				new Promise<typeof result>((resolve) => {
+					finishFirst = resolve;
+				}),
+		);
+		const secondSend = vi.fn(async () => {
+			expect(process.env[envName]).toBe('second');
+			return result;
+		});
+		const connection = (send: typeof firstSend | typeof secondSend) => ({
+			query: vi.fn(),
+			prepare: vi.fn(() => ({ query: vi.fn(), close: vi.fn() })),
+			send,
+			close: vi.fn(),
+		});
+		const database = {
+			instantiate: vi.fn(),
+			open: vi.fn(),
+			connect: vi
+				.fn()
+				.mockReturnValueOnce(connection(vi.fn() as never))
+				.mockReturnValueOnce(connection(firstSend))
+				.mockReturnValueOnce(connection(secondSend)),
+			registerFileText: vi.fn(),
+			dropFile: vi.fn(),
+			reset: vi.fn(),
+		};
+		const request = (value: string): DataQueryExecution => ({
+			sql: 'SELECT 1 AS value',
+			connection: {
+				files: [],
+				vars: { [envName]: value },
+				integration: {
+					id: `intg-${value}` as IntegrationId,
+					name: value,
+					kind: 'test',
+					version: 1,
+				},
+			},
+			accessMode: 'read-only',
+			limits: { maxRows: 10, maxBytes: 4096, deadlineMs: 1000 },
+		});
+		const engine = new BlockingDuckDBEngine(async () => database as never);
+
+		try {
+			await engine.initialize(64);
+			const first = engine.executeQuery(request('first'));
+			await vi.waitFor(() => expect(firstSend).toHaveBeenCalledOnce());
+			expect(process.env[envName]).toBe('first');
+			const second = engine.executeQuery(request('second'));
+			await Promise.resolve();
+			expect(secondSend).not.toHaveBeenCalled();
+			expect(process.env[envName]).toBe('first');
+			finishFirst?.(result);
+			await expect(first).resolves.toEqual({ columns: ['value'], rows: [[1]], truncated: false });
+			await expect(second).resolves.toEqual({ columns: ['value'], rows: [[1]], truncated: false });
+			expect(secondSend).toHaveBeenCalledOnce();
+			expect(process.env[envName]).toBeUndefined();
+		} finally {
+			if (previous === undefined) delete process.env[envName];
+			else process.env[envName] = previous;
+		}
+	});
 });

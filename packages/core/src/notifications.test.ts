@@ -654,6 +654,21 @@ describe('fanOutNotifier', () => {
 		finishSecond?.();
 		await expect(disposing).rejects.toBe(firstFailure);
 	});
+
+	it('reports a meaningful error when adapter disposal rejects without a reason', async () => {
+		const notifier = fanOutNotifier([
+			{
+				name: 'broken',
+				notifier: {
+					deliver: vi.fn(async () => 'skipped' as const),
+					// oxlint-disable-next-line typescript/prefer-promise-reject-errors -- verifies an untyped JavaScript rejection boundary
+					close: vi.fn(() => Promise.reject()),
+				},
+			},
+		]);
+
+		await expect(notifier.close?.()).rejects.toThrow('Notification adapter disposal failed');
+	});
 });
 
 describe('NotificationSchema', () => {

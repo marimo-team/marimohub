@@ -153,6 +153,8 @@ export interface TablePreviewRequest {
  * material) and on the deployment having browsing wired.
  */
 export interface BrowseCapabilityResult {
+	/** Resolved integration kind for internal dialect and adapter decisions. */
+	integration_kind: string;
 	metadata: boolean;
 	/** Whether this kind can preview rows directly through its guarded HTTP API. */
 	hub_preview: boolean;

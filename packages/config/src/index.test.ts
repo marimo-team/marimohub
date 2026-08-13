@@ -219,38 +219,38 @@ describe('createFromEnv auth backend selection', () => {
 
 	it('honors legacy DuckDB-Wasm settings with deprecation warnings', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		const deps = createFromEnv({
-			...baseEnv,
-			MARIMOHUB_AUTH_BACKEND: 'dev',
-			MARIMOHUB_INTEGRATIONS: 'on',
-			MARIMOHUB_DATA_BROWSER: 'full',
-			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
-			MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB: '72',
-			MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS: '19',
-			MARIMOHUB_DUCKDB_WASM_RUNTIME: 'inline',
-		});
-		const stores = deps.integrations as unknown as {
-			store: {
-				dataPreview: {
-					options: { duckdbWasm: { options: { memoryLimitMb: number; idleTimeoutMs: number } } };
+		try {
+			const deps = createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_DATA_BROWSER: 'full',
+				MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
+				MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB: '72',
+				MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS: '19',
+				MARIMOHUB_DUCKDB_WASM_RUNTIME: 'inline',
+			});
+			const stores = deps.integrations as unknown as {
+				store: {
+					dataPreview: {
+						options: {
+							duckdbWasm: { options: { memoryLimitMb: number; idleTimeoutMs: number } };
+						};
+					};
 				};
 			};
-		};
 
-		expect(stores.store.dataPreview.options.duckdbWasm.options).toMatchObject({
-			memoryLimitMb: 72,
-			idleTimeoutMs: 19_000,
-		});
-		expect(warn.mock.calls.map(([message]) => String(message)).join('\n')).toMatch(
-			/MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB/,
-		);
-		expect(warn.mock.calls.map(([message]) => String(message)).join('\n')).toMatch(
-			/MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS/,
-		);
-		expect(warn.mock.calls.map(([message]) => String(message)).join('\n')).toMatch(
-			/MARIMOHUB_DUCKDB_WASM_RUNTIME/,
-		);
-		warn.mockRestore();
+			expect(stores.store.dataPreview.options.duckdbWasm.options).toMatchObject({
+				memoryLimitMb: 72,
+				idleTimeoutMs: 19_000,
+			});
+			const warnings = warn.mock.calls.map(([message]) => String(message)).join('\n');
+			expect(warnings).toMatch(/MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB/);
+			expect(warnings).toMatch(/MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS/);
+			expect(warnings).toMatch(/MARIMOHUB_DUCKDB_WASM_RUNTIME/);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it('prefers renamed DuckDB-Wasm settings over legacy values', () => {

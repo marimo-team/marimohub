@@ -15,6 +15,7 @@ type Database = Awaited<ReturnType<typeof duckdb.createDuckDB>>;
 
 export class BlockingDuckDBEngine {
 	private db: Database | undefined;
+	private queryTail: Promise<void> = Promise.resolve();
 	private readonly createDatabase: () => Promise<Database>;
 
 	constructor(createDatabase: () => Promise<Database> = defaultDatabase) {
@@ -99,6 +100,15 @@ export class BlockingDuckDBEngine {
 	}
 
 	async executeQuery(request: DataQueryExecution): Promise<DataQueryResult> {
+		const pending = this.queryTail.then(() => this.executeQueryExclusive(request));
+		this.queryTail = pending.then(
+			() => {},
+			() => {},
+		);
+		return pending;
+	}
+
+	private async executeQueryExclusive(request: DataQueryExecution): Promise<DataQueryResult> {
 		const plan = request.connection.plan;
 		const statement = singleDataQueryStatement(request.sql, {
 			backslashEscapes: request.connection.integration.kind === 'clickhouse',
