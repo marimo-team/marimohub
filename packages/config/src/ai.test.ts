@@ -64,4 +64,17 @@ describe('makeAi', () => {
 			/MARIMOHUB_AI_MAX_TOKENS/,
 		);
 	});
+
+	it.each(['0', '-1', '9007199254740992'])(
+		'rejects invalid MARIMOHUB_AI_MAX_TOKENS=%s',
+		(value) => {
+			expect(() => makeAi({ ...aiEnv, MARIMOHUB_AI_MAX_TOKENS: value })).toThrow(
+				/MARIMOHUB_AI_MAX_TOKENS/,
+			);
+		},
+	);
+
+	it('ignores stale token limits when managed AI is disabled', () => {
+		expect(makeAi({ MARIMOHUB_AI_MAX_TOKENS: '-1' })).toEqual({});
+	});
 });

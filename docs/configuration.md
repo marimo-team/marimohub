@@ -515,6 +515,11 @@ Integration management and session injection are enabled. Project entries use
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER` | Maximum number of runtime-backed previews for one user. | — | `1` | — |
 | `MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS` | Maximum time to start and prepare a preview runtime. | — | `120` | — |
 | `MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS` | Maximum time for a DuckDB-Wasm or fixed PyIceberg preview. | — | `30` | — |
+| `MARIMOHUB_DATA_QUERY_MAX_CONCURRENT` | Maximum number of isolated SQL queries in this server process. | — | `4` | — |
+| `MARIMOHUB_DATA_QUERY_MAX_CONCURRENT_PER_USER` | Maximum number of isolated SQL queries for one user. | — | `1` | — |
+| `MARIMOHUB_DATA_QUERY_MAX_ROWS` | Maximum number of rows returned by one SQL query. | — | `10000` | — |
+| `MARIMOHUB_DATA_QUERY_MAX_BYTES` | Maximum serialized response size in bytes for one SQL query. | — | `2097152` | — |
+| `MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS` | Maximum execution time for one isolated SQL query. | — | `30` | — |
 | `MARIMOHUB_DUCKDB_WASM_RUNTIME` | Runtime selected by the `duckdb-wasm-preview` experiment. `auto` uses a worker thread and falls back to inline only when workers are structurally unsupported. `worker` and `inline` force one mode. | — | `auto` | — |
 | `MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB` | DuckDB engine memory limit in MiB. This does not cap all WebAssembly and Arrow allocations. | — | `128` | — |
 | `MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS` | Maximum idle time before a warm DuckDB-Wasm engine is released. Set to 0 to keep warm engines until shutdown. | — | `300` | — |

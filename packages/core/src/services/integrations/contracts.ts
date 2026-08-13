@@ -112,6 +112,7 @@ export interface ProjectIntegrationsService {
 		principal: { userId: UserId; email: string },
 		sessionId: SessionRenderContext['sessionId'],
 		sql: string,
+		signal?: AbortSignal,
 	): Promise<DataQueryResult>;
 	browseObjectBuckets(
 		projectId: ProjectId,

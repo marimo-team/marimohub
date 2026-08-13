@@ -168,6 +168,7 @@ export interface BrowseCapabilityResult {
 	surfaces: {
 		tables?: { available: boolean; preview: boolean; reason?: string };
 		objects?: ObjectBrowseCapability;
+		query?: { available: boolean; reason?: string };
 	};
 }
 

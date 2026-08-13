@@ -81,6 +81,8 @@ function makeFetch({
 	pagedTables = false,
 	tables = ['orders'],
 	capability = { metadata: true, preview: false },
+	querySurface,
+	role = 'editor',
 	namespacesDown = false,
 	kind = icebergKind,
 	entry = lakeEntry,
@@ -117,6 +119,8 @@ function makeFetch({
 	pagedTables?: boolean;
 	tables?: string[];
 	capability?: { metadata: boolean; preview: boolean; reason?: string };
+	querySurface?: { available: boolean; reason?: string };
+	role?: 'editor' | 'manager';
 	namespacesDown?: boolean;
 	kind?: IntegrationKind;
 	entry?: IntegrationEntry;
@@ -158,7 +162,9 @@ function makeFetch({
 		if (method !== 'GET') throw new Error(`unexpected ${method} ${url}`);
 		const target = new URL(url, 'http://test');
 		if (url.includes('/api/v1/capabilities')) {
-			return ok({ data_browser: { available, preview: false } });
+			return ok({
+				data_browser: { available, preview: false, query: querySurface !== undefined },
+			});
 		}
 		if (url.includes('/api/v1/integrations/kinds')) {
 			return ok([kind]);
@@ -283,6 +289,7 @@ function makeFetch({
 						preview: capability.preview,
 						...(capability.reason ? { reason: capability.reason } : {}),
 					},
+					...(querySurface ? { query: querySurface } : {}),
 				},
 			});
 		}
@@ -290,7 +297,7 @@ function makeFetch({
 			return ok({ items: [entry], next_cursor: null });
 		}
 		if (url.includes(`/api/v1/projects/${PID}`)) {
-			return ok({ id: PID, name: 'Demo', description: 'd', your_role: 'editor' });
+			return ok({ id: PID, name: 'Demo', description: 'd', your_role: role });
 		}
 		throw new Error(`unexpected fetch: ${method} ${url}`);
 	});
@@ -350,6 +357,20 @@ afterEach(() => {
 });
 
 describe('DataBrowserPage', () => {
+	it('renders only supported surface buttons when Query is blocked', async () => {
+		setup(`/projects/${PID}/data/${IID}`, {
+			role: 'manager',
+			querySurface: { available: false, reason: 'Broker unavailable.' },
+		});
+
+		expect(
+			await screen.findByRole('button', { name: 'Tables' }, { timeout: 5000 }),
+		).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Query' })).toBeDisabled();
+		expect(screen.queryByRole('button', { name: 'Objects' })).not.toBeInTheDocument();
+		expect(screen.getByText('Run SQL unavailable: Broker unavailable.')).toBeInTheDocument();
+	});
+
 	it('restores a deep link: tree expanded to the namespace, table selected, schema shown', async () => {
 		setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`);
 

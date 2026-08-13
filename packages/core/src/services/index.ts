@@ -65,8 +65,10 @@ export type {
 	DataQueryExecution,
 	DataQueryExecutorFactory,
 	DataQueryInput,
+	DataQueryPlan,
 	DataQueryResult,
 	DataQueryServiceOptions,
+	DataQueryStatement,
 	DisposableDataQueryExecutor,
 } from './integrations/data-query';
 export {

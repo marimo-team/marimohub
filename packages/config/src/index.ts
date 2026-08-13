@@ -21,12 +21,16 @@ import {
 	EDITOR_SANDBOX_SHARING_VALUES,
 	runPreflight,
 	DataPreviewService,
+	DataQueryService,
 	DuckDBWasmDataPreview,
 	SubdomainExposure,
 	SandboxDataPreview,
 	VIEWER_MODES,
 } from '@marimo-hub/core';
-import { createNodeDuckDBWasmRuntimeFactory } from '@marimo-hub/duckdb-wasm-runtime/node';
+import {
+	createNodeDataQueryExecutorFactory,
+	createNodeDuckDBWasmRuntimeFactory,
+} from '@marimo-hub/duckdb-wasm-runtime/node';
 import type { DuckDBWasmRuntimeMode } from '@marimo-hub/duckdb-wasm-runtime/node';
 import type {
 	EditorSandboxSharing,
@@ -105,6 +109,12 @@ const DEFAULT_DATA_PREVIEW_STARTUP_TIMEOUT_S = 120;
 const DEFAULT_DATA_PREVIEW_EXECUTION_TIMEOUT_S = 30;
 const DEFAULT_DUCKDB_WASM_MEMORY_LIMIT_MB = 128;
 const DEFAULT_DUCKDB_WASM_IDLE_TIMEOUT_S = 300;
+const DEFAULT_MAX_DATA_QUERIES = 4;
+const DEFAULT_MAX_DATA_QUERIES_PER_USER = 1;
+const DEFAULT_DATA_QUERY_ROWS = 10_000;
+const DEFAULT_DATA_QUERY_BYTES = 2 * 1024 * 1024;
+const DEFAULT_DATA_QUERY_TIMEOUT_S = 30;
+const MAX_NODE_TIMER_SECONDS = Math.floor(2_147_483_647 / 1000);
 
 /**
  * Parse a concurrency cap. `0` disables the cap (unlimited); unset falls back to
@@ -203,10 +213,47 @@ function duckdbRuntimeMode(env: Env): DuckDBWasmRuntimeMode {
 	);
 }
 
+function dataQueryFromEnv(
+	env: Env,
+	experiments: ReadonlySet<Experiment>,
+): DataQueryService | undefined {
+	if (
+		env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() !== 'full' ||
+		!experiments.has('duckdb-wasm-sql')
+	) {
+		return undefined;
+	}
+	return new DataQueryService({
+		executorFactory: createNodeDataQueryExecutorFactory({
+			memoryLimitMb: parsePositiveIntEnv(
+				env,
+				'MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB',
+				DEFAULT_DUCKDB_WASM_MEMORY_LIMIT_MB,
+			),
+		}),
+		maxConcurrent: parsePositiveIntEnv(
+			env,
+			'MARIMOHUB_DATA_QUERY_MAX_CONCURRENT',
+			DEFAULT_MAX_DATA_QUERIES,
+		),
+		maxConcurrentPerUser: parsePositiveIntEnv(
+			env,
+			'MARIMOHUB_DATA_QUERY_MAX_CONCURRENT_PER_USER',
+			DEFAULT_MAX_DATA_QUERIES_PER_USER,
+		),
+		maxRows: parsePositiveIntEnv(env, 'MARIMOHUB_DATA_QUERY_MAX_ROWS', DEFAULT_DATA_QUERY_ROWS),
+		maxBytes: parsePositiveIntEnv(env, 'MARIMOHUB_DATA_QUERY_MAX_BYTES', DEFAULT_DATA_QUERY_BYTES),
+		executionTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS', {
+			dflt: DEFAULT_DATA_QUERY_TIMEOUT_S,
+			max: MAX_NODE_TIMER_SECONDS,
+		}),
+	});
+}
+
 function parsePositiveIntEnv(env: Env, key: string, fallback: number): number {
 	const value = parseIntEnv(env, key) ?? fallback;
-	if (value < 1) {
-		throw new ConfigError(`Invalid ${key}: ${value} (expected a positive integer)`, {
+	if (!Number.isSafeInteger(value) || value < 1) {
+		throw new ConfigError(`Invalid ${key}: ${value} (expected a positive safe integer)`, {
 			variable: key,
 		});
 	}
@@ -487,7 +534,7 @@ export function createFromEnv(
 		...makeAi(env),
 		// Project integrations (no-op unless MARIMOHUB_INTEGRATIONS=on — opt-in per the
 		// two-phase rollout note on makeIntegrations).
-		...makeIntegrations(env, bucket, metrics, dataPreview),
+		...makeIntegrations(env, bucket, metrics, dataPreview, dataQueryFromEnv(env, experiments)),
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time
 		// (Dockerfile ARG → ENV); everything else is inferred from the live config +

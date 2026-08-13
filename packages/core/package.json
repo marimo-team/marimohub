@@ -9,6 +9,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./data-query-sql": "./src/services/integrations/data-query/sql.ts",
 		"./ports": "./src/ports/index.ts",
 		"./testing": "./src/testing/index.ts",
 		"./testing/memory-bucket": "./src/testing/MemoryBucket.ts",

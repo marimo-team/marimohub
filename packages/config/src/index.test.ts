@@ -196,6 +196,25 @@ describe('createFromEnv auth backend selection', () => {
 		).toThrow(/MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT/);
 	});
 
+	it('rejects unsafe query limits and timer-overflowing timeouts', () => {
+		const env = {
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_INTEGRATIONS: 'on',
+			MARIMOHUB_DATA_BROWSER: 'full',
+			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-sql',
+		};
+		expect(() =>
+			createFromEnv({ ...env, MARIMOHUB_DATA_QUERY_MAX_ROWS: '9007199254740992' }),
+		).toThrow(/MARIMOHUB_DATA_QUERY_MAX_ROWS/);
+		expect(() =>
+			createFromEnv({ ...env, MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS: '2147484' }),
+		).toThrow(/MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS/);
+		expect(() =>
+			createFromEnv({ ...env, MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS: '2147483' }),
+		).not.toThrow();
+	});
+
 	it('enables editor profile overrides explicitly', () => {
 		const deps = createFromEnv({
 			...baseEnv,

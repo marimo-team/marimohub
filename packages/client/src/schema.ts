@@ -6804,6 +6804,258 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/integrations/{iid}/browse/query/schema': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get bounded SQL completion schema (manager or above) */
+		get: {
+			parameters: {
+				query?: {
+					focus_namespace?: string;
+					focus_table?: string;
+				};
+				header?: never;
+				path: {
+					pid: string;
+					iid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Bounded table and column schema for SQL tools */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['IntegrationQuerySchema'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/integrations/{iid}/browse/query/generate': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Generate or revise SQL with managed AI (manager or above) */
+		post: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+					iid: string;
+				};
+				cookie?: never;
+			};
+			requestBody: {
+				content: {
+					'application/json': {
+						/** @enum {string} */
+						mode: 'generate' | 'revise';
+						instruction: string;
+						sql?: string;
+					};
+				};
+			};
+			responses: {
+				/** @description Generated DuckDB SQL */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: {
+								sql: string;
+							};
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Resource limit reached */
+				429: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/integrations/{iid}/browse/objects/buckets': {
 		parameters: {
 			query?: never;
@@ -8872,6 +9124,8 @@ export interface components {
 			data_browser: {
 				available: boolean;
 				preview: boolean;
+				query: boolean;
+				ai_query: boolean;
 			};
 			/** @enum {string} */
 			viewer_mode: 'static' | 'applications' | 'ephemeral-sandbox';
@@ -9483,6 +9737,10 @@ export interface components {
 					preview_formats: string[];
 					reason?: string;
 				};
+				query?: {
+					available: boolean;
+					reason?: string;
+				};
 			};
 			metadata: boolean;
 			preview: boolean;
@@ -9522,6 +9780,23 @@ export interface components {
 			columns: string[];
 			rows: unknown[][];
 			truncated: boolean;
+			execution_ms: number;
+		};
+		IntegrationQuerySchema: {
+			tables: {
+				namespace: string[];
+				name: string;
+				columns: {
+					name: string;
+					type: string;
+					nullable: boolean;
+				}[];
+			}[];
+			truncated: {
+				tables: boolean;
+				columns: boolean;
+				bytes: boolean;
+			};
 		};
 		IntegrationObjectBucket: {
 			name: string;

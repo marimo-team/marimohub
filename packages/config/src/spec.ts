@@ -1504,6 +1504,36 @@ See the [secret-source guide](./integration-secrets.md).`,
 						default: '30',
 					},
 					{
+						id: 'MARIMOHUB_DATA_QUERY_MAX_CONCURRENT',
+						name: 'Max concurrent data queries',
+						description: 'Maximum number of isolated SQL queries in this server process.',
+						default: '4',
+					},
+					{
+						id: 'MARIMOHUB_DATA_QUERY_MAX_CONCURRENT_PER_USER',
+						name: 'Max data queries per user',
+						description: 'Maximum number of isolated SQL queries for one user.',
+						default: '1',
+					},
+					{
+						id: 'MARIMOHUB_DATA_QUERY_MAX_ROWS',
+						name: 'Data-query row limit',
+						description: 'Maximum number of rows returned by one SQL query.',
+						default: '10000',
+					},
+					{
+						id: 'MARIMOHUB_DATA_QUERY_MAX_BYTES',
+						name: 'Data-query response limit',
+						description: 'Maximum serialized response size in bytes for one SQL query.',
+						default: '2097152',
+					},
+					{
+						id: 'MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS',
+						name: 'Data-query timeout',
+						description: 'Maximum execution time for one isolated SQL query.',
+						default: '30',
+					},
+					{
 						id: 'MARIMOHUB_DUCKDB_WASM_RUNTIME',
 						name: 'DuckDB-Wasm runtime',
 						description:

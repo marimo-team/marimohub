@@ -171,6 +171,13 @@ export interface AiProxyConfig {
 	rules?: string;
 	/** Session-token lifetime in seconds. */
 	tokenTtlSeconds?: Seconds;
+	generateSql?: (input: {
+		mode: 'generate' | 'revise';
+		instruction: string;
+		sql?: string;
+		schema: string;
+		signal: AbortSignal;
+	}) => Promise<string>;
 }
 
 /** Deployment-wide authorization / abuse-guard knobs. */

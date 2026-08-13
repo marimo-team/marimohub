@@ -7,6 +7,8 @@
  */
 import type { ApiDeps } from '@marimo-hub/api';
 import { Seconds } from '@marimo-hub/core';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { generateText } from 'ai';
 import { parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -48,27 +50,64 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 			},
 		);
 	}
+	const upstreamBaseUrl = requiredVar(env, 'MARIMOHUB_AI_UPSTREAM_BASE_URL', {
+		remediation: 'Set the upstream OpenAI-compatible base URL, e.g. https://api.openai.com/v1',
+		docs: DOCS,
+	}).replace(/\/+$/, '');
+	const upstreamApiKey = requiredVar(env, 'MARIMOHUB_AI_UPSTREAM_API_KEY', {
+		remediation: 'Set the upstream provider API key (held server-side, never injected).',
+		docs: DOCS,
+	});
+	const model = requiredVar(env, 'MARIMOHUB_AI_MODEL', {
+		remediation: 'Set the default upstream model id, e.g. gpt-4o-mini',
+		docs: DOCS,
+	});
+	const upstreamProject = env.MARIMOHUB_AI_UPSTREAM_PROJECT;
+	const provider = createOpenAICompatible({
+		name: 'marimohub-managed-ai',
+		baseURL: upstreamBaseUrl,
+		apiKey: upstreamApiKey,
+		headers: upstreamProject ? { 'OpenAI-Project': upstreamProject } : undefined,
+	});
+	const maxTokens = parseIntEnv(env, 'MARIMOHUB_AI_MAX_TOKENS');
+	if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens < 1)) {
+		throw new ConfigError(
+			`Invalid MARIMOHUB_AI_MAX_TOKENS: ${maxTokens} (expected a positive safe integer)`,
+			{ variable: 'MARIMOHUB_AI_MAX_TOKENS', docs: DOCS },
+		);
+	}
 	return {
 		ai: {
-			// Strip a trailing slash so the proxy's `<base>/chat/completions` join is clean.
-			upstreamBaseUrl: requiredVar(env, 'MARIMOHUB_AI_UPSTREAM_BASE_URL', {
-				remediation: 'Set the upstream OpenAI-compatible base URL, e.g. https://api.openai.com/v1',
-				docs: DOCS,
-			}).replace(/\/+$/, ''),
-			upstreamApiKey: requiredVar(env, 'MARIMOHUB_AI_UPSTREAM_API_KEY', {
-				remediation: 'Set the upstream provider API key (held server-side, never injected).',
-				docs: DOCS,
-			}),
-			upstreamProject: env.MARIMOHUB_AI_UPSTREAM_PROJECT,
-			model: requiredVar(env, 'MARIMOHUB_AI_MODEL', {
-				remediation: 'Set the default upstream model id, e.g. gpt-4o-mini',
-				docs: DOCS,
-			}),
+			upstreamBaseUrl,
+			upstreamApiKey,
+			upstreamProject,
+			model,
 			signingSecret,
 			allowedModels: parseList(env.MARIMOHUB_AI_ALLOWED_MODELS),
-			maxTokens: parseIntEnv(env, 'MARIMOHUB_AI_MAX_TOKENS'),
+			maxTokens,
 			rules: env.MARIMOHUB_AI_RULES,
 			tokenTtlSeconds: tokenTtl === undefined ? undefined : Seconds.of(tokenTtl),
+			async generateSql(input) {
+				const result = await generateText({
+					model: provider.chatModel(model),
+					instructions:
+						`You generate DuckDB SQL. Return SQL only, without Markdown fences or explanation. ` +
+						`Use only the supplied schema and write read-only statements.${
+							env.MARIMOHUB_AI_RULES ? `\n${env.MARIMOHUB_AI_RULES}` : ''
+						}`,
+					prompt: [
+						`Mode: ${input.mode}`,
+						`Instruction: ${input.instruction}`,
+						input.sql ? `Current SQL:\n${input.sql}` : '',
+						`Schema:\n${input.schema}`,
+					]
+						.filter(Boolean)
+						.join('\n\n'),
+					abortSignal: input.signal,
+					...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
+				});
+				return result.text;
+			},
 		},
 	};
 }

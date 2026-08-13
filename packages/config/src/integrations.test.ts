@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	createProjectId,
 	createSessionId,
 	DataPreviewService,
 	DataQueryService,
+	icebergRest,
 } from '@marimo-hub/core';
 import type { DataQueryExecution } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
@@ -15,6 +16,8 @@ import {
 } from './integrations';
 
 const PG_CONFIG = { host: 'db.internal', database: 'db', username: 'u', password: 'pw' };
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('makeIntegrations', () => {
 	it('is OPT-IN (two-phase rollout): unset/off disabled, on enabled', () => {
@@ -230,7 +233,7 @@ describe('makeIntegrations data browser', () => {
 		expect(withRuntime.dataBrowser?.close).toBeTypeOf('function');
 	});
 
-	it('keeps Run SQL off by default and exposes an explicitly injected isolated service', async () => {
+	it('keeps Run SQL off by default and enables an explicitly injected isolated service', async () => {
 		const env = { MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' };
 		const without = makeIntegrations(env, new MemoryBucket());
 		expect(without.dataBrowser?.query).toBe(false);
@@ -253,23 +256,37 @@ describe('makeIntegrations data browser', () => {
 			maxBytes: 4096,
 			executionTimeoutMs: 1000,
 		});
+		vi.spyOn(icebergRest.query!, 'available').mockReturnValue({ ok: true });
 		const wired = makeIntegrations(env, new MemoryBucket(), undefined, undefined, dataQuery);
 		expect(wired.dataBrowser?.query).toBe(true);
 		const pid = createProjectId();
-		const created = await wired.integrations?.create(
+		const created = await wired.integrations!.create(
 			pid,
-			{ kind: 'custom_env', name: 'source', config: { vars: { SOURCE: 'test' } } },
+			{
+				kind: 'iceberg_rest',
+				name: 'source',
+				config: {
+					uri: 'https://catalog.example.com',
+					auth: { method: 'none' },
+					storage: { scheme: 'catalog' },
+				},
+			},
 			ACTOR,
 		);
 		await expect(
-			wired.integrations?.runDataQuery(
+			wired.integrations!.runDataQuery(
 				pid,
-				created!.id,
+				created.id,
 				{ userId: ACTOR, email: 'actor@example.com' },
 				createSessionId(),
 				'select 1',
 			),
-		).resolves.toEqual({ columns: ['value'], rows: [[1]], truncated: false });
+		).resolves.toEqual({
+			columns: ['value'],
+			rows: [[1]],
+			truncated: false,
+			execution_ms: expect.any(Number),
+		});
 		expect(executions).toHaveLength(1);
 		await wired.dataBrowser?.close?.();
 	});

@@ -8,6 +8,7 @@ import type {
 	DataQueryResult,
 	DisposableDataQueryExecutor,
 } from './contracts';
+import { singleDataQueryStatement } from './sql';
 
 export const MAX_DATA_QUERY_SQL_BYTES = 32 * 1024;
 
@@ -51,10 +52,14 @@ export class DataQueryService {
 		});
 	}
 
-	async query(userId: UserId, input: DataQueryInput): Promise<DataQueryResult> {
+	async query(
+		userId: UserId,
+		input: DataQueryInput,
+		signal?: AbortSignal,
+	): Promise<DataQueryResult> {
 		if (this.closed) throw new UnavailableError('The data-query service is closed.');
 		assertValidDataQuerySql(input.sql);
-		return this.inFlight.track(this.admission.run(userId, () => this.execute(input)));
+		return this.inFlight.track(this.admission.run(userId, () => this.execute(input, signal)));
 	}
 
 	close(): Promise<void> {
@@ -67,7 +72,10 @@ export class DataQueryService {
 		return this.closing;
 	}
 
-	private async execute(input: DataQueryInput): Promise<DataQueryResult> {
+	private async execute(
+		input: DataQueryInput,
+		externalSignal?: AbortSignal,
+	): Promise<DataQueryResult> {
 		const controller = new AbortController();
 		let executor: DisposableDataQueryExecutor | undefined;
 		let terminated = false;
@@ -97,11 +105,15 @@ export class DataQueryService {
 			},
 		};
 		this.active.add(active);
+		const onAbort = () => active.stop(new UnavailableError('The data query was cancelled.'));
+		externalSignal?.addEventListener('abort', onAbort, { once: true });
+		if (externalSignal?.aborted) onAbort();
 		const timer = setTimeout(
 			() => active.stop(new UnavailableError('The data query timed out.')),
 			this.options.executionTimeoutMs,
 		);
 		try {
+			const started = performance.now();
 			const work = (async () => {
 				executor = await this.options.executorFactory.create(controller.signal);
 				if (controller.signal.aborted) {
@@ -124,7 +136,10 @@ export class DataQueryService {
 					},
 					controller.signal,
 				);
-				return this.validateResult(result);
+				return this.validateResult({
+					...result,
+					execution_ms: Math.max(0, Math.round(performance.now() - started)),
+				});
 			})();
 			return await Promise.race([work, stopped]);
 		} catch (error) {
@@ -132,6 +147,7 @@ export class DataQueryService {
 			throw new UnavailableError('The data-query runtime could not execute this query.');
 		} finally {
 			clearTimeout(timer);
+			externalSignal?.removeEventListener('abort', onAbort);
 			controller.abort();
 			terminate();
 			this.active.delete(active);
@@ -145,7 +161,10 @@ export class DataQueryService {
 			!Array.isArray(result.rows) ||
 			result.rows.length > this.options.maxRows ||
 			!result.rows.every((row) => Array.isArray(row) && row.length === result.columns.length) ||
-			typeof result.truncated !== 'boolean'
+			typeof result.truncated !== 'boolean' ||
+			typeof result.execution_ms !== 'number' ||
+			!Number.isSafeInteger(result.execution_ms) ||
+			result.execution_ms < 0
 		) {
 			throw new UnavailableError('The data-query runtime returned an invalid result.');
 		}
@@ -166,5 +185,10 @@ export function assertValidDataQuerySql(sql: string): void {
 	if (sql.trim().length === 0) throw new ValidationError('SQL must not be empty.');
 	if (new TextEncoder().encode(sql).byteLength > MAX_DATA_QUERY_SQL_BYTES) {
 		throw new ValidationError(`SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`);
+	}
+	try {
+		singleDataQueryStatement(sql);
+	} catch {
+		throw new ValidationError('SQL must contain exactly one statement.');
 	}
 }

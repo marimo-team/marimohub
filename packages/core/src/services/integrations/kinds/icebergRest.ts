@@ -303,6 +303,43 @@ export const icebergRest = defineIntegration({
 		},
 	},
 
+	query: {
+		available(config) {
+			const reason = duckdbPreviewBlocker(config);
+			return {
+				ok: false,
+				reason:
+					reason ??
+					'guarded catalog and object-store HTTP brokering is not available in DuckDB-Wasm',
+			};
+		},
+		plan({ config, integration }) {
+			const reason = duckdbPreviewBlocker(config);
+			if (reason) throw new ValidationError(reason);
+			const params: (string | number | boolean | null)[] = [config.uri];
+			const options = ['TYPE iceberg', 'ENDPOINT ?'];
+			if (config.warehouse) {
+				options.push('WAREHOUSE ?');
+				params.push(config.warehouse);
+			}
+			options.push(...duckdbAuthOptions(config.auth, params));
+			options.push('ACCESS_DELEGATION_MODE ?', 'READ_ONLY');
+			params.push(config.access_delegation);
+			const alias = sqlIdentifier(integration.name);
+			return {
+				setup: [
+					{ text: 'LOAD iceberg' },
+					{ text: 'LOAD httpfs' },
+					{
+						text: `ATTACH ${sqlLiteral(config.warehouse ?? integration.name)} AS ${alias} (${options.join(', ')})`,
+						params,
+					},
+				],
+				cleanup: [{ text: `DETACH ${alias}` }],
+			};
+		},
+	},
+
 	async testConnection(config, probe) {
 		assertSafeHeaders(config.headers);
 		const start = performance.now();

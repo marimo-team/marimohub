@@ -373,4 +373,86 @@ describe('defineIntegration available-reason guard', () => {
 			reason: 'preview requires supported authentication',
 		});
 	});
+
+	it('guards query availability reasons and plan failures that echo secrets', () => {
+		const queryLeaky = defineIntegration({
+			kind: 'query_leaky',
+			title: 'Query leaky',
+			description: 'test kind',
+			category: 'catalog',
+			brand: { color: '#000000' },
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			query: {
+				available: (config) => ({ ok: false, reason: `query denied for ${config.token}` }),
+				plan: ({ config }) => {
+					throw new ValidationError(`bad plan for ${encodeURIComponent(config.token)}`);
+				},
+			},
+		});
+
+		expect(queryLeaky.query!.available({ token: 'query secret/value' })).toEqual({
+			ok: false,
+			reason: 'this instance cannot run SQL from the hub',
+		});
+		expect(() =>
+			queryLeaky.query!.plan({
+				config: { token: 'query secret/value' },
+				integration: {
+					id: 'intg-0000000000000000' as never,
+					name: 'query',
+					kind: 'query_leaky',
+					version: 1,
+				},
+			}),
+		).toThrow('The integration query plan could not be created.');
+	});
+
+	it('degrades unexpected query availability failures to an unavailable verdict', () => {
+		const queryUnavailable = defineIntegration({
+			kind: 'query_unavailable',
+			title: 'Query unavailable',
+			description: 'test kind',
+			category: 'catalog',
+			brand: { color: '#000000' },
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			query: {
+				available: () => {
+					throw new Error('kind implementation failed');
+				},
+				plan: () => ({ setup: [] }),
+			},
+		});
+
+		expect(queryUnavailable.query!.available({ token: 'query-secret' })).toEqual({
+			ok: false,
+			reason: 'this instance cannot run SQL from the hub',
+		});
+	});
+
+	it('preserves deliberate query availability rejections', () => {
+		const queryRejected = defineIntegration({
+			kind: 'query_rejected',
+			title: 'Query rejected',
+			description: 'test kind',
+			category: 'catalog',
+			brand: { color: '#000000' },
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			query: {
+				available: () => {
+					throw new ValidationError('invalid query configuration');
+				},
+				plan: () => ({ setup: [] }),
+			},
+		});
+
+		expect(() => queryRejected.query!.available({ token: 'query-secret' })).toThrow(
+			'invalid query configuration',
+		);
+	});
 });

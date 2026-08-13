@@ -2510,6 +2510,10 @@ describe('data browsing', () => {
 				schemaVersion: 1,
 				configSchema: z.object({ token: zSecret() }),
 				render,
+				query: {
+					available: () => ({ ok: true }),
+					plan: () => ({ setup: [] }),
+				},
 			}),
 		);
 		const dataQuery = new DataQueryService({
@@ -2546,6 +2550,10 @@ describe('data browsing', () => {
 			},
 			ACTOR,
 		);
+		expect(await queryStore.browseCapability(pid, created.id)).toMatchObject({
+			metadata: false,
+			surfaces: { query: { available: true } },
+		});
 
 		await expect(
 			queryStore.runDataQuery(

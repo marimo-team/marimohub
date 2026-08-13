@@ -1,6 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import * as duckdb from '@duckdb/duckdb-wasm/blocking';
-import type { DuckDBPreviewProgram, TablePreview } from '@marimo-hub/core';
+import type {
+	DataQueryExecution,
+	DataQueryResult,
+	DuckDBPreviewProgram,
+	TablePreview,
+} from '@marimo-hub/core';
+import { singleDataQueryStatement } from '@marimo-hub/core/data-query-sql';
 import { createFailClosedNodeRuntime } from './networkPolicy.ts';
 
 const MAX_RESULT_BYTES = 2 * 1024 * 1024;
@@ -87,6 +93,51 @@ export class BlockingDuckDBEngine {
 		return preview;
 	}
 
+	async executeQuery(request: DataQueryExecution): Promise<DataQueryResult> {
+		const plan = request.connection.plan;
+		const statement = singleDataQueryStatement(request.sql);
+		const maxRows = request.limits.maxRows;
+		if (!Number.isSafeInteger(maxRows) || maxRows < 1) throw new Error('Invalid query row limit.');
+		const connection = this.requireDatabase().connect();
+		let primaryError: unknown;
+		let cleanupError: unknown;
+		let transactionOpen = false;
+		let queryResult: DataQueryResult | undefined;
+		try {
+			for (const setup of plan?.setup ?? []) runStatement(connection, setup);
+			connection.query('BEGIN TRANSACTION READ ONLY');
+			transactionOpen = true;
+			const result = await connection.send(
+				`SELECT * FROM (${statement}\n) AS "__marimohub_query" LIMIT ${maxRows + 1}`,
+				true,
+			);
+			result.open();
+			queryResult = normalizeQueryResultStream(result, maxRows, request.limits.maxBytes);
+		} catch (error) {
+			primaryError = error;
+		} finally {
+			try {
+				if (transactionOpen) connection.query('ROLLBACK');
+				for (const cleanup of [...(plan?.cleanup ?? [])].reverse()) {
+					runStatement(connection, cleanup);
+				}
+			} catch (error) {
+				if (transactionOpen) {
+					try {
+						connection.query('ROLLBACK');
+					} catch {}
+				}
+				cleanupError = error;
+			} finally {
+				connection.close();
+			}
+		}
+		if (primaryError !== undefined) throw asError(primaryError);
+		if (cleanupError !== undefined) throw asError(cleanupError);
+		if (!queryResult) throw new Error('DuckDB-Wasm did not return a query result.');
+		return queryResult;
+	}
+
 	close(): void {
 		this.db?.reset();
 		this.db = undefined;
@@ -137,6 +188,58 @@ function normalizeResult(
 		throw new Error('DuckDB-Wasm result exceeded the response limit.');
 	}
 	return preview;
+}
+
+function normalizeQueryResultStream(
+	result: Awaited<ReturnType<ReturnType<Database['connect']>['send']>>,
+	maxRows: number,
+	maxBytes: number,
+): DataQueryResult {
+	const columns = result.schema.fields.map((field) => field.name);
+	const dateColumns = result.schema.fields.map((field) => field.type.typeId === 8);
+	const rows: unknown[][] = [];
+	let truncated = false;
+	let stopped = false;
+	let responseBytes = queryResponseBaseBytes(columns);
+	if (responseBytes > maxBytes) {
+		result.cancel();
+		throw new Error('DuckDB-Wasm result exceeded the response limit.');
+	}
+	for (const batch of result) {
+		for (const row of batch) {
+			if (rows.length === maxRows) {
+				truncated = true;
+				stopped = true;
+				break;
+			}
+			const record = row.toJSON() as Record<string, unknown>;
+			const normalized = columns.map((column, index) =>
+				jsonValue(record[column], dateColumns[index]),
+			);
+			const rowBytes = new TextEncoder().encode(JSON.stringify(normalized)).byteLength;
+			const separatorBytes = rows.length === 0 ? 0 : 1;
+			if (responseBytes + separatorBytes + rowBytes > maxBytes) {
+				truncated = true;
+				stopped = true;
+				break;
+			}
+			rows.push(normalized);
+			responseBytes += separatorBytes + rowBytes;
+		}
+		if (stopped) break;
+	}
+	if (stopped) result.cancel();
+	return { columns, rows, truncated };
+}
+
+function queryResponseBaseBytes(columns: string[]): number {
+	const serialized = JSON.stringify({
+		columns,
+		rows: [],
+		truncated: false,
+		execution_ms: Number.MAX_SAFE_INTEGER,
+	});
+	return new TextEncoder().encode(serialized).byteLength;
 }
 
 function jsonValue(value: unknown, dateValue = false): unknown {
