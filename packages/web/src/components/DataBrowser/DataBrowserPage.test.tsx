@@ -690,20 +690,14 @@ describe('DataBrowserPage', () => {
 
 	it('resets a multi-selection when revisiting its URL through history', async () => {
 		const user = userEvent.setup();
-		setup(
-			[
-				`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=second.csv`,
-				`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=first.csv`,
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=first.csv`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectEntries: [
+				{ kind: 'object', name: 'first.csv', key: 'first.csv', size: 12 },
+				{ kind: 'object', name: 'second.csv', key: 'second.csv', size: 24 },
 			],
-			{
-				kind: objectKind,
-				entry: { ...lakeEntry, kind: 's3' },
-				objectEntries: [
-					{ kind: 'object', name: 'first.csv', key: 'first.csv', size: 12 },
-					{ kind: 'object', name: 'second.csv', key: 'second.csv', size: 24 },
-				],
-			},
-		);
+		});
 
 		await screen.findByRole('button', { name: /^first\.csv/ });
 		const second = screen.getByRole('button', { name: /^second\.csv/ });
