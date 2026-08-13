@@ -69,10 +69,10 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 
 - The first profile is the default and applies to every new sandbox. Reordering
   the list changes the default.
-- GPU values use Modal's `<type>[:<count>]` syntax, such as `A100`, `T4:2`, or
-  `A100-80GB:4`. Modal applies them when creating a sandbox. Other backends
-  ignore GPU values and log a startup warning while continuing to apply CPU and
-  memory values when supported.
+- Use `<type>[:<count>]` for GPU values. Examples include `A100`, `T4:2`, and
+  `A100-80GB:4`. The maximum count is 8. The Modal backend applies GPU values
+  when it creates a sandbox. Other backends ignore GPU values and log a startup
+  warning. They continue to apply supported CPU and memory values.
 - Profile names are stable identifiers. Renaming is remove-and-add; CPU, memory,
   and GPU values under an existing name can be changed freely.
 - Changes apply on the next session start. Running kernels keep their current

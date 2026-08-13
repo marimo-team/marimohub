@@ -237,7 +237,7 @@ describe('object content response helpers', () => {
 		const secondRelease = acquireDownload(deps, user.id);
 		const second = body(new ReadableStream({ pull() {} }), close);
 		await streamObjectBody(second, secondRelease, () => {}).cancel('gone');
-		expect(close).toHaveBeenCalledTimes(1);
+		expect(close).toHaveBeenCalledTimes(2);
 		const thirdRelease = acquireDownload(deps, user.id);
 		thirdRelease();
 	});
@@ -266,6 +266,22 @@ describe('object content response helpers', () => {
 		});
 		expect(metrics.gauge).toHaveBeenCalledWith('object_browser.download.active', 3);
 		expect(metrics.gauge).toHaveBeenLastCalledWith('object_browser.download.active', 0);
+	});
+
+	it('updates mutable download limits without forgetting active downloads', () => {
+		const deps = wifDeps(async () => ({ accessKeyId: 'unused', secretAccessKey: 'unused' }));
+		const first = acquireDownload(deps, 'user-a');
+		expect(() => acquireDownload(deps, 'user-b')).toThrow(ResourceExhaustedError);
+
+		deps.dataBrowser!.objectBrowser!.maxConcurrentDownloads = 2;
+		deps.dataBrowser!.objectBrowser!.maxConcurrentDownloadsPerUser = 2;
+		const second = acquireDownload(deps, 'user-a');
+		expect(() => acquireDownload(deps, 'user-a')).toThrow(ResourceExhaustedError);
+		expect(() => acquireDownload(deps, 'user-b')).toThrow(ResourceExhaustedError);
+		first();
+		const third = acquireDownload(deps, 'user-b');
+		second();
+		third();
 	});
 
 	it('reports a global active-download gauge across operation types', () => {

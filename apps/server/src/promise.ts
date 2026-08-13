@@ -1,18 +1,23 @@
+import { withDeadline } from '@marimo-hub/core';
+
 export type SettleWithinResult = 'settled' | 'timed-out';
+
+class SettleWithinTimeoutError extends Error {
+	readonly name = 'SettleWithinTimeoutError';
+}
 
 export async function settleAllWithin(
 	promises: Iterable<PromiseLike<unknown>>,
 	timeoutMs: number,
 ): Promise<SettleWithinResult> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const timedOut = new Promise<'timed-out'>((resolve) => {
-		timer = setTimeout(() => resolve('timed-out'), timeoutMs);
+	return withDeadline(
+		Promise.allSettled(promises).then(() => 'settled' as const),
+		{
+			timeoutMs,
+			timeoutError: () => new SettleWithinTimeoutError(),
+		},
+	).catch((error): SettleWithinResult => {
+		if (error instanceof SettleWithinTimeoutError) return 'timed-out';
+		throw error;
 	});
-	const settled = Promise.allSettled(promises).then(() => 'settled' as const);
-
-	try {
-		return await Promise.race([settled, timedOut]);
-	} finally {
-		if (timer !== undefined) clearTimeout(timer);
-	}
 }

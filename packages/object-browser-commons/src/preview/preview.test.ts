@@ -270,6 +270,31 @@ describe('Parquet preview safety', () => {
 		expect(test.destroyed()).toBe(1);
 	});
 
+	it('enforces the Parquet range-request cap', async () => {
+		parquet.metadata.mockImplementation(async (file: AsyncBuffer) => {
+			for (let index = 0; index < 65; index++) await file.slice(index, index + 1);
+			return { num_rows: 0n };
+		});
+		const bytes = new Uint8Array(100);
+		bytes.set(new TextEncoder().encode('PAR1'));
+		const test = harness(
+			[
+				{ ContentLength: bytes.length },
+				{ Body: body(bytes) },
+				...Array.from({ length: 64 }, (_, index) => ({
+					Body: body(bytes.slice(index, index + 1)),
+				})),
+			],
+			{ parquetMaxRangedBytes: bytes.length },
+		);
+
+		await expect(test.preview('data.parquet')).rejects.toMatchObject({
+			code: 'unsupported',
+			message: 'The Parquet preview exceeded its range budget.',
+		});
+		expect(test.sent()).toHaveLength(66);
+	});
+
 	it.each([
 		[-1, 1],
 		[1, 1],

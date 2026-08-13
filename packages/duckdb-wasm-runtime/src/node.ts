@@ -8,7 +8,6 @@ import type {
 	DuckDBWasmRuntimeFactory,
 	TablePreview,
 } from '@marimo-hub/core';
-import { BlockingDuckDBEngine } from './engine';
 import { ICEBERG_HTTP_UNAVAILABLE } from './networkPolicy';
 import type { RuntimeRequestInput, RuntimeResponse } from './protocol';
 
@@ -24,6 +23,12 @@ const CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
 	unavailable: Object.freeze({ 'iceberg-http': ICEBERG_HTTP_UNAVAILABLE }),
 });
 
+export const DUCKDB_WORKER_RESOURCE_LIMITS = Object.freeze({
+	maxOldGenerationSizeMb: 256,
+	maxYoungGenerationSizeMb: 32,
+	stackSizeMb: 4,
+});
+
 export function nodeDuckDBWasmCapabilities(): NodeDuckDBWasmCapabilities {
 	return CAPABILITIES;
 }
@@ -32,12 +37,12 @@ export function createNodeDuckDBWasmRuntimeFactory(
 	mode: DuckDBWasmRuntimeMode = 'auto',
 ): DuckDBWasmRuntimeFactory {
 	return async () => {
-		if (mode === 'inline') return new InlineRuntime();
+		if (mode === 'inline') throw inlineRuntimeUnavailable();
 		try {
 			return new WorkerRuntime();
 		} catch (error) {
 			if (mode === 'worker' || !isStructuralWorkerError(error)) throw error;
-			return new InlineRuntime();
+			throw inlineRuntimeUnavailable();
 		}
 	};
 }
@@ -47,8 +52,7 @@ export function createNodeDataQueryExecutorFactory(options: {
 }): DataQueryExecutorFactory {
 	return {
 		async create(signal) {
-			if (signal.aborted)
-				throw Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' });
+			if (signal.aborted) throw abortError();
 			const runtime = new WorkerRuntime();
 			const onAbort = () => {
 				void runtime.close().catch(() => {});
@@ -56,9 +60,7 @@ export function createNodeDataQueryExecutorFactory(options: {
 			signal.addEventListener('abort', onAbort, { once: true });
 			try {
 				await runtime.initialize({ memoryLimitMb: options.memoryLimitMb });
-				if (signal.aborted) {
-					throw Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' });
-				}
+				if (signal.aborted) throw abortError();
 			} catch (error) {
 				await runtime.close().catch(() => {});
 				throw error;
@@ -70,35 +72,17 @@ export function createNodeDataQueryExecutorFactory(options: {
 				execute: (request: DataQueryExecution, executionSignal: AbortSignal) =>
 					runtime.executeQuery(request, executionSignal),
 				terminate: () => {
-					void runtime.close();
+					void runtime.close().catch(() => {});
 				},
 			};
 		},
 	};
 }
 
-class InlineRuntime implements DuckDBWasmRuntime {
-	readonly mode = 'inline' as const;
-	readonly features = CAPABILITIES.features;
-	private readonly engine = new BlockingDuckDBEngine();
-
-	initialize(options: { memoryLimitMb: number }): Promise<void> {
-		return this.engine.initialize(options.memoryLimitMb);
-	}
-
-	async execute(program: DuckDBPreviewProgram): Promise<TablePreview> {
-		assertSupported(program);
-		return this.engine.execute(program);
-	}
-
-	async ping(): Promise<void> {
-		this.engine.ping();
-	}
-
-	close(): Promise<void> {
-		this.engine.close();
-		return Promise.resolve();
-	}
+function inlineRuntimeUnavailable(): Error {
+	return new Error(
+		'DuckDB-Wasm inline execution is disabled because blocking queries cannot be preempted.',
+	);
 }
 
 class WorkerRuntime implements DuckDBWasmRuntime {
@@ -118,7 +102,9 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 			: import.meta.url.includes('/apps/server/dist/')
 				? './duckdbWorker.mjs'
 				: './worker.mjs';
-		this.worker = new Worker(new URL(source, import.meta.url));
+		this.worker = new Worker(new URL(source, import.meta.url), {
+			resourceLimits: DUCKDB_WORKER_RESOURCE_LIMITS,
+		});
 		this.worker.on('message', (response: RuntimeResponse) => this.onResponse(response));
 		this.worker.on('error', (error: Error) => this.fail(error));
 		this.worker.on('exit', (code) => {
@@ -136,18 +122,16 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	}
 
 	async executeQuery(request: DataQueryExecution, signal: AbortSignal): Promise<DataQueryResult> {
-		if (signal.aborted)
-			throw Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' });
+		if (signal.aborted) throw abortError();
 		const work = this.request<DataQueryResult>({ type: 'execute-query', request });
 		let rejectAbort!: (error: Error) => void;
-		const abort = new Promise<never>((_resolve, reject) => {
+		const aborted = new Promise<never>((_resolve, reject) => {
 			rejectAbort = reject;
 		});
-		const onAbort = () =>
-			rejectAbort(Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' }));
+		const onAbort = () => rejectAbort(abortError());
 		signal.addEventListener('abort', onAbort, { once: true });
 		try {
-			return await Promise.race([work, abort]);
+			return await Promise.race([work, aborted]);
 		} finally {
 			signal.removeEventListener('abort', onAbort);
 		}
@@ -198,7 +182,14 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		if (this.closed) return;
 		this.closed = true;
 		this.rejectAll(error);
+		try {
+			void this.worker.terminate().catch(() => {});
+		} catch {}
 	}
+}
+
+function abortError(): Error {
+	return Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' });
 }
 
 function assertSupported(program: DuckDBPreviewProgram): void {

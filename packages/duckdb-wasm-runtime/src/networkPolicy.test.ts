@@ -3,18 +3,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { assertProtocolAllowed, createFailClosedNodeRuntime } from './networkPolicy';
 
 describe('DuckDB-Wasm network policy', () => {
-	it.each([undefined, duckdb.DuckDBDataProtocol.HTTP, duckdb.DuckDBDataProtocol.S3, 999])(
-		'rejects non-local or unknown protocol %s',
-		(protocol) => {
-			expect(() =>
-				assertProtocolAllowed(protocol as duckdb.DuckDBDataProtocol | undefined),
-			).toThrow(/non-local or unknown.*policy-enforcing broker/i);
-		},
-	);
+	it.each([
+		undefined,
+		duckdb.DuckDBDataProtocol.HTTP,
+		duckdb.DuckDBDataProtocol.S3,
+		duckdb.DuckDBDataProtocol.NODE_FS,
+		999,
+	])('rejects non-local or unknown protocol %s', (protocol) => {
+		expect(() => assertProtocolAllowed(protocol as duckdb.DuckDBDataProtocol | undefined)).toThrow(
+			/non-local or unknown.*policy-enforcing broker/i,
+		);
+	});
 
 	it.each([
 		duckdb.DuckDBDataProtocol.BUFFER,
-		duckdb.DuckDBDataProtocol.NODE_FS,
 		duckdb.DuckDBDataProtocol.BROWSER_FILEREADER,
 		duckdb.DuckDBDataProtocol.BROWSER_FSACCESS,
 	] as const)('allows explicitly listed local protocol %s', (protocol) => {

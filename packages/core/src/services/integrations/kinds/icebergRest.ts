@@ -385,7 +385,7 @@ export const icebergRest = defineIntegration({
 		},
 
 		async listNamespaces(config, probe, request) {
-			const catalog = await openCatalog(config, probe);
+			const catalog = await openCatalog(config, probe, request.signal);
 			const parent = request.parent ?? [];
 			const body = await catalogGet(catalog, '/namespaces', {
 				...pageParams(request),
@@ -407,7 +407,7 @@ export const icebergRest = defineIntegration({
 		},
 
 		async listTables(config, probe, namespace, request) {
-			const catalog = await openCatalog(config, probe);
+			const catalog = await openCatalog(config, probe, request.signal);
 			const body = await catalogGet(
 				catalog,
 				`/namespaces/${namespacePathSegment(catalog, namespace)}/tables`,
@@ -434,8 +434,8 @@ export const icebergRest = defineIntegration({
 			};
 		},
 
-		async getTableSchema(config, probe, namespace, table) {
-			const catalog = await openCatalog(config, probe);
+		async getTableSchema(config, probe, namespace, table, request) {
+			const catalog = await openCatalog(config, probe, request?.signal);
 			const body = await catalogGet(
 				catalog,
 				`/namespaces/${namespacePathSegment(catalog, namespace)}/tables/${encodeURIComponent(table)}`,
@@ -612,6 +612,7 @@ interface OpenedCatalog {
 	config: IcebergRestConfig;
 	probe: IntegrationProbe;
 	headers: Record<string, string>;
+	signal?: AbortSignal;
 	/** Server-supplied route prefix from `/v1/config` (Polaris et al. require it). */
 	prefix?: string;
 	/** Effective URL-encoded namespace joiner (see {@link effectiveSeparator}). */
@@ -625,6 +626,7 @@ interface OpenedCatalog {
 async function openCatalog(
 	config: IcebergRestConfig,
 	probe: IntegrationProbe,
+	signal?: AbortSignal,
 ): Promise<OpenedCatalog> {
 	assertSafeHeaders(config.headers);
 	const headers: Record<string, string> = { ...config.headers };
@@ -633,11 +635,11 @@ async function openCatalog(
 	} else if (config.auth.method === 'basic') {
 		headers.Authorization = basicAuthHeader(config.auth.username, config.auth.password);
 	} else if (config.auth.method === 'oauth2_client_credentials') {
-		const token = await oauth2Token(config.auth, probe);
+		const token = await oauth2Token(config.auth, probe, signal);
 		if (!token.ok) throw new UnavailableError(`The catalog is not reachable: ${token.details}.`);
 		headers.Authorization = `Bearer ${token.value}`;
 	}
-	const res = await probe.fetch(configEndpoint(config.uri, config.warehouse), { headers });
+	const res = await probe.fetch(configEndpoint(config.uri, config.warehouse), { headers, signal });
 	if (!res.ok) {
 		throw new UnavailableError(`The catalog config endpoint answered HTTP ${res.status}.`);
 	}
@@ -651,6 +653,7 @@ async function openCatalog(
 		config,
 		probe,
 		headers,
+		signal,
 		prefix,
 		separator: effectiveSeparator(config, overrides, defaults),
 	};
@@ -711,7 +714,10 @@ async function catalogGet(
 		: '';
 	url.pathname = `${url.pathname.replace(/\/+$/, '')}/v1${prefixPart}${route}`;
 	for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-	const res = await catalog.probe.fetch(url.toString(), { headers: catalog.headers });
+	const res = await catalog.probe.fetch(url.toString(), {
+		headers: catalog.headers,
+		signal: catalog.signal,
+	});
 	if (res.status === 404) {
 		throw new NotFoundError('The catalog reports no such namespace or table.');
 	}
@@ -1034,6 +1040,7 @@ async function oauth2Token(
 		scope: string;
 	},
 	probe: IntegrationProbe,
+	signal?: AbortSignal,
 ): Promise<{ ok: true; value: string } | { ok: false; details: string }> {
 	const res = await probe.fetch(auth.token_endpoint, {
 		method: 'POST',
@@ -1045,6 +1052,7 @@ async function oauth2Token(
 			grant_type: 'client_credentials',
 			scope: auth.scope,
 		}).toString(),
+		signal,
 	});
 	if (!res.ok) return { ok: false, details: `token endpoint: HTTP ${res.status}` };
 	const body = (await res.json()) as { access_token?: string } | undefined;

@@ -30,11 +30,15 @@ function ok(data: unknown) {
 	});
 }
 
+function destinationPage(items: ProjectAlertDestination[]) {
+	return { items, next_cursor: null };
+}
+
 function renderDialog(
 	destinations: ProjectAlertDestination[] = [],
 	handler?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
-	const fetchMock = vi.fn(handler ?? (async () => ok(destinations)));
+	const fetchMock = vi.fn(handler ?? (async () => ok(destinationPage(destinations))));
 	vi.stubGlobal('fetch', fetchMock);
 	const client = createTestQueryClient();
 	const wrapper = ({ children }: { children: ReactNode }) => (
@@ -73,6 +77,22 @@ function slackDestination(
 		webhook_url_set: true,
 		...overrides,
 	} as ProjectAlertDestination;
+}
+
+async function patchBody(
+	fetchMock: ReturnType<typeof renderDialog>['fetchMock'],
+): Promise<unknown> {
+	await waitFor(() =>
+		expect(
+			fetchMock.mock.calls.some(([input, init]) =>
+				input instanceof Request ? input.method === 'PATCH' : init?.method === 'PATCH',
+			),
+		).toBe(true),
+	);
+	const [input, init] = fetchMock.mock.calls.find(([callInput, callInit]) =>
+		callInput instanceof Request ? callInput.method === 'PATCH' : callInit?.method === 'PATCH',
+	)!;
+	return input instanceof Request ? input.clone().json() : JSON.parse(String(init?.body));
 }
 
 beforeEach(() => {
@@ -185,7 +205,7 @@ describe('ProjectAlertsDialog', () => {
 					{ status: 422, headers: { 'content-type': 'application/json' } },
 				);
 			}
-			return ok([]);
+			return ok(destinationPage([]));
 		});
 		await user.click(await screen.findByRole('button', { name: 'Add destination' }));
 		await user.type(screen.getByLabelText('Name'), 'Broken');
@@ -204,7 +224,7 @@ describe('ProjectAlertsDialog', () => {
 		const destination = slackDestination('alert-delete-000001', { name: 'Production Slack' });
 		const { fetchMock } = renderDialog([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
-			return method === 'DELETE' ? ok(undefined) : ok([destination]);
+			return method === 'DELETE' ? ok(undefined) : ok(destinationPage([destination]));
 		});
 		await user.click(await screen.findByRole('button', { name: 'Delete Production Slack' }));
 		expect(screen.getByRole('heading', { name: 'Delete alert destination' })).toBeInTheDocument();
@@ -231,7 +251,7 @@ describe('ProjectAlertsDialog', () => {
 					{ status: 412, headers: { 'content-type': 'application/json' } },
 				);
 			}
-			return ok([destination]);
+			return ok(destinationPage([destination]));
 		});
 		await user.click(await screen.findByRole('button', { name: 'Delete Production Slack' }));
 		await user.click(screen.getByRole('button', { name: 'Delete' }));
@@ -242,6 +262,79 @@ describe('ProjectAlertsDialog', () => {
 			),
 		);
 		expect(screen.getByRole('heading', { name: 'Delete alert destination' })).toBeInTheDocument();
+	});
+
+	it('omits kinds from an edit when the selection is untouched', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-edit-00000002', {
+			name: 'Production Slack',
+			kinds: ['app.unavailable', 'unknown'],
+		});
+		const { fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			return method === 'PATCH' ? ok(destination) : ok(destinationPage([destination]));
+		});
+		await user.click(await screen.findByRole('button', { name: 'Edit Production Slack' }));
+		await user.clear(screen.getByLabelText('Name'));
+		await user.type(screen.getByLabelText('Name'), 'Renamed Slack');
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+
+		const body = await patchBody(fetchMock);
+		expect(body).toMatchObject({ name: 'Renamed Slack' });
+		expect(body).not.toHaveProperty('kinds');
+	});
+
+	it('sends kinds on an edit once the selection changes', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-edit-00000003', { name: 'Production Slack' });
+		const { fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			return method === 'PATCH' ? ok(destination) : ok(destinationPage([destination]));
+		});
+		await user.click(await screen.findByRole('button', { name: 'Edit Production Slack' }));
+		await user.click(screen.getByRole('checkbox', { name: 'App start failed' }));
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+
+		const body = await patchBody(fetchMock);
+		expect(body).toMatchObject({ kinds: ['app.unavailable', 'app.start_failed'] });
+	});
+
+	it('preserves unknown kinds when a visible selection changes', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-edit-00000004', {
+			name: 'Production Slack',
+			kinds: ['app.unavailable', 'unknown'],
+		});
+		const { fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			return method === 'PATCH' ? ok(destination) : ok(destinationPage([destination]));
+		});
+		await user.click(await screen.findByRole('button', { name: 'Edit Production Slack' }));
+		await user.click(screen.getByRole('checkbox', { name: 'App start failed' }));
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+
+		const body = await patchBody(fetchMock);
+		expect(body).toMatchObject({ kinds: ['app.unavailable', 'app.start_failed', 'unknown'] });
+	});
+
+	it('allows removing the last visible kind while preserving an unknown kind', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-edit-00000005', {
+			name: 'Production Slack',
+			kinds: ['app.unavailable', 'unknown'],
+		});
+		const { fetchMock } = renderDialog([destination], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			return method === 'PATCH' ? ok(destination) : ok(destinationPage([destination]));
+		});
+		await user.click(await screen.findByRole('button', { name: 'Edit Production Slack' }));
+		await user.click(screen.getByRole('checkbox', { name: 'App unavailable' }));
+		const save = screen.getByRole('button', { name: 'Save' });
+		expect(save).toBeEnabled();
+		await user.click(save);
+
+		const body = await patchBody(fetchMock);
+		expect(body).toMatchObject({ kinds: ['unknown'] });
 	});
 
 	it('sends only replacement material entered during an edit', async () => {
@@ -255,7 +348,7 @@ describe('ProjectAlertsDialog', () => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			return method === 'PATCH'
 				? ok({ ...destination, enabled: false, verified_at: null })
-				: ok([destination]);
+				: ok(destinationPage([destination]));
 		});
 		await user.click(await screen.findByRole('button', { name: 'Edit Production Slack' }));
 		await user.type(

@@ -49,3 +49,34 @@ jobs:
           MARIMOHUB_TEST_S3_ACCESS_KEY: minioadmin
           MARIMOHUB_TEST_S3_SECRET_KEY: minioadmin
         run: vp test packages/config/src/objectBrowser.minio.live.test.ts
+
+  azurite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AZURITE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 0.1.24
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+      - name: Start Azurite
+        run: |
+          docker run -d --name azurite -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+          for i in $(seq 1 30); do
+            az storage container list --connection-string "$AZURITE_CONNECTION_STRING" \
+              --num-results 1 --only-show-errors --output none && break
+            sleep 1
+            [ "$i" = 30 ] && exit 1
+          done
+      - name: Run Azure object-browser contract
+        env:
+          MARIMOHUB_TEST_AZURE_CONNECTION_STRING: ${{ env.AZURITE_CONNECTION_STRING }}
+        run: vp test packages/object-browser-azure/src/azurite.live.test.ts

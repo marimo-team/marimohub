@@ -1,5 +1,7 @@
 export * from './cursors';
+export * from './capability';
 export * from './deadline';
+export * from './errors';
 export * from './formats';
 export * from './limits';
 export * from './metrics';

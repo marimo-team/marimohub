@@ -8,7 +8,6 @@ export const ICEBERG_HTTP_UNAVAILABLE =
 
 const LOCAL_PROTOCOLS = new Set<duckdb.DuckDBDataProtocol>([
 	duckdb.DuckDBDataProtocol.BUFFER,
-	duckdb.DuckDBDataProtocol.NODE_FS,
 	duckdb.DuckDBDataProtocol.BROWSER_FILEREADER,
 	duckdb.DuckDBDataProtocol.BROWSER_FSACCESS,
 ]);

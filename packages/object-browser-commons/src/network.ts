@@ -8,11 +8,42 @@ export type GuardedHostResolver = (
 	signal?: AbortSignal,
 ) => Promise<PinnedAddress[]>;
 
-export function createGuardedFetch(resolveHost: GuardedHostResolver): typeof fetch {
+export interface GuardedFetchOptions {
+	socketTimeoutMs?: number;
+}
+
+const DEFAULT_SOCKET_TIMEOUT_MS = 30_000;
+
+/**
+ * Node bypasses a custom `lookup` when the host is already an IP literal, so
+ * the pinning hook never sees those connections and the address policy goes
+ * unenforced for them. Literals have to be checked directly.
+ */
+export async function assertPermittedHost(
+	hostname: string,
+	resolveHost: GuardedHostResolver,
+	signal?: AbortSignal,
+): Promise<void> {
+	// A URL brackets an IPv6 literal; strip them for isIP and the resolver.
+	const bare = hostname.replaceAll(/^\[|\]$/g, '');
+	if (isIP(bare) === 0) return;
+	const addresses = await resolveHost(bare, signal);
+	if (addresses.length === 0) throw new Error('The object-store hostname did not resolve.');
+}
+
+export function createGuardedFetch(
+	resolveHost: GuardedHostResolver,
+	options: GuardedFetchOptions = {},
+): typeof fetch {
+	const socketTimeoutMs = options.socketTimeoutMs ?? DEFAULT_SOCKET_TIMEOUT_MS;
+	if (!Number.isSafeInteger(socketTimeoutMs) || socketTimeoutMs < 1) {
+		throw new RangeError('Object-store socket timeout must be a positive integer');
+	}
 	return (async (input: URL | RequestInfo, init: RequestInit = {}) => {
 		const effective = new Request(input, init);
 		const url = new URL(effective.url);
-		const lookup = createLookup(resolveHost, effective.signal);
+		await assertPermittedHost(url.hostname, resolveHost, effective.signal);
+		const lookup = createGuardedLookup(resolveHost, effective.signal);
 		const request = url.protocol === 'http:' ? httpRequest : httpsRequest;
 		const body = effective.body ? new Uint8Array(await effective.arrayBuffer()) : undefined;
 		return new Promise<Response>((resolve, reject) => {
@@ -25,6 +56,9 @@ export function createGuardedFetch(resolveHost: GuardedHostResolver): typeof fet
 					signal: effective.signal,
 				},
 				(incoming) => {
+					incoming.setTimeout(socketTimeoutMs, () => {
+						incoming.destroy(new Error('The object-store response timed out.'));
+					});
 					const headers = new Headers();
 					for (const [name, value] of Object.entries(incoming.headers)) {
 						if (Array.isArray(value)) for (const child of value) headers.append(name, child);
@@ -45,27 +79,45 @@ export function createGuardedFetch(resolveHost: GuardedHostResolver): typeof fet
 					);
 				},
 			);
+			outgoing.setTimeout(socketTimeoutMs, () => {
+				outgoing.destroy(new Error('The object-store request timed out.'));
+			});
 			outgoing.on('error', reject);
 			writeBody(outgoing, body);
 		});
 	}) as typeof fetch;
 }
 
-function createLookup(resolveHost: GuardedHostResolver, signal?: AbortSignal): LookupFunction {
+export function createGuardedLookup(
+	resolveHost: GuardedHostResolver,
+	signal?: AbortSignal,
+): LookupFunction {
 	return ((hostname: string, options: unknown, callback: unknown) => {
 		const cb = callback as (error: Error | null, address?: unknown, family?: number) => void;
 		void resolveHost(hostname, signal).then(
 			(addresses) => {
 				const value =
 					typeof options === 'object' && options !== null
-						? (options as { all?: boolean; family?: number })
+						? (options as { all?: boolean; family?: number; hints?: number })
 						: typeof options === 'number'
 							? { family: options }
 							: {};
-				const candidates =
-					value.family === 4 || value.family === 6
-						? addresses.filter(({ family }) => family === value.family)
-						: addresses;
+				const requestedFamily = value.family === 4 || value.family === 6 ? value.family : 0;
+				let candidates = requestedFamily
+					? addresses.filter(({ family }) => family === requestedFamily)
+					: addresses;
+				const hints = value.hints ?? 0;
+				if (requestedFamily === 6 && (hints & V4MAPPED) !== 0) {
+					const includeMapped = candidates.length === 0 || (hints & ALL) !== 0;
+					if (includeMapped) {
+						candidates = [
+							...candidates,
+							...addresses
+								.filter(({ family }) => family === 4)
+								.map(({ address }) => ({ address: `::ffff:${address}`, family: 6 })),
+						];
+					}
+				}
 				if (candidates.length === 0) {
 					cb(new Error('The object-store hostname did not resolve.'));
 				} else if (value.all) {
@@ -75,13 +127,28 @@ function createLookup(resolveHost: GuardedHostResolver, signal?: AbortSignal): L
 				}
 			},
 			(error) => {
-				const mapped = new Error('The object-store hostname is not permitted.');
-				if ((error as { name?: unknown } | null)?.name === 'AbortError' || signal?.aborted) {
-					mapped.name = 'AbortError';
-				}
+				const aborted =
+					(error as { name?: unknown } | null)?.name === 'AbortError' || signal?.aborted;
+				const mapped = new Error(
+					aborted
+						? 'The object-store hostname resolution was canceled.'
+						: 'The object-store hostname is not permitted.',
+				);
+				if (aborted) mapped.name = 'AbortError';
 				cb(mapped);
 			},
 		);
+	}) as LookupFunction;
+}
+
+export function createPinnedLookup(pinned: PinnedAddress[]): LookupFunction {
+	return ((_hostname: string, lookupOptions: unknown, callback: unknown) => {
+		const cb = callback as (error: Error | null, address: unknown, family?: number) => void;
+		if (typeof lookupOptions === 'object' && (lookupOptions as { all?: boolean } | null)?.all) {
+			cb(null, pinned);
+		} else {
+			cb(null, pinned[0].address, pinned[0].family);
+		}
 	}) as LookupFunction;
 }
 
@@ -106,4 +173,6 @@ function writeBody(
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { Readable } from 'node:stream';
+import { isIP } from 'node:net';
 import type { LookupFunction } from 'node:net';
+import { ALL, V4MAPPED } from 'node:dns';

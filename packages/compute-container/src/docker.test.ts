@@ -492,9 +492,22 @@ describe('DockerCompute', () => {
 	});
 });
 
-computeContract('DockerCompute', () => new DockerCompute({}, fakeRunner(defaultHandler).runner), {
-	mountFallsBack: true,
-});
+computeContract(
+	'DockerCompute',
+	() =>
+		new DockerCompute(
+			{},
+			fakeRunner((args) =>
+				args.at(-1) === 'false'
+					? { stdout: '', stderr: 'failed', exitCode: 1 }
+					: defaultHandler(args),
+			).runner,
+		),
+	{
+		mountFallsBack: true,
+		semantics: { failingCommand: 'false' },
+	},
+);
 
 containerCliContract(
 	'DockerCompute',

@@ -10,6 +10,11 @@ export interface ArchiveFile {
 const MAX_DECOMPRESSED_BYTES = 100 * 1024 * 1024;
 const MAX_ARCHIVE_FILES = 1000;
 
+interface ArchiveLimitState {
+	fileCount: number;
+	totalBytes: number;
+}
+
 const decoder = new TextDecoder();
 
 function assertSafeArchiveFilePath(path: string) {
@@ -22,6 +27,22 @@ function assertSafeArchiveDirectoryPath(path: string) {
 	const normalized = path.replace(/\/+$/, '');
 	if (!isSafeWorkspacePath(normalized)) {
 		throw new BadRequestError(`Unsafe archive path: ${path}`);
+	}
+}
+
+function enforceArchiveFileLimits(state: ArchiveLimitState, path: string, size: number): void {
+	state.fileCount += 1;
+	if (state.fileCount > MAX_ARCHIVE_FILES) {
+		throw new BadRequestError(`Archive exceeds the ${MAX_ARCHIVE_FILES}-file limit`);
+	}
+	if (!Number.isSafeInteger(size) || size < 0 || size > MAX_WORKSPACE_FILE_BYTES) {
+		throw new BadRequestError(
+			`Archive file exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit: ${path}`,
+		);
+	}
+	state.totalBytes += size;
+	if (state.totalBytes > MAX_DECOMPRESSED_BYTES) {
+		throw new BadRequestError('Decompressed archive exceeds the size limit');
 	}
 }
 
@@ -39,8 +60,7 @@ function toArchiveFiles(files: Map<string, Uint8Array>): ArchiveFile[] {
 
 function parseZip(bytes: Uint8Array): ArchiveFile[] {
 	const paths = new Set<string>();
-	let totalBytes = 0;
-	let fileCount = 0;
+	const limits: ArchiveLimitState = { fileCount: 0, totalBytes: 0 };
 	try {
 		// Read the central directory without inflating anything. fflate sizes each
 		// output allocation from this metadata, so rejecting the complete archive in
@@ -55,19 +75,7 @@ function parseZip(bytes: Uint8Array): ArchiveFile[] {
 				assertSafeArchiveFilePath(name);
 				if (paths.has(name)) throw new BadRequestError(`Duplicate archive path: ${name}`);
 				paths.add(name);
-				fileCount += 1;
-				if (fileCount > MAX_ARCHIVE_FILES) {
-					throw new BadRequestError(`Archive exceeds the ${MAX_ARCHIVE_FILES}-file limit`);
-				}
-				if (!Number.isSafeInteger(originalSize) || originalSize > MAX_WORKSPACE_FILE_BYTES) {
-					throw new BadRequestError(
-						`Archive file exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit: ${name}`,
-					);
-				}
-				totalBytes += originalSize;
-				if (totalBytes > MAX_DECOMPRESSED_BYTES) {
-					throw new BadRequestError('Decompressed archive exceeds the size limit');
-				}
+				enforceArchiveFileLimits(limits, name, originalSize);
 				return false;
 			},
 		});
@@ -146,6 +154,7 @@ function parseTar(bytes: Uint8Array): ArchiveFile[] {
 	const files = new Map<string, Uint8Array>();
 	let offset = 0;
 	let pathOverride: string | undefined;
+	const limits: ArchiveLimitState = { fileCount: 0, totalBytes: 0 };
 	while (offset + 512 <= bytes.length) {
 		const block = bytes.subarray(offset, offset + 512);
 		if (block.every((b) => b === 0)) break;
@@ -187,6 +196,7 @@ function parseTar(bytes: Uint8Array): ArchiveFile[] {
 		pathOverride = undefined;
 
 		if (typeFlag === '0' || typeFlag === '\0' || typeFlag === '7') {
+			enforceArchiveFileLimits(limits, path, size);
 			addFile(files, path, bytes.slice(dataOffset, dataOffset + size));
 		} else if (typeFlag === '5') {
 			assertSafeArchiveDirectoryPath(path);

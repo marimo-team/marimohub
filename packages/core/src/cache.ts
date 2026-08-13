@@ -59,13 +59,14 @@ export class LazyMap<K, V> {
 		return this.getIfPresent(key) as V;
 	}
 
-	reload(key: K): Promise<V> {
+	reload(key: K, options: { force?: boolean; load?: (key: K) => Promise<V> } = {}): Promise<V> {
 		const existing = this.pending.get(key);
-		if (existing) return existing.promise;
+		if (existing && !existing.state.superseded && !options.force) return existing.promise;
+		if (existing) existing.state.superseded = true;
 
 		const state = { superseded: false };
 		const promise = Promise.resolve()
-			.then(() => this.loadValue(key))
+			.then(() => (options.load ?? this.loadValue)(key))
 			.then((loaded) => {
 				if (!state.superseded) {
 					this.store(key, loaded);
@@ -80,6 +81,15 @@ export class LazyMap<K, V> {
 		return promise;
 	}
 
+	getOrLoad(key: K, load: (key: K) => Promise<V>, options: { force?: boolean } = {}): Promise<V> {
+		if (!options.force && this.values.has(key)) return Promise.resolve(this.getIfPresent(key) as V);
+		return this.reload(key, { ...options, load });
+	}
+
+	hasPending(key: K): boolean {
+		return this.pending.has(key);
+	}
+
 	set(key: K, value: V): void {
 		const pending = this.pending.get(key);
 		if (pending) pending.state.superseded = true;
@@ -90,6 +100,12 @@ export class LazyMap<K, V> {
 		const pending = this.pending.get(key);
 		if (pending) pending.state.superseded = true;
 		return this.values.delete(key);
+	}
+
+	clear(): void {
+		for (const pending of this.pending.values()) pending.state.superseded = true;
+		this.pending.clear();
+		this.values.clear();
 	}
 
 	private store(key: K, value: V): void {

@@ -214,6 +214,139 @@ describe('NotificationRouter', () => {
 		expect(Object.isFrozen(PROJECT_ALERT_KINDS)).toBe(true);
 	});
 
+	it.each([
+		[
+			'member.invited',
+			() =>
+				notificationRouter.render({
+					kind: 'member.invited',
+					project,
+					member: { email: 'member@example.com', role: 'editor' },
+					recipient: { email: 'member@example.com' },
+					actor: { id: uid('render_actor'), email: 'owner@example.com' },
+					mutationId: 'render-invited',
+				}),
+		],
+		[
+			'member.added',
+			() =>
+				notificationRouter.render({
+					kind: 'member.added',
+					project,
+					member: { user_id: uid('render_member'), role: 'viewer' },
+					recipient: {
+						userId: uid('render_member'),
+						email: 'member@example.com',
+					},
+					actor: { id: uid('render_actor'), email: 'owner@example.com' },
+					mutationId: 'render-added',
+				}),
+		],
+		[
+			'member.role_changed',
+			() =>
+				notificationRouter.render({
+					kind: 'member.role_changed',
+					project,
+					member: { email: 'member@example.com', role: 'editor' },
+					oldRole: 'viewer',
+					actor: { id: uid('render_actor'), email: 'owner@example.com' },
+					mutationId: 'render-role',
+				}),
+		],
+		[
+			'member.removed',
+			() =>
+				notificationRouter.render({
+					kind: 'member.removed',
+					project,
+					member: { email: 'member@example.com', role: 'editor' },
+					actor: { id: uid('render_actor'), email: 'owner@example.com' },
+					mutationId: 'render-removed',
+				}),
+		],
+		[
+			'session.takeover',
+			() =>
+				notificationRouter.render({
+					kind: 'session.takeover',
+					project,
+					notebookTitle: 'Revenue',
+					projectId: project.id,
+					notebookId: ids().notebook,
+					takeoverId: 'render-takeover',
+					displacedUserId: uid('render_displaced'),
+					recipient: { email: 'displaced@example.com' },
+					actor: { id: uid('render_actor'), email: 'owner@example.com' },
+				}),
+		],
+		[
+			'notebook.deleted',
+			() =>
+				notificationRouter.render({
+					kind: 'notebook.deleted',
+					project,
+					notebookId: ids().notebook,
+					notebookTitle: 'Revenue',
+					actor: { id: uid('render_actor'), email: 'owner@example.com' },
+					mutationId: 'render-notebook-deleted',
+				}),
+		],
+		[
+			'project.deleted',
+			() =>
+				notificationRouter.render({
+					kind: 'project.deleted',
+					project,
+					actor: { id: uid('render_actor'), email: 'owner@example.com' },
+					mutationId: 'render-project-deleted',
+				}),
+		],
+		[
+			'app.start_failed',
+			() =>
+				notificationRouter.render({
+					kind: 'app.start_failed',
+					project,
+					notebookId: ids().notebook,
+					notebookTitle: 'Revenue',
+					sessionId: ids().session,
+					startedByUserId: uid('render_starter'),
+					errorCode: 'START_FAILED',
+				}),
+		],
+		[
+			'app.unavailable',
+			() =>
+				notificationRouter.render({
+					kind: 'app.unavailable',
+					project,
+					notebookId: ids().notebook,
+					notebookTitle: 'Revenue',
+					sessionId: ids().session,
+					startedByUserId: uid('render_starter'),
+					errorCode: 'APP_STOPPED',
+				}),
+		],
+		[
+			'sync.failed',
+			() =>
+				notificationRouter.render({
+					kind: 'sync.failed',
+					project,
+					notebookId: ids().notebook,
+					notebookTitle: 'Revenue',
+					commit: '1234567890abcdef',
+					errorCode: 'SYNC_FAILED',
+				}),
+		],
+	] as const)('renders valid envelopes for %s', (kind, render) => {
+		const rendered = render();
+		expect(rendered.length).toBeGreaterThan(0);
+		expect(rendered.every((item) => item.kind === kind)).toBe(true);
+		for (const item of rendered) expect(() => NotificationSchema.parse(item)).not.toThrow();
+	});
+
 	it('renders stable app-failure data without provider error text', () => {
 		const [rendered] = notificationRouter.render({
 			kind: 'app.start_failed',
@@ -234,6 +367,134 @@ describe('NotificationRouter', () => {
 			dedupe_key: `app.start_failed:${ids().session}:broadcast`,
 		});
 		expect(JSON.stringify(rendered)).not.toContain('provider');
+	});
+
+	it('renders member role changes and removals with stable member identity data', () => {
+		const actor = { id: uid('owner_notify'), email: 'owner@example.com', name: 'Owner' };
+		const member = { email: 'member@example.com', role: 'editor' as const };
+		const [roleChanged] = notificationRouter.render({
+			kind: 'member.role_changed',
+			project,
+			member,
+			oldRole: 'viewer',
+			actor,
+			mutationId: 'role-1',
+			baseUrl: 'https://hub.example.com',
+		});
+		const [removed] = notificationRouter.render({
+			kind: 'member.removed',
+			project,
+			member,
+			actor,
+			mutationId: 'remove-1',
+			baseUrl: 'https://hub.example.com',
+		});
+
+		expect(roleChanged).toMatchObject({
+			kind: 'member.role_changed',
+			severity: 'warning',
+			audience: 'broadcast',
+			body: 'Owner changed member@example.com from viewer to editor.',
+			data: { member_email: 'member@example.com', old_role: 'viewer', new_role: 'editor' },
+			dedupe_key: 'member.role_changed:role-1:broadcast',
+		});
+		expect(removed).toMatchObject({
+			kind: 'member.removed',
+			body: 'Owner removed member@example.com from Forecasts.',
+			data: { member_email: 'member@example.com', role: 'editor' },
+			dedupe_key: 'member.removed:remove-1:broadcast',
+		});
+	});
+
+	it('renders notebook and project deletion alerts', () => {
+		const actor = { id: uid('owner_notify'), email: 'owner@example.com' };
+		const [notebookDeleted] = notificationRouter.render({
+			kind: 'notebook.deleted',
+			project,
+			notebookId: ids().notebook,
+			notebookTitle: 'Revenue',
+			actor,
+			mutationId: 'notebook-delete-1',
+			baseUrl: 'https://hub.example.com',
+		});
+		const [projectDeleted] = notificationRouter.render({
+			kind: 'project.deleted',
+			project,
+			actor,
+			mutationId: 'project-delete-1',
+		});
+
+		expect(notebookDeleted).toMatchObject({
+			kind: 'notebook.deleted',
+			body: 'owner@example.com deleted Revenue.',
+			context: { pid: project.id, nid: ids().notebook },
+			data: { notebook_title: 'Revenue', actor_user_id: actor.id },
+			dedupe_key: 'notebook.deleted:notebook-delete-1:broadcast',
+		});
+		expect(projectDeleted).toMatchObject({
+			kind: 'project.deleted',
+			title: 'Project deleted: Forecasts',
+			data: { project_id: project.id, actor_user_id: actor.id },
+			dedupe_key: 'project.deleted:project-delete-1:broadcast',
+		});
+		expect(projectDeleted).not.toHaveProperty('link');
+	});
+
+	it('renders unavailable-app and sync-failure alerts', () => {
+		const notebookId = ids().notebook;
+		const sessionId = ids().session;
+		const [unavailable] = notificationRouter.render({
+			kind: 'app.unavailable',
+			project,
+			notebookId,
+			notebookTitle: 'Revenue',
+			sessionId,
+			startedByUserId: uid('app_starter'),
+			errorCode: 'SANDBOX_DISAPPEARED',
+			baseUrl: 'https://hub.example.com',
+		});
+		const [syncFailed] = notificationRouter.render({
+			kind: 'sync.failed',
+			project,
+			notebookId,
+			notebookTitle: 'Revenue',
+			commit: '1234567890abcdef',
+			errorCode: 'SYNC_FAILED',
+			baseUrl: 'https://hub.example.com',
+		});
+
+		expect(unavailable).toMatchObject({
+			kind: 'app.unavailable',
+			title: 'App unavailable in Forecasts',
+			body: 'Revenue stopped unexpectedly (SANDBOX_DISAPPEARED).',
+			dedupe_key: `app.unavailable:${sessionId}:broadcast`,
+		});
+		expect(syncFailed).toMatchObject({
+			kind: 'sync.failed',
+			body: 'Revenue failed to sync commit 1234567890ab (SYNC_FAILED).',
+			data: { commit: '1234567890abcdef', error_code: 'SYNC_FAILED' },
+			dedupe_key: `sync.failed:${notebookId}:1234567890abcdef:broadcast`,
+		});
+	});
+
+	it('renders a complete test alert envelope', () => {
+		const destinationId = 'alert-0123456789abcdef' as never;
+		const [rendered] = notificationRouter.render({
+			kind: 'alert.test',
+			project,
+			destinationId,
+			actor: { id: uid('owner_notify'), email: 'owner@example.com' },
+			testId: 'test-request-1',
+		});
+
+		expect(rendered).toMatchObject({
+			kind: 'alert.test',
+			severity: 'info',
+			audience: 'broadcast',
+			title: 'Test alert for Forecasts',
+			data: { destination_id: destinationId, test_id: 'test-request-1' },
+			dedupe_key: 'alert.test:alert-0123456789abcdef:test-request-1:broadcast',
+		});
 	});
 });
 
@@ -347,6 +608,66 @@ describe('fanOutNotifier', () => {
 		const filtered = filterNotifier(target, new Set(['session.takeover']));
 		await expect(filtered.deliver(notification)).resolves.toBe('skipped');
 		expect(target.deliver).not.toHaveBeenCalled();
+	});
+
+	it('disposes every adapter through fan-out and filters', async () => {
+		const first = {
+			deliver: vi.fn(async () => 'skipped' as const),
+			[Symbol.asyncDispose]: vi.fn(async () => {}),
+		};
+		const second = { deliver: vi.fn(async () => 'skipped' as const), close: vi.fn() };
+		const notifier = fanOutNotifier([
+			{ name: 'smtp', notifier: filterNotifier(first, new Set()) },
+			{ name: 'webhook', notifier: second },
+		]);
+
+		await notifier[Symbol.asyncDispose]?.();
+
+		expect(first[Symbol.asyncDispose]).toHaveBeenCalledOnce();
+		expect(second.close).toHaveBeenCalledOnce();
+	});
+
+	it('waits for every adapter disposal before reporting a failure', async () => {
+		let finishSecond: (() => void) | undefined;
+		const firstFailure = new Error('first close failed');
+		const first = {
+			deliver: vi.fn(async () => 'skipped' as const),
+			close: vi.fn(async () => {
+				throw firstFailure;
+			}),
+		};
+		const second = {
+			deliver: vi.fn(async () => 'skipped' as const),
+			close: vi.fn(() => new Promise<void>((resolve) => (finishSecond = resolve))),
+		};
+		const notifier = fanOutNotifier([
+			{ name: 'first', notifier: first },
+			{ name: 'second', notifier: second },
+		]);
+
+		let settled = false;
+		const disposing = Promise.resolve(notifier.close?.()).finally(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		finishSecond?.();
+		await expect(disposing).rejects.toBe(firstFailure);
+	});
+
+	it('reports a meaningful error when adapter disposal rejects without a reason', async () => {
+		const notifier = fanOutNotifier([
+			{
+				name: 'broken',
+				notifier: {
+					deliver: vi.fn(async () => 'skipped' as const),
+					// oxlint-disable-next-line typescript/prefer-promise-reject-errors -- verifies an untyped JavaScript rejection boundary
+					close: vi.fn(() => Promise.reject()),
+				},
+			},
+		]);
+
+		await expect(notifier.close?.()).rejects.toThrow('Notification adapter disposal failed');
 	});
 });
 

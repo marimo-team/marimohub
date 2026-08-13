@@ -2462,6 +2462,7 @@ describe('data browsing', () => {
 	it('reports the capability verdict without resolving secrets', async () => {
 		const created = await createBrowsy();
 		expect(await store.browseCapability(pid, created.id)).toEqual({
+			integration_kind: 'browsy',
 			metadata: true,
 			hub_preview: false,
 			surfaces: { tables: { available: true, preview: false } },
@@ -2475,6 +2476,7 @@ describe('data browsing', () => {
 			ACTOR,
 		);
 		expect(await store.browseCapability(pid, closed.id)).toEqual({
+			integration_kind: 'browsy',
 			metadata: false,
 			hub_preview: false,
 			surfaces: {
@@ -2795,6 +2797,7 @@ describe('data browsing', () => {
 		);
 
 		expect(await store.browseCapability(pid, orgInstance.id)).toEqual({
+			integration_kind: 'browsy',
 			metadata: true,
 			hub_preview: false,
 			surfaces: { tables: { available: true, preview: false } },

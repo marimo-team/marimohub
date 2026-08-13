@@ -25,9 +25,9 @@ or more domains, or set `*` to allow all.
 If the provider publishes UserInfo, marimohub uses it for profile claims.
 UserInfo must have the same `sub` as the validated ID token. Email verification
 is required by default. If a trusted issuer omits `email_verified`, use
-`MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer`. Any present value other
-than boolean `true` is invalid. This policy also applies when a domain allowlist
-is active.
+`MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer`. This mode also permits
+an omitted claim when a domain allowlist is active. If the claim is present, its
+value must be boolean `true`.
 
 The signed session JWT has a 3,800-byte limit. If necessary, marimohub omits the
 profile picture first and the display name second. Required identity and

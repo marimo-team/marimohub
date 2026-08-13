@@ -16,10 +16,19 @@ import {
 import { Button, Chip, EmptyState, IconButton, Skeleton, TextField } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { errorMessage } from '@/lib/errors';
-import { cn } from '@/lib/utils';
-import type { IntegrationEntry, IntegrationObjectEntry, IntegrationObjectPreview } from '@/types';
+import { cn, logNever } from '@/lib/utils';
+import type {
+	IntegrationBrowseCapability,
+	IntegrationEntry,
+	IntegrationObjectEntry,
+	IntegrationObjectPreview,
+} from '@/types';
 import { useSeededNotebook } from './notebookSeed';
 import { TabularPreviewGrid } from './TabularPreviewGrid';
+
+type ObjectCapability = NonNullable<IntegrationBrowseCapability['surfaces']['objects']>;
+type ObjectRootKind = ObjectCapability['root_kind'];
+type ObjectUriScheme = ObjectCapability['uri_scheme'];
 
 interface ObjectBrowserProps {
 	projectId: string;
@@ -28,8 +37,8 @@ interface ObjectBrowserProps {
 	downloadAvailable: boolean;
 	searchAvailable: boolean;
 	versionsAvailable: boolean;
-	rootKind: 'bucket' | 'container';
-	uriScheme: 's3' | 'gs' | 'az';
+	rootKind: ObjectRootKind;
+	uriScheme: ObjectUriScheme;
 }
 
 export function ObjectBrowser({
@@ -42,8 +51,7 @@ export function ObjectBrowser({
 	rootKind,
 	uriScheme,
 }: ObjectBrowserProps) {
-	const rootLabel = rootKind === 'container' ? 'container' : 'bucket';
-	const rootLabelTitle = rootKind === 'container' ? 'Container' : 'Bucket';
+	const rootLabel = objectRootLabel(rootKind);
 	const [params, setParams] = useSearchParams();
 	const bucketParam = params.get('bucket') ?? '';
 	const prefix = params.get('prefix') ?? '';
@@ -166,12 +174,14 @@ export function ObjectBrowser({
 	const { copy: copySelection } = useCopyToClipboard();
 	const copySelectedUris = () => {
 		const keys = selectedKeys.size > 0 ? [...selectedKeys] : key ? [key] : [];
-		void copySelection(keys.map((value) => `${uriScheme}://${bucket}/${value}`).join('\n')).then(
-			(copied) => {
-				if (copied)
-					toast.success(`Copied ${keys.length} object URI${keys.length === 1 ? '' : 's'}`);
-			},
-		);
+		const uris = keys.map((value) => objectUri(uriScheme, bucket, value));
+		if (!uris.every((uri): uri is string => uri !== null)) {
+			toast.error('This provider does not expose a recognized object URI scheme.');
+			return;
+		}
+		void copySelection(uris.join('\n')).then((copied) => {
+			if (copied) toast.success(`Copied ${keys.length} object URI${keys.length === 1 ? '' : 's'}`);
+		});
 	};
 	const handleListKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
 		if (event.key === 'Backspace' && prefix) {
@@ -198,7 +208,7 @@ export function ObjectBrowser({
 			<section className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-xl border bg-card p-3">
 				{bucket === '' ? (
 					<div className="min-h-0 overflow-y-auto">
-						<p className="mb-2 text-xs font-medium text-muted-foreground">{rootLabelTitle}s</p>
+						<p className="mb-2 text-xs font-medium text-muted-foreground">{rootLabel.plural}</p>
 						{buckets.data === undefined ? (
 							buckets.error ? (
 								<p className="p-3 text-sm text-destructive">{errorMessage(buckets.error)}</p>
@@ -208,8 +218,8 @@ export function ObjectBrowser({
 						) : !buckets.error && bucketItems.length === 0 && !buckets.hasNextPage ? (
 							<EmptyState
 								icon={<Folder />}
-								message={`No ${rootLabel}s available`}
-								description={`The integration credentials did not return an accessible ${rootLabel}.`}
+								message={`No ${rootLabel.plural.toLocaleLowerCase()} available`}
+								description={`The integration credentials did not return an accessible ${rootLabel.singular}.`}
 							/>
 						) : (
 							<>
@@ -235,10 +245,10 @@ export function ObjectBrowser({
 										onPress={() => void buckets.fetchNextPage()}
 									>
 										{buckets.isFetchingNextPage
-											? `Loading ${rootLabel}s…`
+											? `Loading ${rootLabel.plural.toLocaleLowerCase()}…`
 											: buckets.error
-												? `Retry loading ${rootLabel}s`
-												: `Load more ${rootLabel}s`}
+												? `Retry loading ${rootLabel.plural.toLocaleLowerCase()}`
+												: `Load more ${rootLabel.plural.toLocaleLowerCase()}`}
 									</Button>
 								)}
 							</>
@@ -483,7 +493,7 @@ function ObjectDetail({
 	previewAvailable: boolean;
 	downloadAvailable: boolean;
 	versionsAvailable: boolean;
-	uriScheme: 's3' | 'gs' | 'az';
+	uriScheme: ObjectUriScheme;
 	onVersion: (version?: string) => void;
 }) {
 	const detail = useObjectDetailQuery(projectId, integration.id, bucket, objectKey, versionId);
@@ -508,7 +518,8 @@ function ObjectDetail({
 			</div>
 		);
 	}
-	const uri = `${uriScheme}://${bucket}/${objectKey}`;
+	const uri = objectUri(uriScheme, bucket, objectKey);
+	const displayLocation = uri ?? `${bucket}/${objectKey}`;
 	const downloadUrl = objectContentUrl({
 		projectId,
 		integrationId: integration.id,
@@ -522,8 +533,8 @@ function ObjectDetail({
 		const title = `explore_${safeNotebookTitle(objectKey)}`;
 		await seededNotebook.create({
 			title,
-			heading: uri,
-			description: `Explore ${uri} via the ${integration.name} integration`,
+			heading: displayLocation,
+			description: `Explore ${displayLocation} via the ${integration.name} integration`,
 			snippet: detail.data.snippet,
 		});
 	};
@@ -535,11 +546,11 @@ function ObjectDetail({
 						{objectKey}
 					</h2>
 					<p className="break-all font-mono text-xs text-muted-foreground" translate="no">
-						{uri}
+						{displayLocation}
 					</p>
 				</div>
 				<div className="flex flex-wrap gap-2">
-					<CopyIconButton label="URI" value={uri} />
+					{uri && <CopyIconButton label="URI" value={uri} />}
 					<CopyIconButton label="key" value={objectKey} />
 					{detail.data.snippet && <CopyIconButton label="snippet" value={detail.data.snippet} />}
 					{detail.data.snippet && (
@@ -754,6 +765,35 @@ function MetadataRows({ values }: { values: Record<string, string | undefined> }
 				))}
 		</dl>
 	);
+}
+
+function objectRootLabel(rootKind: ObjectRootKind): { singular: string; plural: string } {
+	switch (rootKind) {
+		case 'bucket':
+			return { singular: 'bucket', plural: 'Buckets' };
+		case 'container':
+			return { singular: 'container', plural: 'Containers' };
+		case 'unknown':
+			return { singular: 'storage root', plural: 'Storage roots' };
+		default:
+			return logNever(rootKind, 'object root kind', {
+				singular: 'storage root',
+				plural: 'Storage roots',
+			});
+	}
+}
+
+function objectUri(uriScheme: ObjectUriScheme, bucket: string, key: string): string | null {
+	switch (uriScheme) {
+		case 's3':
+		case 'gs':
+		case 'az':
+			return `${uriScheme}://${bucket}/${key}`;
+		case 'unknown':
+			return null;
+		default:
+			return logNever(uriScheme, 'object URI scheme', null);
+	}
 }
 
 function prefixParts(prefix: string): { label: string; value: string }[] {

@@ -101,7 +101,7 @@ Read regardless of the selected compute backend.
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_COMPUTE_IMAGE` | Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
-| `MARIMOHUB_COMPUTE_PROFILES` | Ordered named CPU, memory, and optional GPU profiles (`name:cpu=<cores>;mem=<Mi\|Gi\|Ti>;gpu=<type>[:<count>]`, with a maximum GPU count of 8). The first is the default; supported backends apply the notebook choice when overrides are enabled. Modal applies GPU requests; other backends ignore them with a startup warning. | — | — | `small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100` |
+| `MARIMOHUB_COMPUTE_PROFILES` | Ordered named CPU, memory, and optional GPU profiles. Use `name:cpu=<cores>;mem=<Mi\|Gi\|Ti>;gpu=<type>[:<count>]`. The maximum GPU count is 8. The first profile is the default. Supported backends apply the selected profile when overrides are enabled. The Modal backend applies GPU requests. Other backends ignore GPU values and log a startup warning. | — | — | `small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100` |
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |
@@ -323,7 +323,7 @@ Server-wide settings; no backend selector.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown IDs fail startup. Current values: `duckdb-wasm-preview`. | — | — | `duckdb-wasm-preview` |
+| `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current values: `duckdb-wasm-preview`. | — | — | `duckdb-wasm-preview` |
 | `PORT` | Port the HTTP server listens on. | — | `3000` | — |
 | `MARIMOHUB_STATIC_ROOT` | Directory containing the web UI's static files. | — | `./public` | — |
 | `MARIMOHUB_RUN_MAINTENANCE` | Run background maintenance (expiring old sessions, cleaning up sandboxes) on this replica only. | — | `false` | `true` |
@@ -444,6 +444,7 @@ These variables control all notification backends.
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_NOTIFY_BACKENDS` | Comma-separated backends. Accepted values are `smtp`, `slack`, and `webhook`. An empty value disables notifications. | — | — | `smtp,slack,webhook` |
 | `MARIMOHUB_NOTIFY_KINDS` | Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, and `session.takeover`. Set `none` to disable all kinds, including per-backend overrides. An unknown kind causes a startup error. | — | — | `member.invited,member.added` |
+| `MARIMOHUB_NOTIFY_ALLOW_PRIVATE` | Allow Slack and webhook delivery to private, loopback, link-local, or reserved IP addresses. Enable only for operator-controlled internal destinations. | — | `false` | `true` |
 
 ### SMTP
 
@@ -509,20 +510,21 @@ Integration management and session injection are enabled. Project entries use
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_INTEGRATIONS_PROBE` | Policy for the "Test connection" probe, which makes server-side HTTP requests to manager-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`). | — | `guarded` | — |
-| `MARIMOHUB_DATA_BROWSER` | Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews. Requires `MARIMOHUB_INTEGRATIONS=on` and an enabled integration probe. `off` disables browsing. | — | `off` | — |
+| `MARIMOHUB_DATA_BROWSER` | Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews and Run SQL. Requires `MARIMOHUB_INTEGRATIONS=on` and an enabled integration probe. `off` disables browsing. | — | `off` | — |
 | `MARIMOHUB_DATA_PREVIEW_IMAGE` | OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The hub verifies the image at startup. | — | — | `ghcr.io/example/marimohub-data-preview:1` |
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT` | Maximum number of runtime-backed previews in this server process. | — | `4` | — |
 | `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER` | Maximum number of runtime-backed previews for one user. | — | `1` | — |
 | `MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS` | Maximum time to start and prepare a preview runtime. | — | `120` | — |
 | `MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS` | Maximum time for a DuckDB-Wasm or fixed PyIceberg preview. | — | `30` | — |
-| `MARIMOHUB_DATA_QUERY_MAX_CONCURRENT` | Maximum number of isolated SQL queries in this server process. | — | `4` | — |
-| `MARIMOHUB_DATA_QUERY_MAX_CONCURRENT_PER_USER` | Maximum number of isolated SQL queries for one user. | — | `1` | — |
-| `MARIMOHUB_DATA_QUERY_MAX_ROWS` | Maximum number of rows returned by one SQL query. | — | `10000` | — |
-| `MARIMOHUB_DATA_QUERY_MAX_BYTES` | Maximum serialized response size in bytes for one SQL query. | — | `2097152` | — |
-| `MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS` | Maximum execution time for one isolated SQL query. | — | `30` | — |
-| `MARIMOHUB_DUCKDB_WASM_RUNTIME` | Runtime selected by the `duckdb-wasm-preview` experiment. `auto` uses a worker thread and falls back to inline only when workers are structurally unsupported. `worker` and `inline` force one mode. | — | `auto` | — |
-| `MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB` | DuckDB engine memory limit in MiB. This does not cap all WebAssembly and Arrow allocations. | — | `128` | — |
-| `MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS` | Maximum idle time before a warm DuckDB-Wasm engine is released. Set to 0 to keep warm engines until shutdown. | — | `300` | — |
+| `MARIMOHUB_DATA_PREVIEW_EMBEDDED_RUNTIME` | Isolation mode for the embedded preview executor. `auto` and `worker` both require a worker thread; blocking inline execution is rejected because its deadline cannot preempt a query. | — | `auto` | — |
+| `MARIMOHUB_DATA_PREVIEW_EMBEDDED_MEMORY_LIMIT_MB` | Engine memory limit in MiB for the embedded preview executor. This does not cap all runtime and result-buffer allocations. | — | `128` | — |
+| `MARIMOHUB_DATA_PREVIEW_EMBEDDED_IDLE_TIMEOUT_SECONDS` | Maximum idle time before a warm embedded preview executor is released. Set to 0 to keep warm executors until shutdown. | — | `300` | — |
+| `MARIMOHUB_DATA_QUERY_MAX_CONCURRENT` | Maximum number of Run SQL workers in this server process. | — | `4` | — |
+| `MARIMOHUB_DATA_QUERY_MAX_CONCURRENT_PER_USER` | Maximum number of active Run SQL workers for one user. | — | `1` | — |
+| `MARIMOHUB_DATA_QUERY_MAX_ROWS` | Maximum rows returned by one Run SQL request. | — | `10000` | — |
+| `MARIMOHUB_DATA_QUERY_MAX_BYTES` | Maximum serialized response bytes returned by one Run SQL request. | — | `2097152` | — |
+| `MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS` | Hard deadline for one Run SQL worker, including startup. | — | `30` | — |
+| `MARIMOHUB_DATA_QUERY_MEMORY_LIMIT_MB` | Engine memory limit in MiB for each Run SQL worker. The worker also has fixed V8 heap and stack limits. | — | `128` | — |
 | `MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS` | Allow editors to browse ambient-auth S3 integrations with the control-plane AWS identity when compatible project WIF credentials are unavailable. Keep this off unless that identity is intentionally available to project editors. | — | `false` | — |
 | `MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS` | Maximum time for one object listing or metadata operation, including DNS resolution. | — | `30` | — |
 | `MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS` | Maximum time for one bounded object preview, including DNS resolution and ranged reads. | — | `30` | — |

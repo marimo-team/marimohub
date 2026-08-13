@@ -39,6 +39,7 @@
 		"@marimo-hub/notify-smtp": "workspace:*",
 		"@marimo-hub/notify-webhook": "workspace:*",
 		"@marimo-hub/object-browser-azure": "workspace:*",
+		"@marimo-hub/object-browser-commons": "workspace:*",
 		"@marimo-hub/object-browser-gcs": "workspace:*",
 		"@marimo-hub/object-browser-s3": "workspace:*",
 		"@marimo-hub/secrets-aws": "workspace:*",

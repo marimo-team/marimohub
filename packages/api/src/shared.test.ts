@@ -1,5 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
 import {
 	createProjectId,
 	createServices,
@@ -14,12 +14,31 @@ import {
 	assertSessionControl,
 	createApp,
 	ErrorResponseSchema,
+	extensibleResponseEnum,
 	jsonBody,
 	jsonContent,
 	NotebookIdParam,
 	ProjectIdParam,
 	SessionIdParam,
 } from './shared';
+
+describe('extensibleResponseEnum', () => {
+	const schema = z.object({
+		root_kind: extensibleResponseEnum(['bucket', 'container'], 'bucket'),
+	});
+
+	it('preserves known literals and normalizes future values', () => {
+		expect(schema.parse({ root_kind: 'bucket' })).toEqual({ root_kind: 'bucket' });
+		expect(schema.parse({ root_kind: 'future-root' })).toEqual({ root_kind: 'unknown' });
+		expect(schema.safeParse({}).success).toBe(false);
+		expect(schema.safeParse({ root_kind: 1 }).success).toBe(false);
+	});
+
+	it('exposes a closed output union with an unknown fallback', () => {
+		const parsed = schema.parse({ root_kind: 'container' });
+		expectTypeOf(parsed.root_kind).toEqualTypeOf<'bucket' | 'container' | 'unknown'>();
+	});
+});
 
 // Seed a project's meta object directly so we can pin arbitrary members/roles
 // without going through the catalog/snapshot machinery.

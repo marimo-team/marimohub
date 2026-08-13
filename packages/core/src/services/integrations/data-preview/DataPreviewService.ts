@@ -1,5 +1,5 @@
 import { ResourceExhaustedError, UnavailableError, ValidationError } from '../../../errors';
-import { InFlightWork, KeyedAdmission } from '../../../concurrency';
+import { KeyedAdmission } from '../../../concurrency';
 import type { UserId } from '../../../ids';
 import { noopMetrics } from '../../../ports/metrics';
 import type { Metrics } from '../../../ports/metrics';
@@ -11,6 +11,7 @@ import type {
 	PreviewProgramAvailability,
 	PreviewPrograms,
 } from './programs';
+import { DrainableService } from '../DrainableService';
 
 export interface DataPreviewServiceOptions {
 	duckdbWasm?: Pick<
@@ -23,14 +24,12 @@ export interface DataPreviewServiceOptions {
 	metrics?: Metrics;
 }
 
-export class DataPreviewService {
+export class DataPreviewService extends DrainableService {
 	private readonly admission: KeyedAdmission<UserId>;
-	private readonly inFlight = new InFlightWork();
 	private readonly metrics: Metrics;
-	private closed = false;
-	private closing: Promise<void> | undefined;
 
 	constructor(private readonly options: DataPreviewServiceOptions) {
+		super();
 		this.metrics = options.metrics ?? noopMetrics;
 		this.admission = new KeyedAdmission(options.maxConcurrent, options.maxConcurrentPerUser, {
 			global: () =>
@@ -69,16 +68,11 @@ export class DataPreviewService {
 
 	async preview(userId: UserId, programs: PreviewPrograms): Promise<TablePreview> {
 		if (this.closed) throw new UnavailableError('The data-preview service is closed.');
-		return this.inFlight.track(
-			this.admission.run(userId, () => this.executeAvailableProgram(programs)),
-		);
+		return this.track(this.admission.run(userId, () => this.executeAvailableProgram(programs)));
 	}
 
 	close(): Promise<void> {
-		if (this.closing) return this.closing;
-		this.closed = true;
-		this.closing = this.closeAll();
-		return this.closing;
+		return this.closeOnce(() => this.closeAll());
 	}
 
 	private async closeAll(): Promise<void> {

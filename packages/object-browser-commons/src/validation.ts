@@ -13,4 +13,16 @@ export function assertObjectIdentity(source: ObjectStoreSource, request: ObjectI
 	if (!request.key || new TextEncoder().encode(request.key).length > 1_024) {
 		throw new ObjectBrowseError('not_found', 'The object key is invalid.');
 	}
+	// Providers that address a blob by URL (Azure) let the URL parser resolve
+	// dot segments, which walks the key out of the configured container.
+	if (
+		source.provider === 'azure_blob' &&
+		(request.key.startsWith('/') || hasDotSegment(request.key))
+	) {
+		throw new ObjectBrowseError('not_found', 'The object key is invalid.');
+	}
+}
+
+function hasDotSegment(key: string): boolean {
+	return key.split('/').some((segment) => segment === '.' || segment === '..');
 }

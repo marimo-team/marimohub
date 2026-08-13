@@ -24,6 +24,16 @@ describe('Azure guarded HTTP client', () => {
 		expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
 	});
 
+	it('classifies transport deadline errors as aborted', async () => {
+		const client = guardedHttpClient(
+			resolver,
+			vi.fn<typeof fetch>(async () => {
+				throw new DOMException('deadline exceeded', 'TimeoutError');
+			}),
+		);
+		await expect(client.sendRequest(request())).rejects.toMatchObject({ code: 'aborted' });
+	});
+
 	it('keeps download cancellation linked after response headers arrive', async () => {
 		const requestController = new AbortController();
 		const client = guardedHttpClient(resolver, (async (_input, init) => {
@@ -47,6 +57,39 @@ describe('Azure guarded HTTP client', () => {
 		const closed = new Promise<void>((resolve) => body.once('close', resolve));
 		requestController.abort();
 		await closed;
+	});
+
+	it('cancels metadata responses that exceed the configured cap', async () => {
+		const cancel = vi.fn();
+		const response = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('too large'));
+			},
+			cancel,
+		});
+		const client = guardedHttpClient(
+			resolver,
+			(async () => new Response(response)) as typeof fetch,
+			undefined,
+			{ metadataMaxResponseBytes: 4, listMaxResponseBytes: 1024 },
+		);
+
+		await expect(client.sendRequest(request())).rejects.toMatchObject({ code: 'unsupported' });
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
+	it('bounds list responses with the list cap instead of the metadata cap', async () => {
+		const client = guardedHttpClient(
+			resolver,
+			(async () => new Response('<EnumerationResults></EnumerationResults>')) as typeof fetch,
+			undefined,
+			{ metadataMaxResponseBytes: 4, listMaxResponseBytes: 1024 },
+		);
+
+		const response = await client.sendRequest(
+			request({ url: 'https://lake.blob.core.windows.net/raw?restype=container&comp=list' }),
+		);
+		expect(response.bodyAsText).toBe('<EnumerationResults></EnumerationResults>');
 	});
 });
 

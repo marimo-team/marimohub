@@ -26,6 +26,14 @@ const LABELS: Record<ProjectAlertKind, string> = {
 	'sync.failed': 'Git sync failed',
 };
 
+function knownKinds(values: readonly string[]): ProjectAlertKind[] {
+	return values.filter((value): value is ProjectAlertKind => Object.hasOwn(LABELS, value));
+}
+
+function sameKinds(a: readonly ProjectAlertKind[], b: readonly ProjectAlertKind[]): boolean {
+	return a.length === b.length && b.every((kind) => a.includes(kind));
+}
+
 const GROUPS: { label: string; kinds: ProjectAlertKind[] }[] = [
 	{
 		label: 'Access',
@@ -39,7 +47,7 @@ interface Props {
 	isOpen: boolean;
 	onClose: () => void;
 	projectId: string;
-	selectableKinds: ProjectAlertKind[];
+	selectableKinds: string[];
 	maxDestinations: number;
 }
 
@@ -52,8 +60,8 @@ type EditorState = {
 	secret: string;
 };
 
-function fresh(kinds: ProjectAlertKind[]): EditorState {
-	return { type: 'slack', name: '', kinds: [...kinds], endpoint: '', secret: '' };
+function fresh(kinds: readonly string[]): EditorState {
+	return { type: 'slack', name: '', kinds: knownKinds(kinds), endpoint: '', secret: '' };
 }
 
 export function ProjectAlertsDialog({
@@ -77,13 +85,23 @@ export function ProjectAlertsDialog({
 			destination,
 			type: destination.type,
 			name: destination.name,
-			kinds: [...destination.kinds],
+			kinds: knownKinds(destination.kinds),
 			endpoint: '',
 			secret: '',
 		});
 
+	// An untouched selection is omitted from the PATCH: the response enum is
+	// widened, so echoing back only the kinds this build knows would silently
+	// unsubscribe server-newer ones.
+	const kindsPristine =
+		editor?.destination !== undefined &&
+		sameKinds(editor.kinds, knownKinds(editor.destination.kinds));
+	const unknownKinds =
+		editor?.destination?.kinds.filter((kind) => !Object.hasOwn(LABELS, kind)) ?? [];
+	const hasSelectedKinds = (editor?.kinds.length ?? 0) > 0 || unknownKinds.length > 0;
+
 	const save = async () => {
-		if (!editor?.name.trim() || editor.kinds.length === 0) return;
+		if (!editor?.name.trim() || (!hasSelectedKinds && !kindsPristine)) return;
 		try {
 			if (!editor.destination) {
 				if (!editor.endpoint.trim() || (editor.type === 'webhook' && !editor.secret)) return;
@@ -109,7 +127,9 @@ export function ProjectAlertsDialog({
 					id: editor.destination.id,
 					updatedAt: editor.destination.updated_at,
 					name: editor.name.trim(),
-					kinds: editor.kinds,
+					...(kindsPristine
+						? {}
+						: { kinds: [...editor.kinds, ...unknownKinds] as ProjectAlertKind[] }),
 					...(editor.type === 'slack' && editor.endpoint.trim()
 						? { webhook_url: editor.endpoint.trim() }
 						: {}),
@@ -240,7 +260,7 @@ export function ProjectAlertsDialog({
 								isDisabled={
 									pending ||
 									!editor.name.trim() ||
-									editor.kinds.length === 0 ||
+									(!hasSelectedKinds && !kindsPristine) ||
 									(!editor.destination &&
 										(!editor.endpoint.trim() || (editor.type === 'webhook' && !editor.secret)))
 								}

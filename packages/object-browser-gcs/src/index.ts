@@ -20,19 +20,21 @@ import type {
 	ObjectVersion,
 	ObjectVersionRequest,
 } from '@marimo-hub/core';
-import { OBJECT_BROWSE_PROVIDER_METADATA, ObjectBrowseError } from '@marimo-hub/core';
+import { ObjectBrowseError } from '@marimo-hub/core';
 import {
 	assertBucket,
 	assertObjectIdentity,
+	boundedKeySearch,
 	decodeCursor,
 	createGuardedFetch,
 	DEFAULT_OBJECT_BROWSER_LIMITS,
 	detectRasterImage,
 	encodeCursor,
 	guardObjectStream,
-	matchesObjectSearchFilters,
-	OBJECT_PREVIEW_FORMATS,
+	isAbortError,
 	ObjectBrowserObserver,
+	objectBrowseCapability,
+	objectBrowseHttpError,
 	previewObject,
 	readBoundedBody,
 	rasterContentType,
@@ -47,6 +49,10 @@ import { GcsAuth, parseServiceAccount } from './auth';
 
 const API_ORIGIN = 'https://storage.googleapis.com';
 const SEARCH_BATCH_SIZE = 1_000;
+// Only the fields the list mappers consume; without the projection each item
+// repeats its key several times (id, selfLink, mediaLink) and a full page can
+// blow past the bounded-read cap.
+const LIST_FIELDS = 'items(name,generation,size,updated,etag,storageClass),prefixes,nextPageToken';
 
 export interface GcsObjectBrowserOptions {
 	mode: 'metadata' | 'full';
@@ -95,37 +101,21 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 	}
 
 	capability(source: GcsObjectStoreSource, context: ObjectBrowseContext): ObjectBrowseCapability {
-		try {
-			if (source.auth.method === 'service_account')
-				parseServiceAccount(source.auth.credentials_json);
-			if (source.auth.method === 'ambient' && !context.allow_server_ambient.gcs) {
-				throw new ObjectBrowseError(
-					'access_denied',
-					'Ambient GCS access is not enabled for this integration.',
-				);
-			}
-			return {
-				...OBJECT_BROWSE_PROVIDER_METADATA.gcs,
-				available: true,
-				preview: this.mode === 'full',
-				download: this.mode === 'full',
-				search: 'bounded-key-name',
-				versions: true,
-				preview_formats: this.mode === 'full' ? [...OBJECT_PREVIEW_FORMATS] : [],
-			};
-		} catch (error) {
-			const mapped = mapGcsError(error);
-			return {
-				...OBJECT_BROWSE_PROVIDER_METADATA.gcs,
-				available: false,
-				preview: false,
-				download: false,
-				search: 'none',
-				versions: false,
-				preview_formats: [],
-				reason: mapped.message,
-			};
-		}
+		return objectBrowseCapability(
+			this.provider,
+			this.mode,
+			() => {
+				if (source.auth.method === 'service_account')
+					parseServiceAccount(source.auth.credentials_json);
+				if (source.auth.method === 'ambient' && !context.allow_server_ambient.gcs) {
+					throw new ObjectBrowseError(
+						'access_denied',
+						'Ambient GCS access is not enabled for this integration.',
+					);
+				}
+			},
+			mapGcsError,
+		);
 	}
 
 	listBuckets(
@@ -214,57 +204,24 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 			assertBucket(source, request.bucket);
 			const result = await this.metadata(context, async (scoped) => {
 				const auth = this.auth(source, scoped);
-				const cursor = decodeCursor(request.cursor, ['token', 'start_after']);
-				if (cursor.token && cursor.start_after) throw invalidCursor();
 				const prefix = request.prefix ?? '';
-				const query = request.query.toLocaleLowerCase();
-				let token = cursor.token;
-				let startAfter = cursor.start_after;
-				let scanned = 0;
-				let complete = false;
-				let nextCursor: string | null = null;
-				const items: ObjectEntry[] = [];
-				while (scanned < this.limits.searchMaxKeys && items.length < request.limit) {
-					const params = new URLSearchParams({
-						maxResults: String(Math.min(SEARCH_BATCH_SIZE, this.limits.searchMaxKeys - scanned)),
-						prefix,
-					});
-					if (token) params.set('pageToken', token);
-					else if (startAfter) params.set('startOffset', `${startAfter}\0`);
-					const requestedToken = token;
-					const page = await this.objectPage(source, scoped, request.bucket, params, auth);
-					for (let index = 0; index < page.items.length; index += 1) {
-						const object = page.items[index];
-						const entry = objectEntry(object, prefix);
-						scanned += 1;
-						if (
-							entry.key.slice(prefix.length).toLocaleLowerCase().includes(query) &&
-							matchesObjectSearchFilters(entry, request)
-						) {
-							items.push(entry);
-						}
-						if (scanned >= this.limits.searchMaxKeys || items.length >= request.limit) {
-							nextCursor =
-								index < page.items.length - 1
-									? encodeCursor({ start_after: entry.key })
-									: page.next
-										? encodeCursor({ token: page.next })
-										: null;
-							complete = nextCursor === null;
-							break;
-						}
-					}
-					if (nextCursor || complete) break;
-					if (!page.next) {
-						complete = true;
-						break;
-					}
-					if (page.next === requestedToken) throw nonAdvancingCursor();
-					token = page.next;
-					startAfter = undefined;
-				}
-				if (!complete && !nextCursor && token) nextCursor = encodeCursor({ token });
-				return { items, scanned, complete, next_cursor: complete ? null : nextCursor };
+				return boundedKeySearch({
+					request,
+					maxKeys: this.limits.searchMaxKeys,
+					batchSize: SEARCH_BATCH_SIZE,
+					cursorStyle: 'start-after',
+					loadPage: async ({ token, startAfter, limit }) => {
+						const params = new URLSearchParams({
+							maxResults: String(limit),
+							prefix,
+						});
+						if (token) params.set('pageToken', token);
+						else if (startAfter) params.set('startOffset', `${startAfter}\0`);
+						const page = await this.objectPage(source, scoped, request.bucket, params, auth);
+						return { items: page.items, nextToken: page.next, hasMore: page.next !== undefined };
+					},
+					toEntry: (object) => objectEntry(object, prefix),
+				});
 			});
 			this.observer.keysScanned(result.scanned);
 			return result;
@@ -485,11 +442,13 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 		params: URLSearchParams,
 		auth?: GcsAuth,
 	): Promise<{ items: GcsObject[]; prefixes: string[]; next?: string }> {
+		params.set('fields', LIST_FIELDS);
 		const value = (await this.json(
 			source,
 			context,
 			`/storage/v1/b/${encodeURIComponent(bucket)}/o?${params}`,
 			auth,
+			this.limits.listMaxResponseBytes,
 		)) as GcsObjectPage;
 		const record = strictRecord(value);
 		return {
@@ -504,13 +463,17 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 		context: ObjectBrowseContext,
 		path: string,
 		auth = this.auth(source, context),
+		maxResponseBytes = this.limits.metadataMaxResponseBytes,
 	): Promise<unknown> {
 		const response = await this.request(context, `${API_ORIGIN}${path}`, {
 			headers: await auth.headers(),
 		});
 		try {
-			return await response.json();
-		} catch {
+			if (!response.body) return undefined;
+			const bytes = await readBoundedBody(response.body, maxResponseBytes);
+			return JSON.parse(new TextDecoder().decode(bytes));
+		} catch (error) {
+			if (error instanceof ObjectBrowseError) throw error;
 			throw new ObjectBrowseError('unavailable', 'GCS returned a malformed response.');
 		}
 	}
@@ -561,7 +524,8 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 	}
 
 	private auth(source: GcsObjectStoreSource, context: ObjectBrowseContext): GcsAuth {
-		return new GcsAuth(source, context, this.authFetch, this.options.fetchImpl === undefined);
+		const authFetch = source.auth.method === 'service_account' ? this.fetchImpl : this.authFetch;
+		return new GcsAuth(source, context, authFetch, this.options.fetchImpl === undefined);
 	}
 
 	private observe<T>(
@@ -710,32 +674,16 @@ function nonAdvancingCursor(): ObjectBrowseError {
 
 function mapGcsResponse(response: Response): ObjectBrowseError {
 	const requestId = response.headers.get('x-guploader-uploadid') ?? undefined;
-	switch (response.status) {
-		case 401:
-		case 403:
-			return new ObjectBrowseError('access_denied', 'Access to GCS was denied.', requestId);
-		case 404:
-			return new ObjectBrowseError('not_found', 'The requested object was not found.', requestId);
-		case 412:
-			return new ObjectBrowseError(
-				'precondition_failed',
-				'The object changed before it could be read.',
-				requestId,
-			);
-		case 416:
-			return new ObjectBrowseError(
-				'range_not_satisfiable',
-				'The requested byte range is not available.',
-				requestId,
-			);
-		default:
-			return new ObjectBrowseError('unavailable', 'The GCS request failed.', requestId);
-	}
+	return objectBrowseHttpError(response.status, {
+		accessDenied: 'Access to GCS was denied.',
+		unavailable: 'The GCS request failed.',
+		requestId,
+	});
 }
 
 function mapGcsError(error: unknown): ObjectBrowseError {
 	if (error instanceof ObjectBrowseError) return error;
-	if ((error as { name?: unknown } | null)?.name === 'AbortError') {
+	if (isAbortError(error)) {
 		return new ObjectBrowseError('aborted', 'The request was canceled.');
 	}
 	return new ObjectBrowseError('unavailable', 'The GCS request failed.');

@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseExperiments } from './experiments';
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe('parseExperiments', () => {
 	it('returns an empty set when unset', () => {
@@ -14,18 +18,23 @@ describe('parseExperiments', () => {
 		]).toEqual(['duckdb-wasm-preview']);
 	});
 
-	it('rejects unknown IDs', () => {
-		expect(() => parseExperiments({ MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preveiw' })).toThrow(
-			'Unknown MARIMOHUB_EXPERIMENTS value',
+	it('ignores unknown IDs with a warning', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		expect([
+			...parseExperiments({ MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preveiw,duckdb-wasm-preview' }),
+		]).toEqual(['duckdb-wasm-preview']);
+		expect(warn).toHaveBeenCalledOnce();
+		expect(warn.mock.calls[0]?.[0]).toContain(
+			'Unknown MARIMOHUB_EXPERIMENTS value: duckdb-wasm-preveiw',
 		);
 	});
 
 	it.each(['constructor', 'toString', 'hasOwnProperty', '__proto__'])(
-		'rejects inherited object property %s',
+		'ignores inherited object property %s',
 		(id) => {
-			expect(() => parseExperiments({ MARIMOHUB_EXPERIMENTS: id })).toThrow(
-				'Unknown MARIMOHUB_EXPERIMENTS value',
-			);
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			expect([...parseExperiments({ MARIMOHUB_EXPERIMENTS: id })]).toEqual([]);
+			expect(warn).toHaveBeenCalledOnce();
 		},
 	);
 });

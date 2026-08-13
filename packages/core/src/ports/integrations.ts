@@ -102,6 +102,7 @@ export interface BrowsePageRequest {
 	cursor?: string;
 	/** Effective upstream identity for engines that authorize each query. */
 	query_user?: string;
+	signal?: AbortSignal;
 }
 
 export interface BrowseNamespacesRequest extends BrowsePageRequest {
@@ -143,6 +144,7 @@ export interface TablePreview {
 export interface TablePreviewRequest {
 	limit: number;
 	query_user?: string;
+	signal?: AbortSignal;
 }
 
 /**
@@ -151,6 +153,8 @@ export interface TablePreviewRequest {
  * material) and on the deployment having browsing wired.
  */
 export interface BrowseCapabilityResult {
+	/** Resolved integration kind for internal dialect and adapter decisions. */
+	integration_kind: string;
 	metadata: boolean;
 	/** Whether this kind can preview rows directly through its guarded HTTP API. */
 	hub_preview: boolean;
@@ -181,11 +185,13 @@ export interface ProbeRequestInit {
 	method?: 'GET' | 'POST';
 	headers?: Record<string, string>;
 	body?: string;
+	signal?: AbortSignal;
 }
 
 export interface ProbeResponse {
 	ok: boolean;
 	status: number;
+	headers?: Readonly<Record<string, string>>;
 	/** Body parsed as JSON, or `undefined` when it is not JSON (or was truncated). */
 	json(): Promise<unknown>;
 }

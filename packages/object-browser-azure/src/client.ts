@@ -14,16 +14,29 @@ import type {
 } from '@azure/storage-blob';
 import type { AzureBlobObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
 import { ObjectBrowseError } from '@marimo-hub/core';
-import { createGuardedFetch } from '@marimo-hub/object-browser-commons';
-import type { GuardedHostResolver } from '@marimo-hub/object-browser-commons';
+import {
+	createGuardedFetch,
+	DEFAULT_OBJECT_BROWSER_LIMITS,
+	isAbortError,
+	readBoundedBody,
+} from '@marimo-hub/object-browser-commons';
+import type { GuardedHostResolver, ObjectBrowserLimits } from '@marimo-hub/object-browser-commons';
+
+export type AzureResponseLimits = Pick<
+	ObjectBrowserLimits,
+	'metadataMaxResponseBytes' | 'listMaxResponseBytes'
+>;
 
 export function createAzureClient(
 	source: AzureBlobObjectStoreSource,
 	context: ObjectBrowseContext,
 	resolveHost: GuardedHostResolver,
 	fetchImpl: typeof fetch,
+	limits: AzureResponseLimits = DEFAULT_OBJECT_BROWSER_LIMITS,
 ): BlobServiceClient {
-	const options = { httpClient: guardedHttpClient(resolveHost, fetchImpl, context.signal) };
+	const options = {
+		httpClient: guardedHttpClient(resolveHost, fetchImpl, context.signal, limits),
+	};
 	const authorityHost = authorityHostFor(source.endpoint_suffix);
 	if (source.auth.method === 'connection_string') {
 		return BlobServiceClient.fromConnectionString(source.auth.connection_string, options);
@@ -76,6 +89,7 @@ export function guardedHttpClient(
 	resolveHost: GuardedHostResolver,
 	fetchImpl: typeof fetch,
 	contextSignal?: AbortSignal,
+	limits: AzureResponseLimits = DEFAULT_OBJECT_BROWSER_LIMITS,
 ): IHttpClient {
 	const pinnedFetch = fetchImpl === fetch ? createGuardedFetch(resolveHost) : fetchImpl;
 	return {
@@ -109,14 +123,22 @@ export function guardedHttpClient(
 					readable.once('close', cleanup);
 					return { request, status: response.status, headers, readableStreamBody: readable };
 				}
+				// List Blobs XML has no field projection, so a full page of
+				// max-length names needs far more room than other metadata calls.
+				const maxResponseBytes =
+					url.searchParams.get('comp') === 'list'
+						? limits.listMaxResponseBytes
+						: limits.metadataMaxResponseBytes;
 				return {
 					request,
 					status: response.status,
 					headers,
-					bodyAsText: await response.text(),
+					bodyAsText: response.body
+						? new TextDecoder().decode(await readBoundedBody(response.body, maxResponseBytes))
+						: '',
 				};
 			} catch (error) {
-				if ((error as { name?: unknown } | null)?.name === 'AbortError') {
+				if (isAbortError(error) || controller.signal.aborted) {
 					throw new ObjectBrowseError('aborted', 'The request was canceled.');
 				}
 				if (error instanceof ObjectBrowseError) throw error;

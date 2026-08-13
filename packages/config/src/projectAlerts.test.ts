@@ -178,14 +178,27 @@ describe('NodeProjectAlertDispatcher', () => {
 		});
 		const fetch = vi
 			.fn<IntegrationProbe['fetch']>()
-			.mockResolvedValueOnce({ ok: false, status: 429, json: async () => null })
+			.mockResolvedValueOnce({
+				ok: false,
+				status: 429,
+				headers: { 'retry-after': '999999' },
+				json: async () => null,
+			})
 			.mockResolvedValueOnce({ ok: true, status: 204, json: async () => null });
-		const dispatcher = new NodeProjectAlertDispatcher(store, noopMetrics, probe(fetch));
+		const delay = vi.fn(async () => {});
+		const dispatcher = new NodeProjectAlertDispatcher(
+			store,
+			noopMetrics,
+			probe(fetch),
+			undefined,
+			delay,
+		);
 
 		await expect(
 			dispatcher.deliver(projectId, 'session.takeover', BROADCAST_NOTIFICATION_FIXTURE),
 		).resolves.toBe('delivered');
 		expect(fetch).toHaveBeenCalledTimes(2);
+		expect(delay).toHaveBeenCalledWith(60_000);
 	});
 
 	it('isolates a failed destination and reports partial fan-out', async () => {

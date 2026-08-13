@@ -54,18 +54,31 @@ export function guardObjectStream(
 	const reader = toWebStream(body).getReader();
 	let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
 	let upstreamClosed = false;
+	let readerReleased = false;
 	let aborted = signal?.aborted ?? false;
 	const abortedError = () => new ObjectBrowseError('aborted', 'The request was canceled.');
-	const cancelUpstream = (reason?: unknown): Promise<void> => {
-		if (upstreamClosed) return Promise.resolve();
+	const releaseReader = () => {
+		if (readerReleased) return;
+		readerReleased = true;
+		reader.releaseLock();
+	};
+	const cancelUpstream = async (reason?: unknown): Promise<void> => {
+		if (upstreamClosed) return;
 		upstreamClosed = true;
 		signal?.removeEventListener('abort', abortStream);
-		return reader.cancel(reason);
+		try {
+			await reader.cancel(reason);
+		} finally {
+			releaseReader();
+		}
 	};
 	function abortStream() {
 		aborted = true;
-		controller?.error(abortedError());
-		void cancelUpstream(signal?.reason).catch(() => {});
+		try {
+			controller?.error(abortedError());
+		} finally {
+			void cancelUpstream(signal?.reason).catch(() => {});
+		}
 	}
 	return {
 		body: new ReadableStream<Uint8Array>({
@@ -82,6 +95,7 @@ export function guardObjectStream(
 					if (next.done) {
 						upstreamClosed = true;
 						signal?.removeEventListener('abort', abortStream);
+						releaseReader();
 						value.close();
 					} else {
 						value.enqueue(next.value);
@@ -90,6 +104,7 @@ export function guardObjectStream(
 					if (aborted) return;
 					upstreamClosed = true;
 					signal?.removeEventListener('abort', abortStream);
+					releaseReader();
 					value.error(mapError(error));
 				}
 			},
@@ -107,18 +122,28 @@ export async function readBoundedBody(body: unknown, maxBytes: number): Promise<
 	const reader = toWebStream(body).getReader();
 	const chunks: Uint8Array[] = [];
 	let total = 0;
+	let completed = false;
 	try {
 		while (true) {
 			const next = await reader.read();
-			if (next.done) break;
+			if (next.done) {
+				completed = true;
+				break;
+			}
 			total += next.value.byteLength;
 			if (total > maxBytes) {
-				await reader.cancel();
 				throw new ObjectBrowseError('unsupported', 'The object exceeded the read limit.');
 			}
 			chunks.push(next.value);
 		}
 	} finally {
+		if (!completed) {
+			try {
+				await reader.cancel();
+			} catch {
+				// Preserve the original read or limit error.
+			}
+		}
 		reader.releaseLock();
 	}
 	const result = new Uint8Array(total);

@@ -1,4 +1,5 @@
 import { ofetch } from 'ofetch';
+import { requireHttpsUrl } from '@marimo-hub/core';
 import type { Notification, NotificationDeliveryOutcome, Notifier } from '@marimo-hub/core';
 
 interface SlackRequestOptions {
@@ -8,22 +9,11 @@ interface SlackRequestOptions {
 	timeout: number;
 }
 
-type SlackFetch = (url: string, options: SlackRequestOptions) => Promise<unknown>;
+type SlackFetch = (url: string, options: SlackRequestOptions) => Promise<{ ok: boolean }>;
 
 export interface SlackNotifierOptions {
 	webhookUrl: string;
 	fetcher?: SlackFetch;
-}
-
-function httpsUrl(value: string): string {
-	let url: URL;
-	try {
-		url = new URL(value);
-	} catch {
-		throw new Error('Invalid Slack webhook URL');
-	}
-	if (url.protocol !== 'https:') throw new Error('Slack webhook URL must use HTTPS');
-	return value;
 }
 
 export function escapeSlackText(value: string): string {
@@ -35,8 +25,8 @@ export class SlackNotifier implements Notifier {
 	private readonly fetcher: SlackFetch;
 
 	constructor(options: SlackNotifierOptions) {
-		this.webhookUrl = httpsUrl(options.webhookUrl);
-		this.fetcher = options.fetcher ?? ofetch;
+		this.webhookUrl = requireHttpsUrl(options.webhookUrl, 'Slack webhook URL');
+		this.fetcher = options.fetcher ?? ((url, request) => ofetch.raw(url, request));
 	}
 
 	async deliver(notification: Notification): Promise<NotificationDeliveryOutcome> {
@@ -44,12 +34,13 @@ export class SlackNotifier implements Notifier {
 		const parts = [`*${escapeSlackText(notification.title)}*`, escapeSlackText(notification.body)];
 		if (notification.link) parts.push(escapeSlackText(notification.link));
 		try {
-			await this.fetcher(this.webhookUrl, {
+			const response = await this.fetcher(this.webhookUrl, {
 				method: 'POST',
 				body: { text: parts.join('\n'), unfurl_links: false, unfurl_media: false },
 				retry: 0,
 				timeout: 10_000,
 			});
+			if (!response.ok) throw new Error('status');
 			return 'delivered';
 		} catch {
 			throw new Error('Slack notification delivery failed');

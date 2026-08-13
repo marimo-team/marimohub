@@ -27,14 +27,14 @@ import type {
 	Metrics,
 	S3ObjectStoreSource,
 } from '@marimo-hub/core';
-import { OBJECT_BROWSE_PROVIDER_METADATA, ObjectBrowseError } from '@marimo-hub/core';
+import { ObjectBrowseError } from '@marimo-hub/core';
 import {
 	decodeCursor,
+	boundedKeySearch,
 	DEFAULT_OBJECT_BROWSER_LIMITS,
 	encodeCursor,
-	matchesObjectSearchFilters,
-	OBJECT_PREVIEW_FORMATS,
 	ObjectBrowserObserver,
+	objectBrowseCapability,
 	assertBucket,
 	assertObjectIdentity,
 	previewObject,
@@ -82,6 +82,8 @@ export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 				resolveHost: options.resolveHost,
 				connectionTimeoutMs: transportTimeoutMs,
 				requestTimeoutMs: transportTimeoutMs,
+				metadataMaxResponseBytes: this.limits.metadataMaxResponseBytes,
+				listMaxResponseBytes: this.limits.listMaxResponseBytes,
 			});
 		} else {
 			throw new Error('S3ObjectBrowser requires a guarded host resolver.');
@@ -89,30 +91,12 @@ export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 	}
 
 	capability(source: S3ObjectStoreSource, context: ObjectBrowseContext): ObjectBrowseCapability {
-		try {
-			credentialsFor(source, context);
-			return {
-				...OBJECT_BROWSE_PROVIDER_METADATA.s3,
-				available: true,
-				preview: this.mode === 'full',
-				download: this.mode === 'full',
-				search: 'bounded-key-name',
-				versions: true,
-				preview_formats: this.mode === 'full' ? [...OBJECT_PREVIEW_FORMATS] : [],
-			};
-		} catch (error) {
-			const mapped = mapS3Error(error);
-			return {
-				...OBJECT_BROWSE_PROVIDER_METADATA.s3,
-				available: false,
-				preview: false,
-				download: false,
-				search: 'none',
-				versions: false,
-				preview_formats: [],
-				reason: mapped.message,
-			};
-		}
+		return objectBrowseCapability(
+			this.provider,
+			this.mode,
+			() => void credentialsFor(source, context),
+			mapS3Error,
+		);
 	}
 
 	async listBuckets(
@@ -214,77 +198,36 @@ export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 	): Promise<ObjectSearchPage> {
 		return this.observe('search_objects', context, async () => {
 			assertBucket(source, request.bucket);
-			const prefix = request.prefix ?? '';
-			const cursor = decodeCursor(request.cursor, ['token', 'start_after']);
-			if (cursor.token && cursor.start_after) {
-				throw new ObjectBrowseError('invalid_cursor', 'The object-browser cursor is invalid.');
-			}
-			const query = request.query.toLocaleLowerCase();
 			const result = await this.metadataOperation(context, (scopedContext) =>
 				withS3Client(this.clientFactory, source, scopedContext, async (client) => {
-					const items: ObjectEntry[] = [];
-					let scanned = 0;
-					let token = cursor.token;
-					let startAfter = cursor.start_after;
-					let complete = false;
-					let nextCursor: string | null = null;
-					while (scanned < this.limits.searchMaxKeys && items.length < request.limit) {
-						const remainingScan = this.limits.searchMaxKeys - scanned;
-						const requestToken = token;
-						const output = await sendS3<ListObjectsOutput>(
-							client,
-							new ListObjectsV2Command({
-								Bucket: request.bucket,
-								Prefix: prefix,
-								MaxKeys: Math.min(remainingScan, SEARCH_BATCH_SIZE),
-								ContinuationToken: token,
-								StartAfter: token ? undefined : startAfter,
-							}),
-							scopedContext.signal,
-						);
-						const contents = providerArray(output.Contents).filter(
-							(object): object is typeof object & { Key: string } => object.Key !== undefined,
-						);
-						for (let index = 0; index < contents.length; index += 1) {
-							const object = contents[index];
-							scanned += 1;
-							if (object.Key.slice(prefix.length).toLocaleLowerCase().includes(query)) {
-								const entry = objectEntry(object, prefix);
-								if (matchesObjectSearchFilters(entry, request)) items.push(entry);
-							}
-							if (scanned < this.limits.searchMaxKeys && items.length < request.limit) {
-								continue;
-							}
-							if (index < contents.length - 1) {
-								nextCursor = encodeCursor({ start_after: object.Key });
-							} else if (output.IsTruncated && output.NextContinuationToken) {
-								nextCursor = encodeCursor({ token: output.NextContinuationToken });
-							} else {
-								complete = true;
-							}
-							break;
-						}
-						if (items.length >= request.limit || scanned >= this.limits.searchMaxKeys) break;
-						if (!output.IsTruncated) {
-							complete = true;
-							break;
-						}
-						token = output.NextContinuationToken;
-						startAfter = undefined;
-						if (!token || token === requestToken) {
-							throw new ObjectBrowseError(
-								'invalid_cursor',
-								'The object-store cursor did not advance.',
+					const prefix = request.prefix ?? '';
+					return boundedKeySearch({
+						request,
+						maxKeys: this.limits.searchMaxKeys,
+						batchSize: SEARCH_BATCH_SIZE,
+						cursorStyle: 'start-after',
+						loadPage: async ({ token, startAfter, limit }) => {
+							const output = await sendS3<ListObjectsOutput>(
+								client,
+								new ListObjectsV2Command({
+									Bucket: request.bucket,
+									Prefix: prefix,
+									MaxKeys: limit,
+									ContinuationToken: token,
+									StartAfter: token ? undefined : startAfter,
+								}),
+								scopedContext.signal,
 							);
-						}
-					}
-					if (!complete && !nextCursor && token) nextCursor = encodeCursor({ token });
-					return {
-						items,
-						scanned,
-						complete,
-						next_cursor: complete ? null : nextCursor,
-					};
+							return {
+								items: providerArray(output.Contents).filter(
+									(object): object is typeof object & { Key: string } => object.Key !== undefined,
+								),
+								nextToken: output.NextContinuationToken,
+								hasMore: output.IsTruncated === true,
+							};
+						},
+						toEntry: (object) => objectEntry(object, prefix),
+					});
 				}),
 			);
 			this.observer.keysScanned(result.scanned);

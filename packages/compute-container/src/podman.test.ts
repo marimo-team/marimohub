@@ -10,6 +10,7 @@ function fakeRunner(): PodmanRunner {
 			if (args[0] === 'port') {
 				return { stdout: '127.0.0.1:49153\n', stderr: '', exitCode: 0 };
 			}
+			if (args.at(-1) === 'false') return { stdout: '', stderr: 'failed', exitCode: 1 };
 			return { stdout: '', stderr: '', exitCode: 0 };
 		},
 	};
@@ -24,4 +25,5 @@ containerCliContract(
 
 computeContract('PodmanCompute', () => new PodmanCompute({}, fakeRunner()), {
 	mountFallsBack: true,
+	semantics: { failingCommand: 'false' },
 });

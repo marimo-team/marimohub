@@ -22,18 +22,20 @@ import type {
 	ObjectVersion,
 	ObjectVersionRequest,
 } from '@marimo-hub/core';
-import { OBJECT_BROWSE_PROVIDER_METADATA, ObjectBrowseError } from '@marimo-hub/core';
+import { ObjectBrowseError } from '@marimo-hub/core';
 import {
 	assertBucket,
 	assertObjectIdentity,
+	boundedKeySearch,
 	decodeCursor,
 	DEFAULT_OBJECT_BROWSER_LIMITS,
 	detectRasterImage,
 	encodeCursor,
 	guardObjectStream,
-	matchesObjectSearchFilters,
-	OBJECT_PREVIEW_FORMATS,
+	isAbortError,
 	ObjectBrowserObserver,
+	objectBrowseCapability,
+	objectBrowseHttpError,
 	previewObject,
 	rasterContentType,
 	readBoundedBody,
@@ -73,30 +75,12 @@ export class AzureBlobObjectBrowser implements ObjectBrowser<'azure_blob'> {
 		source: AzureBlobObjectStoreSource,
 		context: ObjectBrowseContext,
 	): ObjectBrowseCapability {
-		try {
-			this.client(source, context);
-			return {
-				...OBJECT_BROWSE_PROVIDER_METADATA.azure_blob,
-				available: true,
-				preview: this.mode === 'full',
-				download: this.mode === 'full',
-				search: 'bounded-key-name',
-				versions: true,
-				preview_formats: this.mode === 'full' ? [...OBJECT_PREVIEW_FORMATS] : [],
-			};
-		} catch (error) {
-			const mapped = mapAzureError(error);
-			return {
-				...OBJECT_BROWSE_PROVIDER_METADATA.azure_blob,
-				available: false,
-				preview: false,
-				download: false,
-				search: 'none',
-				versions: false,
-				preview_formats: [],
-				reason: mapped.message,
-			};
-		}
+		return objectBrowseCapability(
+			this.provider,
+			this.mode,
+			() => void this.client(source, context),
+			mapAzureError,
+		);
 	}
 
 	listBuckets(
@@ -193,61 +177,28 @@ export class AzureBlobObjectBrowser implements ObjectBrowser<'azure_blob'> {
 			assertBucket(source, request.bucket);
 			const result = await this.metadata(context, async (scoped) => {
 				try {
-					const cursor = decodeCursor(request.cursor, ['token', 'skip']);
-					const initialSkip = cursor.skip === undefined ? 0 : Number(cursor.skip);
-					if (!Number.isSafeInteger(initialSkip) || initialSkip < 0) throw invalidCursor();
-					let token = cursor.token || undefined;
-					let skip = initialSkip;
-					let scanned = 0;
-					let complete = false;
-					let nextCursor: string | null = null;
-					const items: ObjectEntry[] = [];
 					const container = this.container(source, scoped, request.bucket);
 					const prefix = request.prefix ?? '';
-					const query = request.query.toLocaleLowerCase();
-					while (scanned < this.limits.searchMaxKeys && items.length < request.limit) {
-						const pageToken = token;
-						const pages = container.listBlobsFlat({ prefix }).byPage({
-							continuationToken: token,
-							maxPageSize: Math.min(1_000, this.limits.searchMaxKeys - scanned),
-						});
-						const next = await pages.next();
-						if (next.done) {
-							complete = true;
-							break;
-						}
-						const blobs = next.value.segment.blobItems;
-						if (skip > blobs.length) throw invalidCursor();
-						for (let index = skip; index < blobs.length; index += 1) {
-							const entry = blobEntry(blobs[index], prefix);
-							scanned += 1;
-							if (
-								entry.key.slice(prefix.length).toLocaleLowerCase().includes(query) &&
-								matchesObjectSearchFilters(entry, request)
-							) {
-								items.push(entry);
-							}
-							if (scanned >= this.limits.searchMaxKeys || items.length >= request.limit) {
-								nextCursor =
-									index < blobs.length - 1
-										? encodeCursor({ token: pageToken ?? '', skip: String(index + 1) })
-										: next.value.continuationToken
-											? encodeCursor({ token: next.value.continuationToken, skip: '0' })
-											: null;
-								complete = nextCursor === null;
-								break;
-							}
-						}
-						if (nextCursor || complete) break;
-						if (!next.value.continuationToken) {
-							complete = true;
-							break;
-						}
-						if (next.value.continuationToken === pageToken) throw nonAdvancingCursor();
-						token = next.value.continuationToken;
-						skip = 0;
-					}
-					return { items, scanned, complete, next_cursor: complete ? null : nextCursor };
+					return await boundedKeySearch({
+						request,
+						maxKeys: this.limits.searchMaxKeys,
+						cursorStyle: 'page-offset',
+						loadPage: async ({ token, limit }) => {
+							const pages = container.listBlobsFlat({ prefix }).byPage({
+								continuationToken: token || undefined,
+								maxPageSize: limit,
+							});
+							const next = await pages.next();
+							if (next.done) return { items: [], hasMore: false };
+							const nextToken = next.value.continuationToken || undefined;
+							return {
+								items: next.value.segment.blobItems,
+								nextToken,
+								hasMore: nextToken !== undefined,
+							};
+						},
+						toEntry: (blob) => blobEntry(blob, prefix),
+					});
 				} catch (error) {
 					throw mapAzureError(error);
 				}
@@ -495,7 +446,13 @@ export class AzureBlobObjectBrowser implements ObjectBrowser<'azure_blob'> {
 		source: AzureBlobObjectStoreSource,
 		context: ObjectBrowseContext,
 	): BlobServiceClient {
-		return createAzureClient(source, context, this.options.resolveHost, this.fetchImpl);
+		return createAzureClient(
+			source,
+			context,
+			this.options.resolveHost,
+			this.fetchImpl,
+			this.limits,
+		);
 	}
 
 	private container(
@@ -618,36 +575,8 @@ function mapAzureError(error: unknown): ObjectBrowseError {
 	};
 	const status = value?.statusCode;
 	const code = value?.code ?? value?.details?.errorCode ?? '';
-	if (value?.name === 'AbortError') {
+	if (isAbortError(error)) {
 		return new ObjectBrowseError('aborted', 'The request was canceled.');
-	}
-	if (status === 401 || status === 403 || code === 'AuthorizationPermissionMismatch') {
-		return new ObjectBrowseError(
-			'access_denied',
-			'Access to Azure Blob was denied.',
-			value.requestId,
-		);
-	}
-	if (status === 404 || code === 'BlobNotFound' || code === 'ContainerNotFound') {
-		return new ObjectBrowseError(
-			'not_found',
-			'The requested object was not found.',
-			value.requestId,
-		);
-	}
-	if (status === 412 || code === 'ConditionNotMet') {
-		return new ObjectBrowseError(
-			'precondition_failed',
-			'The object changed before it could be read.',
-			value.requestId,
-		);
-	}
-	if (status === 416 || code === 'InvalidRange') {
-		return new ObjectBrowseError(
-			'range_not_satisfiable',
-			'The requested byte range is not available.',
-			value.requestId,
-		);
 	}
 	if (isVersioningUnsupported(error) || code === 'UnsupportedQueryParameter') {
 		return new ObjectBrowseError(
@@ -656,7 +585,21 @@ function mapAzureError(error: unknown): ObjectBrowseError {
 			value.requestId,
 		);
 	}
-	return new ObjectBrowseError('unavailable', 'The Azure Blob request failed.', value?.requestId);
+	const mappedStatus =
+		code === 'AuthorizationPermissionMismatch'
+			? 403
+			: code === 'BlobNotFound' || code === 'ContainerNotFound'
+				? 404
+				: code === 'ConditionNotMet'
+					? 412
+					: code === 'InvalidRange'
+						? 416
+						: status;
+	return objectBrowseHttpError(mappedStatus, {
+		accessDenied: 'Access to Azure Blob was denied.',
+		unavailable: 'The Azure Blob request failed.',
+		requestId: value?.requestId,
+	});
 }
 
 export { DEFAULT_OBJECT_BROWSER_LIMITS as DEFAULT_AZURE_OBJECT_BROWSER_LIMITS } from '@marimo-hub/object-browser-commons';

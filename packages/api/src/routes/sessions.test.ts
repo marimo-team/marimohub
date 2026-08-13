@@ -401,6 +401,54 @@ describe('Session routes', () => {
 		});
 	});
 
+	it('checks the displaced recipient after atomically reserving a takeover', async () => {
+		const notifier = new MemoryNotifier();
+		const holderApi = exclusiveApi(STRANGER);
+		const persistent = await expectOk<ApiSession>(await holderApi('POST', sessionsPath()));
+		const services = createServices(bucket);
+		const other = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: {
+				services,
+				notifier,
+				policy: { editorSandboxSharing: 'exclusive', defaultRole: 'editor' },
+			},
+		});
+		for (let index = 0; index < 5; index++) {
+			await expectOk(
+				await other.request('POST', `/projects/${pid}/members`, {
+					user_id: STRANGER,
+					role: 'editor',
+				}),
+				201,
+			);
+			await expectOk(await other.request('DELETE', `/projects/${pid}/members/${STRANGER}`));
+		}
+		await vi.waitFor(() => expect(notifier.attempts).toBeGreaterThanOrEqual(5));
+		const attemptsBeforeTakeover = notifier.attempts;
+		const actualClaim = await services.sessions.getEditorClaim(pid, nid);
+		vi.spyOn(services.sessions, 'getEditorClaim').mockResolvedValueOnce({
+			...actualClaim!,
+			session_id: 'sess-stale-observation' as SessionId,
+		});
+
+		await expectError(
+			await other.request('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-recipient-race',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: 'unknown',
+				acknowledge_disruption: true,
+			}),
+			429,
+			'RESOURCE_EXHAUSTED',
+		);
+		expect((await services.sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(notifier.attempts).toBe(attemptsBeforeTakeover);
+	});
+
 	it('does not fail a takeover when notification delivery fails', async () => {
 		const notifier = new MemoryNotifier();
 		notifier.failNext();

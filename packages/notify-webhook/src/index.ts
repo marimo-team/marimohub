@@ -1,5 +1,5 @@
 import { ofetch } from 'ofetch';
-import { NotificationSchema } from '@marimo-hub/core';
+import { NotificationSchema, requireHttpsUrl } from '@marimo-hub/core';
 import type { Notification, NotificationDeliveryOutcome, Notifier } from '@marimo-hub/core';
 
 interface WebhookRequestOptions {
@@ -10,24 +10,13 @@ interface WebhookRequestOptions {
 	timeout: number;
 }
 
-type WebhookFetch = (url: string, options: WebhookRequestOptions) => Promise<unknown>;
+type WebhookFetch = (url: string, options: WebhookRequestOptions) => Promise<{ ok: boolean }>;
 
 export interface WebhookNotifierOptions {
 	url: string;
 	secret: string;
 	fetcher?: WebhookFetch;
 	now?: () => number;
-}
-
-function httpsUrl(value: string): string {
-	let url: URL;
-	try {
-		url = new URL(value);
-	} catch {
-		throw new Error('Invalid notification webhook URL');
-	}
-	if (url.protocol !== 'https:') throw new Error('Notification webhook URL must use HTTPS');
-	return value;
 }
 
 function toHex(bytes: ArrayBuffer): string {
@@ -58,10 +47,10 @@ export class WebhookNotifier implements Notifier {
 	private readonly now: () => number;
 
 	constructor(options: WebhookNotifierOptions) {
-		this.url = httpsUrl(options.url);
+		this.url = requireHttpsUrl(options.url, 'notification webhook URL');
 		if (!options.secret) throw new Error('Notification webhook secret is required');
 		this.secret = options.secret;
-		this.fetcher = options.fetcher ?? ofetch;
+		this.fetcher = options.fetcher ?? ((url, request) => ofetch.raw(url, request));
 		this.now = options.now ?? Date.now;
 	}
 
@@ -70,7 +59,7 @@ export class WebhookNotifier implements Notifier {
 		const timestamp = Math.floor(this.now() / 1000);
 		const signature = await signWebhook(this.secret, timestamp, body);
 		try {
-			await this.fetcher(this.url, {
+			const response = await this.fetcher(this.url, {
 				method: 'POST',
 				body,
 				headers: {
@@ -80,6 +69,7 @@ export class WebhookNotifier implements Notifier {
 				retry: 1,
 				timeout: 10_000,
 			});
+			if (!response.ok) throw new Error('status');
 			return 'delivered';
 		} catch {
 			throw new Error('Webhook notification delivery failed');

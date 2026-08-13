@@ -17,10 +17,11 @@ system.
 
 ## 1. Design Principles
 
-1. **Ports and adapters.** Every external dependency — object storage, compute,
-   identity — sits behind a TypeScript interface. The domain services depend on
-   the interface, never on the vendor SDK. New providers are additive: implement
-   the interface, register the adapter.
+1. **Ports and adapters.** Every external dependency sits behind a TypeScript
+   interface. This includes storage, compute, identity, external data, secrets,
+   credentials, and notification delivery. Domain services depend on these
+   interfaces, never on vendor SDKs. To add a provider, implement its interface
+   and register the adapter.
 2. **Config-driven for the common case, library-based for the complex case.**
    A standard deployment is configured entirely through prefixed environment
    variables (`MARIMOHUB_*`). When you need behavior the config surface doesn't
@@ -81,6 +82,11 @@ authenticates the caller (AuthN), authorizes the action against roles stored in
 the notebook storage (AuthZ), then invokes a domain service, which reads/writes
 through the **Storage** port and — when running a notebook — provisions a kernel
 through the **Compute** port.
+
+Data requests use the same direction. Core describes browse, preview, and query
+operations. The configured adapters perform provider I/O. Notification events
+also flow from core through a `Notifier` port to the configured delivery
+adapters.
 
 ---
 
@@ -331,8 +337,33 @@ business logic and depend only on interfaces:
   (best-effort: a failed append never fails the mutation); read via the
   manager-only `GET /projects/{pid}/events`.
 - **SandboxProvisioner** — orchestrates the Compute port (see [§3.2](#32-compute-sandbox)).
+- **DataPreviewService** — selects a bounded preview program and an available
+  DuckDB-Wasm or sandbox executor.
+- **DataQueryService** — runs user SQL through a fresh, disposable executor with
+  separate limits. It does not reuse trusted preview programs.
+- **ProjectAlertStore** — owns the CAS-managed project alert configuration.
 
 `createServices(bucket)` composes them; nothing here imports a vendor SDK.
+
+### 3.8 External Data and Notifications
+
+The external-data ports keep provider SDKs out of core and API:
+
+| Boundary              | Core contract                                         | Adapters                                      |
+| --------------------- | ----------------------------------------------------- | --------------------------------------------- |
+| Object browsing       | `ObjectBrowser`                                       | S3, GCS, and Azure Blob packages              |
+| Row preview           | Preview programs selected by `DataPreviewService`     | Guarded HTTP, sandbox, or `DuckDBWasmRuntime` |
+| SQL query             | `DataQueryExecutorFactory` used by `DataQueryService` | Fresh DuckDB-Wasm worker per request on Node  |
+| Notification delivery | `Notifier`                                            | SMTP, Slack, and signed webhook packages      |
+
+Table integrations implement provider-neutral browse and preview capabilities
+in core. Object stores use the separate `ObjectBrowser` port because their
+bucket, prefix, and object model is not a table hierarchy.
+
+Preview and query execution are separate security seams. Preview programs are
+server-authored and can use a reusable DuckDB-Wasm engine. User SQL requires a
+fresh disposable executor. For details, see
+[`integrations.md`](./integrations.md#data-browsing).
 
 ---
 
@@ -343,8 +374,9 @@ Every variable is **prefixed by the component it configures**, so it is always
 obvious which knob belongs to storage, compute, or auth. The global prefix is
 `MARIMOHUB_`.
 
-Each component reads a `*_BACKEND` selector that picks the adapter, followed by
-adapter-specific settings.
+Most adapter families use a `*_BACKEND` selector and adapter-specific settings.
+Notifications use a backend list because they can send one event to several
+destinations.
 
 > The tables below summarize the main knobs. For the **complete, always-current**
 > reference (every variable with its description, default, and example), see
@@ -462,8 +494,10 @@ const app = createApi({
 // mount `app` in any host: Workers, Node/Hono, etc.
 ```
 
-The ports are the extension points: anything implementing `Bucket`,
-`SandboxProvider`, `Authenticator`, or `Authorizer` drops straight in.
+The ports are the extension points. Implementations of `Bucket`,
+`SandboxProvider`, `Authenticator`, `Authorizer`, `ObjectBrowser`, and
+`Notifier` can replace the bundled adapters. Preview and query runtimes use
+their own executor contracts.
 
 ---
 
@@ -504,6 +538,7 @@ packages/
   storage-r2/             Cloudflare R2 binding adapter
   storage-gcs/            Google Cloud Storage adapter (native JSON API)
   storage-azure/          Azure Blob Storage adapter (native SDK)
+  storage-fs/             local filesystem adapter (single process)
   compute-cloudflare/     Cloudflare Containers adapter
   compute-modal/          Modal adapter
   compute-coreweave/      CoreWeave Sandboxes adapter (vendored cwsandbox SDK)
@@ -512,7 +547,17 @@ packages/
   compute-e2b/            E2B sandboxes adapter (bring-your-own e2b SDK)
   compute-commons/        vendor-free helpers shared by the compute adapters
   compute-local/          local host-subprocess adapter (dev)
+  object-browser-commons/ shared transport, preview, and validation helpers
+  object-browser-s3/      S3-compatible object-browser adapter
+  object-browser-gcs/     Google Cloud Storage object-browser adapter
+  object-browser-azure/   Azure Blob Storage object-browser adapter
+  duckdb-wasm-runtime/    isolated DuckDB-Wasm preview and query runtime for Node
+  notify-smtp/            SMTP notification adapter
+  notify-slack/           Slack incoming-webhook notification adapter
+  notify-webhook/         signed JSON webhook notification adapter
+  credentials-aws/        AWS credential broker (OIDC federation)
   credentials-coreweave/  CoreWeave CAIOS credential broker (OIDC federation)
+  secrets-aws/            AWS Secrets Manager adapter
   auth-oidc/              generic OIDC adapter
   auth-cloudflare-access/ Cloudflare Access adapter
   auth-dev/               dev-bypass authenticator (local only)

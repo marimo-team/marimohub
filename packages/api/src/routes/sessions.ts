@@ -54,7 +54,11 @@ import {
 } from '@marimo-hub/core';
 import { logObserver } from '../saga';
 import { appendAudit, errorMetadata, logEvent } from '../log';
-import { scheduleNotification, scheduleProjectAlert } from '../notifications';
+import {
+	assertNotificationMutationAllowed,
+	scheduleNotification,
+	scheduleProjectAlert,
+} from '../notifications';
 import type { ApiDeps, PolicyConfig, SandboxConfig } from '../context';
 import {
 	assertSessionAccess,
@@ -276,7 +280,7 @@ const takeoverEditorSession = createRoute({
 	responses: {
 		200: jsonContent(SuccessResponseSchema, 'The prior editor was saved and stopped'),
 		...commonErrors(),
-		...errorResponses(400, 403, 404, 409, 503),
+		...errorResponses(400, 403, 404, 409, 429, 503),
 	},
 });
 
@@ -674,17 +678,29 @@ app.openapi(takeoverEditorSession, async (c) => {
 		if (effectiveEditorSharing(currentClaim, deps.policy.editorSandboxSharing) !== 'exclusive') {
 			throw new ConflictError('Takeover is only available in exclusive editor mode');
 		}
-		const claim = await deps.services.sessions.reserveTakeover(pid, nid, {
+		assertNotificationMutationAllowed(deps, user.id);
+		let holderIdentity: Awaited<ReturnType<typeof deps.services.identities.get>> | undefined;
+		let holder: Session | undefined;
+		const reserved = await deps.services.sessions.reserveTakeoverWithOutcome(pid, nid, {
 			takeoverId: body.takeover_id,
 			requestedBy: user.id,
 			expectedHolder: body.expected_holder_session_id,
 			expectedActivity: body.expected_activity,
 		});
+		const claim = reserved.value;
+		if (reserved.written) {
+			holder = await deps.services.sessions.getSession(pid, claim.session_id!);
+			holderIdentity = await deps.services.identities.get(holder.user_id).catch(() => null);
+			assertNotificationMutationAllowed(deps, user.id, {
+				recipient: holderIdentity?.email ?? holder.user_id,
+				recipientScope: pid,
+				consumeActor: false,
+			});
+		}
 		observer.tag('phase', claim.transfer?.phase ?? 'changed');
 		await audit('session.takeover.request');
 		const notifyTakeover = (holderUserId: UserId) => {
-			const rendered = Promise.resolve().then(async () => {
-				const identity = await deps.services.identities.get(holderUserId).catch(() => null);
+			const rendered = Promise.resolve().then(() => {
 				return notificationRouter.render({
 					kind: 'session.takeover',
 					project: subject.project,
@@ -693,7 +709,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 					notebookId: nid,
 					takeoverId: body.takeover_id,
 					displacedUserId: holderUserId,
-					recipient: recipientFromIdentity(identity),
+					recipient: recipientFromIdentity(holderIdentity),
 					actor: user,
 					baseUrl: deps.sandbox.appBaseUrl,
 				});
@@ -717,7 +733,10 @@ app.openapi(takeoverEditorSession, async (c) => {
 			await audit('session.takeover.success');
 			return c.json({ success: true }, 200);
 		}
-		const holder = await deps.services.sessions.getSession(pid, body.expected_holder_session_id);
+		holder ??= await deps.services.sessions.getSession(pid, claim.session_id!);
+		if (holderIdentity === undefined) {
+			holderIdentity = await deps.services.identities.get(holder.user_id).catch(() => null);
+		}
 		if (claim.transfer?.phase === 'draining') {
 			try {
 				const completed = await sessionRetirer(deps).completeTakeoverDrain(

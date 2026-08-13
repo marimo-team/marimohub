@@ -88,28 +88,53 @@ export class KeyedAdmission<K> {
 	private readonly activeByKey = new Map<K, number>();
 
 	constructor(
-		private readonly maxConcurrent: number,
-		private readonly maxConcurrentPerKey: number,
+		private maxConcurrent: number,
+		private maxConcurrentPerKey: number,
 		private readonly errors: { global: () => Error; perKey: () => Error },
 	) {
 		assertPositiveInteger('maxConcurrent', maxConcurrent);
 		assertPositiveInteger('maxConcurrentPerKey', maxConcurrentPerKey);
 	}
 
+	reconfigure(maxConcurrent: number, maxConcurrentPerKey: number): void {
+		assertPositiveInteger('maxConcurrent', maxConcurrent);
+		assertPositiveInteger('maxConcurrentPerKey', maxConcurrentPerKey);
+		this.maxConcurrent = maxConcurrent;
+		this.maxConcurrentPerKey = maxConcurrentPerKey;
+	}
+
 	async run<T>(key: K, work: () => Promise<T>): Promise<T> {
+		const release = this.acquire(key);
+		try {
+			return await work();
+		} finally {
+			release();
+		}
+	}
+
+	get activeCount(): number {
+		return this.active;
+	}
+
+	activeFor(key: K): number {
+		return this.activeByKey.get(key) ?? 0;
+	}
+
+	acquire(key: K): () => void {
 		const keyActive = this.activeByKey.get(key) ?? 0;
 		if (keyActive >= this.maxConcurrentPerKey) throw this.errors.perKey();
 		if (this.active >= this.maxConcurrent) throw this.errors.global();
 		this.active++;
 		this.activeByKey.set(key, keyActive + 1);
-		try {
-			return await work();
-		} finally {
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
 			this.active--;
 			const remaining = (this.activeByKey.get(key) ?? 1) - 1;
 			if (remaining === 0) this.activeByKey.delete(key);
 			else this.activeByKey.set(key, remaining);
-		}
+		};
 	}
 }
 

@@ -887,6 +887,9 @@ importers:
       '@marimo-hub/object-browser-azure':
         specifier: workspace:*
         version: link:../object-browser-azure
+      '@marimo-hub/object-browser-commons':
+        specifier: workspace:*
+        version: link:../object-browser-commons
       '@marimo-hub/object-browser-gcs':
         specifier: workspace:*
         version: link:../object-browser-gcs

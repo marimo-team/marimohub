@@ -132,7 +132,7 @@ environment variables instead. The bundle is placed under
 
 ## Connectivity probes
 
-`testConnection` may access the network only through the injected
+`testConnection` must access the network only through the injected
 `IntegrationProbe`. Never use ambient `fetch`. The probe is the deployment's
 SSRF boundary: the Node adapter validates and pins resolved addresses, blocks
 redirects, caps response size and time, and rate-limits requests.
@@ -185,14 +185,12 @@ Per-user and process-wide limits control admission across both executors.
 Deadlines bound startup and execution. A `finally` block destroys each sandbox;
 DuckDB failures poison and close the affected engine slot before later traffic.
 
-Run SQL has a separate, fail-closed `DataQueryService` contract and must not
-reuse trusted preview programs. `POST …/browse/query` requires a manager role,
-uses its own request budget, returns `Cache-Control: no-store`, and audits only
-query size and result counts. Each request must receive a fresh disposable
-worker or process with read-only access and SQL, row, byte, concurrency, and
-deadline limits; inline execution is forbidden. No executor is composed yet,
-so deployments cannot enable the route until an isolated runtime implements
-that contract.
+Run SQL has a separate, fail-closed `DataQueryService` contract and does not
+reuse trusted preview programs. The Node composition root wires a fresh
+DuckDB-Wasm worker per request only when `MARIMOHUB_DATA_BROWSER=full`. The
+route remains in OpenAPI while the runtime is disabled and returns `404`.
+Read-only execution, one-statement validation, row, byte, memory, concurrency,
+and deadline limits apply; inline execution is forbidden.
 
 All network access must use the injected browse probe. This probe has a separate
 request budget and a larger response limit than the connection-test probe.
@@ -229,7 +227,7 @@ Servers differ in pagination and namespace addressing, so the `iceberg_rest`
 client filters listings to direct children, stops on a non-advancing page
 token, and honors a `namespace-separator` declared by `/v1/config`.
 
-Every browsable kind should run the shared live suite: `browseContract`
+Every browsable kind must run the shared live suite: `browseContract`
 (`@marimo-hub/core/testing/browse-contract`) pins the cross-kind guarantees —
 roots without descendants, exact direct children under a parent, tables in
 their namespace, schema round-trip — while the kind supplies config, probe,

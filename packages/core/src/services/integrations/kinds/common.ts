@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import { ValidationError } from '../../../errors';
 import type { UiHints } from '../../../ports/integrations';
+import { parseHttpUrl } from '../../../url';
 import { INTEGRATIONS_DIR } from '../bundle';
 import { envSegment, HOSTNAME_REGEX } from '../sdk';
 import type { RenderOutput } from '../sdk';
@@ -62,13 +63,8 @@ export const HTTP_HEADER_NAME_REGEX = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
  */
 function isUsableUrl(value: string): boolean {
 	if (/^https?:\/\/\//.test(value)) return false;
-	let parsed: URL;
-	try {
-		parsed = new URL(value);
-	} catch {
-		return false;
-	}
-	return parsed.port !== '0' && parsed.username === '' && parsed.password === '';
+	const parsed = parseHttpUrl(value);
+	return parsed.ok && parsed.url.port !== '0';
 }
 
 export const httpUrlField = () =>

@@ -15,6 +15,25 @@ const SPEC_PATH = fileURLToPath(new URL('../openapi.yaml', import.meta.url));
 
 const doc = generateOpenApiDocument();
 
+interface SchemaNode {
+	properties?: Record<string, SchemaNode>;
+	items?: SchemaNode;
+	oneOf?: SchemaNode[];
+	enum?: unknown[];
+	description?: string;
+}
+
+function property(schema: SchemaNode, name: string): SchemaNode {
+	const value = schema.properties?.[name];
+	if (!value) throw new Error(`OpenAPI property ${name} is missing`);
+	return value;
+}
+
+function arrayItems(schema: SchemaNode): SchemaNode {
+	if (!schema.items) throw new Error('OpenAPI array items schema is missing');
+	return schema.items;
+}
+
 // The `openapi:generate` script sets UPDATE_OPENAPI to rewrite the committed
 // spec from `generateOpenApiDocument()` rather than asserting against it.
 if (process.env.UPDATE_OPENAPI) {
@@ -80,5 +99,58 @@ describe('OpenAPI spec', () => {
 			required: ['source', 'id'],
 			additionalProperties: false,
 		});
+	});
+
+	it('publishes typed response vocabularies with an unknown fallback', () => {
+		const schemas = (doc as { components: { schemas: Record<string, SchemaNode> } }).components
+			.schemas;
+		const capability = schemas.IntegrationBrowseCapability;
+		const objects = property(property(capability, 'surfaces'), 'objects');
+		const alerts = property(schemas.Capabilities, 'project_alerts');
+		const previewFormats = (schemas.IntegrationObjectPreview.oneOf ?? [])
+			.map((branch) => branch.properties?.format)
+			.filter((format): format is SchemaNode => format !== undefined);
+		const destinationKinds = (schemas.ProjectAlertDestination.oneOf ?? []).map((branch) =>
+			arrayItems(property(branch, 'kinds')),
+		);
+		const alertKinds = [
+			'member.invited',
+			'member.added',
+			'member.role_changed',
+			'member.removed',
+			'session.takeover',
+			'notebook.deleted',
+			'project.deleted',
+			'app.start_failed',
+			'app.unavailable',
+			'sync.failed',
+			'unknown',
+		];
+		const typedEnums: [SchemaNode, string[]][] = [
+			[
+				arrayItems(property(schemas.IntegrationKind, 'browse_surfaces')),
+				['tables', 'objects', 'unknown'],
+			],
+			[property(objects, 'provider'), ['s3', 'gcs', 'azure_blob', 'unknown']],
+			[property(objects, 'root_kind'), ['bucket', 'container', 'unknown']],
+			[property(objects, 'uri_scheme'), ['s3', 'gs', 'az', 'unknown']],
+			[property(objects, 'search'), ['none', 'bounded-key-name', 'unknown']],
+			[arrayItems(property(alerts, 'destination_types')), ['slack', 'webhook', 'unknown']],
+			[arrayItems(property(alerts, 'selectable_kinds')), alertKinds],
+			[previewFormats[0], ['table', 'csv', 'tsv', 'json', 'jsonl', 'parquet', 'unknown']],
+			[previewFormats[1], ['text', 'markdown', 'code', 'log', 'json', 'unknown']],
+			[previewFormats[2], ['png', 'jpeg', 'gif', 'webp', 'unknown']],
+			...destinationKinds.map((schema): [SchemaNode, string[]] => [schema, alertKinds]),
+		];
+
+		for (const [schema, values] of typedEnums) {
+			expect(schema.enum).toEqual(values);
+			expect(schema.description).toContain('Unrecognized values normalize to unknown.');
+		}
+		expect(Object.keys(capability.properties ?? {})).toEqual(['surfaces']);
+		expect(Object.keys(schemas.ProjectAlertDestinationPage.properties ?? {})).toEqual([
+			'items',
+			'next_cursor',
+		]);
 	});
 });

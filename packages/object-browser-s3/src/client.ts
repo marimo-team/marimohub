@@ -1,21 +1,23 @@
 import { Agent as HttpAgent } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
-import { ALL, V4MAPPED } from 'node:dns';
-import type { LookupFunction } from 'node:net';
+import { Transform } from 'node:stream';
+import type { TransformCallback } from 'node:stream';
 import { S3Client } from '@aws-sdk/client-s3';
 import type { ObjectBrowseContext, S3ObjectStoreSource } from '@marimo-hub/core';
 import { ObjectBrowseError } from '@marimo-hub/core';
+import {
+	assertPermittedHost,
+	createGuardedLookup,
+	DEFAULT_OBJECT_BROWSER_LIMITS,
+	isAbortError,
+} from '@marimo-hub/object-browser-commons';
+
+export { createGuardedLookup } from '@marimo-hub/object-browser-commons';
+import type { GuardedHostResolver } from '@marimo-hub/object-browser-commons';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
+import type { NodeHttpHandlerOptions } from '@smithy/node-http-handler';
 
-export interface PinnedAddress {
-	address: string;
-	family: number;
-}
-
-export type GuardedHostResolver = (
-	hostname: string,
-	signal?: AbortSignal,
-) => Promise<PinnedAddress[]>;
+export type { GuardedHostResolver, PinnedAddress } from '@marimo-hub/object-browser-commons';
 
 export interface S3ClientLike {
 	send(command: unknown, options?: { abortSignal?: AbortSignal }): Promise<unknown>;
@@ -31,16 +33,22 @@ export function createS3ClientFactory(options: {
 	resolveHost: GuardedHostResolver;
 	connectionTimeoutMs?: number;
 	requestTimeoutMs?: number;
+	metadataMaxResponseBytes?: number;
+	listMaxResponseBytes?: number;
 }): S3ClientFactory {
 	return (source, context) => {
 		const lookup = createGuardedLookup(options.resolveHost, context.signal);
-		const requestHandler = new NodeHttpHandler({
-			httpAgent: new HttpAgent({ lookup }),
-			httpsAgent: new HttpsAgent({ lookup }),
-			...enforcedTimeouts(options),
-		});
+		const requestHandler = new MetadataCappedNodeHttpHandler(
+			options.metadataMaxResponseBytes ?? DEFAULT_OBJECT_BROWSER_LIMITS.metadataMaxResponseBytes,
+			options.listMaxResponseBytes ?? DEFAULT_OBJECT_BROWSER_LIMITS.listMaxResponseBytes,
+			{
+				httpAgent: new HttpAgent({ lookup }),
+				httpsAgent: new HttpsAgent({ lookup }),
+				...enforcedTimeouts(options),
+			},
+		);
 		const credentials = credentialsFor(source, context);
-		return new S3Client({
+		const client = new S3Client({
 			region: source.region ?? context.federation?.storage.region ?? 'us-east-1',
 			endpoint: source.endpoint,
 			forcePathStyle: source.path_style,
@@ -48,7 +56,146 @@ export function createS3ClientFactory(options: {
 			requestHandler,
 			...(credentials ? { credentials } : {}),
 		}) as S3ClientLike;
+		const endpointAllowed = guardEndpoint(source.endpoint, options.resolveHost, context.signal);
+		return {
+			send: async (command, sendOptions) => {
+				await endpointAllowed;
+				return client.send(command, sendOptions);
+			},
+			destroy: () => client.destroy(),
+		};
 	};
+}
+
+class MetadataCappedNodeHttpHandler extends NodeHttpHandler {
+	constructor(
+		private readonly metadataMaxBytes: number,
+		private readonly listMaxBytes: number,
+		options: NodeHttpHandlerOptions,
+	) {
+		super(options);
+	}
+
+	override async handle(
+		request: Parameters<NodeHttpHandler['handle']>[0],
+		options?: Parameters<NodeHttpHandler['handle']>[1],
+	) {
+		const result = await super.handle(request, options);
+		const maxBytes = s3ResponseLimit(request, this.metadataMaxBytes, this.listMaxBytes);
+		if (maxBytes !== undefined) {
+			const declaredBytes = Number(result.response.headers['content-length']);
+			if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+				(result.response.body as { destroy?: () => void } | undefined)?.destroy?.();
+				throw responseTooLarge();
+			}
+			result.response.body = boundedResponseBody(result.response.body, maxBytes);
+		}
+		return result;
+	}
+}
+
+export function s3ResponseLimit(
+	request: Parameters<NodeHttpHandler['handle']>[0],
+	metadataMaxBytes: number,
+	listMaxBytes: number,
+): number | undefined {
+	if (request.method !== 'GET') return undefined;
+	const query = request.query ?? {};
+	if (
+		query['x-id'] === 'ListBuckets' ||
+		Object.hasOwn(query, 'list-type') ||
+		Object.hasOwn(query, 'versions')
+	) {
+		return listMaxBytes;
+	}
+	return Object.hasOwn(query, 'tagging') ? metadataMaxBytes : undefined;
+}
+
+function boundedResponseBody(body: unknown, maxBytes: number): unknown {
+	if (body === undefined || body === null) return body;
+	if (typeof body === 'string') {
+		if (Buffer.byteLength(body) > maxBytes) throw responseTooLarge();
+		return body;
+	}
+	if (body instanceof Uint8Array) {
+		if (body.byteLength > maxBytes) throw responseTooLarge();
+		return body;
+	}
+	if (body instanceof ArrayBuffer) {
+		if (body.byteLength > maxBytes) throw responseTooLarge();
+		return body;
+	}
+	if (body instanceof ReadableStream) {
+		let seen = 0;
+		return body.pipeThrough(
+			new TransformStream<Uint8Array, Uint8Array>({
+				transform(chunk, controller) {
+					seen += chunk.byteLength;
+					if (seen > maxBytes) throw responseTooLarge();
+					controller.enqueue(chunk);
+				},
+			}),
+		);
+	}
+	if (typeof (body as { pipe?: unknown }).pipe === 'function') {
+		return (body as NodeJS.ReadableStream).pipe(new BoundedMetadataTransform(maxBytes));
+	}
+	return body;
+}
+
+class BoundedMetadataTransform extends Transform {
+	private seen = 0;
+
+	constructor(private readonly maxBytes: number) {
+		super();
+	}
+
+	_transform(chunk: Buffer | string, encoding: BufferEncoding, callback: TransformCallback): void {
+		this.seen += typeof chunk === 'string' ? Buffer.byteLength(chunk, encoding) : chunk.byteLength;
+		if (this.seen > this.maxBytes) callback(responseTooLarge());
+		else callback(null, chunk);
+	}
+}
+
+function responseTooLarge(): ObjectBrowseError {
+	return new ObjectBrowseError('unavailable', 'The object-store response was too large.');
+}
+
+/**
+ * The pinned `lookup` is skipped for IP-literal endpoints, so a custom endpoint
+ * could otherwise reach any address. Checked once per client, awaited by every
+ * command so no request path can skip it.
+ */
+function guardEndpoint(
+	endpoint: string | undefined,
+	resolveHost: GuardedHostResolver,
+	signal?: AbortSignal,
+): Promise<void> {
+	if (!endpoint) return Promise.resolve();
+	let hostname: string;
+	try {
+		hostname = new URL(endpoint).hostname;
+	} catch {
+		return rejected('The object-store endpoint is invalid.');
+	}
+	const guard = assertPermittedHost(hostname, resolveHost, signal).catch((error: unknown) => {
+		if (isAbortError(error) || signal?.aborted) {
+			throw new ObjectBrowseError('aborted', 'The request was canceled.');
+		}
+		throw new ObjectBrowseError(
+			'access_denied',
+			'The object-store endpoint is not permitted from this deployment.',
+		);
+	});
+	// The first command may be issued well after the check settles.
+	guard.catch(() => {});
+	return guard;
+}
+
+function rejected(message: string): Promise<never> {
+	const failure = Promise.reject(new ObjectBrowseError('access_denied', message));
+	failure.catch(() => {});
+	return failure;
 }
 
 export function enforcedTimeouts(options: {
@@ -99,54 +246,4 @@ export function endpointsMatch(left: string | undefined, right: string | undefin
 	} catch {
 		return false;
 	}
-}
-
-export function createGuardedLookup(
-	resolveHost: GuardedHostResolver,
-	signal?: AbortSignal,
-): LookupFunction {
-	return ((hostname: string, lookupOptions: unknown, callback: unknown) => {
-		const cb = callback as (err: Error | null, address?: unknown, family?: number) => void;
-		void resolveHost(hostname, signal).then(
-			(addresses) => {
-				const options =
-					typeof lookupOptions === 'number'
-						? { family: lookupOptions }
-						: typeof lookupOptions === 'object' && lookupOptions !== null
-							? (lookupOptions as { all?: boolean; family?: number; hints?: number })
-							: {};
-				const requestedFamily = options.family === 4 || options.family === 6 ? options.family : 0;
-				let candidates = requestedFamily
-					? addresses.filter((address) => address.family === requestedFamily)
-					: addresses;
-				const hints = options.hints ?? 0;
-				if (requestedFamily === 6 && (hints & V4MAPPED) !== 0) {
-					const includeMapped = candidates.length === 0 || (hints & ALL) !== 0;
-					if (includeMapped) {
-						const mapped = addresses
-							.filter((address) => address.family === 4)
-							.map((address) => ({ address: `::ffff:${address.address}`, family: 6 }));
-						candidates = [...candidates, ...mapped];
-					}
-				}
-				if (candidates.length === 0) {
-					cb(new Error('The object-store hostname did not resolve.'));
-					return;
-				}
-				if (options.all) {
-					cb(null, candidates);
-				} else {
-					cb(null, candidates[0].address, candidates[0].family);
-				}
-			},
-			(error) => {
-				const name = (error as { name?: unknown } | null)?.name;
-				const message =
-					name === 'AbortError'
-						? 'The object-store hostname resolution was canceled.'
-						: 'The object-store hostname is not permitted.';
-				cb(Object.assign(new Error(message), { name: name === 'AbortError' ? name : 'Error' }));
-			},
-		);
-	}) as LookupFunction;
 }

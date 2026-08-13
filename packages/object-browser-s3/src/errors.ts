@@ -1,4 +1,5 @@
 import { ObjectBrowseError } from '@marimo-hub/core';
+import { isAbortError, objectBrowseHttpError } from '@marimo-hub/object-browser-commons';
 
 export function mapS3Error(error: unknown): ObjectBrowseError {
 	if (error instanceof ObjectBrowseError) return error;
@@ -10,37 +11,28 @@ export function mapS3Error(error: unknown): ObjectBrowseError {
 	const name = value?.name ?? value?.Code ?? '';
 	const status = value?.$metadata?.httpStatusCode;
 	const requestId = value?.$metadata?.requestId;
-	if (name === 'AbortError') return new ObjectBrowseError('aborted', 'The request was canceled.');
-	if (status === 403 || name === 'AccessDenied') {
-		return new ObjectBrowseError(
-			'access_denied',
-			'Access to the object store was denied.',
-			requestId,
-		);
-	}
-	if (status === 404 || name === 'NoSuchKey' || name === 'NotFound') {
-		return new ObjectBrowseError('not_found', 'The requested object was not found.', requestId);
-	}
-	if (status === 412 || name === 'PreconditionFailed') {
-		return new ObjectBrowseError(
-			'precondition_failed',
-			'The object changed before it could be read.',
-			requestId,
-		);
-	}
-	if (status === 416 || name === 'InvalidRange') {
-		return new ObjectBrowseError(
-			'range_not_satisfiable',
-			'The requested byte range is not available.',
-			requestId,
-		);
-	}
-	if (name === 'NotImplemented' || name === 'UnsupportedOperation') {
+	if (isAbortError(error)) return new ObjectBrowseError('aborted', 'The request was canceled.');
+	let mappedStatus: number | undefined;
+	if (status === 401 || status === 403 || name === 'AccessDenied') {
+		mappedStatus = status === 401 ? 401 : 403;
+	} else if (status === 404 || name === 'NoSuchKey' || name === 'NotFound') {
+		mappedStatus = 404;
+	} else if (status === 412 || name === 'PreconditionFailed') {
+		mappedStatus = 412;
+	} else if (status === 416 || name === 'InvalidRange') {
+		mappedStatus = 416;
+	} else if (name === 'NotImplemented' || name === 'UnsupportedOperation') {
 		return new ObjectBrowseError(
 			'unsupported',
 			'This S3-compatible provider does not support the operation.',
 			requestId,
 		);
+	} else {
+		mappedStatus = status;
 	}
-	return new ObjectBrowseError('unavailable', 'The object-store request failed.', requestId);
+	return objectBrowseHttpError(mappedStatus, {
+		accessDenied: 'Access to the object store was denied.',
+		unavailable: 'The object-store request failed.',
+		requestId,
+	});
 }

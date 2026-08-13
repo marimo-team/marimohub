@@ -1,17 +1,22 @@
 import { BlobServiceClient } from '@azure/storage-blob';
 import { describe, it } from 'vitest';
 import { createProjectId, UserId } from '@marimo-hub/core';
-import { objectBrowseContract } from '@marimo-hub/core/testing/object-browse-contract';
+import {
+	OBJECT_BROWSE_CONTRACT_SEED,
+	objectBrowseContract,
+} from '@marimo-hub/core/testing/object-browse-contract';
 import { AzureBlobObjectBrowser } from './index';
 
 const connectionString = process.env.MARIMOHUB_TEST_AZURE_CONNECTION_STRING;
 const container = `object-browser-${process.pid}-${Date.now()}`;
 const prefix = 'contract/';
-const directObject = `${prefix}contract.csv`;
-const nestedObject = `${prefix}nested/contract.txt`;
-const unicodeObject = `${prefix}résumé-雪.txt`;
-const emptyObject = `${prefix}empty.bin`;
-const versionedObject = `${prefix}versioned.txt`;
+const seed = OBJECT_BROWSE_CONTRACT_SEED;
+const directObject = `${prefix}${seed.direct.path}`;
+const nestedObject = `${prefix}${seed.nested.path}`;
+const unicodeObject = `${prefix}${seed.unicode.path}`;
+const emptyObject = `${prefix}${seed.empty.path}`;
+const parquetObject = `${prefix}${seed.parquet.path}`;
+const versionedObject = `${prefix}${seed.versioned.path}`;
 
 if (connectionString) {
 	objectBrowseContract('Azurite', () => ({
@@ -26,7 +31,6 @@ if (connectionString) {
 		}),
 		source: {
 			provider: 'azure_blob',
-			configured_bucket: container,
 			account_name: 'devstoreaccount1',
 			endpoint_suffix: 'core.windows.net',
 			auth: { method: 'connection_string', connection_string: connectionString },
@@ -43,19 +47,22 @@ if (connectionString) {
 			await target.create();
 			await target
 				.getBlockBlobClient(directObject)
-				.uploadData(new TextEncoder().encode('name,value\nfirst,1\nsecond,2\n'), {
-					blobHTTPHeaders: { blobContentType: 'text/csv' },
+				.uploadData(new TextEncoder().encode(seed.direct.body), {
+					blobHTTPHeaders: { blobContentType: seed.direct.contentType },
 				});
 			await target
 				.getBlockBlobClient(nestedObject)
-				.uploadData(new TextEncoder().encode('nested contract'));
+				.uploadData(new TextEncoder().encode(seed.nested.body));
 			await target
 				.getBlockBlobClient(unicodeObject)
-				.uploadData(new TextEncoder().encode('unicode contract'));
+				.uploadData(new TextEncoder().encode(seed.unicode.body));
 			await target.getBlockBlobClient(emptyObject).uploadData(new Uint8Array());
+			await target.getBlockBlobClient(parquetObject).uploadData(seed.parquet.body, {
+				blobHTTPHeaders: { blobContentType: seed.parquet.contentType },
+			});
 			await target
 				.getBlockBlobClient(versionedObject)
-				.uploadData(new TextEncoder().encode('current version'));
+				.uploadData(new TextEncoder().encode(seed.versioned.secondBody));
 			return {
 				bucket: container,
 				prefix,
@@ -63,6 +70,7 @@ if (connectionString) {
 				nestedObject,
 				unicodeObject,
 				emptyObject,
+				parquetObject,
 				versionedObject,
 				versions: false,
 			};

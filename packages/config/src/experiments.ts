@@ -1,5 +1,4 @@
 import type { Env } from './env';
-import { ConfigError } from './errors';
 
 export const EXPERIMENTS = {
 	'duckdb-wasm-preview': {
@@ -18,11 +17,19 @@ export function parseExperiments(env: Env): ReadonlySet<Experiment> {
 	for (const raw of env.MARIMOHUB_EXPERIMENTS?.split(',') ?? []) {
 		const id = raw.trim().toLowerCase();
 		if (!id) continue;
+		// An experiment id from a newer or older deployment must not brick boot;
+		// ignore it so config stays forward- and backward-compatible.
 		if (!Object.hasOwn(EXPERIMENTS, id)) {
-			throw new ConfigError(`Unknown MARIMOHUB_EXPERIMENTS value: ${id}.`, {
-				variable: 'MARIMOHUB_EXPERIMENTS',
-				remediation: `Use one or more of: ${Object.keys(EXPERIMENTS).join(', ')}.`,
-			});
+			console.warn(
+				JSON.stringify({
+					ts: new Date().toISOString(),
+					event: 'unknown_experiment_ignored',
+					message:
+						`Unknown MARIMOHUB_EXPERIMENTS value: ${id}. ` +
+						`Known experiments: ${Object.keys(EXPERIMENTS).join(', ')}.`,
+				}),
+			);
+			continue;
 		}
 		enabled.add(id as Experiment);
 	}

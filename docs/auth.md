@@ -107,9 +107,9 @@ their known identifiers is already on the roster, so removing a member always
 revokes their access.
 
 The login email grants access, so OIDC requires `email_verified: true` by
-default. `trusted-issuer` permits an enterprise issuer to omit the claim. Any
-present value other than boolean `true` is rejected. This policy also applies
-when a domain allowlist is active.
+default. `trusted-issuer` permits an enterprise issuer to omit the claim,
+including when a domain allowlist is active. If the claim is present, its value
+must be boolean `true`.
 
 Invite emails are PII of people who never signed in: the members list and
 project detail show them only to project managers (and to the invitee themself).

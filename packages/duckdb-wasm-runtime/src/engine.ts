@@ -15,36 +15,42 @@ type Database = Awaited<ReturnType<typeof duckdb.createDuckDB>>;
 
 export class BlockingDuckDBEngine {
 	private db: Database | undefined;
+	private queryTail: Promise<void> = Promise.resolve();
+	private readonly createDatabase: () => Promise<Database>;
+
+	constructor(createDatabase: () => Promise<Database> = defaultDatabase) {
+		this.createDatabase = createDatabase;
+	}
 
 	async initialize(memoryLimitMb: number): Promise<void> {
 		if (this.db) return;
-		const mainModule = modulePath();
-		const db = await duckdb.createDuckDB(
-			{
-				eh: { mainModule, mainWorker: '' },
-				mvp: { mainModule, mainWorker: '' },
-			},
-			new duckdb.VoidLogger(),
-			createFailClosedNodeRuntime(),
-		);
-		await db.instantiate();
-		db.open({ path: ':memory:' });
-		const connection = db.connect();
+		let db: Database | undefined;
 		try {
-			runStatement(connection, { text: 'SET memory_limit = ?', params: [`${memoryLimitMb}MB`] });
-			connection.query('SET allow_community_extensions=false');
-			connection.query('SET autoinstall_known_extensions=false');
-			connection.query('SET autoload_known_extensions=false');
-			connection.query('SET enable_external_access=false');
-			connection.query('SET lock_configuration=true');
-			connection.query('SELECT 1');
+			db = await this.createDatabase();
+			await db.instantiate();
+			db.open({ path: ':memory:' });
+			const connection = db.connect();
+			try {
+				runStatement(connection, {
+					text: 'SET memory_limit = ?',
+					params: [`${memoryLimitMb}MB`],
+				});
+				connection.query('SET allow_community_extensions=false');
+				connection.query('SET autoinstall_known_extensions=false');
+				connection.query('SET autoload_known_extensions=false');
+				connection.query('SET enable_external_access=false');
+				connection.query('SET lock_configuration=true');
+				connection.query('SELECT 1');
+			} finally {
+				connection.close();
+			}
+			this.db = db;
 		} catch (error) {
-			db.reset();
+			try {
+				db?.reset();
+			} catch {}
 			throw error;
-		} finally {
-			connection.close();
 		}
-		this.db = db;
 	}
 
 	ping(): void {
@@ -94,42 +100,102 @@ export class BlockingDuckDBEngine {
 	}
 
 	async executeQuery(request: DataQueryExecution): Promise<DataQueryResult> {
+		const pending = this.queryTail.then(() => this.executeQueryExclusive(request));
+		this.queryTail = pending.then(
+			() => {},
+			() => {},
+		);
+		return pending;
+	}
+
+	private async executeQueryExclusive(request: DataQueryExecution): Promise<DataQueryResult> {
 		const plan = request.connection.plan;
-		const statement = singleDataQueryStatement(request.sql);
+		const statement = singleDataQueryStatement(request.sql, {
+			backslashEscapes: request.connection.integration.kind === 'clickhouse',
+		});
 		const maxRows = request.limits.maxRows;
 		if (!Number.isSafeInteger(maxRows) || maxRows < 1) throw new Error('Invalid query row limit.');
-		const connection = this.requireDatabase().connect();
+		const db = this.requireDatabase();
+		const registeredFiles: string[] = [];
+		const previousEnvironment = new Map<string, { present: boolean; value?: string }>();
 		let primaryError: unknown;
 		let cleanupError: unknown;
 		let transactionOpen = false;
 		let queryResult: DataQueryResult | undefined;
 		try {
-			for (const setup of plan?.setup ?? []) runStatement(connection, setup);
-			connection.query('BEGIN TRANSACTION READ ONLY');
-			transactionOpen = true;
-			const result = await connection.send(
-				`SELECT * FROM (${statement}\n) AS "__marimohub_query" LIMIT ${maxRows + 1}`,
-				true,
-			);
-			result.open();
-			queryResult = normalizeQueryResultStream(result, maxRows, request.limits.maxBytes);
-		} catch (error) {
-			primaryError = error;
-		} finally {
+			for (const file of request.connection.files) {
+				registeredFiles.push(file.path);
+				db.registerFileText(file.path, file.content);
+			}
+			for (const [name, value] of Object.entries(request.connection.vars)) {
+				previousEnvironment.set(name, {
+					present: Object.hasOwn(process.env, name),
+					value: process.env[name],
+				});
+				process.env[name] = value;
+			}
+			const connection = db.connect();
 			try {
-				if (transactionOpen) connection.query('ROLLBACK');
-				for (const cleanup of [...(plan?.cleanup ?? [])].reverse()) {
-					runStatement(connection, cleanup);
-				}
+				for (const setup of plan?.setup ?? []) runStatement(connection, setup);
+				connection.query('BEGIN TRANSACTION READ ONLY');
+				transactionOpen = true;
+				const result = await connection.send(
+					`SELECT * FROM (${statement}\n) AS "__marimohub_query" LIMIT ${maxRows + 1}`,
+					true,
+				);
+				result.open();
+				queryResult = normalizeQueryResultStream(result, maxRows, request.limits.maxBytes);
 			} catch (error) {
-				if (transactionOpen) {
-					try {
-						connection.query('ROLLBACK');
-					} catch {}
-				}
-				cleanupError = error;
+				primaryError = error;
 			} finally {
-				connection.close();
+				try {
+					if (transactionOpen) connection.query('ROLLBACK');
+					for (const cleanup of [...(plan?.cleanup ?? [])].reverse()) {
+						runStatement(connection, cleanup);
+					}
+				} catch (error) {
+					if (transactionOpen) {
+						try {
+							connection.query('ROLLBACK');
+						} catch {}
+					}
+					cleanupError = error;
+				} finally {
+					try {
+						connection.close();
+					} catch (error) {
+						cleanupError ??= error;
+					}
+				}
+			}
+		} catch (error) {
+			primaryError ??= error;
+		} finally {
+			const materializationCleanupErrors: unknown[] = [];
+			for (const [name, previous] of previousEnvironment) {
+				try {
+					if (previous.present) process.env[name] = previous.value;
+					else delete process.env[name];
+				} catch (error) {
+					materializationCleanupErrors.push(error);
+				}
+			}
+			for (const path of registeredFiles.reverse()) {
+				try {
+					db.dropFile(path);
+				} catch (error) {
+					materializationCleanupErrors.push(error);
+				}
+			}
+			if (materializationCleanupErrors.length > 0) {
+				const errors = [
+					...(cleanupError === undefined ? [] : [cleanupError]),
+					...materializationCleanupErrors,
+				];
+				cleanupError =
+					errors.length === 1
+						? errors[0]
+						: new AggregateError(errors, 'DuckDB-Wasm query cleanup failed.');
 			}
 		}
 		if (primaryError !== undefined) throw asError(primaryError);
@@ -139,14 +205,27 @@ export class BlockingDuckDBEngine {
 	}
 
 	close(): void {
-		this.db?.reset();
+		const db = this.db;
 		this.db = undefined;
+		db?.reset();
 	}
 
 	private requireDatabase(): Database {
 		if (!this.db) throw new Error('DuckDB-Wasm is not initialized.');
 		return this.db;
 	}
+}
+
+async function defaultDatabase(): Promise<Database> {
+	const mainModule = modulePath();
+	return duckdb.createDuckDB(
+		{
+			eh: { mainModule, mainWorker: '' },
+			mvp: { mainModule, mainWorker: '' },
+		},
+		new duckdb.VoidLogger(),
+		createFailClosedNodeRuntime(),
+	);
 }
 
 type Connection = ReturnType<Database['connect']>;

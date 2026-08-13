@@ -55,6 +55,14 @@ describe('DataQueryService', () => {
 		).toThrow(name);
 	});
 
+	it('rejects an execution timeout that overflows the platform timer', () => {
+		expect(() =>
+			setup(async () => ({ columns: [], rows: [], truncated: false }), {
+				executionTimeoutMs: 2_147_483_648,
+			}),
+		).toThrow(/executionTimeoutMs/);
+	});
+
 	it('passes fixed isolation controls to a fresh executor and terminates it', async () => {
 		const executions: DataQueryExecution[] = [];
 		let signal: AbortSignal | undefined;
@@ -89,6 +97,19 @@ describe('DataQueryService', () => {
 
 		await expect(service.query(user, { sql: 'select 1', connection })).rejects.toThrow('timed out');
 		expect(terminate).toHaveBeenCalled();
+	});
+
+	it('hard-terminates a query when its caller aborts', async () => {
+		const controller = new AbortController();
+		const execute = vi.fn(() => new Promise<DataQueryResult>(() => {}));
+		const { service, terminate } = setup(execute, { executionTimeoutMs: 10_000 });
+		const query = service.query(user, { sql: 'select 1', connection }, controller.signal);
+		await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+
+		controller.abort();
+
+		await expect(query).rejects.toThrow('cancelled');
+		expect(terminate).toHaveBeenCalledOnce();
 	});
 
 	it('bounds factory creation and terminates an executor that resolves after the deadline', async () => {
@@ -260,6 +281,9 @@ describe('DataQueryService', () => {
 		await expect(
 			service.query(user, { sql: 'x'.repeat(MAX_DATA_QUERY_SQL_BYTES + 1), connection }),
 		).rejects.toThrow('byte limit');
+		await expect(service.query(user, { sql: 'select 1; select 2', connection })).rejects.toThrow(
+			'exactly one statement',
+		);
 		await expect(service.query(user, { sql: 'select 1', connection })).rejects.toThrow(
 			'could not execute',
 		);

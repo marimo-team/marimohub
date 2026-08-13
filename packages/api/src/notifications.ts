@@ -1,10 +1,17 @@
-import { noopNotifier, reduceNotificationDeliveryResults } from '@marimo-hub/core';
+import {
+	createSlidingWindowBudget,
+	noopNotifier,
+	reduceNotificationDeliveryResults,
+	ResourceExhaustedError,
+} from '@marimo-hub/core';
 import type {
 	Notification,
 	NotificationDeliveryOutcome,
 	NotificationKind,
 	ProjectAlertKind,
 	ProjectId,
+	SlidingWindowBudget,
+	UserId,
 } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
@@ -13,6 +20,61 @@ type RenderNotifications = () =>
 	| Notification
 	| readonly Notification[]
 	| Promise<Notification | readonly Notification[]>;
+
+interface NotificationMutationBudgets {
+	actor: SlidingWindowBudget<UserId>;
+	recipient: SlidingWindowBudget<string>;
+}
+
+type NotificationDeliveryMechanism = 'either' | 'notifier' | 'project-alert';
+
+interface NotificationMutationOptions {
+	delivery?: NotificationDeliveryMechanism;
+	recipient?: string;
+	recipientScope?: string;
+	consumeActor?: boolean;
+}
+
+const mutationBudgets = new WeakMap<ApiDeps, NotificationMutationBudgets>();
+
+export function assertNotificationMutationAllowed(
+	deps: ApiDeps,
+	actor: UserId,
+	options: NotificationMutationOptions = {},
+): void {
+	const notifierEnabled = Boolean(deps.notifier && deps.notifier !== noopNotifier);
+	const projectAlertsEnabled = Boolean(deps.projectAlerts);
+	const delivery = options.delivery ?? 'either';
+	const deliveryEnabled =
+		delivery === 'notifier'
+			? notifierEnabled
+			: delivery === 'project-alert'
+				? projectAlertsEnabled
+				: notifierEnabled || projectAlertsEnabled;
+	if (!deliveryEnabled) return;
+	let budgets = mutationBudgets.get(deps);
+	if (!budgets) {
+		budgets = {
+			actor: createSlidingWindowBudget({ limit: 20, windowMs: 60_000 }),
+			recipient: createSlidingWindowBudget({ limit: 5, windowMs: 10 * 60_000 }),
+		};
+		mutationBudgets.set(deps, budgets);
+	}
+	if (options.consumeActor !== false && !budgets.actor.consume(actor)) {
+		throw new ResourceExhaustedError('Too many notification-triggering changes; try again later.');
+	}
+	if (
+		notifierEnabled &&
+		options.recipient &&
+		!budgets.recipient.consume(
+			`${options.recipientScope ?? actor}\0${options.recipient.toLowerCase()}`,
+		)
+	) {
+		throw new ResourceExhaustedError(
+			'Too many notifications were requested for this recipient; try again later.',
+		);
+	}
+}
 
 function scheduleDelivery(
 	deps: ApiDeps,

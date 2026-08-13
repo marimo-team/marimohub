@@ -32,12 +32,29 @@ import { makeSecretSources } from './secrets';
 
 const DOCS = 'docs/project-alerts.md';
 const MAX_PROJECT_ALERT_EVENTS_PER_MINUTE = 100;
+const RATE_LIMIT_RETRY_DELAY_MS = 1_000;
+const MAX_RATE_LIMIT_RETRY_DELAY_MS = 60_000;
 
 class AlertHttpError extends Error {
-	constructor(readonly status: number) {
+	constructor(
+		readonly status: number,
+		readonly retryAfterMs?: number,
+	) {
 		super(`Alert destination returned HTTP ${status}`);
 		this.name = 'AlertHttpError';
 	}
+}
+
+function retryAfterMilliseconds(value: string | undefined): number | undefined {
+	if (!value) return undefined;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(Math.ceil(seconds * 1_000), MAX_RATE_LIMIT_RETRY_DELAY_MS);
+	}
+	const at = Date.parse(value);
+	return Number.isNaN(at)
+		? undefined
+		: Math.min(Math.max(0, at - Date.now()), MAX_RATE_LIMIT_RETRY_DELAY_MS);
 }
 
 function retryableAlertError(error: unknown): boolean {
@@ -99,6 +116,10 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 		private readonly metrics: Metrics,
 		probe?: IntegrationProbe,
 		deliveryBudget?: SlidingWindowBudget<ProjectId>,
+		private readonly delay: (milliseconds: number) => Promise<void> = (milliseconds) =>
+			new Promise((resolve) => {
+				setTimeout(resolve, milliseconds);
+			}),
 	) {
 		this.probe =
 			probe ??
@@ -199,6 +220,7 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 									headers: { 'content-type': 'application/json' },
 									body: JSON.stringify(options.body),
 								});
+								return { ok: true };
 							},
 						}).deliver(notification)
 					: await new WebhookNotifier({
@@ -209,10 +231,13 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 								for (let attempt = 0; attempt <= options.retry; attempt++) {
 									try {
 										await this.request(url, options);
-										return;
+										return { ok: true };
 									} catch (error) {
 										lastError = error;
 										if (attempt === options.retry || !retryableAlertError(error)) throw error;
+										if (error instanceof AlertHttpError && error.status === 429) {
+											await this.delay(error.retryAfterMs ?? RATE_LIMIT_RETRY_DELAY_MS);
+										}
 									}
 								}
 								throw lastError;
@@ -237,6 +262,11 @@ export class NodeProjectAlertDispatcher implements ProjectAlertDispatcher {
 		options: { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: string },
 	): Promise<void> {
 		const response = await this.probe.fetch(url, options);
-		if (!response.ok) throw new AlertHttpError(response.status);
+		if (!response.ok) {
+			throw new AlertHttpError(
+				response.status,
+				retryAfterMilliseconds(response.headers?.['retry-after']),
+			);
+		}
 	}
 }

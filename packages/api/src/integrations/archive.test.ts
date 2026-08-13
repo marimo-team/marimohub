@@ -153,6 +153,23 @@ describe('parseWorkspaceArchive', () => {
 		expect(() => parseWorkspaceArchive(archive, 'zip', '')).toThrow(/1000-file limit/);
 	});
 
+	it('applies the file-count and per-file limits to tar archives', () => {
+		const tooMany = concat([
+			...Array.from({ length: 1001 }, (_, index) =>
+				tarEntry(`${index}.txt`, new Uint8Array(), '0'),
+			),
+			TAR_TRAILER,
+		]);
+		expect(() => parseWorkspaceArchive(tooMany, 'tar', '')).toThrow(/1000-file limit/);
+
+		const oversized = concat([
+			tarHeader('large.bin', MAX_WORKSPACE_FILE_BYTES + 1, '0'),
+			new Uint8Array(MAX_WORKSPACE_FILE_BYTES + 1),
+			TAR_TRAILER,
+		]);
+		expect(() => parseWorkspaceArchive(oversized, 'tar', '')).toThrow(/Archive file exceeds/);
+	});
+
 	it('parses a gzipped tar (.tar.gz)', () => {
 		const tar = tarArchive({ 'app.py': 'print("gz")' });
 		const files = parseWorkspaceArchive(gzipSync(tar), 'tar.gz', 'application/gzip');

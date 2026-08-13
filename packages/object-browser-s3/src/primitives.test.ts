@@ -1,10 +1,11 @@
 import { Readable } from 'node:stream';
 import { ALL, V4MAPPED } from 'node:dns';
 import { describe, expect, it, vi } from 'vitest';
-import { ObjectBrowseError } from '@marimo-hub/core';
+import { ObjectBrowseError, UserId, createProjectId } from '@marimo-hub/core';
 import {
 	assertBucket,
 	assertObjectIdentity,
+	assertPermittedHost,
 	decodeCursor,
 	detectRasterImage,
 	encodeCursor,
@@ -12,7 +13,32 @@ import {
 	readBoundedBody,
 	toWebStream,
 } from '@marimo-hub/object-browser-commons';
-import { createGuardedLookup, endpointsMatch, enforcedTimeouts } from './client';
+import type { ObjectBrowseContext, S3ObjectStoreSource } from '@marimo-hub/core';
+import {
+	createGuardedLookup,
+	createS3ClientFactory,
+	endpointsMatch,
+	enforcedTimeouts,
+	s3ResponseLimit,
+} from './client';
+
+function browseContext(): ObjectBrowseContext {
+	return {
+		project_id: createProjectId(),
+		user_id: UserId.parse('user-1'),
+		user_email: 'ada@example.com',
+		allow_server_ambient: {},
+	};
+}
+
+function sourceWithEndpoint(endpoint: string): S3ObjectStoreSource {
+	return {
+		provider: 's3',
+		endpoint,
+		path_style: true,
+		auth: { method: 'static', access_key_id: 'ak', secret_access_key: 'sk' },
+	};
+}
 import { mapS3Error } from './errors';
 
 describe('cursor encoding', () => {
@@ -53,6 +79,7 @@ describe('provider error mapping', () => {
 
 	it.each([
 		['AbortError', undefined, 'aborted'],
+		['TimeoutError', undefined, 'aborted'],
 		['AccessDenied', 500, 'access_denied'],
 		['Other', 403, 'access_denied'],
 		['NoSuchKey', 500, 'not_found'],
@@ -76,6 +103,26 @@ describe('provider error mapping', () => {
 			request_id: code === 'aborted' ? undefined : 'request-id',
 		});
 		expect(mapped.message).not.toContain('secret provider detail');
+	});
+
+	it('keeps an explicit permission status ahead of a conflicting provider name', () => {
+		const mapped = mapS3Error(
+			Object.assign(new Error('provider detail'), {
+				name: 'NoSuchKey',
+				$metadata: { httpStatusCode: 403 },
+			}),
+		);
+		expect(mapped).toMatchObject({ code: 'access_denied' });
+	});
+
+	it('keeps an explicit permission status ahead of an unsupported provider name', () => {
+		const mapped = mapS3Error(
+			Object.assign(new Error('provider detail'), {
+				name: 'NotImplemented',
+				$metadata: { httpStatusCode: 403 },
+			}),
+		);
+		expect(mapped).toMatchObject({ code: 'access_denied' });
 	});
 });
 
@@ -116,6 +163,16 @@ describe('format and identity validation', () => {
 });
 
 describe('guarded DNS lookup', () => {
+	it('uses separate response caps for list and metadata operations and does not cap HEAD', () => {
+		const request = (method: string, query: Record<string, string>) =>
+			({ method, query }) as Parameters<typeof s3ResponseLimit>[0];
+		expect(s3ResponseLimit(request('GET', { 'list-type': '2' }), 10, 100)).toBe(100);
+		expect(s3ResponseLimit(request('GET', { versions: '' }), 10, 100)).toBe(100);
+		expect(s3ResponseLimit(request('GET', { 'x-id': 'ListBuckets' }), 10, 100)).toBe(100);
+		expect(s3ResponseLimit(request('GET', { tagging: '' }), 10, 100)).toBe(10);
+		expect(s3ResponseLimit(request('HEAD', {}), 10, 100)).toBeUndefined();
+	});
+
 	it('configures enforcing connection and socket timeouts', () => {
 		expect(enforcedTimeouts({})).toEqual({
 			connectionTimeout: 10_000,
@@ -127,6 +184,59 @@ describe('guarded DNS lookup', () => {
 			requestTimeout: 10,
 			throwOnRequestTimeout: true,
 		});
+	});
+
+	// The pinned lookup is never consulted for a literal endpoint, so the client
+	// has to check it before issuing any command.
+	it('refuses commands when the endpoint host fails the address policy', async () => {
+		const resolver = vi.fn().mockRejectedValue(new Error('private or reserved address'));
+		const factory = createS3ClientFactory({ resolveHost: resolver });
+		const client = factory(sourceWithEndpoint('http://169.254.169.254'), browseContext());
+		try {
+			await expect(client.send({})).rejects.toMatchObject({
+				code: 'access_denied',
+				message: expect.stringMatching(/endpoint is not permitted/),
+			});
+			expect(resolver).toHaveBeenCalledWith('169.254.169.254', undefined);
+		} finally {
+			client.destroy();
+		}
+	});
+
+	it.each(['AbortError', 'TimeoutError'])(
+		'rethrows an endpoint-guard %s as aborted instead of access denied',
+		async (name) => {
+			const resolver = vi.fn().mockRejectedValue(new DOMException('canceled', name));
+			const factory = createS3ClientFactory({ resolveHost: resolver });
+			const client = factory(sourceWithEndpoint('http://169.254.169.254'), browseContext());
+			try {
+				await expect(client.send({})).rejects.toMatchObject({
+					code: 'aborted',
+					message: 'The request was canceled.',
+				});
+			} finally {
+				client.destroy();
+			}
+		},
+	);
+
+	it('does not consult the address policy for a hostname endpoint', async () => {
+		const resolver = vi.fn().mockResolvedValue([{ address: '192.0.2.1', family: 4 }]);
+		const factory = createS3ClientFactory({ resolveHost: resolver });
+		const client = factory(sourceWithEndpoint('https://objects.example.com'), browseContext());
+		client.destroy();
+		// Hostnames stay pinned by the lookup hook, so no eager resolution.
+		expect(resolver).not.toHaveBeenCalled();
+	});
+
+	it('rejects a malformed endpoint', async () => {
+		const factory = createS3ClientFactory({ resolveHost: async () => [] });
+		const client = factory(sourceWithEndpoint('not a url'), browseContext());
+		try {
+			await expect(client.send({})).rejects.toMatchObject({ code: 'access_denied' });
+		} finally {
+			client.destroy();
+		}
 	});
 
 	it('pins the resolver output for single and all-address lookups', async () => {
@@ -214,6 +324,9 @@ describe('guarded DNS lookup', () => {
 	});
 
 	it('fails closed for empty or rejected resolver output', async () => {
+		await expect(assertPermittedHost('127.0.0.1', async () => [])).rejects.toThrow(
+			/did not resolve/,
+		);
 		await expect(
 			lookupResult(
 				createGuardedLookup(async () => []),
@@ -274,10 +387,17 @@ describe('body stream conversion', () => {
 	it('propagates reader failures', async () => {
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
-				controller.error(new Error('read failed'));
+				controller.enqueue(new Uint8Array([1]));
+			},
+			pull() {
+				throw new Error('read failed');
 			},
 		});
+		const reader = stream.getReader();
+		const cancel = vi.spyOn(reader, 'cancel');
+		vi.spyOn(stream, 'getReader').mockReturnValue(reader);
 		await expect(readBoundedBody(stream, 10)).rejects.toThrow('read failed');
+		expect(cancel).toHaveBeenCalledOnce();
 	});
 });
 

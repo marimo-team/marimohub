@@ -17,7 +17,12 @@ import type { Context } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { bodyLimit } from 'hono/body-limit';
 import { proxy } from 'hono/proxy';
-import { MAX_REQUEST_BYTES, verifyAiSessionToken } from '@marimo-hub/core';
+import {
+	MAX_REQUEST_BYTES,
+	UnavailableError,
+	UserId,
+	verifyAiSessionToken,
+} from '@marimo-hub/core';
 import type { AiTokenClaims } from '@marimo-hub/core';
 import type { HonoEnv } from '../context';
 import { logEvent } from '../log';
@@ -118,7 +123,7 @@ export function createAiProxy(): Hono<AiEnv> {
 				const ai = c.get('deps').ai;
 				if (!ai) return false;
 				const claims = await verifyAiSessionToken(ai.signingSecret, token);
-				if (!claims) return false;
+				if (!claims || !UserId.is(claims.userId)) return false;
 				c.set('aiClaims', claims);
 				return true;
 			},
@@ -129,6 +134,18 @@ export function createAiProxy(): Hono<AiEnv> {
 			invalidToken: { message: aiError('Invalid or expired token', 'invalid_request_error') },
 		}),
 	);
+	app.use('*', async (c, next) => {
+		const claims = c.get('aiClaims');
+		try {
+			if (await c.get('deps').services.identities.isSuspended(UserId.parse(claims.userId))) {
+				return openAiError('User account is suspended', 'access_denied', 403);
+			}
+		} catch (error) {
+			if (!(error instanceof UnavailableError)) throw error;
+			return openAiError('Unable to verify account status', 'api_error', 503);
+		}
+		return next();
+	});
 	app.use(
 		'*',
 		bodyLimit({

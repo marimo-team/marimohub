@@ -11,6 +11,7 @@ import type {
 } from '../ids';
 import { SyncTokenRecordSchema } from '../integrations/syncedSource';
 import { paths } from '../paths';
+import { ProjectAlertConfigSchema } from '../services/notifications/ProjectAlertStore';
 import {
 	AppClaimSchema,
 	CatalogSchema,
@@ -56,6 +57,7 @@ interface BucketObject {
 	mutability: Mutability;
 	/** The sole writer, for CAS-managed records (see AGENTS.md "Key invariant"). */
 	owner?: string;
+	secretPaths?: readonly string[];
 	tag: string;
 }
 
@@ -91,6 +93,20 @@ const OBJECTS: BucketObject[] = [
 		schema: ProjectSchema,
 		summary: 'Project record: members, federation opt-in, status.',
 		mutability: 'last-writer-wins',
+		tag: 'project',
+	},
+	{
+		name: 'ProjectAlertConfig',
+		key: project.alerts,
+		schema: ProjectAlertConfigSchema,
+		summary: 'Project-scoped Slack and signed-webhook alert destinations.',
+		mutability: 'cas',
+		owner: 'ProjectAlertStore',
+		secretPaths: [
+			'destinations.*.webhook_url',
+			'destinations.*.url',
+			'destinations.*.signing_secret',
+		],
 		tag: 'project',
 	},
 	{
@@ -264,6 +280,7 @@ export function buildBucketSpec(): Record<string, unknown> {
 			parameters: pathParams(obj.key),
 			'x-mutability': obj.mutability,
 			...(obj.owner ? { 'x-owner': obj.owner } : {}),
+			...(obj.secretPaths ? { 'x-secret-paths': obj.secretPaths } : {}),
 			get: {
 				operationId: `read_${opSuffix}`,
 				summary: `Read ${obj.name}`,

@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Metrics } from '@marimo-hub/core';
-import { NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing';
+import { BROADCAST_NOTIFICATION_FIXTURE, NOTIFICATION_FIXTURE } from '@marimo-hub/core/testing';
+import type { ProbeTransport } from './integrationProbe';
 import { makeNotifier, notificationBackends, notificationKindsForBackend } from './notifications';
+
+// An IP-literal target skips DNS so the guarded probe stays hermetic in tests.
+const WEBHOOK_ENV = {
+	MARIMOHUB_NOTIFY_BACKENDS: 'webhook',
+	MARIMOHUB_NOTIFY_WEBHOOK_URL: 'https://93.184.216.34/hook',
+	MARIMOHUB_NOTIFY_WEBHOOK_SECRET: 'secret',
+} as const;
 
 describe('makeNotifier', () => {
 	it('returns a no-op notifier when no backends are configured', async () => {
@@ -21,6 +29,87 @@ describe('makeNotifier', () => {
 				MARIMOHUB_NOTIFY_SLACK_WEBHOOK_URL: 'http://hooks.example.com',
 			}),
 		).toThrow(/must use HTTPS/);
+	});
+
+	it.each([
+		{
+			MARIMOHUB_NOTIFY_BACKENDS: 'slack',
+			MARIMOHUB_NOTIFY_SLACK_WEBHOOK_URL: 'https://127.0.0.1/hook',
+		},
+		{
+			MARIMOHUB_NOTIFY_BACKENDS: 'webhook',
+			MARIMOHUB_NOTIFY_WEBHOOK_URL: 'https://127.0.0.1/hook',
+			MARIMOHUB_NOTIFY_WEBHOOK_SECRET: 'secret',
+		},
+	] as const)('blocks private env-configured HTTP notification targets', async (env) => {
+		await expect(makeNotifier(env).deliver(BROADCAST_NOTIFICATION_FIXTURE)).rejects.toThrow(
+			/delivery failed/,
+		);
+	});
+
+	it('allows private HTTP notification targets only with explicit operator policy', async () => {
+		const transport = vi.fn<ProbeTransport>(async () => ({ status: 204, body: '' }));
+		const notifier = makeNotifier(
+			{
+				MARIMOHUB_NOTIFY_BACKENDS: 'webhook',
+				MARIMOHUB_NOTIFY_WEBHOOK_URL: 'https://127.0.0.1/hook',
+				MARIMOHUB_NOTIFY_WEBHOOK_SECRET: 'secret',
+				MARIMOHUB_NOTIFY_ALLOW_PRIVATE: 'true',
+			},
+			undefined,
+			transport,
+		);
+
+		await expect(notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE)).resolves.toBe('delivered');
+		expect(transport).toHaveBeenCalledOnce();
+	});
+
+	it('rejects an invalid private-target policy', () => {
+		expect(() => makeNotifier({ MARIMOHUB_NOTIFY_ALLOW_PRIVATE: 'sometimes' })).toThrow(
+			/MARIMOHUB_NOTIFY_ALLOW_PRIVATE/,
+		);
+	});
+
+	it('is not capped by the connection-test rate limit', async () => {
+		const transport = vi.fn<ProbeTransport>(async () => ({ status: 204, body: '' }));
+		const notifier = makeNotifier(WEBHOOK_ENV, undefined, transport);
+
+		for (let delivery = 0; delivery < 40; delivery++) {
+			await expect(notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE)).resolves.toBe('delivered');
+		}
+		expect(transport).toHaveBeenCalledTimes(40);
+	});
+
+	it('retries a webhook delivery once after a transient network failure', async () => {
+		const transport = vi
+			.fn<ProbeTransport>()
+			.mockRejectedValueOnce(new Error('temporary failure'))
+			.mockResolvedValue({ status: 204, body: '' });
+		const notifier = makeNotifier(WEBHOOK_ENV, undefined, transport);
+
+		await expect(notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE)).resolves.toBe('delivered');
+		expect(transport).toHaveBeenCalledTimes(2);
+	});
+
+	it('retries a webhook delivery once after a retryable HTTP status', async () => {
+		const transport = vi
+			.fn<ProbeTransport>()
+			.mockResolvedValueOnce({ status: 503, body: '' })
+			.mockResolvedValue({ status: 204, body: '' });
+		const notifier = makeNotifier(WEBHOOK_ENV, undefined, transport);
+
+		await expect(notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE)).resolves.toBe('delivered');
+		expect(transport).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not retry a webhook delivery after a permanent HTTP status', async () => {
+		const transport = vi.fn<ProbeTransport>(async () => ({ status: 401, body: '' }));
+		const notifier = makeNotifier(WEBHOOK_ENV, undefined, transport);
+
+		await expect(notifier.deliver(BROADCAST_NOTIFICATION_FIXTURE)).rejects.toThrow(
+			/delivery failed/,
+		);
+		expect(transport).toHaveBeenCalledOnce();
 	});
 
 	it.each([

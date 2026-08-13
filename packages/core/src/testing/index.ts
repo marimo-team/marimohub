@@ -1,6 +1,7 @@
 export * from './MemoryBucket';
 export * from './MemoryNotifier';
 export * from './notificationFixtures';
+export * from './notifierContract';
 export * from './objectBrowseContract';
 export * from './RecordingBucket';
 export * from './assertions';

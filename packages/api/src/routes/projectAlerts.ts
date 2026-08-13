@@ -18,6 +18,7 @@ import {
 	errorResponses,
 	etagFor,
 	EtagResponseHeader,
+	extensibleResponseEnum,
 	ifMatchToken,
 	IfMatchHeader,
 	jsonBody,
@@ -25,6 +26,7 @@ import {
 	ProjectIdParam,
 	SuccessResponseSchema,
 } from '../shared';
+import { pageSchema } from '../pagination';
 
 const AlertDestinationIdParam = ProjectIdParam.extend({
 	aid: z
@@ -37,7 +39,7 @@ const AlertDestinationIdParam = ProjectIdParam.extend({
 const DestinationCommonSchema = z.object({
 	id: z.string().regex(AlertDestinationId.regex),
 	name: z.string(),
-	kinds: z.array(ProjectAlertKindSchema),
+	kinds: z.array(extensibleResponseEnum(PROJECT_ALERT_KINDS, PROJECT_ALERT_KINDS[0])),
 	enabled: z.boolean(),
 	verified_at: z.iso.datetime().nullable(),
 	endpoint_host: z.string(),
@@ -96,7 +98,10 @@ const listDestinations = createRoute({
 	request: { params: ProjectIdParam },
 	responses: {
 		200: jsonContent(
-			z.object({ success: z.literal(true), data: z.array(AlertDestinationResponseSchema) }),
+			z.object({
+				success: z.literal(true),
+				data: pageSchema(AlertDestinationResponseSchema, 'ProjectAlertDestinationPage'),
+			}),
 			'Project alert destinations with secret material redacted',
 		),
 		...commonErrors(),
@@ -205,7 +210,10 @@ app.openapi(listDestinations, async (c) => {
 	const { pid } = c.req.valid('param');
 	const alerts = requireProjectAlerts(deps);
 	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
-	return c.json({ success: true, data: await alerts.store.list(pid) }, 200);
+	return c.json(
+		{ success: true, data: { items: await alerts.store.list(pid), next_cursor: null } },
+		200,
+	);
 });
 
 app.openapi(createDestination, async (c) => {

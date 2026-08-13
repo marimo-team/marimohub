@@ -800,6 +800,7 @@ class ScopedIntegrationsStore {
 				: { available: false, reason: 'Run SQL is not enabled on this deployment.' };
 		}
 		const compatibility = (reason?: string): BrowseCapabilityResult => ({
+			integration_kind: head.kind,
 			metadata: surfaces.tables?.available ?? false,
 			hub_preview: surfaces.tables?.preview ?? false,
 			surfaces,
@@ -893,7 +894,7 @@ class ScopedIntegrationsStore {
 		id: IntegrationId,
 		namespace: string[],
 		table: string,
-		request?: Pick<TablePreviewRequest, 'query_user'>,
+		request?: Pick<TablePreviewRequest, 'query_user' | 'signal'>,
 	): Promise<TableSchema> {
 		const { head, browse, config, probe } = await this.openBrowse(scope, id);
 		const schema = await browse.getTableSchema(config, probe, namespace, table, request);
@@ -965,8 +966,8 @@ class ScopedIntegrationsStore {
 		if (!this.dataQuery) {
 			throw new ValidationError('Run SQL is not enabled on this deployment.');
 		}
-		assertValidDataQuerySql(sql);
 		const head = await this.getHead(scope, id);
+		assertValidDataQuerySql(sql, head.kind);
 		if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
 		const rendered = await this.renderOne(scope, head, projectId, { sessionId, principal });
 		const bundled = bundleIntegrations([rendered], sessionId);
