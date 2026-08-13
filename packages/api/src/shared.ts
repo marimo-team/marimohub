@@ -726,6 +726,7 @@ export const ComputeResourcesResponseSchema = z
 	.object({
 		cpu: z.number().optional(),
 		memory_bytes: z.number().optional(),
+		gpu: z.string().optional(),
 	})
 	.openapi('ComputeResources');
 
@@ -736,6 +737,7 @@ export function toComputeResourcesResponse(
 	return {
 		cpu: resources.cpu,
 		memory_bytes: resources.memoryBytes,
+		gpu: resources.gpu,
 	};
 }
 

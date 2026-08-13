@@ -36,6 +36,8 @@ export interface ConfigBackend {
 	description?: string;
 	/** Whether this compute backend applies per-sandbox CPU and memory requests. */
 	supportsComputeProfiles?: boolean;
+	/** Whether this compute backend applies GPU requests from compute profiles. */
+	supportsGpuProfiles?: boolean;
 	vars: ConfigVar[];
 }
 
@@ -236,8 +238,8 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_PROFILES',
 						name: 'Compute profiles',
 						description:
-							'Ordered named CPU/memory profiles (`name:cpu=<cores>;mem=<Mi|Gi|Ti>`). The first is the default; supported backends apply the notebook choice when overrides are enabled.',
-						example: 'small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi',
+							'Ordered named CPU, memory, and optional GPU profiles (`name:cpu=<cores>;mem=<Mi|Gi|Ti>;gpu=<type>[:<count>]`, with a maximum GPU count of 8). The first is the default; supported backends apply the notebook choice when overrides are enabled. Modal applies GPU requests; other backends ignore them with a startup warning.',
+						example: 'small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100',
 						optIn: true,
 					},
 					{
@@ -437,6 +439,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Modal',
 				selectorValue: 'modal',
 				supportsComputeProfiles: true,
+				supportsGpuProfiles: true,
 				description: 'Modal sandboxes.',
 				vars: [
 					{

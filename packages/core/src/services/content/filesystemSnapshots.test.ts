@@ -214,13 +214,13 @@ describe('filesystemSnapshots', () => {
 
 			await captureFilesystemSnapshot(provider, env.notebooks, instance, project.id, nb.id, {
 				compute_profile: 'large',
-				compute_resources: { cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+				compute_resources: { cpu: 8, memory_bytes: 32 * 1024 ** 3, gpu: 'A100' },
 			});
 
 			expect(await env.notebooks.getFsSnapshot(project.id, nb.id)).toMatchObject({
 				snapshot_id: 'snap_new',
 				compute_profile: 'large',
-				compute_resources: { cpu: 8, memory_bytes: 32 * 1024 ** 3 },
+				compute_resources: { cpu: 8, memory_bytes: 32 * 1024 ** 3, gpu: 'A100' },
 			});
 		});
 

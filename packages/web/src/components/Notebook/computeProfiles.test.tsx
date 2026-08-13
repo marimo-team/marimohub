@@ -20,6 +20,9 @@ const profiles = [
 describe('compute profile presentation', () => {
 	it('formats resources and the concrete default label', () => {
 		expect(computeProfileResources(profiles[0])).toBe('1 CPU · 2 Gi');
+		expect(computeProfileResources({ cpu: 8, memory_bytes: 32 * 1024 ** 3, gpu: 'A100:2' })).toBe(
+			'8 CPU · 32 Gi · A100:2 GPU',
+		);
 		expect(computeProfileResources({})).toBe('platform default');
 		expect(computeProfileLabel(profiles[0], true)).toBe('Default (small) — 1 CPU · 2 Gi');
 	});
@@ -33,6 +36,8 @@ describe('compute profile presentation', () => {
 	it('keeps unknown resources distinct from equality', () => {
 		expect(compareComputeResources({ cpu: 1 }, { cpu: 1 })).toBe('same');
 		expect(compareComputeResources({ cpu: 1 }, { cpu: 2 })).toBe('different');
+		expect(compareComputeResources({ gpu: 'A100' }, { gpu: 'A100:2' })).toBe('different');
+		expect(compareComputeResources({}, { gpu: 'A100' })).toBe('different');
 		expect(compareComputeResources(undefined, { cpu: 2 })).toBe('unknown');
 	});
 

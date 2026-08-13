@@ -288,6 +288,8 @@ components:
           type: number
         memory_bytes:
           type: number
+        gpu:
+          type: string
     ProjectPage:
       type: object
       properties:

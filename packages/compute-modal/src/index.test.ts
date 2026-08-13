@@ -183,7 +183,7 @@ describe('ModalCompute', () => {
 		await makeCompute(world)
 			.create(SANDBOX_ID, {
 				reuse: false,
-				resources: { cpu: 1.5, memoryBytes: 2 * 1024 ** 3 },
+				resources: { cpu: 1.5, memoryBytes: 2 * 1024 ** 3, gpu: 'A100:2' },
 			})
 			.exec('true');
 
@@ -192,6 +192,7 @@ describe('ModalCompute', () => {
 			name: SANDBOX_ID,
 			cpu: 1.5,
 			memoryMiB: 2048,
+			gpu: 'A100:2',
 			encryptedPorts: [2718],
 			idleTimeoutMs: 45 * 60_000,
 			timeoutMs: 24 * 60 * 60_000,
@@ -216,11 +217,13 @@ describe('ModalCompute', () => {
 			cpu: 0.5,
 			memoryMiB: 512,
 		});
+		expect(modalProfileResources({ gpu: 'T4:2' })).toEqual({ gpu: 'T4:2' });
 
 		const world = makeWorld();
 		await makeCompute(world).create(SANDBOX_ID, { reuse: false }).exec('true');
 		expect(world.created[0].options).not.toHaveProperty('cpu');
 		expect(world.created[0].options).not.toHaveProperty('memoryMiB');
+		expect(world.created[0].options).not.toHaveProperty('gpu');
 	});
 
 	it('reattaches by sandbox name when reuse is enabled', async () => {

@@ -59,18 +59,22 @@ model.
 
 ## Compute profiles
 
-Operators can define named CPU and memory profiles in an ordered list:
+Operators can define named CPU, memory, and GPU profiles in an ordered list:
 
 ```bash
-MARIMOHUB_COMPUTE_PROFILES="small:cpu=1;mem=2Gi,large:cpu=8;mem=32Gi"
+MARIMOHUB_COMPUTE_PROFILES="small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100"
 # Optional: let editors choose a profile per notebook.
 MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 ```
 
 - The first profile is the default and applies to every new sandbox. Reordering
   the list changes the default.
-- Profile names are stable identifiers. Renaming is remove-and-add; CPU and
-  memory values under an existing name can be changed freely.
+- GPU values use Modal's `<type>[:<count>]` syntax, such as `A100`, `T4:2`, or
+  `A100-80GB:4`. Modal applies them when creating a sandbox. Other backends
+  ignore GPU values and log a startup warning while continuing to apply CPU and
+  memory values when supported.
+- Profile names are stable identifiers. Renaming is remove-and-add; CPU, memory,
+  and GPU values under an existing name can be changed freely.
 - Changes apply on the next session start. Running kernels keep their current
   resources. The session details show both the running and selected profile
   until the restart.

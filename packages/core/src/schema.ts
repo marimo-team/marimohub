@@ -517,6 +517,7 @@ export function toPublicVersion(version: Version): PublicVersion {
 export const ComputeResourceRecordSchema = z.object({
 	cpu: z.number().optional(),
 	memory_bytes: z.number().optional(),
+	gpu: z.string().optional(),
 });
 
 export type ComputeResourceRecord = z.infer<typeof ComputeResourceRecordSchema>;

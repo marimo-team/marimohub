@@ -69,6 +69,29 @@ describe('createFromEnv auth backend selection', () => {
 		expect(deps.sandbox.computeProfileOverride).toBe('none');
 	});
 
+	it('wires GPU profiles through for Modal', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_COMPUTE_BACKEND: 'modal',
+			MARIMOHUB_COMPUTE_IMAGE: 'ghcr.io/acme/marimo:latest',
+			MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: 'token-id',
+			MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: 'token-secret',
+			MARIMOHUB_COMPUTE_PROFILES: 'gpu:cpu=8;mem=32Gi;gpu=A100:2',
+		});
+		expect(deps.sandbox.resources).toEqual({
+			cpu: 8,
+			memoryBytes: 32 * 1024 ** 3,
+			gpu: 'A100:2',
+		});
+		expect(deps.sandbox.computeProfiles).toEqual([
+			{
+				name: 'gpu',
+				resources: { cpu: 8, memoryBytes: 32 * 1024 ** 3, gpu: 'A100:2' },
+			},
+		]);
+	});
+
 	it('wires a preview service only when an executor is configured', () => {
 		const env = {
 			...baseEnv,
@@ -203,6 +226,23 @@ describe('createFromEnv auth backend selection', () => {
 					String(call[0]).includes('MARIMOHUB_COMPUTE_PROFILE_OVERRIDE'),
 				),
 			).toBe(true);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('warns when a profile-aware backend ignores GPU values', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			const deps = createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_COMPUTE_BACKEND: 'docker',
+				MARIMOHUB_COMPUTE_PROFILES: 'gpu:cpu=8;gpu=A100',
+			});
+			expect(warn.mock.calls.some((call) => String(call[0]).includes('profile GPUs'))).toBe(true);
+			expect(deps.sandbox.resources).toEqual({ cpu: 8 });
+			expect(deps.sandbox.computeProfiles).toEqual([{ name: 'gpu', resources: { cpu: 8 } }]);
 		} finally {
 			warn.mockRestore();
 		}
