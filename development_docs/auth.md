@@ -62,8 +62,9 @@ provider logout endpoint.
 register byte-for-byte. The issuer, redirect URI, and discovered authorization
 and logout endpoints must use HTTPS and cannot contain credentials.
 
-`trusted-issuer` applies only when all email domains are allowed. A domain
-allowlist always requires `email_verified: true`.
+`trusted-issuer` permits an omitted `email_verified` claim, including when a
+domain allowlist is active. Any present value other than boolean `true` is
+rejected.
 
 **Cookies**: `mh_session` is an issuer-, audience-, and type-bound HS256 JWT.
 It is HttpOnly, Secure, and SameSite=Lax. Its default lifetime is 8 hours, or

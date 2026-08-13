@@ -68,9 +68,9 @@ export interface OidcConfig {
 	/**
 	 * Lowercase email domains allowed to sign in (e.g. `['marimo.io']`). When set
 	 * and non-empty, the callback rejects any user whose `email` is not under one
-	 * of these domains, and additionally requires the `email_verified` claim to be
-	 * true (so a domain can't be spoofed via an unverified address). When exactly
-	 * one domain is configured, it is also passed to the provider as the `hd`
+	 * of these domains. Email verification follows `emailVerification`: a present
+	 * claim must be true, while `trusted-issuer` permits omission. When exactly one
+	 * domain is configured, it is also passed to the provider as the `hd`
 	 * (hosted-domain) hint — a Google UX nudge, NOT a security boundary; the
 	 * callback check is what actually enforces the restriction. Empty/undefined
 	 * means any successfully-authenticated account is accepted.
@@ -672,13 +672,18 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		if (!validEmail(identityClaims.email)) return callbackError(c, 'auth_failed', returnTo);
 		const email = identityClaims.email;
 		const emailVerified = identityClaims.email_verified;
+		const emailVerificationClaims = [claims.email_verified, userInfo?.email_verified];
 
-		// Email participates in project authorization, so a present verification
-		// claim must be exactly true. Only omission is covered by trusted-issuer.
-		if (emailVerified !== undefined && emailVerified !== true) {
+		// Email participates in project authorization, so every validated source
+		// that provides a verification claim must set it to exactly true.
+		if (
+			emailVerificationClaims.some(
+				(verification) => verification !== undefined && verification !== true,
+			)
+		) {
 			return callbackError(c, 'email_not_verified', returnTo);
 		}
-		if ((emailVerification === 'required' || restrictDomains) && emailVerified !== true) {
+		if (emailVerification === 'required' && emailVerified !== true) {
 			return callbackError(c, 'email_not_verified', returnTo);
 		}
 
