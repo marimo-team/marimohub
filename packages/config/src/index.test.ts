@@ -77,17 +77,17 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_DATA_BROWSER: 'full',
 			MARIMOHUB_DATA_PREVIEW_IMAGE: 'preview-image',
 		};
-		expect(createFromEnv({ ...env, MARIMOHUB_COMPUTE_BACKEND: 'local' }).dataBrowser).toEqual({
-			preview: true,
-		});
-		expect(
-			createFromEnv({
-				...env,
-				MARIMOHUB_COMPUTE_BACKEND: 'e2b',
-				MARIMOHUB_COMPUTE_E2B_API_KEY: 'test-key',
-				MARIMOHUB_COMPUTE_E2B_TEMPLATE: 'base-template',
-			}).dataBrowser,
-		).toEqual({ preview: true });
+		const local = createFromEnv({ ...env, MARIMOHUB_COMPUTE_BACKEND: 'local' }).dataBrowser;
+		expect(local).toMatchObject({ preview: true });
+		expect(local?.checkPreview).toBeUndefined();
+		const e2b = createFromEnv({
+			...env,
+			MARIMOHUB_COMPUTE_BACKEND: 'e2b',
+			MARIMOHUB_COMPUTE_E2B_API_KEY: 'test-key',
+			MARIMOHUB_COMPUTE_E2B_TEMPLATE: 'base-template',
+		}).dataBrowser;
+		expect(e2b).toMatchObject({ preview: true });
+		expect(e2b?.checkPreview).toBeUndefined();
 
 		const preview = createFromEnv({
 			...env,
@@ -104,7 +104,9 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_DATA_BROWSER: 'full',
 		};
-		expect(createFromEnv(env).dataBrowser).toEqual({ preview: true });
+		const withoutExperiment = createFromEnv(env).dataBrowser;
+		expect(withoutExperiment).toMatchObject({ preview: true });
+		expect(withoutExperiment?.checkPreview).toBeUndefined();
 
 		const deps = createFromEnv({
 			...env,

@@ -12,9 +12,8 @@ import {
 	UnavailableError,
 	zSecret,
 } from '@marimo-hub/core';
-import type { ObjectBrowser } from '@marimo-hub/core';
+import type { ObjectBrowser, PythonPreviewProgram, TablePreview } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
-import type { PythonPreviewProgram, TablePreview } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 import { clearObjectCredentialCacheForTests } from './objectBrowse';

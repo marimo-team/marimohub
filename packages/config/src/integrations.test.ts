@@ -206,7 +206,8 @@ describe('makeIntegrations data browser', () => {
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
 			new MemoryBucket(),
 		);
-		expect(without.dataBrowser).toEqual({ preview: true });
+		expect(without.dataBrowser).toMatchObject({ preview: true });
+		expect(without.dataBrowser?.checkPreview).toBeUndefined();
 		const withRuntime = makeIntegrations(
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
 			new MemoryBucket(),

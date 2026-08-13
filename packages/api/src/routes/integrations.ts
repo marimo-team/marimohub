@@ -1463,10 +1463,7 @@ app.openapi(browseCapability, async (c) => {
 		iid,
 		c.req.raw.signal,
 	);
-	const tablePreview =
-		preview &&
-		capability.metadata &&
-		(capability.hub_preview || deps.dataBrowser?.sandboxPreview?.available() === true);
+	const tablePreview = preview && capability.metadata && capability.hub_preview;
 	return c.json(
 		{
 			success: true,
