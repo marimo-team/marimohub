@@ -24,6 +24,17 @@ describe('WideEventMetrics', () => {
 		expect(metrics.collect()).toMatchObject({ 'gauge.live_sessions': 8 });
 	});
 
+	it('summarizes histogram observations', () => {
+		const metrics = new WideEventMetrics();
+		metrics.histogram('object_browser.latency_ms', 4);
+		metrics.histogram('object_browser.latency_ms', 10);
+		expect(metrics.collect()).toMatchObject({
+			'histogram.object_browser.latency_ms.count': 2,
+			'histogram.object_browser.latency_ms.sum': 14,
+			'histogram.object_browser.latency_ms.max': 10,
+		});
+	});
+
 	it('flattens counters and gauges under prefixed keys', () => {
 		const metrics = new WideEventMetrics();
 		metrics.increment('a');
@@ -76,9 +87,27 @@ describe('OtelMetrics', () => {
 		expect(byName.get('sessions.live')?.dataPoints[0]?.value).toBe(2);
 		await provider.shutdown();
 	});
+
+	it('records histogram distributions with tags', async () => {
+		const { exporter, provider, metrics } = setup();
+		metrics.histogram('object_browser.s3.latency_ms', 12, { operation: 'list_objects' });
+		metrics.histogram('object_browser.s3.latency_ms', 20, { operation: 'list_objects' });
+
+		const byName = await collect(provider, exporter);
+		const point = byName.get('object_browser.s3.latency_ms')?.dataPoints[0];
+		expect(point?.attributes).toEqual({ operation: 'list_objects' });
+		expect(point?.value).toMatchObject({ count: 2, sum: 32 });
+		await provider.shutdown();
+	});
 });
 
 describe('fanoutMetrics', () => {
+	it('omits histogram support when no target implements it', () => {
+		const target: Metrics = { increment: vi.fn(), gauge: vi.fn() };
+
+		expect(fanoutMetrics(target).histogram).toBeUndefined();
+	});
+
 	it('forwards every call to all targets', () => {
 		const target: Metrics = { increment: vi.fn(), gauge: vi.fn() };
 		const wide = new WideEventMetrics();
@@ -86,12 +115,16 @@ describe('fanoutMetrics', () => {
 
 		fan.increment('catalog.cas.conflict', 2, { source: 'test' });
 		fan.gauge('sessions.live', 7);
+		fan.histogram?.('object_browser.latency_ms', 12, { operation: 'list_objects' });
 
 		expect(target.increment).toHaveBeenCalledWith('catalog.cas.conflict', 2, { source: 'test' });
 		expect(target.gauge).toHaveBeenCalledWith('sessions.live', 7, undefined);
 		expect(wide.collect()).toEqual({
 			'counter.catalog.cas.conflict': 2,
 			'gauge.sessions.live': 7,
+			'histogram.object_browser.latency_ms.count': 1,
+			'histogram.object_browser.latency_ms.max': 12,
+			'histogram.object_browser.latency_ms.sum': 12,
 		});
 	});
 });

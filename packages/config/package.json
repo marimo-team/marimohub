@@ -46,6 +46,7 @@
 		"hono": "catalog:"
 	},
 	"devDependencies": {
+		"@aws-sdk/client-s3": "catalog:",
 		"@marimo-hub/tsconfig": "workspace:*",
 		"@types/node": "catalog:",
 		"typescript": "catalog:",

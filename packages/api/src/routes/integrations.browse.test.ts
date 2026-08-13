@@ -391,6 +391,35 @@ describe('Data browser routes', () => {
 		expect(versions.items).toEqual([expect.objectContaining({ version_id: 'v1' })]);
 	});
 
+	it('reports low-cardinality object metadata cache outcomes', async () => {
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		(deps as typeof deps & { metrics: typeof metrics }).metrics = metrics;
+		request = createTestApi({ bucket, userId: ACTOR, deps }).request;
+		const pid = await createProject();
+		const created = await createObjectStore(pid);
+		const url = `/projects/${pid}/integrations/${created.id}/browse/objects?bucket=lake`;
+
+		await expectOk(await request('GET', url));
+		await expectOk(await request('GET', url));
+		await expectOk(await request('GET', `${url}&fresh=true`));
+
+		expect(metrics.increment).toHaveBeenCalledWith('object_browser.cache.requests', 1, {
+			operation: 'list_objects',
+			outcome: 'miss',
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('object_browser.cache.requests', 1, {
+			operation: 'list_objects',
+			outcome: 'hit',
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('object_browser.cache.requests', 1, {
+			operation: 'list_objects',
+			outcome: 'refresh',
+		});
+		for (const call of metrics.increment.mock.calls) {
+			expect(JSON.stringify(call[2])).not.toMatch(/lake|proj-|intg-|user-/);
+		}
+	});
+
 	it('reports bounded search progress and rejects inconsistent filters', async () => {
 		const pid = await createProject();
 		const created = await createObjectStore(pid);
@@ -560,6 +589,46 @@ describe('Data browser routes', () => {
 		const afterCancel = await request('GET', url);
 		expect(afterCancel.status).toBe(200);
 		expect(await afterCancel.text()).toBe('hello object');
+	});
+
+	it('reports download timeouts separately from downstream cancellations', async () => {
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		(deps as typeof deps & { metrics: typeof metrics }).metrics = metrics;
+		request = createTestApi({ bucket, userId: ACTOR, deps }).request;
+		const canceledWith = vi.fn();
+		vi.spyOn(objectBrowser, 'openObject').mockResolvedValueOnce({
+			body: new ReadableStream({ cancel: canceledWith }),
+			status: 200,
+			content_type: 'text/plain',
+			content_length: 12,
+			total_size: 12,
+			close: () => {},
+		});
+		const pid = await createProject();
+		const created = await createObjectStore(pid);
+		deps.dataBrowser.objectBrowser.downloadTimeoutMs = Millis.of(5);
+		const url = `/projects/${pid}/integrations/${created.id}/browse/objects/content?bucket=lake&key=events.jsonl`;
+
+		const timedOut = await request('GET', url);
+		await vi.waitFor(() =>
+			expect(metrics.increment).toHaveBeenCalledWith('object_browser.download.timeouts', 1, {
+				operation: 'download',
+			}),
+		);
+		await vi.waitFor(() =>
+			expect(canceledWith).toHaveBeenCalledWith(expect.objectContaining({ name: 'TimeoutError' })),
+		);
+		expect(metrics.increment).not.toHaveBeenCalledWith('object_browser.download.cancellations', 1, {
+			operation: 'download',
+		});
+		await timedOut.body?.cancel().catch(() => {});
+
+		deps.dataBrowser.objectBrowser.downloadTimeoutMs = Millis.of(60_000);
+		const canceled = await request('GET', url);
+		await canceled.body?.cancel();
+		expect(metrics.increment).toHaveBeenCalledWith('object_browser.download.cancellations', 1, {
+			operation: 'download',
+		});
 	});
 
 	it('rejects malformed ranges and overlong keys before opening content', async () => {

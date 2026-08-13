@@ -419,6 +419,7 @@ export function createFromEnv(
 	const dataPreview = dataPreviewFromEnv(env, compute, computeBackendValue, experiments);
 	const deps: ApiDeps = {
 		services,
+		metrics,
 		bucket,
 		notifier: makeNotifier(env, metrics),
 		projectAlerts,

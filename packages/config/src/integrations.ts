@@ -57,6 +57,7 @@ export function makeIntegrations(
 					return {
 						s3: new S3ObjectBrowser({
 							mode: dataBrowser,
+							metrics,
 							resolveHost: createGuardedHostResolver({
 								allowPrivate: policy === 'private',
 								timeoutMs: deadlines.resolveTimeoutMs,

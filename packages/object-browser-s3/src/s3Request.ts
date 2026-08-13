@@ -27,7 +27,12 @@ export async function withS3Client<T>(
 	context: ObjectBrowseContext,
 	run: (client: S3ClientLike) => Promise<T>,
 ): Promise<T> {
-	const client = clientFactory(source, context);
+	let client: S3ClientLike;
+	try {
+		client = clientFactory(source, context);
+	} catch (error) {
+		throw mapS3Error(error);
+	}
 	try {
 		return await run(client);
 	} finally {
