@@ -108,8 +108,8 @@ revokes their access.
 
 The login email grants access, so OIDC requires `email_verified: true` by
 default. `trusted-issuer` permits an enterprise issuer to omit the claim. Any
-present value other than boolean `true` is rejected. A domain allowlist always
-requires boolean `true`, even under `trusted-issuer`.
+present value other than boolean `true` is rejected. This policy also applies
+when a domain allowlist is active.
 
 Invite emails are PII of people who never signed in: the members list and
 project detail show them only to project managers (and to the invitee themself).

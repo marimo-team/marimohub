@@ -68,9 +68,9 @@ export interface OidcConfig {
 	/**
 	 * Lowercase email domains allowed to sign in (e.g. `['marimo.io']`). When set
 	 * and non-empty, the callback rejects any user whose `email` is not under one
-	 * of these domains, and additionally requires the `email_verified` claim to be
-	 * true (so a domain can't be spoofed via an unverified address). When exactly
-	 * one domain is configured, it is also passed to the provider as the `hd`
+	 * of these domains. Email verification follows `emailVerification`: a present
+	 * claim must be true, while `trusted-issuer` permits omission. When exactly one
+	 * domain is configured, it is also passed to the provider as the `hd`
 	 * (hosted-domain) hint — a Google UX nudge, NOT a security boundary; the
 	 * callback check is what actually enforces the restriction. Empty/undefined
 	 * means any successfully-authenticated account is accepted.
@@ -678,7 +678,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		if (emailVerified !== undefined && emailVerified !== true) {
 			return callbackError(c, 'email_not_verified', returnTo);
 		}
-		if ((emailVerification === 'required' || restrictDomains) && emailVerified !== true) {
+		if (emailVerification === 'required' && emailVerified !== true) {
 			return callbackError(c, 'email_not_verified', returnTo);
 		}
 

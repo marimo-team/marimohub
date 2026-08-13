@@ -23,8 +23,8 @@ or more domains, or set <code>*</code> to allow all.</p>
 UserInfo must have the same <code>sub</code> as the validated ID token. Email verification
 is required by default. If a trusted issuer omits <code>email_verified</code>, use
 <code>MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION=trusted-issuer</code>. Any present value other
-than boolean <code>true</code> is invalid. A domain allowlist always requires boolean
-<code>true</code>, even under <code>trusted-issuer</code>.</p>
+than boolean <code>true</code> is invalid. This policy also applies when a domain allowlist
+is active.</p>
 <p>The signed session JWT has a 3,800-byte limit. If necessary, marimohub omits the
 profile picture first and the display name second. Required identity and
 authorization claims are never omitted. Login fails if they exceed the limit.</p>
