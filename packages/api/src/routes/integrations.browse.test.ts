@@ -47,7 +47,14 @@ const browsyKind = defineIntegration({
 	}),
 	render: () => ({}),
 	query: {
-		available: () => ({ ok: true }),
+		available: (config) =>
+			config.mode === 'open'
+				? { ok: true }
+				: {
+						ok: false,
+						reason:
+							'guarded catalog and object-store HTTP brokering is not available in DuckDB-Wasm',
+					},
 		plan: () => ({ setup: [] }),
 	},
 	browse: {
@@ -428,6 +435,33 @@ describe('Data browser routes', () => {
 					reason: 'Run SQL is not enabled on this deployment.',
 				},
 			},
+		});
+	});
+
+	it('logs a server warning when Run SQL is unavailable', async () => {
+		const pid = await createProject();
+		const created = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 'browsy',
+				name: 'blocked-query',
+				config: { mode: 'sandbox_only', token: 'tok' },
+			}),
+			201,
+		);
+		const queryDeps = browserDeps(bucket, undefined, queryService([]));
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+		await expectOk(await query('GET', `/projects/${pid}/integrations/${created.id}/browse`));
+
+		expect(log).toHaveBeenCalledOnce();
+		expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+			level: 'warn',
+			event: 'integration_query_unavailable',
+			project_id: pid,
+			integration_id: created.id,
+			reason: 'guarded catalog and object-store HTTP brokering is not available in DuckDB-Wasm',
 		});
 	});
 

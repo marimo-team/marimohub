@@ -1,6 +1,6 @@
 <!-- GENERATED from internal/schemas/integrations.yml — do not edit; run `pnpm schemas:generate`. -->
 
-<span style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:#0078D4;vertical-align:-1px"></span> `azure_blob` · storage · config schema v1
+<span style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:#0078D4;vertical-align:-1px"></span> `azure_blob` · storage · config schema v1 · connection test supported
 
 **Notebook packages:** `adlfs>=2024.7`, `azure-storage-blob>=12.22`, `azure-identity>=1.17`
 

@@ -57,7 +57,7 @@ paths:
       - auth.sas_token
       - auth.connection_string
       - auth.client_secret
-    x-supports-test: false
+    x-supports-test: true
     x-requirements:
       - adlfs>=2024.7
       - azure-storage-blob>=12.22
@@ -245,7 +245,7 @@ paths:
     x-brand-icon: googlecloudstorage
     x-secret-paths:
       - auth.credentials_json
-    x-supports-test: false
+    x-supports-test: true
     x-requirements:
       - gcsfs>=2024.6
       - google-cloud-storage>=2.18
@@ -834,7 +834,7 @@ paths:
       - auth.access_key_id
       - auth.secret_access_key
       - auth.session_token
-    x-supports-test: false
+    x-supports-test: true
     x-requirements:
       - boto3>=1.35
       - s3fs>=2024.6

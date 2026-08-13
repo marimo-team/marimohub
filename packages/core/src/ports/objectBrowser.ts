@@ -63,7 +63,7 @@ export interface S3FederationContext {
 }
 
 export interface ObjectBrowseContext {
-	project_id: ProjectId;
+	project_id?: ProjectId;
 	user_id: UserId;
 	user_email: string;
 	federation?: S3FederationContext;
