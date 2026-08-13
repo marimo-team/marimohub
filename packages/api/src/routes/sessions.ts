@@ -1035,13 +1035,6 @@ app.openapi(createSession, async (c) => {
 	// In subdomain mode clientUrl === url and originUrl is unset.
 	let clientUrl = '';
 	let originUrl: string | undefined;
-	// After the reuse/cap short-circuits on purpose: the synced-entry GET is
-	// only worth paying when a sandbox is actually provisioned.
-	const resolvedLaunchStrategy = await resolveLaunchStrategyForSession({
-		entryNotebook: workspacePolicy.entryNotebook,
-		workspacePrefix,
-		bucket: bucketHandle,
-	});
 	const observer = logObserver({
 		event: 'session_provision',
 		sandbox_id: sandboxId,
@@ -1050,8 +1043,6 @@ app.openapi(createSession, async (c) => {
 		user_id: user.id,
 		mode,
 	});
-	observer.tag('launch_strategy', resolvedLaunchStrategy.strategy);
-	observer.tag('launch_strategy_detection_failed', resolvedLaunchStrategy.detectionFailed);
 	try {
 		await saga(observer)
 			.step('session_record', async () => {
@@ -1240,7 +1231,19 @@ app.openapi(createSession, async (c) => {
 					const sessionEnv = resolveSessionEnv();
 					void sessionEnv.catch(() => {});
 
+					// Inside this step on purpose: only a create that survived the reuse
+					// fast path and cap_recheck pays the synced-entry GET. Never rejects
+					// (a failed read falls back to the default strategy).
+					const launchStrategyPromise = resolveLaunchStrategyForSession({
+						entryNotebook: workspacePolicy.entryNotebook,
+						workspacePrefix,
+						bucket: bucketHandle,
+					});
+
 					const { baseUrl } = await sandboxExposure.prepare(exposureCtx);
+					const resolvedLaunchStrategy = await launchStrategyPromise;
+					observer.tag('launch_strategy', resolvedLaunchStrategy.strategy);
+					observer.tag('launch_strategy_detection_failed', resolvedLaunchStrategy.detectionFailed);
 
 					const provisionResult = await provisioner.provision({
 						sandboxId,

@@ -80,9 +80,11 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 // conflict with --no-compile-bytecode). `|| true` never blocks launch.
 const PYPROJECT_LAYER_SETUP = `if python3 -c "import tomllib,sys;sys.exit(0 if tomllib.load(open('pyproject.toml','rb')).get('project',{}).get('dependencies') else 1)" 2>/dev/null; then uv sync --inexact --no-compile-bytecode --no-build || true; elif ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then { rm -f pyproject.toml && uv init --vcs none --name notebook --description "Built in marimohub"; } || true; fi`;
 
-// Outside the workspace: keeps the marimo file browser clean and can't clobber
-// a synced repo's own requirements.txt.
-const SCRIPT_REQUIREMENTS = '/tmp/marimohub-script-requirements.txt';
+// Outside the workspace (keeps the marimo file browser clean, can't clobber a
+// synced repo's own requirements.txt) and unique per launch shell: `$$` is the
+// PID of the single `sh -c` the setup runs in, so local sandboxes — which
+// share the host /tmp — can't clobber each other between export and install.
+const SCRIPT_REQUIREMENTS = '/tmp/marimohub-script-requirements-$$.txt';
 
 // The env the kernel's `uv run --no-sync` will use — uv resolves the project
 // env as UV_PROJECT_ENVIRONMENT, else `.venv` in the project dir. Deliberately

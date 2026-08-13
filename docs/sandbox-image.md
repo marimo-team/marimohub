@@ -59,21 +59,21 @@ uv sync --inexact --no-compile-bytecode   # add the notebook's deps to the base 
 uv run --no-sync marimo edit notebook.py --headless --no-token --host 0.0.0.0 --port 2718
 ```
 
-For a git-synced notebook whose entry file declares
-[PEP 723](https://peps.python.org/pep-0723/) inline metadata, two more setup
-commands run between the sync and the launch, installing the declared pins on
-top of the base env:
+If a git-synced notebook's entry file contains
+[PEP 723](https://peps.python.org/pep-0723/) inline metadata, marimohub runs three
+more setup commands. These commands run after the project sync and install the
+inline dependencies into the base environment:
 
 ```sh
-uv export --script notebook.py --format requirements-txt --no-hashes -o /tmp/marimohub-script-requirements.txt
+uv export --script notebook.py --format requirements-txt --no-hashes -o /tmp/marimohub-script-requirements-$$.txt
 [ -d "${UV_PROJECT_ENVIRONMENT:-.venv}" ] || uv venv "${UV_PROJECT_ENVIRONMENT:-.venv}"
-uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" --no-build -r /tmp/marimohub-script-requirements.txt
+uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" --no-build -r /tmp/marimohub-script-requirements-$$.txt
 ```
 
-Unlike the lenient pyproject sync, a failed pin install fails the session —
-declared pins are never silently ignored. A notebook pinning `marimo` itself
-replaces the image's pinned marimo for that sandbox, which can mismatch a
-CDN-served frontend (`--asset-url`).
+A failed project sync does not stop the session. In contrast, a failure in these
+three commands stops the session, so marimohub never ignores inline dependencies.
+If the metadata pins `marimo`, it replaces the image's version for that sandbox.
+The replacement can be incompatible with a frontend served through `--asset-url`.
 
 So your image must provide:
 

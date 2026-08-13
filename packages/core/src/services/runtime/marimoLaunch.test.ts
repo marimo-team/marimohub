@@ -85,10 +85,13 @@ describe('buildMarimoLaunch', () => {
 			expect(plan.start).toMatch(/^uv run --no-sync marimo /);
 		});
 
-		it('shares one requirements file, outside the workspace', () => {
+		it('shares one per-launch requirements file, outside the workspace', () => {
 			const [, exportCmd, , installCmd] = plan.setup;
 			const [, exportTarget] = /-o (\S+)/.exec(exportCmd) ?? [];
 			expect(exportTarget).toMatch(/^\/tmp\//);
+			// `$$` (the launch shell's PID) keeps concurrent local sandboxes, which
+			// share the host /tmp, from clobbering each other's export.
+			expect(exportTarget).toContain('$$');
 			expect(installCmd).toContain(`-r ${exportTarget}`);
 		});
 

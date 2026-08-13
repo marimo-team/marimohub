@@ -255,20 +255,20 @@ Returns a fresh `sync_url` + `sync_token`.
 
 ## Dependencies
 
-A session's environment is built from what the push contained, layered onto the
-sandbox image's pre-installed base:
+A session environment starts with the packages in the sandbox image. marimohub
+then applies dependency sources from the pushed archive in this order:
 
-- A `pyproject.toml` at the synced root is applied with `uv sync --inexact` —
-  its dependencies are added to the base environment. This layer is lenient: a
-  broken pyproject falls back to the base environment.
+- If the synced root contains `pyproject.toml`, `uv sync --inexact` adds its
+  dependencies to the base environment. If this command fails, the session
+  continues with the base environment.
 - [PEP 723](https://peps.python.org/pep-0723/) inline metadata
-  (`# /// script … # ///`) in the entry notebook is detected automatically and
-  installed on top via `uv export --script` + `uv pip install`. This layer is
-  strict: an unsatisfiable pin fails the session with uv's resolver error
-  (declared pins are never silently ignored).
+  (`# /// script … # ///`) in the entry notebook adds another dependency layer.
+  marimohub installs these dependencies with `uv export --script` and
+  `uv pip install`. If uv cannot resolve them, the session fails.
 
-Both compose — the inline pins are applied last, so they win on conflicts. No
-configuration is needed; the strategy is inferred per notebook at session start.
+If both sources declare the same package, the inline metadata takes precedence.
+No configuration is necessary. marimohub selects the dependency strategy when
+the session starts.
 
 ## Read-only sessions
 
