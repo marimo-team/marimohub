@@ -7,7 +7,9 @@ import {
 	detectRasterImage,
 	encodeCursor,
 	guardObjectStream,
+	matchesObjectSearchFilters,
 	previewObject,
+	toWebStream,
 } from './index';
 
 const context: ObjectBrowseContext = {
@@ -21,8 +23,43 @@ describe('provider-neutral object-browser utilities', () => {
 	it('round-trips opaque cursors and rejects malformed or unknown fields', () => {
 		const cursor = encodeCursor({ token: 'opaque/値' });
 		expect(decodeCursor(cursor, ['token'])).toEqual({ token: 'opaque/値' });
+		expect(decodeCursor(encodeCursor({ v: 2, token: 'safe' }), ['token'])).toEqual({
+			token: 'safe',
+		});
 		expect(() => decodeCursor('!', ['token'])).toThrow(/cursor/);
 		expect(() => decodeCursor(encodeCursor({ secret: 'value' }), ['token'])).toThrow(/cursor/);
+	});
+
+	it('closes async iterators after a body read fails', async () => {
+		const failure = new Error('provider failure');
+		let returned = false;
+		const body = toWebStream({
+			[Symbol.asyncIterator]() {
+				return {
+					next: async () => {
+						throw failure;
+					},
+					return: async () => {
+						returned = true;
+						return { done: true, value: undefined };
+					},
+				};
+			},
+		});
+		await expect(body.getReader().read()).rejects.toBe(failure);
+		expect(returned).toBe(true);
+	});
+
+	it('excludes objects without modification timestamps from bounded searches', () => {
+		const entry = { kind: 'object' as const, key: 'record.csv', name: 'record.csv' };
+		expect(
+			matchesObjectSearchFilters(entry, {
+				bucket: 'lake',
+				query: 'record',
+				limit: 10,
+				modified_before: '2026-08-13T00:00:00Z',
+			}),
+		).toBe(false);
 	});
 
 	it('recognizes only raster magic bytes', () => {

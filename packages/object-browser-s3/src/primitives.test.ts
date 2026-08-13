@@ -2,12 +2,18 @@ import { Readable } from 'node:stream';
 import { ALL, V4MAPPED } from 'node:dns';
 import { describe, expect, it, vi } from 'vitest';
 import { ObjectBrowseError } from '@marimo-hub/core';
+import {
+	assertBucket,
+	assertObjectIdentity,
+	decodeCursor,
+	detectRasterImage,
+	encodeCursor,
+	rasterContentType,
+	readBoundedBody,
+	toWebStream,
+} from '@marimo-hub/object-browser-commons';
 import { createGuardedLookup, endpointsMatch, enforcedTimeouts } from './client';
-import { decodeCursor, encodeCursor } from './cursors';
 import { mapS3Error } from './errors';
-import { detectRasterImage, rasterContentType } from './formats';
-import { readBoundedBody, toWebStream } from './streams';
-import { assertBucket, assertObjectIdentity } from './validation';
 
 describe('cursor encoding', () => {
 	it('round trips opaque values and treats an absent cursor as empty', () => {

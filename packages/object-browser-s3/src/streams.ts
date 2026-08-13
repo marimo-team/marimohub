@@ -1,1 +1,1 @@
-export { arrayBuffer, readBoundedBody, toWebStream } from '@marimo-hub/object-browser-commons';
+export { readBoundedBody, toWebStream } from '@marimo-hub/object-browser-commons';

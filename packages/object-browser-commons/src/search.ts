@@ -16,8 +16,7 @@ export function matchesObjectSearchFilters(
 	}
 	if (
 		filters.modified_before &&
-		entry.last_modified &&
-		Date.parse(entry.last_modified) > Date.parse(filters.modified_before)
+		(!entry.last_modified || Date.parse(entry.last_modified) > Date.parse(filters.modified_before))
 	) {
 		return false;
 	}

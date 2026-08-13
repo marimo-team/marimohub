@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { GoogleAuth } from 'google-auth-library';
 import { importPKCS8, SignJWT } from 'jose';
 import type { GcsObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
 import { ObjectBrowseError } from '@marimo-hub/core';
@@ -35,18 +35,18 @@ export function parseServiceAccount(raw: string): GcsServiceAccount {
 
 export class GcsAuth {
 	private cached?: { token: string; expires_at: number };
-	private ambientAccount?: GcsServiceAccount;
-	private ambientLoaded = false;
+	private ambientAuth?: GoogleAuth;
 
 	constructor(
 		private readonly source: GcsObjectStoreSource,
 		private readonly context: ObjectBrowseContext,
 		private readonly fetchImpl: typeof fetch,
+		private readonly useStandardAdc = true,
 	) {}
 
 	async projectId(): Promise<string | undefined> {
 		if (this.source.project_id) return this.source.project_id;
-		const account = await this.account();
+		const account = this.account();
 		if (account?.project_id) return account.project_id;
 		if (this.source.auth.method !== 'ambient') return undefined;
 		if (!this.context.allow_server_ambient.gcs) {
@@ -57,6 +57,16 @@ export class GcsAuth {
 		}
 		const environment = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
 		if (environment) return environment;
+		if (this.useStandardAdc) {
+			try {
+				return await abortable(this.googleAuth().getProjectId(), this.context.signal);
+			} catch (error) {
+				if ((error as { name?: unknown } | null)?.name === 'AbortError') {
+					throw new ObjectBrowseError('aborted', 'The request was canceled.');
+				}
+				return undefined;
+			}
+		}
 		try {
 			const response = await this.fetchImpl(METADATA_PROJECT, {
 				headers: { 'Metadata-Flavor': 'Google' },
@@ -75,13 +85,28 @@ export class GcsAuth {
 
 	private async token(): Promise<string> {
 		if (this.cached && this.cached.expires_at > Date.now() + 60_000) return this.cached.token;
-		const account = await this.account();
+		const account = this.account();
 		if (account) return this.serviceAccountToken(account);
 		if (!this.context.allow_server_ambient.gcs) {
 			throw new ObjectBrowseError(
 				'access_denied',
 				'Ambient GCS access is not enabled for this integration.',
 			);
+		}
+		if (this.useStandardAdc) {
+			try {
+				const token = await abortable(this.googleAuth().getAccessToken(), this.context.signal);
+				if (!token) throw new Error('missing token');
+				return token;
+			} catch (error) {
+				if ((error as { name?: unknown } | null)?.name === 'AbortError') {
+					throw new ObjectBrowseError('aborted', 'The request was canceled.');
+				}
+				throw new ObjectBrowseError(
+					'access_denied',
+					'GCS application credentials are unavailable.',
+				);
+			}
 		}
 		try {
 			const response = await this.fetchImpl(METADATA_TOKEN, {
@@ -110,22 +135,16 @@ export class GcsAuth {
 		}
 	}
 
-	private async account(): Promise<GcsServiceAccount | undefined> {
+	private account(): GcsServiceAccount | undefined {
 		if (this.source.auth.method === 'service_account') {
 			return parseServiceAccount(this.source.auth.credentials_json);
 		}
-		if (!this.context.allow_server_ambient.gcs) return undefined;
-		if (this.ambientLoaded) return this.ambientAccount;
-		this.ambientLoaded = true;
-		const path = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-		if (!path) return undefined;
-		try {
-			this.ambientAccount = parseServiceAccount(await readFile(path, 'utf8'));
-			return this.ambientAccount;
-		} catch (error) {
-			if (error instanceof ObjectBrowseError) throw error;
-			throw new ObjectBrowseError('access_denied', 'GCS application credentials are unavailable.');
-		}
+		return undefined;
+	}
+
+	private googleAuth(): GoogleAuth {
+		this.ambientAuth ??= new GoogleAuth({ scopes: STORAGE_SCOPE });
+		return this.ambientAuth;
 	}
 
 	private async serviceAccountToken(account: GcsServiceAccount): Promise<string> {
@@ -176,4 +195,23 @@ export class GcsAuth {
 			throw new ObjectBrowseError('access_denied', 'GCS authentication failed.');
 		}
 	}
+}
+
+async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return promise;
+	if (signal.aborted) throw new DOMException('The request was canceled.', 'AbortError');
+	return new Promise<T>((resolve, reject) => {
+		const abort = () => reject(new DOMException('The request was canceled.', 'AbortError'));
+		signal.addEventListener('abort', abort, { once: true });
+		void promise.then(
+			(value) => {
+				signal.removeEventListener('abort', abort);
+				resolve(value);
+			},
+			(error: unknown) => {
+				signal.removeEventListener('abort', abort);
+				reject(error instanceof Error ? error : new Error('GCS authentication failed.'));
+			},
+		);
+	});
 }

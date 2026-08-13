@@ -142,7 +142,7 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 				};
 			}
 			return this.metadata(context, async (scoped) => {
-				const auth = new GcsAuth(source, scoped, this.authFetch);
+				const auth = this.auth(source, scoped);
 				const project = await auth.projectId();
 				if (!project) {
 					throw new ObjectBrowseError(
@@ -178,7 +178,7 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 		return this.observe('list_objects', context, async () => {
 			assertBucket(source, request.bucket);
 			return this.metadata(context, async (scoped) => {
-				const auth = new GcsAuth(source, scoped, this.authFetch);
+				const auth = this.auth(source, scoped);
 				const prefix = request.prefix ?? '';
 				const cursor = decodeCursor(request.cursor, ['token']);
 				const params = new URLSearchParams({
@@ -213,7 +213,7 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 		return this.observe('search_objects', context, async () => {
 			assertBucket(source, request.bucket);
 			const result = await this.metadata(context, async (scoped) => {
-				const auth = new GcsAuth(source, scoped, this.authFetch);
+				const auth = this.auth(source, scoped);
 				const cursor = decodeCursor(request.cursor, ['token', 'start_after']);
 				if (cursor.token && cursor.start_after) throw invalidCursor();
 				const prefix = request.prefix ?? '';
@@ -283,7 +283,7 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 					source,
 					scoped,
 					request,
-					new GcsAuth(source, scoped, this.authFetch),
+					this.auth(source, scoped),
 				);
 				return detail(request, object);
 			});
@@ -298,7 +298,13 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 		return this.observe('list_versions', context, async () => {
 			assertObjectIdentity(source, request);
 			return this.metadata(context, async (scoped) => {
-				const auth = new GcsAuth(source, scoped, this.authFetch);
+				const auth = this.auth(source, scoped);
+				let currentGeneration: string | undefined;
+				try {
+					currentGeneration = (await this.metadataObject(source, scoped, request, auth)).generation;
+				} catch (error) {
+					if (!(error instanceof ObjectBrowseError) || error.code !== 'not_found') throw error;
+				}
 				const cursor = decodeCursor(request.cursor, ['token']);
 				const params = new URLSearchParams({
 					prefix: request.key,
@@ -310,12 +316,12 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 				if (page.next && page.next === cursor.token) throw nonAdvancingCursor();
 				const versions = page.items.filter((item) => item.name === request.key);
 				return {
-					items: versions.map((item, index) => ({
+					items: versions.map((item) => ({
 						kind: 'version',
 						bucket: request.bucket,
 						key: request.key,
 						version_id: item.generation!,
-						is_latest: request.cursor === undefined && index === 0,
+						is_latest: item.generation === currentGeneration,
 						last_modified: item.updated,
 						size: safeNumber(item.size),
 						etag: item.etag,
@@ -354,7 +360,7 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 				throw new ObjectBrowseError('access_denied', 'Object downloads are disabled.');
 			}
 			assertObjectIdentity(source, request);
-			const auth = new GcsAuth(source, context, this.authFetch);
+			const auth = this.auth(source, context);
 			let verifiedType: string | undefined;
 			let openRequest = request;
 			if (request.inline) {
@@ -412,7 +418,7 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 	private previewReader(
 		source: GcsObjectStoreSource,
 		context: ObjectBrowseContext,
-		auth = new GcsAuth(source, context, this.authFetch),
+		auth = this.auth(source, context),
 	): ObjectPreviewReader {
 		return {
 			head: async (request, signal) => {
@@ -497,7 +503,7 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 		source: GcsObjectStoreSource,
 		context: ObjectBrowseContext,
 		path: string,
-		auth = new GcsAuth(source, context, this.authFetch),
+		auth = this.auth(source, context),
 	): Promise<unknown> {
 		const response = await this.request(context, `${API_ORIGIN}${path}`, {
 			headers: await auth.headers(),
@@ -513,7 +519,7 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 		source: GcsObjectStoreSource,
 		context: ObjectBrowseContext,
 		request: ObjectOpenRequest,
-		auth = new GcsAuth(source, context, this.authFetch),
+		auth = this.auth(source, context),
 	): Promise<Response> {
 		const params = new URLSearchParams({ alt: 'media' });
 		if (request.version_id) params.set('generation', request.version_id);
@@ -552,6 +558,10 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 		run: (context: ObjectBrowseContext) => Promise<T>,
 	): Promise<T> {
 		return withOperationDeadline(context, this.limits.metadataTimeoutMs, run);
+	}
+
+	private auth(source: GcsObjectStoreSource, context: ObjectBrowseContext): GcsAuth {
+		return new GcsAuth(source, context, this.authFetch, this.options.fetchImpl === undefined);
 	}
 
 	private observe<T>(

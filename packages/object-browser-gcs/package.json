@@ -20,6 +20,7 @@
 	"dependencies": {
 		"@marimo-hub/core": "workspace:*",
 		"@marimo-hub/object-browser-commons": "workspace:*",
+		"google-auth-library": "catalog:",
 		"jose": "catalog:"
 	},
 	"devDependencies": {

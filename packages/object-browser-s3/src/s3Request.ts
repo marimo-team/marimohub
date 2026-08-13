@@ -1,6 +1,7 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import type { ObjectBrowseContext, ObjectIdentity, S3ObjectStoreSource } from '@marimo-hub/core';
 import { ObjectBrowseError } from '@marimo-hub/core';
+export { withOperationDeadline } from '@marimo-hub/object-browser-commons';
 import type { S3ClientFactory, S3ClientLike } from './client';
 import { mapS3Error } from './errors';
 import { readBoundedBody } from './streams';
@@ -37,24 +38,6 @@ export async function withS3Client<T>(
 		return await run(client);
 	} finally {
 		client.destroy();
-	}
-}
-
-export async function withOperationDeadline<T>(
-	context: ObjectBrowseContext,
-	timeoutMs: number,
-	run: (context: ObjectBrowseContext) => Promise<T>,
-): Promise<T> {
-	const controller = new AbortController();
-	const abort = () => controller.abort();
-	if (context.signal?.aborted) abort();
-	else context.signal?.addEventListener('abort', abort, { once: true });
-	const timer = setTimeout(abort, timeoutMs);
-	try {
-		return await run({ ...context, signal: controller.signal });
-	} finally {
-		clearTimeout(timer);
-		context.signal?.removeEventListener('abort', abort);
 	}
 }
 

@@ -1,7 +1,7 @@
 import { ObjectBrowseError } from '@marimo-hub/core';
 
 export function encodeCursor(value: Record<string, unknown>): string {
-	return Buffer.from(JSON.stringify({ v: 1, ...value }), 'utf8').toString('base64url');
+	return Buffer.from(JSON.stringify({ ...value, v: 1 }), 'utf8').toString('base64url');
 }
 
 export function decodeCursor<const K extends string>(
@@ -26,7 +26,7 @@ export function decodeCursor<const K extends string>(
 			fields.flatMap((field) => (typeof value[field] === 'string' ? [[field, value[field]]] : [])),
 		) as Partial<Record<K, string>>;
 	} catch {
-		throw new ObjectBrowseError('invalid_cursor', 'The object browser cursor is invalid.');
+		throw new ObjectBrowseError('invalid_cursor', 'The object-browser cursor is invalid.');
 	}
 }
 

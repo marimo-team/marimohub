@@ -99,7 +99,7 @@ export const s3 = defineIntegration({
 			};
 		},
 		snippet(instanceName, bucket, key) {
-			const uri = JSON.stringify(`s3://${bucket}/${key}`);
+			const uri = JSON.stringify(objectStoreUri('s3', bucket, key));
 			const descriptor = JSON.stringify(instanceName);
 			const extension = key.split('.').at(-1)?.toLowerCase();
 			if (extension === 'csv') {
@@ -257,7 +257,7 @@ function objectStoreSnippet(
 	bucket: string,
 	key: string,
 ): string {
-	const uri = JSON.stringify(`${scheme}://${bucket}/${key}`);
+	const uri = JSON.stringify(objectStoreUri(scheme, bucket, key));
 	const descriptor = JSON.stringify(instanceName);
 	const extension = key.split('.').at(-1)?.toLowerCase();
 	if (extension === 'csv') {
@@ -273,6 +273,14 @@ function objectStoreSnippet(
 		return `import polars as pl\n\ndf = pl.read_parquet(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
 	}
 	return `import fsspec\n\nwith fsspec.open(${uri}, "rb", marimohub_integration=${descriptor}) as source:\n    data = source.read()`;
+}
+
+function objectStoreUri(scheme: 's3' | 'gs' | 'az', bucket: string, key: string): string {
+	const encodedKey = key
+		.split('/')
+		.map((segment) => encodeURIComponent(segment))
+		.join('/');
+	return `${scheme}://${bucket}/${encodedKey}`;
 }
 
 const azureAuthSchema = z.discriminatedUnion('method', [

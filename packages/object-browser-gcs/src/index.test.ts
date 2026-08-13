@@ -24,7 +24,7 @@ function browser(fetchImpl: typeof fetch) {
 }
 
 describe('GCS object browser', () => {
-	it('maps generations, hierarchy, checksums, and opaque page tokens', async () => {
+	it('maps hierarchy, sizes, and opaque page tokens', async () => {
 		const fetchImpl = async (input: URL | RequestInfo) => {
 			const url = String(input);
 			if (url.includes('metadata.google.internal')) {
@@ -38,8 +38,6 @@ describe('GCS object browser', () => {
 						generation: '7',
 						size: '12',
 						updated: '2026-01-01T00:00:00Z',
-						crc32c: 'crc',
-						md5Hash: 'md5',
 					},
 				],
 				nextPageToken: 'opaque',
@@ -104,10 +102,16 @@ describe('GCS object browser', () => {
 		);
 	});
 
-	it('marks only the first generation on the first page as latest', async () => {
+	it('marks the current generation as latest independently of version pagination', async () => {
+		let tokenRequests = 0;
 		const fetchImpl = async (input: URL | RequestInfo) => {
-			if (String(input).includes('metadata.google.internal')) {
+			const url = String(input);
+			if (url.includes('metadata.google.internal')) {
+				tokenRequests += 1;
 				return Response.json({ access_token: 'token', expires_in: 3600 });
+			}
+			if (url.includes('/o/report.csv') && !url.includes('versions=true')) {
+				return Response.json({ name: 'report.csv', generation: '9', size: '3' });
 			}
 			return Response.json({
 				items: [
@@ -126,6 +130,7 @@ describe('GCS object browser', () => {
 			{ version_id: '9', is_latest: true },
 			{ version_id: '8', is_latest: false },
 		]);
+		expect(tokenRequests).toBe(1);
 	});
 
 	it('keeps ambient authorization provider-specific', () => {

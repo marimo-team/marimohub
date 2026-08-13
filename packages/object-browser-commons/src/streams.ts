@@ -17,14 +17,31 @@ export function toWebStream(body: unknown): ReadableStream<Uint8Array> {
 		throw new ObjectBrowseError('unavailable', 'The object store returned an invalid body.');
 	}
 	const iterator = iterable[Symbol.asyncIterator]();
+	let finished = false;
+	const closeIterator = async (reason?: unknown) => {
+		if (finished) return;
+		finished = true;
+		await iterator.return?.(reason);
+	};
 	return new ReadableStream<Uint8Array>({
 		async pull(controller) {
-			const next = await iterator.next();
-			if (next.done) controller.close();
-			else controller.enqueue(next.value);
+			try {
+				const next = await iterator.next();
+				if (next.done) {
+					finished = true;
+					controller.close();
+				} else {
+					controller.enqueue(next.value);
+				}
+			} catch (error) {
+				try {
+					await closeIterator(error);
+				} catch {}
+				controller.error(error);
+			}
 		},
 		async cancel(reason) {
-			await iterator.return?.(reason);
+			await closeIterator(reason);
 		},
 	});
 }

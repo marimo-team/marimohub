@@ -1425,6 +1425,15 @@ describe('kind renders (golden)', () => {
 		expect(azureBlob.objectBrowse?.snippet('warehouse', 'raw', 'records.parquet')).toContain(
 			'az://raw/records.parquet',
 		);
+		expect(gcs.objectBrowse?.snippet('warehouse', 'lake', 'folder/a ?#%.csv')).toContain(
+			'gs://lake/folder/a%20%3F%23%25.csv',
+		);
+		expect(azureBlob.objectBrowse?.snippet('warehouse', 'raw', 'folder/a ?#%.json')).toContain(
+			'az://raw/folder/a%20%3F%23%25.json',
+		);
+		expect(s3.objectBrowse?.snippet('warehouse', 'lake', 'folder/a ?#%.jsonl')).toContain(
+			's3://lake/folder/a%20%3F%23%25.jsonl',
+		);
 	});
 
 	it('resolves requirements from the selected driver, storage, and authentication branches', () => {

@@ -10,18 +10,19 @@ export type GuardedHostResolver = (
 
 export function createGuardedFetch(resolveHost: GuardedHostResolver): typeof fetch {
 	return (async (input: URL | RequestInfo, init: RequestInit = {}) => {
-		const url =
-			input instanceof URL ? input : new URL(typeof input === 'string' ? input : input.url);
-		const lookup = createLookup(resolveHost, init.signal ?? undefined);
+		const effective = new Request(input, init);
+		const url = new URL(effective.url);
+		const lookup = createLookup(resolveHost, effective.signal);
 		const request = url.protocol === 'http:' ? httpRequest : httpsRequest;
+		const body = effective.body ? new Uint8Array(await effective.arrayBuffer()) : undefined;
 		return new Promise<Response>((resolve, reject) => {
 			const outgoing = request(
 				url,
 				{
-					method: init.method,
-					headers: init.headers as Record<string, string> | undefined,
+					method: effective.method,
+					headers: Object.fromEntries(effective.headers),
 					lookup,
-					signal: init.signal ?? undefined,
+					signal: effective.signal,
 				},
 				(incoming) => {
 					const headers = new Headers();
@@ -29,8 +30,14 @@ export function createGuardedFetch(resolveHost: GuardedHostResolver): typeof fet
 						if (Array.isArray(value)) for (const child of value) headers.append(name, child);
 						else if (value !== undefined) headers.set(name, value);
 					}
+					const responseBody =
+						effective.method === 'HEAD' ||
+						incoming.statusCode === 204 ||
+						incoming.statusCode === 304
+							? null
+							: (Readable.toWeb(incoming) as ReadableStream<Uint8Array>);
 					resolve(
-						new Response(Readable.toWeb(incoming) as ReadableStream<Uint8Array>, {
+						new Response(responseBody, {
 							status: incoming.statusCode ?? 500,
 							statusText: incoming.statusMessage,
 							headers,
@@ -39,7 +46,7 @@ export function createGuardedFetch(resolveHost: GuardedHostResolver): typeof fet
 				},
 			);
 			outgoing.on('error', reject);
-			writeBody(outgoing, init.body);
+			writeBody(outgoing, body);
 		});
 	}) as typeof fetch;
 }
@@ -67,7 +74,13 @@ function createLookup(resolveHost: GuardedHostResolver, signal?: AbortSignal): L
 					cb(null, candidates[0].address, candidates[0].family);
 				}
 			},
-			() => cb(new Error('The object-store hostname is not permitted.')),
+			(error) => {
+				const mapped = new Error('The object-store hostname is not permitted.');
+				if ((error as { name?: unknown } | null)?.name === 'AbortError' || signal?.aborted) {
+					mapped.name = 'AbortError';
+				}
+				cb(mapped);
+			},
 		);
 	}) as LookupFunction;
 }

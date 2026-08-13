@@ -120,10 +120,12 @@ IDs map to `version_id`; accounts without Blob Versions return an empty terminal
 current blobs remain browsable. Soft-deleted blobs are not labeled as S3 delete markers.
 
 Enabling server-ambient browsing gives project editors access through the hub control-plane identity
-for each ambient provider. GCS metadata and Azure Entra token acquisition can therefore expose every
-object that identity may read. Keep this off unless that authority is intended. Provider data-plane
-traffic uses the guarded resolver; Azure authentication remains limited to SDK-managed credentials
-and fixed Entra authority hosts. All browser operations are read-only.
+for each ambient provider. GCS accepts standard ADC service-account, authorized-user,
+external-account, and metadata credentials. GCS external-account and Azure Entra token acquisition
+can therefore expose every object those identities may read. Keep this off unless that authority is
+intended. Provider data-plane traffic uses the guarded resolver. Provider SDKs manage ambient
+control-plane authentication, and Azure Entra traffic is limited to fixed authority hosts. All
+browser operations are read-only.
 
 Custom endpoints use the configured guarded/private integration egress policy. `guarded` rejects
 private, loopback, link-local, metadata, and other reserved targets. Use `private` only when an

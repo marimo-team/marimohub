@@ -3,12 +3,13 @@ import { createProjectId, UserId } from '@marimo-hub/core';
 import type { AzureBlobObjectStoreSource, ObjectBrowseContext } from '@marimo-hub/core';
 import { AzureBlobObjectBrowser } from './index';
 
-const azure = vi.hoisted(() => ({ next: vi.fn() }));
+const azure = vi.hoisted(() => ({ next: vi.fn(), hierarchyNext: vi.fn() }));
 
 vi.mock('./client', () => ({
 	createAzureClient: () => ({
 		getContainerClient: () => ({
 			listBlobsFlat: () => ({ byPage: () => ({ next: azure.next }) }),
+			listBlobsByHierarchy: () => ({ byPage: () => ({ next: azure.hierarchyNext }) }),
 		}),
 	}),
 }));
@@ -31,7 +32,35 @@ const browser = new AzureBlobObjectBrowser({
 	resolveHost: async () => [{ address: '20.60.1.1', family: 4 }],
 });
 
-beforeEach(() => azure.next.mockReset());
+beforeEach(() => {
+	azure.next.mockReset();
+	azure.hierarchyNext.mockReset();
+});
+
+describe('Azure Blob hierarchy', () => {
+	it('suppresses zero-byte directory markers returned with a prefix', async () => {
+		azure.hierarchyNext.mockResolvedValue({
+			done: false,
+			value: {
+				segment: {
+					blobPrefixes: [{ name: 'folder/' }],
+					blobItems: [
+						{ name: 'folder/', properties: { contentLength: 0 } },
+						{ name: 'file.csv', properties: { contentLength: 3 } },
+					],
+				},
+			},
+		});
+		await expect(
+			browser.listObjects(source, context, { bucket: 'raw', limit: 10 }),
+		).resolves.toMatchObject({
+			items: [
+				{ kind: 'object', key: 'file.csv' },
+				{ kind: 'prefix', key: 'folder/' },
+			],
+		});
+	});
+});
 
 describe('Azure Blob versions', () => {
 	it('maps native version IDs and excludes soft-deleted blobs', async () => {

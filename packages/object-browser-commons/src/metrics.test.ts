@@ -49,6 +49,30 @@ describe('provider-neutral object-browser metrics', () => {
 			code: 'access_denied',
 		});
 	});
+
+	it('cancels an unread provider stream before closing its object', async () => {
+		const observer = new ObjectBrowserObserver('gcs', 'full');
+		let canceled = false;
+		const close = vi.fn();
+		const wrapped = observer.observeBody(
+			{
+				body: new ReadableStream({
+					cancel() {
+						canceled = true;
+					},
+				}),
+				status: 200,
+				content_type: 'application/octet-stream',
+				content_length: 1,
+				total_size: 1,
+				close,
+			},
+			0,
+		);
+		wrapped.close();
+		await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+		expect(canceled).toBe(true);
+	});
 });
 
 function sensitiveContext() {

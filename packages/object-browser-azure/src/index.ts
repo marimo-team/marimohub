@@ -160,12 +160,15 @@ export class AzureBlobObjectBrowser implements ObjectBrowser<'azure_blob'> {
 					if (page.continuationToken && page.continuationToken === cursor.token) {
 						throw nonAdvancingCursor();
 					}
-					const prefixes = (page.segment.blobPrefixes ?? []).map(({ name: key }) => ({
+					const prefixNames = new Set((page.segment.blobPrefixes ?? []).map(({ name }) => name));
+					const prefixes = [...prefixNames].map((key) => ({
 						kind: 'prefix' as const,
 						key,
 						name: key.slice(prefix.length).replace(/\/$/, ''),
 					}));
-					const objects = page.segment.blobItems.map((item) => blobEntry(item, prefix));
+					const objects = page.segment.blobItems
+						.filter((item) => !(item.properties.contentLength === 0 && prefixNames.has(item.name)))
+						.map((item) => blobEntry(item, prefix));
 					return {
 						items: [...prefixes, ...objects].sort((left, right) =>
 							left.key.localeCompare(right.key),

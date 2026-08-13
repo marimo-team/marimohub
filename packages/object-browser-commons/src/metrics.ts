@@ -126,6 +126,7 @@ export class ObjectBrowserObserver {
 			}),
 			close() {
 				finish();
+				void reader.cancel().catch(() => {});
 				object.close();
 			},
 		};

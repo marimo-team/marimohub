@@ -23,7 +23,7 @@ export function createAzureClient(
 	resolveHost: GuardedHostResolver,
 	fetchImpl: typeof fetch,
 ): BlobServiceClient {
-	const options = { httpClient: guardedHttpClient(resolveHost, fetchImpl) };
+	const options = { httpClient: guardedHttpClient(resolveHost, fetchImpl, context.signal) };
 	const authorityHost = authorityHostFor(source.endpoint_suffix);
 	if (source.auth.method === 'connection_string') {
 		return BlobServiceClient.fromConnectionString(source.auth.connection_string, options);
@@ -72,14 +72,25 @@ function authorityHostFor(endpointSuffix: string): string {
 	}
 }
 
-function guardedHttpClient(resolveHost: GuardedHostResolver, fetchImpl: typeof fetch): IHttpClient {
+export function guardedHttpClient(
+	resolveHost: GuardedHostResolver,
+	fetchImpl: typeof fetch,
+	contextSignal?: AbortSignal,
+): IHttpClient {
 	const pinnedFetch = fetchImpl === fetch ? createGuardedFetch(resolveHost) : fetchImpl;
 	return {
 		async sendRequest(request: WebResource): Promise<HttpOperationResponse> {
 			const controller = new AbortController();
 			const abort = () => controller.abort();
+			const signals = [contextSignal, request.abortSignal].filter(
+				(signal): signal is NonNullable<typeof signal> => signal !== undefined,
+			);
+			const cleanup = () => {
+				for (const signal of signals) signal.removeEventListener('abort', abort);
+			};
 			let streaming = false;
-			request.abortSignal?.addEventListener('abort', abort);
+			if (signals.some((signal) => signal.aborted)) abort();
+			else for (const signal of signals) signal.addEventListener('abort', abort);
 			try {
 				const url = new URL(request.url);
 				if (fetchImpl !== fetch) await resolveHost(url.hostname, controller.signal);
@@ -95,7 +106,6 @@ function guardedHttpClient(resolveHost: GuardedHostResolver, fetchImpl: typeof f
 				if (stream && response.body) {
 					streaming = true;
 					const readable = Readable.fromWeb(response.body as NodeReadableStream);
-					const cleanup = () => request.abortSignal?.removeEventListener('abort', abort);
 					readable.once('close', cleanup);
 					return { request, status: response.status, headers, readableStreamBody: readable };
 				}
@@ -112,7 +122,7 @@ function guardedHttpClient(resolveHost: GuardedHostResolver, fetchImpl: typeof f
 				if (error instanceof ObjectBrowseError) throw error;
 				throw new ObjectBrowseError('unavailable', 'The Azure Blob request failed.');
 			} finally {
-				if (!streaming) request.abortSignal?.removeEventListener('abort', abort);
+				if (!streaming) cleanup();
 			}
 		},
 	};
