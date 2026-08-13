@@ -717,6 +717,23 @@ describe('DataBrowserPage', () => {
 		expect(screen.getByRole('button', { name: 'Retry loading objects' })).toBeInTheDocument();
 	});
 
+	it('keeps parent-prefix navigation available when the initial listing fails', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&prefix=daily%2F`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectFailures: { objects: 'Object listing failed. Check ListBucket access.' },
+		});
+
+		const parentPrefix = await screen.findByRole('button', { name: 'Parent prefix' });
+		expect(
+			await screen.findByRole('button', { name: 'Retry loading objects' }),
+		).toBeInTheDocument();
+		await user.click(parentPrefix);
+
+		await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('prefix='));
+	});
+
 	it('round-trips object selection in the URL and loads previews only on request', async () => {
 		const user = userEvent.setup();
 		const fetchImpl = setup(

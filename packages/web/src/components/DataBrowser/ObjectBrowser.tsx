@@ -397,7 +397,7 @@ export function ObjectBrowser({
 							{listError && !initialListError && (
 								<p className="p-3 text-sm text-destructive">{errorMessage(listError)}</p>
 							)}
-							{!initialListError && prefix && !activeSearchQuery && (
+							{prefix && !activeSearchQuery && (
 								<button
 									type="button"
 									onKeyDown={handleListKeyDown}
