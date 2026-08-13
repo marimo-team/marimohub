@@ -5,6 +5,7 @@ import {
 	acquireSingletonClaim,
 	ensureInitialized,
 	releaseSingletonClaim,
+	sleep,
 	UserId,
 	ValidationError,
 } from '@marimo-hub/core';
@@ -12,6 +13,9 @@ import type { CreateIntegrationInput, CreateNotebookInput } from '@marimo-hub/co
 
 const DEV_STORAGE_ROOT = fileURLToPath(new URL('../../../.context/dev-storage', import.meta.url));
 const DEV_NOTEBOOK_SEED_CLAIM = '_system/dev/local-notebook-seed.json';
+const DEV_NOTEBOOK_SEED_LEASE_MS = 30_000;
+const DEV_NOTEBOOK_SEED_WAIT_MS = DEV_NOTEBOOK_SEED_LEASE_MS + 5_000;
+const DEV_NOTEBOOK_SEED_POLL_MS = 25;
 
 const DEV_USER = {
 	id: UserId.parse('user'),
@@ -79,9 +83,18 @@ function parseSeedClaim(raw: unknown): string | null {
 }
 
 async function isSeedProcessLive(holder: string): Promise<boolean> {
-	const match = /^(\d+):/.exec(holder);
+	const match = /^(\d+):(\d+):/.exec(holder);
 	const pid = Number(match?.[1]);
-	if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+	const claimedAt = Number(match?.[2]);
+	const age = Date.now() - claimedAt;
+	if (
+		!Number.isSafeInteger(pid) ||
+		pid <= 0 ||
+		!Number.isSafeInteger(claimedAt) ||
+		age < 0 ||
+		age >= DEV_NOTEBOOK_SEED_LEASE_MS
+	)
+		return false;
 	try {
 		process.kill(pid, 0);
 		return true;
@@ -90,8 +103,22 @@ async function isSeedProcessLive(holder: string): Promise<boolean> {
 	}
 }
 
+async function acquireSeedClaim(
+	claim: Parameters<typeof acquireSingletonClaim>[0],
+	holder: string,
+): Promise<void> {
+	const deadline = Date.now() + DEV_NOTEBOOK_SEED_WAIT_MS;
+	for (;;) {
+		if ((await acquireSingletonClaim(claim, holder)).acquired) return;
+		const remaining = deadline - Date.now();
+		if (remaining <= 0)
+			throw new Error('Timed out waiting to seed the local development notebook.');
+		await sleep(Math.min(DEV_NOTEBOOK_SEED_POLL_MS, remaining));
+	}
+}
+
 async function seedWelcomeNotebook(deps: Pick<ApiDeps, 'bucket' | 'services'>): Promise<void> {
-	const holder = `${process.pid}:${randomUUID()}`;
+	const holder = `${process.pid}:${Date.now()}:${randomUUID()}`;
 	const claim = {
 		bucket: deps.bucket,
 		key: DEV_NOTEBOOK_SEED_CLAIM,
@@ -99,8 +126,7 @@ async function seedWelcomeNotebook(deps: Pick<ApiDeps, 'bucket' | 'services'>): 
 		parseHolder: parseSeedClaim,
 		isHolderLive: isSeedProcessLive,
 	};
-	const { acquired } = await acquireSingletonClaim(claim, holder);
-	if (!acquired) return;
+	await acquireSeedClaim(claim, holder);
 
 	try {
 		const projects = await deps.services.projects.listProjects();

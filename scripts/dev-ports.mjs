@@ -35,9 +35,11 @@ if (process.exitCode === undefined) {
 		env,
 		stdio: 'inherit',
 	});
-	const signals = ['SIGINT', 'SIGTERM'];
+	const signals = useProcessGroup
+		? ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGTERM']
+		: ['SIGINT', 'SIGTERM'];
 	const signalHandlers = new Map();
-	const signalChildTree = (signal) => {
+	const signalChildTree = (signal, groupMayBeGone = false) => {
 		if (!useProcessGroup || child.pid === undefined) {
 			child.kill(signal);
 			return;
@@ -46,7 +48,7 @@ if (process.exitCode === undefined) {
 		try {
 			process.kill(-child.pid, signal);
 		} catch (error) {
-			if (error.code !== 'ESRCH') {
+			if (error.code !== 'ESRCH' && !(groupMayBeGone && error.code === 'EPERM')) {
 				throw error;
 			}
 		}
@@ -60,7 +62,7 @@ if (process.exitCode === undefined) {
 	for (const signal of signals) {
 		const handler = () => signalChildTree(signal);
 		signalHandlers.set(signal, handler);
-		process.once(signal, handler);
+		process.on(signal, handler);
 	}
 
 	child.on('error', (error) => {
@@ -69,10 +71,10 @@ if (process.exitCode === undefined) {
 		process.exitCode = 1;
 	});
 	child.on('exit', (code, signal) => {
-		removeSignalHandlers();
 		if (useProcessGroup) {
-			signalChildTree('SIGTERM');
+			signalChildTree('SIGTERM', true);
 		}
+		removeSignalHandlers();
 		if (signal) {
 			process.kill(process.pid, signal);
 		} else {

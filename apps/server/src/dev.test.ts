@@ -5,6 +5,14 @@ import type { OrgIntegrationsService } from '@marimo-hub/core';
 import { createFromEnv } from '@marimo-hub/config';
 import { localDevEnv, seedLocalDev } from './devSetup';
 
+function deferred() {
+	let resolve!: () => void;
+	const promise = new Promise<void>((done) => {
+		resolve = done;
+	});
+	return { promise, resolve };
+}
+
 describe('local development setup', () => {
 	const createDevDeps = () => createFromEnv(localDevEnv({ PORT: '4321' }));
 	const nameConflict = () =>
@@ -88,6 +96,56 @@ describe('local development setup', () => {
 		await Promise.all([seedLocalDev(deps), seedLocalDev(deps)]);
 
 		expect(createNotebook).toHaveBeenCalledOnce();
+		const [project] = await deps.services.projects.listProjects();
+		expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
+	});
+
+	it('retries the notebook seed when the concurrent holder fails', async () => {
+		const deps = createDevDeps();
+		await ensureInitialized(deps.bucket, UserId.parse('user'));
+		const originalCreate = deps.services.notebooks.createNotebook.bind(deps.services.notebooks);
+		const firstCanFail = deferred();
+		const firstDidStart = deferred();
+		const secondSawClaim = deferred();
+		const originalGet = deps.bucket.get.bind(deps.bucket);
+		vi.spyOn(deps.bucket, 'get').mockImplementation(async (key) => {
+			const object = await originalGet(key);
+			if (key === '_system/dev/local-notebook-seed.json' && object) secondSawClaim.resolve();
+			return object;
+		});
+		const createNotebook = vi
+			.spyOn(deps.services.notebooks, 'createNotebook')
+			.mockImplementationOnce(async () => {
+				firstDidStart.resolve();
+				await firstCanFail.promise;
+				throw new Error('first seed failed');
+			})
+			.mockImplementation(originalCreate);
+
+		const first = seedLocalDev(deps);
+		await firstDidStart.promise;
+		const second = seedLocalDev(deps);
+		await secondSawClaim.promise;
+		expect(createNotebook).toHaveBeenCalledOnce();
+
+		firstCanFail.resolve();
+		await expect(first).rejects.toThrow('first seed failed');
+		await expect(second).resolves.toBeUndefined();
+
+		expect(createNotebook).toHaveBeenCalledTimes(2);
+		const [project] = await deps.services.projects.listProjects();
+		expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
+	});
+
+	it('reclaims an expired seed claim even when its PID is live', async () => {
+		const deps = createDevDeps();
+		await deps.bucket.put(
+			'_system/dev/local-notebook-seed.json',
+			JSON.stringify({ holder: `${process.pid}:${Date.now() - 60_000}:previous-process` }),
+		);
+
+		await seedLocalDev(deps);
+
 		const [project] = await deps.services.projects.listProjects();
 		expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
 	});
