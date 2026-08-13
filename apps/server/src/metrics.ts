@@ -1,4 +1,4 @@
-import type { Counter, Gauge, MeterProvider } from '@opentelemetry/api';
+import type { Counter, Gauge, Histogram, MeterProvider } from '@opentelemetry/api';
 import { metrics as metricsApi } from '@opentelemetry/api';
 import type { Metrics, MetricTags } from '@marimo-hub/core';
 
@@ -16,6 +16,7 @@ import type { Metrics, MetricTags } from '@marimo-hub/core';
 export class WideEventMetrics implements Metrics {
 	private counters = new Map<string, number>();
 	private gauges = new Map<string, number>();
+	private histograms = new Map<string, { count: number; sum: number; max: number }>();
 
 	increment(name: string, value = 1): void {
 		this.counters.set(name, (this.counters.get(name) ?? 0) + value);
@@ -25,11 +26,25 @@ export class WideEventMetrics implements Metrics {
 		this.gauges.set(name, value);
 	}
 
+	histogram(name: string, value: number): void {
+		const current = this.histograms.get(name);
+		this.histograms.set(name, {
+			count: (current?.count ?? 0) + 1,
+			sum: (current?.sum ?? 0) + value,
+			max: Math.max(current?.max ?? Number.NEGATIVE_INFINITY, value),
+		});
+	}
+
 	/** Snapshot current totals + latest gauges as flat fields for a wide event. */
 	collect(): Record<string, number> {
 		const out: Record<string, number> = {};
 		for (const [k, v] of this.counters) out[`counter.${k}`] = v;
 		for (const [k, v] of this.gauges) out[`gauge.${k}`] = v;
+		for (const [k, v] of this.histograms) {
+			out[`histogram.${k}.count`] = v.count;
+			out[`histogram.${k}.sum`] = v.sum;
+			out[`histogram.${k}.max`] = v.max;
+		}
 		return out;
 	}
 }
@@ -44,6 +59,7 @@ export class OtelMetrics implements Metrics {
 	private readonly meter;
 	private readonly counters = new Map<string, Counter>();
 	private readonly gauges = new Map<string, Gauge>();
+	private readonly histograms = new Map<string, Histogram>();
 
 	constructor(provider: MeterProvider = metricsApi.getMeterProvider()) {
 		this.meter = provider.getMeter('@marimo-hub/server');
@@ -66,6 +82,15 @@ export class OtelMetrics implements Metrics {
 		}
 		gauge.record(value, tags);
 	}
+
+	histogram(name: string, value: number, tags?: MetricTags): void {
+		let histogram = this.histograms.get(name);
+		if (!histogram) {
+			histogram = this.meter.createHistogram(name);
+			this.histograms.set(name, histogram);
+		}
+		histogram.record(value, tags);
+	}
 }
 
 /** Emit every signal to all targets (e.g. wide-event flush + OTEL export). */
@@ -76,6 +101,9 @@ export function fanoutMetrics(...targets: Metrics[]): Metrics {
 		},
 		gauge(name, value, tags) {
 			for (const t of targets) t.gauge(name, value, tags);
+		},
+		histogram(name, value, tags) {
+			for (const t of targets) t.histogram?.(name, value, tags);
 		},
 	};
 }

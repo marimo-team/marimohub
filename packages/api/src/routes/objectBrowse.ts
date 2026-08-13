@@ -3,6 +3,7 @@ import {
 	createSessionId,
 	exchangeFederatedStorageCredentials,
 	ForbiddenError,
+	noopMetrics,
 	NotFoundError,
 	ObjectBrowseError,
 	PreconditionFailedError,
@@ -165,23 +166,30 @@ class DownloadGate {
 	private active = 0;
 	private readonly activeByUser = new Map<string, number>();
 
-	constructor(private readonly limits: DownloadLimits) {}
+	constructor(
+		private readonly limits: DownloadLimits,
+		private readonly metrics: ApiDeps['metrics'],
+	) {}
 
-	acquire(userId: string): () => void {
+	acquire(userId: string, operation: 'download' | 'inline'): () => void {
+		const tags = { operation };
 		const userActive = this.activeByUser.get(userId) ?? 0;
 		if (
 			this.active >= this.limits.maxConcurrentDownloads ||
 			userActive >= this.limits.maxConcurrentDownloadsPerUser
 		) {
+			(this.metrics ?? noopMetrics).increment('object_browser.download.rejected', 1, tags);
 			throw new ResourceExhaustedError('Too many object downloads are active — try again later.');
 		}
 		this.active += 1;
 		this.activeByUser.set(userId, userActive + 1);
+		(this.metrics ?? noopMetrics).gauge('object_browser.download.active', this.active);
 		let released = false;
 		return () => {
 			if (released) return;
 			released = true;
 			this.active -= 1;
+			(this.metrics ?? noopMetrics).gauge('object_browser.download.active', this.active);
 			const remaining = (this.activeByUser.get(userId) ?? 1) - 1;
 			if (remaining === 0) this.activeByUser.delete(userId);
 			else this.activeByUser.set(userId, remaining);
@@ -191,15 +199,19 @@ class DownloadGate {
 
 const downloadGates = new WeakMap<object, DownloadGate>();
 
-export function acquireDownload(deps: ApiDeps, userId: string): () => void {
+export function acquireDownload(
+	deps: ApiDeps,
+	userId: string,
+	operation: 'download' | 'inline' = 'download',
+): () => void {
 	const limits = deps.dataBrowser?.objectBrowser;
 	if (!limits) throw new NotFoundError('Object downloads are not enabled on this deployment.');
 	let gate = downloadGates.get(limits);
 	if (!gate) {
-		gate = new DownloadGate(limits);
+		gate = new DownloadGate(limits, deps.metrics);
 		downloadGates.set(limits, gate);
 	}
-	return gate.acquire(userId);
+	return gate.acquire(userId, operation);
 }
 
 export function streamObjectBody(
@@ -207,6 +219,7 @@ export function streamObjectBody(
 	release: () => void,
 	onFinish: () => void,
 	signal?: AbortSignal,
+	onCancel?: () => void,
 ): ReadableStream<Uint8Array> {
 	const reader = object.body.getReader();
 	let finished = false;
@@ -263,6 +276,7 @@ export function streamObjectBody(
 		},
 		async cancel(reason) {
 			try {
+				onCancel?.();
 				await reader.cancel(reason);
 			} finally {
 				close();

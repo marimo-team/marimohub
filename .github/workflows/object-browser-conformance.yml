@@ -43,3 +43,9 @@ jobs:
           MARIMOHUB_TEST_S3_ACCESS_KEY: minioadmin
           MARIMOHUB_TEST_S3_SECRET_KEY: minioadmin
         run: vp test packages/object-browser-s3/src/minio.live.test.ts
+      - name: Run config-to-API smoke test
+        env:
+          MARIMOHUB_TEST_S3_ENDPOINT: http://127.0.0.1:19000
+          MARIMOHUB_TEST_S3_ACCESS_KEY: minioadmin
+          MARIMOHUB_TEST_S3_SECRET_KEY: minioadmin
+        run: vp test packages/config/src/objectBrowser.minio.live.test.ts

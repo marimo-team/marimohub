@@ -242,6 +242,8 @@ describe('object content response helpers', () => {
 
 	it('enforces both per-user and process download limits with idempotent release', () => {
 		const deps = wifDeps(async () => ({ accessKeyId: 'unused', secretAccessKey: 'unused' }));
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		deps.metrics = metrics;
 		deps.dataBrowser!.objectBrowser!.maxConcurrentDownloads = 3;
 		deps.dataBrowser!.objectBrowser!.maxConcurrentDownloadsPerUser = 2;
 		const first = acquireDownload(deps, 'user-a');
@@ -256,6 +258,45 @@ describe('object content response helpers', () => {
 		second();
 		otherUser();
 		third();
+		expect(metrics.increment).toHaveBeenCalledTimes(2);
+		expect(metrics.increment).toHaveBeenCalledWith('object_browser.download.rejected', 1, {
+			operation: 'download',
+		});
+		expect(metrics.gauge).toHaveBeenCalledWith('object_browser.download.active', 3);
+		expect(metrics.gauge).toHaveBeenLastCalledWith('object_browser.download.active', 0);
+	});
+
+	it('reports a global active-download gauge across operation types', () => {
+		const deps = wifDeps(async () => ({ accessKeyId: 'unused', secretAccessKey: 'unused' }));
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		deps.metrics = metrics;
+		deps.dataBrowser!.objectBrowser!.maxConcurrentDownloads = 3;
+		deps.dataBrowser!.objectBrowser!.maxConcurrentDownloadsPerUser = 2;
+
+		const releaseDownload = acquireDownload(deps, 'user-a', 'download');
+		const releaseInline = acquireDownload(deps, 'user-b', 'inline');
+		releaseDownload();
+		releaseInline();
+
+		expect(metrics.gauge.mock.calls).toEqual([
+			['object_browser.download.active', 1],
+			['object_browser.download.active', 2],
+			['object_browser.download.active', 1],
+			['object_browser.download.active', 0],
+		]);
+	});
+
+	it('reports downstream stream cancellation once', async () => {
+		const cancel = vi.fn();
+		const stream = streamObjectBody(
+			body(new ReadableStream({ pull() {} }), vi.fn()),
+			vi.fn(),
+			vi.fn(),
+			undefined,
+			cancel,
+		);
+		await stream.cancel('gone');
+		expect(cancel).toHaveBeenCalledOnce();
 	});
 
 	it('closes the object and releases its permit after a stream error', async () => {

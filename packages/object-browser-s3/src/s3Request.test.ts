@@ -47,8 +47,24 @@ describe('S3 request utilities', () => {
 					throw new Error('failed');
 				},
 			),
-		).rejects.toThrow('failed');
+		).rejects.toMatchObject({
+			code: 'unavailable',
+			message: 'The object-store request failed.',
+		});
 		expect(failure.destroy).toHaveBeenCalledOnce();
+	});
+
+	it('maps client construction failures without attempting cleanup', async () => {
+		await expect(
+			withS3Client(
+				() => {
+					throw Object.assign(new Error('private credential detail'), { name: 'AccessDenied' });
+				},
+				source,
+				context,
+				async () => 'unreachable',
+			),
+		).rejects.toMatchObject({ code: 'access_denied' });
 	});
 
 	it('releases a client at most once', () => {

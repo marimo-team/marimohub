@@ -193,6 +193,45 @@ describe('S3ObjectBrowser listing and metadata', () => {
 		expect(second.sent[0].input.ContinuationToken).toBe('next');
 	});
 
+	it('stops a large multi-page scan exactly at the configured key budget', async () => {
+		const objects = (offset: number, count: number) =>
+			Array.from({ length: count }, (_, index) => ({
+				Key: `events/${String(offset + index).padStart(5, '0')}.json`,
+			}));
+		const test = harness(
+			[
+				{
+					Contents: objects(0, 1_000),
+					IsTruncated: true,
+					NextContinuationToken: 'page-2',
+				},
+				{
+					Contents: objects(1_000, 1_000),
+					IsTruncated: true,
+					NextContinuationToken: 'page-3',
+				},
+				{
+					Contents: objects(2_000, 500),
+					IsTruncated: true,
+					NextContinuationToken: 'page-4',
+				},
+			],
+			{ limits: { searchMaxKeys: 2_500 } },
+		);
+		const page = await test.browser.searchObjects(source, context, {
+			bucket: 'lake',
+			query: 'missing',
+			limit: 10,
+		});
+		expect(page).toMatchObject({
+			items: [],
+			scanned: 2_500,
+			complete: false,
+			next_cursor: expect.any(String),
+		});
+		expect(test.sent.map((call) => call.input.MaxKeys)).toEqual([1_000, 1_000, 500]);
+	});
+
 	it('scans in batches independent of the requested result count', async () => {
 		const test = harness([
 			{
@@ -286,6 +325,47 @@ describe('S3ObjectBrowser listing and metadata', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it('propagates caller cancellation to an in-flight metadata request', async () => {
+		const parent = new AbortController();
+		const test = harness(
+			(sent) =>
+				new Promise((_resolve, reject) => {
+					sent.options?.abortSignal?.addEventListener(
+						'abort',
+						() => reject(new DOMException('aborted', 'AbortError')),
+						{ once: true },
+					);
+				}),
+		);
+		const operation = test.browser.listObjects(
+			source,
+			{ ...context, signal: parent.signal },
+			{
+				bucket: 'lake',
+				limit: 10,
+			},
+		);
+		parent.abort();
+		await expect(operation).rejects.toMatchObject({ code: 'aborted' });
+		expect(test.destroyed()).toBe(1);
+	});
+
+	it('sanitizes malformed provider response shapes', async () => {
+		const test = harness([{ Contents: { private_detail: 'signed request secret' } }]);
+		let error: unknown;
+		try {
+			await test.browser.listObjects(source, context, { bucket: 'lake', limit: 10 });
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toMatchObject({
+			code: 'unavailable',
+			message: 'The object-store request failed.',
+		});
+		expect((error as Error).message).not.toContain('signed request secret');
+		expect(test.destroyed()).toBe(1);
 	});
 
 	it('fails a non-advancing provider cursor', async () => {
@@ -473,6 +553,35 @@ describe('S3ObjectBrowser listing and metadata', () => {
 });
 
 describe('S3ObjectBrowser previews and streams', () => {
+	it('aborts a preview when its request deadline is exhausted', async () => {
+		vi.useFakeTimers();
+		try {
+			const test = harness(
+				(sent) =>
+					new Promise((_resolve, reject) => {
+						sent.options?.abortSignal?.addEventListener(
+							'abort',
+							() => reject(new DOMException('aborted', 'AbortError')),
+							{ once: true },
+						);
+					}),
+				{ limits: { previewTimeoutMs: 25 } },
+			);
+			const operation = test.browser.previewObject(source, context, {
+				bucket: 'lake',
+				key: 'slow.csv',
+				limit: 20,
+				content_url: '/content',
+			});
+			const rejected = expect(operation).rejects.toMatchObject({ code: 'aborted' });
+			await vi.advanceTimersByTimeAsync(25);
+			await rejected;
+			expect(test.destroyed()).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('previews quoted CSV explicitly within row limits', async () => {
 		const csv = new TextEncoder().encode('name,note\nAda,"hello, world"\nLin,"multi\nline"\n');
 		const test = harness([
@@ -709,10 +818,12 @@ describe('S3ObjectBrowser previews and streams', () => {
 		expect(test.destroyed()).toBe(1);
 	});
 
-	it('releases the client when the returned stream fails', async () => {
+	it('sanitizes a mid-stream provider disconnect and releases the client', async () => {
 		const failing = new ReadableStream<Uint8Array>({
 			pull(controller) {
-				controller.error(new Error('stream failed'));
+				controller.error(
+					Object.assign(new Error('private socket and request detail'), { name: 'InternalError' }),
+				);
 			},
 		});
 		const test = harness([{ Body: failing, ContentLength: 1 }]);
@@ -720,7 +831,43 @@ describe('S3ObjectBrowser previews and streams', () => {
 			bucket: 'lake',
 			key: 'data.bin',
 		});
-		await expect(new Response(opened.body).arrayBuffer()).rejects.toThrow('stream failed');
+		await expect(new Response(opened.body).arrayBuffer()).rejects.toMatchObject({
+			code: 'unavailable',
+			message: 'The object-store request failed.',
+		});
+		expect(test.destroyed()).toBe(1);
+	});
+
+	it('errors a partially-read streaming download when the caller disconnects', async () => {
+		const parent = new AbortController();
+		const cancel = vi.fn();
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new Uint8Array([1, 2, 3]));
+			},
+			cancel,
+		});
+		const test = harness([{ Body: stream, ContentLength: 1 }]);
+		const opened = await test.browser.openObject(
+			source,
+			{ ...context, signal: parent.signal },
+			{
+				bucket: 'lake',
+				key: 'slow.bin',
+			},
+		);
+		const reader = opened.body.getReader();
+		await expect(reader.read()).resolves.toEqual({
+			done: false,
+			value: new Uint8Array([1, 2, 3]),
+		});
+		const pendingRead = reader.read();
+		parent.abort();
+		await expect(pendingRead).rejects.toMatchObject({
+			code: 'aborted',
+			message: 'The request was canceled.',
+		});
+		await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
 		expect(test.destroyed()).toBe(1);
 	});
 
@@ -825,7 +972,7 @@ describe('capabilities and metadata-only mode', () => {
 		});
 	});
 
-	it('advertises and enforces metadata-only operation boundaries', () => {
+	it('advertises and enforces metadata-only operation boundaries', async () => {
 		const test = harness([], { mode: 'metadata' });
 		expect(test.browser.capability(source, context)).toMatchObject({
 			available: true,
@@ -833,17 +980,28 @@ describe('capabilities and metadata-only mode', () => {
 			download: false,
 			preview_formats: [],
 		});
-		expect(() =>
+		await expect(
 			test.browser.previewObject(source, context, {
 				bucket: 'lake',
 				key: 'a.txt',
 				limit: 20,
 				content_url: '/content',
 			}),
-		).toThrow(expect.objectContaining({ code: 'access_denied' }));
-		expect(() =>
+		).rejects.toMatchObject({ code: 'access_denied' });
+		await expect(
 			test.browser.openObject(source, context, { bucket: 'lake', key: 'a.txt' }),
-		).toThrow(expect.objectContaining({ code: 'access_denied' }));
+		).rejects.toMatchObject({ code: 'access_denied' });
+		expect(test.sent).toEqual([]);
+	});
+
+	it('advertises preview formats and downloads only in full mode', () => {
+		const test = harness([], { mode: 'full' });
+		expect(test.browser.capability(source, context)).toMatchObject({
+			available: true,
+			preview: true,
+			download: true,
+			preview_formats: expect.arrayContaining(['csv', 'json', 'parquet']),
+		});
 	});
 });
 

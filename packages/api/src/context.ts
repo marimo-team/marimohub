@@ -13,6 +13,7 @@ import type {
 	ProjectIntegrationsService,
 	KernelProbe,
 	Millis,
+	Metrics,
 	Notifier,
 	OrgIntegrationsService,
 	PreflightReport,
@@ -266,6 +267,8 @@ export interface BackgroundTaskScheduler {
  */
 export interface ApiDeps {
 	services: Services;
+	/** Operational signals shared by domain services and API-owned resource guards. */
+	metrics?: Metrics;
 	/** Raw bucket handle (used by ensureInitialized + the sandbox copy fallback). */
 	bucket: Bucket;
 	compute: SandboxProvider;

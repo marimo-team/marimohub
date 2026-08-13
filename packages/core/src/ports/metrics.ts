@@ -4,9 +4,10 @@
  * CAS contention, reaper activity, snapshot growth, live session count — without
  * the core depending on any concrete metrics backend.
  *
- * Two primitives cover the need:
+ * Three primitives cover the need:
  * - `increment` for counters (rates: CAS conflicts, snapshots pruned, …).
  * - `gauge` for point-in-time values (snapshot count/size, live sessions, …).
+ * - `histogram` for distributions (operation latency, payload sizes, …).
  *
  * The default is `noopMetrics`; entrypoints inject a real emitter (e.g. the
  * wide-event canonical-log emitter in `apps/server`, or a Prometheus adapter).
@@ -18,10 +19,13 @@ export interface Metrics {
 	increment(name: string, value?: number, tags?: MetricTags): void;
 	/** Record a point-in-time value. */
 	gauge(name: string, value: number, tags?: MetricTags): void;
+	/** Record a value in a distribution, such as operation latency. */
+	histogram?(name: string, value: number, tags?: MetricTags): void;
 }
 
 /** No-op default — used everywhere a real emitter isn't wired (tests, library mode). */
 export const noopMetrics: Metrics = {
 	increment() {},
 	gauge() {},
+	histogram() {},
 };

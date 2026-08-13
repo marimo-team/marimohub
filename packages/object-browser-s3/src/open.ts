@@ -76,17 +76,37 @@ export async function openS3Object(
 		if (!output.Body) throw new ObjectBrowseError('unavailable', 'The object body was empty.');
 		const upstream = toWebStream(output.Body).getReader();
 		let upstreamClosed = false;
+		let aborted = context.signal?.aborted ?? false;
+		const abortedError = () => new ObjectBrowseError('aborted', 'The request was canceled.');
 		const cancelUpstream = (reason?: unknown): Promise<void> => {
 			if (upstreamClosed) return Promise.resolve();
 			upstreamClosed = true;
+			context.signal?.removeEventListener('abort', abortStream);
 			return upstream.cancel(reason);
 		};
+		function abortStream() {
+			aborted = true;
+			const cancellation = cancelUpstream(context.signal?.reason);
+			release();
+			void cancellation.catch(() => {});
+		}
+		if (context.signal?.aborted) abortStream();
+		else context.signal?.addEventListener('abort', abortStream, { once: true });
 		const body = new ReadableStream<Uint8Array>({
 			async pull(controller) {
+				if (aborted) {
+					controller.error(abortedError());
+					return;
+				}
 				try {
 					const next = await upstream.read();
+					if (aborted) {
+						controller.error(abortedError());
+						return;
+					}
 					if (next.done) {
 						upstreamClosed = true;
+						context.signal?.removeEventListener('abort', abortStream);
 						controller.close();
 						release();
 					} else {
@@ -94,7 +114,8 @@ export async function openS3Object(
 					}
 				} catch (error) {
 					upstreamClosed = true;
-					controller.error(error);
+					context.signal?.removeEventListener('abort', abortStream);
+					controller.error(aborted ? abortedError() : mapS3Error(error));
 					release();
 				}
 			},

@@ -1149,16 +1149,29 @@ async function cachedBrowse<T>(
 	fresh: boolean,
 	charge: () => void,
 	load: () => Promise<T>,
+	observation?: { metrics: ApiDeps['metrics']; operation: string },
 ): Promise<T> {
+	const record = (outcome: 'hit' | 'miss' | 'coalesced' | 'refresh') =>
+		observation?.metrics?.increment('object_browser.cache.requests', 1, {
+			operation: observation.operation,
+			outcome,
+		});
 	const now = Date.now();
 	const hit = fresh ? undefined : browseCache.get(key);
-	if (hit && hit.expiresAt > now) return hit.value as T;
+	if (hit && hit.expiresAt > now) {
+		record('hit');
+		return hit.value as T;
+	}
 	// Every consumer of a miss pays its own budget BEFORE creating or joining
 	// the shared load: an exhausted user 429s alone (never poisoning the shared
 	// promise for others), and piggybacking on someone else's load is not free.
 	charge();
 	const pending = fresh ? undefined : inflightBrowse.get(key);
-	if (pending) return pending as Promise<T>;
+	if (pending) {
+		record('coalesced');
+		return pending as Promise<T>;
+	}
+	record(fresh ? 'refresh' : 'miss');
 	const promise = (async () => {
 		const value = await load();
 		if (browseCache.size >= BROWSE_CACHE_MAX_ENTRIES) {
@@ -1650,6 +1663,7 @@ app.openapi(browseObjectBuckets, async (c) => {
 		fresh === 'true',
 		() => assertBrowseBudget(user.id),
 		() => runObjectBrowse(() => integrations.browseObjectBuckets(pid, iid, context, request)),
+		{ metrics: deps.metrics, operation: 'list_buckets' },
 	);
 	return c.json({ success: true, data }, 200);
 });
@@ -1680,6 +1694,7 @@ app.openapi(browseObjects, async (c) => {
 		fresh === 'true',
 		() => assertBrowseBudget(user.id),
 		() => runObjectBrowse(() => integrations.browseObjects(pid, iid, context, request)),
+		{ metrics: deps.metrics, operation: 'list_objects' },
 	);
 	return c.json({ success: true, data }, 200);
 });
@@ -1851,11 +1866,24 @@ app.get('/projects/:pid/integrations/:iid/browse/objects/content', async (c) => 
 	const { bucket, key, version_id, inline, etag } = parsed.data;
 	const { integrations } = requireDataBrowser(deps);
 	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
-	const release = acquireDownload(deps, user.id);
+	const operation = inline === 'true' ? 'inline' : 'download';
+	const release = acquireDownload(deps, user.id, operation);
 	const controller = new AbortController();
-	const abort = () => controller.abort();
+	let cancellationRecorded = false;
+	const recordCancellation = () => {
+		if (cancellationRecorded) return;
+		cancellationRecorded = true;
+		deps.metrics?.increment('object_browser.download.cancellations', 1, { operation });
+	};
+	const abort = () => {
+		recordCancellation();
+		controller.abort();
+	};
 	c.req.raw.signal.addEventListener('abort', abort, { once: true });
-	const timeout = setTimeout(abort, deps.dataBrowser!.objectBrowser!.downloadTimeoutMs);
+	const timeout = setTimeout(() => {
+		deps.metrics?.increment('object_browser.download.timeouts', 1, { operation });
+		controller.abort();
+	}, deps.dataBrowser!.objectBrowser!.downloadTimeoutMs);
 	const finish = () => {
 		clearTimeout(timeout);
 		c.req.raw.signal.removeEventListener('abort', abort);
@@ -1914,10 +1942,13 @@ app.get('/projects/:pid/integrations/:iid/browse/objects/content', async (c) => 
 		if (object.content_range) headers.set('Content-Range', object.content_range);
 		if (object.etag) headers.set('ETag', object.etag);
 		if (object.version_id) headers.set('X-Marimohub-Object-Version', object.version_id);
-		return new Response(streamObjectBody(object, release, finish, controller.signal), {
-			status: object.status,
-			headers,
-		});
+		return new Response(
+			streamObjectBody(object, release, finish, controller.signal, recordCancellation),
+			{
+				status: object.status,
+				headers,
+			},
+		);
 	} catch (error) {
 		finish();
 		release();

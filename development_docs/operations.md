@@ -204,14 +204,24 @@ rates from deltas between lines.
 
 Signals emitted today:
 
-| Signal                                               | Type    | Source                          |
-| ---------------------------------------------------- | ------- | ------------------------------- |
-| `catalog.cas.attempt` / `.conflict` / `.exhausted`   | counter | `CatalogService.mutateSnapshot` |
-| `sessions.live`                                      | gauge   | `SessionService.expireStale`    |
-| `sessions.expired` / `sessions.reaped`               | counter | `SessionService`                |
-| `snapshots.count` / `snapshots.bytes`                | gauge   | `MaintenanceService`            |
-| `maintenance.snapshots_pruned` / `.events_pruned`    | counter | `MaintenanceService`            |
-| Per-cycle: `sessions_expired`, `snapshots_pruned`, … | fields  | the `maintenance_cycle` event   |
+| Signal                                                              | Type      | Source                          |
+| ------------------------------------------------------------------- | --------- | ------------------------------- |
+| `catalog.cas.attempt` / `.conflict` / `.exhausted`                  | counter   | `CatalogService.mutateSnapshot` |
+| `sessions.live`                                                     | gauge     | `SessionService.expireStale`    |
+| `sessions.expired` / `sessions.reaped`                              | counter   | `SessionService`                |
+| `snapshots.count` / `snapshots.bytes`                               | gauge     | `MaintenanceService`            |
+| `maintenance.snapshots_pruned` / `.events_pruned`                   | counter   | `MaintenanceService`            |
+| `object_browser.s3.operations` / `.failures`                        | counter   | `S3ObjectBrowser`               |
+| `object_browser.s3.latency_ms`                                      | histogram | `S3ObjectBrowser`               |
+| `object_browser.s3.bytes_read` / `.keys_scanned`                    | counter   | `S3ObjectBrowser`               |
+| `object_browser.cache.requests`                                     | counter   | object browse API cache         |
+| `object_browser.download.active`                                    | gauge     | object download gate            |
+| `object_browser.download.rejected` / `.timeouts` / `.cancellations` | counter   | object download API             |
+| Per-cycle: `sessions_expired`, `snapshots_pruned`, …                | fields    | the `maintenance_cycle` event   |
+
+Object-browser metric attributes are deliberately low-cardinality: operation,
+mode, outcome, and sanitized error code only. Never add bucket names, keys,
+queries, integration IDs, project IDs, or user IDs as metric attributes.
 
 What to watch / alert on:
 
