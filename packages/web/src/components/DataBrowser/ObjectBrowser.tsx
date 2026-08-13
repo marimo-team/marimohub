@@ -28,6 +28,8 @@ interface ObjectBrowserProps {
 	downloadAvailable: boolean;
 	searchAvailable: boolean;
 	versionsAvailable: boolean;
+	rootKind: 'bucket' | 'container';
+	uriScheme: 's3' | 'gs' | 'az';
 }
 
 export function ObjectBrowser({
@@ -37,7 +39,11 @@ export function ObjectBrowser({
 	downloadAvailable,
 	searchAvailable,
 	versionsAvailable,
+	rootKind,
+	uriScheme,
 }: ObjectBrowserProps) {
+	const rootLabel = rootKind === 'container' ? 'container' : 'bucket';
+	const rootLabelTitle = rootKind === 'container' ? 'Container' : 'Bucket';
 	const [params, setParams] = useSearchParams();
 	const bucketParam = params.get('bucket') ?? '';
 	const prefix = params.get('prefix') ?? '';
@@ -160,9 +166,12 @@ export function ObjectBrowser({
 	const { copy: copySelection } = useCopyToClipboard();
 	const copySelectedUris = () => {
 		const keys = selectedKeys.size > 0 ? [...selectedKeys] : key ? [key] : [];
-		void copySelection(keys.map((value) => `s3://${bucket}/${value}`).join('\n')).then((copied) => {
-			if (copied) toast.success(`Copied ${keys.length} object URI${keys.length === 1 ? '' : 's'}`);
-		});
+		void copySelection(keys.map((value) => `${uriScheme}://${bucket}/${value}`).join('\n')).then(
+			(copied) => {
+				if (copied)
+					toast.success(`Copied ${keys.length} object URI${keys.length === 1 ? '' : 's'}`);
+			},
+		);
 	};
 	const handleListKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
 		if (event.key === 'Backspace' && prefix) {
@@ -189,7 +198,7 @@ export function ObjectBrowser({
 			<section className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-xl border bg-card p-3">
 				{bucket === '' ? (
 					<div className="min-h-0 overflow-y-auto">
-						<p className="mb-2 text-xs font-medium text-muted-foreground">Buckets</p>
+						<p className="mb-2 text-xs font-medium text-muted-foreground">{rootLabelTitle}s</p>
 						{buckets.data === undefined ? (
 							buckets.error ? (
 								<p className="p-3 text-sm text-destructive">{errorMessage(buckets.error)}</p>
@@ -199,8 +208,8 @@ export function ObjectBrowser({
 						) : !buckets.error && bucketItems.length === 0 && !buckets.hasNextPage ? (
 							<EmptyState
 								icon={<Folder />}
-								message="No buckets available"
-								description="The integration credentials did not return an accessible bucket."
+								message={`No ${rootLabel}s available`}
+								description={`The integration credentials did not return an accessible ${rootLabel}.`}
 							/>
 						) : (
 							<>
@@ -226,10 +235,10 @@ export function ObjectBrowser({
 										onPress={() => void buckets.fetchNextPage()}
 									>
 										{buckets.isFetchingNextPage
-											? 'Loading buckets…'
+											? `Loading ${rootLabel}s…`
 											: buckets.error
-												? 'Retry loading buckets'
-												: 'Load more buckets'}
+												? `Retry loading ${rootLabel}s`
+												: `Load more ${rootLabel}s`}
 									</Button>
 								)}
 							</>
@@ -439,6 +448,7 @@ export function ObjectBrowser({
 						previewAvailable={previewAvailable}
 						downloadAvailable={downloadAvailable}
 						versionsAvailable={versionsAvailable}
+						uriScheme={uriScheme}
 						onVersion={(value) => update({ version: value })}
 					/>
 				) : (
@@ -462,6 +472,7 @@ function ObjectDetail({
 	previewAvailable,
 	downloadAvailable,
 	versionsAvailable,
+	uriScheme,
 	onVersion,
 }: {
 	projectId: string;
@@ -472,6 +483,7 @@ function ObjectDetail({
 	previewAvailable: boolean;
 	downloadAvailable: boolean;
 	versionsAvailable: boolean;
+	uriScheme: 's3' | 'gs' | 'az';
 	onVersion: (version?: string) => void;
 }) {
 	const detail = useObjectDetailQuery(projectId, integration.id, bucket, objectKey, versionId);
@@ -496,7 +508,7 @@ function ObjectDetail({
 			</div>
 		);
 	}
-	const uri = `s3://${bucket}/${objectKey}`;
+	const uri = `${uriScheme}://${bucket}/${objectKey}`;
 	const downloadUrl = objectContentUrl({
 		projectId,
 		integrationId: integration.id,

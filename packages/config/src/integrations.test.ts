@@ -129,6 +129,12 @@ describe('makeIntegrations data browser', () => {
 			supports_browse: true,
 			browse_surfaces: ['objects'],
 		});
+		for (const kind of ['gcs', 'azure_blob']) {
+			expect(wired.integrations?.listKinds().find((item) => item.kind === kind)).toMatchObject({
+				supports_browse: true,
+				browse_surfaces: ['objects'],
+			});
+		}
 
 		const full = makeIntegrations(
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
@@ -218,7 +224,7 @@ describe('makeIntegrations data browser', () => {
 		expect(withRuntime.dataBrowser?.close).toBeTypeOf('function');
 	});
 
-	it('passes metadata and full modes to the production S3 browser', async () => {
+	it('passes metadata and full modes to every production object browser', async () => {
 		for (const [mode, expected] of [
 			['metadata', { preview: false, download: false }],
 			['full', { preview: true, download: true }],
@@ -228,18 +234,28 @@ describe('makeIntegrations data browser', () => {
 				new MemoryBucket(),
 			).integrations!;
 			const pid = createProjectId();
-			const created = await integrations.create(
-				pid,
-				{ kind: 's3', name: `s3-${mode}`, config: { auth: { method: 'ambient' } } },
-				ACTOR,
-			);
-			const capability = await integrations.browseCapability(pid, created.id, {
-				project_id: pid,
-				user_id: ACTOR,
-				user_email: 'user@example.com',
-				allow_server_ambient: true,
-			});
-			expect(capability.surfaces.objects).toMatchObject({ available: true, ...expected });
+			for (const [kind, config] of [
+				['s3', { auth: { method: 'ambient' } }],
+				['gcs', { auth: { method: 'ambient' } }],
+				['azure_blob', { account_name: 'lakeaccount', auth: { method: 'ambient' } }],
+			] as const) {
+				const created = await integrations.create(
+					pid,
+					{ kind, name: `${kind.replaceAll('_', '-')}-${mode}`, config },
+					ACTOR,
+				);
+				const capability = await integrations.browseCapability(pid, created.id, {
+					project_id: pid,
+					user_id: ACTOR,
+					user_email: 'user@example.com',
+					allow_server_ambient: { s3: true, gcs: true, azure_blob: true },
+				});
+				expect(capability.surfaces.objects).toMatchObject({
+					available: true,
+					provider: kind,
+					...expected,
+				});
+			}
 		}
 	});
 

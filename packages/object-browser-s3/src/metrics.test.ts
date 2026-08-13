@@ -17,7 +17,7 @@ const context: ObjectBrowseContext = {
 	project_id: createProjectId(),
 	user_id: UserId.parse('user-metrics'),
 	user_email: 'metrics@example.com',
-	allow_server_ambient: false,
+	allow_server_ambient: {},
 };
 
 describe('S3 object browser metrics', () => {

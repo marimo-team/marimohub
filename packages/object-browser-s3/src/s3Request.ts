@@ -1,5 +1,5 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
-import type { ObjectBrowseContext, ObjectIdentity, ObjectStoreSource } from '@marimo-hub/core';
+import type { ObjectBrowseContext, ObjectIdentity, S3ObjectStoreSource } from '@marimo-hub/core';
 import { ObjectBrowseError } from '@marimo-hub/core';
 import type { S3ClientFactory, S3ClientLike } from './client';
 import { mapS3Error } from './errors';
@@ -23,7 +23,7 @@ export async function sendS3<T>(
 
 export async function withS3Client<T>(
 	clientFactory: S3ClientFactory,
-	source: ObjectStoreSource,
+	source: S3ObjectStoreSource,
 	context: ObjectBrowseContext,
 	run: (client: S3ClientLike) => Promise<T>,
 ): Promise<T> {

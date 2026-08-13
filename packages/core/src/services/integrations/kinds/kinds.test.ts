@@ -23,7 +23,7 @@ import { huggingFace, wandb } from './mlPlatforms';
 import { mongodb } from './mongodb';
 import { motherduck } from './motherduck';
 import { mysql } from './mysql';
-import { gcs, s3 } from './objectStores';
+import { azureBlob, gcs, s3 } from './objectStores';
 import { postgres } from './postgres';
 import { pyspark } from './pyspark';
 import { snowflake } from './snowflake';
@@ -1398,6 +1398,33 @@ describe('kind renders (golden)', () => {
 		const snippet = s3.objectBrowse!.snippet('warehouse', 'lake', key);
 		expect(snippet).toContain(reader);
 		expect(snippet).toContain('s3://lake/');
+	});
+
+	it('maps GCS and Azure Blob browsing sources and URI schemes', () => {
+		expect(gcs.objectBrowse?.source(gcs.configSchema.parse(FIXTURES.gcs))).toEqual({
+			provider: 'gcs',
+			configured_bucket: 'lake',
+			project_id: 'analytics-prod',
+			auth: {
+				method: 'service_account',
+				credentials_json: '{"type":"service_account"}',
+			},
+		});
+		expect(
+			azureBlob.objectBrowse?.source(azureBlob.configSchema.parse(FIXTURES.azure_blob)),
+		).toEqual({
+			provider: 'azure_blob',
+			configured_bucket: 'raw',
+			account_name: 'lakeaccount',
+			endpoint_suffix: 'core.windows.net',
+			auth: { method: 'account_key', account_key: 'azure-key' },
+		});
+		expect(gcs.objectBrowse?.snippet('warehouse', 'lake', 'records.csv')).toContain(
+			'gs://lake/records.csv',
+		);
+		expect(azureBlob.objectBrowse?.snippet('warehouse', 'raw', 'records.parquet')).toContain(
+			'az://raw/records.parquet',
+		);
 	});
 
 	it('resolves requirements from the selected driver, storage, and authentication branches', () => {

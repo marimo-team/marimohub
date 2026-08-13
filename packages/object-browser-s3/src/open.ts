@@ -3,7 +3,7 @@ import type {
 	ObjectBody,
 	ObjectBrowseContext,
 	ObjectOpenRequest,
-	ObjectStoreSource,
+	S3ObjectStoreSource,
 } from '@marimo-hub/core';
 import { ObjectBrowseError } from '@marimo-hub/core';
 import type { S3ObjectBrowserLimits } from './index';
@@ -25,7 +25,7 @@ interface GetOutput {
 export async function openS3Object(
 	clientFactory: S3ClientFactory,
 	limits: S3ObjectBrowserLimits,
-	source: ObjectStoreSource,
+	source: S3ObjectStoreSource,
 	context: ObjectBrowseContext,
 	request: ObjectOpenRequest,
 ): Promise<ObjectBody> {

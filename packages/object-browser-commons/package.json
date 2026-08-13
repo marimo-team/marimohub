@@ -1,0 +1,32 @@
+{
+	"name": "@marimo-hub/object-browser-commons",
+	"version": "0.0.0",
+	"private": true,
+	"license": "Apache-2.0",
+	"files": [
+		"dist"
+	],
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "vp pack",
+		"test": "vp test",
+		"check": "vp check",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@marimo-hub/core": "workspace:*",
+		"csv-parse": "catalog:",
+		"hyparquet": "catalog:"
+	},
+	"devDependencies": {
+		"@marimo-hub/tsconfig": "workspace:*",
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}

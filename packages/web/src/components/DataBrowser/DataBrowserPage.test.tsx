@@ -45,6 +45,12 @@ const objectKind: IntegrationKind = {
 	browse_surfaces: ['objects'],
 };
 
+const azureObjectKind: IntegrationKind = {
+	...objectKind,
+	kind: 'azure_blob',
+	title: 'Azure Blob',
+};
+
 const SNIPPET = 'from pyiceberg.catalog import load_catalog\n\ncatalog = load_catalog("lake")';
 
 function ok(data: unknown) {
@@ -79,6 +85,9 @@ function makeFetch({
 	kind = icebergKind,
 	entry = lakeEntry,
 	objectSearch = 'bounded-key-name',
+	objectProvider = 's3',
+	objectRootKind = 'bucket',
+	objectUriScheme = 's3',
 	objectBuckets = [{ name: 'lake', configured: true }],
 	objectBucketsSecond = [],
 	objectBucketNextCursor = null,
@@ -112,6 +121,9 @@ function makeFetch({
 	kind?: IntegrationKind;
 	entry?: IntegrationEntry;
 	objectSearch?: 'none' | 'bounded-key-name';
+	objectProvider?: 's3' | 'gcs' | 'azure_blob';
+	objectRootKind?: 'bucket' | 'container';
+	objectUriScheme?: 's3' | 'gs' | 'az';
 	objectBuckets?: { name: string; configured: boolean }[];
 	objectBucketsSecond?: { name: string; configured: boolean }[];
 	objectBucketNextCursor?: string | null;
@@ -250,6 +262,9 @@ function makeFetch({
 					preview: false,
 					surfaces: {
 						objects: {
+							provider: objectProvider,
+							root_kind: objectRootKind,
+							uri_scheme: objectUriScheme,
 							available: true,
 							preview: true,
 							download: true,
@@ -608,6 +623,21 @@ describe('DataBrowserPage', () => {
 		expect(await screen.findByText('No buckets available')).toBeInTheDocument();
 		expect(
 			screen.getByText('The integration credentials did not return an accessible bucket.'),
+		).toBeInTheDocument();
+	});
+
+	it('uses provider capability metadata for Azure containers and URIs', async () => {
+		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
+			kind: azureObjectKind,
+			entry: { ...lakeEntry, kind: 'azure_blob' },
+			objectProvider: 'azure_blob',
+			objectRootKind: 'container',
+			objectUriScheme: 'az',
+			objectBuckets: [],
+		});
+		expect(await screen.findByText('No containers available')).toBeInTheDocument();
+		expect(
+			screen.getByText('The integration credentials did not return an accessible container.'),
 		).toBeInTheDocument();
 	});
 

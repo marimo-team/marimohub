@@ -79,6 +79,7 @@ export const s3 = defineIntegration({
 		ambient_env: { group: 'Authentication', order: 11, widget: 'toggle', advanced: true },
 	},
 	objectBrowse: {
+		provider: 's3',
 		source(config) {
 			return {
 				provider: 's3',
@@ -116,7 +117,6 @@ export const s3 = defineIntegration({
 			return `import fsspec\n\nwith fsspec.open(${uri}, "rb", marimohub_integration=${descriptor}) as source:\n    data = source.read()`;
 		},
 	},
-
 	render({ config, instanceName }) {
 		const files: { path: string; content: string }[] = [];
 		const staticAuth = config.auth.method === 'static' ? config.auth : undefined;
@@ -203,6 +203,26 @@ export const gcs = defineIntegration({
 		'auth.credentials_json': { widget: 'textarea' },
 		ambient_env: { group: 'Authentication', order: 11, widget: 'toggle', advanced: true },
 	},
+	objectBrowse: {
+		provider: 'gcs',
+		source(config) {
+			return {
+				provider: 'gcs',
+				configured_bucket: config.bucket,
+				project_id: config.project_id,
+				auth:
+					config.auth.method === 'service_account'
+						? {
+								method: 'service_account',
+								credentials_json: config.auth.credentials_json,
+							}
+						: { method: 'ambient' },
+			};
+		},
+		snippet(instanceName, bucket, key) {
+			return objectStoreSnippet('gs', instanceName, bucket, key);
+		},
+	},
 
 	render({ config, instanceName }) {
 		const files: { path: string; content: string }[] = [];
@@ -230,6 +250,30 @@ export const gcs = defineIntegration({
 		});
 	},
 });
+
+function objectStoreSnippet(
+	scheme: 'gs' | 'az',
+	instanceName: string,
+	bucket: string,
+	key: string,
+): string {
+	const uri = JSON.stringify(`${scheme}://${bucket}/${key}`);
+	const descriptor = JSON.stringify(instanceName);
+	const extension = key.split('.').at(-1)?.toLowerCase();
+	if (extension === 'csv') {
+		return `import polars as pl\n\ndf = pl.read_csv(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
+	}
+	if (extension === 'json') {
+		return `import polars as pl\n\ndf = pl.read_json(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
+	}
+	if (extension === 'jsonl' || extension === 'ndjson') {
+		return `import polars as pl\n\ndf = pl.read_ndjson(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
+	}
+	if (extension === 'parquet') {
+		return `import polars as pl\n\ndf = pl.read_parquet(${uri}, storage_options={"marimohub_integration": ${descriptor}})`;
+	}
+	return `import fsspec\n\nwith fsspec.open(${uri}, "rb", marimohub_integration=${descriptor}) as source:\n    data = source.read()`;
+}
 
 const azureAuthSchema = z.discriminatedUnion('method', [
 	z.strictObject({ method: z.literal('ambient') }),
@@ -290,6 +334,21 @@ export const azureBlob = defineIntegration({
 		'auth.connection_string': { widget: 'password' },
 		'auth.client_secret': { widget: 'password' },
 		ambient_env: { group: 'Authentication', order: 11, widget: 'toggle', advanced: true },
+	},
+	objectBrowse: {
+		provider: 'azure_blob',
+		source(config) {
+			return {
+				provider: 'azure_blob',
+				configured_bucket: config.container,
+				account_name: config.account_name,
+				endpoint_suffix: config.endpoint_suffix,
+				auth: config.auth,
+			};
+		},
+		snippet(instanceName, container, key) {
+			return objectStoreSnippet('az', instanceName, container, key);
+		},
 	},
 
 	render({ config, instanceName }) {

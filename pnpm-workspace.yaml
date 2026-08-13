@@ -10,6 +10,7 @@ catalog:
   '@smithy/node-http-handler': ^4.9.1
   '@aws-sdk/client-secrets-manager': ^3.1066.0
   '@azure/core-auth': ^1.11.0
+  '@azure/core-rest-pipeline': ^1.25.0
   '@azure/identity': ^4.13.1
   '@azure/storage-blob': ^12.33.0
   '@cloudflare/sandbox': ^0.12.1

@@ -321,6 +321,8 @@ export default function DataBrowserPage() {
 									downloadAvailable={selectedObjectCapability.download}
 									searchAvailable={selectedObjectCapability.search === 'bounded-key-name'}
 									versionsAvailable={selectedObjectCapability.versions}
+									rootKind={selectedObjectCapability.root_kind}
+									uriScheme={selectedObjectCapability.uri_scheme}
 								/>
 							) : (
 								<EmptyState

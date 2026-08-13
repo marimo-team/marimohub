@@ -1886,6 +1886,23 @@ describe('ProjectIntegrationsStore', () => {
 			expect(() => JSON.stringify(kind)).not.toThrow();
 		}
 	});
+
+	it('advertises object browsing only for the exact wired provider', () => {
+		const browser = {
+			provider: 's3' as const,
+		} as ObjectBrowser<'s3'>;
+		const kinds = new ProjectIntegrationsStore({
+			bucket,
+			registry: defaultRegistry(),
+			codec,
+			objectBrowsers: { s3: browser },
+		}).listKinds();
+		expect(kinds.find(({ kind }) => kind === 's3')?.browse_surfaces).toContain('objects');
+		expect(kinds.find(({ kind }) => kind === 'gcs')?.browse_surfaces).not.toContain('objects');
+		expect(kinds.find(({ kind }) => kind === 'azure_blob')?.browse_surfaces).not.toContain(
+			'objects',
+		);
+	});
 });
 
 describe('OrgIntegrationsStore + project inheritance', () => {
@@ -2093,6 +2110,7 @@ describe('data browsing', () => {
 		configSchema: z.object({ token: zSecret() }),
 		render: () => ({}),
 		objectBrowse: {
+			provider: 's3',
 			source: (config) => ({
 				provider: 's3',
 				configured_bucket: 'lake',
@@ -2106,8 +2124,12 @@ describe('data browsing', () => {
 			snippet: (name, bucket, key) => `open ${name}:s3://${bucket}/${key}`,
 		},
 	});
-	const objectBrowser: ObjectBrowser = {
+	const objectBrowser: ObjectBrowser<'s3'> = {
+		provider: 's3',
 		capability: () => ({
+			provider: 's3',
+			root_kind: 'bucket',
+			uri_scheme: 's3',
 			available: true,
 			preview: true,
 			download: true,
@@ -2235,7 +2257,7 @@ describe('data browsing', () => {
 		project_id: pid,
 		user_id: ACTOR,
 		user_email: 'actor@example.com',
-		allow_server_ambient: false,
+		allow_server_ambient: {},
 	});
 
 	it('gates object-only integrations by provider and keeps table operations separate', async () => {
@@ -2302,7 +2324,7 @@ describe('data browsing', () => {
 		const registry = new IntegrationRegistry();
 		registry.register(objectKind);
 		const listBuckets = vi.fn(objectBrowser.listBuckets);
-		const leakingBrowser: ObjectBrowser = {
+		const leakingBrowser: ObjectBrowser<'s3'> = {
 			...objectBrowser,
 			capability: async () => {
 				throw new Error('provider rejected provider-secret');
@@ -2347,9 +2369,12 @@ describe('data browsing', () => {
 			const registry = new IntegrationRegistry();
 			registry.register(objectKind);
 			const listBuckets = vi.fn(objectBrowser.listBuckets);
-			const unavailableBrowser: ObjectBrowser = {
+			const unavailableBrowser: ObjectBrowser<'s3'> = {
 				...objectBrowser,
 				capability: () => ({
+					provider: 's3',
+					root_kind: 'bucket',
+					uri_scheme: 's3',
 					available: false,
 					preview: false,
 					download: false,

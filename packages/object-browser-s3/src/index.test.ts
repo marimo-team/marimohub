@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectId, ObjectBrowseError, UserId } from '@marimo-hub/core';
-import type { ObjectBrowseContext, ObjectStoreSource } from '@marimo-hub/core';
+import type { ObjectBrowseContext, S3ObjectStoreSource } from '@marimo-hub/core';
 import type { S3ClientLike } from './client';
 import { credentialsFor, endpointsMatch } from './client';
 import { S3ObjectBrowser } from './index';
 
-const source: ObjectStoreSource = {
+const source: S3ObjectStoreSource = {
 	provider: 's3',
 	configured_bucket: 'lake',
 	region: 'us-east-1',
@@ -22,7 +22,7 @@ const context: ObjectBrowseContext = {
 	project_id: createProjectId(),
 	user_id: UserId.parse('user-1'),
 	user_email: 'ada@example.com',
-	allow_server_ambient: false,
+	allow_server_ambient: {},
 };
 
 interface Sent {
@@ -933,10 +933,13 @@ describe('credential selection', () => {
 		const ambient = { ...source, auth: { method: 'ambient' as const } };
 		const temporary = credentialsFor(ambient, {
 			...context,
-			temporary_storage: { endpoint: 'https://s3.example.com/' },
-			temporary_s3_credentials: {
-				accessKeyId: 'temporary',
-				secretAccessKey: 'temporary-secret',
+			federation: {
+				provider: 's3',
+				storage: { endpoint: 'https://s3.example.com/' },
+				credentials: {
+					accessKeyId: 'temporary',
+					secretAccessKey: 'temporary-secret',
+				},
 			},
 		});
 		expect(temporary).toMatchObject({ accessKeyId: 'temporary' });
@@ -948,15 +951,20 @@ describe('credential selection', () => {
 		expect(() =>
 			credentialsFor(ambient, {
 				...context,
-				temporary_storage: { endpoint: 'https://other.example.com' },
-				temporary_s3_credentials: {
-					accessKeyId: 'temporary',
-					secretAccessKey: 'temporary-secret',
+				federation: {
+					provider: 's3',
+					storage: { endpoint: 'https://other.example.com' },
+					credentials: {
+						accessKeyId: 'temporary',
+						secretAccessKey: 'temporary-secret',
+					},
 				},
 			}),
 		).toThrow(/not valid/);
 		expect(() => credentialsFor(ambient, context)).toThrow(/not enabled/);
-		expect(credentialsFor(ambient, { ...context, allow_server_ambient: true })).toBeUndefined();
+		expect(
+			credentialsFor(ambient, { ...context, allow_server_ambient: { s3: true } }),
+		).toBeUndefined();
 	});
 });
 

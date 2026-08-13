@@ -434,6 +434,9 @@ const BrowseCapabilitySchema = z
 				.optional(),
 			objects: z
 				.object({
+					provider: z.enum(['s3', 'gcs', 'azure_blob']),
+					root_kind: z.enum(['bucket', 'container']),
+					uri_scheme: z.enum(['s3', 'gs', 'az']),
 					available: z.boolean(),
 					preview: z.boolean(),
 					download: z.boolean(),
@@ -1075,12 +1078,12 @@ async function resolveObjectAccess(
 	const base = await makeObjectBrowseContext(deps, project, user, signal, {
 		integrationId: iid,
 		includeFederated: false,
-		allowServerAmbient: wifEligible
-			? false
-			: deps.dataBrowser?.objectBrowser?.allowServerAmbientCredentials,
+		allowServerAmbient: deps.dataBrowser?.objectBrowser?.allowServerAmbientCredentials,
+		disableS3Ambient: wifEligible,
 	});
 	const baseCapability = await runObjectBrowse(() => integrations.browseCapability(pid, iid, base));
-	if (baseCapability.surfaces.objects?.available || !wifEligible) {
+	const objects = baseCapability.surfaces.objects;
+	if (objects?.available || !wifEligible || objects?.provider !== 's3') {
 		return { context: base, capability: baseCapability };
 	}
 	const federated = await makeObjectBrowseContext(deps, project, user, signal, {

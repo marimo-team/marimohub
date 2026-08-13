@@ -40,8 +40,8 @@ Editors and higher roles can use the Data page at `/projects/{pid}/data`.
 They do not need to start a session. The URL stores the selected integration,
 surface, table or object identity, and search scope, so a link restores the same view.
 
-The Data page lists namespaces, tables, and table schemas for catalog integrations. S3 integrations
-retain bucket, prefix, and object semantics; they are not presented as tables. The schema view
+The Data page lists namespaces, tables, and table schemas for catalog integrations. S3 and GCS use
+bucket, prefix, and object semantics; Azure Blob uses containers. They are not presented as tables. The schema view
 shows columns, partition fields, and available snapshot statistics. It also
 provides notebook code that loads the table through the integration. The
 **Open in notebook** action creates a notebook in the project with that code
@@ -52,12 +52,15 @@ Browsing is read-only. Iceberg REST and ClickHouse use HTTP GET requests. Trino
 submits hub-generated `SHOW`, `DESCRIBE`, and bounded `SELECT` statements. All
 requests use the egress policy from `MARIMOHUB_INTEGRATIONS_PROBE`.
 
-### S3 object browsing
+### Object-store browsing
 
-S3 object browsing supports configured-bucket or accessible-bucket navigation, direct prefix
+S3, GCS, and Azure Blob browsing support configured-root or accessible-root navigation, direct prefix
 listing, bounded key-name search, object metadata and tags, read-only version history, explicit
 previews, notebook snippets, and streamed downloads. It never uploads, deletes, restores, renames,
 or edits upstream objects or metadata.
+
+The API retains `bucket`, `key`, and `version_id` as provider-neutral compatibility fields. The UI
+calls Azure roots containers. Copied and detail URIs use `s3://`, `gs://`, and `az://` respectively.
 
 When an S3 integration sets `bucket`, the browser exposes only that bucket and does not call
 `ListBuckets`. This is a user-interface scope, not an IAM restriction: notebook code still has every
@@ -86,9 +89,9 @@ validated PNG, JPEG, GIF, and WebP files can be previewed within configured byte
 request, result, and deadline limits. HTML, SVG, PDF, archives, executables, unknown binary files,
 and oversized images are never rendered inline. Truncated previews say so.
 
-Downloads stay behind hub authorization and stream from S3 through the server. They support one
+Downloads stay behind hub authorization and stream from the object store through the server. They support one
 HTTP byte range, preserve ETag/version preconditions, use safe attachment filenames, and propagate
-client cancellation upstream. The hub does not return S3 credentials or presigned URLs.
+client cancellation upstream. The hub does not return provider credentials or presigned URLs.
 
 The raw content endpoint is
 `GET /api/v1/projects/{pid}/integrations/{iid}/browse/objects/content`. It requires `bucket` and
@@ -96,12 +99,31 @@ The raw content endpoint is
 `Range: bytes=…` header and receive `200` or `206`. Pre-stream failures use the standard JSON error
 envelope, including `403`, `404`, `412`, `416`, `429`, and `503` responses.
 
-Static integration credentials are used only for that integration. Ambient-auth integrations use
+Static integration credentials are used only for that integration. S3 ambient-auth integrations use
 short-lived project WIF credentials when the project enables a compatible target. The WIF storage
 endpoint and integration endpoint must be the same canonical origin. Otherwise, ambient object
-browsing remains unavailable unless the operator explicitly sets
+browsing for S3 remains unavailable unless the operator explicitly sets
 `MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS=true`. That setting grants project
 editors access through the control-plane AWS identity and should be enabled only intentionally.
+
+GCS service-account integrations use `storage.buckets.list` for discovery, `storage.objects.list`
+for navigation and versions, and `storage.objects.get` for metadata and content. Ambient GCS uses
+ADC only when the same server-ambient operator opt-in is enabled. Bucket discovery needs a project
+from the integration, service-account key, ADC environment, or metadata service. GCS generations
+map to `version_id`; version history uses the native `versions=true` listing and has no delete-marker
+records.
+
+Azure supports account keys, SAS tokens, connection strings, service principals, and
+`DefaultAzureCredential`. Grant container listing only when discovery is needed, blob listing for
+navigation and versions, and blob read/tag permissions for metadata and content. Azure blob version
+IDs map to `version_id`; accounts without Blob Versions return an empty terminal history while
+current blobs remain browsable. Soft-deleted blobs are not labeled as S3 delete markers.
+
+Enabling server-ambient browsing gives project editors access through the hub control-plane identity
+for each ambient provider. GCS metadata and Azure Entra token acquisition can therefore expose every
+object that identity may read. Keep this off unless that authority is intended. Provider data-plane
+traffic uses the guarded resolver; Azure authentication remains limited to SDK-managed credentials
+and fixed Entra authority hosts. All browser operations are read-only.
 
 Custom endpoints use the configured guarded/private integration egress policy. `guarded` rejects
 private, loopback, link-local, metadata, and other reserved targets. Use `private` only when an
@@ -182,7 +204,7 @@ Each request checks whether the integration is available before it reads the
 cache. Disabling or shadowing an integration therefore takes effect immediately.
 A new configuration version uses a new cache entry.
 
-Each replica can cache namespace and table lists for one minute and S3 bucket/object lists for 15 seconds.
+Each replica can cache namespace and table lists for one minute and object-store root/object lists for 15 seconds.
 It can cache table schemas for five minutes. Searches, previews, tags, versions, content, failures,
 and authorization denials are not cached. Browse requests have per-user rate limits. The
 **Refresh** action bypasses the response cache, but it still uses the rate

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProjectId, UserId } from '@marimo-hub/core';
-import type { ObjectBrowseContext, ObjectStoreSource } from '@marimo-hub/core';
+import type { ObjectBrowseContext } from '@marimo-hub/core';
 import type { AsyncBuffer } from 'hyparquet';
-import type { S3ClientLike } from '../client';
-import { S3ObjectBrowser } from '../index';
+import { DEFAULT_OBJECT_BROWSER_LIMITS } from '../limits';
+import type { ObjectBrowserLimits } from '../limits';
+import { previewObject } from './index';
 
 const parquet = vi.hoisted(() => ({
 	metadata: vi.fn(),
@@ -17,22 +18,11 @@ vi.mock('hyparquet', () => ({
 	parquetSchema: parquet.schema,
 }));
 
-const source: ObjectStoreSource = {
-	provider: 's3',
-	configured_bucket: 'lake',
-	path_style: false,
-	auth: {
-		method: 'static',
-		access_key_id: 'access',
-		secret_access_key: 'secret',
-	},
-};
-
 const context: ObjectBrowseContext = {
 	project_id: createProjectId(),
 	user_id: UserId.parse('user-1'),
 	user_email: 'ada@example.com',
-	allow_server_ambient: false,
+	allow_server_ambient: {},
 };
 
 beforeEach(() => {
@@ -343,36 +333,49 @@ describe('Parquet preview safety', () => {
 	});
 });
 
-function harness(
-	responses: unknown[],
-	limits: ConstructorParameters<typeof S3ObjectBrowser>[0]['limits'] = {},
-) {
+function harness(responses: unknown[], limits: Partial<ObjectBrowserLimits> = {}) {
 	const queue = [...responses];
 	const sent: unknown[] = [];
-	let destroyed = 0;
-	const client: S3ClientLike = {
-		async send(command) {
-			sent.push(command);
-			const response = queue.shift();
-			if (response instanceof Error) throw response;
-			return response;
-		},
-		destroy() {
-			destroyed += 1;
-		},
+	let finished = false;
+	const next = () => {
+		sent.push({});
+		const response = queue.shift();
+		if (response instanceof Error) throw response;
+		return response as {
+			Body?: ReadableStream<Uint8Array>;
+			ContentLength?: number;
+			ContentType?: string;
+			ETag?: string;
+		};
 	};
-	const browser = new S3ObjectBrowser({ mode: 'full', limits, clientFactory: () => client });
 	return {
 		preview(key: string, limit = 20) {
-			return browser.previewObject(source, context, {
-				bucket: 'lake',
-				key,
-				limit,
-				content_url: '/content',
+			return previewObject(
+				{
+					head: async () => {
+						const response = next();
+						return {
+							total_bytes: response.ContentLength ?? 0,
+							content_type: response.ContentType,
+							etag: response.ETag,
+						};
+					},
+					readRange: async (_request, start, end) => {
+						const response = next();
+						if (!response.Body) return new Uint8Array();
+						const bytes = await new Response(response.Body).bytes();
+						return bytes.slice(0, end - start);
+					},
+				},
+				{ ...DEFAULT_OBJECT_BROWSER_LIMITS, ...limits },
+				context,
+				{ bucket: 'lake', key, limit, content_url: '/content' },
+			).finally(() => {
+				finished = true;
 			});
 		},
 		sent: () => sent,
-		destroyed: () => destroyed,
+		destroyed: () => (finished ? 1 : 0),
 	};
 }
 

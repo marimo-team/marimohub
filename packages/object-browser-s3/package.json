@@ -21,9 +21,8 @@
 	"dependencies": {
 		"@aws-sdk/client-s3": "catalog:",
 		"@marimo-hub/core": "workspace:*",
-		"@smithy/node-http-handler": "catalog:",
-		"csv-parse": "catalog:",
-		"hyparquet": "catalog:"
+		"@marimo-hub/object-browser-commons": "workspace:*",
+		"@smithy/node-http-handler": "catalog:"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
