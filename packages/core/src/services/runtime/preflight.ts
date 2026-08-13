@@ -13,6 +13,8 @@
  * crashloops a replica.
  */
 
+import { withDeadline } from '../../internal/async';
+
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skipped';
 
 export interface CheckResult {
@@ -65,19 +67,11 @@ async function runOne(
 ): Promise<CheckResult> {
 	const timeoutMs = check.timeoutMs ?? defaultTimeoutMs;
 	const start = now();
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const timeout = new Promise<CheckOutcome>((resolve) => {
-		timer = setTimeout(
-			() =>
-				resolve({
-					status: 'fail',
-					message: `Timed out after ${timeoutMs}ms (treated as transient)`,
-				}),
-			timeoutMs,
-		);
-	});
 	try {
-		const outcome = await Promise.race([check.run(), timeout]);
+		const outcome = await withDeadline(check.run(), {
+			timeoutMs,
+			timeoutError: () => new Error(`Timed out after ${timeoutMs}ms (treated as transient)`),
+		});
 		return { name: check.name, latencyMs: now() - start, ...outcome };
 	} catch (err) {
 		return {
@@ -86,8 +80,6 @@ async function runOne(
 			status: 'fail',
 			message: err instanceof Error ? err.message : String(err),
 		};
-	} finally {
-		if (timer) clearTimeout(timer);
 	}
 }
 

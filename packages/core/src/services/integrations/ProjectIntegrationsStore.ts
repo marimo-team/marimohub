@@ -18,6 +18,12 @@ import { logOperationalError } from '../../operationalLog';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
+import type { DataPreviewService } from './data-preview/DataPreviewService';
+import type {
+	PreviewCredentialVars,
+	PreviewProgramAvailability,
+	PreviewPrograms,
+} from './data-preview/programs';
 import type {
 	BrowseCapabilityResult,
 	BrowseNamespacesRequest,
@@ -176,6 +182,13 @@ function isTombstoned(raw: unknown): boolean {
 	return typeof (raw as { deleted_at?: unknown } | null)?.deleted_at === 'string';
 }
 
+function availabilityForPrograms(programs: PreviewPrograms): PreviewProgramAvailability {
+	return {
+		...(programs.duckdbWasm ? { duckdbWasm: programs.duckdbWasm.requires ?? [] } : {}),
+		...(programs.python ? { python: true } : {}),
+	};
+}
+
 /** Opaque keyset cursor: the last version number examined for the page. */
 function encodeVersionCursor(version: number): string {
 	return btoa(String(version));
@@ -218,6 +231,7 @@ export interface IntegrationsStoreOptions {
 	/** Injectable clock for deterministic tests. */
 	now?: () => string;
 	metrics?: Metrics;
+	dataPreview?: DataPreviewService;
 }
 
 /**
@@ -234,6 +248,7 @@ class ScopedIntegrationsStore {
 	private readonly objectBrowsers: Partial<Record<ObjectStoreSource['provider'], ObjectBrowser>>;
 	private readonly now: () => string;
 	private readonly metrics: Metrics;
+	private readonly dataPreview?: DataPreviewService;
 
 	constructor(options: IntegrationsStoreOptions) {
 		this.bucket = options.bucket;
@@ -247,6 +262,7 @@ class ScopedIntegrationsStore {
 		this.objectBrowsers = options.objectBrowsers ?? {};
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.metrics = options.metrics ?? noopMetrics;
+		this.dataPreview = options.dataPreview;
 	}
 
 	listKinds(): KindDescriptor[] {
@@ -797,8 +813,12 @@ class ScopedIntegrationsStore {
 		}
 		if (def.browse && this.browseProbe) {
 			const verdict = def.browse.available(parsed);
+			const previewVerdict = def.preview?.available(parsed);
+			const runtimePreview =
+				previewVerdict?.ok === true &&
+				this.dataPreview?.available(previewVerdict.programs) === true;
 			surfaces.tables = verdict.ok
-				? { available: true, preview: def.browse.previewRows !== undefined }
+				? { available: true, preview: def.browse.previewRows !== undefined || runtimePreview }
 				: unavailableTableCapability(verdict.reason);
 		}
 		if (def.objectBrowse && objectContext) {
@@ -851,15 +871,54 @@ class ScopedIntegrationsStore {
 	async browseTablePreview(
 		scope: IntegrationScope,
 		id: IntegrationId,
+		projectId: ProjectId,
+		principal: { userId: UserId; email: string },
+		sessionId: SessionRenderContext['sessionId'],
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
+		credentialVars?: PreviewCredentialVars,
 	): Promise<TablePreview> {
-		const { browse, config, probe } = await this.openBrowse(scope, id);
-		if (!browse.previewRows) {
-			throw new ValidationError('This integration requires a preview sandbox.');
+		const { head, def, version, browse, config, probe } = await this.openBrowse(scope, id);
+		if (browse.previewRows) return browse.previewRows(config, probe, namespace, table, request);
+		if (!def.preview || !this.dataPreview) {
+			throw new ValidationError(
+				'This integration does not support row preview on this deployment.',
+			);
 		}
-		return browse.previewRows(config, probe, namespace, table, request);
+		const verdict = def.preview.available(config);
+		if (!verdict.ok) {
+			throw new ValidationError(
+				`Integration "${head.name}" cannot preview rows: ${verdict.reason}.`,
+			);
+		}
+		if (!this.dataPreview.available(verdict.programs)) {
+			throw new ValidationError(
+				'This integration does not support row preview on this deployment.',
+			);
+		}
+		const programs = def.preview.programs({
+			config,
+			integration: {
+				id: head.id,
+				name: head.name,
+				kind: head.kind,
+				version: version.version,
+			},
+			projectId,
+			principal,
+			sessionId,
+			namespace,
+			table,
+			limit: request.limit,
+			credentialVars,
+		});
+		if (!this.dataPreview.available(availabilityForPrograms(programs))) {
+			throw new ValidationError(
+				'This integration does not support row preview on this deployment.',
+			);
+		}
+		return this.dataPreview.preview(principal.userId, programs);
 	}
 
 	async browseObjectBuckets(
@@ -987,7 +1046,7 @@ class ScopedIntegrationsStore {
 	 * browsing writes nothing to the bucket.
 	 */
 	private async openBrowse(scope: IntegrationScope, id: IntegrationId) {
-		const { head, def, config: parsed } = await this.openResolvedBrowse(scope, id);
+		const { head, def, version, config: parsed } = await this.openResolvedBrowse(scope, id);
 		const probe = this.browseProbe;
 		if (!probe) {
 			throw new ValidationError('Data browsing is not enabled on this deployment.');
@@ -999,13 +1058,13 @@ class ScopedIntegrationsStore {
 		if (!verdict.ok) {
 			throw new ValidationError(`Integration "${head.name}" cannot be browsed: ${verdict.reason}.`);
 		}
-		return { head, browse: def.browse, config: parsed, probe };
+		return { head, def, version, browse: def.browse, config: parsed, probe };
 	}
 
 	private async openResolvedBrowse(scope: IntegrationScope, id: IntegrationId) {
 		const head = await this.getHead(scope, id);
 		if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
-		const { def, config } = await this.loadCurrent(scope, head);
+		const { def, config, version } = await this.loadCurrent(scope, head);
 		const resolved = await this.open(scope, head.id, def, config);
 		const parsed = def.configSchema.safeParse(resolved);
 		if (!parsed.success) {
@@ -1013,7 +1072,7 @@ class ScopedIntegrationsStore {
 				`Stored config no longer matches kind "${def.kind}" — edit and re-save it.`,
 			);
 		}
-		return { head, def, config: parsed.data };
+		return { head, def, version, config: parsed.data };
 	}
 
 	/** `getHead`, but absence (or a tombstone) reads as undefined instead of a 404. */
@@ -1584,12 +1643,25 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 	browseTablePreview(
 		projectId: ProjectId,
 		id: IntegrationId,
+		principal: { userId: UserId; email: string },
+		sessionId: SessionRenderContext['sessionId'],
 		namespace: string[],
 		table: string,
 		request: TablePreviewRequest,
+		credentialVars?: PreviewCredentialVars,
 	): Promise<TablePreview> {
 		return this.withBrowseScope(projectId, id, (scope) =>
-			this.store.browseTablePreview(scope, id, namespace, table, request),
+			this.store.browseTablePreview(
+				scope,
+				id,
+				projectId,
+				principal,
+				sessionId,
+				namespace,
+				table,
+				request,
+				credentialVars,
+			),
 		);
 	}
 
@@ -1669,21 +1741,6 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 			this.store.openObject(scope, id, context, request),
 		);
 	}
-
-	async resolveForPreview(
-		projectId: ProjectId,
-		id: IntegrationId,
-		context: SessionRenderContext,
-	): Promise<SessionRender> {
-		return this.withBrowseScope(projectId, id, async (scope) => {
-			const head = await this.store.findHead(scope, id);
-			if (!head) throw new NotFoundError(`Integration ${id} not found`);
-			if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
-			const rendered = await this.store.renderOne(scope, head, projectId, context);
-			return bundleIntegrations([rendered], context.sessionId);
-		});
-	}
-
 	/**
 	 * Browse reaches the merged view members already have — project instances
 	 * plus inherited org ones — unlike `get`/`test`, which stay project-scope.

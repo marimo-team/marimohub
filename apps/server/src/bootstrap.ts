@@ -158,17 +158,28 @@ export async function bootstrap(
 				server.close(() => resolve());
 			});
 			if ('closeIdleConnections' in server) server.closeIdleConnections();
+			let dataBrowserClose: Promise<void> | undefined;
+			const closeDataBrowser = (): Promise<void> => {
+				dataBrowserClose ??= deps.dataBrowser?.close?.() ?? Promise.resolve();
+				return dataBrowserClose;
+			};
 
 			// Long-lived WebSockets can keep close pending indefinitely. Ten seconds stays
 			// below Kubernetes' default 30-second termination grace period.
 			const result = await settleAllWithin(
-				[closed, ...(otel ? [Promise.resolve().then(() => otel.shutdown())] : [])],
+				[
+					closed,
+					...(deps.dataBrowser?.close ? [closed.then(closeDataBrowser)] : []),
+					...(otel ? [Promise.resolve().then(() => otel.shutdown())] : []),
+				],
 				DRAIN_TIMEOUT_MS,
 			);
 			// A timed-out drain still resolves (settleAllWithin never rejects), so surface it
 			// here or the forced termination looks like a clean shutdown.
-			if (result === 'timed-out')
+			if (result === 'timed-out') {
 				logEvent({ level: 'warn', event: 'drain_timeout', timeoutMs: DRAIN_TIMEOUT_MS });
+				await settleAllWithin([closeDataBrowser()], DRAIN_TIMEOUT_MS);
+			}
 		})();
 		return drainPromise;
 	};

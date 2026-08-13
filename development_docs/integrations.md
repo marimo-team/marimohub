@@ -156,14 +156,24 @@ imports it. Core owns source/context/result contracts, and API/web dispatch on t
 `tables` or `objects` surface instead of importing provider code.
 
 Kinds can implement `previewRows` for bounded reads through the guarded HTTP
-path. Other kinds use `SandboxDataPreview` when the data browser is `full`.
+path. Otherwise, `IntegrationDefinition.preview` emits DuckDB SQL and/or Python
+programs. `DataPreviewService` selects `DuckDBWasmDataPreview` first when its
+required runtime features are healthy, then `SandboxDataPreview`. Neither
+executor switches on integration kind.
+
+The DuckDB SDK lives in `packages/duckdb-wasm-runtime`; core owns only the
+runtime-neutral orchestration seam. The Node implementation supports worker and
+inline execution, locks configuration, disables external access, and runs each
+result query in a read-only transaction. It exposes no remote-data feature yet:
+DuckDB extension requests must not bypass the guarded integration transport.
 
 The sandbox adapter renders only the selected integration. It uses the image
 from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It
 also injects applicable WIF credentials.
 
-Per-user and process-wide limits control admission. Deadlines bound startup and
-execution. A `finally` block destroys each sandbox.
+Per-user and process-wide limits control admission across both executors.
+Deadlines bound startup and execution. A `finally` block destroys each sandbox;
+DuckDB failures poison and close the reusable engine before later traffic.
 
 All network access must use the injected browse probe. This probe has a separate
 request budget and a larger response limit than the connection-test probe.

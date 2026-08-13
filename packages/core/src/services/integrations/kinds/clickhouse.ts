@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { UnavailableError, ValidationError } from '../../../errors';
+import { isRecord } from '../../../internal/validation';
 import type { IntegrationProbe } from '../../../ports/integrations';
 import {
 	basicAuthHeader,
@@ -225,8 +226,4 @@ function qualifiedName(parts: string[]): string {
 
 function quoteIdentifier(value: string): string {
 	return `"${value.replaceAll('"', '""')}"`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

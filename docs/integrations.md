@@ -144,14 +144,30 @@ request rows. The response is not cached, and a successful request creates an
 audit event.
 
 Trino and ClickHouse run bounded preview queries through their HTTP APIs. Other
-browsable integrations use a new sandbox and a fixed PyIceberg scan.
+browsable integrations emit a runtime-specific preview program. The preview
+service prefers DuckDB-Wasm SQL when the runtime supports every required
+feature, then falls back to a new sandbox running a fixed Python program.
+
+Enable the experimental DuckDB executor with:
+
+```bash
+MARIMOHUB_EXPERIMENTS=duckdb-wasm-preview
+```
+
+The Node server uses a worker thread by default. Set
+`MARIMOHUB_DUCKDB_WASM_RUNTIME=inline` only for trusted, server-authored preview
+programs when a worker is unavailable. Each query runs in a read-only
+transaction after the runtime disables external access, sets its memory limit,
+and locks configuration. DuckDB-Wasm does not currently advertise Iceberg HTTP
+support because its traffic cannot use the hub's guarded browse transport;
+Iceberg therefore continues to use the sandbox executor.
 
 Sandbox previews require `MARIMOHUB_DATA_PREVIEW_IMAGE`. The image must contain
 Python, PyIceberg, and PyArrow. The compute backend must support per-sandbox
 OCI image overrides. The `local`, `e2b`, `none`, and `noop` backends do not
 support them.
 
-At startup, the hub verifies the image before it advertises sandbox previews.
+At startup, the hub verifies each configured executor before advertising it.
 Each preview receives the selected integration configuration and applicable WIF
 credentials. Concurrency limits and deadlines bound resource use. The hub
 destroys the sandbox after the request, including after a failure.

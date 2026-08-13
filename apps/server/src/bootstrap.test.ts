@@ -19,13 +19,15 @@ type PreflightReport = Awaited<ReturnType<NonNullable<ApiDeps['preflight']>>>;
 const BASE_ENV = { MARIMOHUB_STATIC_ROOT: './public' };
 
 function fakeServer(closeImmediately = true) {
+	let finishClose: (() => void) | undefined;
 	const close = vi.fn((callback?: () => void) => {
 		if (closeImmediately) callback?.();
+		else finishClose = callback;
 	});
 	const closeIdleConnections = vi.fn();
 	const on = vi.fn();
 	const server = { close, closeIdleConnections, on } as unknown as ServerType;
-	return { server, close, closeIdleConnections };
+	return { server, close, closeIdleConnections, finishClose: () => finishClose?.() };
 }
 
 function makeHarness(
@@ -194,6 +196,53 @@ describe('bootstrap', () => {
 		await vi.advanceTimersByTimeAsync(0);
 
 		expect(shutdown).toHaveBeenCalledOnce();
+		expect(harness.exit).toHaveBeenCalledWith(0);
+	});
+
+	it('closes the data-preview backend after active HTTP requests have drained', async () => {
+		const closePreview = vi.fn().mockResolvedValue(undefined);
+		deps.dataBrowser = { preview: true, close: closePreview };
+		const harness = makeHarness(deps, { closeImmediately: false });
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+
+		const draining = handle?.drain();
+		expect(harness.close).toHaveBeenCalledOnce();
+		expect(closePreview).not.toHaveBeenCalled();
+
+		harness.finishClose();
+		await draining;
+		expect(closePreview).toHaveBeenCalledOnce();
+	});
+
+	it('closes the data-preview backend when WebSockets outlive the drain deadline', async () => {
+		const closePreview = vi.fn().mockResolvedValue(undefined);
+		deps.dataBrowser = { preview: true, close: closePreview };
+		const harness = makeHarness(deps, { closeImmediately: false });
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+
+		const draining = handle?.drain();
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(closePreview).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(1);
+		await draining;
+		expect(closePreview).toHaveBeenCalledOnce();
+	});
+
+	it('exits after a bounded wait when forced data-preview cleanup does not finish', async () => {
+		const closePreview = vi.fn(() => new Promise<void>(() => {}));
+		deps.dataBrowser = { preview: true, close: closePreview };
+		const harness = makeHarness(deps, { closeImmediately: false });
+		await bootstrap(BASE_ENV, harness.overrides);
+
+		harness.signals.get('SIGTERM')?.();
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(closePreview).toHaveBeenCalledOnce();
+		expect(harness.exit).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(harness.exit).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
 		expect(harness.exit).toHaveBeenCalledWith(0);
 	});
 

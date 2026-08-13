@@ -69,7 +69,7 @@ describe('createFromEnv auth backend selection', () => {
 		expect(deps.sandbox.computeProfileOverride).toBe('none');
 	});
 
-	it('wires sandbox preview only when the compute backend honors its dedicated image', () => {
+	it('wires a preview service only when an executor is configured', () => {
 		const env = {
 			...baseEnv,
 			MARIMOHUB_AUTH_BACKEND: 'dev',
@@ -77,24 +77,43 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_DATA_BROWSER: 'full',
 			MARIMOHUB_DATA_PREVIEW_IMAGE: 'preview-image',
 		};
-		expect(
-			createFromEnv({ ...env, MARIMOHUB_COMPUTE_BACKEND: 'local' }).dataBrowser?.sandboxPreview,
-		).toBeUndefined();
-		expect(
-			createFromEnv({
-				...env,
-				MARIMOHUB_COMPUTE_BACKEND: 'e2b',
-				MARIMOHUB_COMPUTE_E2B_API_KEY: 'test-key',
-				MARIMOHUB_COMPUTE_E2B_TEMPLATE: 'base-template',
-			}).dataBrowser?.sandboxPreview,
-		).toBeUndefined();
+		const local = createFromEnv({ ...env, MARIMOHUB_COMPUTE_BACKEND: 'local' }).dataBrowser;
+		expect(local).toMatchObject({ preview: true });
+		expect(local?.checkPreview).toBeUndefined();
+		const e2b = createFromEnv({
+			...env,
+			MARIMOHUB_COMPUTE_BACKEND: 'e2b',
+			MARIMOHUB_COMPUTE_E2B_API_KEY: 'test-key',
+			MARIMOHUB_COMPUTE_E2B_TEMPLATE: 'base-template',
+		}).dataBrowser;
+		expect(e2b).toMatchObject({ preview: true });
+		expect(e2b?.checkPreview).toBeUndefined();
 
 		const preview = createFromEnv({
 			...env,
 			MARIMOHUB_COMPUTE_BACKEND: 'docker',
-		}).dataBrowser?.sandboxPreview;
-		expect(preview).toBeDefined();
-		expect(preview?.available()).toBe(false);
+		}).dataBrowser;
+		expect(preview?.checkPreview).toBeTypeOf('function');
+		expect(preview?.close).toBeTypeOf('function');
+	});
+
+	it('registers DuckDB-Wasm only behind its experiment', () => {
+		const env = {
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_INTEGRATIONS: 'on',
+			MARIMOHUB_DATA_BROWSER: 'full',
+		};
+		const withoutExperiment = createFromEnv(env).dataBrowser;
+		expect(withoutExperiment).toMatchObject({ preview: true });
+		expect(withoutExperiment?.checkPreview).toBeUndefined();
+
+		const deps = createFromEnv({
+			...env,
+			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
+		});
+		expect(deps.dataBrowser?.checkPreview).toBeTypeOf('function');
+		expect(deps.dataBrowser?.close).toBeTypeOf('function');
 	});
 
 	it('rejects invalid sandbox-preview limits during composition', () => {

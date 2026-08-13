@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectId } from '@marimo-hub/core';
+import { createProjectId, DataPreviewService } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
 import { ConfigError } from './errors';
 import {
@@ -200,24 +200,22 @@ describe('makeIntegrations data browser', () => {
 		});
 	});
 
-	it('does not add a generic sandbox fallback unless a runtime is explicitly wired', () => {
-		const runtime = {
-			available: () => false,
-			check: async () => {},
-			preview: async () => ({ columns: [], rows: [] }),
-		};
+	it('wires aggregate preview lifecycle only when a preview service is supplied', () => {
+		const runtime = new DataPreviewService({ maxConcurrent: 1, maxConcurrentPerUser: 1 });
 		const without = makeIntegrations(
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
 			new MemoryBucket(),
 		);
-		expect(without.dataBrowser?.sandboxPreview).toBeUndefined();
+		expect(without.dataBrowser).toMatchObject({ preview: true });
+		expect(without.dataBrowser?.checkPreview).toBeUndefined();
 		const withRuntime = makeIntegrations(
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
 			new MemoryBucket(),
 			undefined,
 			runtime,
 		);
-		expect(withRuntime.dataBrowser?.sandboxPreview).toBe(runtime);
+		expect(withRuntime.dataBrowser?.checkPreview).toBeTypeOf('function');
+		expect(withRuntime.dataBrowser?.close).toBeTypeOf('function');
 	});
 
 	it('passes metadata and full modes to the production S3 browser', async () => {
@@ -245,24 +243,29 @@ describe('makeIntegrations data browser', () => {
 		}
 	});
 
-	it('advertises sandbox fallback only after its runtime becomes available', async () => {
-		let available = false;
-		const runtime = {
-			available: () => available,
-			check: async () => {
-				available = true;
+	it('delegates aggregate preview preflight', async () => {
+		let checked = false;
+		const runtime = new DataPreviewService({
+			maxConcurrent: 1,
+			maxConcurrentPerUser: 1,
+			sandbox: {
+				available: () => checked,
+				check: async () => {
+					checked = true;
+				},
+				preview: async () => ({ columns: [], rows: [] }),
+				close: async () => {},
 			},
-			preview: async () => ({ columns: [], rows: [] }),
-		};
+		});
 		const wired = makeIntegrations(
 			{ MARIMOHUB_INTEGRATIONS: 'on', MARIMOHUB_DATA_BROWSER: 'full' },
 			new MemoryBucket(),
 			undefined,
 			runtime,
 		);
-		expect(wired.dataBrowser?.sandboxPreview?.available()).toBe(false);
-		await wired.dataBrowser?.sandboxPreview?.check();
-		expect(wired.dataBrowser?.sandboxPreview?.available()).toBe(true);
+		expect(checked).toBe(false);
+		await wired.dataBrowser?.checkPreview?.();
+		expect(checked).toBe(true);
 	});
 
 	it('refuses to enable browsing without integrations', () => {

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { NotFoundError, UnavailableError, ValidationError } from '../../../errors';
+import { asRecord } from '../../../internal/validation';
 import type {
 	BrowsePageRequest,
 	IntegrationProbe,
@@ -7,11 +8,13 @@ import type {
 	TableSchema,
 } from '../../../ports/integrations';
 import { INTEGRATIONS_DIR } from '../bundle';
+import { sqlIdentifier, sqlLiteral } from '../data-preview/sql';
 import { basicAuthHeader, defineIntegration, probeErrorDetails } from '../sdk';
 import { zSecret } from '../secretFields';
 import {
 	extraPropertiesSchema,
 	ICEBERG_BRAND_COLOR,
+	ICEBERG_RUNTIME_DEFAULTS,
 	icebergRuntimeSchema,
 	icebergRequirements,
 	icebergStorageSchema,
@@ -62,6 +65,16 @@ const authSchema = z.discriminatedUnion('method', [
 
 const isInsecureUrl = (url: string) => url.startsWith('http://');
 
+const ICEBERG_REST_DEFAULTS = {
+	snapshot_loading_mode: 'all' as const,
+	metrics_reporting_enabled: true,
+	view_endpoints_supported: false,
+	scan_planning_mode: 'client' as const,
+	namespace_separator: '%1F',
+	table_cache_expire_after_write_ms: 300_000,
+	table_cache_max_entries: 100,
+};
+
 const icebergRestConfig = z.strictObject({
 	uri: httpUrl().describe('REST catalog base URI, e.g. https://catalog.internal/api/catalog'),
 	warehouse: z.string().optional().describe('Warehouse name/path if the server hosts several'),
@@ -84,24 +97,30 @@ const icebergRestConfig = z.strictObject({
 		.default({}),
 	rest: z
 		.strictObject({
-			snapshot_loading_mode: z.enum(['all', 'refs']).default('all'),
-			metrics_reporting_enabled: z.boolean().default(true),
+			snapshot_loading_mode: z
+				.enum(['all', 'refs'])
+				.default(ICEBERG_REST_DEFAULTS.snapshot_loading_mode),
+			metrics_reporting_enabled: z
+				.boolean()
+				.default(ICEBERG_REST_DEFAULTS.metrics_reporting_enabled),
 			page_size: z.number().int().positive().optional(),
-			view_endpoints_supported: z.boolean().default(false),
-			scan_planning_mode: z.enum(['client', 'server']).default('client'),
-			namespace_separator: z.string().min(1).default('%1F'),
-			table_cache_expire_after_write_ms: z.number().int().nonnegative().default(300_000),
-			table_cache_max_entries: z.number().int().positive().default(100),
+			view_endpoints_supported: z.boolean().default(ICEBERG_REST_DEFAULTS.view_endpoints_supported),
+			scan_planning_mode: z
+				.enum(['client', 'server'])
+				.default(ICEBERG_REST_DEFAULTS.scan_planning_mode),
+			namespace_separator: z.string().min(1).default(ICEBERG_REST_DEFAULTS.namespace_separator),
+			table_cache_expire_after_write_ms: z
+				.number()
+				.int()
+				.nonnegative()
+				.default(ICEBERG_REST_DEFAULTS.table_cache_expire_after_write_ms),
+			table_cache_max_entries: z
+				.number()
+				.int()
+				.positive()
+				.default(ICEBERG_REST_DEFAULTS.table_cache_max_entries),
 		})
-		.default({
-			snapshot_loading_mode: 'all',
-			metrics_reporting_enabled: true,
-			view_endpoints_supported: false,
-			scan_planning_mode: 'client',
-			namespace_separator: '%1F',
-			table_cache_expire_after_write_ms: 300_000,
-			table_cache_max_entries: 100,
-		}),
+		.default(ICEBERG_REST_DEFAULTS),
 	headers: z
 		.record(z.string().regex(HTTP_HEADER_NAME_REGEX), z.string())
 		.default({})
@@ -219,60 +238,69 @@ export const icebergRest = defineIntegration({
 	},
 
 	render({ config, instanceName }) {
-		assertSafeHeaders(config.headers);
-		const files: { path: string; content: string }[] = [];
-		const properties: Record<string, unknown> = {
-			uri: config.uri,
-			...(config.warehouse ? { warehouse: config.warehouse } : {}),
-			...authProperties(config.auth, instanceName, files),
-			...storageProperties(config.storage),
-			...runtimeCatalogProperties(config.runtime),
-			...delegationProperties(config.access_delegation),
-			'snapshot-loading-mode': config.rest.snapshot_loading_mode,
-			'rest-metrics-reporting-enabled': String(config.rest.metrics_reporting_enabled),
-			...(config.rest.page_size ? { 'rest-page-size': String(config.rest.page_size) } : {}),
-			'view-endpoints-supported': String(config.rest.view_endpoints_supported),
-			'scan-planning-mode': config.rest.scan_planning_mode,
-			'namespace-separator': config.rest.namespace_separator,
-			'rest-table-cache.expire-after-write-ms': String(
-				config.rest.table_cache_expire_after_write_ms,
-			),
-			'rest-table-cache.max-entries': String(config.rest.table_cache_max_entries),
-			...Object.fromEntries(
-				Object.entries(config.headers).map(([key, value]) => [`header.${key}`, value]),
-			),
-			...config.extra_properties,
-		};
-		const ssl: Record<string, unknown> = {};
-		if (config.tls.ca_bundle) {
-			const path = `${INTEGRATIONS_DIR}/iceberg/${instanceName}-ca.pem`;
-			files.push({ path: `iceberg/${instanceName}-ca.pem`, content: config.tls.ca_bundle });
-			ssl.cabundle = path;
-		}
-		if (config.tls.client_certificate && config.tls.client_key) {
-			const cert = `${INTEGRATIONS_DIR}/iceberg/${instanceName}-client.crt`;
-			const key = `${INTEGRATIONS_DIR}/iceberg/${instanceName}-client.key`;
-			files.push(
-				{ path: `iceberg/${instanceName}-client.crt`, content: config.tls.client_certificate },
-				{ path: `iceberg/${instanceName}-client.key`, content: config.tls.client_key },
-			);
-			ssl.client = { cert, key };
-		}
-		if (Object.keys(ssl).length > 0) properties.ssl = ssl;
+		return renderIcebergRest(config, instanceName);
+	},
 
-		return renderIcebergCatalog({
-			instanceName,
-			catalogType: 'rest',
-			properties,
-			rootProperties: runtimeRootProperties(config.runtime),
-			descriptor: {
-				uri: config.uri,
-				...(config.warehouse ? { warehouse: config.warehouse } : {}),
-				auth_method: config.auth.method,
-				storage: config.storage.scheme,
-			},
-			files,
-		});
+	preview: {
+		available(config) {
+			return {
+				ok: true,
+				programs: {
+					...(duckdbPreviewBlocker(config) === undefined
+						? { duckdbWasm: ['iceberg-http'] as const }
+						: {}),
+					python: true,
+				},
+			};
+		},
+
+		programs(input) {
+			const render = renderIcebergRest(input.config, input.integration.name);
+			const python = {
+				script: PYICEBERG_PREVIEW_SCRIPT,
+				maxRows: input.limit,
+				input: {
+					integration_name: input.integration.name,
+					namespace: input.namespace,
+					table: input.table,
+					limit: input.limit,
+				},
+				render,
+				integration: input.integration,
+				sessionId: input.sessionId,
+				credentialVars: input.credentialVars,
+			};
+			if (duckdbPreviewBlocker(input.config)) return { python };
+			const alias = `preview_${input.integration.id.replaceAll('-', '_')}`;
+			const attachParams: (string | number | boolean | null)[] = [input.config.uri];
+			const options = ['TYPE iceberg', 'ENDPOINT ?'];
+			if (input.config.warehouse) {
+				options.push('WAREHOUSE ?');
+				attachParams.push(input.config.warehouse);
+			}
+			options.push(...duckdbAuthOptions(input.config.auth, attachParams));
+			options.push('ACCESS_DELEGATION_MODE ?', 'READ_ONLY');
+			attachParams.push(input.config.access_delegation);
+			return {
+				duckdbWasm: {
+					setup: [
+						{ text: 'LOAD iceberg' },
+						{ text: 'LOAD httpfs' },
+						{
+							text: `ATTACH ${sqlLiteral(input.config.warehouse ?? input.integration.name)} AS ${sqlIdentifier(alias)} (${options.join(', ')})`,
+							params: attachParams,
+						},
+					],
+					query: {
+						text: `SELECT * FROM ${[alias, ...input.namespace, input.table].map(sqlIdentifier).join('.')} LIMIT ?`,
+						params: [input.limit],
+					},
+					cleanup: [{ text: `DETACH ${sqlIdentifier(alias)}` }],
+					requires: ['iceberg-http'],
+				},
+				python,
+			};
+		},
 	},
 
 	async testConnection(config, probe) {
@@ -400,6 +428,128 @@ export const icebergRest = defineIntegration({
 });
 
 type IcebergRestConfig = z.infer<typeof icebergRestConfig>;
+
+function renderIcebergRest(config: IcebergRestConfig, instanceName: string) {
+	assertSafeHeaders(config.headers);
+	const files: { path: string; content: string }[] = [];
+	const properties: Record<string, unknown> = {
+		uri: config.uri,
+		...(config.warehouse ? { warehouse: config.warehouse } : {}),
+		...authProperties(config.auth, instanceName, files),
+		...storageProperties(config.storage),
+		...runtimeCatalogProperties(config.runtime),
+		...delegationProperties(config.access_delegation),
+		'snapshot-loading-mode': config.rest.snapshot_loading_mode,
+		'rest-metrics-reporting-enabled': String(config.rest.metrics_reporting_enabled),
+		...(config.rest.page_size ? { 'rest-page-size': String(config.rest.page_size) } : {}),
+		'view-endpoints-supported': String(config.rest.view_endpoints_supported),
+		'scan-planning-mode': config.rest.scan_planning_mode,
+		'namespace-separator': config.rest.namespace_separator,
+		'rest-table-cache.expire-after-write-ms': String(config.rest.table_cache_expire_after_write_ms),
+		'rest-table-cache.max-entries': String(config.rest.table_cache_max_entries),
+		...Object.fromEntries(
+			Object.entries(config.headers).map(([key, value]) => [`header.${key}`, value]),
+		),
+		...config.extra_properties,
+	};
+	const ssl: Record<string, unknown> = {};
+	if (config.tls.ca_bundle) {
+		const path = `${INTEGRATIONS_DIR}/iceberg/${instanceName}-ca.pem`;
+		files.push({ path: `iceberg/${instanceName}-ca.pem`, content: config.tls.ca_bundle });
+		ssl.cabundle = path;
+	}
+	if (config.tls.client_certificate && config.tls.client_key) {
+		const cert = `${INTEGRATIONS_DIR}/iceberg/${instanceName}-client.crt`;
+		const key = `${INTEGRATIONS_DIR}/iceberg/${instanceName}-client.key`;
+		files.push(
+			{ path: `iceberg/${instanceName}-client.crt`, content: config.tls.client_certificate },
+			{ path: `iceberg/${instanceName}-client.key`, content: config.tls.client_key },
+		);
+		ssl.client = { cert, key };
+	}
+	if (Object.keys(ssl).length > 0) properties.ssl = ssl;
+
+	return renderIcebergCatalog({
+		instanceName,
+		catalogType: 'rest',
+		properties,
+		rootProperties: runtimeRootProperties(config.runtime),
+		descriptor: {
+			uri: config.uri,
+			...(config.warehouse ? { warehouse: config.warehouse } : {}),
+			auth_method: config.auth.method,
+			storage: config.storage.scheme,
+		},
+		files,
+	});
+}
+
+const PYICEBERG_PREVIEW_SCRIPT = `import json
+import math
+from pyiceberg.catalog import load_catalog
+
+def json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
+
+with open("/tmp/marimohub-data-preview-request.json", encoding="utf-8") as request_file:
+    request = json.load(request_file)
+
+catalog = load_catalog(request["integration_name"])
+identifier = tuple([*request["namespace"], request["table"]])
+arrow = catalog.load_table(identifier).scan(limit=request["limit"]).to_arrow()
+columns = [str(field.name) for field in arrow.schema]
+rows = [[json_safe(record.get(column)) for column in columns] for record in arrow.to_pylist()]
+print(json.dumps({"columns": columns, "rows": rows}, allow_nan=False, default=str, separators=(",", ":")))
+`;
+
+function duckdbPreviewBlocker(config: IcebergRestConfig): string | undefined {
+	if (config.auth.method !== 'none' && config.auth.method !== 'bearer_token') {
+		return `${config.auth.method} authentication is not supported by DuckDB-Wasm preview`;
+	}
+	if (config.tls.ca_bundle || config.tls.client_certificate) {
+		return 'custom TLS material is not supported by DuckDB-Wasm preview';
+	}
+	if (Object.keys(config.headers).length > 0 || Object.keys(config.extra_properties).length > 0) {
+		return 'custom headers and properties are not supported by DuckDB-Wasm preview';
+	}
+	if (config.storage.scheme !== 'catalog') {
+		return 'explicit object-storage configuration is not supported by DuckDB-Wasm preview';
+	}
+	if (JSON.stringify(config.runtime) !== JSON.stringify(ICEBERG_RUNTIME_DEFAULTS)) {
+		return 'PyIceberg runtime options are not supported by DuckDB-Wasm preview';
+	}
+	if (JSON.stringify(config.rest) !== JSON.stringify(ICEBERG_REST_DEFAULTS)) {
+		return 'custom REST client options are not supported by DuckDB-Wasm preview';
+	}
+	return undefined;
+}
+
+function duckdbAuthOptions(
+	config: IcebergRestConfig['auth'],
+	params: (string | number | boolean | null)[],
+): string[] {
+	switch (config.method) {
+		case 'none':
+			params.push('');
+			return ['TOKEN ?'];
+		case 'bearer_token':
+			params.push(config.token);
+			return ['TOKEN ?'];
+		case 'basic':
+		case 'entra':
+		case 'google':
+		case 'oauth2_client_credentials':
+		case 'sigv4':
+		default:
+			throw new ValidationError('This authentication method requires the preview sandbox.');
+	}
+}
 
 /**
  * Auth methods and TLS material the guarded probe cannot exercise; testing and
@@ -594,12 +744,6 @@ function decodedSeparator(separator: string): string {
 	} catch {
 		return separator;
 	}
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: undefined;
 }
 
 function tableSchemaOf(body: unknown): TableSchema {

@@ -287,22 +287,3 @@ export interface SessionRender {
 	/** Version pins persisted on the session record. */
 	attachments: { id: IntegrationId; name: string; kind: string; version: number }[];
 }
-
-export interface DataPreviewRequest {
-	bundle: SessionRender;
-	integration_name: string;
-	user_id: UserId;
-	credential_vars?: Record<string, string>;
-	namespace: string[];
-	table: string;
-	limit: number;
-}
-
-/** Executes a bounded read-only table scan outside the control-plane process. */
-export interface DataPreview {
-	/** False until the dedicated runtime has passed its dependency preflight. */
-	available(): boolean;
-	/** Verify the dedicated runtime and update {@link available}. */
-	check(): Promise<void>;
-	preview(request: DataPreviewRequest): Promise<TablePreview>;
-}

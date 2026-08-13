@@ -33,6 +33,7 @@
 		"@marimo-hub/core": "workspace:*",
 		"@marimo-hub/credentials-aws": "workspace:*",
 		"@marimo-hub/credentials-coreweave": "workspace:*",
+		"@marimo-hub/duckdb-wasm-runtime": "workspace:*",
 		"@marimo-hub/notify-slack": "workspace:*",
 		"@marimo-hub/notify-smtp": "workspace:*",
 		"@marimo-hub/notify-webhook": "workspace:*",

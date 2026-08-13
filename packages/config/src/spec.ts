@@ -895,6 +895,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Server',
 				vars: [
 					{
+						id: 'MARIMOHUB_EXPERIMENTS',
+						name: 'Experiments',
+						description:
+							'Comma-separated experimental feature IDs. Unknown IDs fail startup. Current values: `duckdb-wasm-preview`.',
+						example: 'duckdb-wasm-preview',
+					},
+					{
 						id: 'PORT',
 						name: 'HTTP port',
 						description: 'Port the HTTP server listens on.',
@@ -1465,26 +1472,40 @@ See the [secret-source guide](./integration-secrets.md).`,
 					{
 						id: 'MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT',
 						name: 'Max concurrent data previews',
-						description: 'Maximum number of preview sandboxes in this server process.',
+						description: 'Maximum number of runtime-backed previews in this server process.',
 						default: '4',
 					},
 					{
 						id: 'MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER',
 						name: 'Max data previews per user',
-						description: 'Maximum number of preview sandboxes for one user.',
+						description: 'Maximum number of runtime-backed previews for one user.',
 						default: '1',
 					},
 					{
 						id: 'MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS',
 						name: 'Data-preview startup timeout',
-						description: 'Maximum time to start and prepare a preview sandbox.',
+						description: 'Maximum time to start and prepare a preview runtime.',
 						default: '120',
 					},
 					{
 						id: 'MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS',
 						name: 'Data-preview execution timeout',
-						description: 'Maximum time for the fixed PyIceberg scan.',
+						description: 'Maximum time for a DuckDB-Wasm or fixed PyIceberg preview.',
 						default: '30',
+					},
+					{
+						id: 'MARIMOHUB_DUCKDB_WASM_RUNTIME',
+						name: 'DuckDB-Wasm runtime',
+						description:
+							'Runtime selected by the `duckdb-wasm-preview` experiment. `auto` uses a worker thread and falls back to inline only when workers are structurally unsupported. `worker` and `inline` force one mode.',
+						default: 'auto',
+					},
+					{
+						id: 'MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB',
+						name: 'DuckDB-Wasm memory limit',
+						description:
+							'DuckDB engine memory limit in MiB. This does not cap all WebAssembly and Arrow allocations.',
+						default: '128',
 					},
 					{
 						id: 'MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS',

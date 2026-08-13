@@ -329,4 +329,48 @@ describe('defineIntegration available-reason guard', () => {
 			reason: 'this instance cannot be browsed from the hub',
 		});
 	});
+
+	it('degrades a preview reason that quotes a secret value', () => {
+		const previewLeaky = defineIntegration({
+			kind: 'preview_leaky',
+			title: 'Preview leaky',
+			description: 'test kind',
+			category: 'catalog',
+			brand: { color: '#000000' },
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			preview: {
+				available: (config) => ({ ok: false, reason: `preview denied for ${config.token}` }),
+				programs: () => ({}),
+			},
+		});
+
+		expect(previewLeaky.preview!.available({ token: 'preview-secret' })).toEqual({
+			ok: false,
+			reason: 'this instance cannot be previewed from the hub',
+		});
+	});
+
+	it('preserves a preview reason that does not contain a secret', () => {
+		const previewBlocked = defineIntegration({
+			kind: 'preview_blocked',
+			title: 'Preview blocked',
+			description: 'test kind',
+			category: 'catalog',
+			brand: { color: '#000000' },
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			preview: {
+				available: () => ({ ok: false, reason: 'preview requires supported authentication' }),
+				programs: () => ({}),
+			},
+		});
+
+		expect(previewBlocked.preview!.available({ token: 'preview-secret' })).toEqual({
+			ok: false,
+			reason: 'preview requires supported authentication',
+		});
+	});
 });

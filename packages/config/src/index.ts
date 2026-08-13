@@ -20,10 +20,14 @@ import {
 	ASSIGNABLE_ROLES,
 	EDITOR_SANDBOX_SHARING_VALUES,
 	runPreflight,
+	DataPreviewService,
+	DuckDBWasmDataPreview,
 	SubdomainExposure,
 	SandboxDataPreview,
 	VIEWER_MODES,
 } from '@marimo-hub/core';
+import { createNodeDuckDBWasmRuntimeFactory } from '@marimo-hub/duckdb-wasm-runtime/node';
+import type { DuckDBWasmRuntimeMode } from '@marimo-hub/duckdb-wasm-runtime/node';
 import type {
 	EditorSandboxSharing,
 	Metrics,
@@ -55,9 +59,13 @@ import type { Env } from './env';
 import { ConfigError } from './errors';
 import { checkSandboxHostIsolation } from './hostIsolation';
 import { buildPreflightChecks } from './preflightChecks';
+import { parseExperiments } from './experiments';
+import type { Experiment } from './experiments';
 
 export { ConfigError, isConfigError } from './errors';
 export type { ConfigErrorOptions } from './errors';
+export { EXPERIMENTS, parseExperiments } from './experiments';
+export type { Experiment } from './experiments';
 export {
 	ComputeProfileConfigError,
 	hasConfiguredResources,
@@ -92,6 +100,7 @@ const DEFAULT_MAX_DATA_PREVIEWS = 4;
 const DEFAULT_MAX_DATA_PREVIEWS_PER_USER = 1;
 const DEFAULT_DATA_PREVIEW_STARTUP_TIMEOUT_S = 120;
 const DEFAULT_DATA_PREVIEW_EXECUTION_TIMEOUT_S = 30;
+const DEFAULT_DUCKDB_WASM_MEMORY_LIMIT_MB = 128;
 
 /**
  * Parse a concurrency cap. `0` disables the cap (unlimited); unset falls back to
@@ -116,37 +125,70 @@ function dataPreviewFromEnv(
 	env: Env,
 	compute: SandboxProvider,
 	computeBackendValue: string,
-): SandboxDataPreview | undefined {
+	experiments: ReadonlySet<Experiment>,
+): DataPreviewService | undefined {
 	const image = env.MARIMOHUB_DATA_PREVIEW_IMAGE?.trim();
-	if (
-		env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() !== 'full' ||
-		!image ||
-		computeBackendValue === 'local' ||
-		computeBackendValue === 'e2b' ||
-		computeBackendValue === 'none' ||
-		computeBackendValue === 'noop'
-	) {
-		return undefined;
-	}
-	return new SandboxDataPreview(compute, {
-		image,
-		maxConcurrent: parsePositiveIntEnv(
-			env,
-			'MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT',
-			DEFAULT_MAX_DATA_PREVIEWS,
-		),
-		maxConcurrentPerUser: parsePositiveIntEnv(
-			env,
-			'MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER',
-			DEFAULT_MAX_DATA_PREVIEWS_PER_USER,
-		),
-		startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS', {
-			dflt: DEFAULT_DATA_PREVIEW_STARTUP_TIMEOUT_S,
-		}),
-		executionTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS', {
-			dflt: DEFAULT_DATA_PREVIEW_EXECUTION_TIMEOUT_S,
-		}),
+	if (env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() !== 'full') return undefined;
+	const sandboxSupported =
+		image !== undefined &&
+		image !== '' &&
+		computeBackendValue !== 'local' &&
+		computeBackendValue !== 'e2b' &&
+		computeBackendValue !== 'none' &&
+		computeBackendValue !== 'noop';
+	const duckdbEnabled = experiments.has('duckdb-wasm-preview');
+	if (!sandboxSupported && !duckdbEnabled) return undefined;
+	const maxConcurrent = parsePositiveIntEnv(
+		env,
+		'MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT',
+		DEFAULT_MAX_DATA_PREVIEWS,
+	);
+	const maxConcurrentPerUser = parsePositiveIntEnv(
+		env,
+		'MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER',
+		DEFAULT_MAX_DATA_PREVIEWS_PER_USER,
+	);
+	const executionTimeoutMs = parseSecondsEnv(
+		env,
+		'MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS',
+		{ dflt: DEFAULT_DATA_PREVIEW_EXECUTION_TIMEOUT_S },
+	);
+	const startupTimeoutMs = parseSecondsEnv(env, 'MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS', {
+		dflt: DEFAULT_DATA_PREVIEW_STARTUP_TIMEOUT_S,
 	});
+	const sandbox = sandboxSupported
+		? new SandboxDataPreview(compute, {
+				image,
+				startupTimeoutMs,
+				executionTimeoutMs,
+			})
+		: undefined;
+	const duckdbWasm = duckdbEnabled
+		? new DuckDBWasmDataPreview(createNodeDuckDBWasmRuntimeFactory(duckdbRuntimeMode(env)), {
+				memoryLimitMb: parsePositiveIntEnv(
+					env,
+					'MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB',
+					DEFAULT_DUCKDB_WASM_MEMORY_LIMIT_MB,
+				),
+				startupTimeoutMs,
+				executionTimeoutMs,
+			})
+		: undefined;
+	return new DataPreviewService({
+		duckdbWasm,
+		sandbox,
+		maxConcurrent,
+		maxConcurrentPerUser,
+	});
+}
+
+function duckdbRuntimeMode(env: Env): DuckDBWasmRuntimeMode {
+	return parseEnumOr(
+		env,
+		'MARIMOHUB_DUCKDB_WASM_RUNTIME',
+		['auto', 'worker', 'inline'] as const,
+		'auto',
+	);
 }
 
 function parsePositiveIntEnv(env: Env, key: string, fallback: number): number {
@@ -340,6 +382,7 @@ export function createFromEnv(
 	metrics?: Metrics,
 	options?: CreateFromEnvOptions,
 ): ApiDeps {
+	const experiments = parseExperiments(env);
 	const bucket = makeStorage(env);
 	const exposure = parseSandboxExposure(env);
 	// The same-origin isolation guard only applies to `subdomain` mode (a separate
@@ -373,7 +416,7 @@ export function createFromEnv(
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
 	});
-	const sandboxPreview = dataPreviewFromEnv(env, compute, computeBackendValue);
+	const dataPreview = dataPreviewFromEnv(env, compute, computeBackendValue, experiments);
 	const deps: ApiDeps = {
 		services,
 		bucket,
@@ -430,7 +473,7 @@ export function createFromEnv(
 		...makeAi(env),
 		// Project integrations (no-op unless MARIMOHUB_INTEGRATIONS=on — opt-in per the
 		// two-phase rollout note on makeIntegrations).
-		...makeIntegrations(env, bucket, metrics, sandboxPreview),
+		...makeIntegrations(env, bucket, metrics, dataPreview),
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time
 		// (Dockerfile ARG → ENV); everything else is inferred from the live config +

@@ -4,7 +4,7 @@ import {
 	OrgIntegrationsStore,
 	ProjectIntegrationsStore,
 } from '@marimo-hub/core';
-import type { Bucket, DataPreview, IntegrationProbe, Metrics } from '@marimo-hub/core';
+import type { Bucket, DataPreviewService, IntegrationProbe, Metrics } from '@marimo-hub/core';
 import type { ApiDeps } from '@marimo-hub/api';
 import { DEFAULT_S3_OBJECT_BROWSER_LIMITS, S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
 import { parseBool, parseIntEnv, parseSecondsEnv } from './env';
@@ -25,7 +25,7 @@ export function makeIntegrations(
 	env: Env,
 	bucket: Bucket,
 	metrics?: Metrics,
-	sandboxPreview?: DataPreview,
+	dataPreview?: DataPreviewService,
 ): Pick<ApiDeps, 'integrations' | 'orgIntegrations' | 'dataBrowser'> {
 	const setting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
 	const dataBrowser = dataBrowserSetting(env);
@@ -78,6 +78,7 @@ export function makeIntegrations(
 		browseProbe: makeBrowseProbe(policy, dataBrowser),
 		...(objectBrowsers ? { objectBrowsers } : {}),
 		metrics,
+		dataPreview,
 	};
 	return {
 		integrations: new ProjectIntegrationsStore(options),
@@ -90,7 +91,12 @@ export function makeIntegrations(
 					dataBrowser: {
 						preview: dataBrowser === 'full',
 						objectBrowser: objectBrowserApiConfigFromEnv(env, dataBrowser),
-						...(dataBrowser === 'full' && sandboxPreview ? { sandboxPreview } : {}),
+						...(dataBrowser === 'full' && dataPreview
+							? {
+									checkPreview: () => dataPreview.check(),
+									close: () => dataPreview.close(),
+								}
+							: {}),
 					},
 				}),
 	};

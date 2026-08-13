@@ -322,6 +322,7 @@ Server-wide settings; no backend selector.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
+| `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown IDs fail startup. Current values: `duckdb-wasm-preview`. | — | — | `duckdb-wasm-preview` |
 | `PORT` | Port the HTTP server listens on. | — | `3000` | — |
 | `MARIMOHUB_STATIC_ROOT` | Directory containing the web UI's static files. | — | `./public` | — |
 | `MARIMOHUB_RUN_MAINTENANCE` | Run background maintenance (expiring old sessions, cleaning up sandboxes) on this replica only. | — | `false` | `true` |
@@ -509,10 +510,12 @@ Integration management and session injection are enabled. Project entries use
 | `MARIMOHUB_INTEGRATIONS_PROBE` | Policy for the "Test connection" probe, which makes server-side HTTP requests to manager-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`). | — | `guarded` | — |
 | `MARIMOHUB_DATA_BROWSER` | Controls read-only data browsing for editors and higher roles. `metadata` enables metadata browsing. `full` also enables explicit, audited row previews. Requires `MARIMOHUB_INTEGRATIONS=on` and an enabled integration probe. `off` disables browsing. | — | `off` | — |
 | `MARIMOHUB_DATA_PREVIEW_IMAGE` | OCI image for sandbox previews. It must contain Python, PyIceberg, and PyArrow. The compute backend must support OCI image overrides. The local, E2B, none, and noop backends do not support these overrides. The hub verifies the image at startup. | — | — | `ghcr.io/example/marimohub-data-preview:1` |
-| `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT` | Maximum number of preview sandboxes in this server process. | — | `4` | — |
-| `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER` | Maximum number of preview sandboxes for one user. | — | `1` | — |
-| `MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS` | Maximum time to start and prepare a preview sandbox. | — | `120` | — |
-| `MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS` | Maximum time for the fixed PyIceberg scan. | — | `30` | — |
+| `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT` | Maximum number of runtime-backed previews in this server process. | — | `4` | — |
+| `MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT_PER_USER` | Maximum number of runtime-backed previews for one user. | — | `1` | — |
+| `MARIMOHUB_DATA_PREVIEW_STARTUP_TIMEOUT_SECONDS` | Maximum time to start and prepare a preview runtime. | — | `120` | — |
+| `MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS` | Maximum time for a DuckDB-Wasm or fixed PyIceberg preview. | — | `30` | — |
+| `MARIMOHUB_DUCKDB_WASM_RUNTIME` | Runtime selected by the `duckdb-wasm-preview` experiment. `auto` uses a worker thread and falls back to inline only when workers are structurally unsupported. `worker` and `inline` force one mode. | — | `auto` | — |
+| `MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB` | DuckDB engine memory limit in MiB. This does not cap all WebAssembly and Arrow allocations. | — | `128` | — |
 | `MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS` | Allow editors to browse ambient-auth S3 integrations with the control-plane AWS identity when compatible project WIF credentials are unavailable. Keep this off unless that identity is intentionally available to project editors. | — | `false` | — |
 | `MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS` | Maximum time for one object listing or metadata operation, including DNS resolution. | — | `30` | — |
 | `MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS` | Maximum time for one bounded object preview, including DNS resolution and ranged reads. | — | `30` | — |
