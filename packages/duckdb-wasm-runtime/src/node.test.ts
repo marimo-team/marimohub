@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DuckDBPreviewProgram, DuckDBWasmRuntime } from '@marimo-hub/core';
-import { createNodeDuckDBWasmRuntimeFactory } from './node';
+import { createNodeDuckDBWasmRuntimeFactory, nodeDuckDBWasmCapabilities } from './node';
 
 const open: DuckDBWasmRuntime[] = [];
 
@@ -16,6 +16,19 @@ async function initialized(mode: 'worker' | 'inline'): Promise<DuckDBWasmRuntime
 }
 
 describe('DuckDB-Wasm worker lifecycle', () => {
+	it('reports why guarded Iceberg HTTP is unavailable', () => {
+		const capabilities = nodeDuckDBWasmCapabilities();
+		expect(capabilities).toEqual({
+			features: [],
+			unavailable: {
+				'iceberg-http': expect.stringMatching(/synchronous.*IntegrationProbe.*asynchronous/i),
+			},
+		});
+		expect(Object.isFrozen(capabilities)).toBe(true);
+		expect(Object.isFrozen(capabilities.features)).toBe(true);
+		expect(Object.isFrozen(capabilities.unavailable)).toBe(true);
+	});
+
 	it('preserves request order while initialization is pending', async () => {
 		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker')();
 		open.push(runtime);
@@ -62,9 +75,42 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 		expect(internals.pending.size).toBe(0);
 		await internals.worker.terminate();
 	});
+
+	it('hard-terminates an executing query when closed', async () => {
+		const runtime = await initialized('worker');
+		const executing = runtime.execute({
+			setup: [],
+			query: { text: 'SELECT sum(value) FROM range(1000000000) values(value)' },
+		});
+
+		await runtime.close();
+		await expect(executing).rejects.toThrow('closed');
+	}, 15_000);
 });
 
 describe.each(['worker', 'inline'] as const)('DuckDB-Wasm %s runtime', (mode) => {
+	it('rejects remote-required programs before executing their setup', async () => {
+		const runtime = await initialized(mode);
+		expect(runtime.features).not.toContain('iceberg-http');
+		await expect(
+			runtime.execute({
+				setup: [{ text: 'CREATE TABLE must_not_exist(value INTEGER)' }],
+				query: { text: 'SELECT 1' },
+				requires: ['iceberg-http'],
+			}),
+		).rejects.toThrow(/does not support required feature iceberg-http.*policy-enforcing broker/i);
+		await expect(
+			runtime.execute({
+				setup: [],
+				query: {
+					text: `SELECT count(*) AS count
+						FROM information_schema.tables
+						WHERE table_name = 'must_not_exist'`,
+				},
+			}),
+		).resolves.toEqual({ columns: ['count'], rows: [['0']] });
+	});
+
 	it('rejects work before initialization and after close', async () => {
 		const runtime = await createNodeDuckDBWasmRuntimeFactory(mode)();
 		open.push(runtime);
@@ -86,6 +132,16 @@ describe.each(['worker', 'inline'] as const)('DuckDB-Wasm %s runtime', (mode) =>
 		await expect(
 			runtime.execute({ setup: [], query: { text: "SET memory_limit='128MB'" } }),
 		).rejects.toThrow(/locked/i);
+	});
+
+	it('resets after failed initialization and can initialize cleanly later', async () => {
+		const runtime = await createNodeDuckDBWasmRuntimeFactory(mode)();
+		open.push(runtime);
+
+		await expect(runtime.initialize({ memoryLimitMb: Number.NaN })).rejects.toThrow();
+		await expect(runtime.ping()).rejects.toThrow(/not initialized/i);
+		await expect(runtime.initialize({ memoryLimitMb: 64 })).resolves.toBeUndefined();
+		await expect(runtime.ping()).resolves.toBeUndefined();
 	});
 
 	it('executes SQL and normalizes Arrow values', async () => {

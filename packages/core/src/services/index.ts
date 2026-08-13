@@ -56,6 +56,20 @@ export {
 export type { IntegrationsStoreOptions } from './integrations/ProjectIntegrationsStore';
 export type { OrgIntegrationsService, ProjectIntegrationsService } from './integrations/contracts';
 export {
+	assertValidDataQuerySql,
+	DataQueryService,
+	MAX_DATA_QUERY_SQL_BYTES,
+} from './integrations/data-query';
+export type {
+	DataQueryConnection,
+	DataQueryExecution,
+	DataQueryExecutorFactory,
+	DataQueryInput,
+	DataQueryResult,
+	DataQueryServiceOptions,
+	DisposableDataQueryExecutor,
+} from './integrations/data-query';
+export {
 	DataPreviewService,
 	DuckDBWasmDataPreview,
 	SandboxDataPreview,

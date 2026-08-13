@@ -6,9 +6,24 @@ import type {
 	TablePreview,
 } from '@marimo-hub/core';
 import { BlockingDuckDBEngine } from './engine';
+import { ICEBERG_HTTP_UNAVAILABLE } from './networkPolicy';
 import type { RuntimeRequestInput, RuntimeResponse } from './protocol';
 
 export type DuckDBWasmRuntimeMode = 'auto' | 'worker' | 'inline';
+
+export interface NodeDuckDBWasmCapabilities {
+	features: DuckDBWasmRuntime['features'];
+	unavailable: Readonly<Partial<Record<DuckDBWasmRuntime['features'][number], string>>>;
+}
+
+const CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
+	features: Object.freeze([]),
+	unavailable: Object.freeze({ 'iceberg-http': ICEBERG_HTTP_UNAVAILABLE }),
+});
+
+export function nodeDuckDBWasmCapabilities(): NodeDuckDBWasmCapabilities {
+	return CAPABILITIES;
+}
 
 export function createNodeDuckDBWasmRuntimeFactory(
 	mode: DuckDBWasmRuntimeMode = 'auto',
@@ -26,7 +41,7 @@ export function createNodeDuckDBWasmRuntimeFactory(
 
 class InlineRuntime implements DuckDBWasmRuntime {
 	readonly mode = 'inline' as const;
-	readonly features = [];
+	readonly features = CAPABILITIES.features;
 	private readonly engine = new BlockingDuckDBEngine();
 
 	initialize(options: { memoryLimitMb: number }): Promise<void> {
@@ -34,6 +49,7 @@ class InlineRuntime implements DuckDBWasmRuntime {
 	}
 
 	async execute(program: DuckDBPreviewProgram): Promise<TablePreview> {
+		assertSupported(program);
 		return this.engine.execute(program);
 	}
 
@@ -49,7 +65,7 @@ class InlineRuntime implements DuckDBWasmRuntime {
 
 class WorkerRuntime implements DuckDBWasmRuntime {
 	readonly mode = 'worker' as const;
-	readonly features = [];
+	readonly features = CAPABILITIES.features;
 	private readonly worker: Worker;
 	private readonly pending = new Map<
 		number,
@@ -76,7 +92,8 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		return this.request({ type: 'initialize', memoryLimitMb: options.memoryLimitMb });
 	}
 
-	execute(program: DuckDBPreviewProgram): Promise<TablePreview> {
+	async execute(program: DuckDBPreviewProgram): Promise<TablePreview> {
+		assertSupported(program);
 		return this.request({ type: 'execute', program });
 	}
 
@@ -125,6 +142,16 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		if (this.closed) return;
 		this.closed = true;
 		this.rejectAll(error);
+	}
+}
+
+function assertSupported(program: DuckDBPreviewProgram): void {
+	for (const feature of program.requires ?? []) {
+		if (CAPABILITIES.features.includes(feature)) continue;
+		const reason = CAPABILITIES.unavailable[feature];
+		throw new Error(
+			`DuckDB-Wasm runtime does not support required feature ${feature}.${reason ? ` ${reason}` : ''}`,
+		);
 	}
 }
 

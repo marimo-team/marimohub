@@ -4,7 +4,13 @@ import {
 	OrgIntegrationsStore,
 	ProjectIntegrationsStore,
 } from '@marimo-hub/core';
-import type { Bucket, DataPreviewService, IntegrationProbe, Metrics } from '@marimo-hub/core';
+import type {
+	Bucket,
+	DataPreviewService,
+	DataQueryService,
+	IntegrationProbe,
+	Metrics,
+} from '@marimo-hub/core';
 import type { ApiDeps } from '@marimo-hub/api';
 import { DEFAULT_S3_OBJECT_BROWSER_LIMITS, S3ObjectBrowser } from '@marimo-hub/object-browser-s3';
 import { GcsObjectBrowser } from '@marimo-hub/object-browser-gcs';
@@ -28,6 +34,7 @@ export function makeIntegrations(
 	bucket: Bucket,
 	metrics?: Metrics,
 	dataPreview?: DataPreviewService,
+	dataQuery?: DataQueryService,
 ): Pick<ApiDeps, 'integrations' | 'orgIntegrations' | 'dataBrowser'> {
 	const setting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
 	const dataBrowser = dataBrowserSetting(env);
@@ -47,6 +54,7 @@ export function makeIntegrations(
 		);
 	}
 	const secretSources = makeSecretSources(env);
+	const enabledDataQuery = dataBrowser === 'full' ? dataQuery : undefined;
 	// Parsed once so both probes interpret the same validated policy — neither
 	// depends on the other having rejected an invalid value first.
 	const policy = probePolicy(env);
@@ -86,6 +94,7 @@ export function makeIntegrations(
 		...(objectBrowsers ? { objectBrowsers } : {}),
 		metrics,
 		dataPreview,
+		dataQuery: enabledDataQuery,
 	};
 	return {
 		integrations: new ProjectIntegrationsStore(options),
@@ -97,11 +106,18 @@ export function makeIntegrations(
 			: {
 					dataBrowser: {
 						preview: dataBrowser === 'full',
+						query: enabledDataQuery !== undefined,
 						objectBrowser: objectBrowserApiConfigFromEnv(env, dataBrowser),
 						...(dataBrowser === 'full' && dataPreview
 							? {
 									checkPreview: () => dataPreview.check(),
-									close: () => dataPreview.close(),
+								}
+							: {}),
+						...(dataPreview || enabledDataQuery
+							? {
+									close: async () => {
+										await Promise.allSettled([dataPreview?.close(), enabledDataQuery?.close()]);
+									},
 								}
 							: {}),
 					},

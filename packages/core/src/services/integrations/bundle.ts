@@ -1,9 +1,9 @@
 // Rendered config stays outside the workspace mount so credentials cannot be
 // captured into a notebook version.
 import { ValidationError } from '../../errors';
-import type { IntegrationId, SessionId } from '../../ids';
+import type { SessionId } from '../../ids';
 import { isRecord } from '../../internal/validation';
-import type { SessionRender } from '../../ports/integrations';
+import type { IntegrationVersionPin, SessionRender } from '../../ports/integrations';
 import type { RenderOutput } from './sdk';
 import { CODE_EXECUTION_ENV, SHELL_BASICS_ENV } from './environmentName';
 import { stringify } from 'yaml';
@@ -48,11 +48,7 @@ export function assertValidIntegrationName(name: string): void {
 	}
 }
 
-export interface RenderedIntegration {
-	id: IntegrationId;
-	name: string;
-	kind: string;
-	version: number;
+export interface RenderedIntegration extends IntegrationVersionPin {
 	/** Requirements copied into the integration manifest. */
 	requirements?: string[];
 	output: RenderOutput;

@@ -40,6 +40,7 @@ import type {
 	ObjectVersionRequest,
 } from '../../ports/objectBrowser';
 import type { PreviewCredentialVars } from './data-preview/programs';
+import type { DataQueryResult } from './data-query';
 
 /** Application service for project integrations and inherited organization integrations. */
 export interface ProjectIntegrationsService {
@@ -105,6 +106,13 @@ export interface ProjectIntegrationsService {
 		request: TablePreviewRequest,
 		credentialVars?: PreviewCredentialVars,
 	): Promise<TablePreview>;
+	runDataQuery(
+		projectId: ProjectId,
+		id: IntegrationId,
+		principal: { userId: UserId; email: string },
+		sessionId: SessionRenderContext['sessionId'],
+		sql: string,
+	): Promise<DataQueryResult>;
 	browseObjectBuckets(
 		projectId: ProjectId,
 		id: IntegrationId,

@@ -184,7 +184,12 @@ programs when a worker is unavailable. Each query runs in a read-only
 transaction after the runtime disables external access, sets its memory limit,
 and locks configuration. DuckDB-Wasm does not currently advertise Iceberg HTTP
 support because its traffic cannot use the hub's guarded browse transport;
-Iceberg therefore continues to use the sandbox executor.
+Iceberg therefore continues to use the sandbox executor. The installed Node
+binding exposes synchronous file callbacks and rejects HTTP and S3, while the
+guarded transport is asynchronous. The runtime adds its own fail-closed remote
+protocol guard so a dependency update cannot silently open ambient egress. A
+future broker must validate every catalog request, redirect, and vended object
+URL before the runtime can advertise Iceberg HTTP support.
 
 Sandbox previews require `MARIMOHUB_DATA_PREVIEW_IMAGE`. The image must contain
 Python, PyIceberg, and PyArrow. The compute backend must support per-sandbox

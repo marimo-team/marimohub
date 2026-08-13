@@ -128,7 +128,7 @@ describe('createFromEnv auth backend selection', () => {
 			MARIMOHUB_DATA_BROWSER: 'full',
 		};
 		const withoutExperiment = createFromEnv(env).dataBrowser;
-		expect(withoutExperiment).toMatchObject({ preview: true });
+		expect(withoutExperiment).toMatchObject({ preview: true, query: false });
 		expect(withoutExperiment?.checkPreview).toBeUndefined();
 
 		const deps = createFromEnv({
@@ -137,6 +137,49 @@ describe('createFromEnv auth backend selection', () => {
 		});
 		expect(deps.dataBrowser?.checkPreview).toBeTypeOf('function');
 		expect(deps.dataBrowser?.close).toBeTypeOf('function');
+		expect(deps.dataBrowser?.query).toBe(false);
+	});
+
+	it('wires DuckDB-Wasm pool and idle lifecycle settings', () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_INTEGRATIONS: 'on',
+			MARIMOHUB_DATA_BROWSER: 'full',
+			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
+			MARIMOHUB_DATA_PREVIEW_MAX_CONCURRENT: '3',
+			MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS: '17',
+		});
+		const stores = deps.integrations as unknown as {
+			store: {
+				dataPreview: {
+					options: {
+						duckdbWasm: { options: { maxPoolSize: number; idleTimeoutMs: number } };
+					};
+				};
+			};
+		};
+
+		expect(stores.store.dataPreview.options.duckdbWasm.options).toMatchObject({
+			maxPoolSize: 3,
+			idleTimeoutMs: 17_000,
+		});
+	});
+
+	it('accepts zero and rejects invalid DuckDB-Wasm idle timeouts', () => {
+		const env = {
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_INTEGRATIONS: 'on',
+			MARIMOHUB_DATA_BROWSER: 'full',
+			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview',
+		};
+		expect(() =>
+			createFromEnv({ ...env, MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS: '0' }),
+		).not.toThrow();
+		expect(() =>
+			createFromEnv({ ...env, MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS: '-1' }),
+		).toThrow(/MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS/);
 	});
 
 	it('rejects invalid sandbox-preview limits during composition', () => {

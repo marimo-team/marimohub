@@ -166,6 +166,16 @@ runtime-neutral orchestration seam. The Node implementation supports worker and
 inline execution, locks configuration, disables external access, and runs each
 result query in a read-only transaction. It exposes no remote-data feature yet:
 DuckDB extension requests must not bypass the guarded integration transport.
+The installed Node binding's file callbacks are synchronous and its HTTP and S3
+protocols are unsupported, while `IntegrationProbe.fetch` is asynchronous. A
+future parent-worker bridge must revalidate catalog requests, redirects, and
+vended object URLs. The current runtime advertises no Iceberg HTTP support and
+rejects remote protocols before they reach the vendor runtime.
+A positive live scan suite must be added with the broker API so its fixture can
+assert that every catalog, redirect, and vended object request crossed the
+parent probe. Until then, conformance asserts the negative contract: both Node
+runtime modes omit `iceberg-http` and reject a program that requires it before
+executing setup.
 
 The sandbox adapter renders only the selected integration. It uses the image
 from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It
@@ -173,7 +183,16 @@ also injects applicable WIF credentials.
 
 Per-user and process-wide limits control admission across both executors.
 Deadlines bound startup and execution. A `finally` block destroys each sandbox;
-DuckDB failures poison and close the reusable engine before later traffic.
+DuckDB failures poison and close the affected engine slot before later traffic.
+
+Run SQL has a separate, fail-closed `DataQueryService` contract and must not
+reuse trusted preview programs. `POST …/browse/query` requires a manager role,
+uses its own request budget, returns `Cache-Control: no-store`, and audits only
+query size and result counts. Each request must receive a fresh disposable
+worker or process with read-only access and SQL, row, byte, concurrency, and
+deadline limits; inline execution is forbidden. No executor is composed yet,
+so deployments cannot enable the route until an isolated runtime implements
+that contract.
 
 All network access must use the injected browse probe. This probe has a separate
 request budget and a larger response limit than the connection-test probe.

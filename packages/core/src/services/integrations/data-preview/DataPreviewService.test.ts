@@ -112,6 +112,26 @@ describe('DataPreviewService', () => {
 		expect(sandboxPreview).toHaveBeenCalledOnce();
 	});
 
+	it('records executor selection without request-specific metric tags', async () => {
+		const increment = vi.fn();
+		const service = new DataPreviewService({
+			sandbox: {
+				available: () => true,
+				check: async () => {},
+				preview: async () => ({ columns: [], rows: [] }),
+				close: async () => {},
+			},
+			maxConcurrent: 1,
+			maxConcurrentPerUser: 1,
+			metrics: { increment, gauge: vi.fn() },
+		});
+
+		await service.preview(user, { python: {} as never });
+		expect(increment).toHaveBeenCalledWith('data_preview.selected', 1, {
+			executor: 'sandbox',
+		});
+	});
+
 	it('rejects overload and lets accepted work drain before close', async () => {
 		let finish: (() => void) | undefined;
 		const sandboxClose = vi.fn(async () => {});
@@ -137,6 +157,40 @@ describe('DataPreviewService', () => {
 		await closing;
 		expect(sandboxClose).toHaveBeenCalledOnce();
 		await expect(service.preview(user, { python: {} as never })).rejects.toThrow('closed');
+	});
+
+	it('starts DuckDB cancellation before waiting for accepted work to drain', async () => {
+		let rejectPreview: ((error: Error) => void) | undefined;
+		const duckdbClose = vi.fn(() => {
+			rejectPreview?.(new Error('runtime closed'));
+			return Promise.resolve();
+		});
+		const service = new DataPreviewService({
+			duckdbWasm: {
+				available: () => true,
+				supports: () => true,
+				supportsFeatures: () => true,
+				status: () => ({ available: true }),
+				check: async () => {},
+				preview: () =>
+					new Promise((_resolve, reject) => {
+						rejectPreview = reject;
+					}),
+				close: duckdbClose,
+			},
+			maxConcurrent: 1,
+			maxConcurrentPerUser: 1,
+		});
+
+		const accepted = service.preview(user, {
+			duckdbWasm: { setup: [], query: { text: 'SELECT 1' } },
+		});
+		await vi.waitFor(() => expect(rejectPreview).toBeTypeOf('function'));
+		const firstClose = service.close();
+		expect(service.close()).toBe(firstClose);
+		await expect(accepted).rejects.toThrow('runtime closed');
+		await expect(firstClose).resolves.toBeUndefined();
+		expect(duckdbClose).toHaveBeenCalledOnce();
 	});
 
 	it('enforces the global limit across different users', async () => {

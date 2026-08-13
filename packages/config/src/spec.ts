@@ -1511,6 +1511,13 @@ See the [secret-source guide](./integration-secrets.md).`,
 						default: '128',
 					},
 					{
+						id: 'MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS',
+						name: 'DuckDB-Wasm idle timeout',
+						description:
+							'Maximum idle time before a warm DuckDB-Wasm engine is released. Set to 0 to keep warm engines until shutdown.',
+						default: '300',
+					},
+					{
 						id: 'MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS',
 						name: 'Allow server credentials for object browsing',
 						description:
