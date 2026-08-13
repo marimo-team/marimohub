@@ -72,11 +72,11 @@ describe('buildMarimoLaunch', () => {
 
 		it('layers pyproject first, then exports and installs the script pins', () => {
 			expect(plan.setup).toHaveLength(4);
-			const [pyproject, exportCmd, ensureEnv, installCmd] = plan.setup;
+			const [pyproject, ensureEnv, exportCmd, installCmd] = plan.setup;
 			expect(pyproject).toContain('uv sync --inexact');
+			expect(ensureEnv).toContain('uv venv');
 			expect(exportCmd).toContain("uv export --script 'apps/my app.py'");
 			expect(exportCmd).toContain('--format requirements-txt');
-			expect(ensureEnv).toContain('uv venv');
 			expect(installCmd).toContain('uv pip install');
 			// The env `uv run --no-sync` resolves — never VIRTUAL_ENV, which uv run
 			// ignores and would leave the pins invisible to the kernel.
@@ -85,21 +85,22 @@ describe('buildMarimoLaunch', () => {
 			expect(plan.start).toMatch(/^uv run --no-sync marimo /);
 		});
 
-		it('shares one per-launch requirements file, outside the workspace', () => {
-			const [, exportCmd, , installCmd] = plan.setup;
+		it('writes the requirements file inside the pin env', () => {
+			// Per-sandbox and lifecycle-managed on every backend — nothing left on a
+			// shared host /tmp, no clobbering between concurrent local launches.
+			const [, , exportCmd, installCmd] = plan.setup;
 			const [, exportTarget] = /-o (\S+)/.exec(exportCmd) ?? [];
-			expect(exportTarget).toMatch(/^\/tmp\//);
-			// `$$` (the launch shell's PID) keeps concurrent local sandboxes, which
-			// share the host /tmp, from clobbering each other's export.
-			expect(exportTarget).toContain('$$');
+			expect(exportTarget).toBe(
+				'"${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"',
+			);
 			expect(installCmd).toContain(`-r ${exportTarget}`);
 		});
 
 		it('keeps the pyproject layer lenient and the pin layers strict', () => {
-			const [pyproject, exportCmd, ensureEnv, installCmd] = plan.setup;
+			const [pyproject, ensureEnv, exportCmd, installCmd] = plan.setup;
 			expect(pyproject).toContain('|| true');
-			expect(exportCmd).not.toContain('|| true');
 			expect(ensureEnv).not.toContain('|| true');
+			expect(exportCmd).not.toContain('|| true');
 			expect(installCmd).not.toContain('|| true');
 		});
 
@@ -121,7 +122,7 @@ describe('buildMarimoLaunch', () => {
 				{ ...BASE, notebookFile: "apps/it's a && b.py" },
 				'uv-script-pins',
 			);
-			expect(hostile.setup[1]).toContain(`--script 'apps/it'\\''s a && b.py'`);
+			expect(hostile.setup[2]).toContain(`--script 'apps/it'\\''s a && b.py'`);
 		});
 	});
 });

@@ -198,9 +198,9 @@ describe('uv-script-pins setup execution', () => {
 		expect(log).toContain('venv .venv\n');
 		expect(log).toContain('pip install --python .venv --no-build -r');
 		expect(log).not.toMatch(/--python\s+--/);
-		// `$$` expanded to a real PID, identically in the export and install lines.
+		// The requirements file lands inside the (lifecycle-managed) pin env.
 		const exportPath = /-o (\S+)/.exec(log)?.[1];
-		expect(exportPath).toMatch(/marimohub-script-requirements-\d+\.txt$/);
+		expect(exportPath).toBe('.venv/marimohub-script-requirements.txt');
 		expect(log).toContain(`-r ${exportPath}`);
 	});
 

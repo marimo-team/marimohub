@@ -80,19 +80,21 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 // conflict with --no-compile-bytecode). `|| true` never blocks launch.
 const PYPROJECT_LAYER_SETUP = `if python3 -c "import tomllib,sys;sys.exit(0 if tomllib.load(open('pyproject.toml','rb')).get('project',{}).get('dependencies') else 1)" 2>/dev/null; then uv sync --inexact --no-compile-bytecode --no-build || true; elif ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then { rm -f pyproject.toml && uv init --vcs none --name notebook --description "Built in marimohub"; } || true; fi`;
 
-// Outside the workspace (keeps the marimo file browser clean, can't clobber a
-// synced repo's own requirements.txt) and unique per launch shell: `$$` is the
-// PID of the single `sh -c` the setup runs in, so local sandboxes — which
-// share the host /tmp — can't clobber each other between export and install.
-const SCRIPT_REQUIREMENTS = '/tmp/marimohub-script-requirements-$$.txt';
-
 // The env the kernel's `uv run --no-sync` will use — uv resolves the project
 // env as UV_PROJECT_ENVIRONMENT, else `.venv` in the project dir. Deliberately
 // not VIRTUAL_ENV: `uv run` ignores it, so pins installed there would be
 // invisible to the kernel. Local dev (compute-local) has neither var nor an
 // existing env, hence the create-if-missing guard — a no-op on sandbox images,
 // whose contract pre-creates UV_PROJECT_ENVIRONMENT.
-const PIN_ENV = '"${UV_PROJECT_ENVIRONMENT:-.venv}"';
+const PIN_ENV_EXPANSION = '${UV_PROJECT_ENVIRONMENT:-.venv}';
+const PIN_ENV = `"${PIN_ENV_EXPANSION}"`;
+
+// Inside the pin env: per-sandbox on every backend (a container's env dies
+// with it; a local sandbox's .venv is removed with its root), so nothing
+// accumulates on a shared host /tmp and concurrent launches can't clobber
+// each other. Also keeps it out of workspace capture and away from a synced
+// repo's own requirements.txt.
+const SCRIPT_REQUIREMENTS = `"${PIN_ENV_EXPANSION}/marimohub-script-requirements.txt"`;
 
 export const MARIMO_LAUNCH_STRATEGIES = {
 	// marimohub's default. The sandbox image pre-installs marimo (pinned) plus
@@ -116,8 +118,8 @@ export const MARIMO_LAUNCH_STRATEGIES = {
 	'uv-script-pins': (p) => ({
 		setup: [
 			PYPROJECT_LAYER_SETUP,
-			`uv export --script ${shellQuote(p.notebookFile)} --format requirements-txt --no-hashes -o ${SCRIPT_REQUIREMENTS}`,
 			`[ -d ${PIN_ENV} ] || uv venv ${PIN_ENV}`,
+			`uv export --script ${shellQuote(p.notebookFile)} --format requirements-txt --no-hashes -o ${SCRIPT_REQUIREMENTS}`,
 			`uv pip install --python ${PIN_ENV} --no-build -r ${SCRIPT_REQUIREMENTS}`,
 		],
 		start: `uv run --no-sync ${marimoCommand(p)}`,

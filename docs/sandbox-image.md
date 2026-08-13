@@ -65,9 +65,9 @@ more setup commands. These commands run after the project sync and install the
 inline dependencies into the base environment:
 
 ```sh
-uv export --script notebook.py --format requirements-txt --no-hashes -o /tmp/marimohub-script-requirements-$$.txt
 [ -d "${UV_PROJECT_ENVIRONMENT:-.venv}" ] || uv venv "${UV_PROJECT_ENVIRONMENT:-.venv}"
-uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" --no-build -r /tmp/marimohub-script-requirements-$$.txt
+uv export --script notebook.py --format requirements-txt --no-hashes -o "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
+uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" --no-build -r "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
 ```
 
 A failed project sync does not stop the session. In contrast, a failure in these
