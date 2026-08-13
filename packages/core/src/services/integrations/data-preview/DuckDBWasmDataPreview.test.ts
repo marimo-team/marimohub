@@ -505,6 +505,60 @@ describe('DuckDBWasmDataPreview', () => {
 		expect(factory).toHaveBeenCalledTimes(2);
 	});
 
+	it('does not double-count failed initialization while its runtime closes', async () => {
+		let finishFirst: ((value: { columns: string[]; rows: number[][] }) => void) | undefined;
+		let finishFailedClose: (() => void) | undefined;
+		const first = runtime({
+			execute: vi.fn(
+				() =>
+					new Promise<{ columns: string[]; rows: number[][] }>((resolve) => {
+						finishFirst = resolve;
+					}),
+			),
+		});
+		const failed = runtime({
+			ping: vi.fn(async () => {
+				throw new Error('unhealthy');
+			}),
+			close: vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishFailedClose = resolve;
+					}),
+			),
+		});
+		const third = runtime({
+			execute: vi.fn(async () => ({ columns: ['id'], rows: [[3]] })),
+		});
+		const factory = vi
+			.fn()
+			.mockResolvedValueOnce(first)
+			.mockResolvedValueOnce(failed)
+			.mockResolvedValueOnce(third);
+		const preview = new DuckDBWasmDataPreview(factory, {
+			...options,
+			maxPoolSize: 3,
+			startupTimeoutMs: 10_000,
+			executionTimeoutMs: 10_000,
+		});
+		await preview.check();
+
+		const active = preview.preview({ setup: [], query: { text: 'SELECT 1' } });
+		await vi.waitFor(() => expect(finishFirst).toBeTypeOf('function'));
+		const failedInitialization = preview.preview({ setup: [], query: { text: 'SELECT 2' } });
+		await vi.waitFor(() => expect(failed.close).toHaveBeenCalledOnce());
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 3' } })).resolves.toEqual({
+			columns: ['id'],
+			rows: [[3]],
+		});
+		expect(factory).toHaveBeenCalledTimes(3);
+
+		finishFirst?.({ columns: ['id'], rows: [[1]] });
+		finishFailedClose?.();
+		await expect(active).resolves.toEqual({ columns: ['id'], rows: [[1]] });
+		await expect(failedInitialization).rejects.toThrow('could not start a preview runtime');
+	});
+
 	it('emits low-cardinality pool, execution, and recycle metrics', async () => {
 		const increment = vi.fn();
 		const gauge = vi.fn();

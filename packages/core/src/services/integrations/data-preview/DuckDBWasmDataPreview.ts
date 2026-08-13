@@ -23,6 +23,7 @@ export interface DuckDBWasmDataPreviewOptions {
 
 interface RuntimeSlot {
 	runtime: DuckDBWasmRuntime;
+	capacityToken: symbol;
 	busy: boolean;
 	idleTimer?: ReturnType<typeof setTimeout>;
 	controller?: AbortController;
@@ -50,6 +51,7 @@ export class DuckDBWasmDataPreview {
 	private readonly initializationDisposers = new Set<() => Promise<void>>();
 	private readonly activeWork = new Set<Promise<unknown>>();
 	private readonly disposals = new Set<Promise<unknown>>();
+	private readonly capacityReservations = new Set<symbol>();
 	private readonly maxPoolSize: number;
 	private readonly idleTimeoutMs: number;
 	private readonly metrics: Metrics;
@@ -203,9 +205,6 @@ export class DuckDBWasmDataPreview {
 			slot.busy = true;
 			return slot;
 		}
-		if (this.liveRuntimeCount() >= this.maxPoolSize) {
-			throw new ResourceExhaustedError('The DuckDB-Wasm preview pool is currently full.');
-		}
 		const slot = await this.startSlot();
 		if (this.closed) {
 			await this.disposeSlot(slot, 'shutdown');
@@ -216,7 +215,12 @@ export class DuckDBWasmDataPreview {
 	}
 
 	private startSlot(): Promise<RuntimeSlot> {
-		return this.track(this.initializations, this.initializeSlot());
+		if (this.capacityReservations.size >= this.maxPoolSize) {
+			throw new ResourceExhaustedError('The DuckDB-Wasm preview pool is currently full.');
+		}
+		const capacityToken = Symbol('duckdb-runtime-capacity');
+		this.capacityReservations.add(capacityToken);
+		return this.track(this.initializations, this.initializeSlot(capacityToken));
 	}
 
 	private track<T>(pending: Set<Promise<unknown>>, work: Promise<T>): Promise<T> {
@@ -228,15 +232,20 @@ export class DuckDBWasmDataPreview {
 		return work;
 	}
 
-	private async initializeSlot(): Promise<RuntimeSlot> {
+	private async initializeSlot(capacityToken: symbol): Promise<RuntimeSlot> {
 		const startedAt = Date.now();
 		let runtime: DuckDBWasmRuntime | undefined;
 		let abandoned = false;
 		let disposed = false;
+		let startupSettled = false;
 		const dispose = async (): Promise<void> => {
-			if (!runtime || disposed) return;
+			if (disposed) return;
+			if (!runtime) {
+				if (startupSettled) this.capacityReservations.delete(capacityToken);
+				return;
+			}
 			disposed = true;
-			await this.closeRuntime(runtime);
+			await this.closeRuntime(runtime, capacityToken);
 		};
 		this.initializationDisposers.add(dispose);
 		const ensureNotAbandoned = async (): Promise<void> => {
@@ -245,22 +254,27 @@ export class DuckDBWasmDataPreview {
 			throw new UnavailableError('DuckDB-Wasm initialization was abandoned.');
 		};
 		const startup = (async (): Promise<RuntimeSlot> => {
-			runtime = await this.runtimeFactory();
-			await ensureNotAbandoned();
-			await runtime.initialize({ memoryLimitMb: this.options.memoryLimitMb });
-			await ensureNotAbandoned();
-			await runtime.ping();
-			await ensureNotAbandoned();
-			const capabilities = { runtime: runtime.mode, features: [...runtime.features] };
-			if (this.capabilities && !sameCapabilities(this.capabilities, capabilities)) {
-				await dispose();
-				throw new UnavailableError('DuckDB-Wasm runtime capabilities changed within the pool.');
+			try {
+				runtime = await this.runtimeFactory();
+				await ensureNotAbandoned();
+				await runtime.initialize({ memoryLimitMb: this.options.memoryLimitMb });
+				await ensureNotAbandoned();
+				await runtime.ping();
+				await ensureNotAbandoned();
+				const capabilities = { runtime: runtime.mode, features: [...runtime.features] };
+				if (this.capabilities && !sameCapabilities(this.capabilities, capabilities)) {
+					await dispose();
+					throw new UnavailableError('DuckDB-Wasm runtime capabilities changed within the pool.');
+				}
+				this.capabilities = capabilities;
+				const slot = { runtime, capacityToken, busy: false };
+				this.slots.add(slot);
+				this.recordPoolSize(runtime.mode);
+				return slot;
+			} finally {
+				startupSettled = true;
+				if (abandoned && !runtime) this.capacityReservations.delete(capacityToken);
 			}
-			this.capabilities = capabilities;
-			const slot = { runtime, busy: false };
-			this.slots.add(slot);
-			this.recordPoolSize(runtime.mode);
-			return slot;
 		})();
 		try {
 			const slot = await withDeadline(startup, {
@@ -326,14 +340,18 @@ export class DuckDBWasmDataPreview {
 			reason,
 		});
 		this.recordPoolSize(slot.runtime.mode);
-		slot.disposing = this.closeRuntime(slot.runtime);
+		slot.disposing = this.closeRuntime(slot.runtime, slot.capacityToken);
 		return slot.disposing;
 	}
 
-	private async closeRuntime(runtime: DuckDBWasmRuntime): Promise<void> {
+	private async closeRuntime(runtime: DuckDBWasmRuntime, capacityToken: symbol): Promise<void> {
 		const close = this.track(
 			this.disposals,
 			Promise.resolve().then(() => runtime.close()),
+		);
+		void close.then(
+			() => this.capacityReservations.delete(capacityToken),
+			() => this.capacityReservations.delete(capacityToken),
 		);
 		await withDeadline(close, {
 			timeoutMs: this.options.startupTimeoutMs,
@@ -366,10 +384,6 @@ export class DuckDBWasmDataPreview {
 		let active = 0;
 		for (const slot of this.slots) if (slot.busy) active++;
 		return active;
-	}
-
-	private liveRuntimeCount(): number {
-		return this.slots.size + this.initializations.size + this.disposals.size;
 	}
 
 	private recordPoolSize(runtime: DuckDBWasmRuntime['mode']): void {
