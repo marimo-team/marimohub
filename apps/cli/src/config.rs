@@ -116,13 +116,10 @@ fn set_linux_credential(
 fn delete_linux_credential(
     current: FileCredential,
     delete_keyring: impl FnOnce() -> keyring::Result<()>,
-    mut set_file: impl FnMut(FileCredential) -> Result<(), Error>,
+    set_file: impl FnOnce(FileCredential) -> Result<(), Error>,
     warn: impl FnOnce(&keyring::Error),
 ) -> Result<(), Error> {
     let has_file_state = current != FileCredential::Missing;
-    if matches!(current, FileCredential::Token(_)) {
-        set_file(FileCredential::Deleted)?;
-    }
 
     match delete_keyring() {
         Ok(()) | Err(keyring::Error::NoEntry) => {
@@ -134,7 +131,7 @@ fn delete_linux_credential(
         }
         Err(error @ (keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_))) => {
             warn(&error);
-            if has_file_state {
+            if current == FileCredential::Deleted {
                 Ok(())
             } else {
                 set_file(FileCredential::Deleted)
@@ -425,7 +422,7 @@ fn warn_file_credentials(error: &keyring::Error) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::sync::Arc;
     use std::thread;
 
@@ -528,7 +525,7 @@ mod tests {
     fn deletion_marker_retries_keyring_and_clears_when_empty() {
         for keyring_result in [Ok(()), Err(keyring::Error::NoEntry)] {
             let keyring_delete_called = Cell::new(false);
-            let stored = std::cell::RefCell::new(Vec::new());
+            let stored = RefCell::new(Vec::new());
             delete_linux_credential(
                 FileCredential::Deleted,
                 || {
@@ -551,7 +548,7 @@ mod tests {
     #[test]
     fn file_backed_profile_stays_file_backed() {
         let keyring_write_called = Cell::new(false);
-        let stored = std::cell::RefCell::new(None);
+        let stored = RefCell::new(None);
         set_linux_credential(
             FileCredential::Token("old-token".into()),
             "new-token",
@@ -619,13 +616,27 @@ mod tests {
         })
         .unwrap();
 
+        let credential = RefCell::new(FileCredential::Token("current-token".into()));
         let result = remove_profile_from(&path, "default", || {
-            Err(Error::Credential("credential store unavailable".into()))
+            let current = credential.borrow().clone();
+            delete_linux_credential(
+                current,
+                || Err(keyring::Error::Invalid("profile".into(), "invalid".into())),
+                |next| {
+                    credential.replace(next);
+                    Ok(())
+                },
+                |_| {},
+            )
         });
 
         assert!(matches!(result, Err(Error::Credential(_))));
         let config = load_from(&path).unwrap();
         assert_eq!(config.current_profile.as_deref(), Some("default"));
         assert!(config.profiles.contains_key("default"));
+        assert_eq!(
+            credential.into_inner(),
+            FileCredential::Token("current-token".into())
+        );
     }
 }
