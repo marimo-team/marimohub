@@ -32,7 +32,8 @@ export default defineConfig({
 			/^destr$/,
 			/^ufo$/,
 			/^ulidx$/,
-			/^zod$/,
+			// Match subpath imports too (zod/v3, zod/v4) — the ai SDK imports them.
+			/^zod(\/|$)/,
 			/^nodemailer$/,
 			// better-all (pure-JS, used by core's provisioning graph) must be
 			// bundled — the runtime image ships no node_modules.
