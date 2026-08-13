@@ -30,6 +30,7 @@ const configOf = (provider: unknown) =>
 		provider as {
 			config: {
 				image?: string;
+				environment?: string;
 				template?: string;
 				host?: string;
 				bindHost?: string;
@@ -72,6 +73,17 @@ describe('makeCompute backend selection', () => {
 		expect(
 			configOf(makeCompute(modalEnv, { sessionIdleTimeoutMs: Millis.minutes(30) })).idleFallbackMs,
 		).toBe(Millis.minutes(45));
+	});
+
+	it('forwards the selected Modal environment', () => {
+		expect(
+			configOf(
+				makeCompute({
+					...modalEnv,
+					MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: 'notebooks',
+				}),
+			).environment,
+		).toBe('notebooks');
 	});
 
 	it('selects docker', () => {

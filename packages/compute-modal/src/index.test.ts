@@ -178,6 +178,18 @@ function makeCompute(world: ReturnType<typeof makeWorld>, overrides = {}) {
 }
 
 describe('ModalCompute', () => {
+	it('configures the SDK client for the selected Modal environment', () => {
+		const compute = new ModalCompute({
+			tokenId: 'token-id',
+			tokenSecret: 'token-secret',
+			image: 'ghcr.io/acme/marimo:latest',
+			environment: 'notebooks',
+		});
+		const client = Reflect.get(compute, 'client') as { profile: { environment?: string } };
+
+		expect(client.profile.environment).toBe('notebooks');
+	});
+
 	it('creates fresh sandboxes through the supported SDK with profile resources', async () => {
 		const world = makeWorld();
 		await makeCompute(world)

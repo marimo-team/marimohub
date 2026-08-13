@@ -40,6 +40,8 @@ export interface ModalConfig {
 	image: string;
 	/** Modal API endpoint override. */
 	apiBase?: string;
+	/** Modal environment that contains the app and sandboxes. */
+	environment?: string;
 	/** Modal app name that owns the sandboxes. */
 	appName?: string;
 	/** Provider-side fallback, set later than marimohub's graceful idle deadline. */
@@ -453,6 +455,7 @@ export class ModalCompute implements SandboxProvider {
 			(new ModalClient({
 				tokenId: config.tokenId,
 				tokenSecret: config.tokenSecret,
+				environment: config.environment,
 				...(config.apiBase ? { endpoint: config.apiBase } : {}),
 			}) as unknown as ModalClientLike);
 	}
