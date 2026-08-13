@@ -28,6 +28,9 @@ async function handle(request: RuntimeRequest): Promise<void> {
 			case 'execute':
 				response = { id: request.id, ok: true, value: engine.execute(request.program) };
 				break;
+			case 'execute-query':
+				response = { id: request.id, ok: true, value: await engine.executeQuery(request.request) };
+				break;
 			case 'ping':
 				engine.ping();
 				response = { id: request.id, ok: true };

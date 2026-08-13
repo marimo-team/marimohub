@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -52,6 +52,8 @@ import type { IntegrationEntry, IntegrationKind } from '@/types';
 import { useSeededNotebook } from './notebookSeed';
 import { ObjectBrowser } from './ObjectBrowser';
 import { TabularPreviewGrid } from './TabularPreviewGrid';
+
+const SqlWorkspace = lazy(() => import('./SqlWorkspace'));
 
 /** Namespace parts join with U+001F in the `ns` query param, so dots round-trip. */
 const NS_JOIN = '\u001f';
@@ -196,18 +198,25 @@ export default function DataBrowserPage() {
 	const selected = browsable.find((entry) => entry.id === iid);
 	const selectedKind = selected ? kindsByName.get(selected.kind) : undefined;
 	const requestedSurface = searchParams.get('surface');
-	const selectedSurface =
-		requestedSurface === 'objects' && supportsObjectBrowse(selectedKind)
-			? 'objects'
-			: supportsTableBrowse(selectedKind)
-				? 'tables'
-				: supportsObjectBrowse(selectedKind)
-					? 'objects'
-					: undefined;
 	const selectedCapability = useBrowseCapabilityQuery(pid!, iid ?? '', selected !== undefined);
+	const querySurface = selectedCapability.data?.surfaces.query;
+	const canManageQueries =
+		(capabilities?.data_browser?.query ?? false) &&
+		(project.your_role === 'manager' || project.your_role === 'admin');
+	const querySurfaceAvailable = canManageQueries && (querySurface?.available ?? false);
+	const selectedSurface =
+		requestedSurface === 'query' && querySurfaceAvailable
+			? 'query'
+			: requestedSurface === 'objects' && supportsObjectBrowse(selectedKind)
+				? 'objects'
+				: supportsTableBrowse(selectedKind)
+					? 'tables'
+					: supportsObjectBrowse(selectedKind)
+						? 'objects'
+						: undefined;
 	const selectedTableCapability = tableBrowseCapability(selectedCapability.data);
 	const selectedObjectCapability = objectBrowseCapability(selectedCapability.data);
-	const selectSurface = (surface: 'tables' | 'objects') => {
+	const selectSurface = (surface: 'tables' | 'objects' | 'query') => {
 		setSearchParams((current) => {
 			const next = new URLSearchParams(current);
 			next.set('surface', surface);
@@ -245,24 +254,49 @@ export default function DataBrowserPage() {
 					</Button>
 				)}
 			</div>
-			{selectedKind && supportsTableBrowse(selectedKind) && supportsObjectBrowse(selectedKind) && (
-				<div className="flex w-fit rounded-md border border-input p-1" aria-label="Browse surface">
-					<Button
-						size="sm"
-						variant={selectedSurface === 'tables' ? 'primary' : 'ghost'}
-						onPress={() => selectSurface('tables')}
+			{selectedKind &&
+				[
+					supportsTableBrowse(selectedKind),
+					supportsObjectBrowse(selectedKind),
+					canManageQueries && querySurface !== undefined,
+				].filter(Boolean).length > 1 && (
+					<div
+						className="flex w-fit rounded-md border border-input p-1"
+						aria-label="Browse surface"
 					>
-						Tables
-					</Button>
-					<Button
-						size="sm"
-						variant={selectedSurface === 'objects' ? 'primary' : 'ghost'}
-						onPress={() => selectSurface('objects')}
-					>
-						Objects
-					</Button>
-				</div>
-			)}
+						{supportsTableBrowse(selectedKind) ? (
+							<Button
+								size="sm"
+								variant={selectedSurface === 'tables' ? 'primary' : 'ghost'}
+								onPress={() => selectSurface('tables')}
+							>
+								Tables
+							</Button>
+						) : null}
+						{supportsObjectBrowse(selectedKind) ? (
+							<Button
+								size="sm"
+								variant={selectedSurface === 'objects' ? 'primary' : 'ghost'}
+								onPress={() => selectSurface('objects')}
+							>
+								Objects
+							</Button>
+						) : null}
+						{canManageQueries && querySurface ? (
+							<Button
+								size="sm"
+								variant={selectedSurface === 'query' ? 'primary' : 'ghost'}
+								onPress={() => selectSurface('query')}
+								isDisabled={!querySurface.available}
+							>
+								Query
+							</Button>
+						) : null}
+					</div>
+				)}
+			{canManageQueries && querySurface?.available === false && querySurface.reason ? (
+				<p className="text-xs text-muted-foreground">Run SQL unavailable: {querySurface.reason}</p>
+			) : null}
 
 			{!available ? (
 				<EmptyState
@@ -279,7 +313,7 @@ export default function DataBrowserPage() {
 			) : (
 				<div className="grid min-h-0 flex-1 grid-cols-[minmax(18rem,1fr)_minmax(0,2fr)] gap-4 text-sm max-lg:grid-cols-1 max-lg:overflow-y-auto">
 					<div className="flex min-h-0 flex-col gap-2 overflow-hidden rounded-xl border bg-card p-3 max-lg:max-h-[50vh]">
-						{selectedSurface !== 'objects' && (
+						{selectedSurface === 'tables' && (
 							<SearchField
 								aria-label="Filter tables"
 								placeholder="Filter tables..."
@@ -295,7 +329,10 @@ export default function DataBrowserPage() {
 									entry={entry}
 									kind={kindsByName.get(entry.kind)}
 									active={entry.id === iid}
-									showTree={entry.id === iid && selectedSurface === 'tables'}
+									showTree={
+										entry.id === iid &&
+										(selectedSurface === 'tables' || selectedSurface === 'query')
+									}
 									query={query}
 									selection={entry.id === iid ? selection : null}
 									isExpanded={isExpanded}
@@ -309,10 +346,20 @@ export default function DataBrowserPage() {
 					<div
 						className={cn(
 							'min-h-0',
-							selectedSurface !== 'objects' && 'overflow-y-auto rounded-xl border bg-card p-4',
+							selectedSurface === 'tables' && 'overflow-y-auto rounded-xl border bg-card p-4',
 						)}
 					>
-						{selected && selectedSurface === 'objects' ? (
+						{selected && selectedSurface === 'query' ? (
+							<Suspense fallback={<Skeleton className="h-full min-h-96 w-full" />}>
+								<SqlWorkspace
+									projectId={pid!}
+									integrationId={selected.id}
+									integrationName={selected.name}
+									selection={selection}
+									aiAvailable={capabilities?.data_browser?.ai_query ?? false}
+								/>
+							</Suspense>
+						) : selected && selectedSurface === 'objects' ? (
 							selectedObjectCapability?.available ? (
 								<ObjectBrowser
 									projectId={pid!}

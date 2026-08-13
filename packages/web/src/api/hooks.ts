@@ -899,6 +899,63 @@ export function useBrowseTablePreview(projectId: string, integrationId: string) 
 	});
 }
 
+export function useDataQuerySchemaQuery(
+	projectId: string,
+	integrationId: string,
+	focus?: { namespace: readonly string[]; table: string } | null,
+	enabled = true,
+) {
+	return useQuery({
+		queryKey: browseKeys.querySchema(
+			projectId,
+			integrationId,
+			focus?.namespace ?? [],
+			focus?.table ?? '',
+		),
+		enabled,
+		staleTime: BROWSE_SCHEMA_STALE_MS,
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/integrations/{iid}/browse/query/schema', {
+					params: {
+						path: browsePath(projectId, integrationId),
+						query: focus
+							? {
+									focus_namespace: focus.namespace.join(NAMESPACE_JOINER),
+									focus_table: focus.table,
+								}
+							: {},
+					},
+				}),
+			),
+	});
+}
+
+export function useRunDataQuery(projectId: string, integrationId: string) {
+	return useMutation({
+		mutationFn: ({ sql, signal }: { sql: string; signal?: AbortSignal }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/query', {
+					params: { path: browsePath(projectId, integrationId) },
+					body: { sql },
+					signal,
+				}),
+			),
+	});
+}
+
+export function useGenerateDataQuerySql(projectId: string, integrationId: string) {
+	return useMutation({
+		mutationFn: (body: { mode: 'generate' | 'revise'; instruction: string; sql?: string }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/integrations/{iid}/browse/query/generate', {
+					params: { path: browsePath(projectId, integrationId) },
+					body,
+				}),
+			),
+	});
+}
+
 export function useObjectBucketsQuery(projectId: string, integrationId: string, enabled = true) {
 	return useInfiniteQuery({
 		queryKey: browseKeys.objectBuckets(projectId, integrationId),

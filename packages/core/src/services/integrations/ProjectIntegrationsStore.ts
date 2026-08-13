@@ -794,6 +794,11 @@ class ScopedIntegrationsStore {
 					: 'Object browsing requires a user credential context.',
 			);
 		}
+		if (def.query) {
+			surfaces.query = this.dataQuery
+				? { available: false }
+				: { available: false, reason: 'Run SQL is not enabled on this deployment.' };
+		}
 		const compatibility = (reason?: string): BrowseCapabilityResult => ({
 			metadata: surfaces.tables?.available ?? false,
 			hub_preview: surfaces.tables?.preview ?? false,
@@ -810,6 +815,7 @@ class ScopedIntegrationsStore {
 			if (surfaces.objects && def.objectBrowse) {
 				surfaces.objects = unavailableObjectCapability(def.objectBrowse.provider, reason);
 			}
+			if (surfaces.query) surfaces.query = { available: false, reason };
 			return compatibility(reason);
 		}
 		const { config } = await this.loadCurrent(scope, head);
@@ -824,6 +830,7 @@ class ScopedIntegrationsStore {
 			if (surfaces.objects && def.objectBrowse) {
 				surfaces.objects = unavailableObjectCapability(def.objectBrowse.provider, reason);
 			}
+			if (surfaces.query) surfaces.query = { available: false, reason };
 			return compatibility(reason);
 		}
 		if (def.browse && this.browseProbe) {
@@ -845,8 +852,16 @@ class ScopedIntegrationsStore {
 				);
 			}
 		}
+		if (def.query && this.dataQuery) {
+			const verdict = def.query.available(parsed);
+			surfaces.query = verdict.ok
+				? { available: true }
+				: { available: false, reason: verdict.reason };
+		}
 		const anySurfaceAvailable =
-			(surfaces.tables?.available ?? false) || (surfaces.objects?.available ?? false);
+			(surfaces.tables?.available ?? false) ||
+			(surfaces.objects?.available ?? false) ||
+			(surfaces.query?.available ?? false);
 		return compatibility(
 			anySurfaceAvailable ? undefined : (surfaces.tables?.reason ?? surfaces.objects?.reason),
 		);
@@ -943,6 +958,7 @@ class ScopedIntegrationsStore {
 		principal: { userId: UserId; email: string },
 		sessionId: SessionRenderContext['sessionId'],
 		sql: string,
+		signal?: AbortSignal,
 	): Promise<DataQueryResult> {
 		if (!this.dataQuery) {
 			throw new ValidationError('Run SQL is not enabled on this deployment.');
@@ -952,15 +968,30 @@ class ScopedIntegrationsStore {
 		if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
 		const rendered = await this.renderOne(scope, head, projectId, { sessionId, principal });
 		const bundled = bundleIntegrations([rendered], sessionId);
+		const opened = await this.openResolvedBrowse(scope, id);
+		const query = opened.def.query;
+		if (!query) {
+			throw new ValidationError(`Integration kind "${head.kind}" does not support SQL queries.`);
+		}
+		const verdict = query.available(opened.config);
+		if (!verdict.ok) {
+			throw new ValidationError(`Integration "${head.name}" cannot run SQL: ${verdict.reason}.`);
+		}
+		const integration = Object.freeze({ ...bundled.attachments[0] });
 		const connection = Object.freeze({
 			files: Object.freeze(bundled.files.map((file) => Object.freeze({ ...file }))),
 			vars: Object.freeze({ ...bundled.vars }),
-			integration: Object.freeze({ ...bundled.attachments[0] }),
+			integration,
+			plan: Object.freeze(query.plan({ config: opened.config, integration })),
 		});
-		return this.dataQuery.query(principal.userId, {
-			sql,
-			connection,
-		});
+		return this.dataQuery.query(
+			principal.userId,
+			{
+				sql,
+				connection,
+			},
+			signal,
+		);
 	}
 
 	async browseObjectBuckets(
@@ -1718,9 +1749,10 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		principal: { userId: UserId; email: string },
 		sessionId: SessionRenderContext['sessionId'],
 		sql: string,
+		signal?: AbortSignal,
 	): Promise<DataQueryResult> {
 		return this.withBrowseScope(projectId, id, (scope) =>
-			this.store.runDataQuery(scope, id, projectId, principal, sessionId, sql),
+			this.store.runDataQuery(scope, id, projectId, principal, sessionId, sql, signal),
 		);
 	}
 

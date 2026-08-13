@@ -1,5 +1,8 @@
 import { Worker } from 'node:worker_threads';
 import type {
+	DataQueryExecution,
+	DataQueryExecutorFactory,
+	DataQueryResult,
 	DuckDBPreviewProgram,
 	DuckDBWasmRuntime,
 	DuckDBWasmRuntimeFactory,
@@ -36,6 +39,41 @@ export function createNodeDuckDBWasmRuntimeFactory(
 			if (mode === 'worker' || !isStructuralWorkerError(error)) throw error;
 			return new InlineRuntime();
 		}
+	};
+}
+
+export function createNodeDataQueryExecutorFactory(options: {
+	memoryLimitMb: number;
+}): DataQueryExecutorFactory {
+	return {
+		async create(signal) {
+			if (signal.aborted)
+				throw Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' });
+			const runtime = new WorkerRuntime();
+			const onAbort = () => {
+				void runtime.close().catch(() => {});
+			};
+			signal.addEventListener('abort', onAbort, { once: true });
+			try {
+				await runtime.initialize({ memoryLimitMb: options.memoryLimitMb });
+				if (signal.aborted) {
+					throw Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' });
+				}
+			} catch (error) {
+				await runtime.close().catch(() => {});
+				throw error;
+			} finally {
+				signal.removeEventListener('abort', onAbort);
+			}
+			return {
+				runtime: 'worker',
+				execute: (request: DataQueryExecution, executionSignal: AbortSignal) =>
+					runtime.executeQuery(request, executionSignal),
+				terminate: () => {
+					void runtime.close();
+				},
+			};
+		},
 	};
 }
 
@@ -95,6 +133,20 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	async execute(program: DuckDBPreviewProgram): Promise<TablePreview> {
 		assertSupported(program);
 		return this.request({ type: 'execute', program });
+	}
+
+	async executeQuery(request: DataQueryExecution, signal: AbortSignal): Promise<DataQueryResult> {
+		if (signal.aborted)
+			throw Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' });
+		const work = this.request<DataQueryResult>({ type: 'execute-query', request });
+		const abort = new Promise<never>((_resolve, reject) => {
+			signal.addEventListener(
+				'abort',
+				() => reject(Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' })),
+				{ once: true },
+			);
+		});
+		return Promise.race([work, abort]);
 	}
 
 	ping(): Promise<void> {

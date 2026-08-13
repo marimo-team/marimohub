@@ -6,6 +6,7 @@ import type {
 	BrowsePageRequest,
 	IntegrationCategory,
 	IntegrationProbe,
+	IntegrationVersionPin,
 	KindBrand,
 	ProbeRequestInit,
 	TableSchema,
@@ -21,6 +22,7 @@ import type {
 	PreviewProgramInput,
 	PreviewPrograms,
 } from './data-preview/programs';
+import type { DataQueryPlan } from './data-query';
 import { secretPaths } from './secretFields';
 import type { SecretPath } from './secretFields';
 
@@ -196,6 +198,10 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 			config: z.infer<S>,
 		): { ok: true; programs: PreviewProgramAvailability } | { ok: false; reason: string };
 		programs(input: PreviewProgramInput<z.infer<S>>): PreviewPrograms;
+	};
+	query?: {
+		available(config: z.infer<S>): { ok: true } | { ok: false; reason: string };
+		plan(input: { config: z.infer<S>; integration: IntegrationVersionPin }): DataQueryPlan;
 	};
 	/**
 	 * Upgrade a stored config from an older `schemaVersion`. Chainable per step.

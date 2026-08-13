@@ -21,6 +21,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@ai-sdk/openai-compatible": "catalog:",
 		"@marimo-hub/api": "workspace:*",
 		"@marimo-hub/auth-dev": "workspace:*",
 		"@marimo-hub/auth-oidc": "workspace:*",
@@ -45,6 +46,7 @@
 		"@marimo-hub/storage-fs": "workspace:*",
 		"@marimo-hub/storage-gcs": "workspace:*",
 		"@marimo-hub/storage-s3": "workspace:*",
+		"ai": "catalog:",
 		"hono": "catalog:"
 	},
 	"devDependencies": {

@@ -108,6 +108,8 @@ app.openapi(capabilitiesRoute, (c) => {
 		data_browser: {
 			available: Boolean(deps.dataBrowser),
 			preview: deps.dataBrowser?.preview ?? false,
+			query: deps.dataBrowser?.query ?? false,
+			ai_query: Boolean(deps.dataBrowser?.query && deps.ai?.generateSql),
 		},
 		// createApi defaults this; the fallback satisfies the optional type for
 		// direct callers (mirrors the sandbox.exposure pattern).

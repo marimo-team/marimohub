@@ -1,8 +1,9 @@
-import type { DuckDBPreviewProgram } from '@marimo-hub/core';
+import type { DataQueryExecution, DuckDBPreviewProgram } from '@marimo-hub/core';
 
 export type RuntimeRequest =
 	| { id: number; type: 'initialize'; memoryLimitMb: number }
 	| { id: number; type: 'execute'; program: DuckDBPreviewProgram }
+	| { id: number; type: 'execute-query'; request: DataQueryExecution }
 	| { id: number; type: 'ping' };
 
 export type RuntimeResponse =
@@ -12,4 +13,5 @@ export type RuntimeResponse =
 export type RuntimeRequestInput =
 	| { type: 'initialize'; memoryLimitMb: number }
 	| { type: 'execute'; program: DuckDBPreviewProgram }
+	| { type: 'execute-query'; request: DataQueryExecution }
 	| { type: 'ping' };

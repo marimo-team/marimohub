@@ -4,6 +4,18 @@ export interface DataQueryResult {
 	columns: string[];
 	rows: unknown[][];
 	truncated: boolean;
+	execution_ms?: number;
+}
+
+export interface DataQueryStatement {
+	text: string;
+	params?: readonly (string | number | boolean | null)[];
+}
+
+export interface DataQueryPlan {
+	setup: readonly DataQueryStatement[];
+	cleanup?: readonly DataQueryStatement[];
+	allowedOrigins: readonly string[];
 }
 
 export interface DataQueryConnection {
@@ -11,6 +23,7 @@ export interface DataQueryConnection {
 	readonly files: readonly { readonly path: string; readonly content: string }[];
 	readonly vars: Readonly<Record<string, string>>;
 	readonly integration: Readonly<IntegrationVersionPin>;
+	readonly plan?: Readonly<DataQueryPlan>;
 }
 
 export interface DataQueryExecution {

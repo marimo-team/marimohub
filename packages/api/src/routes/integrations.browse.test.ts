@@ -45,6 +45,10 @@ const browsyKind = defineIntegration({
 		token: zSecret(),
 	}),
 	render: () => ({}),
+	query: {
+		available: () => ({ ok: true }),
+		plan: () => ({ setup: [], allowedOrigins: [] }),
+	},
 	browse: {
 		available: (config) =>
 			config.mode === 'open' ? { ok: true } : { ok: false, reason: 'sandbox only' },
@@ -347,7 +351,13 @@ describe('Data browser routes', () => {
 		expect(capability).toEqual({
 			metadata: true,
 			preview: false,
-			surfaces: { tables: { available: true, preview: false } },
+			surfaces: {
+				tables: { available: true, preview: false },
+				query: {
+					available: false,
+					reason: 'Run SQL is not enabled on this deployment.',
+				},
+			},
 		});
 
 		const closed = await expectOk<{ id: string }>(
@@ -365,7 +375,13 @@ describe('Data browser routes', () => {
 			metadata: false,
 			preview: false,
 			reason: 'sandbox only',
-			surfaces: { tables: { available: false, preview: false, reason: 'sandbox only' } },
+			surfaces: {
+				tables: { available: false, preview: false, reason: 'sandbox only' },
+				query: {
+					available: false,
+					reason: 'Run SQL is not enabled on this deployment.',
+				},
+			},
 		});
 	});
 
@@ -712,7 +728,13 @@ describe('Data browser routes', () => {
 		expect(capability).toEqual({
 			metadata: true,
 			preview: true,
-			surfaces: { tables: { available: true, preview: true } },
+			surfaces: {
+				tables: { available: true, preview: true },
+				query: {
+					available: false,
+					reason: 'Run SQL is not enabled on this deployment.',
+				},
+			},
 		});
 
 		const response = await request(
@@ -751,6 +773,7 @@ describe('Data browser routes', () => {
 			columns: ['value'],
 			rows: [[1]],
 			truncated: false,
+			execution_ms: expect.any(Number),
 		});
 		expect(executions).toHaveLength(1);
 		expect(executions[0]).toMatchObject({
@@ -782,7 +805,7 @@ describe('Data browser routes', () => {
 		}
 
 		deps.dataBrowser.query = true;
-		await expectError(await request('POST', url, { sql: 'select 1' }), 422, 'VALIDATION_ERROR');
+		await expectError(await request('POST', url, { sql: 'select 1' }), 404, 'NOT_FOUND');
 	});
 
 	it('rejects empty and oversized UTF-8 SQL before invoking the executor', async () => {
@@ -847,8 +870,8 @@ describe('Data browser routes', () => {
 			await query('POST', `/projects/${pid}/integrations/${created.id}/browse/query`, {
 				sql: 'select 1',
 			}),
-			422,
-			'VALIDATION_ERROR',
+			404,
+			'NOT_FOUND',
 		);
 		expect(executions).toHaveLength(0);
 		const eventsResponse = await query('GET', `/projects/${pid}/events`);
@@ -1518,7 +1541,13 @@ describe('Data browser routes', () => {
 		expect(capability).toEqual({
 			metadata: true,
 			preview: false,
-			surfaces: { tables: { available: true, preview: false } },
+			surfaces: {
+				tables: { available: true, preview: false },
+				query: {
+					available: false,
+					reason: 'Run SQL is not enabled on this deployment.',
+				},
+			},
 		});
 
 		await createBrowsable(pid, 'shared-lake');

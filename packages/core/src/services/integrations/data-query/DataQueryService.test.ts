@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ResourceExhaustedError, ValidationError } from '../../../errors';
 import type { IntegrationId, UserId } from '../../../ids';
-import { DataQueryService, MAX_DATA_QUERY_SQL_BYTES } from './DataQueryService';
+import {
+	DataQueryService,
+	MAX_DATA_QUERY_SQL_BYTES,
+	singleDataQueryStatement,
+} from './DataQueryService';
 import type {
 	DataQueryExecution,
 	DataQueryExecutorFactory,
@@ -67,6 +71,7 @@ describe('DataQueryService', () => {
 			columns: ['one'],
 			rows: [[1]],
 			truncated: false,
+			execution_ms: expect.any(Number),
 		});
 		expect(executions).toEqual([
 			expect.objectContaining({
@@ -209,6 +214,7 @@ describe('DataQueryService', () => {
 			columns: ['value'],
 			rows: [[1]],
 			truncated: false,
+			execution_ms: expect.any(Number),
 		});
 		expect(terminate).toHaveBeenCalledOnce();
 	});
@@ -275,11 +281,29 @@ describe('DataQueryService', () => {
 			columns: [],
 			rows: [],
 			truncated: false,
+			execution_ms: expect.any(Number),
 		});
 		await expect(exactService.query(user, { sql: `${exactBytes}é`, connection })).rejects.toThrow(
 			'byte limit',
 		);
 	});
+
+	it.each([
+		["SELECT 'a;b';", "SELECT 'a;b'"],
+		['SELECT 1 /* ; /* nested ; */ */;', 'SELECT 1 /* ; /* nested ; */ */'],
+		['SELECT 1 -- ;\n;', 'SELECT 1 -- ;'],
+		['SELECT $$a;b$$;', 'SELECT $$a;b$$'],
+		['SELECT $tag$a;b$tag$;', 'SELECT $tag$a;b$tag$'],
+	])('accepts a single statement with quoted or commented semicolons', (sql, expected) => {
+		expect(singleDataQueryStatement(sql)).toBe(expected);
+	});
+
+	it.each(['COMMIT; CREATE TABLE escaped(value INTEGER)', 'SELECT 1; SELECT 2', '; -- empty\n ;'])(
+		'rejects SQL that does not contain exactly one statement',
+		(sql) => {
+			expect(() => singleDataQueryStatement(sql)).toThrow('exactly one statement');
+		},
+	);
 
 	it('applies separate global and per-user admission and rejects work after close', async () => {
 		let release!: () => void;

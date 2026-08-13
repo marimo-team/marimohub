@@ -269,7 +269,12 @@ describe('makeIntegrations data browser', () => {
 				createSessionId(),
 				'select 1',
 			),
-		).resolves.toEqual({ columns: ['value'], rows: [[1]], truncated: false });
+		).resolves.toEqual({
+			columns: ['value'],
+			rows: [[1]],
+			truncated: false,
+			execution_ms: expect.any(Number),
+		});
 		expect(executions).toHaveLength(1);
 		await wired.dataBrowser?.close?.();
 	});

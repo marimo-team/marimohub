@@ -51,10 +51,14 @@ export class DataQueryService {
 		});
 	}
 
-	async query(userId: UserId, input: DataQueryInput): Promise<DataQueryResult> {
+	async query(
+		userId: UserId,
+		input: DataQueryInput,
+		signal?: AbortSignal,
+	): Promise<DataQueryResult> {
 		if (this.closed) throw new UnavailableError('The data-query service is closed.');
 		assertValidDataQuerySql(input.sql);
-		return this.inFlight.track(this.admission.run(userId, () => this.execute(input)));
+		return this.inFlight.track(this.admission.run(userId, () => this.execute(input, signal)));
 	}
 
 	close(): Promise<void> {
@@ -67,7 +71,10 @@ export class DataQueryService {
 		return this.closing;
 	}
 
-	private async execute(input: DataQueryInput): Promise<DataQueryResult> {
+	private async execute(
+		input: DataQueryInput,
+		externalSignal?: AbortSignal,
+	): Promise<DataQueryResult> {
 		const controller = new AbortController();
 		let executor: DisposableDataQueryExecutor | undefined;
 		let terminated = false;
@@ -97,11 +104,15 @@ export class DataQueryService {
 			},
 		};
 		this.active.add(active);
+		const onAbort = () => active.stop(new UnavailableError('The data query was cancelled.'));
+		externalSignal?.addEventListener('abort', onAbort, { once: true });
+		if (externalSignal?.aborted) onAbort();
 		const timer = setTimeout(
 			() => active.stop(new UnavailableError('The data query timed out.')),
 			this.options.executionTimeoutMs,
 		);
 		try {
+			const started = performance.now();
 			const work = (async () => {
 				executor = await this.options.executorFactory.create(controller.signal);
 				if (controller.signal.aborted) {
@@ -124,7 +135,10 @@ export class DataQueryService {
 					},
 					controller.signal,
 				);
-				return this.validateResult(result);
+				return this.validateResult({
+					...result,
+					execution_ms: Math.max(0, Math.round(performance.now() - started)),
+				});
 			})();
 			return await Promise.race([work, stopped]);
 		} catch (error) {
@@ -132,6 +146,7 @@ export class DataQueryService {
 			throw new UnavailableError('The data-query runtime could not execute this query.');
 		} finally {
 			clearTimeout(timer);
+			externalSignal?.removeEventListener('abort', onAbort);
 			controller.abort();
 			terminate();
 			this.active.delete(active);
@@ -145,7 +160,10 @@ export class DataQueryService {
 			!Array.isArray(result.rows) ||
 			result.rows.length > this.options.maxRows ||
 			!result.rows.every((row) => Array.isArray(row) && row.length === result.columns.length) ||
-			typeof result.truncated !== 'boolean'
+			typeof result.truncated !== 'boolean' ||
+			typeof result.execution_ms !== 'number' ||
+			!Number.isSafeInteger(result.execution_ms) ||
+			result.execution_ms < 0
 		) {
 			throw new UnavailableError('The data-query runtime returned an invalid result.');
 		}
@@ -167,4 +185,88 @@ export function assertValidDataQuerySql(sql: string): void {
 	if (new TextEncoder().encode(sql).byteLength > MAX_DATA_QUERY_SQL_BYTES) {
 		throw new ValidationError(`SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`);
 	}
+	singleDataQueryStatement(sql);
+}
+
+export function singleDataQueryStatement(sql: string): string {
+	const statements: string[] = [];
+	let start = 0;
+	let hasToken = false;
+	let mode: 'normal' | 'single' | 'double' | 'backtick' | 'line-comment' | 'block-comment' =
+		'normal';
+	let blockDepth = 0;
+	let dollarDelimiter: string | undefined;
+
+	for (let index = 0; index < sql.length; index++) {
+		const character = sql[index];
+		const next = sql[index + 1];
+		if (dollarDelimiter !== undefined) {
+			if (sql.startsWith(dollarDelimiter, index)) {
+				index += dollarDelimiter.length - 1;
+				dollarDelimiter = undefined;
+			}
+			continue;
+		}
+		if (mode === 'line-comment') {
+			if (character === '\n' || character === '\r') mode = 'normal';
+			continue;
+		}
+		if (mode === 'block-comment') {
+			if (character === '/' && next === '*') {
+				blockDepth++;
+				index++;
+			} else if (character === '*' && next === '/') {
+				blockDepth--;
+				index++;
+				if (blockDepth === 0) mode = 'normal';
+			}
+			continue;
+		}
+		if (mode !== 'normal') {
+			const quote = mode === 'single' ? "'" : mode === 'double' ? '"' : '`';
+			if (character === quote) {
+				if (next === quote) index++;
+				else mode = 'normal';
+			}
+			continue;
+		}
+
+		if (character === '-' && next === '-') {
+			mode = 'line-comment';
+			index++;
+			continue;
+		}
+		if (character === '/' && next === '*') {
+			mode = 'block-comment';
+			blockDepth = 1;
+			index++;
+			continue;
+		}
+		if (character === "'" || character === '"' || character === '`') {
+			hasToken = true;
+			mode = character === "'" ? 'single' : character === '"' ? 'double' : 'backtick';
+			continue;
+		}
+		if (character === '$') {
+			const delimiter = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(index))?.[0];
+			if (delimiter !== undefined) {
+				hasToken = true;
+				dollarDelimiter = delimiter;
+				index += delimiter.length - 1;
+				continue;
+			}
+		}
+		if (character === ';') {
+			if (hasToken) statements.push(sql.slice(start, index).trim());
+			start = index + 1;
+			hasToken = false;
+			continue;
+		}
+		if (!/\s/.test(character)) hasToken = true;
+	}
+	if (hasToken) statements.push(sql.slice(start).trim());
+	if (statements.length !== 1) {
+		throw new ValidationError('SQL must contain exactly one statement.');
+	}
+	return statements[0];
 }

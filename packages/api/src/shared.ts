@@ -955,7 +955,12 @@ export const CapabilitiesResponseSchema = z
 			max_destinations: z.number().int().positive(),
 		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */
-		data_browser: z.object({ available: z.boolean(), preview: z.boolean() }),
+		data_browser: z.object({
+			available: z.boolean(),
+			preview: z.boolean(),
+			query: z.boolean(),
+			ai_query: z.boolean(),
+		}),
 		/**
 		 * What an effective `viewer` sees when opening a notebook
 		 * (MARIMOHUB_VIEWER_MODE): the client branches on this before starting a

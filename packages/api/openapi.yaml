@@ -189,9 +189,15 @@ components:
               type: boolean
             preview:
               type: boolean
+            query:
+              type: boolean
+            ai_query:
+              type: boolean
           required:
             - available
             - preview
+            - query
+            - ai_query
         viewer_mode:
           type: string
           enum:
@@ -1716,6 +1722,15 @@ components:
                 - search
                 - versions
                 - preview_formats
+            query:
+              type: object
+              properties:
+                available:
+                  type: boolean
+                reason:
+                  type: string
+              required:
+                - available
         metadata:
           type: boolean
         preview:
@@ -1827,9 +1842,62 @@ components:
             items: {}
         truncated:
           type: boolean
+        execution_ms:
+          type: integer
+          minimum: 0
       required:
         - columns
         - rows
+        - truncated
+        - execution_ms
+    IntegrationQuerySchema:
+      type: object
+      properties:
+        tables:
+          type: array
+          items:
+            type: object
+            properties:
+              namespace:
+                type: array
+                items:
+                  type: string
+              name:
+                type: string
+              columns:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    type:
+                      type: string
+                    nullable:
+                      type: boolean
+                  required:
+                    - name
+                    - type
+                    - nullable
+            required:
+              - namespace
+              - name
+              - columns
+        truncated:
+          type: object
+          properties:
+            tables:
+              type: boolean
+            columns:
+              type: boolean
+            bytes:
+              type: boolean
+          required:
+            - tables
+            - columns
+            - bytes
+      required:
+        - tables
         - truncated
     IntegrationObjectBucket:
       type: object
@@ -8181,6 +8249,248 @@ paths:
                       - true
                   data:
                     $ref: '#/components/schemas/IntegrationDataQueryResult'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/query/schema:
+    get:
+      tags:
+        - Integrations
+      summary: Get bounded SQL completion schema (manager or above)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+          required: false
+          name: focus_namespace
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+          required: false
+          name: focus_table
+          in: query
+      responses:
+        '200':
+          description: Bounded table and column schema for SQL tools
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/IntegrationQuerySchema'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/query/generate:
+    post:
+      tags:
+        - Integrations
+      summary: Generate or revise SQL with managed AI (manager or above)
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum:
+                    - generate
+                    - revise
+                instruction:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+                sql:
+                  type: string
+                  maxLength: 32768
+              required:
+                - mode
+                - instruction
+              additionalProperties: false
+      responses:
+        '200':
+          description: Generated DuckDB SQL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      sql:
+                        type: string
+                    required:
+                      - sql
                 required:
                   - success
                   - data

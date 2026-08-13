@@ -449,6 +449,7 @@ const BrowseCapabilitySchema = z
 					reason: z.string().optional(),
 				})
 				.optional(),
+			query: z.object({ available: z.boolean(), reason: z.string().optional() }).optional(),
 		}),
 		/** Whether namespace/table/schema browsing works for this instance. */
 		metadata: z.boolean(),
@@ -529,8 +530,30 @@ const DataQueryResultSchema = z
 		columns: z.array(z.string()),
 		rows: z.array(z.array(z.unknown())),
 		truncated: z.boolean(),
+		execution_ms: z.number().int().nonnegative(),
 	})
 	.openapi('IntegrationDataQueryResult');
+
+const QuerySchemaSchema = z
+	.object({
+		tables: z.array(
+			z.object({
+				namespace: z.array(z.string()),
+				name: z.string(),
+				columns: z.array(z.object({ name: z.string(), type: z.string(), nullable: z.boolean() })),
+			}),
+		),
+		truncated: z.object({ tables: z.boolean(), columns: z.boolean(), bytes: z.boolean() }),
+	})
+	.openapi('IntegrationQuerySchema');
+
+const GenerateSqlBody = z
+	.object({
+		mode: z.enum(['generate', 'revise']),
+		instruction: z.string().trim().min(1).max(4_000),
+		sql: z.string().max(MAX_DATA_QUERY_SQL_BYTES).optional(),
+	})
+	.strict();
 
 const browseCapability = createRoute({
 	method: 'get',
@@ -650,6 +673,44 @@ const runDataQuery = createRoute({
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: DataQueryResultSchema }),
 			'Bounded query result',
+		),
+		...commonErrors(),
+		...errorResponses(404, 429),
+	},
+});
+
+const getDataQuerySchema = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/integrations/{iid}/browse/query/schema',
+	tags: ['Integrations'],
+	summary: 'Get bounded SQL completion schema (manager or above)',
+	request: {
+		params: IntegrationIdParam,
+		query: z.object({
+			focus_namespace: z.string().min(1).optional(),
+			focus_table: z.string().min(1).optional(),
+		}),
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: QuerySchemaSchema }),
+			'Bounded table and column schema for SQL tools',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
+const generateDataQuerySql = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/integrations/{iid}/browse/query/generate',
+	tags: ['Integrations'],
+	summary: 'Generate or revise SQL with managed AI (manager or above)',
+	request: { params: IntegrationIdParam, body: jsonBody(GenerateSqlBody) },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: z.object({ sql: z.string() }) }),
+			'Generated DuckDB SQL',
 		),
 		...commonErrors(),
 		...errorResponses(404, 429),
@@ -1081,6 +1142,131 @@ function splitNamespace(value: string): string[] {
 	return value.split(NAMESPACE_JOINER);
 }
 
+const QUERY_SCHEMA_MAX_TABLES = 128;
+const QUERY_SCHEMA_MAX_COLUMNS = 2_048;
+const QUERY_SCHEMA_MAX_BYTES = 256 * 1024;
+const QUERY_SCHEMA_TIMEOUT_MS = 15_000;
+
+async function collectQuerySchema(
+	integrations: ProjectIntegrationsService,
+	projectId: Project['id'],
+	integrationId: IntegrationEntry['id'],
+	queryUser: string,
+	focus: { focus_namespace?: string; focus_table?: string },
+) {
+	const deadline = Date.now() + QUERY_SCHEMA_TIMEOUT_MS;
+	const namespaces: string[][] = [];
+	const queue: string[][] = [[]];
+	const seen = new Set<string>();
+	while (queue.length > 0 && namespaces.length < 256 && Date.now() < deadline) {
+		const parent = queue.shift()!;
+		let cursor: string | undefined;
+		do {
+			const page = await integrations.browseNamespaces(projectId, integrationId, {
+				limit: 100,
+				parent: parent.length > 0 ? parent : undefined,
+				cursor,
+				query_user: queryUser,
+			});
+			for (const namespace of page.items) {
+				const key = namespace.join(NAMESPACE_JOINER);
+				if (seen.has(key)) continue;
+				seen.add(key);
+				namespaces.push(namespace);
+				queue.push(namespace);
+			}
+			cursor = page.next_cursor ?? undefined;
+		} while (cursor && namespaces.length < 256 && Date.now() < deadline);
+	}
+	const focusNamespace = focus.focus_namespace ? splitNamespace(focus.focus_namespace) : undefined;
+	namespaces.sort((left, right) => {
+		const focused = (value: string[]) =>
+			focusNamespace && value.join(NAMESPACE_JOINER) === focusNamespace.join(NAMESPACE_JOINER)
+				? 0
+				: 1;
+		return focused(left) - focused(right) || left.join('.').localeCompare(right.join('.'));
+	});
+	const tableRefs: { namespace: string[]; name: string }[] = [];
+	let tableLimitReached = false;
+	for (const namespace of namespaces) {
+		let cursor: string | undefined;
+		do {
+			const page = await integrations.browseTables(projectId, integrationId, namespace, {
+				limit: Math.min(100, QUERY_SCHEMA_MAX_TABLES - tableRefs.length),
+				cursor,
+				query_user: queryUser,
+			});
+			tableRefs.push(...page.items.map((name) => ({ namespace, name })));
+			cursor = page.next_cursor ?? undefined;
+			if (tableRefs.length >= QUERY_SCHEMA_MAX_TABLES) {
+				tableLimitReached = Boolean(cursor) || namespaces.at(-1) !== namespace;
+				break;
+			}
+		} while (cursor && Date.now() < deadline);
+		if (tableRefs.length >= QUERY_SCHEMA_MAX_TABLES || Date.now() >= deadline) break;
+	}
+	tableRefs.sort((left, right) => {
+		const focused = (value: { namespace: string[]; name: string }) =>
+			focusNamespace &&
+			focus.focus_table === value.name &&
+			value.namespace.join(NAMESPACE_JOINER) === focusNamespace.join(NAMESPACE_JOINER)
+				? 0
+				: 1;
+		return (
+			focused(left) - focused(right) ||
+			[...left.namespace, left.name]
+				.join('.')
+				.localeCompare([...right.namespace, right.name].join('.'))
+		);
+	});
+	const tables: {
+		namespace: string[];
+		name: string;
+		columns: { name: string; type: string; nullable: boolean }[];
+	}[] = [];
+	let columnCount = 0;
+	let columnLimitReached = false;
+	let byteLimitReached = false;
+	for (const table of tableRefs) {
+		if (Date.now() >= deadline) break;
+		const schema = await integrations.browseTableSchema(
+			projectId,
+			integrationId,
+			table.namespace,
+			table.name,
+			{ query_user: queryUser },
+		);
+		const remaining = QUERY_SCHEMA_MAX_COLUMNS - columnCount;
+		const columns = schema.columns.slice(0, Math.max(0, remaining)).map((column) => ({
+			name: column.name,
+			type: column.type,
+			nullable: column.nullable,
+		}));
+		if (columns.length < schema.columns.length) columnLimitReached = true;
+		const next = { ...table, columns };
+		const candidate = [...tables, next];
+		if (utf8ByteLength(JSON.stringify(candidate)) > QUERY_SCHEMA_MAX_BYTES) {
+			byteLimitReached = true;
+			break;
+		}
+		tables.push(next);
+		columnCount += columns.length;
+		if (columnCount >= QUERY_SCHEMA_MAX_COLUMNS) break;
+	}
+	return {
+		tables,
+		truncated: {
+			tables: tableLimitReached || tables.length < tableRefs.length || Date.now() >= deadline,
+			columns: columnLimitReached,
+			bytes: byteLimitReached,
+		},
+	};
+}
+
+function quoteSqlIdentifier(value: string): string {
+	return `"${value.replaceAll('"', '""')}"`;
+}
+
 const BROWSE_LIST_TTL_MS = 60_000;
 const BROWSE_SCHEMA_TTL_MS = 300_000;
 const BROWSE_CACHE_MAX_ENTRIES = 1024;
@@ -1417,6 +1603,7 @@ const integrationBudgetDefinitions = {
 	objectSearch: { limit: 5, message: 'Too many object searches — try again in a minute.' },
 	objectPreview: { limit: 10, message: 'Too many object previews — try again in a minute.' },
 	dataQuery: { limit: 5, message: 'Too many data queries — try again in a minute.' },
+	aiQuery: { limit: 5, message: 'Too many AI query requests — try again in a minute.' },
 } as const;
 
 type IntegrationBudgetName = keyof typeof integrationBudgetDefinitions;
@@ -1538,6 +1725,7 @@ app.openapi(browseCapability, async (c) => {
 							}
 						: {}),
 					...(capability.surfaces.objects ? { objects: capability.surfaces.objects } : {}),
+					...(capability.surfaces.query ? { query: capability.surfaces.query } : {}),
 				},
 				metadata: capability.metadata,
 				preview: tablePreview,
@@ -1668,6 +1856,10 @@ app.openapi(runDataQuery, async (c) => {
 	if (deps.dataBrowser?.query !== true) {
 		throw new NotFoundError('Run SQL is not enabled on this deployment');
 	}
+	const capability = await integrations.browseCapability(pid, iid);
+	if (capability.surfaces.query?.available !== true) {
+		throw new NotFoundError(capability.surfaces.query?.reason ?? 'Run SQL is unavailable');
+	}
 	assertIntegrationBudget('dataQuery', user.id);
 	const data = await integrations.runDataQuery(
 		pid,
@@ -1675,6 +1867,7 @@ app.openapi(runDataQuery, async (c) => {
 		{ userId: user.id, email: user.email },
 		createSessionId(),
 		sql,
+		c.req.raw.signal,
 	);
 	await appendAudit(
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
@@ -1690,7 +1883,78 @@ app.openapi(runDataQuery, async (c) => {
 				truncated: data.truncated,
 			}),
 	);
+	return c.json({ success: true, data: { ...data, execution_ms: data.execution_ms ?? 0 } }, 200);
+});
+
+app.openapi(getDataQuerySchema, async (c) => {
+	c.header('Cache-Control', 'private, max-age=300');
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const focus = c.req.valid('query');
+	const { integrations } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	if (deps.dataBrowser?.query !== true) {
+		throw new NotFoundError('Run SQL is not enabled on this deployment');
+	}
+	assertIntegrationBudget('browse', user.id);
+	const capability = await integrations.browseCapability(pid, iid);
+	if (!capability.surfaces.query?.available || !capability.metadata) {
+		throw new NotFoundError(capability.surfaces.query?.reason ?? 'Run SQL is unavailable');
+	}
+	const data = await collectQuerySchema(integrations, pid, iid, user.email, focus);
 	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(generateDataQuerySql, async (c) => {
+	c.header('Cache-Control', 'no-store');
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const body = c.req.valid('json');
+	const { integrations } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	const generateSql = deps.ai?.generateSql;
+	if (deps.dataBrowser?.query !== true || !generateSql) {
+		throw new NotFoundError('Managed AI SQL is not enabled on this deployment');
+	}
+	assertIntegrationBudget('aiQuery', user.id);
+	const capability = await integrations.browseCapability(pid, iid);
+	if (!capability.surfaces.query?.available) {
+		throw new NotFoundError(capability.surfaces.query?.reason ?? 'Run SQL is unavailable');
+	}
+	const snapshot = await collectQuerySchema(integrations, pid, iid, user.email, {});
+	const schema = snapshot.tables
+		.map(
+			(table) =>
+				`${[...table.namespace, table.name].map(quoteSqlIdentifier).join('.')} (${table.columns
+					.map((column) => `${quoteSqlIdentifier(column.name)} ${column.type}`)
+					.join(', ')})`,
+		)
+		.join('\n');
+	const generated = await generateSql({ ...body, schema, signal: c.req.raw.signal });
+	const sql = generated
+		.trim()
+		.replace(/^```(?:sql)?\s*/i, '')
+		.replace(/\s*```$/, '')
+		.trim();
+	if (sql.length === 0 || utf8ByteLength(sql) > MAX_DATA_QUERY_SQL_BYTES) {
+		throw new ValidationError('Managed AI returned invalid SQL.');
+	}
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+		'integration.query.generate',
+		() =>
+			deps.services.events.append({
+				event: 'integration.query.generate',
+				actor: user.id,
+				project_id: pid,
+				integration_id: iid,
+				mode: body.mode,
+				schema_table_count: snapshot.tables.length,
+			}),
+	);
+	return c.json({ success: true, data: { sql } }, 200);
 });
 
 const OBJECT_METADATA_TTL_MS = 15_000;
