@@ -375,6 +375,7 @@ adapter-specific settings.
 | `MARIMOHUB_COMPUTE_IMAGE`                       | Sandbox image reference                                                                          |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`            | Public hostname used when exposing kernel ports                                                  |
 | `MARIMOHUB_COMPUTE_MODAL_TOKEN_ID` / `_SECRET`  | Modal credentials (secret)                                                                       |
+| `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT`           | `modal` backend: named Modal environment (defaults to the workspace environment)                 |
 | `MARIMOHUB_COMPUTE_COREWEAVE_API_KEY`           | `coreweave` backend: CoreWeave Sandbox API key (secret)                                          |
 | `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | `coreweave` backend: public kernel URL scheme (`{sandboxId}`/`{port}`/`{host}`)                  |
 | `MARIMOHUB_COMPUTE_LOCAL_HOST`                  | `local` backend: host for the kernel URL (default `localhost`)                                   |

@@ -457,6 +457,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						secret: true,
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT',
+						name: 'Modal environment',
+						description:
+							'Runs Modal apps and sandboxes in this named environment instead of the workspace default.',
+						example: 'notebooks',
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_MODAL_APP_NAME',
 						name: 'Modal app name',
 						description:

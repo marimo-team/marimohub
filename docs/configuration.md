@@ -156,6 +156,7 @@ Modal sandboxes.
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_COMPUTE_MODAL_TOKEN_ID` 🔒 | Modal API token id. | Yes | — | — |
 | `MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET` 🔒 | Modal API token secret. | Yes | — | — |
+| `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT` | Runs Modal apps and sandboxes in this named environment instead of the workspace default. | — | — | `notebooks` |
 | `MARIMOHUB_COMPUTE_MODAL_APP_NAME` | Limits cleanup to sandboxes this deployment created, so it never stops others sharing the same Modal workspace. | — | — | `marimohub` |
 
 ### Docker

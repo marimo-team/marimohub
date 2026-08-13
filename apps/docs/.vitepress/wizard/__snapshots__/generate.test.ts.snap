@@ -203,6 +203,7 @@ MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
+MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT=notebooks
 MARIMOHUB_COMPUTE_MODAL_APP_NAME=marimohub
 
 # --- Auth ---
@@ -246,6 +247,7 @@ exports[`config -> code generators > default-prod (s3 + modal + oidc) > compose 
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
+      MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
       MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
       MARIMOHUB_AUTH_BACKEND: oidc
       MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
@@ -275,6 +277,7 @@ config:
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
   MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
+  MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
   MARIMOHUB_AUTH_BACKEND: oidc
   MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
@@ -1462,6 +1465,7 @@ MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
+MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT=notebooks
 MARIMOHUB_COMPUTE_MODAL_APP_NAME=marimohub
 
 # --- Auth ---
@@ -1513,6 +1517,7 @@ exports[`config -> code generators > s3 + modal + oidc, managed ai > compose 1`]
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
+      MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
       MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
       MARIMOHUB_AUTH_BACKEND: oidc
       MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
@@ -1550,6 +1555,7 @@ config:
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
   MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
+  MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
   MARIMOHUB_AUTH_BACKEND: oidc
   MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
@@ -1657,6 +1663,7 @@ MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
 MARIMOHUB_COMPUTE_MODAL_TOKEN_ID=_replace_me_  # required, secret
 MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET=_replace_me_  # required, secret
+MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT=notebooks
 MARIMOHUB_COMPUTE_MODAL_APP_NAME=marimohub
 
 # --- Auth ---
@@ -1700,6 +1707,7 @@ exports[`config -> code generators > s3 + modal + oidc, value overrides > compos
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
       MARIMOHUB_COMPUTE_MODAL_TOKEN_ID: _replace_me_
       MARIMOHUB_COMPUTE_MODAL_TOKEN_SECRET: _replace_me_
+      MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
       MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
       MARIMOHUB_AUTH_BACKEND: oidc
       MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
@@ -1729,6 +1737,7 @@ config:
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
   MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
+  MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT: notebooks
   MARIMOHUB_COMPUTE_MODAL_APP_NAME: marimohub
   MARIMOHUB_AUTH_BACKEND: oidc
   MARIMOHUB_AUTH_OIDC_ISSUER: _replace_me_ # e.g. https://accounts.example.com
