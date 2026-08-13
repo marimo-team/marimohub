@@ -28,10 +28,10 @@ export function TabularPreviewGrid({
 						</tr>
 					</thead>
 					<tbody>
-						{keyedRows(rows).map(({ key, row }) => (
+						{keyedRows(rows).map(({ key, cells }) => (
 							<tr key={key} className="border-t border-input/50">
 								{headers.map(({ key: columnKey }, index) => {
-									const value = renderCell(row[index]);
+									const value = cells[index] ?? '';
 									return (
 										<td
 											key={columnKey}
@@ -61,13 +61,14 @@ function keyedNames(names: string[]): { key: string; name: string }[] {
 	});
 }
 
-function keyedRows(rows: unknown[][]): { key: string; row: unknown[] }[] {
+function keyedRows(rows: unknown[][]): { key: string; cells: string[] }[] {
 	const counts = new Map<string, number>();
 	return rows.map((row) => {
-		const base = JSON.stringify(row.map(renderCell));
+		const cells = Array.from(row, renderCell);
+		const base = JSON.stringify(cells);
 		const occurrence = counts.get(base) ?? 0;
 		counts.set(base, occurrence + 1);
-		return { key: `${base}:${occurrence}`, row };
+		return { key: `${base}:${occurrence}`, cells };
 	});
 }
 

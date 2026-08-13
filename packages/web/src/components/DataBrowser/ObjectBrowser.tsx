@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
@@ -54,7 +54,6 @@ export function ObjectBrowser({
 		location: objectSelectionLocation(bucketParam, prefix, key),
 		keys: new Set(key ? [key] : []),
 	}));
-	const pendingSelectionLocation = useRef<string | undefined>(undefined);
 	const [searchDraft, setSearchDraft] = useState(searchQuery);
 	useEffect(() => setSearchDraft(searchQuery), [searchQuery]);
 	const buckets = useObjectBucketsQuery(projectId, integration.id);
@@ -64,17 +63,6 @@ export function ObjectBrowser({
 	const selectionLocation = objectSelectionLocation(bucket, prefix, key);
 	const selectedKeys =
 		selection.location === selectionLocation ? selection.keys : new Set(key ? [key] : []);
-	useEffect(() => {
-		if (pendingSelectionLocation.current === selectionLocation) {
-			pendingSelectionLocation.current = undefined;
-			return;
-		}
-		setSelection((current) =>
-			current.location === selectionLocation
-				? current
-				: { location: selectionLocation, keys: new Set(key ? [key] : []) },
-		);
-	}, [key, selectionLocation]);
 	const listing = useObjectsQuery(
 		projectId,
 		integration.id,
@@ -131,13 +119,11 @@ export function ObjectBrowser({
 	};
 	const selectBucket = (value: string) => {
 		const location = objectSelectionLocation(value, '', '');
-		pendingSelectionLocation.current = location;
 		setSelection({ location, keys: new Set() });
 		update({ bucket: value, prefix: undefined, key: undefined, version: undefined, q: undefined });
 	};
 	const selectPrefix = (value: string) => {
 		const location = objectSelectionLocation(bucket, value, '');
-		pendingSelectionLocation.current = location;
 		setSelection({ location, keys: new Set() });
 		setSearchDraft('');
 		update({ prefix: value, key: undefined, version: undefined, q: undefined });
@@ -147,7 +133,6 @@ export function ObjectBrowser({
 			selectPrefix(entry.key);
 		} else {
 			const location = objectSelectionLocation(bucket, prefix, entry.key);
-			pendingSelectionLocation.current = location;
 			setSelection((current) => {
 				if (!(event?.metaKey || event?.ctrlKey)) {
 					return { location, keys: new Set([entry.key]) };
@@ -198,11 +183,13 @@ export function ObjectBrowser({
 				{bucket === '' ? (
 					<div className="min-h-0 overflow-y-auto">
 						<p className="mb-2 text-xs font-medium text-muted-foreground">Buckets</p>
-						{buckets.error ? (
-							<p className="p-3 text-sm text-destructive">{errorMessage(buckets.error)}</p>
-						) : buckets.data === undefined ? (
-							<Skeleton className="h-9 w-full" />
-						) : bucketItems.length === 0 ? (
+						{buckets.data === undefined ? (
+							buckets.error ? (
+								<p className="p-3 text-sm text-destructive">{errorMessage(buckets.error)}</p>
+							) : (
+								<Skeleton className="h-9 w-full" />
+							)
+						) : bucketItems.length === 0 && !buckets.hasNextPage ? (
 							<EmptyState
 								icon={<Folder />}
 								message="No buckets available"
@@ -222,13 +209,20 @@ export function ObjectBrowser({
 										{item.configured && <Chip className="ml-auto">configured</Chip>}
 									</button>
 								))}
+								{buckets.error && (
+									<p className="p-3 text-sm text-destructive">{errorMessage(buckets.error)}</p>
+								)}
 								{buckets.hasNextPage && (
 									<Button
 										className="mt-2 w-full"
 										isDisabled={buckets.isFetchingNextPage}
 										onPress={() => void buckets.fetchNextPage()}
 									>
-										{buckets.isFetchingNextPage ? 'Loading buckets…' : 'Load more buckets'}
+										{buckets.isFetchingNextPage
+											? 'Loading buckets…'
+											: buckets.error
+												? 'Retry loading buckets'
+												: 'Load more buckets'}
 									</Button>
 								)}
 							</>

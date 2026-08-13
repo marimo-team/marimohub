@@ -82,6 +82,7 @@ function makeFetch({
 	objectBuckets = [{ name: 'lake', configured: true }],
 	objectBucketsSecond = [],
 	objectBucketNextCursor = null,
+	objectBucketNextFailure,
 	objectEntries = [
 		{ kind: 'prefix', name: 'daily/', key: 'daily/' },
 		{ kind: 'object', name: 'events.jsonl', key: 'events.jsonl', size: 12 },
@@ -114,6 +115,7 @@ function makeFetch({
 	objectBuckets?: { name: string; configured: boolean }[];
 	objectBucketsSecond?: { name: string; configured: boolean }[];
 	objectBucketNextCursor?: string | null;
+	objectBucketNextFailure?: string;
 	objectEntries?: unknown[];
 	objectEntriesSecond?: unknown[];
 	objectNextCursor?: string | null;
@@ -124,6 +126,7 @@ function makeFetch({
 	objectPreview?: unknown;
 	objectFailures?: Partial<Record<ObjectFailure, string>>;
 } = {}) {
+	let nextBucketFailure = objectBucketNextFailure;
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? 'GET';
@@ -150,6 +153,11 @@ function makeFetch({
 		}
 		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse/objects/buckets`)) {
 			if (objectFailures.buckets) return failed(objectFailures.buckets);
+			if (target.searchParams.has('cursor') && nextBucketFailure) {
+				const message = nextBucketFailure;
+				nextBucketFailure = undefined;
+				return failed(message);
+			}
 			return target.searchParams.has('cursor')
 				? ok({ items: objectBucketsSecond, next_cursor: null })
 				: ok({ items: objectBuckets, next_cursor: objectBucketNextCursor });
@@ -304,7 +312,7 @@ function HistoryControls() {
 	);
 }
 
-function setup(route: string, fetchOpts?: Parameters<typeof makeFetch>[0]) {
+function setup(route: string | string[], fetchOpts?: Parameters<typeof makeFetch>[0]) {
 	installMatchMedia();
 	const fetchImpl = makeFetch(fetchOpts);
 	renderWithClient(
@@ -572,6 +580,25 @@ describe('DataBrowserPage', () => {
 		).toBe(true);
 	});
 
+	it('keeps loaded buckets visible and retries a failed next page', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectBuckets: [{ name: 'first', configured: false }],
+			objectBucketsSecond: [{ name: 'second', configured: false }],
+			objectBucketNextCursor: 'bucket-page-2',
+			objectBucketNextFailure: 'The next bucket page failed.',
+		});
+
+		await user.click(await screen.findByRole('button', { name: 'Load more buckets' }));
+		expect(await screen.findByText('The next bucket page failed.')).toBeInTheDocument();
+		expect(screen.getByText('first')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Retry loading buckets' }));
+		expect(await screen.findByText('second')).toBeInTheDocument();
+		expect(screen.queryByText('The next bucket page failed.')).not.toBeInTheDocument();
+	});
+
 	it('explains when credentials discover no buckets', async () => {
 		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
 			kind: objectKind,
@@ -641,6 +668,35 @@ describe('DataBrowserPage', () => {
 		expect(await screen.findByText('s3://lake/second.csv')).toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Copy 1 selected URI' }));
 		expect(await navigator.clipboard.readText()).toBe('s3://lake/second.csv');
+	});
+
+	it('keeps history selection synchronized after toggling the current URL object', async () => {
+		const user = userEvent.setup();
+		setup(
+			[
+				`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=second.csv`,
+				`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=first.csv`,
+			],
+			{
+				kind: objectKind,
+				entry: { ...lakeEntry, kind: 's3' },
+				objectEntries: [
+					{ kind: 'object', name: 'first.csv', key: 'first.csv', size: 12 },
+					{ kind: 'object', name: 'second.csv', key: 'second.csv', size: 24 },
+				],
+			},
+		);
+
+		const first = (await screen.findByText('first.csv')).closest('button')!;
+		await user.keyboard('{Control>}');
+		await user.click(first);
+		await user.keyboard('{/Control}');
+		await user.click(screen.getByTestId('history-back'));
+		expect(await screen.findByText('s3://lake/second.csv')).toBeInTheDocument();
+		await user.click(screen.getByTestId('history-forward'));
+		expect(await screen.findByText('s3://lake/first.csv')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Copy 1 selected URI' }));
+		expect(await navigator.clipboard.readText()).toBe('s3://lake/first.csv');
 	});
 
 	it('does not carry a loaded preview into another object detail', async () => {

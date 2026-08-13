@@ -42,20 +42,18 @@ export async function makeObjectBrowseContext(
 	} = {},
 ): Promise<ObjectBrowseContext> {
 	const browser = deps.dataBrowser?.objectBrowser;
-	const wif = deps.wif;
-	const useFederatedCredentials = Boolean(
-		options.includeFederated !== false && wif && project.federation?.enabled,
-	);
+	const wif =
+		options.includeFederated !== false && project.federation?.enabled ? deps.wif : undefined;
 	const context: ObjectBrowseContext = {
 		project_id: project.id,
 		user_id: user.id,
 		user_email: user.email,
-		allow_server_ambient: useFederatedCredentials
+		allow_server_ambient: wif
 			? false
 			: (options.allowServerAmbient ?? browser?.allowServerAmbientCredentials ?? false),
 		...(signal ? { signal } : {}),
 	};
-	if (!useFederatedCredentials || !wif) {
+	if (!wif) {
 		return context;
 	}
 
