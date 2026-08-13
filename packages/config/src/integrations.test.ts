@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { createProjectId, DataPreviewService, DataQueryService } from '@marimo-hub/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+	createProjectId,
+	createSessionId,
+	DataPreviewService,
+	DataQueryService,
+	icebergRest,
+} from '@marimo-hub/core';
+import type { DataQueryExecution } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
 import { ConfigError } from './errors';
 import {
@@ -9,6 +16,8 @@ import {
 } from './integrations';
 
 const PG_CONFIG = { host: 'db.internal', database: 'db', username: 'u', password: 'pw' };
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('makeIntegrations', () => {
 	it('is OPT-IN (two-phase rollout): unset/off disabled, on enabled', () => {
@@ -229,11 +238,15 @@ describe('makeIntegrations data browser', () => {
 		const without = makeIntegrations(env, new MemoryBucket());
 		expect(without.dataBrowser?.query).toBe(false);
 
+		const executions: DataQueryExecution[] = [];
 		const dataQuery = new DataQueryService({
 			executorFactory: {
 				create: async () => ({
 					runtime: 'worker',
-					execute: async () => ({ columns: ['value'], rows: [[1]], truncated: false }),
+					execute: async (request) => {
+						executions.push(request);
+						return { columns: ['value'], rows: [[1]], truncated: false };
+					},
 					terminate: () => {},
 				}),
 			},
@@ -243,8 +256,38 @@ describe('makeIntegrations data browser', () => {
 			maxBytes: 4096,
 			executionTimeoutMs: 1000,
 		});
+		vi.spyOn(icebergRest.query!, 'available').mockReturnValue({ ok: true });
 		const wired = makeIntegrations(env, new MemoryBucket(), undefined, undefined, dataQuery);
 		expect(wired.dataBrowser?.query).toBe(true);
+		const pid = createProjectId();
+		const created = await wired.integrations!.create(
+			pid,
+			{
+				kind: 'iceberg_rest',
+				name: 'source',
+				config: {
+					uri: 'https://catalog.example.com',
+					auth: { method: 'none' },
+					storage: { scheme: 'catalog' },
+				},
+			},
+			ACTOR,
+		);
+		await expect(
+			wired.integrations!.runDataQuery(
+				pid,
+				created.id,
+				{ userId: ACTOR, email: 'actor@example.com' },
+				createSessionId(),
+				'select 1',
+			),
+		).resolves.toEqual({
+			columns: ['value'],
+			rows: [[1]],
+			truncated: false,
+			execution_ms: expect.any(Number),
+		});
+		expect(executions).toHaveLength(1);
 		await wired.dataBrowser?.close?.();
 	});
 
