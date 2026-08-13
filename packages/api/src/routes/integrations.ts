@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
+	assertValidDataQuerySql,
 	INTEGRATION_CATEGORIES,
 	IntegrationId,
 	MAX_DATA_QUERY_SQL_BYTES,
@@ -551,7 +552,12 @@ const GenerateSqlBody = z
 	.object({
 		mode: z.enum(['generate', 'revise']),
 		instruction: z.string().trim().min(1).max(4_000),
-		sql: z.string().max(MAX_DATA_QUERY_SQL_BYTES).optional(),
+		sql: z
+			.string()
+			.refine((value) => utf8ByteLength(value) <= MAX_DATA_QUERY_SQL_BYTES, {
+				message: `SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`,
+			})
+			.optional(),
 	})
 	.strict();
 
@@ -1153,15 +1159,26 @@ async function collectQuerySchema(
 	integrationId: IntegrationEntry['id'],
 	queryUser: string,
 	focus: { focus_namespace?: string; focus_table?: string },
+	chargeWork: () => void,
 ) {
 	const deadline = Date.now() + QUERY_SCHEMA_TIMEOUT_MS;
 	const namespaces: string[][] = [];
 	const queue: string[][] = [[]];
 	const seen = new Set<string>();
+	let namespaceTraversalTruncated = false;
+	const focusNamespace = focus.focus_namespace ? splitNamespace(focus.focus_namespace) : undefined;
+	if (focusNamespace) {
+		const key = focusNamespace.join(NAMESPACE_JOINER);
+		seen.add(key);
+		namespaces.push(focusNamespace);
+		queue.unshift(focusNamespace);
+	}
 	while (queue.length > 0 && namespaces.length < 256 && Date.now() < deadline) {
 		const parent = queue.shift()!;
 		let cursor: string | undefined;
+		const cursors = new Set<string>();
 		do {
+			chargeWork();
 			const page = await integrations.browseNamespaces(projectId, integrationId, {
 				limit: 100,
 				parent: parent.length > 0 ? parent : undefined,
@@ -1171,14 +1188,22 @@ async function collectQuerySchema(
 			for (const namespace of page.items) {
 				const key = namespace.join(NAMESPACE_JOINER);
 				if (seen.has(key)) continue;
+				if (namespaces.length >= 256) break;
 				seen.add(key);
 				namespaces.push(namespace);
 				queue.push(namespace);
 			}
-			cursor = page.next_cursor ?? undefined;
+			const nextCursor = page.next_cursor ?? undefined;
+			if (nextCursor && cursors.has(nextCursor)) namespaceTraversalTruncated = true;
+			cursor = nextCursor && !cursors.has(nextCursor) ? nextCursor : undefined;
+			if (cursor) cursors.add(cursor);
 		} while (cursor && namespaces.length < 256 && Date.now() < deadline);
 	}
-	const focusNamespace = focus.focus_namespace ? splitNamespace(focus.focus_namespace) : undefined;
+	const namespaceLimitReached =
+		namespaceTraversalTruncated ||
+		queue.length > 0 ||
+		namespaces.length >= 256 ||
+		Date.now() >= deadline;
 	namespaces.sort((left, right) => {
 		const focused = (value: string[]) =>
 			focusNamespace && value.join(NAMESPACE_JOINER) === focusNamespace.join(NAMESPACE_JOINER)
@@ -1190,14 +1215,19 @@ async function collectQuerySchema(
 	let tableLimitReached = false;
 	for (const namespace of namespaces) {
 		let cursor: string | undefined;
+		const cursors = new Set<string>();
 		do {
+			chargeWork();
 			const page = await integrations.browseTables(projectId, integrationId, namespace, {
 				limit: Math.min(100, QUERY_SCHEMA_MAX_TABLES - tableRefs.length),
 				cursor,
 				query_user: queryUser,
 			});
 			tableRefs.push(...page.items.map((name) => ({ namespace, name })));
-			cursor = page.next_cursor ?? undefined;
+			const nextCursor = page.next_cursor ?? undefined;
+			if (nextCursor && cursors.has(nextCursor)) tableLimitReached = true;
+			cursor = nextCursor && !cursors.has(nextCursor) ? nextCursor : undefined;
+			if (cursor) cursors.add(cursor);
 			if (tableRefs.length >= QUERY_SCHEMA_MAX_TABLES) {
 				tableLimitReached = Boolean(cursor) || namespaces.at(-1) !== namespace;
 				break;
@@ -1229,6 +1259,7 @@ async function collectQuerySchema(
 	let byteLimitReached = false;
 	for (const table of tableRefs) {
 		if (Date.now() >= deadline) break;
+		chargeWork();
 		const schema = await integrations.browseTableSchema(
 			projectId,
 			integrationId,
@@ -1245,7 +1276,14 @@ async function collectQuerySchema(
 		if (columns.length < schema.columns.length) columnLimitReached = true;
 		const next = { ...table, columns };
 		const candidate = [...tables, next];
-		if (utf8ByteLength(JSON.stringify(candidate)) > QUERY_SCHEMA_MAX_BYTES) {
+		if (
+			utf8ByteLength(
+				JSON.stringify({
+					tables: candidate,
+					truncated: { tables: true, columns: true, bytes: true },
+				}),
+			) > QUERY_SCHEMA_MAX_BYTES
+		) {
 			byteLimitReached = true;
 			break;
 		}
@@ -1256,7 +1294,11 @@ async function collectQuerySchema(
 	return {
 		tables,
 		truncated: {
-			tables: tableLimitReached || tables.length < tableRefs.length || Date.now() >= deadline,
+			tables:
+				namespaceLimitReached ||
+				tableLimitReached ||
+				tables.length < tableRefs.length ||
+				Date.now() >= deadline,
 			columns: columnLimitReached,
 			bytes: byteLimitReached,
 		},
@@ -1368,6 +1410,36 @@ async function requireAuthorizedObjectAccess(
  */
 const browseCache = new Map<string, { expiresAt: number; value: unknown }>();
 const inflightBrowse = new Map<string, Promise<unknown>>();
+const querySchemaCache = new Map<string, { expiresAt: number; value: unknown }>();
+const inflightQuerySchema = new Map<string, Promise<unknown>>();
+const QUERY_SCHEMA_CACHE_TTL_MS = 300_000;
+const QUERY_SCHEMA_CACHE_MAX_ENTRIES = 128;
+
+async function cachedQuerySchema<T>(key: string, load: () => Promise<T>): Promise<T> {
+	const now = Date.now();
+	const hit = querySchemaCache.get(key);
+	if (hit && hit.expiresAt > now) return hit.value as T;
+	const pending = inflightQuerySchema.get(key);
+	if (pending) return pending as Promise<T>;
+	const promise = load().then((value) => {
+		for (const [cachedKey, entry] of querySchemaCache) {
+			if (entry.expiresAt <= now) querySchemaCache.delete(cachedKey);
+		}
+		while (querySchemaCache.size >= QUERY_SCHEMA_CACHE_MAX_ENTRIES) {
+			const oldest = querySchemaCache.keys().next().value;
+			if (oldest === undefined) break;
+			querySchemaCache.delete(oldest);
+		}
+		querySchemaCache.set(key, { expiresAt: Date.now() + QUERY_SCHEMA_CACHE_TTL_MS, value });
+		return value;
+	});
+	inflightQuerySchema.set(key, promise);
+	try {
+		return await promise;
+	} finally {
+		if (inflightQuerySchema.get(key) === promise) inflightQuerySchema.delete(key);
+	}
+}
 
 async function cachedBrowse<T>(
 	key: string,
@@ -1604,6 +1676,7 @@ const integrationBudgetDefinitions = {
 	objectPreview: { limit: 10, message: 'Too many object previews — try again in a minute.' },
 	dataQuery: { limit: 5, message: 'Too many data queries — try again in a minute.' },
 	aiQuery: { limit: 5, message: 'Too many AI query requests — try again in a minute.' },
+	querySchemaWork: { limit: 512, message: 'Too much query-schema work — try again in a minute.' },
 } as const;
 
 type IntegrationBudgetName = keyof typeof integrationBudgetDefinitions;
@@ -1635,6 +1708,8 @@ export function clearIntegrationBrowseStateForTests(): void {
 	integrationBudgets = createIntegrationBudgets();
 	browseCache.clear();
 	inflightBrowse.clear();
+	querySchemaCache.clear();
+	inflightQuerySchema.clear();
 }
 
 app.openapi(copyIntegration, async (c) => {
@@ -1902,7 +1977,21 @@ app.openapi(getDataQuerySchema, async (c) => {
 	if (!capability.surfaces.query?.available || !capability.metadata) {
 		throw new NotFoundError(capability.surfaces.query?.reason ?? 'Run SQL is unavailable');
 	}
-	const data = await collectQuerySchema(integrations, pid, iid, user.email, focus);
+	const schemaKey = JSON.stringify([
+		user.id,
+		user.email,
+		pid,
+		iid,
+		capability.current_version,
+		capability.updated_at,
+		focus.focus_namespace ?? null,
+		focus.focus_table ?? null,
+	]);
+	const data = await cachedQuerySchema(schemaKey, () =>
+		collectQuerySchema(integrations, pid, iid, user.email, focus, () =>
+			assertIntegrationBudget('querySchemaWork', user.id),
+		),
+	);
 	return c.json({ success: true, data }, 200);
 });
 
@@ -1920,10 +2009,24 @@ app.openapi(generateDataQuerySql, async (c) => {
 	}
 	assertIntegrationBudget('aiQuery', user.id);
 	const capability = await integrations.browseCapability(pid, iid);
-	if (!capability.surfaces.query?.available) {
+	if (!capability.surfaces.query?.available || !capability.metadata) {
 		throw new NotFoundError(capability.surfaces.query?.reason ?? 'Run SQL is unavailable');
 	}
-	const snapshot = await collectQuerySchema(integrations, pid, iid, user.email, {});
+	const schemaKey = JSON.stringify([
+		user.id,
+		user.email,
+		pid,
+		iid,
+		capability.current_version,
+		capability.updated_at,
+		null,
+		null,
+	]);
+	const snapshot = await cachedQuerySchema(schemaKey, () =>
+		collectQuerySchema(integrations, pid, iid, user.email, {}, () =>
+			assertIntegrationBudget('querySchemaWork', user.id),
+		),
+	);
 	const schema = snapshot.tables
 		.map(
 			(table) =>
@@ -1939,6 +2042,11 @@ app.openapi(generateDataQuerySql, async (c) => {
 		.replace(/\s*```$/, '')
 		.trim();
 	if (sql.length === 0 || utf8ByteLength(sql) > MAX_DATA_QUERY_SQL_BYTES) {
+		throw new ValidationError('Managed AI returned invalid SQL.');
+	}
+	try {
+		assertValidDataQuerySql(sql);
+	} catch {
 		throw new ValidationError('Managed AI returned invalid SQL.');
 	}
 	await appendAudit(

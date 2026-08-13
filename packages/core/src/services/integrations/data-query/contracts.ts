@@ -15,7 +15,6 @@ export interface DataQueryStatement {
 export interface DataQueryPlan {
 	setup: readonly DataQueryStatement[];
 	cleanup?: readonly DataQueryStatement[];
-	allowedOrigins: readonly string[];
 }
 
 export interface DataQueryConnection {

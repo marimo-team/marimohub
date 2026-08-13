@@ -114,6 +114,7 @@ const DEFAULT_MAX_DATA_QUERIES_PER_USER = 1;
 const DEFAULT_DATA_QUERY_ROWS = 10_000;
 const DEFAULT_DATA_QUERY_BYTES = 2 * 1024 * 1024;
 const DEFAULT_DATA_QUERY_TIMEOUT_S = 30;
+const MAX_NODE_TIMER_SECONDS = Math.floor(2_147_483_647 / 1000);
 
 /**
  * Parse a concurrency cap. `0` disables the cap (unlimited); unset falls back to
@@ -244,14 +245,15 @@ function dataQueryFromEnv(
 		maxBytes: parsePositiveIntEnv(env, 'MARIMOHUB_DATA_QUERY_MAX_BYTES', DEFAULT_DATA_QUERY_BYTES),
 		executionTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_DATA_QUERY_TIMEOUT_SECONDS', {
 			dflt: DEFAULT_DATA_QUERY_TIMEOUT_S,
+			max: MAX_NODE_TIMER_SECONDS,
 		}),
 	});
 }
 
 function parsePositiveIntEnv(env: Env, key: string, fallback: number): number {
 	const value = parseIntEnv(env, key) ?? fallback;
-	if (value < 1) {
-		throw new ConfigError(`Invalid ${key}: ${value} (expected a positive integer)`, {
+	if (!Number.isSafeInteger(value) || value < 1) {
+		throw new ConfigError(`Invalid ${key}: ${value} (expected a positive safe integer)`, {
 			variable: key,
 		});
 	}

@@ -139,14 +139,18 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		if (signal.aborted)
 			throw Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' });
 		const work = this.request<DataQueryResult>({ type: 'execute-query', request });
+		let rejectAbort!: (error: Error) => void;
 		const abort = new Promise<never>((_resolve, reject) => {
-			signal.addEventListener(
-				'abort',
-				() => reject(Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' })),
-				{ once: true },
-			);
+			rejectAbort = reject;
 		});
-		return Promise.race([work, abort]);
+		const onAbort = () =>
+			rejectAbort(Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' }));
+		signal.addEventListener('abort', onAbort, { once: true });
+		try {
+			return await Promise.race([work, abort]);
+		} finally {
+			signal.removeEventListener('abort', onAbort);
+		}
 	}
 
 	ping(): Promise<void> {

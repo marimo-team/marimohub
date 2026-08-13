@@ -70,6 +70,12 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 		headers: upstreamProject ? { 'OpenAI-Project': upstreamProject } : undefined,
 	});
 	const maxTokens = parseIntEnv(env, 'MARIMOHUB_AI_MAX_TOKENS');
+	if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens < 1)) {
+		throw new ConfigError(
+			`Invalid MARIMOHUB_AI_MAX_TOKENS: ${maxTokens} (expected a positive safe integer)`,
+			{ variable: 'MARIMOHUB_AI_MAX_TOKENS', docs: DOCS },
+		);
+	}
 	return {
 		ai: {
 			upstreamBaseUrl,

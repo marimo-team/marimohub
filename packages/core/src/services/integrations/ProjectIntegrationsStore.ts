@@ -806,7 +806,7 @@ class ScopedIntegrationsStore {
 			...state,
 			...(reason ? { reason } : {}),
 		});
-		if (!def.browse && !def.objectBrowse) {
+		if (!def.browse && !def.objectBrowse && !def.query) {
 			return compatibility(`Integration kind "${head.kind}" does not support browsing.`);
 		}
 		if (!head.enabled) {
@@ -863,7 +863,9 @@ class ScopedIntegrationsStore {
 			(surfaces.objects?.available ?? false) ||
 			(surfaces.query?.available ?? false);
 		return compatibility(
-			anySurfaceAvailable ? undefined : (surfaces.tables?.reason ?? surfaces.objects?.reason),
+			anySurfaceAvailable
+				? undefined
+				: (surfaces.tables?.reason ?? surfaces.objects?.reason ?? surfaces.query?.reason),
 		);
 	}
 

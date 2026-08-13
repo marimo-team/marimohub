@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ResourceExhaustedError, ValidationError } from '../../../errors';
 import type { IntegrationId, UserId } from '../../../ids';
-import {
-	DataQueryService,
-	MAX_DATA_QUERY_SQL_BYTES,
-	singleDataQueryStatement,
-} from './DataQueryService';
+import { DataQueryService, MAX_DATA_QUERY_SQL_BYTES } from './DataQueryService';
+import { singleDataQueryStatement } from './sql';
 import type {
 	DataQueryExecution,
 	DataQueryExecutorFactory,

@@ -225,7 +225,7 @@ export function defineIntegration<S extends z.ZodType>(
 	def: IntegrationDefinition<S>,
 ): IntegrationDefinition<S> {
 	const testConnection = def.testConnection?.bind(def);
-	if (!testConnection && !def.browse && !def.objectBrowse && !def.preview) return def;
+	if (!testConnection && !def.browse && !def.objectBrowse && !def.preview && !def.query) return def;
 	let paths: SecretPath[] | undefined;
 	const pathsOf = () =>
 		(paths ??= secretPaths(
@@ -259,6 +259,41 @@ export function defineIntegration<S extends z.ZodType>(
 		...(def.browse ? { browse: guardedBrowse(def.browse, pathsOf) } : {}),
 		...(def.objectBrowse ? { objectBrowse: guardedObjectBrowse(def.objectBrowse, pathsOf) } : {}),
 		...(def.preview ? { preview: guardedPreview(def.preview, pathsOf) } : {}),
+		...(def.query ? { query: guardedQuery(def.query, pathsOf) } : {}),
+	};
+}
+
+function guardedQuery<C>(
+	query: NonNullable<IntegrationDefinition<z.ZodType<C>>['query']>,
+	pathsOf: () => SecretPath[],
+): NonNullable<IntegrationDefinition<z.ZodType<C>>['query']> {
+	const available = query.available.bind(query);
+	return {
+		available(config) {
+			let verdict: ReturnType<typeof available>;
+			try {
+				verdict = available(config);
+			} catch (err) {
+				if (err instanceof DomainError && !echoesSecret(err.message, config, pathsOf())) {
+					throw err;
+				}
+				throw new UnavailableError('The integration query capability could not be evaluated.');
+			}
+			if (!verdict.ok && echoesSecret(verdict.reason, config, pathsOf())) {
+				return { ok: false, reason: 'this instance cannot run SQL from the hub' };
+			}
+			return verdict;
+		},
+		plan(input) {
+			try {
+				return query.plan(input);
+			} catch (err) {
+				if (err instanceof DomainError && !echoesSecret(err.message, input.config, pathsOf())) {
+					throw err;
+				}
+				throw new ValidationError('The integration query plan could not be created.');
+			}
+		},
 	};
 }
 

@@ -336,7 +336,6 @@ export const icebergRest = defineIntegration({
 					},
 				],
 				cleanup: [{ text: `DETACH ${alias}` }],
-				allowedOrigins: [new URL(config.uri).origin],
 			};
 		},
 	},

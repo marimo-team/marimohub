@@ -6,8 +6,8 @@ import type {
 	DuckDBPreviewProgram,
 	TablePreview,
 } from '@marimo-hub/core';
+import { singleDataQueryStatement } from '@marimo-hub/core/data-query-sql';
 import { createFailClosedNodeRuntime } from './networkPolicy.ts';
-import { singleStatement } from './sql.ts';
 
 const MAX_RESULT_BYTES = 2 * 1024 * 1024;
 
@@ -95,7 +95,7 @@ export class BlockingDuckDBEngine {
 
 	async executeQuery(request: DataQueryExecution): Promise<DataQueryResult> {
 		const plan = request.connection.plan;
-		const statement = singleStatement(request.sql);
+		const statement = singleDataQueryStatement(request.sql);
 		const maxRows = request.limits.maxRows;
 		if (!Number.isSafeInteger(maxRows) || maxRows < 1) throw new Error('Invalid query row limit.');
 		const connection = this.requireDatabase().connect();
@@ -108,7 +108,7 @@ export class BlockingDuckDBEngine {
 			connection.query('BEGIN TRANSACTION READ ONLY');
 			transactionOpen = true;
 			const result = await connection.send(
-				`SELECT * FROM (${statement}) AS "__marimohub_query" LIMIT ${maxRows + 1}`,
+				`SELECT * FROM (${statement}\n) AS "__marimohub_query" LIMIT ${maxRows + 1}`,
 				true,
 			);
 			result.open();
@@ -200,7 +200,8 @@ function normalizeQueryResultStream(
 	const rows: unknown[][] = [];
 	let truncated = false;
 	let stopped = false;
-	if (queryResponseBytes(columns, rows, truncated) > maxBytes) {
+	let responseBytes = queryResponseBaseBytes(columns);
+	if (responseBytes > maxBytes) {
 		result.cancel();
 		throw new Error('DuckDB-Wasm result exceeded the response limit.');
 	}
@@ -212,27 +213,33 @@ function normalizeQueryResultStream(
 				break;
 			}
 			const record = row.toJSON() as Record<string, unknown>;
-			rows.push(columns.map((column, index) => jsonValue(record[column], dateColumns[index])));
-			if (queryResponseBytes(columns, rows, false) > maxBytes) {
-				rows.pop();
+			const normalized = columns.map((column, index) =>
+				jsonValue(record[column], dateColumns[index]),
+			);
+			const rowBytes = new TextEncoder().encode(JSON.stringify(normalized)).byteLength;
+			const separatorBytes = rows.length === 0 ? 0 : 1;
+			if (responseBytes + separatorBytes + rowBytes > maxBytes) {
 				truncated = true;
 				stopped = true;
 				break;
 			}
+			rows.push(normalized);
+			responseBytes += separatorBytes + rowBytes;
 		}
 		if (stopped) break;
 	}
 	if (stopped) result.cancel();
-	if (queryResponseBytes(columns, rows, truncated) > maxBytes) {
-		throw new Error('DuckDB-Wasm result exceeded the response limit.');
-	}
 	return { columns, rows, truncated };
 }
 
-function queryResponseBytes(columns: string[], rows: unknown[][], truncated: boolean): number {
-	return new TextEncoder().encode(
-		JSON.stringify({ columns, rows, truncated, execution_ms: Number.MAX_SAFE_INTEGER }),
-	).byteLength;
+function queryResponseBaseBytes(columns: string[]): number {
+	const serialized = JSON.stringify({
+		columns,
+		rows: [],
+		truncated: false,
+		execution_ms: Number.MAX_SAFE_INTEGER,
+	});
+	return new TextEncoder().encode(serialized).byteLength;
 }
 
 function jsonValue(value: unknown, dateValue = false): unknown {

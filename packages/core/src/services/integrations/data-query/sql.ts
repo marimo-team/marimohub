@@ -1,4 +1,4 @@
-export function singleStatement(sql: string): string {
+export function singleDataQueryStatement(sql: string): string {
 	const statements: string[] = [];
 	let start = 0;
 	let hasToken = false;
@@ -6,6 +6,7 @@ export function singleStatement(sql: string): string {
 		'normal';
 	let blockDepth = 0;
 	let dollarDelimiter: string | undefined;
+
 	for (let index = 0; index < sql.length; index++) {
 		const character = sql[index];
 		const next = sql[index + 1];
@@ -39,6 +40,7 @@ export function singleStatement(sql: string): string {
 			}
 			continue;
 		}
+
 		if (character === '-' && next === '-') {
 			mode = 'line-comment';
 			index++;
@@ -73,6 +75,8 @@ export function singleStatement(sql: string): string {
 		if (!/\s/.test(character)) hasToken = true;
 	}
 	if (hasToken) statements.push(sql.slice(start).trim());
-	if (statements.length !== 1) throw new Error('SQL must contain exactly one statement.');
+	if (statements.length !== 1) {
+		throw new Error('SQL must contain exactly one statement.');
+	}
 	return statements[0];
 }

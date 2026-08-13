@@ -71,43 +71,60 @@ interface QueryResult {
 
 interface SqlEditorHandle {
 	getSql(): string;
-	getRunSql(): string;
+	getRunTarget(): SqlTarget;
+	getAllSql(): string[];
 	replaceSql(sql: string): void;
+	replaceTarget(target: SqlTarget, sql: string): boolean;
 	format(): void;
 	focus(): void;
+}
+
+interface SqlTarget {
+	from: number;
+	to: number;
+	sql: string;
+	document: string;
 }
 
 const DEFAULT_SQL = '-- Select a table or write a DuckDB query\nSELECT 1 AS ready;';
 const MAX_HISTORY = 20;
 
-export default function SqlWorkspace({
-	projectId,
-	integrationId,
-	integrationName,
-	selection,
-	aiAvailable,
-}: {
+interface SqlWorkspaceProps {
 	projectId: string;
 	integrationId: string;
 	integrationName: string;
 	selection: Selection | null;
 	aiAvailable: boolean;
-}) {
+}
+
+export default function SqlWorkspace(props: SqlWorkspaceProps) {
 	const { data: user } = useUserQuery();
+	const storageKey = `marimohub:sql:${user?.id ?? 'unknown'}:${props.projectId}:${props.integrationId}`;
+	return <SqlWorkspaceSession key={storageKey} {...props} storageKey={storageKey} />;
+}
+
+function SqlWorkspaceSession({
+	projectId,
+	integrationId,
+	integrationName,
+	selection,
+	aiAvailable,
+	storageKey,
+}: SqlWorkspaceProps & { storageKey: string }) {
 	const schemaQuery = useDataQuerySchemaQuery(projectId, integrationId, selection);
 	const query = useRunDataQuery(projectId, integrationId);
 	const generate = useGenerateDataQuerySql(projectId, integrationId);
 	const editorRef = useRef<SqlEditorHandle>(null);
 	const abortRef = useRef<AbortController>(null);
-	const storageKey = `marimohub:sql:${user?.id ?? 'unknown'}:${projectId}:${integrationId}`;
 	const stored = useMemo(() => readStoredWorkspace(storageKey), [storageKey]);
 	const [result, setResult] = useState<QueryResult | null>(null);
-	const [submittedSql, setSubmittedSql] = useState('');
 	const [historyItems, setHistoryItems] = useState<string[]>(stored.history);
 	const [instruction, setInstruction] = useState('');
 	const [showHistory, setShowHistory] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const { copy, copied } = useCopyToClipboard();
+
+	useEffect(() => () => abortRef.current?.abort(), []);
 
 	const persistDraft = useCallback(
 		(sqlText: string) =>
@@ -117,27 +134,33 @@ export default function SqlWorkspace({
 
 	const run = useCallback(
 		async (all = false) => {
-			const sqlText = all ? editorRef.current?.getSql() : editorRef.current?.getRunSql();
-			if (!sqlText?.trim()) return;
+			const sqlTexts = all
+				? (editorRef.current?.getAllSql() ?? [])
+				: [editorRef.current?.getRunTarget().sql ?? ''];
+			if (sqlTexts.every((sqlText) => !sqlText.trim())) return;
 			abortRef.current?.abort();
 			const controller = new AbortController();
 			abortRef.current = controller;
 			setError(null);
-			setSubmittedSql(sqlText);
+			setResult(null);
 			try {
-				const data = await query.mutateAsync({ sql: sqlText, signal: controller.signal });
-				setResult(data as QueryResult);
-				setHistoryItems((current) => {
-					const next = [sqlText, ...current.filter((item) => item !== sqlText)].slice(
-						0,
-						MAX_HISTORY,
-					);
-					writeStoredWorkspace(storageKey, {
-						draft: editorRef.current?.getSql() ?? sqlText,
-						history: next,
+				for (const sqlText of sqlTexts) {
+					if (!sqlText.trim()) continue;
+					const data = await query.mutateAsync({ sql: sqlText, signal: controller.signal });
+					if (controller.signal.aborted) return;
+					setResult(data as QueryResult);
+					setHistoryItems((current) => {
+						const next = [sqlText, ...current.filter((item) => item !== sqlText)].slice(
+							0,
+							MAX_HISTORY,
+						);
+						writeStoredWorkspace(storageKey, {
+							draft: editorRef.current?.getSql() ?? sqlText,
+							history: next,
+						});
+						return next;
 					});
-					return next;
-				});
+				}
 			} catch (cause) {
 				if (!controller.signal.aborted) setError(errorMessage(cause));
 			} finally {
@@ -151,13 +174,17 @@ export default function SqlWorkspace({
 		if (!instruction.trim()) return;
 		setError(null);
 		try {
-			const current = editorRef.current?.getRunSql() ?? '';
+			const target = editorRef.current?.getRunTarget();
+			const current = target?.sql ?? '';
 			const data = await generate.mutateAsync({
 				mode: current.trim() ? 'revise' : 'generate',
 				instruction,
 				...(current.trim() ? { sql: current } : {}),
 			});
-			editorRef.current?.replaceSql(data.sql);
+			if (!target || !editorRef.current?.replaceTarget(target, data.sql)) {
+				setError('The SQL changed while AI was generating. Review the changes and try again.');
+				return;
+			}
 			editorRef.current?.focus();
 			setInstruction('');
 		} catch (cause) {
@@ -273,7 +300,7 @@ export default function SqlWorkspace({
 				{query.isPending ? (
 					<Skeleton className="h-32 w-full" />
 				) : result ? (
-					<QueryResults result={result} sql={submittedSql} />
+					<QueryResults result={result} />
 				) : (
 					<p className="text-sm text-muted-foreground">Run a query to see results.</p>
 				)}
@@ -316,7 +343,12 @@ const SqlEditor = forwardRef(function SqlEditor(
 
 	useImperativeHandle(ref, () => ({
 		getSql: () => viewRef.current?.state.doc.toString() ?? '',
-		getRunSql: () => (viewRef.current ? selectedOrCurrentStatement(viewRef.current.state) : ''),
+		getRunTarget: () =>
+			viewRef.current
+				? sqlTargetAtState(viewRef.current.state)
+				: { from: 0, to: 0, sql: '', document: '' },
+		getAllSql: () =>
+			viewRef.current ? allSqlStatements(viewRef.current.state.doc.toString()) : [],
 		replaceSql: (next) => {
 			const view = viewRef.current;
 			if (!view) return;
@@ -324,6 +356,17 @@ const SqlEditor = forwardRef(function SqlEditor(
 				changes: { from: 0, to: view.state.doc.length, insert: next },
 				selection: EditorSelection.cursor(next.length),
 			});
+		},
+		replaceTarget: (target, next) => {
+			const view = viewRef.current;
+			if (!view || applySqlTarget(view.state.doc.toString(), target, next) === undefined) {
+				return false;
+			}
+			view.dispatch({
+				changes: { from: target.from, to: target.to, insert: next },
+				selection: EditorSelection.cursor(target.from + next.length),
+			});
+			return true;
 		},
 		format: () => {
 			const view = viewRef.current;
@@ -458,18 +501,50 @@ function completionSchema(tables: QueryTable[], integrationName: string): Record
 }
 
 export function selectedOrCurrentStatement(state: EditorState): string {
-	const selection = state.sliceDoc(state.selection.main.from, state.selection.main.to);
-	if (selection.trim()) return selection;
-	const sqlText = state.doc.toString();
-	const cursor = state.selection.main.head;
-	const { from, to } = sqlStatementRangeAtCursor(sqlText, cursor);
-	const statement = sqlText.slice(from, to).trim();
-	return statement || sqlText.trim();
+	return sqlTargetAtState(state).sql;
+}
+
+export function sqlTargetAtState(state: EditorState): SqlTarget {
+	const document = state.doc.toString();
+	const selection = state.selection.main;
+	if (state.sliceDoc(selection.from, selection.to).trim()) {
+		return {
+			from: selection.from,
+			to: selection.to,
+			sql: state.sliceDoc(selection.from, selection.to),
+			document,
+		};
+	}
+	const range = sqlStatementRangeAtCursor(document, selection.head);
+	let from = range.from;
+	let to = range.to;
+	while (from < to && /\s/.test(document[from])) from++;
+	while (to > from && /\s/.test(document[to - 1])) to--;
+	if (document[to - 1] === ';') to--;
+	return { from, to, sql: document.slice(from, to).trim(), document };
+}
+
+export function applySqlTarget(
+	document: string,
+	target: SqlTarget,
+	replacement: string,
+): string | undefined {
+	if (document !== target.document) return undefined;
+	return `${document.slice(0, target.from)}${replacement}${document.slice(target.to)}`;
 }
 
 function sqlStatementRangeAtCursor(sql: string, cursor: number): { from: number; to: number } {
+	const ranges = sqlStatementRanges(sql);
+	for (const range of ranges) {
+		if (cursor <= range.to) return range;
+	}
+	return ranges.at(-1) ?? { from: 0, to: sql.length };
+}
+
+function sqlStatementRanges(sql: string): { from: number; to: number }[] {
 	let start = 0;
-	let previous = { from: 0, to: sql.length };
+	const ranges: { from: number; to: number }[] = [];
+	let hasToken = false;
 	let mode: 'normal' | 'single' | 'double' | 'backtick' | 'line-comment' | 'block-comment' =
 		'normal';
 	let blockDepth = 0;
@@ -519,28 +594,36 @@ function sqlStatementRangeAtCursor(sql: string, cursor: number): { from: number;
 			continue;
 		}
 		if (character === "'" || character === '"' || character === '`') {
+			hasToken = true;
 			mode = character === "'" ? 'single' : character === '"' ? 'double' : 'backtick';
 			continue;
 		}
 		if (character === '$') {
 			const delimiter = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(index))?.[0];
 			if (delimiter !== undefined) {
+				hasToken = true;
 				dollarDelimiter = delimiter;
 				index += delimiter.length - 1;
 				continue;
 			}
 		}
-		if (character !== ';') continue;
-		const range = { from: start, to: index + 1 };
-		if (cursor <= index) return range;
-		previous = range;
-		start = index + 1;
+		if (character === ';') {
+			if (hasToken) ranges.push({ from: start, to: index + 1 });
+			start = index + 1;
+			hasToken = false;
+		} else if (!/\s/.test(character)) {
+			hasToken = true;
+		}
 	}
-	if (start < sql.length) return { from: start, to: sql.length };
-	return previous;
+	if (hasToken) ranges.push({ from: start, to: sql.length });
+	return ranges;
 }
 
-function QueryResults({ result, sql: _sql }: { result: QueryResult; sql: string }) {
+export function allSqlStatements(sql: string): string[] {
+	return sqlStatementRanges(sql).map(({ from, to }) => sql.slice(from, to).trim());
+}
+
+function QueryResults({ result }: { result: QueryResult }) {
 	const [sort, setSort] = useState<{ index: number; direction: 1 | -1 } | null>(null);
 	const headers = useMemo(() => keyedValues(result.columns), [result.columns]);
 	const rows = useMemo(() => {
@@ -638,8 +721,10 @@ function renderCell(value: unknown): string {
 	}
 }
 
-function csvCell(value: unknown): string {
-	const text = renderCell(value);
+export function csvCell(value: unknown): string {
+	const rendered = renderCell(value);
+	const text =
+		typeof value === 'string' && /^[\t\r ]*[=+\-@]/.test(rendered) ? `'${rendered}` : rendered;
 	return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 

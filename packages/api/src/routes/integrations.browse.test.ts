@@ -47,19 +47,23 @@ const browsyKind = defineIntegration({
 	render: () => ({}),
 	query: {
 		available: () => ({ ok: true }),
-		plan: () => ({ setup: [], allowedOrigins: [] }),
+		plan: () => ({ setup: [] }),
 	},
 	browse: {
 		available: (config) =>
 			config.mode === 'open' ? { ok: true } : { ok: false, reason: 'sandbox only' },
 		// Echo the inputs so route tests can assert round-trips.
-		listNamespaces: async (_config, _probe, request) => ({
-			items: [['sales', 'eu.central'], ...(request.parent ? [request.parent] : [])],
-			next_cursor: request.cursor ?? 'next-token',
+		listNamespaces: async (config, _probe, request) => ({
+			items:
+				config.token === 'many-namespaces' && !request.parent
+					? Array.from({ length: 300 }, (_, index) => [`ns-${index.toString().padStart(3, '0')}`])
+					: [['sales', 'eu.central'], ...(request.parent ? [request.parent] : [])],
+			next_cursor: config.token === 'many-namespaces' ? null : (request.cursor ?? 'next-token'),
 		}),
 		listTables: async (_config, _probe, namespace) => {
 			// Simulated outage, so route tests can exercise the failure path.
 			if (namespace[0] === 'boom') throw new UnavailableError('The catalog answered HTTP 503.');
+			if (namespace[0]?.startsWith('ns-')) return { items: [], next_cursor: null };
 			return { items: [namespace.join('|')], next_cursor: null };
 		},
 		getTableSchema: async (_config, _probe, _namespace, table) => ({
@@ -824,6 +828,91 @@ describe('Data browser routes', () => {
 			'VALIDATION_ERROR',
 		);
 		expect(executions).toHaveLength(0);
+	});
+
+	it('caches and coalesces bounded query-schema traversal', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const queryDeps = browserDeps(bucket, undefined, queryService([]));
+		queryDeps.dataBrowser.query = true;
+		const browseNamespaces = vi.spyOn(queryDeps.integrations, 'browseNamespaces');
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+		const url = `/projects/${pid}/integrations/${created.id}/browse/query/schema`;
+
+		const [first, coalesced] = await Promise.all([query('GET', url), query('GET', url)]);
+		await expectOk(first);
+		await expectOk(coalesced);
+		const callsAfterMiss = browseNamespaces.mock.calls.length;
+		expect(callsAfterMiss).toBeGreaterThan(0);
+		await expectOk(await query('GET', url));
+		expect(browseNamespaces).toHaveBeenCalledTimes(callsAfterMiss);
+	});
+
+	it('reports table truncation when namespace traversal reaches its cap', async () => {
+		const pid = await createProject();
+		const created = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 'browsy',
+				name: 'many',
+				config: { token: 'many-namespaces' },
+			}),
+			201,
+		);
+		const queryDeps = browserDeps(bucket, undefined, queryService([]));
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+
+		const schema = await expectOk<{ truncated: { tables: boolean } }>(
+			await query('GET', `/projects/${pid}/integrations/${created.id}/browse/query/schema`),
+		);
+		expect(schema.truncated.tables).toBe(true);
+	});
+
+	it('rejects byte-oversized revise input before invoking managed AI', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const generateSql = vi.fn(async () => 'SELECT 1');
+		const queryDeps = browserDeps(bucket, undefined, queryService([]));
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: { ...queryDeps, ai: { generateSql } as never },
+		}).request;
+
+		await expectError(
+			await query('POST', `/projects/${pid}/integrations/${created.id}/browse/query/generate`, {
+				mode: 'revise',
+				instruction: 'Improve this',
+				sql: 'é'.repeat(20_000),
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(generateSql).not.toHaveBeenCalled();
+	});
+
+	it('rejects multi-statement managed-AI output', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const generateSql = vi.fn(async () => 'SELECT 1; DELETE FROM orders');
+		const queryDeps = browserDeps(bucket, undefined, queryService([]));
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: { ...queryDeps, ai: { generateSql } as never },
+		}).request;
+
+		await expectError(
+			await query('POST', `/projects/${pid}/integrations/${created.id}/browse/query/generate`, {
+				mode: 'generate',
+				instruction: 'Show orders',
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(generateSql).toHaveBeenCalledOnce();
 	});
 
 	it('redacts executor failures and does not audit unsuccessful SQL', async () => {

@@ -8467,7 +8467,6 @@ paths:
                   maxLength: 4000
                 sql:
                   type: string
-                  maxLength: 32768
               required:
                 - mode
                 - instruction
