@@ -63,6 +63,13 @@ export function ObjectBrowser({
 	const selectionLocation = objectSelectionLocation(bucket, prefix, key);
 	const selectedKeys =
 		selection.location === selectionLocation ? selection.keys : new Set(key ? [key] : []);
+	useEffect(() => {
+		setSelection((current) =>
+			current.location === selectionLocation
+				? current
+				: { location: selectionLocation, keys: new Set(key ? [key] : []) },
+		);
+	}, [key, selectionLocation]);
 	const listing = useObjectsQuery(
 		projectId,
 		integration.id,
@@ -189,7 +196,7 @@ export function ObjectBrowser({
 							) : (
 								<Skeleton className="h-9 w-full" />
 							)
-						) : bucketItems.length === 0 && !buckets.hasNextPage ? (
+						) : !buckets.error && bucketItems.length === 0 && !buckets.hasNextPage ? (
 							<EmptyState
 								icon={<Folder />}
 								message="No buckets available"

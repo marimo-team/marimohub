@@ -611,6 +611,24 @@ describe('DataBrowserPage', () => {
 		).toBeInTheDocument();
 	});
 
+	it('shows a refetch failure instead of a cached empty bucket state', async () => {
+		const user = userEvent.setup();
+		const objectFailures: Partial<Record<ObjectFailure, string>> = {};
+		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+			objectBuckets: [],
+			objectFailures,
+		});
+		expect(await screen.findByText('No buckets available')).toBeInTheDocument();
+
+		objectFailures.buckets = 'Bucket refresh failed.';
+		await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+		expect(await screen.findByText('Bucket refresh failed.')).toBeInTheDocument();
+		expect(screen.queryByText('No buckets available')).not.toBeInTheDocument();
+	});
+
 	it('shows actionable bucket and object-list failures', async () => {
 		setup(`/projects/${PID}/data/${IID}?surface=objects`, {
 			kind: objectKind,
@@ -670,7 +688,7 @@ describe('DataBrowserPage', () => {
 		expect(await navigator.clipboard.readText()).toBe('s3://lake/second.csv');
 	});
 
-	it('keeps history selection synchronized after toggling the current URL object', async () => {
+	it('resets a multi-selection when revisiting its URL through history', async () => {
 		const user = userEvent.setup();
 		setup(
 			[
@@ -687,16 +705,34 @@ describe('DataBrowserPage', () => {
 			},
 		);
 
-		const first = (await screen.findByText('first.csv')).closest('button')!;
+		await screen.findByRole('button', { name: /^first\.csv/ });
+		const second = screen.getByRole('button', { name: /^second\.csv/ });
 		await user.keyboard('{Control>}');
-		await user.click(first);
+		await user.click(second);
 		await user.keyboard('{/Control}');
+		expect(screen.getByRole('button', { name: 'Copy 2 selected URIs' })).toBeInTheDocument();
 		await user.click(screen.getByTestId('history-back'));
-		expect(await screen.findByText('s3://lake/second.csv')).toBeInTheDocument();
-		await user.click(screen.getByTestId('history-forward'));
 		expect(await screen.findByText('s3://lake/first.csv')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /^first\.csv/ })).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		);
+		expect(screen.getByRole('button', { name: /^second\.csv/ })).toHaveAttribute(
+			'aria-pressed',
+			'false',
+		);
+		await user.click(screen.getByTestId('history-forward'));
+		expect(await screen.findByText('s3://lake/second.csv')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /^first\.csv/ })).toHaveAttribute(
+			'aria-pressed',
+			'false',
+		);
+		expect(screen.getByRole('button', { name: /^second\.csv/ })).toHaveAttribute(
+			'aria-pressed',
+			'true',
+		);
 		await user.click(screen.getByRole('button', { name: 'Copy 1 selected URI' }));
-		expect(await navigator.clipboard.readText()).toBe('s3://lake/first.csv');
+		expect(await navigator.clipboard.readText()).toBe('s3://lake/second.csv');
 	});
 
 	it('does not carry a loaded preview into another object detail', async () => {
