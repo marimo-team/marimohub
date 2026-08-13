@@ -105,7 +105,10 @@ describe('SandboxDataPreview', () => {
 					}),
 			);
 			const create = vi.fn(() => instance);
-			const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
+			const preview = new SandboxDataPreview(
+				{ ...fakeComputeFrom(instance), create },
+				{ ...options, executionTimeoutMs: options.startupTimeoutMs * 2 },
+			);
 			await preview.check();
 
 			const result = preview.preview({ ...program, credentialVars: credentials });
@@ -114,6 +117,32 @@ describe('SandboxDataPreview', () => {
 
 			resolveCredentials?.({ AWS_ACCESS_KEY_ID: 'slow-temporary' });
 			await expect(result).resolves.toEqual({ columns: ['id'], rows: [[1]] });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('bounds credential resolution and lets close finish', async () => {
+		vi.useFakeTimers();
+		try {
+			const { instance } = makeFakeSandbox();
+			const create = vi.fn(() => instance);
+			const preview = new SandboxDataPreview({ ...fakeComputeFrom(instance), create }, options);
+			await preview.check();
+
+			const result = preview.preview({
+				...program,
+				credentialVars: () => new Promise<Record<string, string>>(() => {}),
+			});
+			const rejected = expect(result).rejects.toThrow(
+				'The preview credentials did not resolve in time.',
+			);
+			const closing = preview.close();
+
+			await vi.advanceTimersByTimeAsync(options.executionTimeoutMs);
+			await rejected;
+			await closing;
+			expect(create).toHaveBeenCalledOnce();
 		} finally {
 			vi.useRealTimers();
 		}

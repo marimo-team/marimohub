@@ -66,7 +66,10 @@ export class SandboxDataPreview {
 	}
 
 	private async runPreview(program: PythonPreviewProgram): Promise<TablePreview> {
-		const credentialVars = await resolveCredentialVars(program);
+		const credentialVars = await withDeadline(resolveCredentialVars(program), {
+			timeoutMs: this.options.executionTimeoutMs,
+			timeoutError: () => new UnavailableError('The preview credentials did not resolve in time.'),
+		});
 		const sandbox = this.createSandbox();
 		try {
 			await sandboxDeadline(ready(sandbox), this.options.startupTimeoutMs, 'start');
