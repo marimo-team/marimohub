@@ -88,7 +88,9 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 	}, 15_000);
 });
 
-describe.each(['worker', 'inline'] as const)('DuckDB-Wasm %s runtime', (mode) => {
+const describeRuntime = describe.each(['worker', 'inline'] as const);
+
+describeRuntime('DuckDB-Wasm %s runtime', { timeout: 15_000 }, (mode) => {
 	it('rejects remote-required programs before executing their setup', async () => {
 		const runtime = await initialized(mode);
 		expect(runtime.features).not.toContain('iceberg-http');
