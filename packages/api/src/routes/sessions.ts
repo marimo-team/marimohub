@@ -30,6 +30,7 @@ import {
 	requireRole,
 	roleAtLeast,
 	resolveBaseImage,
+	resolveLaunchStrategyForSession,
 	resolveRestoreSnapshot,
 	recipientFromIdentity,
 	ResourceExhaustedError,
@@ -1034,6 +1035,13 @@ app.openapi(createSession, async (c) => {
 	// In subdomain mode clientUrl === url and originUrl is unset.
 	let clientUrl = '';
 	let originUrl: string | undefined;
+	// After the reuse/cap short-circuits on purpose: the synced-entry GET is
+	// only worth paying when a sandbox is actually provisioned.
+	const resolvedLaunchStrategy = await resolveLaunchStrategyForSession({
+		entryNotebook: workspacePolicy.entryNotebook,
+		workspacePrefix,
+		bucket: bucketHandle,
+	});
 	const observer = logObserver({
 		event: 'session_provision',
 		sandbox_id: sandboxId,
@@ -1042,6 +1050,8 @@ app.openapi(createSession, async (c) => {
 		user_id: user.id,
 		mode,
 	});
+	observer.tag('launch_strategy', resolvedLaunchStrategy.strategy);
+	observer.tag('launch_strategy_detection_failed', resolvedLaunchStrategy.detectionFailed);
 	try {
 		await saga(observer)
 			.step('session_record', async () => {
@@ -1249,6 +1259,7 @@ app.openapi(createSession, async (c) => {
 						userHome,
 						sessionEnv,
 						entryNotebook: workspacePolicy.entryNotebook,
+						launchStrategy: resolvedLaunchStrategy.strategy,
 						launchMode: mode,
 						// Ephemeral and app sandboxes never mount the live workspace: a mount
 						// writes straight through to the bucket (bypassing every persistEdits

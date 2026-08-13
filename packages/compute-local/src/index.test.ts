@@ -1,7 +1,9 @@
-import { access, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type { SandboxId } from '@marimo-hub/core';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { SandboxInstance } from '@marimo-hub/core/ports';
@@ -13,6 +15,7 @@ import {
 	CONTRACT_SANDBOX_ID,
 	CONTRACT_VISIBLE_FILE,
 } from '@marimo-hub/core/testing/compute-contract';
+import { buildMarimoLaunch } from '@marimo-hub/core';
 import { LocalCompute, prepareMarimoCommand, rewriteWorkspace } from './index';
 
 const compute = new LocalCompute();
@@ -137,6 +140,75 @@ describe('prepareMarimoCommand (pure)', () => {
 		expect(prepareMarimoCommand('uv run marimo edit -c "a && b"', '0.0.0.0')).toBe(
 			'uv run --with marimo marimo edit -c "a && b" --host 0.0.0.0',
 		);
+	});
+
+	it('rewrites only the launch segment of the composed uv-script-pins command', () => {
+		const plan = buildMarimoLaunch(
+			{ notebookFile: 'apps/dash.py', port: 2718, host: '0.0.0.0' },
+			'uv-script-pins',
+		);
+		const command = [...plan.setup, plan.start].join(' && ');
+		const prepared = prepareMarimoCommand(command, '0.0.0.0');
+		expect(prepared.split(' && ').slice(0, -1)).toEqual(command.split(' && ').slice(0, -1));
+		expect(prepared).toContain('uv run --with marimo --no-sync marimo edit');
+		expect(prepared.match(/--with marimo/g)).toHaveLength(1);
+		// The strategy's own --host must not be doubled by the bind-host append.
+		expect(prepared.match(/--host/g)).toHaveLength(1);
+	});
+});
+
+// Runs the real setup commands through `sh` with a logging uv stub — locally
+// (unlike in a sandbox image) UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV are
+// typically unset, and the pin install must fall back to `.venv` rather than
+// expanding to `--python ""`.
+describe('uv-script-pins setup execution', () => {
+	const setup = buildMarimoLaunch(
+		{ notebookFile: 'app.py', port: 2718, host: '127.0.0.1' },
+		'uv-script-pins',
+	).setup.join(' && ');
+
+	async function runSetup(extraEnv: Record<string, string>) {
+		const dir = await mkdtemp(path.join(os.tmpdir(), 'marimohub-uvstub-'));
+		const workdir = path.join(dir, 'work');
+		const logFile = path.join(dir, 'uv.log');
+		await mkdir(workdir);
+		await writeFile(
+			path.join(dir, 'uv'),
+			'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$UV_LOG"\nif [ "$1" = venv ]; then mkdir -p "$2"; fi\n',
+			{ mode: 0o755 },
+		);
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			PATH: `${dir}:${process.env.PATH}`,
+			UV_LOG: logFile,
+		};
+		delete env.UV_PROJECT_ENVIRONMENT;
+		delete env.VIRTUAL_ENV;
+		Object.assign(env, extraEnv);
+		try {
+			await promisify(execFile)('sh', ['-c', setup], { cwd: workdir, env });
+			return { log: await readFile(logFile, 'utf8'), workdir };
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	it('creates and targets .venv when UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV are unset', async () => {
+		const { log } = await runSetup({});
+		expect(log).toContain('venv .venv\n');
+		expect(log).toContain('pip install --python .venv --no-build -r');
+		expect(log).not.toMatch(/--python\s+--/);
+	});
+
+	it('targets an existing UV_PROJECT_ENVIRONMENT without recreating it', async () => {
+		const envDir = await mkdtemp(path.join(os.tmpdir(), 'marimohub-envdir-'));
+		try {
+			const { log } = await runSetup({ UV_PROJECT_ENVIRONMENT: envDir });
+			expect(log).not.toContain('venv ');
+			expect(log).toContain(`pip install --python ${envDir} --no-build -r`);
+		} finally {
+			await rm(envDir, { recursive: true, force: true });
+		}
 	});
 });
 

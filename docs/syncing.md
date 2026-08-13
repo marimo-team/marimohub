@@ -253,6 +253,23 @@ POST /api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate
 
 Returns a fresh `sync_url` + `sync_token`.
 
+## Dependencies
+
+A session's environment is built from what the push contained, layered onto the
+sandbox image's pre-installed base:
+
+- A `pyproject.toml` at the synced root is applied with `uv sync --inexact` —
+  its dependencies are added to the base environment. This layer is lenient: a
+  broken pyproject falls back to the base environment.
+- [PEP 723](https://peps.python.org/pep-0723/) inline metadata
+  (`# /// script … # ///`) in the entry notebook is detected automatically and
+  installed on top via `uv export --script` + `uv pip install`. This layer is
+  strict: an unsatisfiable pin fails the session with uv's resolver error
+  (declared pins are never silently ignored).
+
+Both compose — the inline pins are applied last, so they win on conflicts. No
+configuration is needed; the strategy is inferred per notebook at session start.
+
 ## Read-only sessions
 
 Sessions on a synced notebook are **ephemeral**: the sandbox is populated from

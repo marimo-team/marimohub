@@ -20,6 +20,7 @@ import { Stopwatch } from '../../timing';
 import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
 import { buildMarimoLaunch } from './marimoLaunch';
+import type { MarimoLaunchStrategyName } from './marimoLaunch';
 import type { NotebookService } from '../content/NotebookService';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
 import type { WorkspaceRestoreStats } from './sandboxFiles';
@@ -118,6 +119,8 @@ export interface ProvisionOptions {
 	sessionEnv?: SessionEnv | Promise<SessionEnv | undefined>;
 	/** Workspace-relative notebook file marimo should open. Defaults to `notebook.py`. */
 	entryNotebook?: string;
+	/** Per-source launch strategy (see launchStrategy.ts). Defaults to the project-managed env. */
+	launchStrategy?: MarimoLaunchStrategyName;
 	/**
 	 * How long to wait for the marimo kernel to bind its port before failing the
 	 * provision. Covers setup too (a cold env may install/build first). Defaults
@@ -436,14 +439,17 @@ export class SandboxProvisioner {
 		mountPath: string,
 		sw: Stopwatch,
 	): Promise<void> {
-		const launch = buildMarimoLaunch({
-			notebookFile: options.entryNotebook ?? 'notebook.py',
-			port: MARIMO_PORT,
-			host: '0.0.0.0',
-			mode: options.launchMode,
-			assetUrl: options.assetUrl,
-			baseUrl: options.baseUrl,
-		});
+		const launch = buildMarimoLaunch(
+			{
+				notebookFile: options.entryNotebook ?? 'notebook.py',
+				port: MARIMO_PORT,
+				host: '0.0.0.0',
+				mode: options.launchMode,
+				assetUrl: options.assetUrl,
+				baseUrl: options.baseUrl,
+			},
+			options.launchStrategy,
+		);
 		const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS;
 		let process: SandboxProcess | undefined;
 		let portWaitStart: number | undefined;

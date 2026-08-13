@@ -1,6 +1,6 @@
 /**
- * How marimo is launched inside a sandbox. Pick a strategy via ACTIVE_STRATEGY
- * below to experiment with different ways of provisioning the env.
+ * How marimo is launched inside a sandbox. Strategies are inferred per-source
+ * (see launchStrategy.ts); the default is the project-managed env.
  */
 import type { SessionMode } from '../../constants';
 import { shellQuote } from './shell';
@@ -71,45 +71,59 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 	return `marimo ${subcommand} ${extraFlags}${shellQuote(p.notebookFile)} ${flags(p)}`;
 }
 
+// Sync only when the notebook declares real deps; an empty one just gets a
+// `[project]` table (so `uv add` works) and runs from the pre-installed
+// /opt/venv via `--no-sync`. --no-compile-bytecode skips ~5s of compiling
+// freshly-added deps on the launch path (lazy-compiled on import instead);
+// --no-build keeps it to wheels so a source build can't run arbitrary code /
+// stall the launch. The image must NOT set UV_COMPILE_BYTECODE (it would
+// conflict with --no-compile-bytecode). `|| true` never blocks launch.
+const PYPROJECT_LAYER_SETUP = `if python3 -c "import tomllib,sys;sys.exit(0 if tomllib.load(open('pyproject.toml','rb')).get('project',{}).get('dependencies') else 1)" 2>/dev/null; then uv sync --inexact --no-compile-bytecode --no-build || true; elif ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then { rm -f pyproject.toml && uv init --vcs none --name notebook --description "Built in marimohub"; } || true; fi`;
+
+// Outside the workspace: keeps the marimo file browser clean and can't clobber
+// a synced repo's own requirements.txt.
+const SCRIPT_REQUIREMENTS = '/tmp/marimohub-script-requirements.txt';
+
+// The env the kernel's `uv run --no-sync` will use — uv resolves the project
+// env as UV_PROJECT_ENVIRONMENT, else `.venv` in the project dir. Deliberately
+// not VIRTUAL_ENV: `uv run` ignores it, so pins installed there would be
+// invisible to the kernel. Local dev (compute-local) has neither var nor an
+// existing env, hence the create-if-missing guard — a no-op on sandbox images,
+// whose contract pre-creates UV_PROJECT_ENVIRONMENT.
+const PIN_ENV = '"${UV_PROJECT_ENVIRONMENT:-.venv}"';
+
 export const MARIMO_LAUNCH_STRATEGIES = {
-	// marimohub's strategy. The sandbox image pre-installs marimo (pinned) plus
+	// marimohub's default. The sandbox image pre-installs marimo (pinned) plus
 	// popular libraries into the project env (UV_PROJECT_ENVIRONMENT), so the base
 	// case needs no install and startup is near-instant. A notebook's own deps live
-	// in pyproject.toml (not PEP 723 inline metadata); `uv sync --inexact` adds them
-	// to that env without removing the pre-installed base, then `--no-sync` runs
-	// marimo straight from it. Unlike marimo's `--sandbox` (which force-refreshes
-	// when a notebook declares no inline deps — ours never do), this never refetches.
+	// in pyproject.toml; `uv sync --inexact` adds them to that env without removing
+	// the pre-installed base, then `--no-sync` runs marimo straight from it. Unlike
+	// marimo's `--sandbox` (which force-refreshes when a notebook declares no
+	// inline deps), this never refetches.
 	'uv-sync-edit': (p) => ({
+		setup: [PYPROJECT_LAYER_SETUP],
+		start: `uv run --no-sync ${marimoCommand(p)}`,
+	}),
+
+	// Git-synced notebooks with PEP 723 inline metadata: the pyproject layer runs
+	// first (lenient, as above), then the script's pins install into the same base
+	// env — last, so they win. No `|| true` on the pin steps: declared pins must
+	// fail the launch loudly (uv's error surfaces via the kernel logs), never be
+	// silently ignored. --no-hashes because hash checking rejects the unhashed
+	// base env.
+	'uv-script-pins': (p) => ({
 		setup: [
-			// Sync only when the notebook declares real deps; an empty one just gets a
-			// `[project]` table (so `uv add` works) and runs from the pre-installed
-			// /opt/venv via `--no-sync`. --no-compile-bytecode skips ~5s of compiling
-			// freshly-added deps on the launch path (lazy-compiled on import instead);
-			// --no-build keeps it to wheels so a source build can't run arbitrary code /
-			// stall the launch. The image must NOT set UV_COMPILE_BYTECODE (it would
-			// conflict with --no-compile-bytecode). `|| true` never blocks launch.
-			`if python3 -c "import tomllib,sys;sys.exit(0 if tomllib.load(open('pyproject.toml','rb')).get('project',{}).get('dependencies') else 1)" 2>/dev/null; then uv sync --inexact --no-compile-bytecode --no-build || true; elif ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then { rm -f pyproject.toml && uv init --vcs none --name notebook --description "Built in marimohub"; } || true; fi`,
+			PYPROJECT_LAYER_SETUP,
+			`uv export --script ${shellQuote(p.notebookFile)} --format requirements-txt --no-hashes -o ${SCRIPT_REQUIREMENTS}`,
+			`[ -d ${PIN_ENV} ] || uv venv ${PIN_ENV}`,
+			`uv pip install --python ${PIN_ENV} --no-build -r ${SCRIPT_REQUIREMENTS}`,
 		],
 		start: `uv run --no-sync ${marimoCommand(p)}`,
 	}),
 
-	// Project mode without a prior `uv sync` — leaner, but `uv run` doesn't reliably
-	// materialize project deps on first invocation. Prefer `uv-sync-edit`.
-	'uv-run-edit': (p) => ({
-		setup: [],
-		start: `uv run ${marimoCommand(p)}`,
-	}),
-
-	// Export the script's PEP 723 deps to requirements.txt, then run against that.
-	'uv-export-requirements': (p) => ({
-		setup: [
-			`uv export --script ${shellQuote(p.notebookFile)} --format requirements-txt > requirements.txt`,
-		],
-		start: `uv run --with marimo --with-requirements=requirements.txt ${marimoCommand(p)}`,
-	}),
-
-	// marimo builds its own venv from PEP 723 metadata; force-refreshes when the
-	// script declares no deps.
+	// marimo builds its own venv from PEP 723 metadata. Unselected today; kept
+	// as the future path for markdown notebooks, whose metadata lives in YAML
+	// frontmatter that uv can't parse (but marimo --sandbox can).
 	'uv-sandbox': (p) => ({
 		setup: [],
 		start: `uv run --with marimo ${marimoCommand(p, '--sandbox ')}`,
@@ -118,8 +132,11 @@ export const MARIMO_LAUNCH_STRATEGIES = {
 
 export type MarimoLaunchStrategyName = keyof typeof MARIMO_LAUNCH_STRATEGIES;
 
-const ACTIVE_STRATEGY: MarimoLaunchStrategyName = 'uv-sync-edit';
+export const DEFAULT_LAUNCH_STRATEGY: MarimoLaunchStrategyName = 'uv-sync-edit';
 
-export function buildMarimoLaunch(params: MarimoLaunchParams): MarimoLaunchPlan {
-	return MARIMO_LAUNCH_STRATEGIES[ACTIVE_STRATEGY](params);
+export function buildMarimoLaunch(
+	params: MarimoLaunchParams,
+	strategy: MarimoLaunchStrategyName = DEFAULT_LAUNCH_STRATEGY,
+): MarimoLaunchPlan {
+	return MARIMO_LAUNCH_STRATEGIES[strategy](params);
 }

@@ -101,6 +101,50 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).toContain('--host 0.0.0.0');
 		});
 
+		it('honors a resolved launch strategy, setup layers ordered before the kernel', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				entryNotebook: 'apps/dash.py',
+				launchStrategy: 'uv-script-pins',
+			});
+
+			// Pins apply last so they win: pyproject → export → install → kernel.
+			const cmd = calls.startProcess[0].cmd;
+			const order = [
+				cmd.indexOf('uv sync --inexact'),
+				cmd.indexOf("uv export --script 'apps/dash.py'"),
+				cmd.indexOf('uv pip install'),
+				cmd.indexOf('marimo edit'),
+			];
+			expect(Math.min(...order)).toBeGreaterThanOrEqual(0);
+			expect(order).toEqual([...order].sort((a, b) => a - b));
+		});
+
+		it('defaults to the project-managed env when no launch strategy is given', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+			await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+			});
+
+			const cmd = calls.startProcess[0].cmd;
+			expect(cmd).toContain('uv sync --inexact');
+			expect(cmd).not.toContain('uv export');
+			expect(cmd).not.toContain('uv pip install');
+		});
+
 		it('accepts sessionEnv as a promise, injecting it once resolved', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));

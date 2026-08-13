@@ -121,6 +121,22 @@ provide, or the namespace may lack sufficient quota. Check the Pod's
 out-of-memory during dependency installation, use a larger compute profile and
 start a new session.
 
+### Session fails with a uv resolver error
+
+A git-synced notebook declaring [PEP 723](https://peps.python.org/pep-0723/)
+inline metadata has its pins installed at session start, and an unsatisfiable
+pin fails the session **by design** — declared pins are never silently ignored.
+Fix the pins in the repo and push again. Source builds are also disallowed on
+the launch path (`--no-build`): pin versions that ship wheels.
+
+### Git-synced session with heavy inline dependencies times out
+
+Inline pins install before the kernel binds its port, so a large dependency set
+(e.g. torch) can exceed the startup window. Raise
+`MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS`, or pre-install the heavy packages
+in the sandbox image so only the delta installs at launch. See
+[Sandbox image](/sandbox-image).
+
 ## Check a live deployment
 
 `GET /api/health?deep=true` probes every downstream dependency and reports each
