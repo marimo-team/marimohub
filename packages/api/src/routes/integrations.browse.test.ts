@@ -53,16 +53,52 @@ const browsyKind = defineIntegration({
 		available: (config) =>
 			config.mode === 'open' ? { ok: true } : { ok: false, reason: 'sandbox only' },
 		// Echo the inputs so route tests can assert round-trips.
-		listNamespaces: async (config, _probe, request) => ({
-			items:
-				config.token === 'many-namespaces' && !request.parent
-					? Array.from({ length: 300 }, (_, index) => [`ns-${index.toString().padStart(3, '0')}`])
-					: [['sales', 'eu.central'], ...(request.parent ? [request.parent] : [])],
-			next_cursor: config.token === 'many-namespaces' ? null : (request.cursor ?? 'next-token'),
-		}),
-		listTables: async (_config, _probe, namespace) => {
+		listNamespaces: async (config, _probe, request) => {
+			if (config.token === 'many-namespaces') {
+				return {
+					items: request.parent
+						? []
+						: Array.from({ length: 300 }, (_, index) => [
+								`ns-${index.toString().padStart(3, '0')}`,
+							]),
+					next_cursor: null,
+				};
+			}
+			if (config.token === 'schema-work-limit') {
+				const current = request.parent
+					? Number.parseInt(request.parent[0]?.slice(3) ?? '', 10)
+					: -1;
+				return {
+					items: current < 255 ? [[`ns-${String(current + 1).padStart(3, '0')}`]] : [],
+					next_cursor: null,
+				};
+			}
+			if (config.token === 'repeated-table-cursor') {
+				return { items: request.parent ? [] : [['sales']], next_cursor: null };
+			}
+			return {
+				items: [['sales', 'eu.central'], ...(request.parent ? [request.parent] : [])],
+				next_cursor: request.cursor ?? 'next-token',
+			};
+		},
+		listTables: async (config, _probe, namespace, request) => {
 			// Simulated outage, so route tests can exercise the failure path.
 			if (namespace[0] === 'boom') throw new UnavailableError('The catalog answered HTTP 503.');
+			if (config.token === 'schema-work-limit' && namespace[0]?.startsWith('ns-')) {
+				const index = Number.parseInt(namespace[0].slice(3), 10);
+				return {
+					items: index >= 128 ? [`table-${index}`] : [],
+					next_cursor: null,
+				};
+			}
+			if (config.token === 'repeated-table-cursor') {
+				const start = request.cursor ? 100 : 0;
+				const count = request.cursor ? 28 : 100;
+				return {
+					items: Array.from({ length: count }, (_, index) => `table-${start + index}`),
+					next_cursor: 'repeat',
+				};
+			}
 			if (namespace[0]?.startsWith('ns-')) return { items: [], next_cursor: null };
 			return { items: [namespace.join('|')], next_cursor: null };
 		},
@@ -865,6 +901,55 @@ describe('Data browser routes', () => {
 		const schema = await expectOk<{ truncated: { tables: boolean } }>(
 			await query('GET', `/projects/${pid}/integrations/${created.id}/browse/query/schema`),
 		);
+		expect(schema.truncated.tables).toBe(true);
+	});
+
+	it('returns a truncated schema when traversal exhausts its work budget', async () => {
+		const pid = await createProject();
+		const created = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 'browsy',
+				name: 'deep',
+				config: { token: 'schema-work-limit' },
+			}),
+			201,
+		);
+		const queryDeps = browserDeps(bucket, undefined, queryService([]));
+		queryDeps.dataBrowser.query = true;
+		const browseNamespaces = vi.spyOn(queryDeps.integrations, 'browseNamespaces');
+		const browseTables = vi.spyOn(queryDeps.integrations, 'browseTables');
+		const browseTableSchema = vi.spyOn(queryDeps.integrations, 'browseTableSchema');
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+
+		const schema = await expectOk<{ tables: unknown[]; truncated: { tables: boolean } }>(
+			await query('GET', `/projects/${pid}/integrations/${created.id}/browse/query/schema`),
+		);
+
+		expect(schema.tables).toEqual([]);
+		expect(schema.truncated.tables).toBe(true);
+		expect(browseNamespaces.mock.calls.length + browseTables.mock.calls.length).toBe(512);
+		expect(browseTableSchema).not.toHaveBeenCalled();
+	});
+
+	it('preserves repeated-cursor truncation when the final table page reaches the cap', async () => {
+		const pid = await createProject();
+		const created = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 'browsy',
+				name: 'repeated-cursor',
+				config: { token: 'repeated-table-cursor' },
+			}),
+			201,
+		);
+		const queryDeps = browserDeps(bucket, undefined, queryService([]));
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+
+		const schema = await expectOk<{ tables: unknown[]; truncated: { tables: boolean } }>(
+			await query('GET', `/projects/${pid}/integrations/${created.id}/browse/query/schema`),
+		);
+
+		expect(schema.tables).toHaveLength(128);
 		expect(schema.truncated.tables).toBe(true);
 	});
 

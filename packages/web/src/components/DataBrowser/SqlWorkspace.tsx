@@ -2,6 +2,7 @@ import {
 	forwardRef,
 	useCallback,
 	useEffect,
+	useId,
 	useImperativeHandle,
 	useMemo,
 	useRef,
@@ -62,11 +63,17 @@ interface QueryTable {
 	columns: { name: string; type: string; nullable: boolean }[];
 }
 
-interface QueryResult {
+export interface QueryResult {
 	columns: string[];
 	rows: unknown[][];
 	truncated: boolean;
 	execution_ms: number;
+}
+
+export interface QueryExecution {
+	id: number;
+	sql: string;
+	result: QueryResult;
 }
 
 interface SqlEditorHandle {
@@ -117,7 +124,8 @@ function SqlWorkspaceSession({
 	const editorRef = useRef<SqlEditorHandle>(null);
 	const abortRef = useRef<AbortController>(null);
 	const stored = useMemo(() => readStoredWorkspace(storageKey), [storageKey]);
-	const [result, setResult] = useState<QueryResult | null>(null);
+	const [executions, setExecutions] = useState<QueryExecution[]>([]);
+	const [activeResultIndex, setActiveResultIndex] = useState(0);
 	const [historyItems, setHistoryItems] = useState<string[]>(stored.history);
 	const [instruction, setInstruction] = useState('');
 	const [showHistory, setShowHistory] = useState(false);
@@ -142,13 +150,21 @@ function SqlWorkspaceSession({
 			const controller = new AbortController();
 			abortRef.current = controller;
 			setError(null);
-			setResult(null);
+			setExecutions([]);
+			setActiveResultIndex(0);
+			let completedCount = 0;
 			try {
 				for (const sqlText of sqlTexts) {
 					if (!sqlText.trim()) continue;
 					const data = await query.mutateAsync({ sql: sqlText, signal: controller.signal });
 					if (controller.signal.aborted) return;
-					setResult(data as QueryResult);
+					const executionIndex = completedCount;
+					completedCount++;
+					setExecutions((current) => [
+						...current,
+						{ id: executionIndex, sql: sqlText, result: data as QueryResult },
+					]);
+					setActiveResultIndex(executionIndex);
 					setHistoryItems((current) => {
 						const next = [sqlText, ...current.filter((item) => item !== sqlText)].slice(
 							0,
@@ -299,8 +315,12 @@ function SqlWorkspaceSession({
 				{error ? <p className="mb-3 text-sm text-destructive">{error}</p> : null}
 				{query.isPending ? (
 					<Skeleton className="h-32 w-full" />
-				) : result ? (
-					<QueryResults result={result} />
+				) : executions.length > 0 ? (
+					<QueryExecutionResults
+						executions={executions}
+						activeIndex={activeResultIndex}
+						onSelect={setActiveResultIndex}
+					/>
 				) : (
 					<p className="text-sm text-muted-foreground">Run a query to see results.</p>
 				)}
@@ -623,7 +643,95 @@ export function allSqlStatements(sql: string): string[] {
 	return sqlStatementRanges(sql).map(({ from, to }) => sql.slice(from, to).trim());
 }
 
-function QueryResults({ result }: { result: QueryResult }) {
+export function QueryExecutionResults({
+	executions,
+	activeIndex,
+	onSelect,
+}: {
+	executions: QueryExecution[];
+	activeIndex: number;
+	onSelect: (index: number) => void;
+}) {
+	const selectedIndex = Math.min(Math.max(activeIndex, 0), executions.length - 1);
+	const execution = executions[selectedIndex];
+	const tabSetId = useId();
+	if (!execution) return null;
+
+	return (
+		<div>
+			{executions.length > 1 ? (
+				<div
+					role="tablist"
+					aria-label="Query results"
+					className="mb-3 flex gap-1 overflow-x-auto border-b"
+				>
+					{executions.map((item, index) => (
+						<button
+							type="button"
+							role="tab"
+							id={`${tabSetId}-tab-${index}`}
+							aria-controls={`${tabSetId}-panel`}
+							aria-label={`Statement ${index + 1}, ${item.result.rows.length.toLocaleString()} ${item.result.rows.length === 1 ? 'row' : 'rows'}`}
+							aria-selected={index === selectedIndex}
+							tabIndex={index === selectedIndex ? 0 : -1}
+							title={item.sql.replaceAll(/\s+/g, ' ').trim()}
+							key={item.id}
+							onClick={() => onSelect(index)}
+							onKeyDown={(event) => {
+								const nextIndex =
+									event.key === 'ArrowRight'
+										? (index + 1) % executions.length
+										: event.key === 'ArrowLeft'
+											? (index - 1 + executions.length) % executions.length
+											: event.key === 'Home'
+												? 0
+												: event.key === 'End'
+													? executions.length - 1
+													: undefined;
+								if (nextIndex === undefined) return;
+								event.preventDefault();
+								onSelect(nextIndex);
+								const tabs =
+									event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]');
+								tabs?.[nextIndex]?.focus();
+							}}
+							className={cn(
+								'shrink-0 border-b-2 px-3 py-2 text-xs',
+								index === selectedIndex
+									? 'border-primary font-medium text-foreground'
+									: 'border-transparent text-muted-foreground hover:text-foreground',
+							)}
+						>
+							Statement {index + 1}
+							<span className="ml-1 text-muted-foreground">
+								({item.result.rows.length.toLocaleString()}{' '}
+								{item.result.rows.length === 1 ? 'row' : 'rows'})
+							</span>
+						</button>
+					))}
+				</div>
+			) : null}
+			<div
+				role="tabpanel"
+				id={`${tabSetId}-panel`}
+				aria-labelledby={executions.length > 1 ? `${tabSetId}-tab-${selectedIndex}` : undefined}
+				aria-label={executions.length === 1 ? 'Query result' : undefined}
+			>
+				{executions.length > 1 ? (
+					<p
+						className="mb-2 truncate font-mono text-xs text-muted-foreground"
+						title={execution.sql}
+					>
+						{execution.sql.replaceAll(/\s+/g, ' ').trim()}
+					</p>
+				) : null}
+				<QueryResultTable key={selectedIndex} result={execution.result} />
+			</div>
+		</div>
+	);
+}
+
+function QueryResultTable({ result }: { result: QueryResult }) {
 	const [sort, setSort] = useState<{ index: number; direction: 1 | -1 } | null>(null);
 	const headers = useMemo(() => keyedValues(result.columns), [result.columns]);
 	const rows = useMemo(() => {

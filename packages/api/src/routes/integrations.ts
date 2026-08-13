@@ -1159,13 +1159,14 @@ async function collectQuerySchema(
 	integrationId: IntegrationEntry['id'],
 	queryUser: string,
 	focus: { focus_namespace?: string; focus_table?: string },
-	chargeWork: () => void,
+	chargeWork: () => boolean,
 ) {
 	const deadline = Date.now() + QUERY_SCHEMA_TIMEOUT_MS;
 	const namespaces: string[][] = [];
 	const queue: string[][] = [[]];
 	const seen = new Set<string>();
 	let namespaceTraversalTruncated = false;
+	let workLimitReached = false;
 	const focusNamespace = focus.focus_namespace ? splitNamespace(focus.focus_namespace) : undefined;
 	if (focusNamespace) {
 		const key = focusNamespace.join(NAMESPACE_JOINER);
@@ -1173,12 +1174,15 @@ async function collectQuerySchema(
 		namespaces.push(focusNamespace);
 		queue.unshift(focusNamespace);
 	}
-	while (queue.length > 0 && namespaces.length < 256 && Date.now() < deadline) {
+	namespaceTraversal: while (queue.length > 0 && namespaces.length < 256 && Date.now() < deadline) {
 		const parent = queue.shift()!;
 		let cursor: string | undefined;
 		const cursors = new Set<string>();
 		do {
-			chargeWork();
+			if (!chargeWork()) {
+				workLimitReached = true;
+				break namespaceTraversal;
+			}
 			const page = await integrations.browseNamespaces(projectId, integrationId, {
 				limit: 100,
 				parent: parent.length > 0 ? parent : undefined,
@@ -1213,11 +1217,14 @@ async function collectQuerySchema(
 	});
 	const tableRefs: { namespace: string[]; name: string }[] = [];
 	let tableLimitReached = false;
-	for (const namespace of namespaces) {
+	tableTraversal: for (const namespace of namespaces) {
 		let cursor: string | undefined;
 		const cursors = new Set<string>();
 		do {
-			chargeWork();
+			if (!chargeWork()) {
+				workLimitReached = true;
+				break tableTraversal;
+			}
 			const page = await integrations.browseTables(projectId, integrationId, namespace, {
 				limit: Math.min(100, QUERY_SCHEMA_MAX_TABLES - tableRefs.length),
 				cursor,
@@ -1229,7 +1236,7 @@ async function collectQuerySchema(
 			cursor = nextCursor && !cursors.has(nextCursor) ? nextCursor : undefined;
 			if (cursor) cursors.add(cursor);
 			if (tableRefs.length >= QUERY_SCHEMA_MAX_TABLES) {
-				tableLimitReached = Boolean(cursor) || namespaces.at(-1) !== namespace;
+				tableLimitReached = tableLimitReached || Boolean(cursor) || namespaces.at(-1) !== namespace;
 				break;
 			}
 		} while (cursor && Date.now() < deadline);
@@ -1259,7 +1266,10 @@ async function collectQuerySchema(
 	let byteLimitReached = false;
 	for (const table of tableRefs) {
 		if (Date.now() >= deadline) break;
-		chargeWork();
+		if (!chargeWork()) {
+			workLimitReached = true;
+			break;
+		}
 		const schema = await integrations.browseTableSchema(
 			projectId,
 			integrationId,
@@ -1295,6 +1305,7 @@ async function collectQuerySchema(
 		tables,
 		truncated: {
 			tables:
+				workLimitReached ||
 				namespaceLimitReached ||
 				tableLimitReached ||
 				tables.length < tableRefs.length ||
@@ -1697,7 +1708,13 @@ function assertTestBudget(userId: string): void {
 }
 
 function assertIntegrationBudget(name: IntegrationBudgetName, userId: string): void {
-	assertBudget(integrationBudgets[name], userId, integrationBudgetDefinitions[name].message);
+	if (!consumeIntegrationBudget(name, userId)) {
+		throw new ResourceExhaustedError(integrationBudgetDefinitions[name].message);
+	}
+}
+
+function consumeIntegrationBudget(name: IntegrationBudgetName, userId: string): boolean {
+	return integrationBudgets[name].consume(userId);
 }
 
 export function trackedTestBudgets(): number {
@@ -1989,7 +2006,7 @@ app.openapi(getDataQuerySchema, async (c) => {
 	]);
 	const data = await cachedQuerySchema(schemaKey, () =>
 		collectQuerySchema(integrations, pid, iid, user.email, focus, () =>
-			assertIntegrationBudget('querySchemaWork', user.id),
+			consumeIntegrationBudget('querySchemaWork', user.id),
 		),
 	);
 	return c.json({ success: true, data }, 200);
@@ -2024,7 +2041,7 @@ app.openapi(generateDataQuerySql, async (c) => {
 	]);
 	const snapshot = await cachedQuerySchema(schemaKey, () =>
 		collectQuerySchema(integrations, pid, iid, user.email, {}, () =>
-			assertIntegrationBudget('querySchemaWork', user.id),
+			consumeIntegrationBudget('querySchemaWork', user.id),
 		),
 	);
 	const schema = snapshot.tables

@@ -277,7 +277,7 @@ function guardedQuery<C>(
 				if (err instanceof DomainError && !echoesSecret(err.message, config, pathsOf())) {
 					throw err;
 				}
-				throw new UnavailableError('The integration query capability could not be evaluated.');
+				return { ok: false, reason: 'this instance cannot run SQL from the hub' };
 			}
 			if (!verdict.ok && echoesSecret(verdict.reason, config, pathsOf())) {
 				return { ok: false, reason: 'this instance cannot run SQL from the hub' };

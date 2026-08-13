@@ -408,4 +408,51 @@ describe('defineIntegration available-reason guard', () => {
 			}),
 		).toThrow('The integration query plan could not be created.');
 	});
+
+	it('degrades unexpected query availability failures to an unavailable verdict', () => {
+		const queryUnavailable = defineIntegration({
+			kind: 'query_unavailable',
+			title: 'Query unavailable',
+			description: 'test kind',
+			category: 'catalog',
+			brand: { color: '#000000' },
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			query: {
+				available: () => {
+					throw new Error('kind implementation failed');
+				},
+				plan: () => ({ setup: [] }),
+			},
+		});
+
+		expect(queryUnavailable.query!.available({ token: 'query-secret' })).toEqual({
+			ok: false,
+			reason: 'this instance cannot run SQL from the hub',
+		});
+	});
+
+	it('preserves deliberate query availability rejections', () => {
+		const queryRejected = defineIntegration({
+			kind: 'query_rejected',
+			title: 'Query rejected',
+			description: 'test kind',
+			category: 'catalog',
+			brand: { color: '#000000' },
+			schemaVersion: 1,
+			configSchema: z.object({ token: zSecret() }),
+			render: () => ({}),
+			query: {
+				available: () => {
+					throw new ValidationError('invalid query configuration');
+				},
+				plan: () => ({ setup: [] }),
+			},
+		});
+
+		expect(() => queryRejected.query!.available({ token: 'query-secret' })).toThrow(
+			'invalid query configuration',
+		);
+	});
 });

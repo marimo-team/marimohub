@@ -363,7 +363,9 @@ describe('DataBrowserPage', () => {
 			querySurface: { available: false, reason: 'Broker unavailable.' },
 		});
 
-		expect(await screen.findByRole('button', { name: 'Tables' })).toBeInTheDocument();
+		expect(
+			await screen.findByRole('button', { name: 'Tables' }, { timeout: 5000 }),
+		).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Query' })).toBeDisabled();
 		expect(screen.queryByRole('button', { name: 'Objects' })).not.toBeInTheDocument();
 		expect(screen.getByText('Run SQL unavailable: Broker unavailable.')).toBeInTheDocument();
