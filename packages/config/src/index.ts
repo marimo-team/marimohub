@@ -104,6 +104,7 @@ const DEFAULT_MAX_DATA_PREVIEWS_PER_USER = 1;
 const DEFAULT_DATA_PREVIEW_STARTUP_TIMEOUT_S = 120;
 const DEFAULT_DATA_PREVIEW_EXECUTION_TIMEOUT_S = 30;
 const DEFAULT_DUCKDB_WASM_MEMORY_LIMIT_MB = 128;
+const DEFAULT_DUCKDB_WASM_IDLE_TIMEOUT_S = 300;
 
 /**
  * Parse a concurrency cap. `0` disables the cap (unlimited); unset falls back to
@@ -129,6 +130,7 @@ function dataPreviewFromEnv(
 	compute: SandboxProvider,
 	computeBackendValue: string,
 	experiments: ReadonlySet<Experiment>,
+	metrics?: Metrics,
 ): DataPreviewService | undefined {
 	const image = env.MARIMOHUB_DATA_PREVIEW_IMAGE?.trim();
 	if (env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() !== 'full') return undefined;
@@ -175,6 +177,12 @@ function dataPreviewFromEnv(
 				),
 				startupTimeoutMs,
 				executionTimeoutMs,
+				maxPoolSize: maxConcurrent,
+				idleTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS', {
+					dflt: DEFAULT_DUCKDB_WASM_IDLE_TIMEOUT_S,
+					allowZero: true,
+				}),
+				metrics,
 			})
 		: undefined;
 	return new DataPreviewService({
@@ -182,6 +190,7 @@ function dataPreviewFromEnv(
 		sandbox,
 		maxConcurrent,
 		maxConcurrentPerUser,
+		metrics,
 	});
 }
 
@@ -420,7 +429,7 @@ export function createFromEnv(
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
 	});
-	const dataPreview = dataPreviewFromEnv(env, compute, computeBackendValue, experiments);
+	const dataPreview = dataPreviewFromEnv(env, compute, computeBackendValue, experiments, metrics);
 	const deps: ApiDeps = {
 		services,
 		metrics,

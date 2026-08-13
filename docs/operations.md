@@ -147,10 +147,14 @@ contention (`catalog.cas.*`), session and reaper activity (`sessions.*`), and
 snapshot growth (`snapshots.*`, `maintenance.*`). Object browsing adds operation
 counts and latency (`object_browser.s3.*`), bytes read, keys scanned, metadata
 cache outcomes, and active/rejected download signals (`object_browser.download.*`).
-Their attributes are limited to fixed operation, mode, outcome, and error-code
-values; bucket names, object keys, queries, integration IDs, and user IDs are
-never metric attributes. These signals also still flush as one wide-event log
-line per maintenance cycle. `OTEL_METRICS_EXPORTER` selects the mode:
+Runtime-backed data previews emit
+executor selection (`data_preview.selected`) and DuckDB pool, initialization,
+execution, timing, row-count, and recycle signals (`data_preview.duckdb.*`).
+Attributes are limited to fixed operation, mode, outcome, error-code, executor,
+runtime, and recycle-reason values; bucket names, object keys, queries,
+integration IDs, and user IDs are never metric attributes. Maintenance signals
+also flush as one wide-event log line per cycle. `OTEL_METRICS_EXPORTER` selects
+the mode:
 
 - **`otlp`** (default): push over OTLP/HTTP whenever
   `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`) is

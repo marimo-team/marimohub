@@ -1,5 +1,5 @@
-import type { IntegrationId, ProjectId, SessionId, UserId } from '../../../ids';
-import type { TablePreview } from '../../../ports/integrations';
+import type { ProjectId, SessionId, UserId } from '../../../ids';
+import type { IntegrationVersionPin, TablePreview } from '../../../ports/integrations';
 import type { RenderOutput } from '../sdk';
 
 export type PreviewRuntimeFeature = 'iceberg-http';
@@ -26,12 +26,7 @@ export interface PythonPreviewProgram {
 	input: unknown;
 	maxRows: number;
 	render: RenderOutput;
-	integration: {
-		id: IntegrationId;
-		name: string;
-		kind: string;
-		version: number;
-	};
+	integration: IntegrationVersionPin;
 	sessionId: SessionId;
 	credentialVars?: PreviewCredentialVars;
 }
@@ -68,7 +63,7 @@ export interface DuckDBWasmRuntime {
 	readonly mode: 'worker' | 'inline';
 	readonly features: readonly PreviewRuntimeFeature[];
 	initialize(options: { memoryLimitMb: number }): Promise<void>;
-	execute(program: DuckDBPreviewProgram): Promise<TablePreview>;
+	execute(program: DuckDBPreviewProgram, signal?: AbortSignal): Promise<TablePreview>;
 	ping(): Promise<void>;
 	close(): Promise<void>;
 }

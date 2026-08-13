@@ -2,7 +2,7 @@ import { UnavailableError } from '../../../errors';
 import { InFlightWork } from '../../../concurrency';
 import { createSandboxId } from '../../../ids';
 import { withDeadline } from '../../../internal/async';
-import { assertPositiveInteger } from '../../../internal/validation';
+import { assertPositiveIntegers } from '../../../internal/validation';
 import { logOperationalError } from '../../../operationalLog';
 import type { TablePreview } from '../../../ports/integrations';
 import type { SandboxInstance, SandboxProvider } from '../../../ports/sandbox';
@@ -32,12 +32,10 @@ export class SandboxDataPreview {
 		private readonly compute: SandboxProvider,
 		private readonly options: SandboxDataPreviewOptions,
 	) {
-		for (const [name, value] of [
-			['startupTimeoutMs', options.startupTimeoutMs],
-			['executionTimeoutMs', options.executionTimeoutMs],
-		] as const) {
-			assertPositiveInteger(name, value);
-		}
+		assertPositiveIntegers({
+			startupTimeoutMs: options.startupTimeoutMs,
+			executionTimeoutMs: options.executionTimeoutMs,
+		});
 	}
 
 	available(): boolean {

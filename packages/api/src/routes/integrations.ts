@@ -2,6 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import {
 	INTEGRATION_CATEGORIES,
 	IntegrationId,
+	MAX_DATA_QUERY_SQL_BYTES,
 	createSessionId,
 	exchangeFederatedStorageEnv,
 	NotFoundError,
@@ -18,6 +19,7 @@ import type {
 	Project,
 	ProjectIntegrationsService,
 	OrgIntegrationsService,
+	SlidingWindowBudget,
 	TestIntegrationRequest,
 } from '@marimo-hub/core';
 import {
@@ -57,6 +59,7 @@ import {
 
 const IntegrationIdSchema = z.string().regex(IntegrationId.regex).refine(IntegrationId.is);
 const IntegrationNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
 
 const IidParam = z
 	.string()
@@ -510,6 +513,26 @@ const BrowsePreviewBody = z.object({
 	limit: z.number().int().positive().max(100).default(20),
 });
 
+const DataQueryBody = z
+	.object({
+		sql: z
+			.string()
+			.min(1)
+			.max(MAX_DATA_QUERY_SQL_BYTES)
+			.refine((value) => utf8ByteLength(value) <= MAX_DATA_QUERY_SQL_BYTES, {
+				message: `SQL exceeds the ${MAX_DATA_QUERY_SQL_BYTES}-byte limit.`,
+			}),
+	})
+	.strict();
+
+const DataQueryResultSchema = z
+	.object({
+		columns: z.array(z.string()),
+		rows: z.array(z.array(z.unknown())),
+		truncated: z.boolean(),
+	})
+	.openapi('IntegrationDataQueryResult');
+
 const browseCapability = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse',
@@ -615,6 +638,25 @@ const browseTablePreview = createRoute({
 	},
 });
 
+const runDataQuery = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/integrations/{iid}/browse/query',
+	tags: ['Integrations'],
+	summary: 'Run SQL against one integration (manager or above)',
+	description:
+		'Experimental, separately gated SQL execution. Each request uses a fresh isolated worker ' +
+		'or process with hard execution, row, and byte limits.',
+	request: { params: IntegrationIdParam, body: jsonBody(DataQueryBody) },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: DataQueryResultSchema }),
+			'Bounded query result',
+		),
+		...commonErrors(),
+		...errorResponses(404, 429),
+	},
+});
+
 const ObjectBucketValue = z
 	.string()
 	.min(1)
@@ -622,14 +664,14 @@ const ObjectBucketValue = z
 	.openapi({ param: { name: 'bucket', in: 'query' }, example: 'analytics-lake' });
 const ObjectPrefixValue = z
 	.string()
-	.refine((value) => new TextEncoder().encode(value).byteLength <= 1024, {
+	.refine((value) => utf8ByteLength(value) <= 1024, {
 		message: "Prefix exceeds S3's 1,024-byte UTF-8 limit.",
 	})
 	.openapi({ param: { name: 'prefix', in: 'query' }, example: 'events/2026/' });
 const ObjectKeyValue = z
 	.string()
 	.min(1)
-	.refine((value) => new TextEncoder().encode(value).byteLength <= 1024, {
+	.refine((value) => utf8ByteLength(value) <= 1024, {
 		message: "Key exceeds S3's 1,024-byte UTF-8 limit.",
 	})
 	.openapi({ param: { name: 'key', in: 'query' }, example: 'events/2026/part-001.jsonl' });
@@ -1357,41 +1399,46 @@ app.openapi(listIntegrationVersions, async (c) => {
 // The probe is a server-side request forger by construction, so beside the
 // probe's own global cap, each USER gets a sliding-window budget — one manager
 // cannot starve every other tenant on the replica.
-const testBudget = createSlidingWindowBudget<string>({ limit: 10, windowMs: 60_000 });
+const BUDGET_WINDOW_MS = 60_000;
+
+function createUserBudget(limit: number): SlidingWindowBudget<string> {
+	return createSlidingWindowBudget({ limit, windowMs: BUDGET_WINDOW_MS });
+}
+
+function assertBudget(budget: SlidingWindowBudget<string>, userId: string, message: string): void {
+	if (!budget.consume(userId)) throw new ResourceExhaustedError(message);
+}
+
+const testBudget = createUserBudget(10);
 // Sized against the browse probe's process-wide cap (360/min): a bounded Trino
 // statement spends at most 12 probe requests, so one user can hold at most 240
 // of the shared allowance.
-const createBrowseBudget = () => createSlidingWindowBudget<string>({ limit: 20, windowMs: 60_000 });
-const createObjectSearchBudget = () =>
-	createSlidingWindowBudget<string>({ limit: 5, windowMs: 60_000 });
-const createObjectPreviewBudget = () =>
-	createSlidingWindowBudget<string>({ limit: 10, windowMs: 60_000 });
-let browseBudget = createBrowseBudget();
-let objectSearchBudget = createObjectSearchBudget();
-let objectPreviewBudget = createObjectPreviewBudget();
+const integrationBudgetDefinitions = {
+	browse: { limit: 20, message: 'Too many browse requests — try again in a minute.' },
+	objectSearch: { limit: 5, message: 'Too many object searches — try again in a minute.' },
+	objectPreview: { limit: 10, message: 'Too many object previews — try again in a minute.' },
+	dataQuery: { limit: 5, message: 'Too many data queries — try again in a minute.' },
+} as const;
+
+type IntegrationBudgetName = keyof typeof integrationBudgetDefinitions;
+
+function createIntegrationBudgets(): Record<IntegrationBudgetName, SlidingWindowBudget<string>> {
+	return Object.fromEntries(
+		Object.entries(integrationBudgetDefinitions).map(([name, definition]) => [
+			name,
+			createUserBudget(definition.limit),
+		]),
+	) as Record<IntegrationBudgetName, SlidingWindowBudget<string>>;
+}
+
+let integrationBudgets = createIntegrationBudgets();
 
 function assertTestBudget(userId: string): void {
-	if (!testBudget.consume(userId)) {
-		throw new ResourceExhaustedError('Too many connection tests — try again in a minute.');
-	}
+	assertBudget(testBudget, userId, 'Too many connection tests — try again in a minute.');
 }
 
-function assertBrowseBudget(userId: string): void {
-	if (!browseBudget.consume(userId)) {
-		throw new ResourceExhaustedError('Too many browse requests — try again in a minute.');
-	}
-}
-
-function assertObjectSearchBudget(userId: string): void {
-	if (!objectSearchBudget.consume(userId)) {
-		throw new ResourceExhaustedError('Too many object searches — try again in a minute.');
-	}
-}
-
-function assertObjectPreviewBudget(userId: string): void {
-	if (!objectPreviewBudget.consume(userId)) {
-		throw new ResourceExhaustedError('Too many object previews — try again in a minute.');
-	}
+function assertIntegrationBudget(name: IntegrationBudgetName, userId: string): void {
+	assertBudget(integrationBudgets[name], userId, integrationBudgetDefinitions[name].message);
 }
 
 export function trackedTestBudgets(): number {
@@ -1399,9 +1446,7 @@ export function trackedTestBudgets(): number {
 }
 
 export function clearIntegrationBrowseStateForTests(): void {
-	browseBudget = createBrowseBudget();
-	objectSearchBudget = createObjectSearchBudget();
-	objectPreviewBudget = createObjectPreviewBudget();
+	integrationBudgets = createIntegrationBudgets();
 	browseCache.clear();
 	inflightBrowse.clear();
 }
@@ -1522,7 +1567,7 @@ app.openapi(browseNamespaces, async (c) => {
 		JSON.stringify([pid, iid, user.id, stateToken, 'namespaces', request]),
 		BROWSE_LIST_TTL_MS,
 		fresh === 'true',
-		() => assertBrowseBudget(user.id),
+		() => assertIntegrationBudget('browse', user.id),
 		() => integrations.browseNamespaces(pid, iid, request),
 	);
 	return c.json({ success: true, data }, 200);
@@ -1541,7 +1586,7 @@ app.openapi(browseTables, async (c) => {
 		JSON.stringify([pid, iid, user.id, stateToken, 'tables', namespace, request]),
 		BROWSE_LIST_TTL_MS,
 		fresh === 'true',
-		() => assertBrowseBudget(user.id),
+		() => assertIntegrationBudget('browse', user.id),
 		() => integrations.browseTables(pid, iid, splitNamespace(namespace), request),
 	);
 	return c.json({ success: true, data }, 200);
@@ -1559,7 +1604,7 @@ app.openapi(browseTableSchema, async (c) => {
 		JSON.stringify([pid, iid, user.id, user.email, stateToken, 'schema', namespace, table]),
 		BROWSE_SCHEMA_TTL_MS,
 		fresh === 'true',
-		() => assertBrowseBudget(user.id),
+		() => assertIntegrationBudget('browse', user.id),
 		() =>
 			integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table, {
 				query_user: user.email,
@@ -1578,7 +1623,7 @@ app.openapi(browseTablePreview, async (c) => {
 	const project = await assertProjectRole(deps.services.projects, pid, user, 'editor', deps.policy);
 	const wif = deps.wif;
 	if (!preview) throw new NotFoundError('Row preview is not enabled on this deployment');
-	assertBrowseBudget(user.id);
+	assertIntegrationBudget('browse', user.id);
 	const capability = await integrations.browseCapability(pid, iid);
 	if (!capability.metadata) {
 		throw new ValidationError(capability.reason ?? 'This integration cannot be browsed.');
@@ -1613,6 +1658,42 @@ app.openapi(browseTablePreview, async (c) => {
 	return c.json({ success: true, data }, 200);
 });
 
+app.openapi(runDataQuery, async (c) => {
+	c.header('Cache-Control', 'no-store');
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, iid } = c.req.valid('param');
+	const { sql } = c.req.valid('json');
+	const { integrations } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	if (deps.dataBrowser?.query !== true) {
+		throw new NotFoundError('Run SQL is not enabled on this deployment');
+	}
+	assertIntegrationBudget('dataQuery', user.id);
+	const data = await integrations.runDataQuery(
+		pid,
+		iid,
+		{ userId: user.id, email: user.email },
+		createSessionId(),
+		sql,
+	);
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+		'integration.query',
+		() =>
+			deps.services.events.append({
+				event: 'integration.query',
+				actor: user.id,
+				project_id: pid,
+				integration_id: iid,
+				sql_bytes: utf8ByteLength(sql),
+				row_count: data.rows.length,
+				truncated: data.truncated,
+			}),
+	);
+	return c.json({ success: true, data }, 200);
+});
+
 const OBJECT_METADATA_TTL_MS = 15_000;
 
 app.openapi(browseObjectBuckets, async (c) => {
@@ -1634,7 +1715,7 @@ app.openapi(browseObjectBuckets, async (c) => {
 		JSON.stringify([pid, iid, user.id, stateToken, 'object-buckets', request]),
 		OBJECT_METADATA_TTL_MS,
 		fresh === 'true',
-		() => assertBrowseBudget(user.id),
+		() => assertIntegrationBudget('browse', user.id),
 		() => runObjectBrowse(() => integrations.browseObjectBuckets(pid, iid, context, request)),
 		{ metrics: deps.metrics, operation: 'list_buckets' },
 	);
@@ -1665,7 +1746,7 @@ app.openapi(browseObjects, async (c) => {
 		JSON.stringify([pid, iid, user.id, stateToken, 'objects', request]),
 		OBJECT_METADATA_TTL_MS,
 		fresh === 'true',
-		() => assertBrowseBudget(user.id),
+		() => assertIntegrationBudget('browse', user.id),
 		() => runObjectBrowse(() => integrations.browseObjects(pid, iid, context, request)),
 		{ metrics: deps.metrics, operation: 'list_objects' },
 	);
@@ -1703,7 +1784,7 @@ app.openapi(searchObjects, async (c) => {
 	if (capability.search !== 'bounded-key-name') {
 		throw new ValidationError('Object search is unavailable.');
 	}
-	assertObjectSearchBudget(user.id);
+	assertIntegrationBudget('objectSearch', user.id);
 	const formats = query.formats
 		?.split(',')
 		.map((value) => value.trim())
@@ -1740,7 +1821,7 @@ app.openapi(browseObjectHead, async (c) => {
 		c.req.raw.signal,
 	);
 	const request = { bucket, key, ...(version_id ? { version_id } : {}) };
-	assertBrowseBudget(user.id);
+	assertIntegrationBudget('browse', user.id);
 	const data = await runObjectBrowse(() =>
 		integrations.browseObjectDetail(pid, iid, context, request),
 	);
@@ -1762,7 +1843,7 @@ app.openapi(browseObjectVersions, async (c) => {
 		c.req.raw.signal,
 	);
 	if (!capability.versions) throw new ValidationError('Object versions are unavailable.');
-	assertBrowseBudget(user.id);
+	assertIntegrationBudget('browse', user.id);
 	const data = await runObjectBrowse(() =>
 		integrations.browseObjectVersions(pid, iid, context, {
 			bucket,
@@ -1791,7 +1872,7 @@ app.openapi(browseObjectPreview, async (c) => {
 		c.req.raw.signal,
 	);
 	if (!capability.preview) throw new NotFoundError('Object preview is not enabled.');
-	assertObjectPreviewBudget(user.id);
+	assertIntegrationBudget('objectPreview', user.id);
 	const contentParams = new URLSearchParams({ bucket: body.bucket, key: body.key, inline: 'true' });
 	if (body.version_id) contentParams.set('version_id', body.version_id);
 	const data = await runObjectBrowse(() =>

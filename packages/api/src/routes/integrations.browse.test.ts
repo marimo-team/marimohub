@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from '@hono/zod-openapi';
 import {
 	AesGcmSecretCodec,
+	DataQueryService,
 	DataPreviewService,
 	defaultRegistry,
 	defineIntegration,
@@ -12,7 +13,12 @@ import {
 	UnavailableError,
 	zSecret,
 } from '@marimo-hub/core';
-import type { ObjectBrowser, PythonPreviewProgram, TablePreview } from '@marimo-hub/core';
+import type {
+	DataQueryExecution,
+	ObjectBrowser,
+	PythonPreviewProgram,
+	TablePreview,
+} from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
@@ -191,7 +197,11 @@ const objectBrowser: ObjectBrowser<'s3'> = {
 	}),
 };
 
-function browserDeps(bucket: MemoryBucket, dataPreview?: DataPreviewService) {
+function browserDeps(
+	bucket: MemoryBucket,
+	dataPreview?: DataPreviewService,
+	dataQuery?: DataQueryService,
+) {
 	const registry = new IntegrationRegistry();
 	registry.register(browsyKind);
 	registry.register(sandboxBrowsyKind);
@@ -205,12 +215,14 @@ function browserDeps(bucket: MemoryBucket, dataPreview?: DataPreviewService) {
 		browseProbe: stubProbe,
 		objectBrowsers: { s3: objectBrowser },
 		dataPreview,
+		dataQuery,
 	};
 	return {
 		integrations: new ProjectIntegrationsStore(options),
 		orgIntegrations: new OrgIntegrationsStore(options),
 		dataBrowser: {
 			preview: false,
+			query: false,
 			objectBrowser: {
 				allowServerAmbientCredentials: false,
 				maxConcurrentDownloads: 16,
@@ -219,6 +231,33 @@ function browserDeps(bucket: MemoryBucket, dataPreview?: DataPreviewService) {
 			},
 		},
 	};
+}
+
+function queryService(
+	executions: DataQueryExecution[],
+	execute = async () => ({
+		columns: ['value'],
+		rows: [[1]],
+		truncated: false,
+	}),
+) {
+	return new DataQueryService({
+		executorFactory: {
+			create: async () => ({
+				runtime: 'worker',
+				execute: async (request) => {
+					executions.push(request);
+					return execute();
+				},
+				terminate: () => {},
+			}),
+		},
+		maxConcurrent: 2,
+		maxConcurrentPerUser: 1,
+		maxRows: 100,
+		maxBytes: 64 * 1024,
+		executionTimeoutMs: 1000,
+	});
 }
 
 function previewService(
@@ -691,6 +730,151 @@ describe('Data browser routes', () => {
 			await request('GET', `/projects/${pid}/events`),
 		);
 		expect(events).toContainEqual(expect.objectContaining({ event: 'integration.preview' }));
+	});
+
+	it('runs SQL only through the separate gated executor and audits without SQL text', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const executions: DataQueryExecution[] = [];
+		const queryDeps = browserDeps(bucket, undefined, queryService(executions));
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+		const sql = "select 'audit-secret-must-not-leak'";
+
+		const response = await query(
+			'POST',
+			`/projects/${pid}/integrations/${created.id}/browse/query`,
+			{ sql },
+		);
+		expect(response.headers.get('cache-control')).toBe('no-store');
+		expect(await expectOk(response)).toEqual({
+			columns: ['value'],
+			rows: [[1]],
+			truncated: false,
+		});
+		expect(executions).toHaveLength(1);
+		expect(executions[0]).toMatchObject({
+			sql,
+			accessMode: 'read-only',
+			connection: {
+				integration: { id: created.id, name: 'lake', kind: 'browsy', version: 1 },
+			},
+		});
+		const connection = executions[0]?.connection;
+		expect(Object.isFrozen(connection)).toBe(true);
+		expect(Object.isFrozen(connection?.files)).toBe(true);
+		expect(Object.isFrozen(connection?.files[0])).toBe(true);
+		expect(Object.isFrozen(connection?.vars)).toBe(true);
+		expect(Object.isFrozen(connection?.integration)).toBe(true);
+
+		const eventsResponse = await query('GET', `/projects/${pid}/events`);
+		const eventsText = await eventsResponse.text();
+		expect(eventsText).toContain('integration.query');
+		expect(eventsText).not.toContain('audit-secret-must-not-leak');
+	});
+
+	it('keeps Run SQL unavailable unless its independent gate and executor are both present', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const url = `/projects/${pid}/integrations/${created.id}/browse/query`;
+		for (let index = 0; index < 6; index++) {
+			await expectError(await request('POST', url, { sql: 'select 1' }), 404, 'NOT_FOUND');
+		}
+
+		deps.dataBrowser.query = true;
+		await expectError(await request('POST', url, { sql: 'select 1' }), 422, 'VALIDATION_ERROR');
+	});
+
+	it('rejects empty and oversized UTF-8 SQL before invoking the executor', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const executions: DataQueryExecution[] = [];
+		const queryDeps = browserDeps(bucket, undefined, queryService(executions));
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+		const url = `/projects/${pid}/integrations/${created.id}/browse/query`;
+
+		await expectError(await query('POST', url, { sql: '   ' }), 422, 'VALIDATION_ERROR');
+		await expectError(
+			await query('POST', url, { sql: 'é'.repeat(20_000) }),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(executions).toHaveLength(0);
+	});
+
+	it('redacts executor failures and does not audit unsuccessful SQL', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const executions: DataQueryExecution[] = [];
+		const queryDeps = browserDeps(
+			bucket,
+			undefined,
+			queryService(executions, async () => {
+				throw new Error('password=hunter2');
+			}),
+		);
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+
+		const response = await query(
+			'POST',
+			`/projects/${pid}/integrations/${created.id}/browse/query`,
+			{ sql: 'select secret' },
+		);
+		expect(response.headers.get('cache-control')).toBe('no-store');
+		const body = await response.text();
+		expect(response.status).toBe(503);
+		expect(body).not.toContain('hunter2');
+		expect(executions).toHaveLength(1);
+
+		const eventsResponse = await query('GET', `/projects/${pid}/events`);
+		expect(await eventsResponse.text()).not.toContain('integration.query');
+	});
+
+	it('does not execute or audit SQL for a disabled integration', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		await expectOk(
+			await request('PATCH', `/projects/${pid}/integrations/${created.id}`, { enabled: false }),
+		);
+		const executions: DataQueryExecution[] = [];
+		const queryDeps = browserDeps(bucket, undefined, queryService(executions));
+		queryDeps.dataBrowser.query = true;
+		const query = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+
+		await expectError(
+			await query('POST', `/projects/${pid}/integrations/${created.id}/browse/query`, {
+				sql: 'select 1',
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(executions).toHaveLength(0);
+		const eventsResponse = await query('GET', `/projects/${pid}/events`);
+		expect(await eventsResponse.text()).not.toContain('integration.query');
+	});
+
+	it('uses manager authorization and a rate limit separate from browsing', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const editor = uid('query-editor');
+		await expectOk(
+			await request('POST', `/projects/${pid}/members`, { user_id: editor, role: 'editor' }),
+			201,
+		);
+		const executions: DataQueryExecution[] = [];
+		const queryDeps = browserDeps(bucket, undefined, queryService(executions));
+		const asEditor = createTestApi({ bucket, userId: editor, deps: queryDeps }).request;
+		const asManager = createTestApi({ bucket, userId: ACTOR, deps: queryDeps }).request;
+		const url = `/projects/${pid}/integrations/${created.id}/browse/query`;
+
+		await expectError(await asEditor('POST', url, { sql: 'select 1' }), 403, 'FORBIDDEN');
+		queryDeps.dataBrowser.query = true;
+		for (let index = 0; index < 5; index++) {
+			await expectOk(await asManager('POST', url, { sql: `select ${index}` }));
+		}
+		await expectError(await asManager('POST', url, { sql: 'select 6' }), 429, 'RESOURCE_EXHAUSTED');
 	});
 
 	it('passes the authenticated email as the native browse identity', async () => {

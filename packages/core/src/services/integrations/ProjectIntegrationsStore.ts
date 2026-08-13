@@ -19,6 +19,7 @@ import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import type { DataPreviewService } from './data-preview/DataPreviewService';
+import type { DataQueryResult, DataQueryService } from './data-query';
 import type {
 	PreviewCredentialVars,
 	PreviewProgramAvailability,
@@ -234,6 +235,7 @@ export interface IntegrationsStoreOptions {
 	now?: () => string;
 	metrics?: Metrics;
 	dataPreview?: DataPreviewService;
+	dataQuery?: DataQueryService;
 }
 
 /**
@@ -251,6 +253,7 @@ class ScopedIntegrationsStore {
 	private readonly now: () => string;
 	private readonly metrics: Metrics;
 	private readonly dataPreview?: DataPreviewService;
+	private readonly dataQuery?: DataQueryService;
 
 	constructor(options: IntegrationsStoreOptions) {
 		this.bucket = options.bucket;
@@ -265,6 +268,7 @@ class ScopedIntegrationsStore {
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.metrics = options.metrics ?? noopMetrics;
 		this.dataPreview = options.dataPreview;
+		this.dataQuery = options.dataQuery;
 	}
 
 	listKinds(): KindDescriptor[] {
@@ -929,6 +933,32 @@ class ScopedIntegrationsStore {
 			);
 		}
 		return this.dataPreview.preview(principal.userId, programs);
+	}
+
+	async runDataQuery(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		projectId: ProjectId,
+		principal: { userId: UserId; email: string },
+		sessionId: SessionRenderContext['sessionId'],
+		sql: string,
+	): Promise<DataQueryResult> {
+		if (!this.dataQuery) {
+			throw new ValidationError('Run SQL is not enabled on this deployment.');
+		}
+		const head = await this.getHead(scope, id);
+		if (!head.enabled) throw new ValidationError(`Integration "${head.name}" is disabled.`);
+		const rendered = await this.renderOne(scope, head, projectId, { sessionId, principal });
+		const bundled = bundleIntegrations([rendered], sessionId);
+		const connection = Object.freeze({
+			files: Object.freeze(bundled.files.map((file) => Object.freeze({ ...file }))),
+			vars: Object.freeze({ ...bundled.vars }),
+			integration: Object.freeze({ ...bundled.attachments[0] }),
+		});
+		return this.dataQuery.query(principal.userId, {
+			sql,
+			connection,
+		});
 	}
 
 	async browseObjectBuckets(
@@ -1677,6 +1707,18 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 				request,
 				credentialVars,
 			),
+		);
+	}
+
+	runDataQuery(
+		projectId: ProjectId,
+		id: IntegrationId,
+		principal: { userId: UserId; email: string },
+		sessionId: SessionRenderContext['sessionId'],
+		sql: string,
+	): Promise<DataQueryResult> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.runDataQuery(scope, id, projectId, principal, sessionId, sql),
 		);
 	}
 

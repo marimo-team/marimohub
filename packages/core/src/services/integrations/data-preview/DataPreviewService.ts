@@ -1,6 +1,8 @@
 import { ResourceExhaustedError, UnavailableError, ValidationError } from '../../../errors';
 import { InFlightWork, KeyedAdmission } from '../../../concurrency';
 import type { UserId } from '../../../ids';
+import { noopMetrics } from '../../../ports/metrics';
+import type { Metrics } from '../../../ports/metrics';
 import type { TablePreview } from '../../../ports/integrations';
 import type { DuckDBWasmDataPreview } from './DuckDBWasmDataPreview';
 import type { SandboxDataPreview } from './SandboxDataPreview';
@@ -18,14 +20,18 @@ export interface DataPreviewServiceOptions {
 	sandbox?: Pick<SandboxDataPreview, 'available' | 'check' | 'preview' | 'close'>;
 	maxConcurrent: number;
 	maxConcurrentPerUser: number;
+	metrics?: Metrics;
 }
 
 export class DataPreviewService {
 	private readonly admission: KeyedAdmission<UserId>;
 	private readonly inFlight = new InFlightWork();
+	private readonly metrics: Metrics;
 	private closed = false;
+	private closing: Promise<void> | undefined;
 
 	constructor(private readonly options: DataPreviewServiceOptions) {
+		this.metrics = options.metrics ?? noopMetrics;
 		this.admission = new KeyedAdmission(options.maxConcurrent, options.maxConcurrentPerUser, {
 			global: () =>
 				new ResourceExhaustedError('The deployment data-preview limit is currently full.'),
@@ -68,18 +74,26 @@ export class DataPreviewService {
 		);
 	}
 
-	async close(): Promise<void> {
-		if (this.closed) return;
+	close(): Promise<void> {
+		if (this.closing) return this.closing;
 		this.closed = true;
+		this.closing = this.closeAll();
+		return this.closing;
+	}
+
+	private async closeAll(): Promise<void> {
+		const duckdbClosing = Promise.resolve().then(() => this.options.duckdbWasm?.close());
 		await this.inFlight.drain();
-		await Promise.allSettled([this.options.duckdbWasm?.close(), this.options.sandbox?.close()]);
+		await Promise.allSettled([duckdbClosing, this.options.sandbox?.close()]);
 	}
 
 	private async executeAvailableProgram(programs: PreviewPrograms): Promise<TablePreview> {
 		if (programs.duckdbWasm && this.options.duckdbWasm?.supports(programs.duckdbWasm)) {
+			this.metrics.increment('data_preview.selected', 1, { executor: 'duckdb_wasm' });
 			return this.options.duckdbWasm.preview(programs.duckdbWasm);
 		}
 		if (programs.python && this.options.sandbox?.available()) {
+			this.metrics.increment('data_preview.selected', 1, { executor: 'sandbox' });
 			return this.options.sandbox.preview(programs.python);
 		}
 		throw new ValidationError('This integration does not support row preview on this deployment.');

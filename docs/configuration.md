@@ -516,6 +516,7 @@ Integration management and session injection are enabled. Project entries use
 | `MARIMOHUB_DATA_PREVIEW_EXECUTION_TIMEOUT_SECONDS` | Maximum time for a DuckDB-Wasm or fixed PyIceberg preview. | — | `30` | — |
 | `MARIMOHUB_DUCKDB_WASM_RUNTIME` | Runtime selected by the `duckdb-wasm-preview` experiment. `auto` uses a worker thread and falls back to inline only when workers are structurally unsupported. `worker` and `inline` force one mode. | — | `auto` | — |
 | `MARIMOHUB_DUCKDB_WASM_MEMORY_LIMIT_MB` | DuckDB engine memory limit in MiB. This does not cap all WebAssembly and Arrow allocations. | — | `128` | — |
+| `MARIMOHUB_DUCKDB_WASM_IDLE_TIMEOUT_SECONDS` | Maximum idle time before a warm DuckDB-Wasm engine is released. Set to 0 to keep warm engines until shutdown. | — | `300` | — |
 | `MARIMOHUB_OBJECT_BROWSER_ALLOW_SERVER_AMBIENT_CREDENTIALS` | Allow editors to browse ambient-auth S3 integrations with the control-plane AWS identity when compatible project WIF credentials are unavailable. Keep this off unless that identity is intentionally available to project editors. | — | `false` | — |
 | `MARIMOHUB_OBJECT_BROWSER_METADATA_TIMEOUT_SECONDS` | Maximum time for one object listing or metadata operation, including DNS resolution. | — | `30` | — |
 | `MARIMOHUB_OBJECT_BROWSER_PREVIEW_TIMEOUT_SECONDS` | Maximum time for one bounded object preview, including DNS resolution and ranged reads. | — | `30` | — |

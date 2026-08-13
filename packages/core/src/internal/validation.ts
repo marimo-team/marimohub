@@ -11,3 +11,7 @@ export function assertPositiveInteger(name: string, value: number): void {
 		throw new RangeError(`${name} must be a positive integer`);
 	}
 }
+
+export function assertPositiveIntegers(values: Readonly<Record<string, number>>): void {
+	for (const [name, value] of Object.entries(values)) assertPositiveInteger(name, value);
+}

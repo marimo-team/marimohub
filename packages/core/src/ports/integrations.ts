@@ -280,10 +280,17 @@ export interface SessionRenderContext {
 	principal: { userId: UserId; email: string };
 }
 
+export interface IntegrationVersionPin {
+	id: IntegrationId;
+	name: string;
+	kind: string;
+	version: number;
+}
+
 /** Files, variables, and audit pins produced for session provisioning. */
 export interface SessionRender {
 	files: { path: string; content: string }[];
 	vars: Record<string, string>;
 	/** Version pins persisted on the session record. */
-	attachments: { id: IntegrationId; name: string; kind: string; version: number }[];
+	attachments: IntegrationVersionPin[];
 }

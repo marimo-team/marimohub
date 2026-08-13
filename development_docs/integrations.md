@@ -166,6 +166,16 @@ runtime-neutral orchestration seam. The Node implementation supports worker and
 inline execution, locks configuration, disables external access, and runs each
 result query in a read-only transaction. It exposes no remote-data feature yet:
 DuckDB extension requests must not bypass the guarded integration transport.
+The installed Node binding's file callbacks are synchronous and its HTTP and S3
+protocols are unsupported, while `IntegrationProbe.fetch` is asynchronous. A
+future parent-worker bridge must revalidate catalog requests, redirects, and
+vended object URLs. Until its live conformance fixture passes, the runtime
+advertises no Iceberg HTTP support and rejects remote protocols before they
+reach the vendor runtime.
+`MARIMOHUB_TEST_DUCKDB_WASM_ICEBERG_URI` and
+`MARIMOHUB_TEST_DUCKDB_WASM_ICEBERG_TABLE` enable the live scan acceptance
+suite. Do not add them to CI until the fixture can assert that all catalog,
+redirect, and vended object requests crossed the parent probe.
 
 The sandbox adapter renders only the selected integration. It uses the image
 from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It
@@ -173,7 +183,16 @@ also injects applicable WIF credentials.
 
 Per-user and process-wide limits control admission across both executors.
 Deadlines bound startup and execution. A `finally` block destroys each sandbox;
-DuckDB failures poison and close the reusable engine before later traffic.
+DuckDB failures poison and close the affected engine slot before later traffic.
+
+Run SQL has a separate, fail-closed `DataQueryService` contract and must not
+reuse trusted preview programs. `POST …/browse/query` requires a manager role,
+uses its own request budget, returns `Cache-Control: no-store`, and audits only
+query size and result counts. Each request must receive a fresh disposable
+worker or process with read-only access and SQL, row, byte, concurrency, and
+deadline limits; inline execution is forbidden. No executor is composed yet,
+so deployments cannot enable the route until an isolated runtime implements
+that contract.
 
 All network access must use the injected browse probe. This probe has a separate
 request budget and a larger response limit than the connection-test probe.

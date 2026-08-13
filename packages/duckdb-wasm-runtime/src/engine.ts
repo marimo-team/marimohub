@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import * as duckdb from '@duckdb/duckdb-wasm/blocking';
 import type { DuckDBPreviewProgram, TablePreview } from '@marimo-hub/core';
+import { createFailClosedNodeRuntime } from './networkPolicy.ts';
 
 const MAX_RESULT_BYTES = 2 * 1024 * 1024;
 
@@ -18,7 +19,7 @@ export class BlockingDuckDBEngine {
 				mvp: { mainModule, mainWorker: '' },
 			},
 			new duckdb.VoidLogger(),
-			duckdb.NODE_RUNTIME,
+			createFailClosedNodeRuntime(),
 		);
 		await db.instantiate();
 		db.open({ path: ':memory:' });
