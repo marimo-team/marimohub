@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { NotebookDetail } from '@/types';
 import {
+	ENTRY_NOTEBOOK_PATTERN,
 	gitBranchUrl,
 	gitCommitUrl,
 	gitCoords,
@@ -188,6 +189,20 @@ describe('isRepoInput', () => {
 describe('shortCommit', () => {
 	it('abbreviates commits to 7 characters', () => {
 		expect(shortCommit('abc123def4567890')).toBe('abc123d');
+	});
+});
+
+describe('ENTRY_NOTEBOOK_PATTERN', () => {
+	it('accepts every marimo notebook extension, at the root or nested', () => {
+		for (const path of ['app.py', 'docs/page.md', 'page.markdown', 'reports/q3.qmd']) {
+			expect(path).toMatch(ENTRY_NOTEBOOK_PATTERN);
+		}
+	});
+
+	it('rejects other extensions, stemless dotfiles, and case mismatches (server parity)', () => {
+		for (const path of ['app.txt', 'notes.ipynb', 'app', '.md', 'docs/.qmd', 'page.MD']) {
+			expect(path).not.toMatch(ENTRY_NOTEBOOK_PATTERN);
+		}
 	});
 });
 

@@ -55,9 +55,10 @@ interface ModeLaunch {
 const LAUNCH_MODES: Record<SessionMode, ModeLaunch> = {
 	edit: {
 		subcommand: 'edit',
-		// --convert opens a non-marimo file (e.g. a plain script); no-op on real
-		// marimo notebooks, so it's safe to always pass.
-		flags: (p) => `--convert ${commonFlags(p)}`,
+		// --convert opens a non-marimo .py file (e.g. a plain script); no-op on real
+		// marimo notebooks, so it's safe to always pass for .py. Its fallback can
+		// rewrite the file as Python, so never pass it for md/qmd notebooks.
+		flags: (p) => `${p.notebookFile.endsWith('.py') ? '--convert ' : ''}${commonFlags(p)}`,
 	},
 	app: {
 		subcommand: 'run',

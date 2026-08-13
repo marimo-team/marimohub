@@ -56,6 +56,9 @@ describe('remote workspace helpers', () => {
 		expect(normalizeWorkspaceRootPath(' apps/ ')).toBe('apps');
 		expect(normalizeWorkspaceRootPath(undefined)).toBe('');
 		expect(normalizeEntryNotebook(' apps/main.py ')).toBe('apps/main.py');
+		expect(normalizeEntryNotebook('docs/page.md')).toBe('docs/page.md');
+		expect(normalizeEntryNotebook('docs/page.markdown')).toBe('docs/page.markdown');
+		expect(normalizeEntryNotebook('docs/page.qmd')).toBe('docs/page.qmd');
 
 		expect(isSafeWorkspacePath('data/cars.csv')).toBe(true);
 		expect(isSafeWorkspacePath('', true)).toBe(true);
@@ -86,9 +89,30 @@ describe('remote workspace helpers', () => {
 		expect(isSafeWorkspacePath('.')).toBe(false);
 	});
 
-	it('normalizeEntryNotebook rejects a non-.py path', () => {
+	it('normalizeEntryNotebook rejects a non-notebook path', () => {
 		expect(() => normalizeEntryNotebook('apps/main.txt')).toThrow(BadRequestError);
 		expect(() => normalizeEntryNotebook('apps/main')).toThrow(BadRequestError);
+		expect(() => normalizeEntryNotebook('apps/main.md.bak')).toThrow(BadRequestError);
+		// Not in NOTEBOOK_FILE_EXTENSIONS yet — the runtime can't open it.
+		expect(() => normalizeEntryNotebook('apps/main.ipynb')).toThrow(BadRequestError);
+	});
+
+	it('normalizeEntryNotebook matches marimo suffix semantics on dotfiles and case', () => {
+		// `Path('.md').suffix` is empty — marimo refuses a stemless dotfile.
+		expect(() => normalizeEntryNotebook('.md')).toThrow(BadRequestError);
+		expect(() => normalizeEntryNotebook('docs/.qmd')).toThrow(BadRequestError);
+		// `Path('..md').suffix` is `.md` (stem `.`), so marimo accepts it.
+		expect(normalizeEntryNotebook('..md')).toBe('..md');
+		// Suffix matching is case-sensitive, as in `Path.suffix`.
+		expect(() => normalizeEntryNotebook('page.MD')).toThrow(BadRequestError);
+		expect(() => normalizeEntryNotebook('page.Py')).toThrow(BadRequestError);
+	});
+
+	it('normalizeEntryNotebook rejects traversal even with a notebook extension', () => {
+		expect(() => normalizeEntryNotebook('../page.md')).toThrow(BadRequestError);
+		expect(() => normalizeEntryNotebook('docs/../page.md')).toThrow(BadRequestError);
+		expect(() => normalizeEntryNotebook('/docs/page.md')).toThrow(BadRequestError);
+		expect(() => normalizeEntryNotebook('docs\\page.md')).toThrow(BadRequestError);
 	});
 
 	it('toSyncedWorkspaceFileMap rejects an empty archive', () => {
