@@ -106,10 +106,12 @@ function PageFallback() {
 }
 
 function StandardLayout() {
+	// h-dvh (not min-h-dvh): pages scroll inside <main>, never the document,
+	// which keeps the header and footer pinned.
 	return (
-		<div className="flex min-h-dvh flex-col">
+		<div className="flex h-dvh flex-col">
 			<Header />
-			<main className="flex flex-1 overflow-hidden">
+			<main className="flex min-h-0 flex-1 overflow-hidden">
 				<AppErrorBoundary>
 					<Suspense fallback={<PageFallback />}>
 						<Routes>

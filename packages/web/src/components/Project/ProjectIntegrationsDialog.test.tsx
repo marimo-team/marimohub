@@ -491,6 +491,28 @@ describe('ProjectIntegrationsPanel — create flow', () => {
 		expect(calls.find((c) => c.method === 'POST')).toBeUndefined();
 	});
 
+	// Regression: react-aria's default validationBehavior="native" mirrored the
+	// error into the input's native validity, which blocked every later form
+	// submit — so submit-time validation could never re-run and clear the error.
+	it('lets a corrected field submit after a failed validation', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({}, { kinds: [postgresKind], entries: [] });
+
+		await user.click(await screen.findByRole('button', { name: /add integration/i }));
+		await user.click(screen.getByText('Postgres'));
+		await user.type(screen.getByLabelText('Name'), 'prod');
+		await user.click(screen.getByRole('button', { name: /add integration/i }));
+		expect(await screen.findByText('Required')).toBeInTheDocument();
+
+		await user.type(screen.getByLabelText('Host'), 'db.internal');
+		await user.click(screen.getByRole('button', { name: /add integration/i }));
+
+		await waitFor(() => {
+			expect(calls.find((c) => c.method === 'POST')).toBeTruthy();
+		});
+		expect(screen.queryByText('Required')).not.toBeInTheDocument();
+	});
+
 	it('creates a passwordless ClickHouse integration without a configured secret source', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({}, { kinds: [clickhouseKind], entries: [] });

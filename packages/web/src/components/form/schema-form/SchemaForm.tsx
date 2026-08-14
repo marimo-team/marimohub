@@ -227,6 +227,8 @@ function TextAreaField({
 		<AriaTextField
 			className="flex flex-col gap-1.5"
 			isInvalid={!!error}
+			// See ui/TextField: "native" would block onSubmit while the error shows.
+			validationBehavior="aria"
 			value={value}
 			onChange={onChange}
 		>

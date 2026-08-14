@@ -1,9 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
+import { Button as AriaButton, Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
 import { toast } from 'sonner';
-import { ArrowUp, Check, Copy, Download, File, Folder, NotebookPen, Search } from 'lucide-react';
+import {
+	ArrowUp,
+	Check,
+	ChevronRight,
+	Copy,
+	Download,
+	File,
+	Folder,
+	HardDrive,
+	Link2,
+	NotebookPen,
+	Search,
+	X,
+} from 'lucide-react';
 import {
 	objectContentUrl,
 	useObjectBucketsQuery,
@@ -13,7 +26,16 @@ import {
 	useObjectsQuery,
 	useObjectVersionsQuery,
 } from '@/api/hooks';
-import { Button, Chip, EmptyState, IconButton, Skeleton, TextField } from '@/components/ui';
+import {
+	Button,
+	Chip,
+	EmptyState,
+	IconButton,
+	Skeleton,
+	TextField,
+	Tooltip,
+} from '@/components/ui';
+import { iconControlClass } from '@/components/ui/iconControl';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { errorMessage } from '@/lib/errors';
 import { cn, logNever } from '@/lib/utils';
@@ -40,6 +62,14 @@ interface ObjectBrowserProps {
 	rootKind: ObjectRootKind;
 	uriScheme: ObjectUriScheme;
 }
+
+const rowGridClass =
+	'grid grid-cols-[1.75rem_minmax(0,1fr)_5rem_9.5rem] items-center gap-3 max-md:grid-cols-[1.75rem_minmax(0,1fr)_5rem]';
+
+// Every crumb — button or text — shares one h-7 box (mobile min-h-11
+// overridden), so navigating never changes the toolbar height.
+const crumbTextClass = 'flex h-7 min-w-0 items-center px-1.5';
+const crumbButtonClass = 'h-7 px-1.5 max-md:min-h-7';
 
 export function ObjectBrowser({
 	projectId,
@@ -205,76 +235,107 @@ export function ObjectBrowser({
 		rows[next].focus();
 	};
 
+	const crumbs = prefixParts(prefix);
+
 	return (
-		<div className="grid min-h-0 grid-cols-[minmax(20rem,1fr)_minmax(0,1.25fr)] gap-4 max-lg:grid-cols-1">
-			<section className="flex min-h-0 flex-col gap-3 overflow-hidden rounded-xl border bg-card p-3">
-				{bucket === '' ? (
-					<div className="min-h-0 overflow-y-auto">
-						<p className="mb-2 text-xs font-medium text-muted-foreground">{rootLabel.plural}</p>
-						{buckets.data === undefined ? (
-							buckets.error ? (
-								<p className="p-3 text-sm text-destructive">{errorMessage(buckets.error)}</p>
+		<div className="flex h-full min-h-0 flex-col">
+			<section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
+				<div className="flex flex-col gap-2 border-b p-3">
+					<div className="flex flex-wrap items-center justify-between gap-2">
+						<nav
+							aria-label="Object location"
+							className="flex min-w-0 flex-wrap items-center gap-0.5 text-sm"
+						>
+							{bucket === '' ? (
+								<span className={cn(crumbTextClass, 'gap-1.5 font-medium')}>
+									<HardDrive className="size-4 text-muted-foreground" aria-hidden />
+									{rootLabel.plural}
+								</span>
 							) : (
-								<Skeleton className="h-9 w-full" />
-							)
-						) : !buckets.error && bucketItems.length === 0 && !buckets.hasNextPage ? (
-							<EmptyState
-								icon={<Folder />}
-								message={`No ${rootLabel.plural.toLocaleLowerCase()} available`}
-								description={`The integration credentials did not return an accessible ${rootLabel.singular}.`}
-							/>
-						) : (
-							<>
-								{bucketItems.map((item) => (
-									<button
-										key={item.name}
-										type="button"
-										onClick={() => selectBucket(item.name)}
-										className="flex w-full touch-manipulation items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11"
-									>
-										<Folder className="size-4" aria-hidden />
-										<span className="truncate">{item.name}</span>
-										{item.configured && <Chip className="ml-auto">configured</Chip>}
-									</button>
-								))}
-								{buckets.error && (
-									<p className="p-3 text-sm text-destructive">{errorMessage(buckets.error)}</p>
-								)}
-								{buckets.hasNextPage && (
-									<Button
-										className="mt-2 w-full"
-										isDisabled={buckets.isFetchingNextPage}
-										onPress={() => void buckets.fetchNextPage()}
-									>
-										{buckets.isFetchingNextPage
-											? `Loading ${rootLabel.plural.toLocaleLowerCase()}…`
-											: buckets.error
-												? `Retry loading ${rootLabel.plural.toLocaleLowerCase()}`
-												: `Load more ${rootLabel.plural.toLocaleLowerCase()}`}
-									</Button>
-								)}
-							</>
+								<>
+									{/* A lone bucket reselects itself, so the crumb is inert then. */}
+									{bucketItems.length > 1 || buckets.hasNextPage ? (
+										<Button
+											size="sm"
+											variant="ghost"
+											className={crumbButtonClass}
+											onPress={() => selectBucket('')}
+										>
+											<HardDrive className="size-3.5" aria-hidden />
+											{rootLabel.plural}
+										</Button>
+									) : (
+										<span className={cn(crumbTextClass, 'gap-1.5 text-muted-foreground')}>
+											<HardDrive className="size-3.5" aria-hidden />
+											{rootLabel.plural}
+										</span>
+									)}
+									<ChevronRight
+										className="size-3.5 shrink-0 text-muted-foreground/60"
+										aria-hidden
+									/>
+									{crumbs.length === 0 ? (
+										<span className={cn(crumbTextClass, 'max-w-56 font-medium')}>
+											<span className="truncate" translate="no">
+												{bucket}
+											</span>
+										</span>
+									) : (
+										<Button
+											size="sm"
+											variant="ghost"
+											className={cn(crumbButtonClass, 'max-w-56')}
+											onPress={() => selectPrefix('')}
+										>
+											<span className="truncate" translate="no">
+												{bucket}
+											</span>
+										</Button>
+									)}
+									{crumbs.map(({ label, value }, index) => (
+										<span key={value} className="flex min-w-0 items-center gap-0.5">
+											<ChevronRight
+												className="size-3.5 shrink-0 text-muted-foreground/60"
+												aria-hidden
+											/>
+											{index === crumbs.length - 1 ? (
+												<span className={cn(crumbTextClass, 'max-w-56 font-medium')}>
+													<span className="truncate" translate="no">
+														{label}
+													</span>
+												</span>
+											) : (
+												<Button
+													size="sm"
+													variant="ghost"
+													className={cn(crumbButtonClass, 'max-w-56')}
+													onPress={() => selectPrefix(value)}
+												>
+													<span className="truncate" translate="no">
+														{label}
+													</span>
+												</Button>
+											)}
+										</span>
+									))}
+								</>
+							)}
+						</nav>
+						{selectedKeys.size > 0 && (
+							<div className="flex items-center gap-2">
+								<span className="text-xs text-muted-foreground">{selectedKeys.size} selected</span>
+								<Button size="sm" onPress={copySelectedUris}>
+									<Copy className="size-3.5" aria-hidden />
+									Copy {selectedKeys.size} selected URI{selectedKeys.size === 1 ? '' : 's'}
+								</Button>
+							</div>
 						)}
 					</div>
-				) : (
-					<>
-						<div className="flex flex-wrap items-center gap-1 text-xs">
-							<Button size="sm" variant="ghost" onPress={() => selectBucket('')}>
-								{bucket}
-							</Button>
-							{prefixParts(prefix).map(({ label, value }) => (
-								<span key={value} className="flex items-center gap-1">
-									<span className="text-muted-foreground">/</span>
-									<Button size="sm" variant="ghost" onPress={() => selectPrefix(value)}>
-										{label}
-									</Button>
-								</span>
-							))}
-						</div>
-						{searchAvailable && (
-							<div className="grid grid-cols-[1fr_auto] gap-2">
+					{bucket !== '' && (searchAvailable || !initialListError) && (
+						<div className="flex flex-wrap items-center gap-2">
+							{searchAvailable && (
 								<form
-									className="flex gap-2"
+									className="flex min-w-52 flex-1 items-start gap-1.5"
 									onSubmit={(event) => {
 										event.preventDefault();
 										const query = searchDraft.trim();
@@ -297,97 +358,159 @@ export function ObjectBrowser({
 									<Button type="submit" aria-label="Search object keys">
 										<Search className="size-4" aria-hidden />
 									</Button>
+									{searchQuery && (
+										<Button
+											onPress={() => {
+												setSearchDraft('');
+												update({ q: undefined });
+											}}
+										>
+											Clear search
+										</Button>
+									)}
 								</form>
-								{searchQuery && (
-									<Button
-										onPress={() => {
-											setSearchDraft('');
-											update({ q: undefined });
-										}}
-									>
-										Clear search
-									</Button>
-								)}
-							</div>
-						)}
-						{!initialListError && (
-							<TextField
-								name="loaded-object-filter"
-								autoComplete="off"
-								spellCheck="false"
-								aria-label="Filter loaded objects"
-								placeholder="Filter loaded results…"
-								value={filter}
-								onChange={setFilter}
-							/>
-						)}
-						{!initialListError && (
-							<fieldset className="grid grid-cols-2 gap-2 text-xs xl:grid-cols-4">
-								<legend className="sr-only">Object filters</legend>
-								<ObjectFilterSelect
-									label="Type"
-									name="object-format-filter"
-									value={formatFilter}
-									onChange={setFormatFilter}
-								>
-									<option value="all">All loaded types</option>
-									<option value="data">Data</option>
-									<option value="text">Text</option>
-									<option value="image">Images</option>
-									<option value="other">Other</option>
-								</ObjectFilterSelect>
-								<ObjectFilterSelect
-									label="Size"
-									name="object-size-filter"
-									value={sizeFilter}
-									onChange={setSizeFilter}
-								>
-									<option value="all">Any loaded size</option>
-									<option value="small">Under 1 MiB</option>
-									<option value="medium">1–100 MiB</option>
-									<option value="large">100 MiB+</option>
-								</ObjectFilterSelect>
-								<label className="flex flex-col gap-1 text-muted-foreground">
-									Modified after
-									<input
-										type="date"
-										aria-label="Modified after"
-										name="object-modified-after"
+							)}
+							{!initialListError && (
+								<>
+									<TextField
+										name="loaded-object-filter"
 										autoComplete="off"
-										value={modifiedAfter}
-										onChange={(event) => setModifiedAfter(event.target.value)}
-										className="h-9 rounded-md border border-input bg-background px-2 text-foreground"
+										spellCheck="false"
+										aria-label="Filter loaded objects"
+										placeholder="Filter loaded…"
+										value={filter}
+										onChange={setFilter}
+										className="w-44"
 									/>
-								</label>
-								<ObjectFilterSelect
-									label="Sort loaded results"
-									name="object-sort"
-									value={sort}
-									onChange={setSort}
+									<fieldset className="flex flex-wrap items-center gap-2">
+										<legend className="sr-only">Object filters</legend>
+										<ObjectFilterSelect
+											label="Type"
+											name="object-format-filter"
+											value={formatFilter}
+											onChange={setFormatFilter}
+										>
+											<option value="all">All types</option>
+											<option value="data">Data</option>
+											<option value="text">Text</option>
+											<option value="image">Images</option>
+											<option value="other">Other</option>
+										</ObjectFilterSelect>
+										<ObjectFilterSelect
+											label="Size"
+											name="object-size-filter"
+											value={sizeFilter}
+											onChange={setSizeFilter}
+										>
+											<option value="all">Any size</option>
+											<option value="small">Under 1 MiB</option>
+											<option value="medium">1–100 MiB</option>
+											<option value="large">100 MiB+</option>
+										</ObjectFilterSelect>
+										<input
+											type="date"
+											aria-label="Modified after"
+											name="object-modified-after"
+											autoComplete="off"
+											value={modifiedAfter}
+											onChange={(event) => setModifiedAfter(event.target.value)}
+											className="h-9 rounded-md border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+										/>
+										<ObjectFilterSelect
+											label="Sort loaded results"
+											name="object-sort"
+											value={sort}
+											onChange={setSort}
+										>
+											<option value="name-asc">Name A–Z</option>
+											<option value="name-desc">Name Z–A</option>
+											<option value="size-desc">Largest first</option>
+											<option value="modified-desc">Newest first</option>
+										</ObjectFilterSelect>
+									</fieldset>
+								</>
+							)}
+						</div>
+					)}
+					{activeSearchQuery && searchSummary && (
+						<output className="text-xs text-muted-foreground">
+							{loaded.length} matches after scanning{' '}
+							{search.data?.pages.reduce((n, p) => n + p.scanned, 0)} keys
+							{searchSummary.complete ? '.' : '; more may exist.'}
+						</output>
+					)}
+				</div>
+				<fieldset className="min-h-0 flex-1 overflow-y-auto p-1.5 pt-0">
+					<legend className="sr-only">Objects</legend>
+					{bucket === '' ? (
+						<div className="pt-1.5">
+							{buckets.data === undefined ? (
+								buckets.error ? (
+									<p className="p-3 text-sm text-destructive">{errorMessage(buckets.error)}</p>
+								) : (
+									<Skeleton className="h-9 w-full" />
+								)
+							) : !buckets.error && bucketItems.length === 0 && !buckets.hasNextPage ? (
+								<EmptyState
+									icon={<Folder />}
+									message={`No ${rootLabel.plural.toLocaleLowerCase()} available`}
+									description={`The integration credentials did not return an accessible ${rootLabel.singular}.`}
+								/>
+							) : (
+								<>
+									{bucketItems.map((item) => (
+										<button
+											key={item.name}
+											type="button"
+											onClick={() => selectBucket(item.name)}
+											className="flex w-full touch-manipulation items-center gap-2.5 rounded-md px-3 py-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring max-md:min-h-11"
+										>
+											<span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted/60">
+												<Folder className="size-4 text-primary/70" aria-hidden />
+											</span>
+											<span className="truncate font-medium" translate="no">
+												{item.name}
+											</span>
+											{item.configured && <Chip className="ml-auto">configured</Chip>}
+										</button>
+									))}
+									{buckets.error && (
+										<p className="p-3 text-sm text-destructive">{errorMessage(buckets.error)}</p>
+									)}
+									{buckets.hasNextPage && (
+										<Button
+											className="mt-2 w-full"
+											isDisabled={buckets.isFetchingNextPage}
+											onPress={() => void buckets.fetchNextPage()}
+										>
+											{buckets.isFetchingNextPage
+												? `Loading ${rootLabel.plural.toLocaleLowerCase()}…`
+												: buckets.error
+													? `Retry loading ${rootLabel.plural.toLocaleLowerCase()}`
+													: `Load more ${rootLabel.plural.toLocaleLowerCase()}`}
+										</Button>
+									)}
+								</>
+							)}
+						</div>
+					) : (
+						<>
+							{!initialListError && (
+								<div
+									aria-hidden
+									className={cn(
+										rowGridClass,
+										'sticky top-0 z-10 border-b bg-card px-3 py-1.5 text-[11px] font-medium text-muted-foreground',
+									)}
 								>
-									<option value="name-asc">Name A–Z</option>
-									<option value="name-desc">Name Z–A</option>
-									<option value="size-desc">Largest first</option>
-									<option value="modified-desc">Newest first</option>
-								</ObjectFilterSelect>
-							</fieldset>
-						)}
-						{selectedKeys.size > 0 && (
-							<Button size="sm" onPress={copySelectedUris}>
-								Copy {selectedKeys.size} selected URI{selectedKeys.size === 1 ? '' : 's'}
-							</Button>
-						)}
-						{activeSearchQuery && searchSummary && (
-							<output className="text-xs text-muted-foreground">
-								{loaded.length} matches after scanning{' '}
-								{search.data?.pages.reduce((n, p) => n + p.scanned, 0)} keys
-								{searchSummary.complete ? '.' : '; more may exist.'}
-							</output>
-						)}
-						<fieldset className="min-h-0 flex-1 overflow-y-auto">
-							<legend className="sr-only">Objects</legend>
+									<span />
+									<span>Name</span>
+									<span className="text-right">Size</span>
+									<span className="text-right max-md:hidden">Modified</span>
+								</div>
+							)}
 							{initialListError && (
-								<div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-4 text-center">
+								<div className="mt-1.5 flex min-h-40 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-4 text-center">
 									<p className="text-sm text-destructive">{errorMessage(listError)}</p>
 									<Button onPress={() => void results.refetch()}>
 										{activeSearchQuery ? 'Retry search' : 'Retry loading objects'}
@@ -400,52 +523,103 @@ export function ObjectBrowser({
 							{prefix && !activeSearchQuery && (
 								<button
 									type="button"
+									aria-label="Parent prefix"
 									onKeyDown={handleListKeyDown}
 									onClick={() => selectPrefix(parentPrefix)}
-									className="flex w-full touch-manipulation items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11"
+									className="flex w-full touch-manipulation items-center gap-3 rounded-md px-3 py-2 text-left text-muted-foreground hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring max-md:min-h-11"
 								>
-									<ArrowUp className="size-4" aria-hidden /> Parent prefix
+									<span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted/60">
+										<ArrowUp className="size-4" aria-hidden />
+									</span>
+									<span aria-hidden>..</span>
 								</button>
 							)}
 							{!initialListError &&
-								entries.map((entry) => (
-									<button
-										key={`${entry.kind}:${entry.key}`}
-										data-object-row
-										type="button"
-										aria-pressed={entry.kind === 'object' && selectedKeys.has(entry.key)}
-										onKeyDown={handleListKeyDown}
-										onClick={(event) => selectEntry(entry, event)}
-										className={cn(
-											'grid w-full touch-manipulation grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 [content-visibility:auto] [contain-intrinsic-size:auto_44px]',
-											entry.kind === 'object' &&
-												selectedKeys.has(entry.key) &&
-												'bg-primary/10 text-primary',
-										)}
-									>
-										{entry.kind === 'prefix' ? (
-											<Folder className="size-4" aria-hidden />
-										) : (
-											<File className="size-4" aria-hidden />
-										)}
-										<span className="min-w-0">
-											<span className="block truncate">{entry.name}</span>
-											{entry.kind === 'object' && (
-												<span className="block truncate text-[11px] text-muted-foreground">
-													{[objectFormatLabel(entry.name), entry.storage_class, entry.etag]
-														.filter(Boolean)
-														.join(' · ')}
+								entries.map((entry) => {
+									const entrySelected = entry.kind === 'object' && selectedKeys.has(entry.key);
+									const entryUri =
+										entry.kind === 'object' ? objectUri(uriScheme, bucket, entry.key) : null;
+									return (
+										<div key={`${entry.kind}:${entry.key}`} className="group relative">
+											<button
+												data-object-row
+												type="button"
+												aria-pressed={entrySelected}
+												onKeyDown={handleListKeyDown}
+												onClick={(event) => selectEntry(entry, event)}
+												className={cn(
+													rowGridClass,
+													'w-full touch-manipulation rounded-md px-3 py-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring max-md:min-h-11',
+													entrySelected && 'bg-primary/10',
+												)}
+											>
+												<span className="flex size-7 items-center justify-center rounded-md bg-muted/60">
+													{entry.kind === 'prefix' ? (
+														<Folder className="size-4 text-primary/70" aria-hidden />
+													) : (
+														<File className="size-4 text-muted-foreground" aria-hidden />
+													)}
 												</span>
+												<span className="min-w-0">
+													<span
+														className={cn('block truncate', entrySelected && 'text-primary')}
+														translate="no"
+													>
+														{entry.name}
+													</span>
+													{entry.kind === 'object' && (
+														<span className="block truncate text-[11px] text-muted-foreground">
+															{[objectFormatLabel(entry.name), entry.storage_class]
+																.filter(Boolean)
+																.join(' · ')}
+														</span>
+													)}
+												</span>
+												<span className="text-right text-xs text-muted-foreground tabular-nums">
+													{entry.size === undefined ? '' : formatBytes(entry.size)}
+												</span>
+												<span className="text-right text-xs text-muted-foreground tabular-nums max-md:hidden">
+													{formatDateTime(entry.last_modified) ?? ''}
+												</span>
+											</button>
+											{entry.kind === 'object' && (
+												<div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-md border bg-card p-0.5 opacity-0 shadow-sm transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+													{entryUri && (
+														<RowCopyAction
+															label="Copy URI"
+															name={entry.name}
+															value={entryUri}
+															icon={<Link2 className="size-3.5" aria-hidden />}
+														/>
+													)}
+													<RowCopyAction
+														label="Copy key"
+														name={entry.name}
+														value={entry.key}
+														icon={<Copy className="size-3.5" aria-hidden />}
+													/>
+													{downloadAvailable && (
+														<Tooltip content="Download">
+															<a
+																href={objectContentUrl({
+																	projectId,
+																	integrationId: integration.id,
+																	bucket,
+																	key: entry.key,
+																	etag: entry.etag,
+																})}
+																aria-label={`Download ${entry.name}`}
+																className={iconControlClass({})}
+															>
+																<Download className="size-3.5" aria-hidden />
+															</a>
+														</Tooltip>
+													)}
+												</div>
 											)}
-										</span>
-										<span className="text-right text-xs text-muted-foreground tabular-nums">
-											{entry.size === undefined ? '' : formatBytes(entry.size)}
-											{entry.last_modified && (
-												<span className="block">{formatDateTime(entry.last_modified)}</span>
-											)}
-										</span>
-									</button>
-								))}
+										</div>
+									);
+								})}
 							{!initialListError && entries.length === 0 && (listing.data || search.data) && (
 								<p className="p-4 text-center text-xs text-muted-foreground">No objects found.</p>
 							)}
@@ -460,13 +634,15 @@ export function ObjectBrowser({
 										{activeSearchQuery ? 'Continue search' : 'Load more'}
 									</Button>
 								)}
-						</fieldset>
-					</>
-				)}
+						</>
+					)}
+				</fieldset>
 			</section>
-
-			<section className="min-h-0 overflow-y-auto rounded-xl border bg-card p-4">
-				{bucket && key ? (
+			{bucket && key && (
+				<ObjectDetailSheet
+					title={key.split('/').at(-1) || key}
+					onClose={() => update({ key: undefined, version: undefined })}
+				>
 					<ObjectDetail
 						key={JSON.stringify([bucket, key, versionId ?? null])}
 						projectId={projectId}
@@ -480,15 +656,44 @@ export function ObjectBrowser({
 						uriScheme={uriScheme}
 						onVersion={(value) => update({ version: value })}
 					/>
-				) : (
-					<EmptyState
-						icon={<File />}
-						message="Select an object"
-						description="Choose an object to inspect metadata, preview content, browse versions, or download it."
-					/>
-				)}
-			</section>
+				</ObjectDetailSheet>
+			)}
 		</div>
+	);
+}
+
+/** Non-modal on purpose: the list stays clickable, so clicking another row swaps the detail. */
+function ObjectDetailSheet({
+	title,
+	onClose,
+	children,
+}: {
+	title: string;
+	onClose: () => void;
+	children: ReactNode;
+}) {
+	useEffect(() => {
+		const handle = (event: globalThis.KeyboardEvent) => {
+			if (event.key === 'Escape') onClose();
+		};
+		window.addEventListener('keydown', handle);
+		return () => window.removeEventListener('keydown', handle);
+	}, [onClose]);
+	return (
+		<aside
+			aria-label="Object details"
+			className="fixed inset-y-3 right-3 z-40 flex w-[min(30rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl border bg-card shadow-2xl animate-in duration-200 fade-in-0 slide-in-from-right-6"
+		>
+			<div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
+				<h2 className="min-w-0 truncate text-sm font-semibold" translate="no">
+					{title}
+				</h2>
+				<IconButton label="Close details" tooltip="Close" onPress={onClose}>
+					<X className="size-4" aria-hidden />
+				</IconButton>
+			</div>
+			<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">{children}</div>
+		</aside>
 	);
 }
 
@@ -559,21 +764,22 @@ function ObjectDetail({
 	};
 	return (
 		<div className="flex flex-col gap-4">
-			<div className="flex flex-wrap items-start justify-between gap-3">
-				<div className="min-w-0">
-					<h2 className="break-all font-semibold" translate="no">
-						{objectKey}
-					</h2>
-					<p className="break-all font-mono text-xs text-muted-foreground" translate="no">
-						{displayLocation}
-					</p>
+			<div className="flex flex-col gap-2.5">
+				<p className="break-all font-mono text-xs text-muted-foreground" translate="no">
+					{displayLocation}
+				</p>
+				<div className="flex flex-wrap items-center gap-1.5">
+					{uri && <CopyPill label="Copy URI" value={uri} />}
+					<CopyPill label="Copy key" value={objectKey} />
+					{detail.data.snippet && <CopyPill label="Copy snippet" value={detail.data.snippet} />}
 				</div>
-				<div className="flex flex-wrap gap-2">
-					{uri && <CopyIconButton label="URI" value={uri} />}
-					<CopyIconButton label="key" value={objectKey} />
-					{detail.data.snippet && <CopyIconButton label="snippet" value={detail.data.snippet} />}
+				<div className="flex flex-wrap items-center gap-2">
 					{detail.data.snippet && (
-						<Button isDisabled={seededNotebook.isPending} onPress={() => void openInNotebook()}>
+						<Button
+							variant="primary"
+							isDisabled={seededNotebook.isPending}
+							onPress={() => void openInNotebook()}
+						>
 							<NotebookPen className="size-4" aria-hidden />
 							{seededNotebook.isPending ? 'Creating notebook…' : 'Open in notebook'}
 						</Button>
@@ -786,6 +992,45 @@ function MetadataRows({ values }: { values: Record<string, string | undefined> }
 	);
 }
 
+/** Only the icon flips on copy; label, tooltip, and accessible name stay stable. */
+function CopyPill({ label, value }: { label: string; value: string }) {
+	const { copied, copy } = useCopyToClipboard();
+	return (
+		<Tooltip content={<span className="break-all font-mono text-[11px]">{value}</span>}>
+			<AriaButton
+				onPress={() => void copy(value)}
+				className="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-input bg-card px-2.5 text-xs font-medium text-muted-foreground shadow-xs transition-colors hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-9"
+			>
+				{copied ? (
+					<Check className="size-3.5 text-primary" aria-hidden />
+				) : (
+					<Copy className="size-3.5" aria-hidden />
+				)}
+				{label}
+			</AriaButton>
+		</Tooltip>
+	);
+}
+
+function RowCopyAction({
+	label,
+	name,
+	value,
+	icon,
+}: {
+	label: string;
+	name: string;
+	value: string;
+	icon: ReactNode;
+}) {
+	const { copied, copy } = useCopyToClipboard();
+	return (
+		<IconButton label={`${label} for ${name}`} tooltip={label} onPress={() => void copy(value)}>
+			{copied ? <Check className="size-3.5 text-primary" aria-hidden /> : icon}
+		</IconButton>
+	);
+}
+
 function objectRootLabel(rootKind: ObjectRootKind): { singular: string; plural: string } {
 	switch (rootKind) {
 		case 'bucket':
@@ -882,30 +1127,15 @@ function ObjectFilterSelect({
 	children: ReactNode;
 }) {
 	return (
-		<label className="flex flex-col gap-1 text-muted-foreground">
-			{label}
-			<select
-				name={name}
-				value={value}
-				onChange={(event) => onChange(event.target.value)}
-				className="h-9 rounded-md border border-input bg-background px-2 text-foreground"
-			>
-				{children}
-			</select>
-		</label>
-	);
-}
-
-function CopyIconButton({ label, value }: { label: string; value: string }) {
-	const { copied, copy } = useCopyToClipboard();
-	return (
-		<IconButton
-			label={`${copied ? 'Copied' : 'Copy'} ${label}`}
-			tooltip={`Copy ${label}`}
-			onPress={() => void copy(value)}
+		<select
+			aria-label={label}
+			name={name}
+			value={value}
+			onChange={(event) => onChange(event.target.value)}
+			className="h-9 cursor-pointer rounded-md border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 		>
-			{copied ? <Check className="size-4" aria-hidden /> : <Copy className="size-4" aria-hidden />}
-		</IconButton>
+			{children}
+		</select>
 	);
 }
 
