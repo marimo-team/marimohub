@@ -46,8 +46,17 @@ MARIMOHUB_AUTH_BACKEND=dev
 MARIMOHUB_SUPER_ADMINS=user@localhost
 MARIMOHUB_INTEGRATIONS=on
 MARIMOHUB_INTEGRATIONS_PROBE=private
-MARIMOHUB_DATA_BROWSER=metadata
+MARIMOHUB_DATA_BROWSER=full
+MARIMOHUB_DATA_PREVIEW_IMAGE=ghcr.io/marimo-team/marimo-sandbox:latest
+MARIMOHUB_EXPERIMENTS=duckdb-wasm-preview,duckdb-wasm-sql
 ```
+
+The entrypoint also generates a random local `MARIMOHUB_SECRETS_KEK` so
+integrations with inline secrets work without setup. With
+`MARIMOHUB_DEV_PERSIST=true` the key is kept in `.context/dev-secrets-kek` so
+persisted secrets stay decryptable across restarts. Set your own
+`MARIMOHUB_EXPERIMENTS` or `MARIMOHUB_SECRETS_KEK` to override these two
+values.
 
 Startup is ready when the `server` process is listening on port `3000` and the
 `web` process prints a Vite local URL on port `5175`. The server owns the API;
@@ -71,9 +80,10 @@ DEV_PORT_BASE=4100 pnpm dev
 
 By default, state is held in memory and disappears on restart. The stack starts
 kernels on your machine, signs every request in as a fixed super admin, enables
-integrations and metadata browsing, and seeds a welcome notebook plus an
-org-wide `local-development` environment. Browsing requires a live Trino,
-ClickHouse, or Iceberg REST service. None of this changes deployed defaults.
+integrations and the full data browser (metadata, file previews, and DuckDB-Wasm
+SQL), and seeds a welcome notebook plus an org-wide `local-development`
+environment. Browsing real data requires a live service; start one with
+`pnpm dev:services` below. None of this changes deployed defaults.
 
 To keep projects and notebooks across restarts, opt into filesystem storage:
 
@@ -87,6 +97,32 @@ the dev stack before clearing it:
 ```bash
 pnpm dev:reset
 ```
+
+## Local data services
+
+Data features need something to browse. With Docker installed, start a local
+S3-compatible object store and an Iceberg REST catalog:
+
+```bash
+pnpm dev:services
+```
+
+This runs `scripts/dev-services/compose.yaml`:
+
+- MinIO on `http://localhost:19000`, with a web console on
+  `http://localhost:19001` (log in with `minioadmin` / `minioadmin`).
+- An Apache Iceberg REST catalog on `http://localhost:18181`, storing table data
+  in the MinIO `warehouse` bucket.
+
+Seed containers create a `dev-data` bucket with sample files and an empty
+`demo.events` Iceberg table. When these endpoints respond at startup, `pnpm dev`
+seeds two org integrations: `local-minio` (S3) and `local-iceberg`
+(Iceberg REST). Start the services before the dev stack, or restart `pnpm dev`
+after they are up. Set `MARIMOHUB_DEV_SERVICES=off` to skip the probe.
+
+Stop the services with `pnpm dev:services:down`. Object data survives restarts
+in a named Docker volume; remove it with
+`docker compose -f scripts/dev-services/compose.yaml down -v`.
 
 ## Run the server manually
 
