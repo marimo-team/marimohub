@@ -66,9 +66,8 @@ interface ObjectBrowserProps {
 const rowGridClass =
 	'grid grid-cols-[1.75rem_minmax(0,1fr)_5rem_9.5rem] items-center gap-3 max-md:grid-cols-[1.75rem_minmax(0,1fr)_5rem]';
 
-// Static and interactive crumbs share one h-7 box (overriding the mobile
-// min-h-11 tap target), so a crumb switching between button and text — or the
-// trail growing/shrinking — never changes the toolbar height.
+// Every crumb — button or text — shares one h-7 box (mobile min-h-11
+// overridden), so navigating never changes the toolbar height.
 const crumbTextClass = 'flex h-7 min-w-0 items-center px-1.5';
 const crumbButtonClass = 'h-7 px-1.5 max-md:min-h-7';
 
@@ -254,8 +253,7 @@ export function ObjectBrowser({
 								</span>
 							) : (
 								<>
-									{/* A lone bucket reselects itself, so the root crumb only navigates
-									    when there is actually a list to go back to. */}
+									{/* A lone bucket reselects itself, so the crumb is inert then. */}
 									{bucketItems.length > 1 || buckets.hasNextPage ? (
 										<Button
 											size="sm"
@@ -664,10 +662,7 @@ export function ObjectBrowser({
 	);
 }
 
-/**
- * A non-modal floating panel over the right edge, so the list stays clickable
- * while an object is open — selecting another row swaps the detail in place.
- */
+/** Non-modal on purpose: the list stays clickable, so clicking another row swaps the detail. */
 function ObjectDetailSheet({
 	title,
 	onClose,
@@ -997,10 +992,7 @@ function MetadataRows({ values }: { values: Record<string, string | undefined> }
 	);
 }
 
-/**
- * The tooltip previews the value being copied and deliberately never flips to
- * "Copied" — only the icon does — so the label and accessible name stay stable.
- */
+/** Only the icon flips on copy; label, tooltip, and accessible name stay stable. */
 function CopyPill({ label, value }: { label: string; value: string }) {
 	const { copied, copy } = useCopyToClipboard();
 	return (

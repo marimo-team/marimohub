@@ -623,8 +623,7 @@ describe('DataBrowserPage', () => {
 		expect(screen.getByTestId('location')).toHaveTextContent('prefix=daily%2F');
 		await user.click(screen.getByRole('button', { name: 'lake' }));
 		await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('prefix='));
-		// With a single auto-selected bucket the root crumb is inert — going
-		// "back" would only reselect the same bucket.
+		// A lone auto-selected bucket makes the root crumb inert.
 		expect(screen.getByText('Buckets')).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Buckets' })).not.toBeInTheDocument();
 	});
