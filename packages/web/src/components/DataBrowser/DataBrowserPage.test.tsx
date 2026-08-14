@@ -566,10 +566,67 @@ describe('DataBrowserPage', () => {
 		expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('/browse/objects'))).toBe(
 			true,
 		);
-		expect(screen.getByRole('group', { name: 'Object filters' })).toHaveClass(
-			'grid-cols-2',
-			'xl:grid-cols-4',
-		);
+		expect(screen.getByRole('group', { name: 'Object filters' })).toHaveClass('flex', 'flex-wrap');
+	});
+
+	it('opens the detail sheet and closes it from the header button or Escape', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+		});
+
+		expect(
+			await screen.findByRole('complementary', { name: 'Object details' }),
+		).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Close details' }));
+		await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('key='));
+		expect(screen.queryByRole('complementary', { name: 'Object details' })).not.toBeInTheDocument();
+
+		await user.click(screen.getByText('events.jsonl').closest('button')!);
+		expect(
+			await screen.findByRole('complementary', { name: 'Object details' }),
+		).toBeInTheDocument();
+		await user.keyboard('{Escape}');
+		await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('key='));
+	});
+
+	it('copies and downloads through row quick actions without opening the object', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+		});
+
+		await screen.findByText('events.jsonl');
+		await user.click(screen.getByRole('button', { name: 'Copy URI for events.jsonl' }));
+		expect(await navigator.clipboard.readText()).toBe('s3://lake/events.jsonl');
+		await user.click(screen.getByRole('button', { name: 'Copy key for events.jsonl' }));
+		expect(await navigator.clipboard.readText()).toBe('events.jsonl');
+		const download = screen.getByRole('link', { name: 'Download events.jsonl' });
+		const target = new URL(download.getAttribute('href')!, 'http://test');
+		expect(target.searchParams.get('key')).toBe('events.jsonl');
+		expect(screen.getByTestId('location')).not.toHaveTextContent('key=');
+		expect(screen.queryByRole('complementary', { name: 'Object details' })).not.toBeInTheDocument();
+	});
+
+	it('navigates upward with the breadcrumb trail from a nested prefix', async () => {
+		const user = userEvent.setup();
+		setup(`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&prefix=daily%2Freports%2F`, {
+			kind: objectKind,
+			entry: { ...lakeEntry, kind: 's3' },
+		});
+
+		await screen.findByText('events.jsonl');
+		await user.click(screen.getByRole('button', { name: 'daily' }));
+		await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('reports'));
+		expect(screen.getByTestId('location')).toHaveTextContent('prefix=daily%2F');
+		await user.click(screen.getByRole('button', { name: 'lake' }));
+		await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('prefix='));
+		// With a single auto-selected bucket the root crumb is inert — going
+		// "back" would only reselect the same bucket.
+		expect(screen.getByText('Buckets')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Buckets' })).not.toBeInTheDocument();
 	});
 
 	it('selects among discovered buckets and reports empty or failed discovery', async () => {
@@ -672,7 +729,7 @@ describe('DataBrowserPage', () => {
 			objectUriScheme: 'unknown',
 		});
 
-		await user.click(await screen.findByRole('button', { name: /events\.jsonl/i }));
+		await user.click(await screen.findByRole('button', { name: /^events\.jsonl/i }));
 		expect(await screen.findByText('lake/events.jsonl')).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Copy URI' })).not.toBeInTheDocument();
 	});

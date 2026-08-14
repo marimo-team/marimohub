@@ -106,10 +106,12 @@ function PageFallback() {
 }
 
 function StandardLayout() {
+	// h-dvh (not min-h-dvh) pins the header and footer: the shell never grows
+	// past the viewport, so pages scroll inside <main>, not at the document.
 	return (
-		<div className="flex min-h-dvh flex-col">
+		<div className="flex h-dvh flex-col">
 			<Header />
-			<main className="flex flex-1 overflow-hidden">
+			<main className="flex min-h-0 flex-1 overflow-hidden">
 				<AppErrorBoundary>
 					<Suspense fallback={<PageFallback />}>
 						<Routes>
