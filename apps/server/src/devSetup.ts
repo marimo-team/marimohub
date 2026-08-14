@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ApiDeps } from '@marimo-hub/api';
 import {
@@ -25,6 +27,35 @@ const DEV_USER = {
 	name: 'Local Dev Super Admin',
 } as const;
 
+const DEV_KEK_PATH = fileURLToPath(new URL('../../../.context/dev-secrets-kek', import.meta.url));
+
+function readDevKek(): string | undefined {
+	try {
+		return readFileSync(DEV_KEK_PATH, 'utf8').trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+// A committed KEK would let anyone with the source decrypt persisted dev
+// secrets, so generate a random one instead. Ephemeral storage gets a
+// per-process key; MARIMOHUB_DEV_PERSIST needs the same key across restarts,
+// so it is kept in the gitignored .context dir (created once, `wx` so a
+// concurrent startup keeps the winner's key).
+function devSecretsKek(durableStorage: boolean): string {
+	if (!durableStorage) return randomBytes(32).toString('base64');
+	const existing = readDevKek();
+	if (existing) return existing;
+	const kek = randomBytes(32).toString('base64');
+	mkdirSync(dirname(DEV_KEK_PATH), { recursive: true });
+	try {
+		writeFileSync(DEV_KEK_PATH, `${kek}\n`, { flag: 'wx', mode: 0o600 });
+		return kek;
+	} catch {
+		return readDevKek() ?? kek;
+	}
+}
+
 const DEV_INTEGRATION = {
 	kind: 'custom_env',
 	name: 'local-development',
@@ -32,7 +63,58 @@ const DEV_INTEGRATION = {
 	change_note: 'Seeded by pnpm dev',
 } satisfies CreateIntegrationInput;
 
-const DEV_INTEGRATION_CONFLICT = `An integration named "${DEV_INTEGRATION.name}" already exists at the org level.`;
+// Fixed endpoints from scripts/dev-services/compose.yaml (`pnpm dev:services`).
+const DEV_S3_ENDPOINT = 'http://127.0.0.1:19000';
+const DEV_ICEBERG_URI = 'http://127.0.0.1:18181';
+const DEV_SERVICE_CREDENTIALS = { access_key_id: 'minioadmin', secret_access_key: 'minioadmin' };
+const DEV_SERVICE_PROBE_TIMEOUT_MS = 1_500;
+
+const DEV_SERVICE_INTEGRATIONS: readonly { healthUrl: string; input: CreateIntegrationInput }[] = [
+	{
+		healthUrl: `${DEV_S3_ENDPOINT}/minio/health/live`,
+		input: {
+			kind: 's3',
+			name: 'local-minio',
+			config: {
+				bucket: 'dev-data',
+				region: 'us-east-1',
+				endpoint_url: DEV_S3_ENDPOINT,
+				path_style: true,
+				ambient_env: false,
+				auth: { method: 'static', ...DEV_SERVICE_CREDENTIALS },
+			},
+			change_note: 'Seeded by pnpm dev (MinIO from pnpm dev:services)',
+		},
+	},
+	{
+		healthUrl: `${DEV_ICEBERG_URI}/v1/config`,
+		input: {
+			kind: 'iceberg_rest',
+			name: 'local-iceberg',
+			config: {
+				uri: DEV_ICEBERG_URI,
+				allow_insecure_transport: true,
+				auth: { method: 'none' },
+				access_delegation: 'none',
+				// Explicit storage, not scheme 'catalog': the fixture vends no client
+				// S3 config, so PyIceberg readers need the endpoint and credentials
+				// spelled out. DuckDB-Wasm preview is off either way — the Node
+				// runtime never advertises iceberg-http.
+				storage: {
+					scheme: 's3',
+					region: 'us-east-1',
+					endpoint: DEV_S3_ENDPOINT,
+					credentials: { method: 'static', ...DEV_SERVICE_CREDENTIALS },
+				},
+			},
+			change_note: 'Seeded by pnpm dev (Iceberg REST from pnpm dev:services)',
+		},
+	},
+];
+
+function integrationConflict(name: string): string {
+	return `An integration named "${name}" already exists at the org level.`;
+}
 
 const DEV_NOTEBOOK = {
 	title: 'Welcome to marimohub',
@@ -69,10 +151,44 @@ if __name__ == "__main__":
 	readme: '# Welcome to marimohub\n\nEdit and run this notebook with the local compute backend.\n',
 } satisfies CreateNotebookInput;
 
-async function hasDevIntegration(integrations: NonNullable<ApiDeps['orgIntegrations']>) {
+async function hasIntegration(
+	integrations: NonNullable<ApiDeps['orgIntegrations']>,
+	input: CreateIntegrationInput,
+) {
 	return (await integrations.list()).some(
-		({ kind, name }) => kind === DEV_INTEGRATION.kind && name === DEV_INTEGRATION.name,
+		({ kind, name }) => kind === input.kind && name === input.name,
 	);
+}
+
+async function seedIntegration(
+	integrations: NonNullable<ApiDeps['orgIntegrations']>,
+	input: CreateIntegrationInput,
+): Promise<void> {
+	if (await hasIntegration(integrations, input)) return;
+	try {
+		await integrations.create(input, DEV_USER.id);
+	} catch (error) {
+		// A concurrent startup may have claimed the name first; only a same-kind
+		// duplicate is benign.
+		if (
+			error instanceof ValidationError &&
+			error.message === integrationConflict(input.name) &&
+			(await hasIntegration(integrations, input))
+		)
+			return;
+		throw error;
+	}
+}
+
+async function serviceReachable(healthUrl: string): Promise<boolean> {
+	try {
+		const response = await fetch(healthUrl, {
+			signal: AbortSignal.timeout(DEV_SERVICE_PROBE_TIMEOUT_MS),
+		});
+		return response.ok;
+	} catch {
+		return false;
+	}
 }
 
 function parseSeedClaim(raw: unknown): string | null {
@@ -205,29 +321,31 @@ export function localDevEnv(
 		MARIMOHUB_SUPER_ADMINS: DEV_USER.email,
 		MARIMOHUB_INTEGRATIONS: 'on',
 		MARIMOHUB_INTEGRATIONS_PROBE: 'private',
-		MARIMOHUB_DATA_BROWSER: 'metadata',
+		MARIMOHUB_DATA_BROWSER: 'full',
+		// Inert with the local compute backend (no per-sandbox image overrides),
+		// but keeps the config honest for anyone pointing dev at a real backend.
+		MARIMOHUB_DATA_PREVIEW_IMAGE:
+			env.MARIMOHUB_DATA_PREVIEW_IMAGE ?? 'ghcr.io/marimo-team/marimo-sandbox:latest',
+		MARIMOHUB_EXPERIMENTS: env.MARIMOHUB_EXPERIMENTS ?? 'duckdb-wasm-preview,duckdb-wasm-sql',
+		MARIMOHUB_SECRETS_KEK: env.MARIMOHUB_SECRETS_KEK ?? devSecretsKek(durableStorage),
 	};
 }
 
 export async function seedLocalDev(
 	deps: Pick<ApiDeps, 'bucket' | 'orgIntegrations' | 'services'>,
+	env: Record<string, string | undefined> = process.env,
 ): Promise<void> {
 	const integrations = deps.orgIntegrations;
 	if (!integrations) throw new Error('Local development integrations are not enabled.');
 
 	await ensureInitialized(deps.bucket, DEV_USER.id);
 	await seedWelcomeNotebook(deps);
-	if (await hasDevIntegration(integrations)) return;
+	await seedIntegration(integrations, DEV_INTEGRATION);
 
-	try {
-		await integrations.create(DEV_INTEGRATION, DEV_USER.id);
-	} catch (error) {
-		if (
-			error instanceof ValidationError &&
-			error.message === DEV_INTEGRATION_CONFLICT &&
-			(await hasDevIntegration(integrations))
-		)
-			return;
-		throw error;
+	if (env.MARIMOHUB_DEV_SERVICES?.trim().toLowerCase() === 'off') return;
+	for (const service of DEV_SERVICE_INTEGRATIONS) {
+		if (await serviceReachable(service.healthUrl)) {
+			await seedIntegration(integrations, service.input);
+		}
 	}
 }

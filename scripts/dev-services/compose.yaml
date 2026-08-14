@@ -1,0 +1,70 @@
+name: marimohub-dev-services
+
+# Optional local data services for `pnpm dev`: an S3-compatible object store
+# (MinIO) and an Iceberg REST catalog backed by it. Start with
+# `pnpm dev:services`; the dev server probes these endpoints at startup and
+# seeds matching org integrations when they respond (apps/server/src/devSetup.ts).
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '127.0.0.1:19000:9000'
+      # Web console; log in with minioadmin/minioadmin.
+      - '127.0.0.1:19001:9001'
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - minio-data:/data
+
+  minio-seed:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    entrypoint: /bin/sh
+    command: /seed/seed-minio.sh
+    volumes:
+      - ./seed:/seed:ro
+
+  iceberg-rest:
+    image: apache/iceberg-rest-fixture:1.10.0
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: 'true'
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+    ports:
+      - '127.0.0.1:18181:8181'
+
+  iceberg-seed:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      # The warehouse bucket must exist before table metadata is written to it.
+      minio-seed:
+        condition: service_completed_successfully
+      iceberg-rest:
+        condition: service_started
+    entrypoint: /bin/sh
+    command: /seed/seed-iceberg.sh
+    volumes:
+      - ./seed:/seed:ro
+
+volumes:
+  minio-data:
