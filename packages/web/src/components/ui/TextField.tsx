@@ -13,6 +13,10 @@ export function TextField({ label, placeholder, error, className = '', ...props 
 		<AriaTextField
 			className={cn('flex flex-col gap-1.5', className)}
 			isInvalid={!!error}
+			// "native" would mirror `isInvalid` into the input's native validity and
+			// block form onSubmit while an error is shown — submit-time validation
+			// could then never re-run to clear a fixed error.
+			validationBehavior="aria"
 			{...props}
 		>
 			{label && <Label className="text-xs font-medium text-muted-foreground">{label}</Label>}
