@@ -21,6 +21,10 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			'@': path.resolve(fileURLToPath(new URL('.', import.meta.url)), './src'),
+			// codemirror-sql maps its DuckDB dialect onto node-sql-parser's PostgreSQL
+			// grammar, so ship the single-grammar build instead of the ~2.5 MB
+			// all-dialects bundle.
+			'node-sql-parser': 'node-sql-parser/build/postgresql',
 		},
 	},
 	server: {
