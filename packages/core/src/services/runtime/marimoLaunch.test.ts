@@ -78,6 +78,7 @@ describe('buildMarimoLaunch', () => {
 	it('initializes a fresh project with marimohub metadata', () => {
 		const [setup] = buildMarimoLaunch(BASE).setup;
 		expect(setup).toContain('uv init');
+		expect(setup).toContain('--no-package');
 		expect(setup).toContain('--name notebook');
 		expect(setup).toContain('--description "Built in marimohub"');
 	});
