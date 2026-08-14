@@ -47,6 +47,9 @@ export function createGuardedFetch(
 		const request = url.protocol === 'http:' ? httpRequest : httpsRequest;
 		const body = effective.body ? new Uint8Array(await effective.arrayBuffer()) : undefined;
 		return new Promise<Response>((resolve, reject) => {
+			const onRequestTimeout = () => {
+				outgoing.destroy(new Error('The object-store request timed out.'));
+			};
 			const outgoing = request(
 				url,
 				{
@@ -57,6 +60,7 @@ export function createGuardedFetch(
 				},
 				(incoming) => {
 					outgoing.setTimeout(0);
+					outgoing.removeListener('timeout', onRequestTimeout);
 					incoming.setTimeout(socketTimeoutMs, () => {
 						incoming.destroy(new Error('The object-store response timed out.'));
 					});
@@ -80,9 +84,7 @@ export function createGuardedFetch(
 					);
 				},
 			);
-			outgoing.setTimeout(socketTimeoutMs, () => {
-				outgoing.destroy(new Error('The object-store request timed out.'));
-			});
+			outgoing.setTimeout(socketTimeoutMs, onRequestTimeout);
 			outgoing.on('error', reject);
 			writeBody(outgoing, body);
 		});

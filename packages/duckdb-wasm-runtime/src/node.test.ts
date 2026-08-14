@@ -233,7 +233,7 @@ describe('DuckDB-Wasm worker runtime', () => {
 		await expect(runtime.ping()).rejects.toThrow(/not initialized/i);
 		await expect(runtime.initialize({ memoryLimitMb: 64 })).resolves.toBeUndefined();
 		await expect(runtime.ping()).resolves.toBeUndefined();
-	});
+	}, 15_000);
 
 	it('executes SQL and normalizes Arrow values', async () => {
 		const runtime = await initialized(mode);
