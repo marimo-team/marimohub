@@ -1003,7 +1003,7 @@ describe('NotebookService', () => {
 			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe(`v${extraSaves}`);
 		});
 
-		it('retains an old version while a live session references it', async () => {
+		it('retains an old version for its live session but closes it to new sessions', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
 				{ title: 'NB', description: 'D', code: 'v0' },
@@ -1024,6 +1024,14 @@ describe('NotebookService', () => {
 			const oldest = paths.project(projectId).notebook(created.id).version(oldestVersionId);
 			expect(await bucket.head(oldest.meta)).not.toBeNull();
 			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS + 1);
+			await expect(
+				sessions.createSession({
+					project_id: projectId,
+					notebook_id: created.id,
+					user_id: ACTOR,
+					source_version_id: oldestVersionId,
+				}),
+			).rejects.toThrow(ConflictError);
 
 			await sessions.markFailed(projectId, liveSession.session_id);
 			await notebooks.updateNotebook(projectId, created.id, { code: 'after session' }, ACTOR);
@@ -1104,6 +1112,45 @@ describe('NotebookService', () => {
 			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe('v1');
 			const versions = await notebooks.listVersions(projectId, created.id);
 			expect(versions).toHaveLength(2);
+		});
+
+		it('keeps a failed-delete version closed to new sessions', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v0' },
+				ACTOR,
+			);
+			const oldestVersionId = (await notebooks.listVersions(projectId, created.id))[0].version_id;
+			for (let i = 1; i < MAX_VERSIONS; i++) {
+				await notebooks.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
+			}
+
+			const oldest = paths.project(projectId).notebook(created.id).version(oldestVersionId);
+			const oldestPrefix = `${paths.project(projectId).notebook(created.id).base}/versions/${oldestVersionId}/`;
+			const originalDelete = bucket.delete.bind(bucket);
+			const deleteSpy = vi.spyOn(bucket, 'delete').mockImplementation(async (keys) => {
+				const requested = Array.isArray(keys) ? keys : [keys];
+				if (requested.some((key) => key.startsWith(oldestPrefix))) {
+					throw new Error('simulated version delete failure');
+				}
+				return originalDelete(keys);
+			});
+
+			try {
+				await notebooks.updateNotebook(projectId, created.id, { code: 'triggers prune' }, ACTOR);
+			} finally {
+				deleteSpy.mockRestore();
+			}
+
+			expect(await bucket.head(oldest.meta)).not.toBeNull();
+			await expect(
+				sessions.createSession({
+					project_id: projectId,
+					notebook_id: created.id,
+					user_id: ACTOR,
+					source_version_id: oldestVersionId,
+				}),
+			).rejects.toThrow(ConflictError);
 		});
 	});
 

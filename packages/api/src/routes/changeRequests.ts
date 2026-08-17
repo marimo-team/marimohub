@@ -104,7 +104,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 			}
 			return publisher;
 		};
-		let publisher: SourceControlPublisher;
+		let publisher: SourceControlPublisher | undefined;
 		if (proposal) {
 			if (
 				proposal.proposal_id !== proposalId ||
@@ -114,7 +114,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 			) {
 				throw new ConflictError('The idempotency key belongs to a different proposal');
 			}
-			publisher = requirePublisher(proposal.source.provider);
+			publisher = deps.sourceControlPublishers?.getPublisher(proposal.source.provider);
 		} else {
 			const session = await deps.services.sessions.getSession(pid, sid);
 			if (notebook.source.type !== 'git') {

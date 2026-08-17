@@ -154,6 +154,41 @@ describe('change request routes', () => {
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 	});
 
+	it('recovers a published proposal when response recording failed and its publisher is disabled', async () => {
+		const headers = { 'Idempotency-Key': 'disabled-before-response-recorded' };
+		vi.spyOn(setup.deps.services.idempotency, 'record').mockRejectedValueOnce(
+			new Error('response record unavailable'),
+		);
+
+		await expectError(await setup.request('POST', route(), {}, headers), 500, 'INTERNAL_ERROR');
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+
+		const getPublisher = vi.fn<SourceControlPublisherRegistry['getPublisher']>();
+		const withoutPublisher = createTestApi({
+			bucket: setup.bucket,
+			compute: setup.deps.compute,
+			deps: {
+				sourceControlPublishers: {
+					getPublisher,
+					configuredProviders: () => [],
+				},
+			},
+		});
+
+		const replay = await expectOk<{
+			proposal_id: string;
+			change_request: { provider: string; number: number; url: string };
+		}>(await withoutPublisher.request('POST', route(), {}, headers), 201);
+
+		expect(replay.change_request).toMatchObject({
+			provider: 'github',
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+		});
+		expect(getPublisher).toHaveBeenCalledOnce();
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+	});
+
 	it('replays a recorded response after its source version is pruned', async () => {
 		const headers = { 'Idempotency-Key': 'version-pruned-after-publish' };
 		const first = await expectOk(await setup.request('POST', route(), {}, headers), 201);

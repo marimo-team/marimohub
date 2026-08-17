@@ -169,7 +169,8 @@ describe('NotebookProposalService', () => {
 		};
 
 		const first = await env.proposals.publishChangeRequest(input);
-		const second = await env.proposals.publishChangeRequest(input);
+		const { publisher: _publisher, ...retryInput } = input;
+		const second = await env.proposals.publishChangeRequest(retryInput);
 
 		expect(second).toEqual(first);
 		expect(openChangeRequest).toHaveBeenCalledOnce();

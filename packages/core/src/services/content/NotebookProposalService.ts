@@ -63,7 +63,7 @@ export interface PublishProposalChangeRequestInput {
 	projectId: ProjectId;
 	notebookId: NotebookId;
 	proposalId: ProposalId;
-	publisher: SourceControlPublisher;
+	publisher?: SourceControlPublisher;
 	title: string;
 	body: string;
 }
@@ -449,7 +449,13 @@ export class NotebookProposalService {
 			};
 		}
 		this.assertPayloadNotExpired(proposal);
-		if (input.publisher.provider !== proposal.source.provider) {
+		const publisher = input.publisher;
+		if (!publisher) {
+			throw new UnavailableError(
+				`Change-request publishing is not configured for ${proposal.source.provider}`,
+			);
+		}
+		if (publisher.provider !== proposal.source.provider) {
 			throw new ConflictError(`No publisher is configured for ${proposal.source.provider}`);
 		}
 
@@ -476,7 +482,7 @@ export class NotebookProposalService {
 			}),
 		);
 		const headBranch = `marimohub/${proposal.notebook_id}/${proposal.proposal_id}`;
-		const result = await input.publisher.openChangeRequest({
+		const result = await publisher.openChangeRequest({
 			repository: proposal.source.repo,
 			baseBranch: proposal.source.branch,
 			baseCommit: proposal.source.commit,
@@ -487,7 +493,7 @@ export class NotebookProposalService {
 			changes,
 		});
 		const parsedResult = ChangeRequestPublicationSchema.safeParse({
-			provider: input.publisher.provider,
+			provider: publisher.provider,
 			number: result.number,
 			url: result.url,
 			head_branch: result.headBranch,
@@ -507,7 +513,7 @@ export class NotebookProposalService {
 					state: 'published' as const,
 					updated_at: new Date().toISOString(),
 					change_request: {
-						provider: input.publisher.provider,
+						provider: publisher.provider,
 						number: result.number,
 						url: result.url,
 						head_branch: result.headBranch,
