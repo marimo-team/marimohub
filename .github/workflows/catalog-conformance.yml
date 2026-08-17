@@ -53,6 +53,10 @@ jobs:
       - name: Wait for catalog servers
         run: |
           for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:19000/minio/health/ready >/dev/null && break
+            sleep 1; [ "$i" = 30 ] && exit 1
+          done
+          for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:18181/v1/config && break
             sleep 1; [ "$i" = 30 ] && exit 1
           done
@@ -60,7 +64,7 @@ jobs:
             body=$(curl -fsS -X POST -H 'X-Trino-User: readiness' \
               --data 'SELECT 1' http://127.0.0.1:18080/v1/statement) || true
             next=$(printf '%s' "$body" | jq -r '.nextUri // empty')
-            for page in $(seq 1 100); do
+            for _ in $(seq 1 100); do
               [ -n "$next" ] || break
               body=$(curl -fsS -H 'X-Trino-User: readiness' "$next") || break
               next=$(printf '%s' "$body" | jq -r '.nextUri // empty')
