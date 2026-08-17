@@ -18,8 +18,7 @@ export function createFailClosedNodeRuntime(base: NodeRuntime = duckdb.NODE_RUNT
 		assertProtocolAllowed(file?.dataProtocol);
 	};
 	const denyPathOperation = (): never => {
-		assertProtocolAllowed(undefined);
-		throw new Error('DuckDB-Wasm filesystem policy failed open.');
+		throw protocolDenied();
 	};
 	return {
 		...base,
@@ -90,7 +89,11 @@ export function createFailClosedNodeRuntime(base: NodeRuntime = duckdb.NODE_RUNT
 
 export function assertProtocolAllowed(protocol: duckdb.DuckDBDataProtocol | undefined): void {
 	if (protocol !== undefined && LOCAL_PROTOCOLS.has(protocol)) return;
-	throw new Error(
+	throw protocolDenied();
+}
+
+function protocolDenied(): Error {
+	return new Error(
 		`DuckDB-Wasm access through a non-local or unknown data protocol is unavailable. ${ICEBERG_HTTP_UNAVAILABLE}`,
 	);
 }

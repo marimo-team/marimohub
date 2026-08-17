@@ -209,6 +209,60 @@ describe('IcebergHttpBroker', () => {
 		expect(transport).not.toHaveBeenCalled();
 	});
 
+	it('does not retain an abort controller when request normalization fails', async () => {
+		const { broker } = setup();
+		const abort = vi.spyOn(AbortController.prototype, 'abort');
+		const id = broker.open(capability());
+
+		try {
+			await expectCode(
+				broker.fetch(id, {
+					url: 'https://catalog.example.test/iceberg/v1/config',
+					method: 'GET',
+					headers: { Range: 'bytes=0-1\r\nx-forged: value' },
+				}),
+				'invalid_request',
+			);
+			broker.close(id);
+
+			expect(abort).not.toHaveBeenCalled();
+		} finally {
+			abort.mockRestore();
+		}
+	});
+
+	it('does not consume request budget when parent header preparation fails', async () => {
+		const { broker, transport } = setup();
+		const prepareHeaders = vi
+			.fn<NonNullable<IcebergHttpBrokerCapability['routes'][number]['prepareHeaders']>>()
+			.mockRejectedValueOnce(new Error('temporary signing failure'))
+			.mockResolvedValueOnce({ Authorization: 'signed' });
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'storage',
+						url: 'https://objects.example.test/warehouse',
+						match: 'prefix',
+						methods: ['GET'],
+						prepareHeaders,
+					},
+				],
+				limits: { ...capability().limits, maxRequests: 1 },
+			}),
+		);
+		const request = {
+			url: 'https://objects.example.test/warehouse/data.parquet',
+			method: 'GET' as const,
+		};
+
+		await expect(broker.fetch(id, request)).rejects.toThrow('temporary signing failure');
+		await expect(broker.fetch(id, request)).resolves.toMatchObject({ status: 200 });
+
+		expect(prepareHeaders).toHaveBeenCalledTimes(2);
+		expect(transport).toHaveBeenCalledOnce();
+	});
+
 	it('uses an exact route before an equal-path prefix route', async () => {
 		const { broker, calls } = setup();
 		const url = 'https://objects.example.test/warehouse/table.parquet';

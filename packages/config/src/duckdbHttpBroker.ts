@@ -135,7 +135,11 @@ export function createGuardedBinaryTransport(options: {
 				requestOptions,
 				(response) => {
 					const declared = Number(response.headers['content-length']);
-					if (Number.isFinite(declared) && declared > request.maxResponseBytes) {
+					if (
+						request.method !== 'HEAD' &&
+						Number.isFinite(declared) &&
+						declared > request.maxResponseBytes
+					) {
 						response.destroy();
 						settle(() => reject(responseTooLarge()));
 						return;

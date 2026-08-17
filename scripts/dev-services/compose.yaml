@@ -54,21 +54,16 @@ services:
       - '127.0.0.1:18181:8181'
 
   iceberg-seed:
-    image: python:3.13-slim
+    build:
+      context: ./seed
+      dockerfile: Dockerfile
+    image: marimohub/iceberg-seed:pyiceberg-0.10.0
     depends_on:
       # The warehouse bucket must exist before table metadata is written to it.
       minio-seed:
         condition: service_completed_successfully
       iceberg-rest:
         condition: service_started
-    entrypoint: /bin/sh
-    command:
-      - -c
-      - >-
-        pip install --disable-pip-version-check --no-cache-dir
-        'pyiceberg[pyarrow,s3fs]==0.10.0' && python /seed/seed-iceberg.py
-    volumes:
-      - ./seed:/seed:ro
 
 volumes:
   minio-data:

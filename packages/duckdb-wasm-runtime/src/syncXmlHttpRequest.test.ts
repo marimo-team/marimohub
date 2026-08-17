@@ -46,6 +46,33 @@ describe('synchronous DuckDB XMLHttpRequest', () => {
 		expect(request.getResponseHeader('Content-Range')).toBe('bytes 0-1/10');
 	});
 
+	it('forwards HEAD requests', () => {
+		const { XMLHttpRequest, requests } = setup();
+		const request = new XMLHttpRequest();
+		request.open('HEAD', 'https://objects.example.test/warehouse/data.parquet', false);
+		request.send(null);
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0].request).toEqual({
+			url: 'https://objects.example.test/warehouse/data.parquet',
+			method: 'HEAD',
+			headers: {},
+		});
+		expect(request.status).toBe(206);
+	});
+
+	it.each(['line one\r\nx-forged: value', 'line one\nline two'])(
+		'rejects a request header value containing a line break',
+		(value) => {
+			const { XMLHttpRequest, postMessage } = setup();
+			const request = new XMLHttpRequest();
+			request.open('GET', 'https://objects.example.test/warehouse/data.parquet', false);
+
+			expect(() => request.setRequestHeader('Range', value)).toThrow('request header is invalid');
+			expect(postMessage).not.toHaveBeenCalled();
+		},
+	);
+
 	it('rejects asynchronous, write, and request-body traffic', () => {
 		const { XMLHttpRequest, postMessage } = setup();
 		const asyncRequest = new XMLHttpRequest();

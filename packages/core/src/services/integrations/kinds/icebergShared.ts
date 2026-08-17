@@ -83,10 +83,6 @@ const s3Storage = z.strictObject({
 	scheme: z.literal('s3'),
 	region: z.string().min(1).optional(),
 	endpoint: url().optional(),
-	broker_read_locations: z
-		.array(brokerReadLocation)
-		.default([])
-		.describe('S3 bucket prefixes the guarded DuckDB broker may read'),
 	credentials: awsCredentialsSchema
 		.default({ method: 'ambient' })
 		.describe('Credentials for S3 FileIO only; these override client credentials'),
@@ -101,6 +97,13 @@ const s3Storage = z.strictObject({
 	request_timeout: z.number().positive().optional(),
 	force_virtual_addressing: z.boolean().default(false),
 	anonymous: z.boolean().default(false),
+});
+
+const brokeredS3Storage = s3Storage.extend({
+	broker_read_locations: z
+		.array(brokerReadLocation)
+		.default([])
+		.describe('S3 bucket prefixes the guarded DuckDB broker may read'),
 });
 
 const gcsStorage = z.strictObject({
@@ -170,6 +173,17 @@ export const icebergStorageSchema = z
 	.discriminatedUnion('scheme', [
 		z.strictObject({ scheme: z.literal('catalog') }),
 		s3Storage,
+		gcsStorage,
+		adlsStorage,
+		hdfsStorage,
+		huggingFaceStorage,
+	])
+	.default({ scheme: 'catalog' });
+
+export const icebergRestStorageSchema = z
+	.discriminatedUnion('scheme', [
+		z.strictObject({ scheme: z.literal('catalog') }),
+		brokeredS3Storage,
 		gcsStorage,
 		adlsStorage,
 		hdfsStorage,
@@ -461,7 +475,6 @@ export function renderIcebergCatalog(options: {
 
 export const icebergStorageUiHints = {
 	storage: { group: 'Storage', order: 20 },
-	'storage.broker_read_locations': { advanced: true },
 	'storage.credentials.access_key_id': { widget: 'password' as const },
 	'storage.credentials.secret_access_key': { widget: 'password' as const },
 	'storage.credentials.session_token': { widget: 'password' as const },

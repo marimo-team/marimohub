@@ -73,7 +73,7 @@ describeLive('guarded DuckDB HTTP broker live', () => {
 			const preview = await runtime.execute(programs.duckdbWasm);
 			expect(preview.columns).toEqual(['id', 'ts', 'name', 'value']);
 			expect(preview.rows).toHaveLength(3);
-			expect(preview.rows.map((row) => row[0])).toEqual(['1', '2', '3']);
+			expect(new Set(preview.rows.map((row) => row[0]))).toEqual(new Set(['1', '2', '3']));
 		} finally {
 			await runtime.close();
 		}

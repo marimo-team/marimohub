@@ -35,7 +35,7 @@ jobs:
 
       - name: Start catalog servers
         run: |
-          docker compose -f scripts/dev-services/compose.yaml up -d --wait
+          docker compose -f scripts/dev-services/compose.yaml up -d
           set +e
           docker compose -f scripts/dev-services/compose.yaml wait iceberg-seed
           iceberg_seed_wait_status=$?

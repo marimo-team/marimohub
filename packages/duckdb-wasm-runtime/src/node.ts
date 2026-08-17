@@ -192,22 +192,15 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 
 	async executeQuery(request: DataQueryExecution, signal: AbortSignal): Promise<DataQueryResult> {
 		if (signal.aborted) throw abortError();
-		const plan = request.connection.plan;
-		const httpAccess = plan?.httpAccess;
-		let workerPlan = plan;
-		if (plan) {
-			const { httpAccess: _parentOnly, ...parentSafePlan } = plan;
-			workerPlan = parentSafePlan;
+		const httpAccess = request.connection.plan?.httpAccess;
+		let workerRequest = request;
+		if (httpAccess && request.connection.plan) {
+			const { httpAccess: _parentOnly, ...workerPlan } = request.connection.plan;
+			workerRequest = {
+				...request,
+				connection: { ...request.connection, files: [], vars: {}, plan: workerPlan },
+			};
 		}
-		const workerRequest = {
-			...request,
-			connection: {
-				...request.connection,
-				files: [],
-				vars: {},
-				...(plan ? { plan: workerPlan } : {}),
-			},
-		};
 		return this.withHttpAccess(httpAccess, signal, request.limits.deadlineMs, (executionNonce) =>
 			this.request<DataQueryResult>({
 				type: 'execute-query',

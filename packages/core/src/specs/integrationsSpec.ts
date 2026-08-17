@@ -79,15 +79,18 @@ export function buildIntegrationsSpec(): Record<string, unknown> {
 		'iceberg_rest',
 		'iceberg_sql',
 	];
-	hoistSharedProperty(schemas, icebergKinds, 'storage', 'IcebergStorage');
+	const sharedStorageKinds = icebergKinds.filter((kind) => kind !== 'iceberg_rest');
+	hoistSharedProperty(schemas, sharedStorageKinds, 'storage', 'IcebergStorage');
+	hoistSharedProperty(schemas, ['iceberg_rest'], 'storage', 'IcebergRestStorage');
 	hoistSharedProperty(schemas, icebergKinds, 'runtime', 'IcebergRuntime');
 	hoistSharedProperty(schemas, icebergKinds, 'extra_properties', 'IcebergExtraProperties');
 	hoistSharedProperty(
 		schemas,
-		icebergKinds.map((kind) => `${kind}_stored`),
+		sharedStorageKinds.map((kind) => `${kind}_stored`),
 		'storage',
 		'IcebergStorageStored',
 	);
+	hoistSharedProperty(schemas, ['iceberg_rest_stored'], 'storage', 'IcebergRestStorageStored');
 	hoistSharedProperty(
 		schemas,
 		icebergKinds.map((kind) => `${kind}_stored`),

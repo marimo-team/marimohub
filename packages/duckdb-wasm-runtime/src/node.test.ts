@@ -293,7 +293,7 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 });
 
 describe('DuckDB-Wasm data-query executor', () => {
-	it('keeps rendered credentials in the parent for non-brokered plans', async () => {
+	it('preserves rendered connection material for non-brokered plans', async () => {
 		const runtime = await initialized('worker');
 		const internals = runtime as unknown as {
 			worker: { postMessage(message: unknown): void };
@@ -315,7 +315,11 @@ describe('DuckDB-Wasm data-query executor', () => {
 			expect.objectContaining({
 				type: 'execute-query',
 				request: expect.objectContaining({
-					connection: expect.objectContaining({ files: [], vars: {}, plan: { setup: [] } }),
+					connection: expect.objectContaining({
+						files: [{ path: 'secret.txt', content: 'file-secret' }],
+						vars: { QUERY_SECRET: 'environment-secret' },
+						plan: { setup: [] },
+					}),
 				}),
 			}),
 		);
@@ -323,10 +327,17 @@ describe('DuckDB-Wasm data-query executor', () => {
 
 	it('keeps rendered credentials in the parent for brokered plans', async () => {
 		const close = vi.fn();
-		const executor = await createNodeDataQueryExecutorFactory({
-			memoryLimitMb: 64,
-			httpSessionFactory: () => ({ fetch: vi.fn(), close }),
-		}).create(new AbortController().signal);
+		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker', () => ({
+			fetch: vi.fn(),
+			close,
+		}))();
+		open.push(runtime);
+		await runtime.initialize({ memoryLimitMb: 64 });
+		const internals = runtime as unknown as {
+			worker: { postMessage(message: unknown): void };
+			executeQuery(request: DataQueryExecution, signal: AbortSignal): Promise<unknown>;
+		};
+		const postMessage = vi.spyOn(internals.worker, 'postMessage');
 		const request = dataQuery('select true as parent_only');
 		request.connection = {
 			...request.connection,
@@ -347,16 +358,20 @@ describe('DuckDB-Wasm data-query executor', () => {
 				},
 			},
 		};
-		try {
-			await expect(executor.execute(request, new AbortController().signal)).resolves.toEqual({
-				columns: ['parent_only'],
-				rows: [[true]],
-				truncated: false,
-			});
-			expect(close).toHaveBeenCalledOnce();
-		} finally {
-			executor.terminate();
-		}
+		await expect(internals.executeQuery(request, new AbortController().signal)).resolves.toEqual({
+			columns: ['parent_only'],
+			rows: [[true]],
+			truncated: false,
+		});
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: 'execute-query',
+				request: expect.objectContaining({
+					connection: expect.objectContaining({ files: [], vars: {}, plan: { setup: [] } }),
+				}),
+			}),
+		);
+		expect(close).toHaveBeenCalledOnce();
 	}, 15_000);
 
 	it('uses a fresh worker and enforces the row cap while streaming', async () => {

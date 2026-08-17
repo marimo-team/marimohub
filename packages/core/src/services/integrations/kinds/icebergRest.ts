@@ -18,7 +18,7 @@ import {
 	ICEBERG_RUNTIME_DEFAULTS,
 	icebergRuntimeSchema,
 	icebergRequirements,
-	icebergStorageSchema,
+	icebergRestStorageSchema,
 	icebergStorageUiHints,
 	renderIcebergCatalog,
 	runtimeCatalogProperties,
@@ -84,7 +84,7 @@ const icebergRestConfig = z.strictObject({
 		.default(false)
 		.describe('Allow http:// endpoints to carry credentials — local development only'),
 	auth: authSchema,
-	storage: icebergStorageSchema,
+	storage: icebergRestStorageSchema,
 	runtime: icebergRuntimeSchema,
 	access_delegation: z
 		.enum(['none', 'vended_credentials', 'remote_signing', 'both'])
@@ -176,6 +176,7 @@ export const icebergRest = defineIntegration({
 		'auth.client_secret': { widget: 'password' },
 		'auth.credentials_json': { widget: 'password' },
 		...icebergStorageUiHints,
+		'storage.broker_read_locations': { advanced: true },
 		access_delegation: { group: 'Storage', order: 21 },
 		tls: { group: 'TLS', order: 25, advanced: true },
 		'tls.ca_bundle': { widget: 'textarea' },

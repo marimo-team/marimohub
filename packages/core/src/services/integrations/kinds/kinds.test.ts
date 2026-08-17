@@ -834,6 +834,21 @@ describe('kind renders (golden)', () => {
 		).toBe(false);
 	});
 
+	it.each([icebergSql, icebergHive, icebergGlue, icebergDynamoDb, icebergBigQuery])(
+		'$kind rejects REST-only broker read locations',
+		(definition) => {
+			expect(
+				definition.configSchema.safeParse({
+					...fixtureFor(definition),
+					storage: {
+						scheme: 's3',
+						broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					},
+				}).success,
+			).toBe(false);
+		},
+	);
+
 	it('iceberg_rest routes query-bearing catalog URLs to the sandbox', () => {
 		const config = icebergRest.configSchema.parse({
 			...(FIXTURES.iceberg_rest as object),

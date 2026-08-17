@@ -203,15 +203,14 @@ export class IcebergHttpBroker {
 		await acquireRequestSlot(session, signal);
 		try {
 			if (this.requireSession(id) !== session) throw unknownCapability();
+			let current = normalizeRequest(request);
 			const controller = new AbortController();
 			session.controllers.add(controller);
-			const transportSignal = signal
-				? AbortSignal.any([signal, controller.signal])
-				: controller.signal;
-			let current = normalizeRequest(request);
-			let redirects = 0;
-
 			try {
+				const transportSignal = signal
+					? AbortSignal.any([signal, controller.signal])
+					: controller.signal;
+				let redirects = 0;
 				for (;;) {
 					const authorized = await authorize(session, current);
 					const reservation = await reserveResponseBudget(session, transportSignal);
@@ -448,11 +447,20 @@ async function authorize(
 			);
 		}
 	}
-	session.requests += 1;
 	const preparedHeaders = normalizeHeaders(
 		(await route.prepareHeaders?.(request)) ?? {},
 		'invalid_request',
 	);
+	if (session.requests >= session.limits.maxRequests) {
+		session.metrics.increment('duckdb_http_broker.budget_exhausted', 1, {
+			budget: 'request',
+		});
+		throw new IcebergHttpBrokerError(
+			'request_budget_exceeded',
+			'Iceberg HTTP broker request budget exceeded.',
+		);
+	}
+	session.requests += 1;
 	session.metrics.increment('duckdb_http_broker.request', 1, {
 		outcome: 'authorized',
 		route: route.kind,

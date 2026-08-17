@@ -120,7 +120,29 @@ describe('createDuckDBHttpSessionFactory', () => {
 });
 
 describe('signS3Request', () => {
-	it('is deterministic and binds the method, path, query, and session token', () => {
+	it('matches the AWS S3 GET Bucket lifecycle signing example', () => {
+		const signed = signS3Request(
+			{
+				url: 'https://examplebucket.s3.amazonaws.com/?lifecycle',
+				method: 'GET',
+			},
+			{
+				accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
+				secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+				region: 'us-east-1',
+				now: Date.parse('2013-05-24T00:00:00Z'),
+			},
+		);
+
+		expect(signed).toEqual({
+			authorization:
+				'AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=fea454ca298b7da1c68078a5d1bdbfbbe0d65c699e0f91ac7a200a0136783543',
+			'x-amz-content-sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+			'x-amz-date': '20130524T000000Z',
+		});
+	});
+
+	it('binds the method, path, query, and session token', () => {
 		const options = {
 			accessKeyId: 'AKIDEXAMPLE',
 			secretAccessKey: 'secret-example',
@@ -135,7 +157,15 @@ describe('signS3Request', () => {
 			},
 			options,
 		);
-		const changed = signS3Request(
+		const changedMethod = signS3Request(
+			{ url: 'https://objects.example.test/warehouse/a%20b.parquet?versionId=two', method: 'HEAD' },
+			options,
+		);
+		const changedPath = signS3Request(
+			{ url: 'https://objects.example.test/warehouse/c.parquet?versionId=two', method: 'GET' },
+			options,
+		);
+		const changedQuery = signS3Request(
 			{
 				url: 'https://objects.example.test/warehouse/a%20b.parquet?versionId=three',
 				method: 'GET',
@@ -146,7 +176,14 @@ describe('signS3Request', () => {
 		expect(first.authorization).toContain(
 			'SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token',
 		);
-		expect(first.authorization).not.toEqual(changed.authorization);
+		expect(
+			new Set([
+				first.authorization,
+				changedMethod.authorization,
+				changedPath.authorization,
+				changedQuery.authorization,
+			]),
+		).toHaveLength(4);
 		expect(first['x-amz-date']).toBe('20260813T120000Z');
 	});
 });
@@ -208,6 +245,20 @@ describe('createGuardedBinaryTransport', () => {
 				deadlineMs: Date.now() + 10_000,
 			}),
 		).rejects.toMatchObject({ code: 'response_budget_exceeded' });
+	});
+
+	it('does not apply the response body limit to HEAD content-length metadata', async () => {
+		const url = await serve(new Uint8Array([1, 2, 3, 4]));
+
+		await expect(
+			createGuardedBinaryTransport({ allowPrivate: true })({
+				url,
+				method: 'HEAD',
+				headers: {},
+				maxResponseBytes: 3,
+				deadlineMs: Date.now() + 10_000,
+			}),
+		).resolves.toMatchObject({ status: 206, body: new Uint8Array() });
 	});
 
 	it('resolves and pins every request instead of reusing an origin socket', async () => {

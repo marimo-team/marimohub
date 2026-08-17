@@ -520,7 +520,9 @@ export function createFromEnv(
 		sessionMaxLifetimeSeconds: Millis.toSeconds(sessionLifetime.maxLifetimeMs),
 		sessionIdleTimeoutMs: sessionLifetime.idleTimeoutMs,
 	});
+	const integrationsSetting = env.MARIMOHUB_INTEGRATIONS?.trim().toLowerCase();
 	const brokerPolicy =
+		(integrationsSetting === 'on' || integrationsSetting === 'true') &&
 		env.MARIMOHUB_DATA_BROWSER?.trim().toLowerCase() === 'full'
 			? integrationProbePolicy(env)
 			: undefined;

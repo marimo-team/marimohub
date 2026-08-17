@@ -1470,7 +1470,7 @@ See the [secret-source guide](./integration-secrets.md).`,
 						id: 'MARIMOHUB_INTEGRATIONS_PROBE',
 						name: 'Integration egress policy',
 						description:
-							'Policy for integration HTTP requests, including tests, browsing, and the DuckDB-Wasm broker. `guarded` (default) allows public addresses only. It rejects private, loopback, link-local, metadata, and CGNAT addresses. `private` also permits private and loopback targets for private deployments. Requests have time and size limits. Connection tests never follow redirects. The DuckDB broker authorizes each redirect. `off` disables connection tests and data browsing.',
+							'Policy for integration HTTP requests, including tests, browsing, and the DuckDB-Wasm broker. `guarded` (default) allows public addresses only. It rejects private, loopback, link-local, metadata, and CGNAT addresses. `private` also permits private and loopback targets for private deployments. Requests have time and size limits. Connection tests never follow redirects. The DuckDB broker authorizes each redirect. `off` disables connection tests and requires `MARIMOHUB_DATA_BROWSER=off`.',
 						default: 'guarded',
 					},
 					{
