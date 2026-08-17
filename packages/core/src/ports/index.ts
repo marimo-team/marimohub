@@ -9,3 +9,4 @@ export * from './integrations';
 export * from './notifier';
 export * from './objectBrowser';
 export * from './projectAlerts';
+export * from './sourceControl';

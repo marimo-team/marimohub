@@ -22,6 +22,7 @@ import type {
 	SandboxProvider,
 	SandboxUserHome,
 	Seconds,
+	SourceControlPublisherRegistry,
 	ViewerMode,
 	WorkloadIdentityIssuer,
 } from '@marimo-hub/core';
@@ -278,6 +279,8 @@ export interface ApiDeps {
 	/** Raw bucket handle (used by ensureInitialized + the sandbox copy fallback). */
 	bucket: Bucket;
 	compute: SandboxProvider;
+	/** Server-side source-control publishers. Provider credentials never enter a sandbox. */
+	sourceControlPublishers?: SourceControlPublisherRegistry;
 	authenticator: Authenticator;
 	/** Outbound notification channel. `createApi` supplies a no-op when absent. */
 	notifier?: Notifier;

@@ -3,6 +3,7 @@ import type {
 	IntegrationId,
 	NotebookId,
 	ProjectId,
+	ProposalId,
 	SessionId,
 	SnapshotId,
 	TokenId,
@@ -22,7 +23,10 @@ import {
 	IntegrationRecordSchema,
 	IntegrationVersionRecordSchema,
 	NotebookMetaSchema,
+	NotebookProposalSchema,
+	ProposalPayloadMarkerSchema,
 	ProjectSchema,
+	ProposalPublicationSchema,
 	SessionSchema,
 	SnapshotSchema,
 	SourceSchema,
@@ -35,6 +39,7 @@ import {
 const PID = '{pid}' as ProjectId;
 const NID = '{nid}' as NotebookId;
 const VID = '{vid}' as VersionId;
+const PROPOSAL_ID = '{proposal_id}' as ProposalId;
 const SID = '{sid}' as SessionId;
 const IID = '{iid}' as IntegrationId;
 const TID = '{tid}' as TokenId;
@@ -63,6 +68,7 @@ interface BucketObject {
 
 const project = paths.project(PID);
 const notebook = project.notebook(NID);
+const proposal = notebook.proposal(PROPOSAL_ID);
 const projectIntegration = project.integration(IID);
 const orgIntegration = paths.orgIntegration(IID);
 
@@ -130,6 +136,31 @@ const OBJECTS: BucketObject[] = [
 		key: notebook.version(VID).meta,
 		schema: VersionSchema,
 		summary: 'Immutable saved-version record beside the version folder.',
+		mutability: 'immutable',
+		tag: 'notebook',
+	},
+	{
+		name: 'NotebookProposal',
+		key: proposal.meta,
+		schema: NotebookProposalSchema,
+		summary: 'Immutable synced-session change proposal.',
+		mutability: 'immutable',
+		tag: 'notebook',
+	},
+	{
+		name: 'ProposalPublication',
+		key: proposal.publication,
+		schema: ProposalPublicationSchema,
+		summary: 'CAS-managed publication state for a synced-session proposal.',
+		mutability: 'cas',
+		owner: 'NotebookProposalService',
+		tag: 'notebook',
+	},
+	{
+		name: 'ProposalPayloadMarker',
+		key: paths.proposalPayloadMarker(PID, NID, PROPOSAL_ID),
+		schema: ProposalPayloadMarkerSchema,
+		summary: 'Immutable retention marker for ephemeral proposal change content.',
 		mutability: 'immutable',
 		tag: 'notebook',
 	},

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ACTOR, advanceTime, expectNotFound, MemoryBucket, restoreClock, uid } from '../../testing';
 import { PreconditionFailedError } from '../../errors';
-import { createNotebookId, createProjectId } from '../../ids';
+import { createNotebookId, createProjectId, createVersionId } from '../../ids';
 import type { SessionId } from '../../ids';
 import { paths } from '../../paths';
 import { SessionService } from './SessionService';
@@ -712,6 +712,35 @@ describe('SessionService', () => {
 				expect(call[0]?.prefix).toBe(`_system/sessions/${projectId}/`);
 			}
 			listSpy.mockRestore();
+		});
+
+		it('returns source versions protected by present sessions for one notebook', async () => {
+			const protectedVersion = createVersionId();
+			const terminalVersion = createVersionId();
+			const otherNotebookVersion = createVersionId();
+			await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: ACTOR,
+				source_version_id: protectedVersion,
+			});
+			const terminal = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: ACTOR,
+				source_version_id: terminalVersion,
+			});
+			await sessions.markFailed(projectId, terminal.session_id);
+			await sessions.createSession({
+				project_id: projectId,
+				notebook_id: createNotebookId(),
+				user_id: ACTOR,
+				source_version_id: otherNotebookVersion,
+			});
+
+			expect(await sessions.listProtectedVersionIds(projectId, notebookId)).toEqual(
+				new Set([protectedVersion]),
+			);
 		});
 	});
 

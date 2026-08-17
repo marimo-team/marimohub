@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { NotebookId, ProjectId, SessionId, SnapshotId, UserId, VersionId } from './ids';
+import type {
+	NotebookId,
+	ProjectId,
+	ProposalId,
+	SessionId,
+	SnapshotId,
+	UserId,
+	VersionId,
+} from './ids';
 import { paths } from './paths';
 
 const pid = 'proj_01HXY11111ABCDEFGHJKMN' as ProjectId;
@@ -7,6 +15,7 @@ const nid = 'nb_01HXYZ22222PQRSTUVWXYZ' as NotebookId;
 const vid = 'ver_01HXYZ33333RSTUVWXYZAB' as VersionId;
 const sid = 'snap_01HXYZ9ABCDEFGHJKMNPQ' as SnapshotId;
 const sessId = 'sess_01HXYZ44444CDEFGHJKMNP' as SessionId;
+const proposalId = 'prop-0123456789abcdef' as ProposalId;
 
 describe('paths', () => {
 	it('system paths', () => {
@@ -42,6 +51,7 @@ describe('paths', () => {
 			  "fsSnapshot": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/fs_snapshot.json",
 			  "integrationSyncToken": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/integration_sync_token.json",
 			  "meta": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/meta.json",
+			  "proposal": [Function],
 			  "readme": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/README.md",
 			  "source": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/source.json",
 			  "version": [Function],
@@ -49,6 +59,22 @@ describe('paths', () => {
 			  "workspacePrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/workspace/",
 			}
 		`);
+	});
+
+	it('proposal paths', () => {
+		const proposal = paths.project(pid).notebook(nid).proposal(proposalId);
+		expect(proposal.meta).toBe(
+			'projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/proposals/prop-0123456789abcdef/proposal.json',
+		);
+		expect(proposal.publication).toBe(
+			'projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/proposals/prop-0123456789abcdef/publication.json',
+		);
+		expect(proposal.change(2)).toBe(
+			'projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/proposals/prop-0123456789abcdef/changes/2',
+		);
+		expect(paths.proposalPayloadMarker(pid, nid, proposalId)).toBe(
+			'_system/proposal-payloads/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/prop-0123456789abcdef.json',
+		);
 	});
 
 	it('version paths', () => {

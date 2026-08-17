@@ -1,6 +1,7 @@
 import type {
 	IntegrationId,
 	NotebookId,
+	ProposalId,
 	ProjectId,
 	SandboxId,
 	SessionId,
@@ -47,6 +48,14 @@ export interface NotebookPaths {
 	code: string;
 	deps: string;
 	version: (vid: VersionId) => VersionPaths;
+	proposal: (proposalId: ProposalId) => ProposalPaths;
+}
+
+export interface ProposalPaths {
+	base: string;
+	meta: string;
+	publication: string;
+	change: (index: number) => string;
 }
 
 export interface IntegrationPaths {
@@ -111,6 +120,15 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 		code: `${workspace}/notebook.py`,
 		deps: `${workspace}/pyproject.toml`,
 		version: (vid: VersionId) => versionPaths(base, vid),
+		proposal: (proposalId: ProposalId) => {
+			const proposalBase = `${base}/proposals/${proposalId}`;
+			return {
+				base: `${proposalBase}/`,
+				meta: `${proposalBase}/proposal.json`,
+				publication: `${proposalBase}/publication.json`,
+				change: (index: number) => `${proposalBase}/changes/${index}`,
+			};
+		},
 	};
 }
 
@@ -175,6 +193,9 @@ export const paths = {
 	event: (date: string, id: string) => `_system/events/${date}/${id}.json`,
 	idempotencyPrefix: '_system/idempotency/',
 	idempotencyKey: (digest: string) => `_system/idempotency/${digest}.json`,
+	proposalPayloadMarkersPrefix: '_system/proposal-payloads/',
+	proposalPayloadMarker: (projectId: ProjectId, notebookId: NotebookId, proposalId: ProposalId) =>
+		`_system/proposal-payloads/${projectId}/${notebookId}/${proposalId}.json`,
 	/**
 	 * First-seen marker for a recordless sandbox the compute provider reports
 	 * without a `createdAt`. Written once when the reconciler first observes such an

@@ -169,12 +169,7 @@ export interface FsSandboxOptions {
 	root?: string;
 	/** Initial files, keyed by path relative to `root` (string or raw bytes). */
 	files?: Record<string, string | Uint8Array>;
-	/**
-	 * Overrides the size `listFiles` reports for a relative path, decoupling the
-	 * declared size from the stored payload. Lets size-cap tests declare large
-	 * files without allocating (and base64-round-tripping) the bytes — the capture
-	 * caps key off the *listed* size, not a read.
-	 */
+	/** Overrides the size `listFiles` reports for a relative path. */
 	sizes?: Record<string, number>;
 }
 

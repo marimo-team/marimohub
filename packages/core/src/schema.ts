@@ -13,6 +13,7 @@ import {
 	NotebookId,
 	SnapshotId,
 	VersionId,
+	ProposalId,
 	SessionId,
 	SandboxId,
 	TokenId,
@@ -132,6 +133,7 @@ export const ProjectIdSchema = z.string().refine(ProjectId.is);
 export const NotebookIdSchema = z.string().refine(NotebookId.is);
 export const SnapshotIdSchema = z.string().refine(SnapshotId.is);
 export const VersionIdSchema = z.string().refine(VersionId.is);
+export const ProposalIdSchema = z.string().refine(ProposalId.is);
 export const SessionIdSchema = z.string().refine(SessionId.is);
 export const SandboxIdSchema = z.string().refine(SandboxId.is);
 export const TokenIdSchema = z.string().refine(TokenId.is);
@@ -431,9 +433,11 @@ export const LocalSourceSchema = z.object({
 // workflow). The platform never reaches out to the host — content arrives by
 // `push` only — so `provider` is informational (for display/links) and `repo`,
 // `branch`, `commit` are plain git coordinates, host-agnostic. `repo` is
-// either `owner/repo` (GitHub shorthand) or a repository URL; `provider` is
-// null when the host isn't recognized (the UI then renders no links). Sync
-// fields are null until the first push lands; see `SyncedNotebookService`.
+// either `owner/repo` (GitHub shorthand) or a repository URL. Host detection
+// takes precedence over an explicit provider claim; provider is null when
+// neither is available. Sync fields are null until the first push lands; see
+// `SyncedNotebookService`.
+// Static repository coordinates supplied when a git-backed notebook is configured.
 export const GitSourceConfigSchema = z.object({
 	repo: z.string(),
 	branch: z.string(),
@@ -443,10 +447,20 @@ export const GitSourceConfigSchema = z.object({
 
 export type GitSourceConfig = z.infer<typeof GitSourceConfigSchema>;
 
+// Immutable repository coordinates recorded on a synced notebook version.
+export const GitSourceRevisionSchema = z.object({
+	provider: z.string().min(1).nullable(),
+	...GitSourceConfigSchema.shape,
+	commit: z.string().min(1),
+});
+
+export type GitSourceRevision = z.infer<typeof GitSourceRevisionSchema>;
+
+// Mutable live sync state for a git-backed notebook.
 export const GitSourceSchema = z.object({
 	schema_version: SchemaVersionSchema,
 	type: z.literal('git'),
-	provider: z.enum(['github', 'gitlab']).nullable(),
+	provider: z.string().min(1).nullable(),
 	...GitSourceConfigSchema.shape,
 	pending_config: GitSourceConfigSchema.optional(),
 	sync_mode: z.literal('push'),
@@ -496,6 +510,7 @@ export const VersionSchema = z.object({
 	// The git commit a sync-cut version mirrors (git-synced sources only; the
 	// UI links it to the host). Forward-tolerant like the snapshots above.
 	commit: z.string().optional(),
+	git_source: GitSourceRevisionSchema.optional(),
 });
 
 export type Version = z.infer<typeof VersionSchema>;
@@ -505,6 +520,78 @@ export function toPublicVersion(version: Version): PublicVersion {
 	const { schema_version: _schema_version, ...rest } = version;
 	return rest;
 }
+
+// --- Synced-source proposals ---
+
+const ProposalContentChangeSchema = z.object({
+	path: z.string().min(1),
+	operation: z.enum(['add', 'modify']),
+	size_bytes: z.number().int().nonnegative(),
+	sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+const ProposalDeleteChangeSchema = z.object({
+	path: z.string().min(1),
+	operation: z.literal('delete'),
+});
+
+export const ProposalChangeSchema = z.discriminatedUnion('operation', [
+	ProposalContentChangeSchema,
+	ProposalDeleteChangeSchema,
+]);
+
+export type ProposalChange = z.infer<typeof ProposalChangeSchema>;
+
+export const NotebookProposalSchema = z.object({
+	schema_version: SchemaVersionSchema,
+	proposal_id: ProposalIdSchema,
+	notebook_id: NotebookIdSchema,
+	session_id: SessionIdSchema,
+	author: UserIdSchema,
+	created_at: z.iso.datetime(),
+	base_version_id: VersionIdSchema,
+	source: GitSourceRevisionSchema.extend({ provider: z.string().min(1) }),
+	changes: z.array(ProposalChangeSchema).min(1),
+});
+
+export type NotebookProposal = z.infer<typeof NotebookProposalSchema>;
+
+export const ProposalPayloadMarkerSchema = z.object({
+	schema_version: SchemaVersionSchema,
+	proposal_id: ProposalIdSchema,
+	project_id: ProjectIdSchema,
+	notebook_id: NotebookIdSchema,
+	expires_at: z.iso.datetime(),
+	change_indexes: z
+		.array(z.number().int().nonnegative())
+		.min(1)
+		.max(1_000)
+		.refine((indexes) => new Set(indexes).size === indexes.length, 'Change indexes must be unique'),
+});
+
+export type ProposalPayloadMarker = z.infer<typeof ProposalPayloadMarkerSchema>;
+
+export const ChangeRequestPublicationSchema = z.object({
+	provider: z.string().min(1),
+	number: z.number().int().positive(),
+	url: z.url().refine((value) => value.startsWith('https://')),
+	head_branch: z.string().min(1),
+	head_commit: z.string().min(1),
+});
+
+export const ProposalPublicationSchema = z.discriminatedUnion('state', [
+	z.looseObject({
+		state: z.literal('pending'),
+		updated_at: z.iso.datetime(),
+	}),
+	z.looseObject({
+		state: z.literal('published'),
+		updated_at: z.iso.datetime(),
+		change_request: ChangeRequestPublicationSchema,
+	}),
+]);
+
+export type ProposalPublication = z.infer<typeof ProposalPublicationSchema>;
 
 // --- Filesystem snapshot ---
 //

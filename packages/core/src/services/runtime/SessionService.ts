@@ -411,6 +411,18 @@ export class SessionService {
 		return sessions.filter((s) => present.includes(s.status));
 	}
 
+	async listProtectedVersionIds(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<ReadonlySet<VersionId>> {
+		const sessions = await this.listActiveByProject(projectId);
+		return new Set(
+			sessions
+				.filter((session) => session.notebook_id === notebookId && session.source_version_id)
+				.map((session) => session.source_version_id as VersionId),
+		);
+	}
+
 	/**
 	 * Find a session the caller can REUSE for this notebook so a refresh during
 	 * start doesn't pile up sandboxes: a `running` session with a `sandbox_url`

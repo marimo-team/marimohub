@@ -421,6 +421,25 @@ describe('SyncedNotebookService', () => {
 			expect(e?.status).toBe('active');
 		});
 
+		it('records a null provider on versions synced from an unrecognized host', async () => {
+			const repo = 'https://code.my-company.org/team/repo';
+			const { meta } = await notebooks.synced.create(projectId, { ...CREATE_INPUT, repo }, ACTOR);
+			await notebooks.synced.sync(projectId, meta.id, {
+				...syncInput('commit-aaaa'),
+				repo,
+			});
+			const notebook = await notebooks.getNotebook(projectId, meta.id);
+			if (notebook.source.type !== 'git' || !notebook.source.current_version_id) {
+				throw new Error('expected synced source');
+			}
+			const { version } = await notebooks.getVersion(
+				projectId,
+				meta.id,
+				notebook.source.current_version_id,
+			);
+			expect(version.git_source?.provider).toBeNull();
+		});
+
 		it('is a no-op when re-syncing the same commit', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 			await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));

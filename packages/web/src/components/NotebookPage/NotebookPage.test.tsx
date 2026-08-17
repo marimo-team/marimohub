@@ -59,6 +59,10 @@ interface FetchOptions {
 	editorStateFailures?: number;
 	editorStateFailOn?: number[];
 	meFailures?: number;
+	sourceControlProviders?: string[];
+	omitSourceControlCapability?: boolean;
+	changeRequestFailures?: number;
+	changeRequestFailure?: { code: string; message: string; status: number };
 	mePromise?: Promise<{
 		id: string;
 		email: string;
@@ -73,6 +77,7 @@ function makeFetch(opts: FetchOptions) {
 	let sessionPostCount = 0;
 	let editorStateRequestCount = 0;
 	let meRequestCount = 0;
+	let changeRequestCount = 0;
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? 'GET';
@@ -93,6 +98,33 @@ function makeFetch(opts: FetchOptions) {
 				opts.sessionResponses?.[sessionPostCount] ?? opts.session ?? runningSession();
 			sessionPostCount += 1;
 			return ok({ ...response, reused: false });
+		}
+		if (method === 'POST' && url.endsWith('/change-requests')) {
+			changeRequestCount += 1;
+			if (changeRequestCount <= (opts.changeRequestFailures ?? 0)) {
+				const failure = opts.changeRequestFailure ?? {
+					code: 'SERVICE_UNAVAILABLE',
+					message: 'GitHub is unavailable',
+					status: 503,
+				};
+				return new Response(
+					JSON.stringify({
+						success: false,
+						error: { code: failure.code, message: failure.message },
+					}),
+					{ status: failure.status, headers: { 'content-type': 'application/json' } },
+				);
+			}
+			return ok({
+				proposal_id: 'prop-1234567890abcdef',
+				change_request: {
+					provider: 'github',
+					number: 17,
+					url: 'https://github.com/org/repo/pull/17',
+					head_branch: 'marimohub/nb-1/prop-1234567890abcdef',
+					head_commit: 'abc123',
+				},
+			});
 		}
 		if (url.endsWith(`/sessions/${(opts.session ?? runningSession()).session_id}`)) {
 			return ok(opts.session ?? runningSession());
@@ -142,6 +174,13 @@ function makeFetch(opts: FetchOptions) {
 			const viewerMode = opts.viewerMode ?? 'static';
 			return ok({
 				federation: { available: false },
+				...(opts.omitSourceControlCapability
+					? {}
+					: {
+							source_control: {
+								change_request_providers: opts.sourceControlProviders ?? [],
+							},
+						}),
 				viewer_mode: viewerMode,
 				viewer_session_modes:
 					viewerMode === 'ephemeral-sandbox'
@@ -720,6 +759,127 @@ describe('NotebookPage git-synced editor', () => {
 		await waitFor(() => expect(sessionPosts(impl)).toHaveLength(2));
 		const deletes = impl.mock.calls.filter(([, init]) => init?.method === 'DELETE');
 		expect(deletes).toHaveLength(1);
+	});
+
+	it('lets a manager open a pull request from a persistent running session', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'manager',
+			sourceType: 'git',
+			session: gitEditSession(),
+			sourceControlProviders: ['github'],
+		});
+		const popup = {
+			opener: window,
+			location: { href: 'about:blank' },
+			close: vi.fn(),
+		};
+		vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open PR' }));
+		await waitFor(() => expect(popup.location.href).toBe('https://github.com/org/repo/pull/17'));
+		expect(popup.opener).toBeNull();
+		expect(
+			fetch.mock.calls.some(
+				([url, init]) => String(url).endsWith('/change-requests') && init?.method === 'POST',
+			),
+		).toBe(true);
+	});
+
+	it('reuses the idempotency key when a manager retries a failed publication', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'manager',
+			sourceType: 'git',
+			session: gitEditSession(),
+			sourceControlProviders: ['github'],
+			changeRequestFailures: 1,
+		});
+		const firstPopup = { opener: window, location: { href: 'about:blank' }, close: vi.fn() };
+		const secondPopup = { opener: window, location: { href: 'about:blank' }, close: vi.fn() };
+		vi.spyOn(window, 'open')
+			.mockReturnValueOnce(firstPopup as unknown as Window)
+			.mockReturnValueOnce(secondPopup as unknown as Window);
+		renderPage();
+
+		const button = await screen.findByRole('button', { name: 'Open PR' });
+		await user.click(button);
+		await waitFor(() => expect(firstPopup.close).toHaveBeenCalledOnce());
+		await waitFor(() => expect(button).toBeEnabled());
+		await user.click(button);
+		await waitFor(() =>
+			expect(secondPopup.location.href).toBe('https://github.com/org/repo/pull/17'),
+		);
+
+		const keys = fetch.mock.calls
+			.filter(([url, init]) => String(url).endsWith('/change-requests') && init?.method === 'POST')
+			.map(([, init]) => new Headers(init?.headers).get('idempotency-key'));
+		expect(keys).toHaveLength(2);
+		expect(keys[1]).toBe(keys[0]);
+	});
+
+	it('rotates the idempotency key when the proposal must be recaptured', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'manager',
+			sourceType: 'git',
+			session: gitEditSession(),
+			sourceControlProviders: ['github'],
+			changeRequestFailures: 1,
+			changeRequestFailure: {
+				code: 'PROPOSAL_RETRY_REQUIRED',
+				message: 'The proposal payload expired; retry with a new idempotency key',
+				status: 409,
+			},
+		});
+		const firstPopup = { opener: window, location: { href: 'about:blank' }, close: vi.fn() };
+		const secondPopup = { opener: window, location: { href: 'about:blank' }, close: vi.fn() };
+		vi.spyOn(window, 'open')
+			.mockReturnValueOnce(firstPopup as unknown as Window)
+			.mockReturnValueOnce(secondPopup as unknown as Window);
+		renderPage();
+
+		const button = await screen.findByRole('button', { name: 'Open PR' });
+		await user.click(button);
+		await waitFor(() => expect(firstPopup.close).toHaveBeenCalledOnce());
+		await waitFor(() => expect(button).toBeEnabled());
+		await user.click(button);
+		await waitFor(() =>
+			expect(secondPopup.location.href).toBe('https://github.com/org/repo/pull/17'),
+		);
+
+		const keys = fetch.mock.calls
+			.filter(([url, init]) => String(url).endsWith('/change-requests') && init?.method === 'POST')
+			.map(([, init]) => new Headers(init?.headers).get('idempotency-key'));
+		expect(keys).toHaveLength(2);
+		expect(keys[1]).not.toBe(keys[0]);
+	});
+
+	it('does not offer pull-request publishing to project editors', async () => {
+		makeFetch({
+			role: 'editor',
+			sourceType: 'git',
+			session: gitEditSession(),
+			sourceControlProviders: ['github'],
+		});
+		const { container } = renderPage();
+
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(screen.queryByRole('button', { name: 'Open PR' })).toBeNull();
+	});
+
+	it('handles an older capability response without source-control fields', async () => {
+		makeFetch({
+			role: 'manager',
+			sourceType: 'git',
+			session: gitEditSession(),
+			omitSourceControlCapability: true,
+		});
+		const { container } = renderPage();
+
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(screen.queryByRole('button', { name: 'Open PR' })).toBeNull();
 	});
 });
 

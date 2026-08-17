@@ -6,7 +6,7 @@ import {
 	keepPreviousData,
 } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from './client';
 import { useApiMutation, useInvalidate } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
@@ -1645,6 +1645,31 @@ export function useStopSession(
 		() => [sessionKeys.listByProject(projectId)],
 		opts?.suppressErrorToast ? { suppressErrorToast: true } : undefined,
 	);
+}
+
+export function useOpenNotebookChangeRequest(projectId: string, notebookId: string) {
+	const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+	return useMutation({
+		mutationFn: ({ sessionId, title }: { sessionId: string; title?: string }) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests', {
+					params: {
+						path: { pid: projectId, nid: notebookId, sid: sessionId },
+						header: { 'idempotency-key': idempotencyKey },
+					},
+					body: title ? { title } : {},
+					timeout: 120_000,
+				}),
+			),
+		onSuccess: () => {
+			setIdempotencyKey(crypto.randomUUID());
+		},
+		onError: (error) => {
+			if (isApiErrorCode(error, 'PROPOSAL_RETRY_REQUIRED')) {
+				setIdempotencyKey(crypto.randomUUID());
+			}
+		},
+	});
 }
 
 export function useEditorSessionQuery(

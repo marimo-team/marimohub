@@ -237,6 +237,11 @@ export class SyncedNotebookService {
 			parentId: syncedSource.current_version_id,
 			commit: prepared.commit,
 		});
+		version.git_source = {
+			provider: providerForRepo(syncedSource, prepared.config.repo),
+			...prepared.config,
+			commit: prepared.commit,
+		};
 		let versionToKeep = versionId;
 
 		await saga(metricsObserver(this.metrics, 'saga.synced_notebook_sync'))

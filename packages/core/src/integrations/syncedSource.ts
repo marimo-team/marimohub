@@ -11,7 +11,6 @@ import {
 	repoOrigin,
 	reposMatch,
 } from './gitRepo';
-import type { GitProvider } from './gitRepo';
 import {
 	normalizeEntryNotebook,
 	normalizeWorkspaceRootPath,
@@ -22,7 +21,7 @@ import type { SyncedWorkspaceFile, SyncedWorkspaceFileMap } from './remoteWorksp
 export interface CreateSyncedNotebookInput {
 	title: string;
 	description: string;
-	provider?: GitProvider;
+	provider?: string;
 	repo: string;
 	branch: string;
 	root_path?: string;
@@ -128,7 +127,7 @@ export function gitSourceConfigsEqual(a: GitSourceConfig, b: GitSourceConfig): b
 export function providerForRepo(
 	current: Pick<GitSource, 'repo' | 'provider'>,
 	nextRepo: string,
-): GitProvider | null {
+): string | null {
 	const detected = detectProvider(nextRepo);
 	if (detected) return detected;
 	const host = repoHost(nextRepo);

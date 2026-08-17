@@ -16,6 +16,7 @@ import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS } from './NotebookService';
 import type { NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
+import type { SessionService } from '../runtime/SessionService';
 import { listAllKeys, listAllPrefixes } from '../catalog/storage';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -34,6 +35,7 @@ describe('NotebookService', () => {
 	let bucket: MemoryBucket;
 	let notebooks: NotebookService;
 	let projects: ProjectService;
+	let sessions: SessionService;
 	let catalog: CatalogService;
 	let projectId: ProjectId;
 
@@ -42,6 +44,7 @@ describe('NotebookService', () => {
 		bucket = env.bucket;
 		notebooks = env.notebooks;
 		projects = env.projects;
+		sessions = env.sessions;
 		catalog = env.catalog;
 
 		const project = await projects.createProject(
@@ -998,6 +1001,34 @@ describe('NotebookService', () => {
 			expect(code).toBe(`v${extraSaves}`);
 			// And the live notebook content is the latest code.
 			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe(`v${extraSaves}`);
+		});
+
+		it('retains an old version while a live session references it', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v0' },
+				ACTOR,
+			);
+			const oldestVersionId = (await notebooks.listVersions(projectId, created.id))[0].version_id;
+			const liveSession = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: created.id,
+				user_id: ACTOR,
+				source_version_id: oldestVersionId,
+			});
+
+			for (let i = 1; i <= MAX_VERSIONS + 2; i++) {
+				await notebooks.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
+			}
+
+			const oldest = paths.project(projectId).notebook(created.id).version(oldestVersionId);
+			expect(await bucket.head(oldest.meta)).not.toBeNull();
+			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS + 1);
+
+			await sessions.markFailed(projectId, liveSession.session_id);
+			await notebooks.updateNotebook(projectId, created.id, { code: 'after session' }, ACTOR);
+			expect(await bucket.head(oldest.meta)).toBeNull();
+			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS);
 		});
 
 		it('does not fail the save when pruning errors (best-effort)', async () => {

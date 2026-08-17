@@ -409,18 +409,23 @@ export const IfMatchHeader = z.object({
 		.openapi({ param: { name: 'if-match', in: 'header' }, example: '"2025-03-05T14:00:00Z"' }),
 });
 
-/**
- * OpenAPI request schema for the optional `Idempotency-Key` header on the create
- * routes. A client sends the same key on a retry so a dropped-response replay
- * returns the original result instead of creating a duplicate (see `idempotentCreate`).
- */
+/** A retry key shared by the optional and required idempotency header schemas. */
+const IdempotencyKeySchema = z
+	.string()
+	.min(1)
+	.max(255)
+	.openapi({
+		param: { name: 'idempotency-key', in: 'header' },
+		description: 'Stable client-generated key reused for retries of the same operation.',
+		example: 'a1b2c3d4-e5f6-7890',
+	});
+
 export const IdempotencyKeyHeader = z.object({
-	'idempotency-key': z
-		.string()
-		.min(1)
-		.max(255)
-		.optional()
-		.openapi({ param: { name: 'idempotency-key', in: 'header' }, example: 'a1b2c3d4-e5f6-7890' }),
+	'idempotency-key': IdempotencyKeySchema.optional(),
+});
+
+export const RequiredIdempotencyKeyHeader = z.object({
+	'idempotency-key': IdempotencyKeySchema,
 });
 
 /**
@@ -687,17 +692,29 @@ export const LocalSourceResponseSchema = z.object({
 
 export const GitSourceConfigResponseSchema = z
 	.object({
-		repo: z.string(),
-		branch: z.string(),
-		root_path: z.string(),
-		entry_notebook: z.string(),
+		repo: z.string().openapi({
+			description: 'Normalized repository coordinate: owner/repo or an HTTPS repository URL.',
+			example: 'marimo-team/marimohub',
+		}),
+		branch: z.string().openapi({ description: 'Synced repository branch.', example: 'main' }),
+		root_path: z.string().openapi({
+			description: 'Repository-relative directory synced into the notebook workspace.',
+			example: 'apps',
+		}),
+		entry_notebook: z.string().openapi({
+			description: 'Path to the entry notebook relative to root_path.',
+			example: 'dashboard.py',
+		}),
 	})
 	.openapi('GitSourceConfig');
 
 export const GitSourceResponseSchema = z.object({
 	type: z.literal('git'),
 	// Null when the repo's host isn't a recognized provider (links can't be built).
-	provider: z.enum(['github', 'gitlab']).nullable(),
+	provider: z.string().min(1).nullable().openapi({
+		description: 'Detected Git provider id, or null when the repository host is not recognized.',
+		example: 'github',
+	}),
 	...GitSourceConfigResponseSchema.shape,
 	pending_config: GitSourceConfigResponseSchema.optional(),
 	sync_mode: z.literal('push'),
@@ -725,6 +742,21 @@ const SnapshotDescriptorResponseSchema = z
 	})
 	.openapi('SnapshotDescriptor');
 
+const GitSourceRevisionResponseSchema = z
+	.object({
+		provider: z.string().min(1).nullable().openapi({
+			description:
+				'Detected provider id for this immutable source revision, or null when the repository host is unrecognized.',
+			example: 'github',
+		}),
+		...GitSourceConfigResponseSchema.shape,
+		commit: z.string().openapi({
+			description: 'Immutable Git commit from which the saved version was synced.',
+			example: '9e107d9d372bb6826bd81d3542a419d6',
+		}),
+	})
+	.openapi('GitSourceRevision');
+
 export const NotebookVersionResponseSchema = z
 	.object({
 		version_id: z.string(),
@@ -736,6 +768,7 @@ export const NotebookVersionResponseSchema = z
 		html_snapshot: SnapshotDescriptorResponseSchema.optional(),
 		session_snapshot: SnapshotDescriptorResponseSchema.optional(),
 		commit: z.string().optional(),
+		git_source: GitSourceRevisionResponseSchema.optional(),
 	})
 	.openapi('NotebookVersion');
 
@@ -965,6 +998,13 @@ export const CapabilitiesResponseSchema = z
 	.object({
 		federation: z.object({ available: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
+		source_control: z.object({
+			change_request_providers: z.array(z.string()).openapi({
+				description:
+					'Provider ids configured to publish pull requests, merge requests, or equivalents from notebook sessions.',
+				example: ['github'],
+			}),
+		}),
 		project_alerts: z.object({
 			available: z.boolean(),
 			destination_types: z.array(extensibleResponseEnum(['slack', 'webhook'], 'slack')),

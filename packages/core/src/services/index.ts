@@ -11,6 +11,7 @@ import { IdempotencyService } from './catalog/IdempotencyService';
 import { IdentityService } from './identity/IdentityService';
 import { MaintenanceService } from './catalog/MaintenanceService';
 import { NotebookService } from './content/NotebookService';
+import { NotebookProposalService } from './content/NotebookProposalService';
 import { ProjectService } from './content/ProjectService';
 import { SessionService } from './runtime/SessionService';
 import { TokenService } from './tokens/TokenService';
@@ -24,7 +25,17 @@ export { MaintenanceService } from './catalog/MaintenanceService';
 export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/MaintenanceService';
 export { MaintenanceLock } from './catalog/MaintenanceLock';
 export { MAX_VERSIONS, NotebookService } from './content/NotebookService';
-export type { CreateNotebookInput } from './content/NotebookService';
+export {
+	DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS,
+	DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS,
+	NotebookProposalService,
+} from './content/NotebookProposalService';
+export type {
+	CaptureEntryNotebookProposalInput,
+	PruneExpiredProposalPayloadsOptions,
+	PublishProposalChangeRequestInput,
+} from './content/NotebookProposalService';
+export type { CreateNotebookInput, NotebookVersionProtector } from './content/NotebookService';
 export type {
 	CreateSyncedNotebookInput,
 	SyncNotebookInput,
@@ -310,23 +321,6 @@ export function createServices(
 		updateMemberRole: project,
 		removeMember: project,
 	});
-	const notebooks = wrap('NotebookService', new NotebookService(bucket, catalog, metrics), {
-		listNotebooks: project,
-		createNotebook: project,
-		getNotebook: notebook,
-		getNotebookContent: notebook,
-		duplicateNotebook: notebook,
-		updateNotebook: notebook,
-		restoreVersion: notebook,
-		commitSession: notebook,
-		deleteNotebook: notebook,
-		hardDeleteNotebook: notebook,
-		listVersions: notebook,
-		getVersion: notebook,
-		getLatestHtmlSnapshot: notebook,
-		getFsSnapshot: notebook,
-		setFsSnapshot: notebook,
-	});
 	const sessions = wrap('SessionService', new SessionService(bucket, metrics), {
 		createSession: (input) => ({
 			...notebook(input.project_id, input.notebook_id),
@@ -344,9 +338,37 @@ export function createServices(
 		markFailed: session,
 		listSessions: (notebookId) => ({ 'marimohub.notebook_id': notebookId }),
 		listActiveByProject: project,
+		listProtectedVersionIds: notebook,
 		countActiveAppsForProject: project,
 		listActiveAppsForProject: project,
 		countActiveForUser: user,
+	});
+	const notebooks = wrap(
+		'NotebookService',
+		new NotebookService(bucket, catalog, metrics, sessions),
+		{
+			listNotebooks: project,
+			createNotebook: project,
+			getNotebook: notebook,
+			getNotebookContent: notebook,
+			duplicateNotebook: notebook,
+			updateNotebook: notebook,
+			restoreVersion: notebook,
+			commitSession: notebook,
+			deleteNotebook: notebook,
+			hardDeleteNotebook: notebook,
+			listVersions: notebook,
+			getVersion: notebook,
+			getLatestHtmlSnapshot: notebook,
+			getFsSnapshot: notebook,
+			setFsSnapshot: notebook,
+		},
+	);
+	const proposals = wrap('NotebookProposalService', new NotebookProposalService(bucket, metrics), {
+		captureEntryNotebook: (input) => notebook(input.projectId, input.notebookId),
+		getProposal: notebook,
+		publishChangeRequest: (input) => notebook(input.projectId, input.notebookId),
+		pruneExpiredPayloads: () => ({}),
 	});
 	const identities = wrap('IdentityService', new IdentityService(bucket), {
 		get: user,
@@ -367,6 +389,7 @@ export function createServices(
 		events,
 		projects,
 		notebooks,
+		proposals,
 		sessions,
 		identities,
 		tokens,

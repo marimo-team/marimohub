@@ -11,6 +11,7 @@ export type ProjectId = string & { __brand: 'ProjectId' };
 export type NotebookId = string & { __brand: 'NotebookId' };
 export type SnapshotId = string & { __brand: 'SnapshotId' };
 export type VersionId = string & { __brand: 'VersionId' };
+export type ProposalId = string & { __brand: 'ProposalId' };
 export type SessionId = string & { __brand: 'SessionId' };
 export type TokenId = string & { __brand: 'TokenId' };
 export type IntegrationId = string & { __brand: 'IntegrationId' };
@@ -125,6 +126,11 @@ export const VersionId = defineId<VersionId>(
 	/^ver_[0-9A-Z]{26}$/,
 	() => `ver_${nextVersionUlid()}`,
 );
+export const ProposalId = defineId<ProposalId>(
+	'ProposalId',
+	/^prop-[0-9a-z]{16}$/,
+	() => `prop-${randomBody()}`,
+);
 export const SessionId = defineId<SessionId>(
 	'SessionId',
 	/^sess-[0-9a-z]{16}$/,
@@ -183,10 +189,21 @@ export const createProjectId = ProjectId.create;
 export const createNotebookId = NotebookId.create;
 export const createSnapshotId = SnapshotId.create;
 export const createVersionId = VersionId.create;
+export const createProposalId = ProposalId.create;
 export const createSessionId = SessionId.create;
 export const createTokenId = TokenId.create;
 export const createIntegrationId = IntegrationId.create;
 export const createAlertDestinationId = AlertDestinationId.create;
+
+/** Derive a stable proposal id from an already-scoped idempotency seed. */
+export async function deriveProposalId(seed: string): Promise<ProposalId> {
+	const digest = new Uint8Array(
+		await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed)),
+	);
+	let body = '';
+	for (let i = 0; i < RANDOM_ID_LENGTH; i++) body += ID_ALPHABET[digest[i] & 31];
+	return ProposalId.parse(`prop-${body}`);
+}
 
 // Event object keys use a monotonic ULID so that, even when many events are
 // written within the same millisecond, the keys still sort in append order.

@@ -1,0 +1,363 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createSandboxId, MAX_VERSIONS, UnavailableError } from '@marimo-hub/core';
+import type { SourceControlPublisher, SourceControlPublisherRegistry } from '@marimo-hub/core';
+import { ACTOR, fakeComputeFrom, makeFsSandbox, uid } from '@marimo-hub/core/testing';
+import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+
+const encode = (value: string) => new TextEncoder().encode(value);
+
+describe('change request routes', () => {
+	let setup: Awaited<ReturnType<typeof createTestApi>>;
+	let projectId: Awaited<ReturnType<typeof setup.deps.services.projects.createProject>>['id'];
+	let notebookId: Awaited<
+		ReturnType<typeof setup.deps.services.notebooks.synced.create>
+	>['meta']['id'];
+	let sessionId: Awaited<
+		ReturnType<typeof setup.deps.services.sessions.createSession>
+	>['session_id'];
+	let openChangeRequest: ReturnType<typeof vi.fn<SourceControlPublisher['openChangeRequest']>>;
+	const route = () =>
+		`/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`;
+
+	beforeEach(async () => {
+		const bucket = await createInitializedBucket();
+		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("after")' } });
+		openChangeRequest = vi.fn<SourceControlPublisher['openChangeRequest']>(async (input) => ({
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+			headBranch: input.headBranch,
+			headCommit: 'def456',
+		}));
+		const publisher: SourceControlPublisher = { provider: 'github', openChangeRequest };
+		setup = createTestApi({
+			bucket,
+			compute: fakeComputeFrom(instance),
+			deps: {
+				sourceControlPublishers: {
+					getPublisher: (provider) => (provider === 'github' ? publisher : undefined),
+					configuredProviders: () => ['github'],
+				},
+			},
+		});
+		const project = await setup.deps.services.projects.createProject(
+			{ name: 'Dashboards', description: 'd' },
+			ACTOR,
+		);
+		projectId = project.id;
+		const created = await setup.deps.services.notebooks.synced.create(
+			projectId,
+			{
+				title: 'Revenue dashboard',
+				description: 'from git',
+				repo: 'owner/repo',
+				branch: 'main',
+				root_path: 'apps',
+				entry_notebook: 'dashboard.py',
+			},
+			ACTOR,
+		);
+		notebookId = created.meta.id;
+		await setup.deps.services.notebooks.synced.sync(projectId, notebookId, {
+			repo: 'owner/repo',
+			branch: 'main',
+			root_path: 'apps',
+			commit: 'abc123',
+			files: [{ path: 'dashboard.py', bytes: encode('print("before")') }],
+		});
+		const detail = await setup.deps.services.notebooks.getNotebook(projectId, notebookId);
+		if (detail.source.type !== 'git' || !detail.source.current_version_id) {
+			throw new Error('Expected a synced source');
+		}
+		const session = await setup.deps.services.sessions.createSession({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: ACTOR,
+			sandbox_id: createSandboxId(),
+			source_version_id: detail.source.current_version_id,
+		});
+		sessionId = session.session_id;
+		await setup.deps.services.sessions.setRunning(projectId, sessionId, 'https://sandbox.example');
+	});
+
+	it('opens a draft change request from the exact session revision', async () => {
+		const resolveSourceRevision = vi.spyOn(setup.deps.services.proposals, 'resolveSourceRevision');
+		const data = await expectOk<{
+			proposal_id: string;
+			change_request: { provider: string; number: number; url: string };
+		}>(
+			await setup.request(
+				'POST',
+				`/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`,
+				{},
+				{ 'Idempotency-Key': 'open-dashboard-pr' },
+			),
+			201,
+		);
+
+		expect(data.proposal_id).toMatch(/^prop-/);
+		expect(data.change_request).toMatchObject({
+			provider: 'github',
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+		});
+		expect(openChangeRequest).toHaveBeenCalledWith(
+			expect.objectContaining({
+				repository: 'owner/repo',
+				baseBranch: 'main',
+				baseCommit: 'abc123',
+				draft: true,
+				changes: [expect.objectContaining({ path: 'apps/dashboard.py' })],
+			}),
+		);
+		expect(resolveSourceRevision).toHaveBeenCalledOnce();
+
+		await expectOk(
+			await setup.request(
+				'POST',
+				`/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`,
+				{},
+				{ 'Idempotency-Key': 'open-dashboard-pr' },
+			),
+			201,
+		);
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+	});
+
+	it('replays a recorded response after the publisher is disabled', async () => {
+		const headers = { 'Idempotency-Key': 'disabled-after-publish' };
+		const first = await expectOk(await setup.request('POST', route(), {}, headers), 201);
+		const getPublisher = vi.fn<SourceControlPublisherRegistry['getPublisher']>();
+		const withoutPublisher = createTestApi({
+			bucket: setup.bucket,
+			compute: setup.deps.compute,
+			deps: {
+				sourceControlPublishers: {
+					getPublisher,
+					configuredProviders: () => [],
+				},
+			},
+		});
+
+		const replay = await expectOk(
+			await withoutPublisher.request('POST', route(), {}, headers),
+			201,
+		);
+
+		expect(replay).toEqual(first);
+		expect(getPublisher).not.toHaveBeenCalled();
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+	});
+
+	it('replays a recorded response after its source version is pruned', async () => {
+		const headers = { 'Idempotency-Key': 'version-pruned-after-publish' };
+		const first = await expectOk(await setup.request('POST', route(), {}, headers), 201);
+		await setup.deps.services.sessions.markFailed(projectId, sessionId, {
+			code: 'TEST_COMPLETE',
+			message: 'The original edit session ended',
+		});
+		for (let index = 0; index <= MAX_VERSIONS; index++) {
+			await setup.deps.services.notebooks.synced.sync(projectId, notebookId, {
+				repo: 'owner/repo',
+				branch: 'main',
+				root_path: 'apps',
+				commit: `later-${index}`,
+				files: [{ path: 'dashboard.py', bytes: encode(`print(${index})`) }],
+			});
+		}
+
+		const replay = await expectOk(await setup.request('POST', route(), {}, headers), 201);
+		expect(replay).toEqual(first);
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+		await expectError(
+			await setup.request(
+				'POST',
+				route(),
+				{},
+				{ 'Idempotency-Key': 'version-pruned-new-operation' },
+			),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('resumes the same proposal after a publication failure', async () => {
+		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
+		const path = `/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`;
+		const headers = { 'Idempotency-Key': 'retry-dashboard-pr' };
+
+		await expectError(await setup.request('POST', path, {}, headers), 503, 'SERVICE_UNAVAILABLE');
+		await expectOk(await setup.request('POST', path, {}, headers), 201);
+
+		expect(openChangeRequest).toHaveBeenCalledTimes(2);
+		expect(openChangeRequest.mock.calls[0]?.[0].headBranch).toBe(
+			openChangeRequest.mock.calls[1]?.[0].headBranch,
+		);
+	});
+
+	it('requires project manager access', async () => {
+		const outsider = createTestApi({
+			bucket: setup.bucket,
+			userId: uid('outsider'),
+			compute: setup.deps.compute,
+			deps: { sourceControlPublishers: setup.deps.sourceControlPublishers },
+		});
+		await expectError(
+			await outsider.request(
+				'POST',
+				`/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`,
+				{},
+				{ 'Idempotency-Key': 'forbidden-pr' },
+			),
+			403,
+			'FORBIDDEN',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('fails before capture when the provider is not configured', async () => {
+		const withoutPublisher = createTestApi({
+			bucket: setup.bucket,
+			compute: setup.deps.compute,
+		});
+		await expectError(
+			await withoutPublisher.request(
+				'POST',
+				`/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`,
+				{},
+				{ 'Idempotency-Key': 'unconfigured-pr' },
+			),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('requires an idempotency key for the external side effect', async () => {
+		await expectError(
+			await setup.request(
+				'POST',
+				`/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`,
+				{},
+			),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['a whitespace-only title', { title: '   ' }],
+		['a title over 256 characters', { title: 'x'.repeat(257) }],
+		['a body over 64 KiB', { body: 'x'.repeat(65_537) }],
+	])('rejects %s before capture or provider access', async (_label, body) => {
+		await expectError(
+			await setup.request('POST', route(), body, { 'Idempotency-Key': 'invalid-body' }),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('rejects an oversized idempotency key before provider access', async () => {
+		await expectError(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'x'.repeat(256) }),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('rejects a local notebook before inspecting the git session', async () => {
+		const local = await setup.deps.services.notebooks.createNotebook(
+			projectId,
+			{ title: 'Local', description: 'd', code: 'print(1)' },
+			ACTOR,
+		);
+		await expectError(
+			await setup.request(
+				'POST',
+				`/projects/${projectId}/notebooks/${local.id}/sessions/${sessionId}/change-requests`,
+				{},
+				{ 'Idempotency-Key': 'local-notebook' },
+			),
+			409,
+			'CONFLICT',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('rejects a session that is no longer running', async () => {
+		await setup.deps.services.sessions.markFailed(projectId, sessionId, {
+			code: 'TEST_FAILURE',
+			message: 'stopped',
+		});
+		await expectError(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'stopped-session' }),
+			409,
+			'CONFLICT',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('rejects unchanged notebook content without calling the provider', async () => {
+		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("before")' } });
+		const unchanged = createTestApi({
+			bucket: setup.bucket,
+			compute: fakeComputeFrom(instance),
+			deps: { sourceControlPublishers: setup.deps.sourceControlPublishers },
+		});
+		await expectError(
+			await unchanged.request('POST', route(), {}, { 'Idempotency-Key': 'unchanged-notebook' }),
+			409,
+			'CONFLICT',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('uses distinct deterministic proposal branches for distinct idempotency keys', async () => {
+		await expectOk(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'first-change' }),
+			201,
+		);
+		await expectOk(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'second-change' }),
+			201,
+		);
+		expect(openChangeRequest).toHaveBeenCalledTimes(2);
+		expect(openChangeRequest.mock.calls[0]?.[0].headBranch).not.toBe(
+			openChangeRequest.mock.calls[1]?.[0].headBranch,
+		);
+	});
+
+	it('replays the first response when a retry changes request text', async () => {
+		const headers = { 'Idempotency-Key': 'same-operation' };
+		const first = await expectOk<{ change_request: { number: number } }>(
+			await setup.request('POST', route(), { title: 'First title' }, headers),
+			201,
+		);
+		const second = await expectOk<{ change_request: { number: number } }>(
+			await setup.request('POST', route(), { title: 'Different title' }, headers),
+			201,
+		);
+		expect(second).toEqual(first);
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+		expect(openChangeRequest.mock.calls[0]?.[0].title).toBe('First title');
+	});
+
+	it('returns a service error and keeps the proposal retryable for malformed provider output', async () => {
+		openChangeRequest.mockImplementationOnce(async (providerInput) => ({
+			number: 0,
+			url: 'http://github.com/owner/repo/pull/0',
+			headBranch: providerInput.headBranch,
+			headCommit: '',
+		}));
+		const headers = { 'Idempotency-Key': 'malformed-provider' };
+		await expectError(
+			await setup.request('POST', route(), {}, headers),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		await expectOk(await setup.request('POST', route(), {}, headers), 201);
+		expect(openChangeRequest).toHaveBeenCalledTimes(2);
+	});
+});

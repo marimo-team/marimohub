@@ -35,9 +35,10 @@ Use these as the done-criteria for any change.
   port around it would buy no substitutability.
   Anything that _reaches_ something — a store, a cluster, an IdP — is a port.
 - **Adapters** (`packages/storage-*`, `packages/compute-*`, `packages/auth-*`,
-  `packages/object-browser-*`, `packages/notify-*`, and the credential, secret,
-  and DuckDB runtime packages) implement the ports. `packages/api` wires the
-  services to Hono/OpenAPI routes via `@hono/zod-openapi`.
+  `packages/object-browser-*`, `packages/notify-*`, `packages/source-control-*`,
+  and the credential, secret, and DuckDB runtime packages) implement the ports.
+  `packages/api` wires the services to Hono/OpenAPI routes via
+  `@hono/zod-openapi`.
 - **`packages/config`** is the ONLY package that imports concrete adapters: it
   reads `MARIMOHUB_*` env vars, selects an adapter per `*_BACKEND` selector, and
   wires the system together.
@@ -54,7 +55,7 @@ the only places concrete adapters are imported. **Reject PRs that violate this**
 is enforced mechanically: a
 `no-restricted-imports` override in `vite.config.ts` (files `packages/core/**`,
 `packages/api/**`) bans `@marimo-hub/{storage,compute,auth,credentials,secrets}-*`
-imports, `@marimo-hub/{notify,object-browser}-*` imports, and
+imports, `@marimo-hub/{notify,object-browser,source-control}-*` imports, and
 `@marimo-hub/duckdb-wasm-runtime`. A colocated `package-dependencies.test.ts` in
 each of `core` and `api` fails if one of these packages appears in its
 `package.json`.
@@ -117,6 +118,8 @@ These CAS-managed records also have one writer each:
   `_system/editors/{pid}/{nid}.json`.
 - `SessionService.claimApp`/`releaseApp` owns each app claim at
   `_system/apps/{pid}/{nid}.json`.
+- `NotebookProposalService` owns each proposal publication at
+  `projects/{pid}/notebooks/{nid}/proposals/{proposal-id}/publication.json`.
 - `ProjectIntegrationsStore` owns each project integration head at
   `projects/{pid}/integrations/{iid}/integration.json`.
 - `OrgIntegrationsStore` owns each org integration head at

@@ -8,6 +8,7 @@ export const DOMAIN_ERROR_CODES = [
 	'PRECONDITION_FAILED',
 	'NOT_FOUND',
 	'CONFLICT',
+	'PROPOSAL_RETRY_REQUIRED',
 	'EDIT_SESSION_OWNED',
 	'EDIT_SESSION_CHANGED',
 	'TAKEOVER_IN_PROGRESS',
@@ -66,6 +67,15 @@ export class ConflictError extends DomainError {
 	constructor(message = 'Conflict', options?: ErrorOptions) {
 		super(message, options);
 		this.name = 'ConflictError';
+	}
+}
+
+export class ProposalRetryRequiredError extends DomainError {
+	readonly code = 'PROPOSAL_RETRY_REQUIRED';
+	readonly status = 409;
+	constructor(message = 'The proposal cannot be resumed; retry with a new idempotency key') {
+		super(message);
+		this.name = 'ProposalRetryRequiredError';
 	}
 }
 

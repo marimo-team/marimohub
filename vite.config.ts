@@ -334,6 +334,7 @@ export default defineConfig({
 								'@marimo-hub/secrets-*',
 								'@marimo-hub/notify-*',
 								'@marimo-hub/object-browser-*',
+								'@marimo-hub/source-control-*',
 								'@marimo-hub/duckdb-wasm-runtime',
 							],
 						},

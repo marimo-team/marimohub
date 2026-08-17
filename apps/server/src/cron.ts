@@ -84,7 +84,9 @@ async function scheduleUnavailableAppAlerts(
  *  4. `expireSnapshots()` — prune catalog snapshots past retention (keeping
  *     current/previous + a recent floor) so the bucket doesn't grow unbounded.
  *  5. `pruneEvents()`     — drop event-day folders past retention.
- *  6. `sweepDeletedProjects()` / `sweepDeletedNotebooks()` — purge the storage of
+ *  6. `pruneExpiredPayloads()` — delete expired proposal change bytes while
+ *     retaining proposal and publication metadata.
+ *  7. `sweepDeletedProjects()` / `sweepDeletedNotebooks()` — purge the storage of
  *     soft-deleted projects/notebooks past their grace period. Projects first, so
  *     a deleted project's notebooks are reclaimed by the project subtree wipe.
  *
@@ -96,7 +98,7 @@ async function scheduleUnavailableAppAlerts(
  * cumulative metric totals/gauges an operator needs.
  */
 export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () => void {
-	const { sessions, maintenance, projects, notebooks, idempotency } = deps.services;
+	const { sessions, maintenance, projects, notebooks, proposals, idempotency } = deps.services;
 	const reconciler = new ReconciliationService(
 		sessions,
 		notebooks,
@@ -141,6 +143,7 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 				const snapshotsPruned = await maintenance.expireSnapshots();
 				const eventsPruned = await maintenance.pruneEvents();
 				const idempotencyPruned = await idempotency.prune();
+				const proposalPayloadsPruned = await proposals.pruneExpiredPayloads();
 				// Projects before notebooks: a swept project wipes its whole subtree, so
 				// its soft-deleted notebooks are reclaimed without per-notebook work.
 				const projectsSwept = await projects.sweepDeletedProjects();
@@ -162,6 +165,7 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 					snapshots_pruned: snapshotsPruned,
 					events_pruned: eventsPruned,
 					idempotency_pruned: idempotencyPruned,
+					proposal_payloads_pruned: proposalPayloadsPruned,
 					projects_swept: projectsSwept,
 					notebooks_swept: notebooksSwept.purged,
 					snapshots_reaped: snapshotsReaped,

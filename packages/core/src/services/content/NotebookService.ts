@@ -85,6 +85,13 @@ export interface NotebookDeleteMutationResult {
 	mutationId: Snapshot['snapshot_id'];
 }
 
+export interface NotebookVersionProtector {
+	listProtectedVersionIds(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<ReadonlySet<VersionId>>;
+}
+
 export interface NotebookDetail {
 	meta: NotebookMeta;
 	readme: string | null;
@@ -120,6 +127,7 @@ export class NotebookService {
 		private bucket: Bucket,
 		private catalog: CatalogService,
 		private metrics: Metrics = noopMetrics,
+		private versionProtector?: NotebookVersionProtector,
 	) {
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {
 			getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
@@ -853,9 +861,8 @@ export class NotebookService {
 	 * Prune immutable version folders beyond the newest `max`, reclaiming storage
 	 * after a code save. Versions are keyed by ULID, which sorts chronologically
 	 * (newest last), so we keep the lexicographically-largest `max` prefixes. The
-	 * `keep` version (the current `source.current_version_id`) is ALWAYS retained,
-	 * even if it would otherwise fall outside the window, so version rollback to
-	 * the current version is never broken.
+	 * current version and versions used by live sessions are retained even if
+	 * they fall outside the window.
 	 *
 	 * Best-effort: failures are swallowed (logged) so a prune error never fails
 	 * the caller's save, which has already committed.
@@ -879,10 +886,15 @@ export class NotebookService {
 
 			// Keep the newest `max`; the rest are prune candidates.
 			const prunable = versionPrefixes.slice(0, versionPrefixes.length - max);
-			const keepPrefix = `${versionsRoot}${keep}/`;
+			const protectedVersionIds = new Set(
+				await this.versionProtector?.listProtectedVersionIds(projectId, notebookId),
+			);
+			protectedVersionIds.add(keep);
+			const protectedPrefixes = new Set(
+				[...protectedVersionIds].map((versionId) => `${versionsRoot}${versionId}/`),
+			);
 
-			// Never delete the current version, even if it falls in the prune window.
-			const targets = prunable.filter((vpfx) => vpfx !== keepPrefix);
+			const targets = prunable.filter((prefix) => !protectedPrefixes.has(prefix));
 			const keyLists = await mapWithConcurrency(targets, BUCKET_SCAN_CONCURRENCY, (vpfx) =>
 				listAllKeys(this.bucket, vpfx),
 			);

@@ -6,6 +6,7 @@ import {
 	ArrowLeft,
 	Eye,
 	GitBranch,
+	GitPullRequest,
 	Pencil,
 	RefreshCw,
 } from 'lucide-react';
@@ -23,6 +24,7 @@ import {
 import {
 	useCapabilitiesQuery,
 	useNotebookQuery,
+	useOpenNotebookChangeRequest,
 	useProjectQuery,
 	useProjectSessionsQuery,
 	useEditorSessionQuery,
@@ -42,6 +44,8 @@ import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView
 import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
 import type { Theme } from '@/context/ThemeContext';
+import { canManageProject } from '@/lib/roles';
+import { toast } from 'sonner';
 
 /** Copy for the app page's terminal panel, keyed by how the session ended. */
 function endedPanel(ended: SessionEnded): { title: string; message: string; canRestart: boolean } {
@@ -162,6 +166,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const identityStateFailed =
 		needsEditorState && editorStateQuery.isSuccess && !!editorState?.holder && userQuery.isError;
 	const takeover = useTakeoverEditorSession(pid!, nid!);
+	const openChangeRequest = useOpenNotebookChangeRequest(pid!, nid!);
 
 	const {
 		session,
@@ -327,6 +332,43 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const showEditorStateFailure = editorStateFailed && !session && !showEditorChoice;
 	const showIdentityStateFailure =
 		identityStateFailed && !session && !showEditorChoice && !showEditorStateFailure;
+	const sourceProvider = notebook?.source.type === 'git' ? notebook.source.provider : null;
+	const changeRequestKind =
+		sourceProvider === 'gitlab'
+			? 'merge request'
+			: sourceProvider === 'github'
+				? 'pull request'
+				: 'change request';
+	const openChangeRequestLabel =
+		sourceProvider === 'gitlab'
+			? 'Open MR'
+			: sourceProvider === 'github'
+				? 'Open PR'
+				: 'Open change request';
+	const canOpenChangeRequest =
+		!isApp &&
+		isRunning &&
+		!!session &&
+		!session.ephemeral &&
+		!!sourceProvider &&
+		(capabilities?.source_control?.change_request_providers.includes(sourceProvider) ?? false) &&
+		canManageProject(project.your_role);
+	const handleOpenChangeRequest = () => {
+		if (!session) return;
+		const pendingWindow = window.open('about:blank', '_blank');
+		if (pendingWindow) pendingWindow.opener = null;
+		openChangeRequest.mutate(
+			{ sessionId: session.session_id, title: `Update ${title}` },
+			{
+				onSuccess: (data) => {
+					if (pendingWindow) pendingWindow.location.href = data.change_request.url;
+					else window.open(data.change_request.url, '_blank', 'noopener,noreferrer');
+					toast.success(`Opened ${changeRequestKind} #${data.change_request.number}`);
+				},
+				onError: () => pendingWindow?.close(),
+			},
+		);
+	};
 
 	return (
 		<div className="flex h-dvh flex-col">
@@ -378,6 +420,17 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					</span>
 				)}
 				<div className="ml-auto flex items-center gap-2">
+					{canOpenChangeRequest && (
+						<Button
+							variant="unstyled"
+							className="flex h-[26px] items-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11"
+							isDisabled={openChangeRequest.isPending}
+							onPress={handleOpenChangeRequest}
+						>
+							<GitPullRequest className="size-3" />
+							{openChangeRequest.isPending ? 'Opening…' : openChangeRequestLabel}
+						</Button>
+					)}
 					{!staticView && (
 						<ComputeProfileIndicator
 							profiles={computeProfiles}

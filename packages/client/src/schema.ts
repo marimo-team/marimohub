@@ -260,6 +260,7 @@ export interface paths {
 			parameters: {
 				query?: never;
 				header?: {
+					/** @description Stable client-generated key reused for retries of the same operation. */
 					'idempotency-key'?: string;
 				};
 				path?: never;
@@ -2594,6 +2595,7 @@ export interface paths {
 			parameters: {
 				query?: never;
 				header?: {
+					/** @description Stable client-generated key reused for retries of the same operation. */
 					'idempotency-key'?: string;
 				};
 				path: {
@@ -2743,10 +2745,10 @@ export interface paths {
 						/** @example Synced from a git repository */
 						description: string;
 						/**
+						 * @description Git provider id. Recognized repository hosts take precedence over this explicit claim.
 						 * @example github
-						 * @enum {string}
 						 */
-						provider?: 'github' | 'gitlab';
+						provider?: string;
 						/** @example marimo-team/marimohub */
 						repo: string;
 						/** @example main */
@@ -3036,11 +3038,30 @@ export interface paths {
 								source: {
 									/** @enum {string} */
 									type: 'git';
-									/** @enum {string|null} */
-									provider: 'github' | 'gitlab' | null;
+									/**
+									 * @description Detected Git provider id, or null when the repository host is not recognized.
+									 * @example github
+									 */
+									provider: string | null;
+									/**
+									 * @description Normalized repository coordinate: owner/repo or an HTTPS repository URL.
+									 * @example marimo-team/marimohub
+									 */
 									repo: string;
+									/**
+									 * @description Synced repository branch.
+									 * @example main
+									 */
 									branch: string;
+									/**
+									 * @description Repository-relative directory synced into the notebook workspace.
+									 * @example apps
+									 */
 									root_path: string;
+									/**
+									 * @description Path to the entry notebook relative to root_path.
+									 * @example dashboard.py
+									 */
 									entry_notebook: string;
 									pending_config?: components['schemas']['GitSourceConfig'];
 									/** @enum {string} */
@@ -4171,6 +4192,7 @@ export interface paths {
 			parameters: {
 				query?: never;
 				header?: {
+					/** @description Stable client-generated key reused for retries of the same operation. */
 					'idempotency-key'?: string;
 				};
 				path: {
@@ -4268,6 +4290,26 @@ export interface paths {
 				};
 			};
 		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Open a draft change request from a live notebook session
+		 * @description A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. The Idempotency-Key header is required; retry with the same key to resume the same proposal and provider branch. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.
+		 */
+		post: operations['openNotebookChangeRequest'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -4853,6 +4895,7 @@ export interface paths {
 			parameters: {
 				query?: never;
 				header?: {
+					/** @description Stable client-generated key reused for retries of the same operation. */
 					'idempotency-key'?: string;
 				};
 				path: {
@@ -9279,6 +9322,7 @@ export interface components {
 					| 'PRECONDITION_FAILED'
 					| 'NOT_FOUND'
 					| 'CONFLICT'
+					| 'PROPOSAL_RETRY_REQUIRED'
 					| 'EDIT_SESSION_OWNED'
 					| 'EDIT_SESSION_CHANGED'
 					| 'TAKEOVER_IN_PROGRESS'
@@ -9311,6 +9355,15 @@ export interface components {
 			};
 			integrations: {
 				available: boolean;
+			};
+			source_control: {
+				/**
+				 * @description Provider ids configured to publish pull requests, merge requests, or equivalents from notebook sessions.
+				 * @example [
+				 *       "github"
+				 *     ]
+				 */
+				change_request_providers: string[];
 			};
 			project_alerts: {
 				available: boolean;
@@ -9654,9 +9707,25 @@ export interface components {
 			sync_token: string;
 		};
 		GitSourceConfig: {
+			/**
+			 * @description Normalized repository coordinate: owner/repo or an HTTPS repository URL.
+			 * @example marimo-team/marimohub
+			 */
 			repo: string;
+			/**
+			 * @description Synced repository branch.
+			 * @example main
+			 */
 			branch: string;
+			/**
+			 * @description Repository-relative directory synced into the notebook workspace.
+			 * @example apps
+			 */
 			root_path: string;
+			/**
+			 * @description Path to the entry notebook relative to root_path.
+			 * @example dashboard.py
+			 */
 			entry_notebook: string;
 		};
 		NotebookDetail: {
@@ -9673,11 +9742,30 @@ export interface components {
 			| {
 					/** @enum {string} */
 					type: 'git';
-					/** @enum {string|null} */
-					provider: 'github' | 'gitlab' | null;
+					/**
+					 * @description Detected Git provider id, or null when the repository host is not recognized.
+					 * @example github
+					 */
+					provider: string | null;
+					/**
+					 * @description Normalized repository coordinate: owner/repo or an HTTPS repository URL.
+					 * @example marimo-team/marimohub
+					 */
 					repo: string;
+					/**
+					 * @description Synced repository branch.
+					 * @example main
+					 */
 					branch: string;
+					/**
+					 * @description Repository-relative directory synced into the notebook workspace.
+					 * @example apps
+					 */
 					root_path: string;
+					/**
+					 * @description Path to the entry notebook relative to root_path.
+					 * @example dashboard.py
+					 */
 					entry_notebook: string;
 					pending_config?: components['schemas']['GitSourceConfig'];
 					/** @enum {string} */
@@ -9708,6 +9796,7 @@ export interface components {
 			html_snapshot?: components['schemas']['SnapshotDescriptor'];
 			session_snapshot?: components['schemas']['SnapshotDescriptor'];
 			commit?: string;
+			git_source?: components['schemas']['GitSourceRevision'];
 		};
 		SnapshotDescriptor: {
 			/**
@@ -9716,6 +9805,72 @@ export interface components {
 			 */
 			captured_at: string;
 			size_bytes: number;
+		};
+		GitSourceRevision: {
+			/**
+			 * @description Detected provider id for this immutable source revision, or null when the repository host is unrecognized.
+			 * @example github
+			 */
+			provider: string | null;
+			/**
+			 * @description Normalized repository coordinate: owner/repo or an HTTPS repository URL.
+			 * @example marimo-team/marimohub
+			 */
+			repo: string;
+			/**
+			 * @description Synced repository branch.
+			 * @example main
+			 */
+			branch: string;
+			/**
+			 * @description Repository-relative directory synced into the notebook workspace.
+			 * @example apps
+			 */
+			root_path: string;
+			/**
+			 * @description Path to the entry notebook relative to root_path.
+			 * @example dashboard.py
+			 */
+			entry_notebook: string;
+			/**
+			 * @description Immutable Git commit from which the saved version was synced.
+			 * @example 9e107d9d372bb6826bd81d3542a419d6
+			 */
+			commit: string;
+		};
+		OpenNotebookChangeRequestResult: {
+			/**
+			 * @description Identifier of the immutable proposal captured from the notebook session and published by this change request.
+			 * @example prop-7h2k9qm4xz7rp3w8
+			 */
+			proposal_id: string;
+			change_request: {
+				/** @example github */
+				provider: string;
+				/** @example 42 */
+				number: number;
+				/**
+				 * Format: uri
+				 * @example https://github.com/acme/analytics/pull/42
+				 */
+				url: string;
+				/** @example marimohub/nb-7h2k9qm4xz7rp3w8/prop-7h2k9qm4xz7rp3w8 */
+				head_branch: string;
+				/** @example 9e107d9d372bb6826bd81d3542a419d6 */
+				head_commit: string;
+			};
+		};
+		OpenNotebookChangeRequestBody: {
+			/**
+			 * @description Change request title. Defaults to the notebook title.
+			 * @example Update revenue dashboard
+			 */
+			title?: string;
+			/**
+			 * @description Change request description. Defaults to the session and base commit.
+			 * @example Updates the regional revenue analysis.
+			 */
+			body?: string;
 		};
 		SessionPage: {
 			items: components['schemas']['Session'][];
@@ -10171,4 +10326,123 @@ export interface components {
 	pathItems: never;
 }
 export type $defs = Record<string, never>;
-export type operations = Record<string, never>;
+export interface operations {
+	openNotebookChangeRequest: {
+		parameters: {
+			query?: never;
+			header: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key': string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['OpenNotebookChangeRequestBody'];
+			};
+		};
+		responses: {
+			/** @description Draft change request opened */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['OpenNotebookChangeRequestResult'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+}
