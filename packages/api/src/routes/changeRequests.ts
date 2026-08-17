@@ -1,6 +1,12 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { ConflictError, deriveProposalId, ProposalId, UnavailableError } from '@marimo-hub/core';
-import type { GitSourceRevision } from '@marimo-hub/core';
+import {
+	ConflictError,
+	deriveProposalId,
+	NotFoundError,
+	ProposalId,
+	UnavailableError,
+} from '@marimo-hub/core';
+import type { GitSourceRevision, NotebookProposal, SourceControlPublisher } from '@marimo-hub/core';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
 import {
@@ -83,55 +89,73 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
 	const routeId = `POST /projects/${pid}/notebooks/${nid}/sessions/${sid}/change-requests`;
 	const data = await idempotentCreate(c, routeId, async () => {
-		const [session, notebook] = await Promise.all([
-			deps.services.sessions.getSession(pid, sid),
-			deps.services.notebooks.getNotebook(pid, nid),
-		]);
-		if (notebook.source.type !== 'git') {
-			throw new ConflictError('Only git-synced notebooks can open change requests');
-		}
-		if (!session.sandbox_id) throw new ConflictError('The session has no sandbox');
-		const sandboxId = session.sandbox_id;
-		if (!session.source_version_id) {
-			throw new ConflictError('The session has no synced source revision');
-		}
-
-		const legacySourceRevision: GitSourceRevision | undefined =
-			session.source_version_id === notebook.source.current_version_id &&
-			notebook.source.commit &&
-			notebook.source.provider
-				? {
-						provider: notebook.source.provider,
-						repo: notebook.source.repo,
-						branch: notebook.source.branch,
-						root_path: notebook.source.root_path,
-						entry_notebook: notebook.source.entry_notebook,
-						commit: notebook.source.commit,
-					}
-				: undefined;
-		const sourceRevision = await deps.services.proposals.resolveSourceRevision(
-			pid,
-			nid,
-			session.source_version_id,
-			legacySourceRevision,
-		);
-		const publisher = deps.sourceControlPublishers?.getPublisher(sourceRevision.provider);
-		if (!publisher) {
-			throw new UnavailableError(
-				`Change-request publishing is not configured for ${sourceRevision.provider}`,
-			);
-		}
 		const proposalId = await deriveProposalId(`${user.id}\n${routeId}\n${idempotencyKey}`);
-		const proposal = await deps.services.proposals.captureEntryNotebook({
-			projectId: pid,
-			notebookId: nid,
-			proposalId,
-			session,
-			sandbox: deps.compute.create(sandboxId),
-			workdir: deps.sandbox.workdir,
-			author: user.id,
-			resolvedSourceRevision: sourceRevision,
-		});
+		const notebook = await deps.services.notebooks.getNotebook(pid, nid);
+		let proposal: NotebookProposal | undefined;
+		try {
+			proposal = await deps.services.proposals.getReusableProposal(pid, nid, proposalId);
+		} catch (error) {
+			if (!(error instanceof NotFoundError)) throw error;
+		}
+		const requirePublisher = (provider: string): SourceControlPublisher => {
+			const publisher = deps.sourceControlPublishers?.getPublisher(provider);
+			if (!publisher) {
+				throw new UnavailableError(`Change-request publishing is not configured for ${provider}`);
+			}
+			return publisher;
+		};
+		let publisher: SourceControlPublisher;
+		if (proposal) {
+			if (
+				proposal.proposal_id !== proposalId ||
+				proposal.notebook_id !== nid ||
+				proposal.session_id !== sid ||
+				proposal.author !== user.id
+			) {
+				throw new ConflictError('The idempotency key belongs to a different proposal');
+			}
+			publisher = requirePublisher(proposal.source.provider);
+		} else {
+			const session = await deps.services.sessions.getSession(pid, sid);
+			if (notebook.source.type !== 'git') {
+				throw new ConflictError('Only git-synced notebooks can open change requests');
+			}
+			if (!session.sandbox_id) throw new ConflictError('The session has no sandbox');
+			if (!session.source_version_id) {
+				throw new ConflictError('The session has no synced source revision');
+			}
+
+			const legacySourceRevision: GitSourceRevision | undefined =
+				session.source_version_id === notebook.source.current_version_id &&
+				notebook.source.commit &&
+				notebook.source.provider
+					? {
+							provider: notebook.source.provider,
+							repo: notebook.source.repo,
+							branch: notebook.source.branch,
+							root_path: notebook.source.root_path,
+							entry_notebook: notebook.source.entry_notebook,
+							commit: notebook.source.commit,
+						}
+					: undefined;
+			const sourceRevision = await deps.services.proposals.resolveSourceRevision(
+				pid,
+				nid,
+				session.source_version_id,
+				legacySourceRevision,
+			);
+			publisher = requirePublisher(sourceRevision.provider);
+			proposal = await deps.services.proposals.captureEntryNotebook({
+				projectId: pid,
+				notebookId: nid,
+				proposalId,
+				session,
+				sandbox: deps.compute.create(session.sandbox_id),
+				workdir: deps.sandbox.workdir,
+				author: user.id,
+				resolvedSourceRevision: sourceRevision,
+			});
+		}
 		const changeRequest = await deps.services.proposals.publishChangeRequest({
 			projectId: pid,
 			notebookId: nid,

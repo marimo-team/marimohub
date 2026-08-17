@@ -362,7 +362,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 			{
 				onSuccess: (data) => {
 					if (pendingWindow) pendingWindow.location.href = data.change_request.url;
-					else window.open(data.change_request.url, '_blank', 'noopener,noreferrer');
+					else window.location.assign(data.change_request.url);
 					toast.success(`Opened ${changeRequestKind} #${data.change_request.number}`);
 				},
 				onError: () => pendingWindow?.close(),

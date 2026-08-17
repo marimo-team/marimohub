@@ -32,6 +32,7 @@ import {
 	SourceSchema,
 	TokenSchema,
 	VersionSchema,
+	VersionPruneCutoffSchema,
 } from '../schema';
 
 // Placeholder ids threaded through the real `paths` builders, so the templates
@@ -220,6 +221,15 @@ const OBJECTS: BucketObject[] = [
 		key: paths.session(PID, SID),
 		schema: SessionSchema,
 		summary: 'Session lifecycle record, partitioned by project.',
+		mutability: 'cas',
+		owner: 'SessionService',
+		tag: 'session',
+	},
+	{
+		name: 'VersionPruneCutoff',
+		key: paths.versionPruneCutoff(PID, NID),
+		schema: VersionPruneCutoffSchema,
+		summary: 'Monotonic boundary that closes old versions to newly created sessions.',
 		mutability: 'cas',
 		owner: 'SessionService',
 		tag: 'session',

@@ -787,6 +787,25 @@ describe('NotebookPage git-synced editor', () => {
 		).toBe(true);
 	});
 
+	it('navigates the current tab when the pull-request popup is blocked', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'manager',
+			sourceType: 'git',
+			session: gitEditSession(),
+			sourceControlProviders: ['github'],
+		});
+		const assign = vi.fn();
+		vi.stubGlobal('location', { ...window.location, assign });
+		const open = vi.spyOn(window, 'open').mockReturnValue(null);
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open PR' }));
+		await waitFor(() => expect(assign).toHaveBeenCalledWith('https://github.com/org/repo/pull/17'));
+		expect(open).toHaveBeenCalledOnce();
+		expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+	});
+
 	it('reuses the idempotency key when a manager retries a failed publication', async () => {
 		const user = userEvent.setup();
 		const fetch = makeFetch({

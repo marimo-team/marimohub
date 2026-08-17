@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
-import { UserId } from '../../ids';
+import { createVersionId, UserId } from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { ACTOR, setupTestEnv } from '../../testing';
@@ -622,10 +622,23 @@ describe('ProjectService', () => {
 		it('removes the entire subtree of a soft-deleted project', async () => {
 			const doomed = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
 			const survivor = await projects.createProject({ name: 'Survivor', description: 'D' }, ACTOR);
-			await notebooks.createNotebook(
+			const doomedNotebook = await notebooks.createNotebook(
 				doomed.id,
 				{ title: 'NB', description: 'D', code: 'v1', deps: 'd', readme: '# r' },
 				ACTOR,
+			);
+			const survivorNotebook = await notebooks.createNotebook(
+				survivor.id,
+				{ title: 'Survivor NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			await bucket.put(
+				paths.versionPruneCutoff(doomed.id, doomedNotebook.id),
+				JSON.stringify({ cutoff_version_id: createVersionId() }),
+			);
+			await bucket.put(
+				paths.versionPruneCutoff(survivor.id, survivorNotebook.id),
+				JSON.stringify({ cutoff_version_id: createVersionId() }),
 			);
 			const integrationId = 'intg-0000000000000001' as never;
 			await bucket.put(
@@ -650,6 +663,10 @@ describe('ProjectService', () => {
 
 			expect(await listAllKeys(bucket, `projects/${doomed.id}/`)).toEqual([]);
 			expect(await bucket.get(`projects/${doomed.id}/project.json`)).toBeNull();
+			expect(await listAllKeys(bucket, paths.versionPruneCutoffsForProject(doomed.id))).toEqual([]);
+			expect(
+				await bucket.get(paths.versionPruneCutoff(survivor.id, survivorNotebook.id)),
+			).not.toBeNull();
 			expect(
 				await bucket.get(paths.project(survivor.id).integration(integrationId).head),
 			).not.toBeNull();

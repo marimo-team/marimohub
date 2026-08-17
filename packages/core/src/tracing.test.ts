@@ -5,7 +5,8 @@ import {
 	InMemorySpanExporter,
 	SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
-import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createNotebookId, createProjectId, createProposalId } from './ids';
 import type { UserId } from './ids';
 import { createServices } from './services';
 import { MemoryBucket } from './testing/MemoryBucket';
@@ -119,6 +120,43 @@ describe('createServices tracing option', () => {
 		const services = createServices(new MemoryBucket());
 		await services.identities.get('user-1' as UserId);
 		expect(exporter.getFinishedSpans()).toHaveLength(0);
+	});
+
+	it('identifies proposals on lookup and publication spans', async () => {
+		const services = createServices(new MemoryBucket(), undefined, { tracing: true });
+		const projectId = createProjectId();
+		const notebookId = createNotebookId();
+		const proposalId = createProposalId();
+
+		await expect(
+			services.proposals.getProposal(projectId, notebookId, proposalId),
+		).rejects.toThrow();
+		await expect(
+			services.proposals.getReusableProposal(projectId, notebookId, proposalId),
+		).rejects.toThrow();
+		await expect(
+			services.proposals.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId,
+				publisher: { provider: 'github', openChangeRequest: vi.fn() },
+				title: 'Publish proposal',
+				body: '',
+			}),
+		).rejects.toThrow();
+
+		for (const name of [
+			'NotebookProposalService.getProposal',
+			'NotebookProposalService.getReusableProposal',
+			'NotebookProposalService.publishChangeRequest',
+		]) {
+			const span = exporter.getFinishedSpans().find((candidate) => candidate.name === name);
+			expect(span?.attributes).toMatchObject({
+				'marimohub.project_id': projectId,
+				'marimohub.notebook_id': notebookId,
+				'marimohub.proposal_id': proposalId,
+			});
+		}
 	});
 });
 

@@ -171,6 +171,10 @@ export const paths = {
 	session: (projectId: ProjectId, id: SessionId) => `_system/sessions/${projectId}/${id}.json`,
 	sessionsPrefix: '_system/sessions/',
 	sessionsForProject: (projectId: ProjectId) => `_system/sessions/${projectId}/`,
+	versionPruneCutoff: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/version-prune-cutoffs/${projectId}/${notebookId}.json`,
+	versionPruneCutoffsForProject: (projectId: ProjectId) =>
+		`_system/version-prune-cutoffs/${projectId}/`,
 	/**
 	 * Per-notebook app-singleton claim (see `AppClaimSchema`): names the `run`
 	 * session that owns the notebook's shared app sandbox. CAS-managed via

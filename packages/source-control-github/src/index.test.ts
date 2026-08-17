@@ -214,6 +214,91 @@ describe('GitHubAppPublisher', () => {
 		expect(fetcher.mock.calls.some(([url]) => url.endsWith('/git/blobs'))).toBe(false);
 	});
 
+	it('rejects an add change when the path exists at the base commit', async () => {
+		const fetcher = vi.fn(async (url: string) => {
+			const parsed = new URL(url);
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) return response({ token: 'token' });
+			if (parsed.pathname.includes('/git/ref/heads/')) return response({}, 404);
+			if (parsed.pathname.endsWith('/pulls')) return response([]);
+			if (parsed.pathname.endsWith('/git/commits/base-sha')) {
+				return response({ tree: { sha: 'base-tree' } });
+			}
+			if (parsed.pathname.endsWith('/contents/apps/new.py')) {
+				expect(parsed.searchParams.get('ref')).toBe('base-sha');
+				return response({ type: 'file', sha: 'existing-blob' });
+			}
+			throw new Error(`unexpected request: ${parsed.pathname}`);
+		});
+
+		await expect(
+			publisher(fetcher).openChangeRequest({
+				...input,
+				changes: [
+					{
+						path: 'apps/new.py',
+						operation: 'add',
+						content: new TextEncoder().encode('print("new")'),
+					},
+				],
+			}),
+		).rejects.toMatchObject({ code: 'CONFLICT' });
+		expect(fetcher.mock.calls.some(([url]) => url.endsWith('/git/blobs'))).toBe(false);
+		expect(fetcher.mock.calls.some(([url]) => url.endsWith('/git/trees'))).toBe(false);
+	});
+
+	it('creates an add change when the path is absent from the base commit', async () => {
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) return response({ token: 'token' });
+			if (parsed.pathname.includes('/git/ref/heads/')) return response({}, 404);
+			if (parsed.pathname.endsWith('/pulls') && method === 'GET') return response([]);
+			if (parsed.pathname.endsWith('/git/commits/base-sha')) {
+				return response({ tree: { sha: 'base-tree' } });
+			}
+			if (parsed.pathname.endsWith('/contents/apps/new.py')) return response({}, 404);
+			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'blob-sha' }, 201);
+			if (parsed.pathname.endsWith('/git/trees')) return response({ sha: 'tree-sha' }, 201);
+			if (parsed.pathname.endsWith('/git/commits') && method === 'POST') {
+				return response({ sha: 'head-sha' }, 201);
+			}
+			if (parsed.pathname.endsWith('/git/refs')) {
+				return response({ object: { sha: 'head-sha' } }, 201);
+			}
+			if (parsed.pathname.endsWith('/pulls') && method === 'POST') {
+				return response(
+					{
+						number: 17,
+						html_url: 'https://github.com/owner/repo/pull/17',
+						head: { sha: 'head-sha' },
+					},
+					201,
+				);
+			}
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		await expect(
+			publisher(fetcher).openChangeRequest({
+				...input,
+				changes: [
+					{
+						path: 'apps/new.py',
+						operation: 'add',
+						content: new TextEncoder().encode('print("new")'),
+					},
+				],
+			}),
+		).resolves.toMatchObject({ number: 17, headCommit: 'head-sha' });
+		const treeCall = fetcher.mock.calls.find(([url]) => url.endsWith('/git/trees'));
+		expect(JSON.parse(String(treeCall?.[1]?.body))).toEqual({
+			base_tree: 'base-tree',
+			tree: [{ path: 'apps/new.py', mode: '100644', type: 'blob', sha: 'blob-sha' }],
+		});
+	});
+
 	it('returns a closed pull request after verifying its proposal commit', async () => {
 		const fetcher = vi.fn(async (url: string) => {
 			const parsed = new URL(url);
@@ -252,6 +337,82 @@ describe('GitHubAppPublisher', () => {
 			headCommit: 'existing-sha',
 		});
 		expect(fetcher).toHaveBeenCalledTimes(9);
+	});
+
+	it('prefers an open pull request when multiple commits match the proposal', async () => {
+		const fetcher = vi.fn(async (url: string) => {
+			const parsed = new URL(url);
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) return response({ token: 'token' });
+			if (parsed.pathname.includes('/git/ref/heads/')) {
+				return response({ object: { sha: 'open-sha' } });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						html_url: 'https://github.com/owner/repo/pull/17',
+						head: { sha: 'closed-sha' },
+						state: 'closed',
+					},
+					{
+						number: 19,
+						html_url: 'https://github.com/owner/repo/pull/19',
+						head: { sha: 'open-sha' },
+						state: 'open',
+					},
+				]);
+			}
+			const proposalResponse = proposalTreeResponse(parsed, ['open-sha', 'closed-sha']);
+			if (proposalResponse) return proposalResponse;
+			throw new Error(`unexpected request: ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).openChangeRequest(input)).resolves.toMatchObject({
+			number: 19,
+			headCommit: 'open-sha',
+		});
+		expect(fetcher.mock.calls.some(([url]) => url.endsWith('/git/commits/closed-sha'))).toBe(false);
+	});
+
+	it('skips a mismatched open pull request for a matching closed pull request', async () => {
+		const fetcher = vi.fn(async (url: string) => {
+			const parsed = new URL(url);
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) return response({ token: 'token' });
+			if (parsed.pathname.includes('/git/ref/heads/')) {
+				return response({ object: { sha: 'open-sha' } });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						html_url: 'https://github.com/owner/repo/pull/17',
+						head: { sha: 'closed-sha' },
+						state: 'closed',
+					},
+					{
+						number: 19,
+						html_url: 'https://github.com/owner/repo/pull/19',
+						head: { sha: 'open-sha' },
+						state: 'open',
+					},
+				]);
+			}
+			if (parsed.pathname.endsWith('/git/commits/open-sha')) {
+				return response({ tree: { sha: 'different-tree' }, parents: [{ sha: 'base-sha' }] });
+			}
+			const proposalResponse = proposalTreeResponse(parsed, ['closed-sha']);
+			if (proposalResponse) return proposalResponse;
+			throw new Error(`unexpected request: ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).openChangeRequest(input)).resolves.toMatchObject({
+			number: 17,
+			headCommit: 'closed-sha',
+		});
+		expect(fetcher.mock.calls.some(([url]) => url.endsWith('/git/commits/open-sha'))).toBe(true);
+		expect(fetcher.mock.calls.some(([url]) => url.endsWith('/git/commits/closed-sha'))).toBe(true);
 	});
 
 	it('recovers a merged pull request after GitHub deletes its head branch', async () => {
@@ -675,7 +836,14 @@ describe('GitHubAppPublisher', () => {
 				return response({ object: { sha: 'existing-sha' } });
 			}
 			if (parsed.pathname.endsWith('/pulls')) {
-				return response([{ number: 17, html_url: htmlUrl, head: { sha: 'existing-sha' } }]);
+				return response([
+					{
+						number: 17,
+						html_url: htmlUrl,
+						head: { sha: 'existing-sha' },
+						state: 'open',
+					},
+				]);
 			}
 			throw new Error(`unexpected request: ${parsed.pathname}`);
 		});

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ACTOR, advanceTime, expectNotFound, MemoryBucket, restoreClock, uid } from '../../testing';
-import { PreconditionFailedError } from '../../errors';
+import { ConflictError, PreconditionFailedError } from '../../errors';
 import { createNotebookId, createProjectId, createVersionId } from '../../ids';
 import type { SessionId } from '../../ids';
 import { paths } from '../../paths';
@@ -30,6 +30,96 @@ describe('SessionService', () => {
 			expect(session.notebook_id).toBe(notebookId);
 			expect(session.project_id).toBe(projectId);
 			expect(session.session_id).toMatch(/^sess-/);
+		});
+
+		it('rejects a source version at or before the prune cutoff', async () => {
+			const sourceVersion = createVersionId();
+			await sessions.advanceVersionPruneCutoff(projectId, notebookId, sourceVersion);
+
+			await expect(
+				sessions.createSession({
+					notebook_id: notebookId,
+					project_id: projectId,
+					user_id: ACTOR,
+					source_version_id: sourceVersion,
+				}),
+			).rejects.toThrow(ConflictError);
+
+			const [rejected] = await sessions.listSessions(notebookId);
+			expect(rejected).toMatchObject({
+				status: 'failed',
+				error: { code: 'SOURCE_VERSION_PRUNED' },
+			});
+		});
+
+		it('allows a source version newer than the prune cutoff', async () => {
+			const cutoff = createVersionId();
+			const sourceVersion = createVersionId();
+			await sessions.advanceVersionPruneCutoff(projectId, notebookId, cutoff);
+
+			await expect(
+				sessions.createSession({
+					notebook_id: notebookId,
+					project_id: projectId,
+					user_id: ACTOR,
+					source_version_id: sourceVersion,
+				}),
+			).resolves.toMatchObject({ status: 'starting', source_version_id: sourceVersion });
+		});
+
+		it('fails closed when the prune cutoff record is corrupt', async () => {
+			await bucket.put(paths.versionPruneCutoff(projectId, notebookId), '{not-json');
+
+			await expect(
+				sessions.createSession({
+					notebook_id: notebookId,
+					project_id: projectId,
+					user_id: ACTOR,
+					source_version_id: createVersionId(),
+				}),
+			).rejects.toThrow();
+
+			const [rejected] = await sessions.listSessions(notebookId);
+			expect(rejected).toMatchObject({
+				status: 'failed',
+				error: { code: 'SOURCE_VERSION_CHECK_FAILED' },
+			});
+		});
+	});
+
+	describe('advanceVersionPruneCutoff', () => {
+		it('only advances the cutoff', async () => {
+			const older = createVersionId();
+			const newer = createVersionId();
+
+			await sessions.advanceVersionPruneCutoff(projectId, notebookId, newer);
+			await sessions.advanceVersionPruneCutoff(projectId, notebookId, older);
+
+			expect(
+				await (await bucket.get(paths.versionPruneCutoff(projectId, notebookId)))!.json(),
+			).toEqual({ cutoff_version_id: newer });
+		});
+
+		it('does not regress after losing a CAS race to a newer cutoff', async () => {
+			const older = createVersionId();
+			const requested = createVersionId();
+			const winner = createVersionId();
+			await sessions.advanceVersionPruneCutoff(projectId, notebookId, older);
+
+			const key = paths.versionPruneCutoff(projectId, notebookId);
+			const originalPut = bucket.put.bind(bucket);
+			let raced = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (putKey, value, options) => {
+				if (!raced && putKey === key && options?.onlyIfEtagMatches) {
+					raced = true;
+					await originalPut(key, JSON.stringify({ cutoff_version_id: winner }), options);
+				}
+				return originalPut(putKey, value, options);
+			});
+
+			await sessions.advanceVersionPruneCutoff(projectId, notebookId, requested);
+
+			expect(await (await bucket.get(key))!.json()).toEqual({ cutoff_version_id: winner });
 		});
 	});
 

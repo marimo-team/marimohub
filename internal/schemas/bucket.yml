@@ -718,6 +718,47 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/version-prune-cutoffs/{pid}/{nid}.json:
+    summary: Monotonic boundary that closes old versions to newly created sessions.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: SessionService
+    get:
+      operationId: read_system_version_prune_cutoffs_json
+      summary: Read VersionPruneCutoff
+      tags:
+        - session
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionPruneCutoff'
+    put:
+      operationId: write_system_version_prune_cutoffs_json
+      summary: Write VersionPruneCutoff
+      tags:
+        - session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionPruneCutoff'
+      responses:
+        '204':
+          description: Stored.
   /_system/apps/{pid}/{nid}.json:
     summary: Per-notebook app-sandbox singleton claim.
     parameters:
@@ -2013,6 +2054,13 @@ components:
         - started_at
         - last_heartbeat
       additionalProperties: {}
+    VersionPruneCutoff:
+      type: object
+      properties:
+        cutoff_version_id:
+          type: string
+      required:
+        - cutoff_version_id
     AppClaim:
       type: object
       properties:

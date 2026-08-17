@@ -144,6 +144,10 @@ describe('deriveProposalId', () => {
 		expect(ProposalId.is(first)).toBe(true);
 		expect(await deriveProposalId('user\nroute\nother-key')).not.toBe(first);
 	});
+
+	it('keeps the byte-to-alphabet mapping stable', async () => {
+		expect(await deriveProposalId('mapping-fixture')).toBe('prop-kc9ws4vcf2fpbwxz');
+	});
 });
 
 describe('UserId (opaque brand)', () => {

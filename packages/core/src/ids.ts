@@ -37,15 +37,19 @@ const ID_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz';
 // timestamp prefix and keep them short.
 const RANDOM_ID_LENGTH = 16;
 
-function randomBody(): string {
-	const bytes = new Uint8Array(RANDOM_ID_LENGTH);
-	crypto.getRandomValues(bytes);
+function bodyFromBytes(bytes: Uint8Array): string {
 	let out = '';
 	for (let i = 0; i < RANDOM_ID_LENGTH; i++) {
 		// Low 5 bits of each byte map uniformly onto the 32-char alphabet.
 		out += ID_ALPHABET[bytes[i] & 31];
 	}
 	return out;
+}
+
+function randomBody(): string {
+	const bytes = new Uint8Array(RANDOM_ID_LENGTH);
+	crypto.getRandomValues(bytes);
+	return bodyFromBytes(bytes);
 }
 
 // Version ids use a monotonic ULID so versions created within the same
@@ -200,9 +204,7 @@ export async function deriveProposalId(seed: string): Promise<ProposalId> {
 	const digest = new Uint8Array(
 		await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed)),
 	);
-	let body = '';
-	for (let i = 0; i < RANDOM_ID_LENGTH; i++) body += ID_ALPHABET[digest[i] & 31];
-	return ProposalId.parse(`prop-${body}`);
+	return ProposalId.parse(`prop-${bodyFromBytes(digest)}`);
 }
 
 // Event object keys use a monotonic ULID so that, even when many events are

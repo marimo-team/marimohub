@@ -731,8 +731,8 @@ export const SessionSchema = z.looseObject({
 	 */
 	mode: z.enum(SESSION_MODES).optional(),
 	/**
-	 * `app` only: the notebook's head version at provision. Never mutated after
-	 * create — comparing it against the current head is what detects a stale app.
+	 * The immutable notebook version used to start the session. App sessions compare
+	 * it with the current head for staleness; edit sessions use it as save provenance.
 	 */
 	source_version_id: VersionIdSchema.optional(),
 	/**
@@ -781,6 +781,12 @@ export const SessionSchema = z.looseObject({
 });
 
 export type Session = z.infer<typeof SessionSchema>;
+
+export const VersionPruneCutoffSchema = z.object({
+	cutoff_version_id: VersionIdSchema,
+});
+
+export type VersionPruneCutoff = z.infer<typeof VersionPruneCutoffSchema>;
 
 // --- App claim ---
 //

@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSandboxId, MAX_VERSIONS, UnavailableError } from '@marimo-hub/core';
-import type { SourceControlPublisher, SourceControlPublisherRegistry } from '@marimo-hub/core';
+import { createSandboxId, MAX_VERSIONS, paths, UnavailableError } from '@marimo-hub/core';
+import type {
+	SourceControlPublisher,
+	SourceControlPublisherRegistry,
+	VersionId,
+} from '@marimo-hub/core';
 import { ACTOR, fakeComputeFrom, makeFsSandbox, uid } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 
@@ -15,6 +19,7 @@ describe('change request routes', () => {
 	let sessionId: Awaited<
 		ReturnType<typeof setup.deps.services.sessions.createSession>
 	>['session_id'];
+	let sourceVersionId: VersionId;
 	let openChangeRequest: ReturnType<typeof vi.fn<SourceControlPublisher['openChangeRequest']>>;
 	const route = () =>
 		`/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`;
@@ -68,12 +73,13 @@ describe('change request routes', () => {
 		if (detail.source.type !== 'git' || !detail.source.current_version_id) {
 			throw new Error('Expected a synced source');
 		}
+		sourceVersionId = detail.source.current_version_id;
 		const session = await setup.deps.services.sessions.createSession({
 			project_id: projectId,
 			notebook_id: notebookId,
 			user_id: ACTOR,
 			sandbox_id: createSandboxId(),
-			source_version_id: detail.source.current_version_id,
+			source_version_id: sourceVersionId,
 		});
 		sessionId = session.session_id;
 		await setup.deps.services.sessions.setRunning(projectId, sessionId, 'https://sandbox.example');
@@ -194,6 +200,97 @@ describe('change request routes', () => {
 		);
 	});
 
+	it('finishes an incomplete proposal capture before retrying publication', async () => {
+		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureEntryNotebook');
+		const headers = { 'Idempotency-Key': 'retry-incomplete-capture' };
+
+		await expectError(
+			await setup.request('POST', route(), {}, headers),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		const firstCapture = capture.mock.results[0];
+		if (firstCapture?.type !== 'return') throw new Error('Expected proposal capture');
+		const proposal = await firstCapture.value;
+		const changePath = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(proposal.proposal_id)
+			.change(0);
+		await setup.bucket.delete(changePath);
+
+		await expectOk(await setup.request('POST', route(), {}, headers), 201);
+		expect(capture).toHaveBeenCalledTimes(2);
+		expect(await setup.bucket.head(changePath)).not.toBeNull();
+		expect(openChangeRequest).toHaveBeenCalledTimes(2);
+	});
+
+	it('resumes a captured proposal after its session and source version are removed', async () => {
+		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureEntryNotebook');
+		const headers = { 'Idempotency-Key': 'retry-after-session-removal' };
+
+		await expectError(
+			await setup.request('POST', route(), {}, headers),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		await setup.deps.services.sessions.markFailed(projectId, sessionId, {
+			code: 'TEST_COMPLETE',
+			message: 'The original edit session ended',
+		});
+		await setup.bucket.delete(paths.session(projectId, sessionId));
+		for (let index = 0; index <= MAX_VERSIONS; index++) {
+			await setup.deps.services.notebooks.synced.sync(projectId, notebookId, {
+				repo: 'owner/repo',
+				branch: 'main',
+				root_path: 'apps',
+				commit: `pending-retry-${index}`,
+				files: [{ path: 'dashboard.py', bytes: encode(`print(${index})`) }],
+			});
+		}
+		expect(
+			await setup.bucket.get(
+				paths.project(projectId).notebook(notebookId).version(sourceVersionId).meta,
+			),
+		).toBeNull();
+
+		await expectOk(await setup.request('POST', route(), {}, headers), 201);
+		expect(capture).toHaveBeenCalledOnce();
+		expect(openChangeRequest).toHaveBeenCalledTimes(2);
+		expect(openChangeRequest.mock.calls[1]?.[0]).toMatchObject({ baseCommit: 'abc123' });
+	});
+
+	it('does not infer provenance for a stale session created before provenance tracking', async () => {
+		const versionPath = paths.project(projectId).notebook(notebookId).version(sourceVersionId).meta;
+		const object = await setup.bucket.get(versionPath);
+		if (!object) throw new Error('Expected the source version');
+		const { git_source: _gitSource, ...legacyVersion } =
+			await object.json<Record<string, unknown>>();
+		await setup.bucket.put(versionPath, JSON.stringify(legacyVersion));
+		await setup.deps.services.notebooks.synced.sync(projectId, notebookId, {
+			repo: 'owner/repo',
+			branch: 'main',
+			root_path: 'apps',
+			commit: 'newer-commit',
+			files: [{ path: 'dashboard.py', bytes: encode('print("newer")') }],
+		});
+
+		const error = await expectError(
+			await setup.request(
+				'POST',
+				route(),
+				{},
+				{ 'Idempotency-Key': 'stale-pre-provenance-session' },
+			),
+			409,
+			'CONFLICT',
+		);
+		expect(error.message).toContain('restart from the latest synced version');
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
 	it('requires project manager access', async () => {
 		const outsider = createTestApi({
 			bucket: setup.bucket,
@@ -219,6 +316,7 @@ describe('change request routes', () => {
 			bucket: setup.bucket,
 			compute: setup.deps.compute,
 		});
+		const capture = vi.spyOn(withoutPublisher.deps.services.proposals, 'captureEntryNotebook');
 		await expectError(
 			await withoutPublisher.request(
 				'POST',
@@ -229,6 +327,7 @@ describe('change request routes', () => {
 			503,
 			'SERVICE_UNAVAILABLE',
 		);
+		expect(capture).not.toHaveBeenCalled();
 		expect(openChangeRequest).not.toHaveBeenCalled();
 	});
 

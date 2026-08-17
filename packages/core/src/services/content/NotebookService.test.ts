@@ -1031,6 +1031,47 @@ describe('NotebookService', () => {
 			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS);
 		});
 
+		it('rejects a session that starts after the prune cutoff advances', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v0' },
+				ACTOR,
+			);
+			const oldestVersionId = (await notebooks.listVersions(projectId, created.id))[0].version_id;
+			for (let i = 1; i < MAX_VERSIONS; i++) {
+				await notebooks.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
+			}
+
+			const oldestPrefix = `${paths.project(projectId).notebook(created.id).base}/versions/${oldestVersionId}/`;
+			const originalList = bucket.list.bind(bucket);
+			let overlappingSession: Promise<unknown> | undefined;
+			bucket.list = async (options) => {
+				if (!overlappingSession && options?.prefix === oldestPrefix && !options.delimiter) {
+					overlappingSession = sessions.createSession({
+						project_id: projectId,
+						notebook_id: created.id,
+						user_id: ACTOR,
+						source_version_id: oldestVersionId,
+					});
+					await overlappingSession.catch(() => {});
+				}
+				return originalList(options);
+			};
+
+			try {
+				await notebooks.updateNotebook(projectId, created.id, { code: 'triggers prune' }, ACTOR);
+			} finally {
+				bucket.list = originalList;
+			}
+
+			await expect(overlappingSession).rejects.toThrow(ConflictError);
+			expect(await listAllKeys(bucket, oldestPrefix)).toEqual([]);
+			const rejected = (await sessions.listSessions(created.id)).find(
+				(session) => session.source_version_id === oldestVersionId,
+			);
+			expect(rejected?.status).toBe('failed');
+		});
+
 		it('does not fail the save when pruning errors (best-effort)', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
@@ -1972,6 +2013,7 @@ describe('NotebookService', () => {
 			const siblingKeysBefore = await listAllKeys(bucket, siblingPrefix);
 			expect(siblingKeysBefore.length).toBeGreaterThan(0);
 			expect((await listAllKeys(bucket, doomedPrefix)).length).toBeGreaterThan(0);
+			await sessions.advanceVersionPruneCutoff(projectId, doomed.id, createVersionId());
 
 			// Soft-delete first (the guard requires status === 'deleted').
 			await notebooks.deleteNotebook(projectId, doomed.id, ACTOR);
@@ -1980,6 +2022,7 @@ describe('NotebookService', () => {
 
 			// The right things were deleted: the doomed notebook's subtree is empty.
 			expect(await listAllKeys(bucket, doomedPrefix)).toEqual([]);
+			expect(await bucket.get(paths.versionPruneCutoff(projectId, doomed.id))).toBeNull();
 
 			// Live data survived: the sibling notebook is fully intact and resolvable.
 			expect(await listAllKeys(bucket, siblingPrefix)).toEqual(siblingKeysBefore);

@@ -438,6 +438,21 @@ describe('NotebookProposalService', () => {
 		).rejects.toThrow('not found');
 	});
 
+	it('reuses only proposals whose captured payload is complete', async () => {
+		const proposalId = createProposalId();
+		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'changed' } });
+		const proposal = await capture(instance, { proposalId });
+		const changePath = paths.project(projectId).notebook(notebookId).proposal(proposalId).change(0);
+
+		await expect(
+			env.proposals.getReusableProposal(projectId, notebookId, proposalId),
+		).resolves.toEqual(proposal);
+		await env.bucket.delete(changePath);
+		await expect(
+			env.proposals.getReusableProposal(projectId, notebookId, proposalId),
+		).resolves.toBeUndefined();
+	});
+
 	it('resolves repository coordinates for a version written before git_source was stored', async () => {
 		const versionPath = paths.project(projectId).notebook(notebookId).version(versionId).meta;
 		const object = await env.bucket.get(versionPath);
@@ -457,6 +472,19 @@ describe('NotebookProposalService', () => {
 		await expect(
 			env.proposals.resolveSourceRevision(projectId, notebookId, versionId, legacySource),
 		).resolves.toEqual(legacySource);
+	});
+
+	it('explains how to recover when a legacy version has no repository provenance', async () => {
+		const versionPath = paths.project(projectId).notebook(notebookId).version(versionId).meta;
+		const object = await env.bucket.get(versionPath);
+		if (!object) throw new Error('expected version');
+		const { git_source: _gitSource, ...legacyVersion } =
+			await object.json<Record<string, unknown>>();
+		await env.bucket.put(versionPath, JSON.stringify(legacyVersion));
+
+		await expect(
+			env.proposals.resolveSourceRevision(projectId, notebookId, versionId),
+		).rejects.toThrow('restart from the latest synced version');
 	});
 
 	it('rejects legacy repository coordinates for a different commit', async () => {
@@ -732,6 +760,12 @@ describe('NotebookProposalService', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(Date.parse(proposal.created_at) + DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS);
 		try {
+			await expect(
+				env.proposals.getReusableProposal(projectId, notebookId, proposalId),
+			).rejects.toMatchObject({
+				code: 'PROPOSAL_RETRY_REQUIRED',
+				message: expect.stringContaining('retry with a new idempotency key'),
+			});
 			const unreachable = makeFsSandbox({ files: { 'dashboard.py': 'unused' } });
 			await expect(capture(unreachable.instance, { proposalId })).rejects.toMatchObject({
 				code: 'PROPOSAL_RETRY_REQUIRED',

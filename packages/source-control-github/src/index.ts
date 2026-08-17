@@ -177,6 +177,10 @@ type GitTreeEntry = {
 	type: 'blob' | 'commit' | 'tree';
 };
 
+type PullRequestCandidate = OpenChangeRequestResult & {
+	state: 'open' | 'closed';
+};
+
 function gitTreeEntries(value: unknown): Map<string, GitTreeEntry> {
 	if (!isRecord(value) || value.truncated !== false || !Array.isArray(value.tree)) {
 		throw new UnavailableError('GitHub returned an incomplete base tree');
@@ -337,6 +341,23 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 		return gitTreeEntries(await json(response));
 	}
 
+	private async pathExistsAtCommit(
+		owner: string,
+		repo: string,
+		path: string,
+		commit: string,
+		token: string,
+	): Promise<boolean> {
+		const query = new URLSearchParams({ ref: commit });
+		const response = await this.request(
+			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${refPath(path)}?${query}`,
+			token,
+			{},
+			[404],
+		);
+		return response.status !== 404;
+	}
+
 	private async createProposalTree(
 		input: OpenChangeRequestInput,
 		owner: string,
@@ -350,10 +371,22 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 		const baseTree = nestedString(await json(commitResponse), 'tree', 'sha');
 		const baseEntries = input.changes.some((change) => change.operation !== 'add')
 			? await this.getBaseTreeEntries(owner, repo, baseTree, token)
-			: new Map<string, GitTreeEntry>();
+			: null;
+		await Promise.all(
+			input.changes
+				.filter((change) => change.operation === 'add')
+				.map(async (change) => {
+					const exists = baseEntries
+						? baseEntries.has(change.path)
+						: await this.pathExistsAtCommit(owner, repo, change.path, input.baseCommit, token);
+					if (exists) {
+						throw new ConflictError(`GitHub base tree already contains ${change.path}`);
+					}
+				}),
+		);
 		const tree = await Promise.all(
 			input.changes.map(async (change) => {
-				const baseEntry = baseEntries.get(change.path);
+				const baseEntry = baseEntries?.get(change.path);
 				if (change.operation === 'delete') {
 					if (!baseEntry) {
 						throw new UnavailableError(`GitHub base tree is missing ${change.path}`);
@@ -390,14 +423,14 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 		return stringField(await json(treeResponse), 'sha');
 	}
 
-	private async assertProposalCommit(
+	private async proposalCommitMatches(
 		owner: string,
 		repo: string,
 		commitSha: string,
 		baseCommit: string,
 		treeSha: string,
 		token: string,
-	): Promise<void> {
+	): Promise<boolean> {
 		const response = await this.request(
 			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits/${encodeURIComponent(commitSha)}`,
 			token,
@@ -408,20 +441,31 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 		}
 		const parents = commit.parents.map((parent) => stringField(parent, 'sha'));
 		const actualTree = nestedString(commit, 'tree', 'sha');
-		if (parents.length !== 1 || parents[0] !== baseCommit || actualTree !== treeSha) {
+		return parents.length === 1 && parents[0] === baseCommit && actualTree === treeSha;
+	}
+
+	private async assertProposalCommit(
+		owner: string,
+		repo: string,
+		commitSha: string,
+		baseCommit: string,
+		treeSha: string,
+		token: string,
+	): Promise<void> {
+		if (!(await this.proposalCommitMatches(owner, repo, commitSha, baseCommit, treeSha, token))) {
 			throw new ProposalRetryRequiredError(
 				'The GitHub proposal branch no longer matches the captured proposal; retry with a new idempotency key',
 			);
 		}
 	}
 
-	private async findPullRequest(
+	private async findPullRequests(
 		owner: string,
 		repo: string,
 		branch: string,
 		baseBranch: string,
 		token: string,
-	): Promise<OpenChangeRequestResult | null> {
+	): Promise<PullRequestCandidate[]> {
 		const query = new URLSearchParams({
 			state: 'all',
 			head: `${owner}:${branch}`,
@@ -433,15 +477,64 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 		);
 		const pulls: unknown = await json(response);
 		if (!Array.isArray(pulls)) throw new UnavailableError('GitHub returned an invalid pull list');
-		if (pulls.length === 0) return null;
-		const pull = pulls[0];
-		const number = numberField(pull, 'number');
-		return {
-			number,
-			url: pullRequestUrl(pull, owner, repo, number),
-			headBranch: branch,
-			headCommit: nestedString(pull, 'head', 'sha'),
-		};
+		return pulls
+			.map((pull): PullRequestCandidate => {
+				const number = numberField(pull, 'number');
+				const state = stringField(pull, 'state');
+				if (state !== 'open' && state !== 'closed') {
+					throw new UnavailableError('GitHub returned an invalid pull request state');
+				}
+				return {
+					number,
+					url: pullRequestUrl(pull, owner, repo, number),
+					headBranch: branch,
+					headCommit: nestedString(pull, 'head', 'sha'),
+					state,
+				};
+			})
+			.sort((left, right) => {
+				if (left.state !== right.state) return left.state === 'open' ? -1 : 1;
+				return left.number - right.number;
+			});
+	}
+
+	private async matchingPullRequest(
+		pulls: PullRequestCandidate[],
+		owner: string,
+		repo: string,
+		baseCommit: string,
+		treeSha: string,
+		token: string,
+	): Promise<OpenChangeRequestResult | null> {
+		const matches = new Map<string, boolean>();
+		for (const pull of pulls) {
+			let matchesProposal = matches.get(pull.headCommit);
+			if (matchesProposal === undefined) {
+				matchesProposal = await this.proposalCommitMatches(
+					owner,
+					repo,
+					pull.headCommit,
+					baseCommit,
+					treeSha,
+					token,
+				);
+				matches.set(pull.headCommit, matchesProposal);
+			}
+			if (matchesProposal) {
+				return {
+					number: pull.number,
+					url: pull.url,
+					headBranch: pull.headBranch,
+					headCommit: pull.headCommit,
+				};
+			}
+		}
+		if (pulls.length > 0) {
+			throw new ProposalRetryRequiredError(
+				'The GitHub pull requests no longer match the captured proposal; retry with a new idempotency key',
+			);
+		}
+		return null;
 	}
 
 	async openChangeRequest(input: OpenChangeRequestInput): Promise<OpenChangeRequestResult> {
@@ -460,7 +553,7 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 		}
 		const token = await this.installationToken(owner, repo);
 		const existingRef = await this.getRef(owner, repo, input.headBranch, token);
-		const existing = await this.findPullRequest(
+		const pullRequests = await this.findPullRequests(
 			owner,
 			repo,
 			input.headBranch,
@@ -468,15 +561,15 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 			token,
 		);
 		const treeSha = await this.createProposalTree(input, owner, repo, token);
+		const existing = await this.matchingPullRequest(
+			pullRequests,
+			owner,
+			repo,
+			input.baseCommit,
+			treeSha,
+			token,
+		);
 		if (existing) {
-			await this.assertProposalCommit(
-				owner,
-				repo,
-				existing.headCommit,
-				input.baseCommit,
-				treeSha,
-				token,
-			);
 			return existing;
 		}
 		if (existingRef) {
@@ -539,18 +632,16 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 			[422],
 		);
 		if (response.status === 422) {
-			const existing = await this.findPullRequest(
-				owner,
-				repo,
-				input.headBranch,
-				input.baseBranch,
-				token,
-			);
+			const existing = (
+				await this.findPullRequests(owner, repo, input.headBranch, input.baseBranch, token)
+			).find((pull) => pull.headCommit === headCommit);
 			if (existing) {
-				if (existing.headCommit !== headCommit) {
-					throw new ConflictError('The GitHub proposal branch changed while publishing; retry');
-				}
-				return existing;
+				return {
+					number: existing.number,
+					url: existing.url,
+					headBranch: existing.headBranch,
+					headCommit: existing.headCommit,
+				};
 			}
 			throw new UnavailableError('GitHub rejected the pull request');
 		}

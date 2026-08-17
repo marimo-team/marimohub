@@ -1,7 +1,7 @@
 import type { Bucket } from '../ports/bucket';
 import { noopMetrics } from '../ports/metrics';
 import type { Metrics } from '../ports/metrics';
-import type { NotebookId, ProjectId, SessionId, UserId } from '../ids';
+import type { NotebookId, ProjectId, ProposalId, SessionId, UserId } from '../ids';
 import { paths } from '../paths';
 import { traced } from '../tracing';
 import type { AttrExtractors } from '../tracing';
@@ -265,6 +265,10 @@ const notebook = (projectId: ProjectId, notebookId: NotebookId) => ({
 	...project(projectId),
 	'marimohub.notebook_id': notebookId,
 });
+const proposal = (projectId: ProjectId, notebookId: NotebookId, proposalId: ProposalId) => ({
+	...notebook(projectId, notebookId),
+	'marimohub.proposal_id': proposalId,
+});
 const session = (projectId: ProjectId, id: SessionId) => ({
 	...project(projectId),
 	'marimohub.session_id': id,
@@ -338,6 +342,7 @@ export function createServices(
 		markFailed: session,
 		listSessions: (notebookId) => ({ 'marimohub.notebook_id': notebookId }),
 		listActiveByProject: project,
+		advanceVersionPruneCutoff: notebook,
 		listProtectedVersionIds: notebook,
 		countActiveAppsForProject: project,
 		listActiveAppsForProject: project,
@@ -366,8 +371,9 @@ export function createServices(
 	);
 	const proposals = wrap('NotebookProposalService', new NotebookProposalService(bucket, metrics), {
 		captureEntryNotebook: (input) => notebook(input.projectId, input.notebookId),
-		getProposal: notebook,
-		publishChangeRequest: (input) => notebook(input.projectId, input.notebookId),
+		getProposal: proposal,
+		getReusableProposal: proposal,
+		publishChangeRequest: (input) => proposal(input.projectId, input.notebookId, input.proposalId),
 		pruneExpiredPayloads: () => ({}),
 	});
 	const identities = wrap('IdentityService', new IdentityService(bucket), {

@@ -118,6 +118,8 @@ These CAS-managed records also have one writer each:
   `_system/editors/{pid}/{nid}.json`.
 - `SessionService.claimApp`/`releaseApp` owns each app claim at
   `_system/apps/{pid}/{nid}.json`.
+- `SessionService` owns each monotonic version-prune cutoff at
+  `_system/version-prune-cutoffs/{pid}/{nid}.json`.
 - `NotebookProposalService` owns each proposal publication at
   `projects/{pid}/notebooks/{nid}/proposals/{proposal-id}/publication.json`.
 - `ProjectIntegrationsStore` owns each project integration head at

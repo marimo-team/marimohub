@@ -119,7 +119,12 @@ export class NotebookProposalService {
 		if (!versionObject) throw new NotFoundError(`Version ${versionId} not found`);
 		const version = await readStored(VersionSchema, versionObject, base.meta);
 		const source = version.git_source ?? legacySourceRevision;
-		if (!source || source.commit !== version.commit) {
+		if (!source) {
+			throw new ConflictError(
+				'The session source version predates repository provenance tracking; restart from the latest synced version',
+			);
+		}
+		if (source.commit !== version.commit) {
 			throw new ConflictError('The session source revision is missing repository coordinates');
 		}
 		const provider = source.provider;
@@ -143,16 +148,9 @@ export class NotebookProposalService {
 				this.assertProposalRetry(proposal, input);
 				if (publication.state === 'published') return proposal;
 				this.assertPayloadNotExpired(proposal);
-				const proposalPaths = paths
-					.project(input.projectId)
-					.notebook(input.notebookId)
-					.proposal(proposal.proposal_id);
-				const payloadExists = await Promise.all(
-					proposal.changes.map(async (change, index) =>
-						change.operation === 'delete' ? true : this.bucket.head(proposalPaths.change(index)),
-					),
-				);
-				if (payloadExists.every(Boolean)) return proposal;
+				if (await this.hasCompletePayload(input.projectId, input.notebookId, proposal)) {
+					return proposal;
+				}
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
 			}
@@ -404,6 +402,34 @@ export class NotebookProposalService {
 			readStored(ProposalPublicationSchema, publicationObject, proposalPaths.publication),
 		]);
 		return { proposal, publication };
+	}
+
+	async getReusableProposal(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		proposalId: ProposalId,
+	): Promise<NotebookProposal | undefined> {
+		const { proposal, publication } = await this.getProposal(projectId, notebookId, proposalId);
+		if (publication.state === 'published') return proposal;
+		this.assertPayloadNotExpired(proposal);
+		return (await this.hasCompletePayload(projectId, notebookId, proposal)) ? proposal : undefined;
+	}
+
+	private async hasCompletePayload(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		proposal: NotebookProposal,
+	): Promise<boolean> {
+		const proposalPaths = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(proposal.proposal_id);
+		const payloadExists = await Promise.all(
+			proposal.changes.map(async (change, index) =>
+				change.operation === 'delete' ? true : this.bucket.head(proposalPaths.change(index)),
+			),
+		);
+		return payloadExists.every(Boolean);
 	}
 
 	async publishChangeRequest(

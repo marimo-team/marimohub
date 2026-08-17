@@ -86,6 +86,11 @@ export interface NotebookDeleteMutationResult {
 }
 
 export interface NotebookVersionProtector {
+	advanceVersionPruneCutoff(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		cutoff: VersionId,
+	): Promise<void>;
 	listProtectedVersionIds(
 		projectId: ProjectId,
 		notebookId: NotebookId,
@@ -886,6 +891,8 @@ export class NotebookService {
 
 			// Keep the newest `max`; the rest are prune candidates.
 			const prunable = versionPrefixes.slice(0, versionPrefixes.length - max);
+			const cutoff = VersionId.parse(prunable.at(-1)!.slice(versionsRoot.length, -1));
+			await this.versionProtector?.advanceVersionPruneCutoff(projectId, notebookId, cutoff);
 			const protectedVersionIds = new Set(
 				await this.versionProtector?.listProtectedVersionIds(projectId, notebookId),
 			);
@@ -986,6 +993,7 @@ export class NotebookService {
 		// outside the notebook subtree.
 		await this.bucket.delete(paths.appClaim(projectId, notebookId)).catch(() => {});
 		await this.bucket.delete(paths.editorClaim(projectId, notebookId)).catch(() => {});
+		await this.bucket.delete(paths.versionPruneCutoff(projectId, notebookId)).catch(() => {});
 	}
 
 	/**

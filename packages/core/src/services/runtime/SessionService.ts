@@ -30,6 +30,7 @@ import {
 	parseStored,
 	readStored,
 	SessionSchema,
+	VersionPruneCutoffSchema,
 } from '../../schema';
 import type { EditorClaim, Session } from '../../schema';
 import {
@@ -57,7 +58,7 @@ export interface CreateSessionInput {
 	ephemeral?: boolean;
 	/** `edit` (default) or `app` (the shared singleton; see SessionSchema). */
 	mode?: SessionMode;
-	/** `app` only: the notebook's head version at provision, for staleness detection. */
+	/** Immutable notebook version used to start this session. */
 	source_version_id?: VersionId;
 	editor_sandbox_sharing?: EditorSandboxSharing;
 	/** Non-extendable expiry of the entitlement credential that authorized the session. */
@@ -70,6 +71,7 @@ const TERMINAL_RETENTION_MS = Millis.hours(24);
 const TAKEOVER_REQUEST_TTL_MS = Millis.minutes(5);
 const TAKEOVER_DRAIN_LEASE_MS = Millis.minutes(10);
 const TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS = Millis.minutes(30);
+
 // Coalesce heartbeat persistence: an already-running session is only re-written
 // once its stored heartbeat is older than this. Bounds heartbeat writes to
 // ~1/interval/session regardless of client cadence, while staying well within
@@ -156,8 +158,81 @@ export class SessionService {
 			...(input.compute_from_snapshot ? { compute_from_snapshot: true } : {}),
 		};
 
-		await this.bucket.put(paths.session(input.project_id, sessionId), JSON.stringify(session));
+		const sessionPath = paths.session(input.project_id, sessionId);
+		const written = await this.bucket.put(sessionPath, JSON.stringify(session));
+		if (input.source_version_id) {
+			let cutoff: VersionId | null;
+			try {
+				cutoff = await this.getVersionPruneCutoff(input.project_id, input.notebook_id);
+			} catch (error) {
+				await this.failCreatedSession(sessionPath, written.etag, session, {
+					code: 'SOURCE_VERSION_CHECK_FAILED',
+					message: 'The source version could not be verified',
+				});
+				throw error;
+			}
+			if (cutoff && input.source_version_id <= cutoff) {
+				await this.failCreatedSession(sessionPath, written.etag, session, {
+					code: 'SOURCE_VERSION_PRUNED',
+					message: 'The source version is no longer available for a new session',
+				});
+				throw new ConflictError(
+					'The source version is no longer available; reload the notebook and retry',
+				);
+			}
+		}
 		return session;
+	}
+
+	private async failCreatedSession(
+		key: string,
+		etag: string,
+		session: Session,
+		error: { code: string; message: string },
+	): Promise<void> {
+		try {
+			await this.bucket.put(key, JSON.stringify({ ...session, status: 'failed', error }), {
+				onlyIfEtagMatches: etag,
+			});
+		} catch (cause) {
+			logOperationalError(
+				'session_source_version_rejection_failed',
+				{ operation: 'session.source_version.reject', object: key },
+				cause,
+			);
+		}
+	}
+
+	private async getVersionPruneCutoff(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<VersionId | null> {
+		const key = paths.versionPruneCutoff(projectId, notebookId);
+		const object = await this.bucket.get(key);
+		if (!object) return null;
+		return (await readStored(VersionPruneCutoffSchema, object, key)).cutoff_version_id;
+	}
+
+	async advanceVersionPruneCutoff(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		cutoff: VersionId,
+	): Promise<void> {
+		const key = paths.versionPruneCutoff(projectId, notebookId);
+		await withCasRetry(this.bucket, async (cas) => {
+			const existing = await this.bucket.get(key);
+			if (!existing) {
+				await cas.put(key, JSON.stringify({ cutoff_version_id: cutoff }), {
+					onlyIfNotExists: true,
+				});
+				return;
+			}
+			const current = (await readStored(VersionPruneCutoffSchema, existing, key)).cutoff_version_id;
+			if (current >= cutoff) return;
+			await cas.put(key, JSON.stringify({ cutoff_version_id: cutoff }), {
+				onlyIfEtagMatches: existing.etag,
+			});
+		});
 	}
 
 	async getSession(projectId: ProjectId, id: SessionId): Promise<Session> {
