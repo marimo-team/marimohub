@@ -730,7 +730,18 @@ describe('kind renders (golden)', () => {
 			uri: 'https://catalog.example.com/api',
 			warehouse: "lake'house",
 			auth: { method: 'bearer_token', token: "tok'en" },
-			storage: { scheme: 'catalog' },
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.com',
+				region: 'us-east-1',
+				credentials: {
+					method: 'static',
+					access_key_id: 'access-key',
+					secret_access_key: 'secret-key',
+				},
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+			access_delegation: 'none',
 		});
 		const programs = icebergPreviewPrograms(config, { namespace: ['sales"archive'] });
 
@@ -744,9 +755,15 @@ describe('kind renders (golden)', () => {
 		expect(attach?.params).toEqual([
 			'https://catalog.example.com/api',
 			"lake'house",
-			"tok'en",
-			'vended_credentials',
+			'marimohub-parent-broker',
+			'none',
 		]);
+		expect(programs?.duckdbWasm?.httpAccess).toMatchObject({
+			catalog: { authorization: "Bearer tok'en" },
+			storage: {
+				credentials: { method: 'static', accessKeyId: 'access-key', secretAccessKey: 'secret-key' },
+			},
+		});
 		expect(programs?.duckdbWasm?.query).toEqual({
 			text: expect.stringContaining('"sales""archive"."orders" LIMIT ?'),
 			params: [20],
@@ -761,12 +778,18 @@ describe('kind renders (golden)', () => {
 	});
 
 	it('iceberg_rest keeps every remote value bound when optional warehouse is absent', () => {
-		const uri = "https://catalog.example.com/a'b?token=not-sql";
+		const uri = "https://catalog.example.com/a'b";
 		const programs = icebergPreviewPrograms(
 			{
 				uri,
 				auth: { method: 'none' },
 				access_delegation: 'none',
+				storage: {
+					scheme: 's3',
+					endpoint: 'https://objects.example.com',
+					anonymous: true,
+					broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+				},
 			},
 			{
 				integrationName: "catalog'name",
@@ -779,7 +802,7 @@ describe('kind renders (golden)', () => {
 		const attach = programs?.duckdbWasm?.setup.at(-1);
 		expect(attach).toEqual({
 			text: expect.stringContaining("ATTACH 'catalog''name'"),
-			params: [uri, '', 'none'],
+			params: [uri, 'marimohub-parent-broker', 'none'],
 		});
 		expect(attach?.text).not.toContain(uri);
 		expect(attach?.text).not.toContain('WAREHOUSE');
@@ -788,6 +811,82 @@ describe('kind renders (golden)', () => {
 			params: [1],
 		});
 	});
+
+	it.each([
+		{ bucket: 'warehouse/private', prefix: 'tables' },
+		{ bucket: 'warehouse\\private', prefix: 'tables' },
+		{ bucket: 'warehouse', prefix: 'allowed\\private' },
+		{ bucket: '.', prefix: 'tables' },
+		{ bucket: 'warehouse', prefix: '/' },
+		{ bucket: 'warehouse', prefix: 'allowed/../private' },
+	])('iceberg_rest rejects invalid broker read location $bucket/$prefix', (location) => {
+		expect(
+			icebergRest.configSchema.safeParse({
+				...(FIXTURES.iceberg_rest as object),
+				access_delegation: 'none',
+				storage: {
+					scheme: 's3',
+					endpoint: 'https://objects.example.com',
+					anonymous: true,
+					broker_read_locations: [location],
+				},
+			}).success,
+		).toBe(false);
+	});
+
+	it('iceberg_rest routes query-bearing catalog URLs to the sandbox', () => {
+		const config = icebergRest.configSchema.parse({
+			...(FIXTURES.iceberg_rest as object),
+			uri: 'https://catalog.example.com/api?tenant=allowed',
+			auth: { method: 'none' },
+			extra_properties: {},
+			access_delegation: 'none',
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.com',
+				anonymous: true,
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+		});
+
+		expect(icebergRest.preview?.available(config)).toEqual({
+			ok: true,
+			programs: { python: true },
+		});
+		expect(icebergRest.query?.available(config)).toEqual({
+			ok: false,
+			reason: 'catalog URLs with query parameters are not supported by DuckDB-Wasm preview',
+		});
+	});
+
+	it.each(['%2F', '%5C'])(
+		'iceberg_rest routes catalog URLs containing %s to the sandbox',
+		(separator) => {
+			const config = icebergRest.configSchema.parse({
+				...(FIXTURES.iceberg_rest as object),
+				uri: `https://catalog.example.com/iceberg${separator}tenant`,
+				auth: { method: 'none' },
+				extra_properties: {},
+				access_delegation: 'none',
+				storage: {
+					scheme: 's3',
+					endpoint: 'https://objects.example.com',
+					anonymous: true,
+					broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+				},
+			});
+
+			expect(icebergRest.preview?.available(config)).toEqual({
+				ok: true,
+				programs: { python: true },
+			});
+			expect(icebergRest.query?.available(config)).toEqual({
+				ok: false,
+				reason:
+					'catalog URLs with encoded path separators are not supported by DuckDB-Wasm preview',
+			});
+		},
+	);
 
 	it.each([
 		['basic auth', { auth: { method: 'basic', username: 'user', password: 'password' } }],
@@ -809,6 +908,19 @@ describe('kind renders (golden)', () => {
 		['custom headers', { headers: { 'X-Trace': 'trace' } }],
 		['extra properties', { extra_properties: { 'rest.custom-option': 'true' } }],
 		['explicit storage', { storage: { scheme: 's3', region: 'us-east-1' } }],
+		[
+			'advanced S3 client options',
+			{
+				access_delegation: 'none',
+				storage: {
+					scheme: 's3',
+					endpoint: 'https://objects.example.com',
+					anonymous: true,
+					broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					role_arn: 'arn:aws:iam::123456789012:role/reader',
+				},
+			},
+		],
 		['runtime worker count', { runtime: { max_workers: 2 } }],
 		['runtime snapshot compatibility', { runtime: { legacy_current_snapshot_id: false } }],
 		['runtime timestamp downcast', { runtime: { downcast_ns_timestamp_to_us_on_write: false } }],

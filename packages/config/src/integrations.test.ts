@@ -269,7 +269,13 @@ describe('makeIntegrations data browser', () => {
 				config: {
 					uri: 'https://catalog.example.com',
 					auth: { method: 'none' },
-					storage: { scheme: 'catalog' },
+					access_delegation: 'none',
+					storage: {
+						scheme: 's3',
+						endpoint: 'https://objects.example.com',
+						anonymous: true,
+						broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					},
 				},
 			},
 			ACTOR,

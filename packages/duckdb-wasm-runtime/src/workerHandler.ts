@@ -1,9 +1,15 @@
 import { parentPort } from 'node:worker_threads';
 import { BlockingDuckDBEngine } from './engine.ts';
 import type { RuntimeRequest, RuntimeResponse } from './protocol';
+import { createSyncXmlHttpRequest } from './syncXmlHttpRequest.ts';
 
 if (!parentPort) throw new Error('DuckDB-Wasm worker started without a parent port.');
 const port = parentPort;
+
+Object.defineProperty(globalThis, 'XMLHttpRequest', {
+	configurable: true,
+	value: createSyncXmlHttpRequest({ port }),
+});
 
 const engine = new BlockingDuckDBEngine();
 let requestQueue = Promise.resolve();
@@ -22,14 +28,26 @@ async function handle(request: RuntimeRequest): Promise<void> {
 	try {
 		switch (request.type) {
 			case 'initialize':
-				await engine.initialize(request.memoryLimitMb);
+				await engine.initialize(request.memoryLimitMb, request.httpEnabled);
 				response = { id: request.id, ok: true };
 				break;
 			case 'execute':
-				response = { id: request.id, ok: true, value: engine.execute(request.program) };
+				response = {
+					id: request.id,
+					ok: true,
+					value: await withExecutionBridge(request.executionNonce, () =>
+						engine.execute(request.program),
+					),
+				};
 				break;
 			case 'execute-query':
-				response = { id: request.id, ok: true, value: await engine.executeQuery(request.request) };
+				response = {
+					id: request.id,
+					ok: true,
+					value: await withExecutionBridge(request.executionNonce, () =>
+						engine.executeQuery(request.request),
+					),
+				};
 				break;
 			case 'ping':
 				engine.ping();
@@ -44,4 +62,23 @@ async function handle(request: RuntimeRequest): Promise<void> {
 		};
 	}
 	port.postMessage(response);
+}
+
+async function withExecutionBridge<T>(
+	executionNonce: string | undefined,
+	work: () => T | Promise<T>,
+): Promise<T> {
+	const previous = globalThis.XMLHttpRequest;
+	Object.defineProperty(globalThis, 'XMLHttpRequest', {
+		configurable: true,
+		value: createSyncXmlHttpRequest({ port, executionNonce }),
+	});
+	try {
+		return await work();
+	} finally {
+		Object.defineProperty(globalThis, 'XMLHttpRequest', {
+			configurable: true,
+			value: previous,
+		});
+	}
 }

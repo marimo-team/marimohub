@@ -1,4 +1,5 @@
 import type { IntegrationVersionPin } from '../../../ports/integrations';
+import type { DuckDBHttpAccess } from '../data-preview/programs';
 
 export interface DataQueryResult {
 	columns: string[];
@@ -15,6 +16,7 @@ export interface DataQueryStatement {
 export interface DataQueryPlan {
 	setup: readonly DataQueryStatement[];
 	cleanup?: readonly DataQueryStatement[];
+	httpAccess?: Readonly<DuckDBHttpAccess>;
 }
 
 export interface DataQueryConnection {

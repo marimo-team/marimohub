@@ -80,6 +80,7 @@ export class DataQueryService extends DrainableService {
 		externalSignal?: AbortSignal,
 	): Promise<DataQueryResult> {
 		const controller = new AbortController();
+		const deadlineAtMs = Date.now() + this.options.executionTimeoutMs;
 		let executor: DisposableDataQueryExecutor | undefined;
 		let terminated = false;
 		let rejectStop!: (error: UnavailableError) => void;
@@ -134,7 +135,7 @@ export class DataQueryService extends DrainableService {
 						limits: {
 							maxRows: this.options.maxRows,
 							maxBytes: this.options.maxBytes,
-							deadlineMs: this.options.executionTimeoutMs,
+							deadlineMs: Math.max(1, deadlineAtMs - Date.now()),
 						},
 					},
 					controller.signal,

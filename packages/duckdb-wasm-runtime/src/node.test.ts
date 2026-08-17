@@ -4,6 +4,7 @@ import type {
 	DuckDBPreviewProgram,
 	DuckDBWasmRuntime,
 	IntegrationId,
+	Metrics,
 } from '@marimo-hub/core';
 import {
 	createNodeDataQueryExecutorFactory,
@@ -11,6 +12,8 @@ import {
 	DUCKDB_WORKER_RESOURCE_LIMITS,
 	nodeDuckDBWasmCapabilities,
 } from './node';
+import type { DuckDBHttpSessionFactory } from './node';
+import { createHttpBridgeBuffers } from './httpBridge';
 
 const open: DuckDBWasmRuntime[] = [];
 
@@ -67,13 +70,65 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 		expect(capabilities).toEqual({
 			features: [],
 			unavailable: {
-				'iceberg-http': expect.stringMatching(/synchronous.*IntegrationProbe.*asynchronous/i),
+				'iceberg-http': expect.stringMatching(/configured parent broker session/i),
 			},
 		});
 		expect(Object.isFrozen(capabilities)).toBe(true);
 		expect(Object.isFrozen(capabilities.features)).toBe(true);
 		expect(Object.isFrozen(capabilities.unavailable)).toBe(true);
 	});
+
+	it('loads pinned HTTP extensions and creates only a dummy S3 secret in the worker', async () => {
+		const close = vi.fn();
+		const fetch = vi.fn();
+		let expiresAtMs: number | undefined;
+		const createSession: DuckDBHttpSessionFactory = vi.fn((_access, options) => {
+			expiresAtMs = options.expiresAtMs;
+			return { fetch, close };
+		});
+		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker', createSession, 125_000)();
+		open.push(runtime);
+		expect(runtime.features).toEqual([]);
+		await runtime.initialize({ memoryLimitMb: 128 });
+
+		expect(runtime.features).toEqual(['iceberg-http']);
+		const beforeExecute = Date.now();
+		await expect(
+			runtime.execute({
+				setup: [
+					{ text: 'LOAD iceberg' },
+					{ text: 'LOAD httpfs' },
+					{
+						text:
+							"CREATE TEMPORARY SECRET broker_test (TYPE S3, KEY_ID 'dummy', " +
+							"SECRET 'dummy', REGION ?, ENDPOINT ?, URL_STYLE 'path', USE_SSL ?)",
+						params: ['us-east-1', 'objects.example.test', true],
+					},
+				],
+				query: { text: 'SELECT 1 AS value' },
+				cleanup: [{ text: 'DROP SECRET broker_test' }],
+				requires: ['iceberg-http'],
+				httpAccess: {
+					kind: 'iceberg-rest',
+					catalog: { url: 'https://catalog.example.test' },
+					storage: {
+						kind: 's3',
+						endpoint: 'https://objects.example.test',
+						region: 'us-east-1',
+						credentials: { method: 'anonymous' },
+						locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					},
+				},
+			}),
+		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
+		expect(createSession).toHaveBeenCalledWith(expect.anything(), {
+			expiresAtMs: expect.any(Number),
+		});
+		expect(expiresAtMs).toBeGreaterThanOrEqual(beforeExecute + 124_000);
+		expect(expiresAtMs).toBeLessThanOrEqual(Date.now() + 125_000);
+		expect(fetch).not.toHaveBeenCalled();
+		expect(close).toHaveBeenCalledOnce();
+	}, 30_000);
 
 	it('preserves request order while initialization is pending', async () => {
 		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker')();
@@ -86,6 +141,22 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 			undefined,
 			{ columns: ['value'], rows: [[1]] },
 		]);
+	}, 15_000);
+
+	it('blocks host filesystem enumeration when brokered HTTP is enabled', async () => {
+		const runtime = await createNodeDuckDBWasmRuntimeFactory('worker', () => ({
+			fetch: vi.fn(),
+			close: vi.fn(),
+		}))();
+		open.push(runtime);
+		await runtime.initialize({ memoryLimitMb: 64 });
+
+		await expect(
+			runtime.execute({ setup: [], query: { text: "SELECT * FROM glob('/*')" } }),
+		).rejects.toThrow();
+		await expect(
+			runtime.execute({ setup: [], query: { text: 'SELECT 1 AS value' } }),
+		).resolves.toEqual({ columns: ['value'], rows: [[1]] });
 	}, 15_000);
 
 	it('removes requests rejected synchronously by postMessage', async () => {
@@ -125,6 +196,90 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 		if (termination) await termination;
 	});
 
+	it('terminates cleanly when the worker sends a non-object response', async () => {
+		const runtime = await initialized('worker');
+		const internals = runtime as unknown as {
+			worker: { emit(event: 'message', message: unknown): boolean };
+		};
+
+		expect(() => internals.worker.emit('message', null)).not.toThrow();
+		await expect(runtime.ping()).rejects.toThrow('closed');
+	});
+
+	it('terminates the worker when an HTTP bridge message has malformed buffers', async () => {
+		const metrics = {
+			increment: vi.fn(),
+			gauge: vi.fn(),
+			histogram: vi.fn(),
+		} satisfies Metrics;
+		const runtime = await createNodeDuckDBWasmRuntimeFactory(
+			'worker',
+			undefined,
+			60_000,
+			metrics,
+		)();
+		open.push(runtime);
+		await runtime.initialize({ memoryLimitMb: 64 });
+		const internals = runtime as unknown as {
+			activeHttpSession?: {
+				fetch: ReturnType<typeof vi.fn>;
+				close: ReturnType<typeof vi.fn>;
+			};
+			worker: {
+				emit(event: 'message', message: unknown): boolean;
+				terminate(): Promise<number>;
+			};
+		};
+		const terminate = vi.spyOn(internals.worker, 'terminate');
+		const closeSession = vi.fn();
+		internals.activeHttpSession = { fetch: vi.fn(), close: closeSession };
+
+		internals.worker.emit('message', {
+			type: 'http-request',
+			request: { url: 'https://catalog.example.test/v1/config', method: 'GET' },
+			control: new SharedArrayBuffer(1),
+			response: new SharedArrayBuffer(1),
+		});
+
+		await expect(runtime.ping()).rejects.toThrow('closed');
+		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.bridge_failure', 1, {
+			reason: 'invalid_message',
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('duckdb_wasm.worker_termination', 1, {
+			reason: 'failure',
+		});
+		expect(closeSession).toHaveBeenCalledOnce();
+		expect(terminate).toHaveBeenCalledOnce();
+		const termination = terminate.mock.results[0]?.value;
+		if (termination) await termination;
+	});
+
+	it('rejects a bridge request from a different execution and closes the session', async () => {
+		const runtime = await initialized('worker');
+		const closeSession = vi.fn();
+		const fetch = vi.fn();
+		const internals = runtime as unknown as {
+			activeHttpSession?: { fetch: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
+			activeHttpNonce?: string;
+			worker: { emit(event: 'message', message: unknown): boolean };
+		};
+		internals.activeHttpSession = { fetch, close: closeSession };
+		internals.activeHttpNonce = 'current-execution-nonce';
+		const { control, response } = createHttpBridgeBuffers();
+
+		internals.worker.emit('message', {
+			type: 'http-request',
+			executionNonce: 'previous-execution-nonce',
+			request: { url: 'https://catalog.example.test/v1/config', method: 'GET' },
+			control,
+			response,
+		});
+
+		await expect(runtime.ping()).rejects.toThrow('closed');
+		expect(closeSession).toHaveBeenCalledOnce();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
 	it('hard-terminates an executing query when closed', async () => {
 		const runtime = await initialized('worker');
 		const executing = runtime.execute({
@@ -138,6 +293,72 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 });
 
 describe('DuckDB-Wasm data-query executor', () => {
+	it('keeps rendered credentials in the parent for non-brokered plans', async () => {
+		const runtime = await initialized('worker');
+		const internals = runtime as unknown as {
+			worker: { postMessage(message: unknown): void };
+			executeQuery(request: DataQueryExecution, signal: AbortSignal): Promise<unknown>;
+		};
+		const postMessage = vi.spyOn(internals.worker, 'postMessage');
+		const request = dataQuery('select true as parent_only');
+		request.connection = {
+			...request.connection,
+			files: [{ path: 'secret.txt', content: 'file-secret' }],
+			vars: { QUERY_SECRET: 'environment-secret' },
+			plan: { setup: [] },
+		};
+
+		await expect(
+			internals.executeQuery(request, new AbortController().signal),
+		).resolves.toMatchObject({ rows: [[true]] });
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: 'execute-query',
+				request: expect.objectContaining({
+					connection: expect.objectContaining({ files: [], vars: {}, plan: { setup: [] } }),
+				}),
+			}),
+		);
+	});
+
+	it('keeps rendered credentials in the parent for brokered plans', async () => {
+		const close = vi.fn();
+		const executor = await createNodeDataQueryExecutorFactory({
+			memoryLimitMb: 64,
+			httpSessionFactory: () => ({ fetch: vi.fn(), close }),
+		}).create(new AbortController().signal);
+		const request = dataQuery('select true as parent_only');
+		request.connection = {
+			...request.connection,
+			files: [{ path: 'broker-secret.txt', content: 'file-secret' }],
+			vars: { BROKER_SECRET: 'environment-secret' },
+			plan: {
+				setup: [],
+				httpAccess: {
+					kind: 'iceberg-rest',
+					catalog: { url: 'https://catalog.example.test' },
+					storage: {
+						kind: 's3',
+						endpoint: 'https://objects.example.test',
+						region: 'us-east-1',
+						credentials: { method: 'anonymous' },
+						locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					},
+				},
+			},
+		};
+		try {
+			await expect(executor.execute(request, new AbortController().signal)).resolves.toEqual({
+				columns: ['parent_only'],
+				rows: [[true]],
+				truncated: false,
+			});
+			expect(close).toHaveBeenCalledOnce();
+		} finally {
+			executor.terminate();
+		}
+	}, 15_000);
+
 	it('uses a fresh worker and enforces the row cap while streaming', async () => {
 		const executor = await createNodeDataQueryExecutorFactory({ memoryLimitMb: 64 }).create(
 			new AbortController().signal,

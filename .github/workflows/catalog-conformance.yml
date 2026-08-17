@@ -33,14 +33,19 @@ jobs:
           run-install: |
             - args: ['--frozen-lockfile']
 
-      # Iceberg REST: the Apache reference catalog (the image PyIceberg itself
-      # tests against). 1.10.0 declares no namespace-separator override,
-      # exercising the client's %1F default; the browse client adapts to either.
       - name: Start catalog servers
         run: |
-          docker run -d --name iceberg-rest -p 18181:8181 \
-            -e CATALOG_WAREHOUSE=file:///tmp/warehouse \
-            apache/iceberg-rest-fixture:1.10.0
+          docker compose -f scripts/dev-services/compose.yaml up -d --wait
+          set +e
+          docker compose -f scripts/dev-services/compose.yaml wait iceberg-seed
+          iceberg_seed_wait_status=$?
+          set -e
+          iceberg_seed_container=$(docker compose -f scripts/dev-services/compose.yaml ps -q --all iceberg-seed)
+          iceberg_seed_exit_code=$(docker inspect --format '{{.State.ExitCode}}' "$iceberg_seed_container")
+          if [ "$iceberg_seed_wait_status" -ne 0 ] || [ "$iceberg_seed_exit_code" -ne 0 ]; then
+            docker logs "$iceberg_seed_container"
+            exit 1
+          fi
           docker run -d --name trino -p 18080:8080 trinodb/trino:483
           docker run -d --name clickhouse -p 18123:8123 \
             -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server:26.2
@@ -72,6 +77,8 @@ jobs:
       - name: Browse contracts against the live servers
         env:
           MARIMOHUB_TEST_ICEBERG_REST_URI: http://127.0.0.1:18181
+          MARIMOHUB_TEST_ICEBERG_BROKER_URI: http://127.0.0.1:18181
+          MARIMOHUB_TEST_ICEBERG_BROKER_S3_ENDPOINT: http://127.0.0.1:19000
           MARIMOHUB_TEST_TRINO_HOST: 127.0.0.1
           MARIMOHUB_TEST_TRINO_PORT: 18080
           MARIMOHUB_TEST_CLICKHOUSE_HOST: 127.0.0.1
@@ -80,4 +87,7 @@ jobs:
           vp test \
             packages/core/src/services/integrations/kinds/icebergRest.browse.live.test.ts \
             packages/core/src/services/integrations/kinds/trino.browse.live.test.ts \
-            packages/core/src/services/integrations/kinds/clickhouse.browse.live.test.ts
+            packages/core/src/services/integrations/kinds/clickhouse.browse.live.test.ts \
+            packages/duckdb-wasm-runtime/src/icebergHttpBroker.test.ts \
+            packages/config/src/duckdbHttpBroker.test.ts \
+            packages/config/src/duckdbHttpBroker.live.test.ts

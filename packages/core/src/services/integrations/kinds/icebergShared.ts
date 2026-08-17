@@ -55,10 +55,38 @@ export const icebergRuntimeSchema = z
 	})
 	.default(ICEBERG_RUNTIME_DEFAULTS);
 
+const brokerReadLocation = z
+	.strictObject({
+		bucket: z.string().min(1),
+		prefix: z.string().min(1),
+	})
+	.superRefine((location, context) => {
+		const normalizedPrefix = location.prefix.replaceAll(/^\/+|\/+$/g, '');
+		const segments = normalizedPrefix.split('/');
+		if (
+			!normalizedPrefix ||
+			location.bucket.includes('/') ||
+			location.bucket.includes('\\') ||
+			location.prefix.includes('\\') ||
+			location.bucket === '.' ||
+			location.bucket === '..' ||
+			segments.some((segment) => segment === '.' || segment === '..')
+		) {
+			context.addIssue({
+				code: 'custom',
+				message: 'S3 broker read locations require a bucket and a non-traversing prefix.',
+			});
+		}
+	});
+
 const s3Storage = z.strictObject({
 	scheme: z.literal('s3'),
 	region: z.string().min(1).optional(),
 	endpoint: url().optional(),
+	broker_read_locations: z
+		.array(brokerReadLocation)
+		.default([])
+		.describe('S3 bucket prefixes the guarded DuckDB broker may read'),
 	credentials: awsCredentialsSchema
 		.default({ method: 'ambient' })
 		.describe('Credentials for S3 FileIO only; these override client credentials'),
@@ -433,6 +461,7 @@ export function renderIcebergCatalog(options: {
 
 export const icebergStorageUiHints = {
 	storage: { group: 'Storage', order: 20 },
+	'storage.broker_read_locations': { advanced: true },
 	'storage.credentials.access_key_id': { widget: 'password' as const },
 	'storage.credentials.secret_access_key': { widget: 'password' as const },
 	'storage.credentials.session_token': { widget: 'password' as const },

@@ -126,6 +126,34 @@ describe('DuckDB-Wasm network policy', () => {
 		expect(prepareDBFileHandle).not.toHaveBeenCalled();
 	});
 
+	it('blocks every path-based host filesystem hook before delegating', () => {
+		const delegates = {
+			glob: vi.fn(),
+			checkFile: vi.fn(() => true),
+			checkDirectory: vi.fn(() => true),
+			listDirectoryEntries: vi.fn(() => true),
+			createDirectory: vi.fn(),
+			moveFile: vi.fn(),
+			removeFile: vi.fn(),
+			removeDirectory: vi.fn(),
+		};
+		const runtime = createFailClosedNodeRuntime({ ...duckdb.NODE_RUNTIME, ...delegates });
+		const module = {} as never;
+
+		const operations = [
+			() => runtime.glob(module, 0, 0),
+			() => runtime.checkFile(module, 0, 0),
+			() => runtime.checkDirectory(module, 0, 0),
+			() => runtime.listDirectoryEntries(module, 0, 0),
+			() => runtime.createDirectory(module, 0, 0),
+			() => runtime.moveFile(module, 0, 0, 0, 0),
+			() => runtime.removeFile(module, 0, 0),
+			() => runtime.removeDirectory(module, 0, 0),
+		];
+		for (const operation of operations) expect(operation).toThrow(/policy-enforcing broker/i);
+		for (const delegate of Object.values(delegates)) expect(delegate).not.toHaveBeenCalled();
+	});
+
 	it('delegates allowed asynchronous preparation without changing its result', async () => {
 		const expected = [] satisfies Awaited<
 			ReturnType<NonNullable<typeof duckdb.NODE_RUNTIME.prepareFileHandle>>

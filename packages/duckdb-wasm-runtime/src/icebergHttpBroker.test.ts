@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { Metrics } from '@marimo-hub/core';
 import { IcebergHttpBroker, IcebergHttpBrokerError } from './icebergHttpBroker';
 import type {
 	IcebergHttpBrokerCapability,
@@ -37,7 +38,10 @@ function capability(
 	};
 }
 
-function setup(responses?: { status: number; headers?: Record<string, string>; body?: string }[]) {
+function setup(
+	responses?: { status: number; headers?: Record<string, string>; body?: string }[],
+	metrics?: Metrics,
+) {
 	const calls: IcebergHttpBrokerTransportRequest[] = [];
 	const queue = [...(responses ?? [{ status: 200, body: 'ok' }])];
 	const transport = vi.fn(async (request: IcebergHttpBrokerTransportRequest) => {
@@ -53,6 +57,7 @@ function setup(responses?: { status: number; headers?: Record<string, string>; b
 		transport,
 		() => NOW,
 		() => 'capability-id',
+		metrics,
 	);
 	return { broker, calls, transport };
 }
@@ -120,6 +125,38 @@ describe('IcebergHttpBroker', () => {
 		expect(response.headers).toEqual({ 'content-range': 'bytes 0-1/20' });
 	});
 
+	it('allows catalog HEAD and computes parent-owned headers after authorization', async () => {
+		const { broker, calls } = setup();
+		const prepareHeaders = vi.fn(async (request) => ({
+			authorization: `Signed ${request.method}:${new URL(request.url).pathname}`,
+			'x-amz-date': '20260813T120000Z',
+		}));
+		const id = broker.open(
+			capability({
+				routes: [
+					{
+						kind: 'catalog',
+						url: 'https://catalog.example.test/iceberg',
+						match: 'prefix',
+						methods: ['GET', 'HEAD'],
+						prepareHeaders,
+					},
+				],
+			}),
+		);
+
+		await broker.fetch(id, {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'HEAD',
+		});
+
+		expect(prepareHeaders).toHaveBeenCalledOnce();
+		expect(calls[0].headers).toEqual({
+			authorization: 'Signed HEAD:/iceberg/v1/config',
+			'x-amz-date': '20260813T120000Z',
+		});
+	});
+
 	it('rejects targets outside the granted origins and path prefixes', async () => {
 		const { broker, transport } = setup();
 		const id = broker.open(capability());
@@ -151,6 +188,14 @@ describe('IcebergHttpBroker', () => {
 				url: 'https://catalog.example.test/iceberg/v1/config',
 				method: 'GET',
 				headers: { Authorization: 'Bearer forged' },
+			}),
+			'header_denied',
+		);
+		await expectCode(
+			broker.fetch(id, {
+				url: 'https://catalog.example.test/iceberg/v1/config',
+				method: 'GET',
+				headers: { 'X-Iceberg-Access-Delegation': 'vended-credentials' },
 			}),
 			'header_denied',
 		);
@@ -218,6 +263,72 @@ describe('IcebergHttpBroker', () => {
 			headers: { authorization: 'Bearer storage-secret' },
 		});
 		expect(response).toMatchObject({ status: 200, headers: { etag: 'snapshot-1' } });
+	});
+
+	it('emits low-cardinality policy, redirect, budget, byte, and latency metrics', async () => {
+		const metrics = {
+			increment: vi.fn(),
+			gauge: vi.fn(),
+			histogram: vi.fn(),
+		} satisfies Metrics;
+		const { broker } = setup(
+			[
+				{
+					status: 307,
+					headers: { Location: 'https://objects.example.test/warehouse/data.parquet' },
+				},
+				{ status: 200, body: 'data' },
+			],
+			metrics,
+		);
+		const id = broker.open(capability({ limits: { ...capability().limits, maxRequests: 2 } }));
+
+		await broker.fetch(id, {
+			url: 'https://catalog.example.test/iceberg/v1/table',
+			method: 'GET',
+		});
+		await expectCode(
+			broker.fetch(id, {
+				url: 'https://catalog.example.test/iceberg/v1/config',
+				method: 'GET',
+			}),
+			'request_budget_exceeded',
+		);
+
+		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.request', 1, {
+			outcome: 'authorized',
+			route: 'catalog',
+			method: 'GET',
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.request', 1, {
+			outcome: 'authorized',
+			route: 'storage',
+			method: 'GET',
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.request', 1, {
+			outcome: 'denied',
+			reason: 'request_budget_exceeded',
+			method: 'GET',
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.redirect', 1, {
+			outcome: 'followed',
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('duckdb_http_broker.budget_exhausted', 1, {
+			budget: 'request',
+		});
+		expect(metrics.histogram).toHaveBeenCalledWith('duckdb_http_broker.response_bytes', 4, {
+			route: 'storage',
+			method: 'GET',
+			status_class: '2xx',
+		});
+		expect(metrics.histogram).toHaveBeenCalledWith('duckdb_http_broker.transport_latency_ms', 0, {
+			route: 'catalog',
+			method: 'GET',
+			status_class: '3xx',
+		});
+		expect(metrics.histogram).toHaveBeenCalledWith('duckdb_http_broker.request_latency_ms', 0, {
+			method: 'GET',
+		});
 	});
 
 	it('does not follow a redirect to an ungranted destination', async () => {
@@ -334,25 +445,61 @@ describe('IcebergHttpBroker', () => {
 		await expectCode(pending, 'capability_unknown');
 	});
 
-	it('serializes requests so concurrent reads share one exact byte budget', async () => {
-		let releaseFirst!: () => void;
+	it('aborts in-flight transport when its capability is revoked', async () => {
+		let transportSignal: AbortSignal | undefined;
+		const broker = new IcebergHttpBroker(
+			(request) =>
+				new Promise((_resolve, reject) => {
+					transportSignal = request.signal;
+					request.signal?.addEventListener('abort', () => reject(new Error('aborted')), {
+						once: true,
+					});
+				}),
+			() => NOW,
+			() => 'abortable',
+		);
+		const id = broker.open(capability());
+		const pending = broker.fetch(id, {
+			url: 'https://catalog.example.test/iceberg/v1/config',
+			method: 'GET',
+		});
+		await vi.waitFor(() => expect(transportSignal).toBeDefined());
+
+		broker.close(id);
+
+		expect(transportSignal?.aborted).toBe(true);
+		await expect(pending).rejects.toBeDefined();
+	});
+
+	it('allows bounded parallel reads while reserving the shared byte budget', async () => {
+		const releases: (() => void)[] = [];
 		let calls = 0;
+		let active = 0;
+		let maxActive = 0;
 		const limits: number[] = [];
 		const broker = new IcebergHttpBroker(
 			async (request) => {
 				calls += 1;
+				active += 1;
+				maxActive = Math.max(maxActive, active);
 				limits.push(request.maxResponseBytes);
-				if (calls === 1) {
-					await new Promise<void>((resolve) => {
-						releaseFirst = resolve;
-					});
-				}
+				await new Promise<void>((resolve) => releases.push(resolve));
+				active -= 1;
 				return { status: 200, headers: {}, body: new Uint8Array(2) };
 			},
 			() => NOW,
-			() => 'serialized',
+			() => 'parallel',
 		);
-		const id = broker.open(capability({ limits: { ...capability().limits, maxResponseBytes: 4 } }));
+		const id = broker.open(
+			capability({
+				limits: {
+					...capability().limits,
+					maxConcurrentRequests: 2,
+					maxResponseBytes: 4,
+					maxSingleResponseBytes: 2,
+				},
+			}),
+		);
 		const first = broker.fetch(id, {
 			url: 'https://objects.example.test/warehouse/one.parquet',
 			method: 'GET',
@@ -361,10 +508,17 @@ describe('IcebergHttpBroker', () => {
 			url: 'https://objects.example.test/warehouse/two.parquet',
 			method: 'GET',
 		});
+		const third = broker.fetch(id, {
+			url: 'https://objects.example.test/warehouse/three.parquet',
+			method: 'GET',
+		});
 
-		await vi.waitFor(() => expect(calls).toBe(1));
-		releaseFirst();
+		await vi.waitFor(() => expect(calls).toBe(2));
+		expect(maxActive).toBe(2);
+		releases.splice(0).forEach((release) => release());
 		await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-		expect(limits).toEqual([4, 2]);
+		await expectCode(third, 'response_budget_exceeded');
+		expect(calls).toBe(2);
+		expect(limits).toEqual([2, 2]);
 	});
 });

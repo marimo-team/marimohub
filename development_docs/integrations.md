@@ -161,22 +161,17 @@ programs. `DataPreviewService` selects `DuckDBWasmDataPreview` first when its
 required runtime features are healthy, then `SandboxDataPreview`. Neither
 executor switches on integration kind.
 
-The DuckDB SDK lives in `packages/duckdb-wasm-runtime`; core owns only the
-runtime-neutral orchestration seam. The Node implementation supports worker and
-inline execution, locks configuration, disables external access, and runs each
-result query in a read-only transaction. It exposes no remote-data feature yet:
-DuckDB extension requests must not bypass the guarded integration transport.
-The installed Node binding's file callbacks are synchronous and its HTTP and S3
-protocols are unsupported, while `IntegrationProbe.fetch` is asynchronous. A
-future parent-worker bridge must revalidate catalog requests, redirects, and
-vended object URLs. The current runtime advertises no Iceberg HTTP support and
-rejects remote protocols before they reach the vendor runtime.
-A positive live scan suite must be added with the broker API so its fixture can
-assert that every catalog, redirect, and vended object request crossed the
-parent probe. Until then, conformance asserts the negative contract: both Node
-runtime modes omit `iceberg-http` and reject a program that requires it before
-executing setup. See [the broker policy mock](./duckdb_wasm_iceberg_broker.md)
-for the proposed capability boundary and remaining transport work.
+The DuckDB SDK lives in `packages/duckdb-wasm-runtime`. Core owns only the runtime-neutral orchestration seam.
+The Node implementation locks its configuration and runs each result query in a read-only transaction.
+
+The unbrokered runtime disables external access. Its Node file callbacks reject all remote protocols.
+The configured runtime advertises `iceberg-http` and uses a parent-owned HTTP broker.
+The worker submits synchronous requests through fixed shared-memory buffers.
+The parent authorizes each target, injects credentials, checks DNS results, and pins the socket.
+
+The Iceberg integration supports a narrow configuration with explicit S3 read prefixes.
+Unsupported authentication, storage, TLS, delegation, and runtime options use the sandbox executor.
+See [the DuckDB-Wasm Iceberg HTTP broker](./duckdb_wasm_iceberg_broker.md) for the full boundary and test procedure.
 
 The sandbox adapter renders only the selected integration. It uses the image
 from `MARIMOHUB_DATA_PREVIEW_IMAGE` after a PyIceberg and PyArrow preflight. It

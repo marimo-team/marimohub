@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { noopMetrics } from '@marimo-hub/core';
+import type { Metrics } from '@marimo-hub/core';
 
 export type IcebergHttpBrokerMethod = 'GET' | 'HEAD';
 
@@ -9,6 +11,9 @@ export interface IcebergHttpBrokerRoute {
 	methods: readonly IcebergHttpBrokerMethod[];
 	/** Parent-owned headers, including credentials. They are never sent by the worker. */
 	headers?: Readonly<Record<string, string>>;
+	prepareHeaders?: (
+		request: Readonly<IcebergHttpBrokerRequest>,
+	) => Promise<Readonly<Record<string, string>>>;
 }
 
 export interface IcebergHttpBrokerCapability {
@@ -16,8 +21,10 @@ export interface IcebergHttpBrokerCapability {
 	routes: readonly IcebergHttpBrokerRoute[];
 	limits: {
 		maxRequests: number;
+		maxConcurrentRequests?: number;
 		maxRedirects: number;
 		maxResponseBytes: number;
+		maxSingleResponseBytes?: number;
 	};
 	forwardRequestHeaders?: readonly string[];
 }
@@ -37,6 +44,7 @@ export interface IcebergHttpBrokerResponse {
 export interface IcebergHttpBrokerTransportRequest extends IcebergHttpBrokerRequest {
 	/** The transport must stop reading before this limit and must not follow redirects. */
 	maxResponseBytes: number;
+	deadlineMs: number;
 	signal?: AbortSignal;
 }
 
@@ -72,6 +80,7 @@ interface NormalizedRoute {
 	match: IcebergHttpBrokerRoute['match'];
 	methods: ReadonlySet<IcebergHttpBrokerMethod>;
 	headers: Readonly<Record<string, string>>;
+	prepareHeaders?: IcebergHttpBrokerRoute['prepareHeaders'];
 }
 
 interface Session {
@@ -80,9 +89,21 @@ interface Session {
 	limits: IcebergHttpBrokerCapability['limits'];
 	forwardRequestHeaders: ReadonlySet<string>;
 	requests: number;
+	activeRequests: number;
 	responseBytes: number;
-	tail: Promise<void>;
+	reservedResponseBytes: number;
+	controllers: Set<AbortController>;
+	requestWaiters: Set<() => void>;
+	responseWaiters: Set<() => void>;
+	metrics: Metrics;
 }
+
+interface AuthorizedRequest {
+	request: IcebergHttpBrokerRequest;
+	routeKind: IcebergHttpBrokerRoute['kind'];
+}
+
+const DEFAULT_MAX_CONCURRENT_REQUESTS = 4;
 
 const DEFAULT_FORWARDED_REQUEST_HEADERS = [
 	'accept',
@@ -92,7 +113,6 @@ const DEFAULT_FORWARDED_REQUEST_HEADERS = [
 	'if-none-match',
 	'if-unmodified-since',
 	'range',
-	'x-iceberg-access-delegation',
 ] as const;
 
 const FORBIDDEN_WORKER_HEADERS = new Set([
@@ -103,6 +123,7 @@ const FORBIDDEN_WORKER_HEADERS = new Set([
 	'proxy-connection',
 	'x-forwarded-for',
 	'x-forwarded-host',
+	'x-iceberg-access-delegation',
 ]);
 
 const RESPONSE_HEADERS = new Set([
@@ -117,10 +138,7 @@ const RESPONSE_HEADERS = new Set([
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-/**
- * Parent-side policy mock for a future DuckDB-Wasm HTTP bridge. Opening a capability stores
- * credentials here; worker requests carry only the opaque ID and unprivileged request fields.
- */
+/** Credentials stay in these parent-owned sessions; the worker submits only unprivileged fields. */
 export class IcebergHttpBroker {
 	private readonly sessions = new Map<string, Session>();
 
@@ -128,10 +146,11 @@ export class IcebergHttpBroker {
 		private readonly transport: IcebergHttpBrokerTransport,
 		private readonly now: () => number = Date.now,
 		private readonly createId: () => string = randomUUID,
+		private readonly metrics: Metrics = noopMetrics,
 	) {}
 
 	open(capability: IcebergHttpBrokerCapability): string {
-		const session = normalizeCapability(capability, this.now());
+		const session = normalizeCapability(capability, this.now(), this.metrics);
 		const id = this.createId();
 		if (!id || this.sessions.has(id)) {
 			throw new IcebergHttpBrokerError(
@@ -144,7 +163,11 @@ export class IcebergHttpBroker {
 	}
 
 	close(id: string): void {
+		const session = this.sessions.get(id);
 		this.sessions.delete(id);
+		for (const controller of session?.controllers ?? []) controller.abort();
+		wakeAll(session?.requestWaiters);
+		wakeAll(session?.responseWaiters);
 	}
 
 	async fetch(
@@ -152,50 +175,116 @@ export class IcebergHttpBroker {
 		request: IcebergHttpBrokerRequest,
 		signal?: AbortSignal,
 	): Promise<IcebergHttpBrokerResponse> {
+		const startedAtMs = this.now();
+		try {
+			return await this.fetchAuthorized(id, request, signal);
+		} catch (error) {
+			this.metrics.increment('duckdb_http_broker.request', 1, {
+				outcome: error instanceof IcebergHttpBrokerError ? 'denied' : 'failed',
+				reason: brokerFailureReason(error),
+				method: metricMethod(request.method),
+			});
+			throw error;
+		} finally {
+			this.metrics.histogram?.(
+				'duckdb_http_broker.request_latency_ms',
+				Math.max(0, this.now() - startedAtMs),
+				{ method: metricMethod(request.method) },
+			);
+		}
+	}
+
+	private async fetchAuthorized(
+		id: string,
+		request: IcebergHttpBrokerRequest,
+		signal?: AbortSignal,
+	): Promise<IcebergHttpBrokerResponse> {
 		const session = this.requireSession(id);
-		return exclusive(session, async () => {
+		await acquireRequestSlot(session, signal);
+		try {
 			if (this.requireSession(id) !== session) throw unknownCapability();
+			const controller = new AbortController();
+			session.controllers.add(controller);
+			const transportSignal = signal
+				? AbortSignal.any([signal, controller.signal])
+				: controller.signal;
 			let current = normalizeRequest(request);
 			let redirects = 0;
 
-			for (;;) {
-				const authorized = authorize(session, current);
-				const remainingResponseBytes = session.limits.maxResponseBytes - session.responseBytes;
-				const response = await this.transport({
-					...authorized,
-					maxResponseBytes: remainingResponseBytes,
-					signal,
-				});
-				assertResponse(response);
-				if (this.requireSession(id) !== session) throw unknownCapability();
-				session.responseBytes += response.body.byteLength;
-				if (session.responseBytes > session.limits.maxResponseBytes) {
-					throw new IcebergHttpBrokerError(
-						'response_budget_exceeded',
-						'Iceberg HTTP broker response budget exceeded.',
+			try {
+				for (;;) {
+					const authorized = await authorize(session, current);
+					const reservation = await reserveResponseBudget(session, transportSignal);
+					let response: IcebergHttpBrokerResponse;
+					let statusClass = 'failed';
+					const transportStartedAtMs = this.now();
+					try {
+						if (this.requireSession(id) !== session) throw unknownCapability();
+						response = await this.transport({
+							...authorized.request,
+							maxResponseBytes: reservation,
+							deadlineMs: session.expiresAtMs,
+							signal: transportSignal,
+						});
+						assertResponse(response);
+						statusClass = responseStatusClass(response.status);
+						if (this.requireSession(id) !== session) throw unknownCapability();
+						commitResponseBudget(session, reservation, response.body.byteLength);
+					} catch (error) {
+						releaseResponseBudget(session, reservation);
+						throw error;
+					} finally {
+						session.metrics.histogram?.(
+							'duckdb_http_broker.transport_latency_ms',
+							Math.max(0, this.now() - transportStartedAtMs),
+							{
+								route: authorized.routeKind,
+								method: authorized.request.method,
+								status_class: statusClass,
+							},
+						);
+					}
+					session.metrics.histogram?.(
+						'duckdb_http_broker.response_bytes',
+						response.body.byteLength,
+						{
+							route: authorized.routeKind,
+							method: authorized.request.method,
+							status_class: statusClass,
+						},
 					);
-				}
 
-				const headers = sanitizeResponseHeaders(response.headers);
-				const location = REDIRECT_STATUSES.has(response.status) ? headers.location : undefined;
-				if (!location) return { status: response.status, headers, body: response.body };
-				if (redirects >= session.limits.maxRedirects) {
-					throw new IcebergHttpBrokerError(
-						'redirect_budget_exceeded',
-						'Iceberg HTTP broker redirect budget exceeded.',
-					);
+					const headers = sanitizeResponseHeaders(response.headers);
+					const location = REDIRECT_STATUSES.has(response.status) ? headers.location : undefined;
+					if (!location) return { status: response.status, headers, body: response.body };
+					if (redirects >= session.limits.maxRedirects) {
+						session.metrics.increment('duckdb_http_broker.budget_exhausted', 1, {
+							budget: 'redirect',
+						});
+						throw new IcebergHttpBrokerError(
+							'redirect_budget_exceeded',
+							'Iceberg HTTP broker redirect budget exceeded.',
+						);
+					}
+					redirects += 1;
+					session.metrics.increment('duckdb_http_broker.redirect', 1, {
+						outcome: 'followed',
+					});
+					current = redirectRequest(current, location, response.status);
 				}
-				redirects += 1;
-				current = redirectRequest(current, location, response.status);
+			} finally {
+				session.controllers.delete(controller);
 			}
-		});
+		} finally {
+			releaseRequestSlot(session);
+		}
 	}
 
 	private requireSession(id: string): Session {
 		const session = this.sessions.get(id);
 		if (!session) throw unknownCapability();
 		if (this.now() >= session.expiresAtMs) {
-			this.sessions.delete(id);
+			this.close(id);
 			throw new IcebergHttpBrokerError(
 				'capability_expired',
 				'Iceberg HTTP broker capability expired.',
@@ -205,7 +294,11 @@ export class IcebergHttpBroker {
 	}
 }
 
-function normalizeCapability(capability: IcebergHttpBrokerCapability, now: number): Session {
+function normalizeCapability(
+	capability: IcebergHttpBrokerCapability,
+	now: number,
+	metrics: Metrics,
+): Session {
 	const limits = capability.limits;
 	if (
 		!Number.isSafeInteger(capability.expiresAtMs) ||
@@ -216,10 +309,25 @@ function normalizeCapability(capability: IcebergHttpBrokerCapability, now: numbe
 	) {
 		throw invalidCapability();
 	}
-	for (const value of [limits.maxRequests, limits.maxRedirects, limits.maxResponseBytes]) {
+	for (const value of [
+		limits.maxRequests,
+		limits.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS,
+		limits.maxRedirects,
+		limits.maxResponseBytes,
+	]) {
 		if (!Number.isSafeInteger(value) || value < 0) throw invalidCapability();
 	}
-	if (limits.maxRequests === 0 || limits.maxResponseBytes === 0) {
+	if (
+		limits.maxSingleResponseBytes !== undefined &&
+		(!Number.isSafeInteger(limits.maxSingleResponseBytes) || limits.maxSingleResponseBytes < 1)
+	) {
+		throw invalidCapability();
+	}
+	if (
+		limits.maxRequests === 0 ||
+		(limits.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS) === 0 ||
+		limits.maxResponseBytes === 0
+	) {
 		throw invalidCapability();
 	}
 	if (
@@ -243,8 +351,13 @@ function normalizeCapability(capability: IcebergHttpBrokerCapability, now: numbe
 		limits: { ...limits },
 		forwardRequestHeaders: forwarded,
 		requests: 0,
+		activeRequests: 0,
 		responseBytes: 0,
-		tail: Promise.resolve(),
+		reservedResponseBytes: 0,
+		controllers: new Set(),
+		requestWaiters: new Set(),
+		responseWaiters: new Set(),
+		metrics,
 	};
 }
 
@@ -260,20 +373,27 @@ function normalizeRoute(route: IcebergHttpBrokerRoute): NormalizedRoute {
 	if (url.hash || (route.match === 'prefix' && url.search)) throw invalidCapability();
 	if (route.methods.length === 0) throw invalidCapability();
 	const rawMethods: readonly unknown[] = route.methods;
-	const permittedMethods =
-		route.kind === 'catalog'
-			? new Set<IcebergHttpBrokerMethod>(['GET'])
-			: new Set<IcebergHttpBrokerMethod>(['GET', 'HEAD']);
+	const permittedMethods = new Set<IcebergHttpBrokerMethod>(['GET', 'HEAD']);
 	if (rawMethods.some((method) => !permittedMethods.has(method as IcebergHttpBrokerMethod))) {
 		throw invalidCapability();
 	}
 	const methods = new Set(rawMethods as IcebergHttpBrokerMethod[]);
 	if (methods.size !== route.methods.length) throw invalidCapability();
 	const headers = normalizeHeaders(route.headers ?? {}, 'invalid_capability');
+	if (route.prepareHeaders !== undefined && typeof route.prepareHeaders !== 'function') {
+		throw invalidCapability();
+	}
 	if (Object.keys(headers).some((header) => header === 'host' || header === 'content-length')) {
 		throw invalidCapability();
 	}
-	return { kind: route.kind, url, match: route.match, methods, headers };
+	return {
+		kind: route.kind,
+		url,
+		match: route.match,
+		methods,
+		headers,
+		prepareHeaders: route.prepareHeaders,
+	};
 }
 
 function normalizeRequest(request: IcebergHttpBrokerRequest): IcebergHttpBrokerRequest {
@@ -286,8 +406,14 @@ function normalizeRequest(request: IcebergHttpBrokerRequest): IcebergHttpBrokerR
 	};
 }
 
-function authorize(session: Session, request: IcebergHttpBrokerRequest): IcebergHttpBrokerRequest {
+async function authorize(
+	session: Session,
+	request: IcebergHttpBrokerRequest,
+): Promise<AuthorizedRequest> {
 	if (session.requests >= session.limits.maxRequests) {
+		session.metrics.increment('duckdb_http_broker.budget_exhausted', 1, {
+			budget: 'request',
+		});
 		throw new IcebergHttpBrokerError(
 			'request_budget_exceeded',
 			'Iceberg HTTP broker request budget exceeded.',
@@ -323,9 +449,21 @@ function authorize(session: Session, request: IcebergHttpBrokerRequest): Iceberg
 		}
 	}
 	session.requests += 1;
+	const preparedHeaders = normalizeHeaders(
+		(await route.prepareHeaders?.(request)) ?? {},
+		'invalid_request',
+	);
+	session.metrics.increment('duckdb_http_broker.request', 1, {
+		outcome: 'authorized',
+		route: route.kind,
+		method: request.method,
+	});
 	return {
-		...request,
-		headers: { ...workerHeaders, ...route.headers },
+		request: {
+			...request,
+			headers: { ...workerHeaders, ...route.headers, ...preparedHeaders },
+		},
+		routeKind: route.kind,
 	};
 }
 
@@ -438,16 +576,92 @@ function unknownCapability(): IcebergHttpBrokerError {
 	);
 }
 
-async function exclusive<T>(session: Session, work: () => Promise<T>): Promise<T> {
-	const previous = session.tail;
-	let release!: () => void;
-	session.tail = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	await previous;
-	try {
-		return await work();
-	} finally {
-		release();
+async function acquireRequestSlot(session: Session, signal?: AbortSignal): Promise<void> {
+	const limit = session.limits.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS;
+	while (session.activeRequests >= limit) await waitForAvailability(session.requestWaiters, signal);
+	if (signal?.aborted) throw abortError();
+	session.activeRequests += 1;
+}
+
+function releaseRequestSlot(session: Session): void {
+	if (session.activeRequests > 0) session.activeRequests -= 1;
+	wakeAll(session.requestWaiters);
+}
+
+async function reserveResponseBudget(session: Session, signal?: AbortSignal): Promise<number> {
+	const maxSingle = session.limits.maxSingleResponseBytes ?? session.limits.maxResponseBytes;
+	for (;;) {
+		const totalRemaining = session.limits.maxResponseBytes - session.responseBytes;
+		if (totalRemaining <= 0) throw responseBudgetExceeded(session);
+		const available = totalRemaining - session.reservedResponseBytes;
+		if (session.reservedResponseBytes === 0 || available >= maxSingle) {
+			const reservation = Math.min(available, maxSingle);
+			session.reservedResponseBytes += reservation;
+			return reservation;
+		}
+		await waitForAvailability(session.responseWaiters, signal);
 	}
+}
+
+function commitResponseBudget(session: Session, reservation: number, actual: number): void {
+	if (actual > reservation) throw responseBudgetExceeded(session);
+	session.reservedResponseBytes -= reservation;
+	session.responseBytes += actual;
+	wakeAll(session.responseWaiters);
+}
+
+function releaseResponseBudget(session: Session, reservation: number): void {
+	if (session.reservedResponseBytes >= reservation) session.reservedResponseBytes -= reservation;
+	wakeAll(session.responseWaiters);
+}
+
+function waitForAvailability(waiters: Set<() => void>, signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) return Promise.reject(abortError());
+	return new Promise<void>((resolve, reject) => {
+		const wake = () => {
+			signal?.removeEventListener('abort', onAbort);
+			waiters.delete(wake);
+			resolve();
+		};
+		const onAbort = () => {
+			waiters.delete(wake);
+			reject(abortError());
+		};
+		waiters.add(wake);
+		signal?.addEventListener('abort', onAbort, { once: true });
+	});
+}
+
+function wakeAll(waiters?: Set<() => void>): void {
+	for (const wake of waiters ?? []) wake();
+}
+
+function responseBudgetExceeded(session: Session): IcebergHttpBrokerError {
+	session.metrics.increment('duckdb_http_broker.budget_exhausted', 1, {
+		budget: 'response',
+	});
+	return new IcebergHttpBrokerError(
+		'response_budget_exceeded',
+		'Iceberg HTTP broker response budget exceeded.',
+	);
+}
+
+function brokerFailureReason(error: unknown): string {
+	if (error instanceof IcebergHttpBrokerError) return error.code;
+	if (error instanceof Error && error.name === 'AbortError') return 'cancelled';
+	return 'transport_failed';
+}
+
+function metricMethod(method: unknown): string {
+	return method === 'GET' || method === 'HEAD' ? method : 'invalid';
+}
+
+function responseStatusClass(status: number): string {
+	return `${Math.floor(status / 100)}xx`;
+}
+
+function abortError(): Error {
+	return Object.assign(new Error('Iceberg HTTP broker request was cancelled.'), {
+		name: 'AbortError',
+	});
 }

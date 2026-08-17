@@ -5582,6 +5582,23 @@ components:
               pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
+            broker_read_locations:
+              default: []
+              description: S3 bucket prefixes the guarded DuckDB broker may read
+              type: array
+              items:
+                type: object
+                properties:
+                  bucket:
+                    type: string
+                    minLength: 1
+                  prefix:
+                    type: string
+                    minLength: 1
+                required:
+                  - bucket
+                  - prefix
+                additionalProperties: false
             credentials:
               default:
                 method: ambient
@@ -5985,6 +6002,23 @@ components:
               pattern: ^https?:\/\/[^@\s/?#]+(?:[/?#]\S*)?$
               format: uri
               x-marimohub-refinement: A valid http(s) URL with an authority, no userinfo, and no port 0
+            broker_read_locations:
+              default: []
+              description: S3 bucket prefixes the guarded DuckDB broker may read
+              type: array
+              items:
+                type: object
+                properties:
+                  bucket:
+                    type: string
+                    minLength: 1
+                  prefix:
+                    type: string
+                    minLength: 1
+                required:
+                  - bucket
+                  - prefix
+                additionalProperties: false
             credentials:
               default:
                 method: ambient
@@ -6076,6 +6110,7 @@ components:
               type: boolean
           required:
             - scheme
+            - broker_read_locations
             - credentials
             - resolve_region
             - force_virtual_addressing
