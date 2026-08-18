@@ -288,6 +288,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			// Requires `uv` + Python on the host; not for shared/production use.
 			// In Docker, set BIND_HOST=0.0.0.0 + PORTS to a published range.
 			return new LocalCompute({
+				root: env.MARIMOHUB_COMPUTE_LOCAL_ROOT,
 				host: env.MARIMOHUB_COMPUTE_LOCAL_HOST,
 				bindHost: env.MARIMOHUB_COMPUTE_LOCAL_BIND_HOST,
 				ports: parsePortRange(env.MARIMOHUB_COMPUTE_LOCAL_PORTS),

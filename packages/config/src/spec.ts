@@ -651,8 +651,16 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Local (dev only)',
 				selectorValue: 'local',
 				description:
-					'Spawns `uv run marimo edit` as a host subprocess. Requires `uv` + Python on the host; not for shared/production use.',
+					'Spawns `uv run marimo edit` as a host subprocess. Requires `uv` + Python on the host; not for shared/production use. Set the local root outside the OS temporary directory so marimo saves Hub-managed notebooks in place.',
 				vars: [
+					{
+						id: 'MARIMOHUB_COMPUTE_LOCAL_ROOT',
+						name: 'Local sandbox root',
+						description:
+							'Parent directory for local sandboxes. Set this outside the OS temporary directory to prevent marimo from treating notebooks as temporary files.',
+						example: '/var/lib/marimohub/sandboxes',
+						default: 'OS temporary directory',
+					},
 					{
 						id: 'MARIMOHUB_COMPUTE_LOCAL_HOST',
 						name: 'Local host',

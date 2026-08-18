@@ -229,6 +229,26 @@ describe('rewriteWorkspace (pure)', () => {
 });
 
 describe('LocalCompute file ops', () => {
+	it('places sandboxes beneath the configured root', async () => {
+		const root = await mkdtemp(path.join(os.tmpdir(), 'marimohub-local-root-'));
+		const local = new LocalCompute({ root });
+		const id = 'sb-configured-root' as SandboxId;
+		const sandboxRoot = path.join(root, `marimohub-sandbox-${id}`);
+		try {
+			const sb = local.create(id);
+			await sb.writeFiles([{ path: '/workspace/notebook.py', content: 'print(1)' }]);
+
+			await expect(readFile(path.join(sandboxRoot, 'workspace/notebook.py'), 'utf8')).resolves.toBe(
+				'print(1)',
+			);
+			await sb.destroy();
+			await expect(access(sandboxRoot)).rejects.toThrow();
+		} finally {
+			await local[Symbol.asyncDispose]();
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it('round-trips files under the workspace and maps /workspace paths', async () => {
 		const sb = newSandbox();
 		const mkdir = await sb.exec('mkdir -p /workspace');

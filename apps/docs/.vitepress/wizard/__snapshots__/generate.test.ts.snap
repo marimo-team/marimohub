@@ -832,6 +832,7 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com
 MARIMOHUB_COMPUTE_WORKDIR=/workspace
 MARIMOHUB_COMPUTE_ASSET_URL=https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist
 MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS=120
+MARIMOHUB_COMPUTE_LOCAL_ROOT=/var/lib/marimohub/sandboxes
 MARIMOHUB_COMPUTE_LOCAL_HOST=localhost
 MARIMOHUB_COMPUTE_LOCAL_BIND_HOST=127.0.0.1
 MARIMOHUB_COMPUTE_LOCAL_PORTS=2718-2723
@@ -865,6 +866,7 @@ exports[`config -> code generators > memory + local + dev (all-local) > compose 
       MARIMOHUB_COMPUTE_WORKDIR: /workspace
       MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
       MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
+      MARIMOHUB_COMPUTE_LOCAL_ROOT: /var/lib/marimohub/sandboxes
       MARIMOHUB_COMPUTE_LOCAL_HOST: localhost
       MARIMOHUB_COMPUTE_LOCAL_BIND_HOST: 127.0.0.1
       MARIMOHUB_COMPUTE_LOCAL_PORTS: 2718-2723
@@ -888,6 +890,7 @@ config:
   MARIMOHUB_COMPUTE_WORKDIR: /workspace
   MARIMOHUB_COMPUTE_ASSET_URL: "https://cdn.jsdelivr.net/npm/@marimo-team/frontend@{version}/dist"
   MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS: 120
+  MARIMOHUB_COMPUTE_LOCAL_ROOT: /var/lib/marimohub/sandboxes
   MARIMOHUB_COMPUTE_LOCAL_HOST: localhost
   MARIMOHUB_COMPUTE_LOCAL_BIND_HOST: 127.0.0.1
   MARIMOHUB_COMPUTE_LOCAL_PORTS: 2718-2723

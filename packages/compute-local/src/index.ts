@@ -13,7 +13,7 @@
  *
  * Two impedance mismatches with the provider-agnostic core are handled here:
  *  - core hardcodes the workspace at `/workspace`; each sandbox gets a private
- *    temp root and `/workspace` is rewritten to `<root>/workspace`.
+ *    root and `/workspace` is rewritten to `<root>/workspace`.
  *  - core hardcodes `--port 2718`; we allocate a real free port per sandbox and
  *    map the logical port (2718) → the real port so multiple kernels coexist.
  */
@@ -193,6 +193,8 @@ export function prepareMarimoCommand(cmd: string, bindHost: string): string {
 }
 
 export interface LocalComputeOptions {
+	/** Parent directory for local sandbox roots. Defaults to the OS temporary directory. */
+	root?: string;
 	/** Host the exposed kernel URL points at (what the browser hits). Default `localhost`. */
 	host?: string;
 	/**
@@ -231,11 +233,11 @@ class LocalSandboxInstance implements SandboxInstance {
 
 	constructor(
 		id: SandboxId,
-		opts: Required<Pick<LocalComputeOptions, 'host' | 'bindHost'>> &
+		opts: Required<Pick<LocalComputeOptions, 'root' | 'host' | 'bindHost'>> &
 			Pick<LocalComputeOptions, 'ports'>,
 		private readonly onDestroyed?: () => void,
 	) {
-		this.root = path.join(os.tmpdir(), `marimohub-sandbox-${id}`);
+		this.root = path.join(opts.root, `marimohub-sandbox-${id}`);
 		this.host = opts.host;
 		this.bindHost = opts.bindHost;
 		this.ports = opts.ports;
@@ -511,6 +513,7 @@ class LocalSandboxInstance implements SandboxInstance {
 }
 
 export class LocalCompute implements SandboxProvider {
+	private readonly root: string;
 	private readonly host: string;
 	private readonly bindHost: string;
 	private readonly ports?: PortRange;
@@ -520,6 +523,7 @@ export class LocalCompute implements SandboxProvider {
 	private disposePromise?: Promise<void>;
 
 	constructor(options?: LocalComputeOptions) {
+		this.root = path.resolve(options?.root || os.tmpdir());
 		this.host = options?.host || 'localhost';
 		this.bindHost = options?.bindHost || '127.0.0.1';
 		this.ports = options?.ports;
@@ -532,6 +536,7 @@ export class LocalCompute implements SandboxProvider {
 			const next = new LocalSandboxInstance(
 				id,
 				{
+					root: this.root,
 					host: this.host,
 					bindHost: this.bindHost,
 					ports: this.ports,

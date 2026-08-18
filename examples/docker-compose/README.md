@@ -17,6 +17,8 @@ open http://localhost:9001        # MinIO console (minioadmin / minioadmin)
   `uv` fetches Python + marimo on the first kernel launch (cached in the
   `uv-cache` volume). Each kernel binds `0.0.0.0` on a port in the published
   `2718-2723` range and is served to the browser at `http://localhost:<port>`.
+  Sandboxes use `/sandboxes` instead of `/tmp`, so marimo saves Hub-managed
+  notebooks in place instead of opening **Save As**.
 
   To use Modal instead, set `MARIMOHUB_COMPUTE_BACKEND=modal` with
   `MARIMOHUB_COMPUTE_MODAL_TOKEN_*` and an image (drop the `local` vars and the

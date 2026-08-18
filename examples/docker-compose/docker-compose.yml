@@ -59,6 +59,7 @@ services:
       # Run marimo kernels as subprocesses inside this container. uv fetches
       # Python + marimo on the first launch (cached in the uv-cache volume).
       MARIMOHUB_COMPUTE_BACKEND: local
+      MARIMOHUB_COMPUTE_LOCAL_ROOT: /sandboxes # avoid marimo treating notebooks as temporary files
       MARIMOHUB_COMPUTE_LOCAL_HOST: localhost # what the browser connects to
       MARIMOHUB_COMPUTE_LOCAL_BIND_HOST: 0.0.0.0 # reachable through published ports
       MARIMOHUB_COMPUTE_LOCAL_PORTS: 2718-2723 # must match the published range above
