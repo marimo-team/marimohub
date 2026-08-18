@@ -13,8 +13,6 @@ export interface PublishNotebookChangeRequestInput {
 }
 
 interface PublishAttempt {
-	scope: string;
-	signature: string;
 	idempotencyKey: string;
 }
 
@@ -27,13 +25,17 @@ export function notebookChangeRequestScope(projectId: string, notebookId: string
 	return JSON.stringify([projectId, notebookId]);
 }
 
+function publishAttemptKey(scope: string, signature: string): string {
+	return JSON.stringify([scope, signature]);
+}
+
 export function useNotebookChangeRequestPublisher(projectId: string, notebookId: string) {
 	const scope = notebookChangeRequestScope(projectId, notebookId);
 	const currentScope = useRef(scope);
 	currentScope.current = scope;
 	const [published, setPublished] = useState<ScopedChangeRequest>();
 	const [mutationScope, setMutationScope] = useState<string>();
-	const attempt = useRef<PublishAttempt | undefined>(undefined);
+	const attempts = useRef(new Map<string, PublishAttempt>());
 	const mutation = useMutation({
 		mutationFn: async ({ sessionId, title, action }: PublishNotebookChangeRequestInput) => {
 			const activeChangeRequest = published?.scope === scope ? published.value : undefined;
@@ -42,10 +44,12 @@ export function useNotebookChangeRequestPublisher(projectId: string, notebookId:
 				throw new Error('Cannot update a change request before one has been opened');
 			}
 			const signature = `${action}:${targetProposalId ?? ''}`;
-			if (attempt.current?.scope !== scope || attempt.current.signature !== signature) {
-				attempt.current = { scope, signature, idempotencyKey: crypto.randomUUID() };
+			const attemptKey = publishAttemptKey(scope, signature);
+			let requestAttempt = attempts.current.get(attemptKey);
+			if (!requestAttempt) {
+				requestAttempt = { idempotencyKey: crypto.randomUUID() };
+				attempts.current.set(attemptKey, requestAttempt);
 			}
-			const requestAttempt = attempt.current;
 			try {
 				const data = await apiData(
 					apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests', {
@@ -60,17 +64,17 @@ export function useNotebookChangeRequestPublisher(projectId: string, notebookId:
 						timeout: 120_000,
 					}),
 				);
-				if (currentScope.current === scope && attempt.current === requestAttempt) {
-					attempt.current = undefined;
+				if (currentScope.current === scope && attempts.current.get(attemptKey) === requestAttempt) {
+					attempts.current.delete(attemptKey);
 					setPublished({ scope, value: data });
 				}
 				return data;
 			} catch (error) {
 				if (
-					attempt.current === requestAttempt &&
+					attempts.current.get(attemptKey) === requestAttempt &&
 					isApiErrorCode(error, 'PROPOSAL_RETRY_REQUIRED')
 				) {
-					attempt.current = undefined;
+					attempts.current.delete(attemptKey);
 				}
 				throw error;
 			}

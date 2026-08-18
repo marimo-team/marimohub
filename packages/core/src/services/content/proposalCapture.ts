@@ -129,9 +129,19 @@ async function inspectRegularFile(
 	workdir: string,
 	path: string,
 ): Promise<number> {
-	const separator = path.lastIndexOf('/');
-	const parent = separator === -1 ? workdir : sandboxPath(workdir, path.slice(0, separator));
-	const name = path.slice(separator + 1);
+	const components = path.split('/');
+	let parent = workdir;
+	for (const component of components.slice(0, -1)) {
+		const listing = await sandbox.listFiles(parent, { includeHidden: true });
+		if (!listing.success) throw new ConflictError(`Could not inspect changed file ${path}`);
+		const entry = listing.files.find((candidate) => candidate.name === component);
+		if (!entry) throw new ConflictError(`Changed file ${path} is missing from the session`);
+		if (entry.type !== 'directory') {
+			throw new ConflictError(`Changed path ${path} has a non-directory parent`);
+		}
+		parent = sandboxPath(parent, component);
+	}
+	const name = components.at(-1) ?? '';
 	const listing = await sandbox.listFiles(parent, { includeHidden: true });
 	if (!listing.success) throw new ConflictError(`Could not inspect changed file ${path}`);
 	const file = listing.files.find((candidate) => candidate.name === name);

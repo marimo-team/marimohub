@@ -64,6 +64,31 @@ describe('GitHub tree responses', () => {
 		['a truncated tree', { truncated: true, tree: [] }, 'incomplete base tree'],
 		['a missing path', { truncated: false, tree: [{}] }, 'invalid base tree entry'],
 		[
+			'a numeric regular-file mode',
+			{ truncated: false, tree: [{ path: 'file', mode: 100644, type: 'blob' }] },
+			'invalid base tree entry',
+		],
+		[
+			'a numeric executable-file mode',
+			{ truncated: false, tree: [{ path: 'file', mode: 100755, type: 'blob' }] },
+			'invalid base tree entry',
+		],
+		[
+			'a numeric symlink mode',
+			{ truncated: false, tree: [{ path: 'link', mode: 120000, type: 'blob' }] },
+			'invalid base tree entry',
+		],
+		[
+			'a numeric submodule mode',
+			{ truncated: false, tree: [{ path: 'submodule', mode: 160000, type: 'commit' }] },
+			'invalid base tree entry',
+		],
+		[
+			'a non-string entry type',
+			{ truncated: false, tree: [{ path: 'file', mode: '100644', type: 1 }] },
+			'invalid base tree entry',
+		],
+		[
 			'an unsupported mode',
 			{ truncated: false, tree: [{ path: 'file', mode: '040000', type: 'blob' }] },
 			'invalid base tree entry',

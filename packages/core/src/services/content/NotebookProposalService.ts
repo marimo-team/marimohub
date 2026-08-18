@@ -585,25 +585,34 @@ export class NotebookProposalService {
 		if (published.state !== 'published') {
 			throw new ConflictError('Proposal publication did not complete');
 		}
+		const publishedResult: OpenChangeRequestResult = {
+			number: published.change_request.number,
+			url: published.change_request.url,
+			headBranch: published.change_request.head_branch,
+			headCommit: published.change_request.head_commit,
+		};
+		if (
+			published.change_request.provider !== publisher.provider ||
+			publishedResult.headBranch !== headBranch ||
+			(expectedChangeRequest &&
+				(publishedResult.number !== expectedChangeRequest.number ||
+					publishedResult.url !== expectedChangeRequest.url))
+		) {
+			throw new UnavailableError('Stored publication contains an invalid change request');
+		}
 		if (rootProposalId && expectedChangeRequest && observedHeadCommits) {
 			await this.advanceChangeRequestHead(
 				input.projectId,
 				input.notebookId,
 				rootProposalId,
-				result,
+				publishedResult,
 				publisher.provider,
 				observedHeadCommits,
 				proposal.created_at,
 				'publish',
 			);
 		}
-		const changeRequest = published.change_request;
-		return {
-			number: changeRequest.number,
-			url: changeRequest.url,
-			headBranch: changeRequest.head_branch,
-			headCommit: changeRequest.head_commit,
-		};
+		return publishedResult;
 	}
 
 	private async resolvePublishedChangeRequestTarget(

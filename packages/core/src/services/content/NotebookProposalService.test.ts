@@ -18,6 +18,14 @@ import { MAX_VERSIONS } from './NotebookService';
 
 const encode = (value: string) => new TextEncoder().encode(value);
 const GIT_COMMIT = 'a'.repeat(40);
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
 const LARGE_CONTENT_TEST_TIMEOUT_MS = 15_000;
 
 interface GitSandboxOptions {
@@ -440,6 +448,60 @@ describe('NotebookProposalService', () => {
 
 		await expect(capture({ ...sandbox.instance, listFiles })).rejects.toThrow('not a regular file');
 		expect(sandbox.calls.readFile).toHaveLength(0);
+	});
+
+	it('rejects changed files beneath symlinked directories without reading through them', async () => {
+		const sandbox = makeGitSandbox({
+			files: { 'linked/new.txt': 'outside bytes' },
+			untracked: ['linked/new.txt'],
+		});
+		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path, options) => {
+			if (path !== '/workspace') return sandbox.instance.listFiles(path, options);
+			return {
+				success: true,
+				files: [
+					{
+						name: 'linked',
+						absolutePath: '/workspace/linked',
+						relativePath: 'linked',
+						type: 'symlink',
+						size: 0,
+					},
+				],
+			};
+		});
+
+		await expect(capture({ ...sandbox.instance, listFiles })).rejects.toThrow(
+			'has a non-directory parent',
+		);
+		expect(sandbox.exec).not.toHaveBeenCalledWith(expect.stringContaining('base64 <'));
+	});
+
+	it('captures changed files beneath inspected directories', async () => {
+		const sandbox = makeGitSandbox({
+			files: { 'nested/new.txt': 'new bytes' },
+			untracked: ['nested/new.txt'],
+		});
+		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path, options) => {
+			if (path !== '/workspace') return sandbox.instance.listFiles(path, options);
+			return {
+				success: true,
+				files: [
+					{
+						name: 'nested',
+						absolutePath: '/workspace/nested',
+						relativePath: 'nested',
+						type: 'directory',
+						size: 0,
+					},
+				],
+			};
+		});
+
+		await expect(capture({ ...sandbox.instance, listFiles })).resolves.toMatchObject({
+			changes: [expect.objectContaining({ path: 'nested/new.txt', operation: 'add' })],
+		});
+		expect(sandbox.exec).toHaveBeenCalledWith("base64 < '/workspace/nested/new.txt'");
 	});
 
 	it('bounds the number of Git changes before reading their content', async () => {
@@ -1078,6 +1140,107 @@ describe('NotebookProposalService', () => {
 		expect(
 			(await env.proposals.getProposal(projectId, notebookId, initial.proposal_id)).publication,
 		).toMatchObject({ state: 'published', change_request: { head_commit: 'updated-head' } });
+	});
+
+	it('advances the shared head with the publication CAS winner during concurrent updates', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		const firstProviderResult = deferred<OpenChangeRequestResult>();
+		const secondProviderResult = deferred<OpenChangeRequestResult>();
+		let providerCalls = 0;
+		const updateChangeRequest = vi.fn(() =>
+			++providerCalls === 1 ? firstProviderResult.promise : secondProviderResult.promise,
+		);
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(async () => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch,
+				headCommit: 'initial-head',
+			})),
+			updateChangeRequest,
+		};
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+		const proposalPaths = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(update.proposal_id);
+		const rootPublicationPath = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(initial.proposal_id).publication;
+		const rootReadBlocked = deferred<void>();
+		const releaseRootRead = deferred<void>();
+		let updatePublicationStored = false;
+		let blockedRootRead = false;
+		const service = new NotebookProposalService(
+			proxyBucket(
+				async (key, value, options) => {
+					const stored = await env.bucket.put(key, value, options);
+					if (key === proposalPaths.publication && options?.onlyIfEtagMatches) {
+						updatePublicationStored = true;
+					}
+					return stored;
+				},
+				(key) => env.bucket.delete(key),
+				async (key) => {
+					if (key === rootPublicationPath && updatePublicationStored && !blockedRootRead) {
+						blockedRootRead = true;
+						rootReadBlocked.resolve();
+						await releaseRootRead.promise;
+					}
+					return env.bucket.get(key);
+				},
+			),
+		);
+		const publishInput = {
+			projectId,
+			notebookId,
+			proposalId: update.proposal_id,
+			publisher,
+			title: 'Second update',
+			body: '',
+		};
+		const first = service.publishChangeRequest(publishInput);
+		const second = service.publishChangeRequest(publishInput);
+		await vi.waitFor(() => expect(updateChangeRequest).toHaveBeenCalledTimes(2));
+
+		firstProviderResult.resolve({
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+			headBranch,
+			headCommit: 'cas-winner-head',
+		});
+		await rootReadBlocked.promise;
+		secondProviderResult.resolve({
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+			headBranch,
+			headCommit: 'racing-local-head',
+		});
+		const secondResult = await second;
+		releaseRootRead.resolve();
+		const firstResult = await first;
+
+		expect(firstResult.headCommit).toBe('cas-winner-head');
+		expect(secondResult.headCommit).toBe('cas-winner-head');
+		expect(
+			(await env.proposals.getProposal(projectId, notebookId, initial.proposal_id)).publication,
+		).toMatchObject({ state: 'published', change_request: { head_commit: 'cas-winner-head' } });
 	});
 
 	it('returns a published update when best-effort target repair cannot read the target', async () => {

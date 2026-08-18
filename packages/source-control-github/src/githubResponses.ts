@@ -53,13 +53,13 @@ export function gitTreeEntries(value: unknown): Map<string, GitTreeEntry> {
 		const mode = raw.mode;
 		const type = raw.type;
 		const validEntry =
-			(type === 'blob' && ['100644', '100755', '120000'].includes(String(mode))) ||
+			(type === 'blob' && (mode === '100644' || mode === '100755' || mode === '120000')) ||
 			(type === 'tree' && mode === '040000') ||
 			(type === 'commit' && mode === '160000');
 		if (!validEntry) {
 			throw new UnavailableError('GitHub returned an invalid base tree entry');
 		}
-		entries.set(raw.path, { mode, type } as GitTreeEntry);
+		entries.set(raw.path, { mode, type });
 	}
 	return entries;
 }
