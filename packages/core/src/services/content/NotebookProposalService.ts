@@ -68,6 +68,11 @@ export interface PublishProposalChangeRequestInput {
 	body: string;
 }
 
+export interface NotebookProposalRecord {
+	proposal: NotebookProposal;
+	publication: ProposalPublication;
+}
+
 export interface PruneExpiredProposalPayloadsOptions {
 	nowMs?: number;
 }
@@ -388,7 +393,7 @@ export class NotebookProposalService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		proposalId: ProposalId,
-	): Promise<{ proposal: NotebookProposal; publication: ProposalPublication }> {
+	): Promise<NotebookProposalRecord> {
 		const proposalPaths = paths.project(projectId).notebook(notebookId).proposal(proposalId);
 		const [proposalObject, publicationObject] = await Promise.all([
 			this.bucket.get(proposalPaths.meta),
@@ -408,11 +413,12 @@ export class NotebookProposalService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		proposalId: ProposalId,
-	): Promise<NotebookProposal | undefined> {
-		const { proposal, publication } = await this.getProposal(projectId, notebookId, proposalId);
-		if (publication.state === 'published') return proposal;
+	): Promise<NotebookProposalRecord | undefined> {
+		const record = await this.getProposal(projectId, notebookId, proposalId);
+		if (record.publication.state === 'published') return record;
+		const { proposal } = record;
 		this.assertPayloadNotExpired(proposal);
-		return (await this.hasCompletePayload(projectId, notebookId, proposal)) ? proposal : undefined;
+		return (await this.hasCompletePayload(projectId, notebookId, proposal)) ? record : undefined;
 	}
 
 	private async hasCompletePayload(

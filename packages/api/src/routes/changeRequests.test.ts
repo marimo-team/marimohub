@@ -185,7 +185,7 @@ describe('change request routes', () => {
 			number: 17,
 			url: 'https://github.com/owner/repo/pull/17',
 		});
-		expect(getPublisher).toHaveBeenCalledOnce();
+		expect(getPublisher).not.toHaveBeenCalled();
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 	});
 
@@ -233,6 +233,39 @@ describe('change request routes', () => {
 		expect(openChangeRequest.mock.calls[0]?.[0].headBranch).toBe(
 			openChangeRequest.mock.calls[1]?.[0].headBranch,
 		);
+	});
+
+	it('requires a configured publisher when resuming a pending proposal', async () => {
+		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
+		const headers = { 'Idempotency-Key': 'pending-without-publisher' };
+		await expectError(
+			await setup.request('POST', route(), {}, headers),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+
+		const getPublisher = vi.fn<SourceControlPublisherRegistry['getPublisher']>();
+		const withoutPublisher = createTestApi({
+			bucket: setup.bucket,
+			compute: setup.deps.compute,
+			deps: {
+				sourceControlPublishers: {
+					getPublisher,
+					configuredProviders: () => [],
+				},
+			},
+		});
+		const capture = vi.spyOn(withoutPublisher.deps.services.proposals, 'captureEntryNotebook');
+
+		await expectError(
+			await withoutPublisher.request('POST', route(), {}, headers),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+
+		expect(getPublisher).toHaveBeenCalledExactlyOnceWith('github');
+		expect(capture).not.toHaveBeenCalled();
+		expect(openChangeRequest).toHaveBeenCalledOnce();
 	});
 
 	it('finishes an incomplete proposal capture before retrying publication', async () => {

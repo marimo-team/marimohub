@@ -171,8 +171,15 @@ describe('NotebookProposalService', () => {
 		const first = await env.proposals.publishChangeRequest(input);
 		const { publisher: _publisher, ...retryInput } = input;
 		const second = await env.proposals.publishChangeRequest(retryInput);
+		const reusable = await env.proposals.getReusableProposal(
+			projectId,
+			notebookId,
+			proposal.proposal_id,
+		);
 
 		expect(second).toEqual(first);
+		expect(reusable?.proposal).toEqual(proposal);
+		expect(reusable?.publication.state).toBe('published');
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 		expect(openChangeRequest).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -445,9 +452,9 @@ describe('NotebookProposalService', () => {
 		const proposal = await capture(instance, { proposalId });
 		const changePath = paths.project(projectId).notebook(notebookId).proposal(proposalId).change(0);
 
-		await expect(
-			env.proposals.getReusableProposal(projectId, notebookId, proposalId),
-		).resolves.toEqual(proposal);
+		const reusable = await env.proposals.getReusableProposal(projectId, notebookId, proposalId);
+		expect(reusable?.proposal).toEqual(proposal);
+		expect(reusable?.publication.state).toBe('pending');
 		await env.bucket.delete(changePath);
 		await expect(
 			env.proposals.getReusableProposal(projectId, notebookId, proposalId),

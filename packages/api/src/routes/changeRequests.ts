@@ -6,7 +6,12 @@ import {
 	ProposalId,
 	UnavailableError,
 } from '@marimo-hub/core';
-import type { GitSourceRevision, NotebookProposal, SourceControlPublisher } from '@marimo-hub/core';
+import type {
+	GitSourceRevision,
+	NotebookProposal,
+	NotebookProposalRecord,
+	SourceControlPublisher,
+} from '@marimo-hub/core';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
 import {
@@ -91,9 +96,9 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 	const data = await idempotentCreate(c, routeId, async () => {
 		const proposalId = await deriveProposalId(`${user.id}\n${routeId}\n${idempotencyKey}`);
 		const notebook = await deps.services.notebooks.getNotebook(pid, nid);
-		let proposal: NotebookProposal | undefined;
+		let reusableProposal: NotebookProposalRecord | undefined;
 		try {
-			proposal = await deps.services.proposals.getReusableProposal(pid, nid, proposalId);
+			reusableProposal = await deps.services.proposals.getReusableProposal(pid, nid, proposalId);
 		} catch (error) {
 			if (!(error instanceof NotFoundError)) throw error;
 		}
@@ -105,7 +110,9 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 			return publisher;
 		};
 		let publisher: SourceControlPublisher | undefined;
-		if (proposal) {
+		let proposal: NotebookProposal;
+		if (reusableProposal) {
+			proposal = reusableProposal.proposal;
 			if (
 				proposal.proposal_id !== proposalId ||
 				proposal.notebook_id !== nid ||
@@ -114,7 +121,9 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 			) {
 				throw new ConflictError('The idempotency key belongs to a different proposal');
 			}
-			publisher = deps.sourceControlPublishers?.getPublisher(proposal.source.provider);
+			if (reusableProposal.publication.state === 'pending') {
+				publisher = requirePublisher(proposal.source.provider);
+			}
 		} else {
 			const session = await deps.services.sessions.getSession(pid, sid);
 			if (notebook.source.type !== 'git') {

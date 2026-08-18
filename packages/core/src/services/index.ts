@@ -32,6 +32,7 @@ export {
 } from './content/NotebookProposalService';
 export type {
 	CaptureEntryNotebookProposalInput,
+	NotebookProposalRecord,
 	PruneExpiredProposalPayloadsOptions,
 	PublishProposalChangeRequestInput,
 } from './content/NotebookProposalService';
