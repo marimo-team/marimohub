@@ -346,7 +346,7 @@ Server-wide settings; no backend selector.
 
 ## Source control publishing
 
-Optional server-side publishing for notebooks imported from a Git repository. Marimohub captures edited content and its exact source revision as an immutable proposal, then publishes that proposal as a provider change request. Sandboxes supply file content only; provider credentials stay in the marimohub server. The first implementation opens draft GitHub pull requests through a GitHub App, while the core publishing contract remains provider-neutral.
+Optional server-side publishing for notebooks imported from a Git repository. Marimohub captures edited content and its exact source revision as an immutable proposal, then publishes that proposal as a provider change request. When the sandbox work directory has a usable `.git` repository, capture includes tracked and untracked workspace changes while honoring `.gitignore` and excluding runtime/cache paths. Other sandboxes fall back to capturing the configured entry notebook. Sandboxes supply file content only; provider credentials stay in the marimohub server. The first implementation opens draft GitHub pull requests through a GitHub App, while the core publishing contract remains provider-neutral.
 
 ### GitHub App
 

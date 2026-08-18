@@ -6,7 +6,7 @@ import {
 	keepPreviousData,
 } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { apiClient, apiData, apiDataWithResponse, apiErrorFromResponse } from './client';
 import { useApiMutation, useInvalidate } from './mutation';
 import { isApiErrorCode, isNotFoundError, notebookPath } from './request';
@@ -27,7 +27,6 @@ import type {
 	AssignableProjectRole,
 	AdminUser,
 	IntegrationEntry,
-	NotebookChangeRequest,
 	NotebookDetail,
 	ResolvedUser,
 	ProjectFederation,
@@ -1646,48 +1645,6 @@ export function useStopSession(
 		() => [sessionKeys.listByProject(projectId)],
 		opts?.suppressErrorToast ? { suppressErrorToast: true } : undefined,
 	);
-}
-
-export function useOpenNotebookChangeRequest(projectId: string, notebookId: string) {
-	type PublishAction = 'open' | 'update' | 'create-new';
-	type PublishInput = { sessionId: string; title?: string; action: PublishAction };
-	const [activeChangeRequest, setActiveChangeRequest] = useState<NotebookChangeRequest>();
-	const attempt = useRef<{ signature: string; idempotencyKey: string } | undefined>(undefined);
-	const mutation = useMutation({
-		mutationFn: ({ sessionId, title, action }: PublishInput) => {
-			const targetProposalId = action === 'update' ? activeChangeRequest?.proposal_id : undefined;
-			if (action === 'update' && !targetProposalId) {
-				throw new Error('Cannot update a change request before one has been opened');
-			}
-			const signature = `${action}:${targetProposalId ?? ''}`;
-			if (attempt.current?.signature !== signature) {
-				attempt.current = { signature, idempotencyKey: crypto.randomUUID() };
-			}
-			return apiData(
-				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests', {
-					params: {
-						path: { pid: projectId, nid: notebookId, sid: sessionId },
-						header: { 'idempotency-key': attempt.current.idempotencyKey },
-					},
-					body: {
-						...(title ? { title } : {}),
-						...(targetProposalId ? { target_proposal_id: targetProposalId } : {}),
-					},
-					timeout: 120_000,
-				}),
-			);
-		},
-		onSuccess: (data) => {
-			attempt.current = undefined;
-			setActiveChangeRequest(data);
-		},
-		onError: (error) => {
-			if (isApiErrorCode(error, 'PROPOSAL_RETRY_REQUIRED')) {
-				attempt.current = undefined;
-			}
-		},
-	});
-	return { ...mutation, activeChangeRequest };
 }
 
 export function useEditorSessionQuery(

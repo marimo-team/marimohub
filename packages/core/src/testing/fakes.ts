@@ -219,8 +219,8 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 	const instance = {
 		async exec(cmd: string): Promise<ExecResult> {
 			calls.exec.push(cmd);
-			// Capture: base64 -w0 '<path>'
-			const capture = cmd.match(/^base64 -w0 (.+)$/);
+			// Capture: base64 -w0 '<path>' or the portable base64 < '<path>' form.
+			const capture = cmd.match(/^base64(?: -w0)?(?: <)? (.+)$/);
 			if (capture) {
 				const rel = toRel(fsUnquote(capture[1]));
 				const bytes = fs.get(rel);

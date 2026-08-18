@@ -1,19 +1,9 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import {
-	ConflictError,
-	deriveProposalId,
-	NotFoundError,
-	ProposalId,
-	UnavailableError,
-} from '@marimo-hub/core';
-import type {
-	GitSourceRevision,
-	NotebookProposal,
-	NotebookProposalRecord,
-	SourceControlPublisher,
-} from '@marimo-hub/core';
+import { deriveProposalId, ProposalId } from '@marimo-hub/core';
+import type { AuthUser, SourceControlCommitIdentity } from '@marimo-hub/core';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
+import { prepareProposal } from './changeRequestPublishing';
 import {
 	assertProjectRole,
 	commonErrors,
@@ -70,6 +60,12 @@ const ChangeRequestResponse = z
 	})
 	.openapi('OpenNotebookChangeRequestResult');
 
+function commitCoAuthor(user: AuthUser): SourceControlCommitIdentity {
+	const at = user.email.indexOf('@');
+	const emailName = at > 0 ? user.email.slice(0, at) : user.email;
+	return { name: user.name?.trim() || emailName, email: user.email };
+}
+
 const openChangeRequest = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests',
@@ -105,86 +101,25 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 	const routeId = `POST /projects/${pid}/notebooks/${nid}/sessions/${sid}/change-requests`;
 	const data = await idempotentCreate(c, routeId, async () => {
 		const proposalId = await deriveProposalId(`${user.id}\n${routeId}\n${idempotencyKey}`);
-		const notebook = await deps.services.notebooks.getNotebook(pid, nid);
-		let reusableProposal: NotebookProposalRecord | undefined;
-		try {
-			reusableProposal = await deps.services.proposals.getReusableProposal(pid, nid, proposalId);
-		} catch (error) {
-			if (!(error instanceof NotFoundError)) throw error;
-		}
-		const requirePublisher = (provider: string): SourceControlPublisher => {
-			const publisher = deps.sourceControlPublishers?.getPublisher(provider);
-			if (!publisher) {
-				throw new UnavailableError(`Change-request publishing is not configured for ${provider}`);
-			}
-			return publisher;
-		};
-		let publisher: SourceControlPublisher | undefined;
-		let proposal: NotebookProposal;
-		if (reusableProposal) {
-			proposal = reusableProposal.proposal;
-			if (
-				proposal.proposal_id !== proposalId ||
-				proposal.notebook_id !== nid ||
-				proposal.session_id !== sid ||
-				proposal.author !== user.id
-			) {
-				throw new ConflictError('The idempotency key belongs to a different proposal');
-			}
-			if (reusableProposal.publication.state === 'pending') {
-				publisher = requirePublisher(proposal.source.provider);
-			}
-		} else {
-			const session = await deps.services.sessions.getSession(pid, sid);
-			if (notebook.source.type !== 'git') {
-				throw new ConflictError('Only git-synced notebooks can open change requests');
-			}
-			if (!session.sandbox_id) throw new ConflictError('The session has no sandbox');
-			if (!session.source_version_id) {
-				throw new ConflictError('The session has no synced source revision');
-			}
-
-			const legacySourceRevision: GitSourceRevision | undefined =
-				session.source_version_id === notebook.source.current_version_id &&
-				notebook.source.commit &&
-				notebook.source.provider
-					? {
-							provider: notebook.source.provider,
-							repo: notebook.source.repo,
-							branch: notebook.source.branch,
-							root_path: notebook.source.root_path,
-							entry_notebook: notebook.source.entry_notebook,
-							commit: notebook.source.commit,
-						}
-					: undefined;
-			const sourceRevision = await deps.services.proposals.resolveSourceRevision(
-				pid,
-				nid,
-				session.source_version_id,
-				legacySourceRevision,
-			);
-			publisher = requirePublisher(sourceRevision.provider);
-			proposal = await deps.services.proposals.captureEntryNotebook({
-				projectId: pid,
-				notebookId: nid,
-				proposalId,
-				session,
-				sandbox: deps.compute.create(session.sandbox_id),
-				workdir: deps.sandbox.workdir,
-				author: user.id,
-				targetProposalId: request.target_proposal_id,
-				resolvedSourceRevision: sourceRevision,
-			});
-		}
+		const { proposal, publisher, notebookTitle } = await prepareProposal({
+			deps,
+			projectId: pid,
+			notebookId: nid,
+			sessionId: sid,
+			proposalId,
+			author: user.id,
+			targetProposalId: request.target_proposal_id,
+		});
 		const changeRequest = await deps.services.proposals.publishChangeRequest({
 			projectId: pid,
 			notebookId: nid,
 			proposalId: proposal.proposal_id,
 			publisher,
-			title: request.title ?? `Update ${notebook.meta.title}`,
+			title: request.title ?? `Update ${notebookTitle ?? 'notebook'}`,
 			body:
 				request.body ??
 				`Changes proposed from marimohub session ${sid}.\n\nBase commit: ${proposal.source.commit}`,
+			coAuthor: commitCoAuthor(user),
 		});
 		const auditEvent = proposal.target_proposal_id
 			? 'notebook.change_request.update'

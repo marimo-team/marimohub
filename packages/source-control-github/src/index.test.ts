@@ -28,6 +28,7 @@ const input = {
 	title: 'Update dashboard',
 	body: 'Created by marimohub',
 	draft: true,
+	coAuthor: { name: 'Ada Lovelace', email: 'ada@example.com' },
 	changes: [
 		{
 			path: 'apps/dashboard.py',
@@ -49,6 +50,7 @@ const updateInput = {
 	},
 	title: 'Update dashboard again',
 	body: 'A later notebook proposal',
+	coAuthor: input.coAuthor,
 	changes: input.changes,
 };
 
@@ -79,11 +81,37 @@ function proposalTreeResponse(parsed: URL, proposalHeads: readonly string[] = []
 	return null;
 }
 
+function pullRequestMetadataResponse(
+	parsed: URL,
+	init: RequestInit | undefined,
+	headCommit: string,
+): Response | null {
+	if (
+		parsed.pathname !== `/repos/owner/repo/pulls/${updateInput.changeRequest.number}` ||
+		init?.method !== 'PATCH'
+	) {
+		return null;
+	}
+	expect(JSON.parse(String(init.body))).toEqual({
+		title: updateInput.title,
+		body: updateInput.body,
+	});
+	return response({
+		number: updateInput.changeRequest.number,
+		html_url: updateInput.changeRequest.url,
+		title: updateInput.title,
+		body: updateInput.body,
+		head: { sha: headCommit },
+	});
+}
+
 describe('GitHubAppPublisher', () => {
 	it('appends a commit to an existing open pull request', async () => {
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
 			const parsed = new URL(url);
 			const method = init?.method ?? 'GET';
+			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'appended-head');
+			if (metadataResponse) return metadataResponse;
 			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
 			if (parsed.pathname.endsWith('/access_tokens')) {
 				return response({ token: 'installation-token' });
@@ -122,7 +150,12 @@ describe('GitHubAppPublisher', () => {
 				return response({ sha: 'append-tree' }, 201);
 			}
 			if (parsed.pathname.endsWith('/git/commits') && method === 'POST') {
-				expect(JSON.parse(String(init?.body))).toMatchObject({ parents: ['existing-head'] });
+				expect(JSON.parse(String(init?.body))).toEqual({
+					message:
+						'Update dashboard again\n\nA later notebook proposal\n\nCo-authored-by: Ada Lovelace <ada@example.com>',
+					tree: 'append-tree',
+					parents: ['existing-head'],
+				});
 				return response({ sha: 'appended-head' }, 201);
 			}
 			if (parsed.pathname.includes('/git/refs/heads/') && method === 'PATCH') {
@@ -140,11 +173,102 @@ describe('GitHubAppPublisher', () => {
 		expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/graphql'))).toBe(false);
 	});
 
+	it('retries the metadata patch without creating another commit', async () => {
+		let ref = 'existing-head';
+		let commitCount = 0;
+		let metadataPatchCount = 0;
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			if (
+				parsed.pathname === `/repos/owner/repo/pulls/${updateInput.changeRequest.number}` &&
+				method === 'PATCH'
+			) {
+				metadataPatchCount += 1;
+				expect(JSON.parse(String(init?.body))).toEqual({
+					title: updateInput.title,
+					body: updateInput.body,
+				});
+				return metadataPatchCount === 1
+					? response({ message: 'temporarily unavailable' }, 503)
+					: response({
+							number: updateInput.changeRequest.number,
+							html_url: updateInput.changeRequest.url,
+							title: updateInput.title,
+							body: updateInput.body,
+							head: { sha: 'appended-head' },
+						});
+			}
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'open',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: ref },
+					},
+				]);
+			}
+			if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
+				return response({ object: { sha: ref } });
+			}
+			if (parsed.pathname.endsWith('/git/commits/existing-head')) {
+				return response({ tree: { sha: 'existing-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/existing-tree')) {
+				return response({
+					truncated: false,
+					tree: [
+						{
+							path: 'apps/dashboard.py',
+							mode: '100644',
+							type: 'blob',
+							sha: 'old-blob',
+						},
+					],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
+			if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
+				return response({ sha: 'append-tree' }, 201);
+			}
+			if (parsed.pathname.endsWith('/git/commits') && method === 'POST') {
+				commitCount += 1;
+				return response({ sha: 'appended-head' }, 201);
+			}
+			if (parsed.pathname.includes('/git/refs/heads/') && method === 'PATCH') {
+				ref = 'appended-head';
+				return response({ object: { sha: ref } });
+			}
+			if (parsed.pathname.endsWith('/git/commits/appended-head')) {
+				return response({ tree: { sha: 'append-tree' }, parents: [{ sha: 'existing-head' }] });
+			}
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		const github = publisher(fetcher);
+		await expect(github.updateChangeRequest(updateInput)).rejects.toThrow(
+			'GitHub request failed with status 503',
+		);
+		await expect(github.updateChangeRequest(updateInput)).resolves.toEqual({
+			...updateInput.changeRequest,
+			headCommit: 'appended-head',
+		});
+		expect(commitCount).toBe(1);
+		expect(metadataPatchCount).toBe(2);
+	});
+
 	it('force-replaces an owned branch when its current tree cannot accept the update', async () => {
 		let ref = 'existing-head';
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
 			const parsed = new URL(url);
 			const method = init?.method ?? 'GET';
+			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'replacement-head');
+			if (metadataResponse) return metadataResponse;
 			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
 			if (parsed.pathname.endsWith('/access_tokens')) {
 				return response({ token: 'installation-token' });
@@ -290,6 +414,8 @@ describe('GitHubAppPublisher', () => {
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
 			const parsed = new URL(url);
 			const method = init?.method ?? 'GET';
+			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'appended-head');
+			if (metadataResponse) return metadataResponse;
 			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
 			if (parsed.pathname.endsWith('/access_tokens')) {
 				return response({ token: 'installation-token' });
@@ -337,7 +463,167 @@ describe('GitHubAppPublisher', () => {
 			...updateInput.changeRequest,
 			headCommit: 'appended-head',
 		});
-		expect(fetcher.mock.calls.some(([, init]) => (init?.method ?? 'GET') === 'PATCH')).toBe(false);
+		expect(
+			fetcher.mock.calls.some(
+				([url, init]) => String(url).includes('/git/refs/heads/') && init?.method === 'PATCH',
+			),
+		).toBe(false);
+	});
+
+	it('falls back to a conditional force update when GitHub rejects the fast-forward', async () => {
+		let ref = 'existing-head';
+		let treeCount = 0;
+		let commitCount = 0;
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'replacement-head');
+			if (metadataResponse) return metadataResponse;
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'open',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: ref },
+					},
+				]);
+			}
+			if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
+				return response({ object: { sha: ref } });
+			}
+			if (parsed.pathname.endsWith('/git/commits/existing-head')) {
+				return response({ tree: { sha: 'existing-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/existing-tree')) {
+				return response({
+					truncated: false,
+					tree: [{ path: 'apps/dashboard.py', mode: '100755', type: 'blob', sha: 'old-blob' }],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/commits/base-sha')) {
+				return response({ tree: { sha: 'base-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/base-tree')) {
+				return response({
+					truncated: false,
+					tree: [{ path: 'apps/dashboard.py', mode: '100755', type: 'blob', sha: 'base-blob' }],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
+			if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
+				treeCount += 1;
+				expect(JSON.parse(String(init?.body))).toMatchObject({
+					tree: [{ path: 'apps/dashboard.py', mode: '100755' }],
+				});
+				return response({ sha: treeCount === 1 ? 'append-tree' : 'replacement-tree' }, 201);
+			}
+			if (parsed.pathname.endsWith('/git/commits') && method === 'POST') {
+				commitCount += 1;
+				return response({ sha: commitCount === 1 ? 'append-head' : 'replacement-head' }, 201);
+			}
+			if (parsed.pathname.includes('/git/refs/heads/') && method === 'PATCH') {
+				expect(JSON.parse(String(init?.body))).toEqual({ sha: 'append-head', force: false });
+				return response({ message: 'Update is not a fast forward' }, 422);
+			}
+			if (parsed.pathname === '/repos/owner/repo') return response({ node_id: 'repo-node' });
+			if (parsed.pathname === '/graphql') {
+				expect(JSON.parse(String(init?.body))).toMatchObject({
+					variables: {
+						input: {
+							refUpdates: [
+								{
+									beforeOid: 'existing-head',
+									afterOid: 'replacement-head',
+									force: true,
+								},
+							],
+						},
+					},
+				});
+				ref = 'replacement-head';
+				return response({ data: { updateRefs: { clientMutationId: null } } });
+			}
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).updateChangeRequest(updateInput)).resolves.toEqual({
+			...updateInput.changeRequest,
+			headCommit: 'replacement-head',
+		});
+		expect(treeCount).toBe(2);
+		expect(commitCount).toBe(2);
+	});
+
+	it('recovers a completed force replacement without moving the branch again', async () => {
+		let treeCount = 0;
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'replacement-head');
+			if (metadataResponse) return metadataResponse;
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'open',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: 'replacement-head' },
+					},
+				]);
+			}
+			if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
+				return response({ object: { sha: 'replacement-head' } });
+			}
+			if (parsed.pathname.endsWith('/git/commits/existing-head')) {
+				return response({ tree: { sha: 'existing-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/existing-tree')) {
+				return response({
+					truncated: false,
+					tree: [{ path: 'apps/dashboard.py', mode: '100644', type: 'blob', sha: 'old-blob' }],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/commits/base-sha')) {
+				return response({ tree: { sha: 'base-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/base-tree')) {
+				return response({
+					truncated: false,
+					tree: [{ path: 'apps/dashboard.py', mode: '100644', type: 'blob', sha: 'base-blob' }],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
+			if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
+				treeCount += 1;
+				return response({ sha: treeCount === 1 ? 'append-tree' : 'replacement-tree' }, 201);
+			}
+			if (parsed.pathname.endsWith('/git/commits/replacement-head')) {
+				return response({ tree: { sha: 'replacement-tree' }, parents: [{ sha: 'base-sha' }] });
+			}
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).updateChangeRequest(updateInput)).resolves.toEqual({
+			...updateInput.changeRequest,
+			headCommit: 'replacement-head',
+		});
+		expect(treeCount).toBe(2);
+		expect(
+			fetcher.mock.calls.some(
+				([url, init]) =>
+					String(url).endsWith('/graphql') ||
+					(String(url).includes('/git/refs/heads/') && init?.method === 'PATCH'),
+			),
+		).toBe(false);
 	});
 
 	it('rejects an update when the pull request branch moved outside marimohub', async () => {
@@ -435,6 +721,67 @@ describe('GitHubAppPublisher', () => {
 		expect(fetcher.mock.calls.some(([url]) => String(url).includes('/git/ref/heads/'))).toBe(false);
 	});
 
+	it('requires a new pull request after the target branch was deleted', async () => {
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'open',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: 'existing-head' },
+					},
+				]);
+			}
+			if (parsed.pathname.includes('/git/ref/heads/')) return response({}, 404);
+			throw new Error(`unexpected request: ${init?.method ?? 'GET'} ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
+			'pull request branch was deleted; create a new pull request',
+		);
+		expect(fetcher.mock.calls.some(([url]) => String(url).includes('/git/commits/'))).toBe(false);
+	});
+
+	it.each([
+		['number', 18, 'https://github.com/owner/repo/pull/18', updateInput.changeRequest.url],
+		['URL', 17, updateInput.changeRequest.url, 'https://github.com/owner/repo/pull/18'],
+	])(
+		'rejects a target with a mismatched pull-request %s',
+		async (_field, number, url, storedUrl) => {
+			const fetcher = vi.fn(async (requestUrl: string) => {
+				const parsed = new URL(requestUrl);
+				if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+				if (parsed.pathname.endsWith('/access_tokens')) {
+					return response({ token: 'installation-token' });
+				}
+				if (parsed.pathname.endsWith('/pulls')) {
+					return response([
+						{
+							number,
+							state: 'open',
+							html_url: url,
+							head: { sha: 'existing-head' },
+						},
+					]);
+				}
+				throw new Error(`unexpected request: ${parsed.pathname}`);
+			});
+
+			await expect(
+				publisher(fetcher).updateChangeRequest({
+					...updateInput,
+					changeRequest: { ...updateInput.changeRequest, url: storedUrl },
+				}),
+			).rejects.toThrow('pull request no longer matches the published proposal');
+		},
+	);
+
 	it('preserves executable mode while creating a draft pull request', async () => {
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
 			const parsed = new URL(url);
@@ -509,6 +856,15 @@ describe('GitHubAppPublisher', () => {
 		expect(JSON.parse(String(treeCall?.[1]?.body))).toEqual({
 			base_tree: 'base-tree',
 			tree: [{ path: 'apps/dashboard.py', mode: '100755', type: 'blob', sha: 'blob-sha' }],
+		});
+		const commitCall = fetcher.mock.calls.find(
+			([url, request]) => url.endsWith('/git/commits') && request?.method === 'POST',
+		);
+		expect(JSON.parse(String(commitCall?.[1]?.body))).toEqual({
+			message:
+				'Update dashboard\n\nCreated by marimohub\n\nCo-authored-by: Ada Lovelace <ada@example.com>',
+			tree: 'tree-sha',
+			parents: ['base-sha'],
 		});
 		const pullCall = fetcher.mock.calls.find(
 			([url, request]) => url.endsWith('/pulls') && request?.method === 'POST',
@@ -961,6 +1317,30 @@ describe('GitHubAppPublisher', () => {
 		expect(fetcher).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		['repository', { ...updateInput, repository: 'https://gitlab.com/owner/repo' }],
+		['base branch', { ...updateInput, baseBranch: 'feature@{bad}' }],
+		[
+			'head branch',
+			{
+				...updateInput,
+				changeRequest: { ...updateInput.changeRequest, headBranch: '../main' },
+			},
+		],
+		[
+			'change path',
+			{
+				...updateInput,
+				changes: [{ path: '../secrets', operation: 'delete' as const }],
+			},
+		],
+		['title', { ...updateInput, title: '   ' }],
+	])('rejects an invalid update %s before network access', async (_field, invalidInput) => {
+		const fetcher = vi.fn();
+		await expect(publisher(fetcher).updateChangeRequest(invalidInput)).rejects.toThrow();
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
 	it('rejects a non-numeric app id at construction', () => {
 		expect(() => new GitHubAppPublisher({ appId: 'not-an-id', privateKey: PRIVATE_KEY })).toThrow(
 			'must be a positive integer',
@@ -1096,6 +1476,31 @@ describe('GitHubAppPublisher', () => {
 		await expect(publisher(fetcher).openChangeRequest(request)).rejects.toThrow();
 		expect(fetcher).not.toHaveBeenCalled();
 	});
+
+	it.each([
+		['a null identity', null],
+		['a blank name', { name: '', email: 'ada@example.com' }],
+		['a padded name', { name: ' Ada ', email: 'ada@example.com' }],
+		['a newline in the name', { name: 'Ada\nCo-authored-by: Mallory', email: 'ada@example.com' }],
+		['a NUL in the name', { name: 'Ada\0Mallory', email: 'ada@example.com' }],
+		['angle brackets in the name', { name: 'Ada <admin>', email: 'ada@example.com' }],
+		['a missing email domain', { name: 'Ada', email: 'ada@' }],
+		['multiple email separators', { name: 'Ada', email: 'ada@example.com@evil.test' }],
+		['whitespace in the email', { name: 'Ada', email: 'ada @example.com' }],
+		['a newline in the email', { name: 'Ada', email: 'ada@example.com\nMallory' }],
+		['a NUL in the email', { name: 'Ada', email: 'ada\0@example.com' }],
+		['angle brackets in the email', { name: 'Ada', email: 'ada<admin>@example.com' }],
+	] as const)(
+		'rejects an invalid commit co-author with %s before network access',
+		async (_label, coAuthor) => {
+			const fetcher = vi.fn();
+			const request = { ...input, coAuthor } as unknown as typeof input;
+			await expect(publisher(fetcher).openChangeRequest(request)).rejects.toThrow(
+				'Invalid source-control commit co-author',
+			);
+			expect(fetcher).not.toHaveBeenCalled();
+		},
+	);
 
 	it('accepts an HTTPS repository URL with a .git suffix', async () => {
 		const fetcher = vi.fn(async (url: string) => {

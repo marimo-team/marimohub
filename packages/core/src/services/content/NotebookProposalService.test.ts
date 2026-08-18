@@ -4,7 +4,7 @@ import { createNotebookId, createProjectId, createProposalId, createVersionId } 
 import type { NotebookId, ProjectId, ProposalId, UserId, VersionId } from '../../ids';
 import { paths } from '../../paths';
 import type { Bucket, BucketPutOptions } from '../../ports/bucket';
-import { listFilesFailure, readFileFailure } from '../../ports/sandbox';
+import { execResult, listFilesFailure, readFileFailure } from '../../ports/sandbox';
 import type { OpenChangeRequestResult, SourceControlPublisher } from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import type { Session } from '../../schema';
@@ -17,6 +17,56 @@ import {
 import { MAX_VERSIONS } from './NotebookService';
 
 const encode = (value: string) => new TextEncoder().encode(value);
+const GIT_COMMIT = 'a'.repeat(40);
+
+interface GitSandboxOptions {
+	files: Record<string, string | Uint8Array>;
+	diff?: readonly (readonly [status: string, path: string])[];
+	untracked?: readonly string[];
+	diffOutput?: string;
+	untrackedOutput?: string;
+	gitAvailable?: boolean;
+	baseCommitAvailable?: boolean;
+	baseCommitOutput?: string;
+	diffFails?: boolean;
+	sizes?: Record<string, number>;
+}
+
+function makeGitSandbox(options: GitSandboxOptions) {
+	const sandbox = makeFsSandbox({ files: options.files, sizes: options.sizes });
+	const exec = vi.fn<SandboxInstance['exec']>(async (command) => {
+		if (command.includes('test -e .git')) {
+			return options.gitAvailable === false
+				? execResult(false, '', 'not a repository')
+				: execResult(true, 'git-working-tree', '');
+		}
+		if (command.includes('git rev-parse --verify')) {
+			return options.baseCommitAvailable === false
+				? execResult(false, '', 'unknown revision')
+				: execResult(true, options.baseCommitOutput ?? `${GIT_COMMIT}\n`, '');
+		}
+		if (command.includes('git diff --name-status')) {
+			const output =
+				options.diffOutput ??
+				(options.diff ?? [])
+					.flatMap(([status, path]) => [status, path])
+					.map((field) => `${field}\0`)
+					.join('');
+			return options.diffFails
+				? execResult(false, '', 'diff failed')
+				: execResult(true, output, '');
+		}
+		if (command.includes('git ls-files --others')) {
+			return execResult(
+				true,
+				options.untrackedOutput ?? (options.untracked ?? []).map((path) => `${path}\0`).join(''),
+				'',
+			);
+		}
+		return sandbox.instance.exec(command);
+	});
+	return { ...sandbox, instance: { ...sandbox.instance, exec }, exec };
+}
 
 describe('NotebookProposalService', () => {
 	let env: Awaited<ReturnType<typeof setupTestEnv>>;
@@ -70,7 +120,7 @@ describe('NotebookProposalService', () => {
 			targetProposalId: ProposalId;
 		}> = {},
 	) {
-		return env.proposals.captureEntryNotebook({
+		return env.proposals.captureProposal({
 			projectId,
 			notebookId,
 			session: overrides.session ?? session,
@@ -105,7 +155,7 @@ describe('NotebookProposalService', () => {
 		sandbox: SandboxInstance,
 		proposalId: ProposalId,
 	) {
-		return service.captureEntryNotebook({
+		return service.captureProposal({
 			projectId,
 			notebookId,
 			proposalId,
@@ -123,6 +173,7 @@ describe('NotebookProposalService', () => {
 		expect(proposal).toMatchObject({
 			notebook_id: notebookId,
 			base_version_id: versionId,
+			capture_strategy: 'entry-notebook',
 			source: {
 				provider: 'github',
 				repo: 'owner/repo',
@@ -136,6 +187,291 @@ describe('NotebookProposalService', () => {
 		expect(
 			(await env.proposals.getProposal(projectId, notebookId, proposal.proposal_id)).publication,
 		).toEqual(expect.objectContaining({ state: 'pending' }));
+	});
+
+	it('reads proposal manifests written before capture strategies were recorded', async () => {
+		const proposal = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("after")' } }).instance,
+		);
+		const proposalPath = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(proposal.proposal_id).meta;
+		const stored = await (await env.bucket.get(proposalPath))?.json<Record<string, unknown>>();
+		if (!stored) throw new Error('expected proposal');
+		delete stored.capture_strategy;
+		await env.bucket.put(proposalPath, JSON.stringify(stored));
+
+		await expect(
+			env.proposals.getProposal(projectId, notebookId, proposal.proposal_id),
+		).resolves.toMatchObject({ proposal: { capture_strategy: 'entry-notebook' } });
+	});
+
+	it('captures tracked and untracked Git working-tree changes together', async () => {
+		const base = paths.project(projectId).notebook(notebookId).version(versionId);
+		await env.bucket.put(base.workspaceFile('old.txt'), 'old');
+		const { instance, exec } = makeGitSandbox({
+			files: {
+				'dashboard.py': 'print("after")',
+				'new.txt': 'new file',
+			},
+			diff: [
+				['M', 'dashboard.py'],
+				['D', 'old.txt'],
+			],
+			untracked: ['new.txt'],
+		});
+
+		const proposal = await capture(instance);
+
+		expect(proposal.capture_strategy).toBe('git-working-tree');
+		expect(proposal.changes).toEqual([
+			expect.objectContaining({ path: 'dashboard.py', operation: 'modify' }),
+			expect.objectContaining({ path: 'new.txt', operation: 'add' }),
+			{ path: 'old.txt', operation: 'delete' },
+		]);
+		expect(exec).toHaveBeenCalledWith(expect.stringContaining('--exclude-standard'));
+		const proposalPaths = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(proposal.proposal_id);
+		expect(await (await env.bucket.get(proposalPaths.change(0)))?.text()).toBe('print("after")');
+		expect(await (await env.bucket.get(proposalPaths.change(1)))?.text()).toBe('new file');
+		expect(await env.bucket.head(proposalPaths.change(2))).toBeNull();
+
+		const openChangeRequest = vi.fn(async () => ({
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+			headBranch: `marimohub/${notebookId}/${proposal.proposal_id}`,
+			headCommit: 'published-head',
+		}));
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: proposal.proposal_id,
+			publisher: { provider: 'github', openChangeRequest },
+			title: 'Workspace update',
+			body: '',
+		});
+		expect(openChangeRequest).toHaveBeenCalledWith(
+			expect.objectContaining({
+				changes: [
+					expect.objectContaining({ path: 'apps/dashboard.py', operation: 'modify' }),
+					expect.objectContaining({ path: 'apps/new.txt', operation: 'add' }),
+					{ path: 'apps/old.txt', operation: 'delete' },
+				],
+			}),
+		);
+	});
+
+	it('excludes runtime and cache files from Git capture', async () => {
+		const ignored = [
+			'__marimo__/state.json',
+			'.venv/lib/python.py',
+			'pkg/__pycache__/module.pyc',
+			'node_modules/pkg/index.js',
+			'.DS_Store',
+		];
+		const { instance, calls, exec } = makeGitSandbox({
+			files: Object.fromEntries([...ignored.map((path) => [path, 'runtime']), ['new.txt', 'keep']]),
+			untracked: [...ignored, 'new.txt'],
+		});
+
+		const proposal = await capture(instance);
+
+		expect(proposal.changes).toEqual([
+			expect.objectContaining({ path: 'new.txt', operation: 'add' }),
+		]);
+		expect(calls.readFile).toHaveLength(0);
+		const commands = exec.mock.calls.map(([command]) => command).join('\n');
+		expect(commands).toContain(':(exclude,glob)**/__marimo__/**');
+		expect(commands).toContain(':(exclude,glob)**/.venv/**');
+		expect(commands).toContain("base64 < '/workspace/new.txt'");
+		for (const path of ignored) expect(commands).not.toContain(`base64 < '/workspace/${path}'`);
+	});
+
+	it('captures binary Git files byte for byte', async () => {
+		const bytes = Uint8Array.from([0, 255, 128, 10, 13, 1]);
+		const { instance } = makeGitSandbox({
+			files: { 'asset.bin': bytes },
+			untracked: ['asset.bin'],
+		});
+
+		const proposal = await capture(instance);
+		const stored = await (
+			await env.bucket.get(
+				paths.project(projectId).notebook(notebookId).proposal(proposal.proposal_id).change(0),
+			)
+		)?.bytes();
+
+		expect(stored).toEqual(bytes);
+	});
+
+	it('falls back to entry-notebook capture when Git cannot resolve the pinned commit', async () => {
+		const { instance, exec } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("after")' },
+			gitAvailable: false,
+		});
+
+		await expect(capture(instance)).resolves.toMatchObject({
+			capture_strategy: 'entry-notebook',
+			changes: [expect.objectContaining({ path: 'dashboard.py' })],
+		});
+		expect(exec).toHaveBeenCalledOnce();
+	});
+
+	it('does not silently fall back after selecting Git capture', async () => {
+		const { instance } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("after")' },
+			diffFails: true,
+		});
+
+		await expect(capture(instance)).rejects.toThrow('Could not inspect the Git working tree');
+	});
+
+	it('does not silently fall back when the pinned commit is absent from a Git working tree', async () => {
+		const { instance, calls } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("after")' },
+			baseCommitAvailable: false,
+		});
+
+		await expect(capture(instance)).rejects.toThrow('does not contain the pinned source commit');
+		expect(calls.readFile).toHaveLength(0);
+	});
+
+	it('rejects an invalid commit returned by Git', async () => {
+		const { instance, calls } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("after")' },
+			baseCommitOutput: 'not-a-commit\n',
+		});
+
+		await expect(capture(instance)).rejects.toThrow('invalid pinned source commit');
+		expect(calls.readFile).toHaveLength(0);
+	});
+
+	it('supports a delete-only Git proposal and an empty payload marker', async () => {
+		const base = paths.project(projectId).notebook(notebookId).version(versionId);
+		await env.bucket.put(base.workspaceFile('old.txt'), 'old');
+		const { instance } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("before")' },
+			diff: [['D', 'old.txt']],
+		});
+
+		const proposal = await capture(instance);
+		const marker = await (
+			await env.bucket.get(paths.proposalPayloadMarker(projectId, notebookId, proposal.proposal_id))
+		)?.json<{ change_indexes: number[] }>();
+
+		expect(proposal.changes).toEqual([{ path: 'old.txt', operation: 'delete' }]);
+		expect(marker?.change_indexes).toEqual([]);
+	});
+
+	it('ignores a mode-only tracked change whose bytes match the synced version', async () => {
+		const { instance, calls } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("before")' },
+			diff: [['M', 'dashboard.py']],
+		});
+
+		await expect(capture(instance)).rejects.toThrow('no changes');
+		expect(calls.readFile).toHaveLength(0);
+		expect(calls.exec).toEqual(["base64 < '/workspace/dashboard.py'"]);
+	});
+
+	it('treats a tracked deletion recreated as untracked content as a modification', async () => {
+		const { instance } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("recreated")' },
+			diff: [['D', 'dashboard.py']],
+			untracked: ['dashboard.py'],
+		});
+
+		await expect(capture(instance)).resolves.toMatchObject({
+			changes: [expect.objectContaining({ path: 'dashboard.py', operation: 'modify' })],
+		});
+	});
+
+	it.each([
+		['an unsafe path', { diff: [['M', '../secret.txt']] }, 'Invalid Git change path'],
+		[
+			'a control character in a path',
+			{ untracked: ['line\nbreak.txt'] },
+			'Invalid Git change path',
+		],
+		['an unsupported type change', { diff: [['T', 'dashboard.py']] }, 'is not supported'],
+		['a truncated diff record', { diffOutput: 'M\0dashboard.py' }, 'malformed diff output'],
+		[
+			'a truncated untracked record',
+			{ untrackedOutput: 'new.txt' },
+			'malformed untracked-file output',
+		],
+	] as const)('rejects %s from Git', async (_label, options, message) => {
+		const { instance } = makeGitSandbox({
+			files: { 'dashboard.py': 'changed', 'new.txt': 'new' },
+			...options,
+		});
+		await expect(capture(instance)).rejects.toThrow(message);
+	});
+
+	it('rejects a tracked modification outside the immutable synced source version', async () => {
+		const { instance, calls } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("before")', 'unknown.txt': 'changed' },
+			diff: [['M', 'unknown.txt']],
+		});
+
+		await expect(capture(instance)).rejects.toThrow('missing from the synced source version');
+		expect(calls.readFile).toHaveLength(0);
+	});
+
+	it('rejects changed symlinks without reading through them', async () => {
+		const sandbox = makeGitSandbox({
+			files: { 'dashboard.py': 'print("before")', 'link.txt': 'target bytes' },
+			untracked: ['link.txt'],
+		});
+		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path, options) => {
+			const result = await sandbox.instance.listFiles(path, options);
+			if (!result.success) return result;
+			return {
+				...result,
+				files: result.files.map((file) =>
+					file.name === 'link.txt' ? { ...file, type: 'symlink' as const } : file,
+				),
+			};
+		});
+
+		await expect(capture({ ...sandbox.instance, listFiles })).rejects.toThrow('not a regular file');
+		expect(sandbox.calls.readFile).toHaveLength(0);
+	});
+
+	it('bounds the number of Git changes before reading their content', async () => {
+		const untracked = Array.from({ length: 1_001 }, (_, index) => `generated/${index}.txt`);
+		const { instance, calls } = makeGitSandbox({ files: {}, untracked });
+
+		await expect(capture(instance)).rejects.toThrow('1000-change limit');
+		expect(calls.readFile).toHaveLength(0);
+	});
+
+	it('bounds the combined content size across Git changes', async () => {
+		const halfPlusOne = Math.floor(MAX_REQUEST_BYTES / 2) + 1;
+		const { instance } = makeGitSandbox({
+			files: {
+				'one.bin': new Uint8Array(halfPlusOne),
+				'two.bin': new Uint8Array(halfPlusOne),
+			},
+			untracked: ['one.bin', 'two.bin'],
+		});
+
+		await expect(capture(instance)).rejects.toThrow(
+			`Proposal changes exceed the ${MAX_REQUEST_BYTES}-byte limit`,
+		);
+	});
+
+	it('enforces the byte limit after reading Git content', async () => {
+		const { instance } = makeGitSandbox({
+			files: { 'oversized.bin': new Uint8Array(MAX_REQUEST_BYTES + 1) },
+			untracked: ['oversized.bin'],
+			sizes: { 'oversized.bin': 1 },
+		});
+
+		await expect(capture(instance)).rejects.toThrow(`exceeds the ${MAX_REQUEST_BYTES}-byte limit`);
 	});
 
 	it('inspects the entry notebook through its parent directory', async () => {
@@ -403,6 +739,474 @@ describe('NotebookProposalService', () => {
 		expect(stored.proposal.target_proposal_id).toBe(firstTarget);
 	});
 
+	it('chains updates through the latest published proposal and replays without a publisher', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		let updateCount = 0;
+		const updateChangeRequest = vi.fn<NonNullable<SourceControlPublisher['updateChangeRequest']>>(
+			async (input) => ({
+				...input.changeRequest,
+				headCommit: `updated-head-${++updateCount}`,
+			}),
+		);
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(async () => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch,
+				headCommit: 'initial-head',
+			})),
+			updateChangeRequest,
+		};
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+		const firstUpdate = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+		const firstResult = await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: firstUpdate.proposal_id,
+			publisher,
+			title: 'Second update',
+			body: '',
+		});
+		const replay = await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: firstUpdate.proposal_id,
+			title: 'Ignored on replay',
+			body: 'Ignored on replay',
+		});
+		const secondUpdate = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("third")' } }).instance,
+			{ targetProposalId: firstUpdate.proposal_id },
+		);
+		const secondResult = await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: secondUpdate.proposal_id,
+			publisher,
+			title: 'Third update',
+			body: '',
+		});
+		const staleReplay = await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: firstUpdate.proposal_id,
+			title: 'Ignored stale replay',
+			body: 'Ignored stale replay',
+		});
+		const updateFromRoot = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("fourth")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: updateFromRoot.proposal_id,
+			publisher,
+			title: 'Fourth update',
+			body: '',
+		});
+
+		expect(replay).toEqual(firstResult);
+		expect(staleReplay).toEqual(firstResult);
+		expect(secondResult.headCommit).toBe('updated-head-2');
+		expect(updateChangeRequest).toHaveBeenCalledTimes(3);
+		expect(updateChangeRequest.mock.calls[1]?.[0].changeRequest).toMatchObject({
+			number: 17,
+			headBranch,
+			headCommit: 'updated-head-1',
+		});
+		expect(updateChangeRequest.mock.calls[2]?.[0].changeRequest).toMatchObject({
+			number: 17,
+			headBranch,
+			headCommit: 'updated-head-2',
+		});
+		expect(
+			(await env.proposals.getProposal(projectId, notebookId, initial.proposal_id)).publication,
+		).toMatchObject({ state: 'published', change_request: { head_commit: 'updated-head-3' } });
+	});
+
+	it('repairs a legacy update chain whose root publication has a stale head', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		let updateCount = 0;
+		const updateChangeRequest = vi.fn<NonNullable<SourceControlPublisher['updateChangeRequest']>>(
+			async (input) => ({
+				...input.changeRequest,
+				headCommit: `updated-head-${++updateCount}`,
+			}),
+		);
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(async () => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch,
+				headCommit: 'initial-head',
+			})),
+			updateChangeRequest,
+		};
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+		const rootPublicationPath = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(initial.proposal_id).publication;
+		const initialPublication = await env.bucket.get(rootPublicationPath);
+		if (!initialPublication) throw new Error('expected root publication');
+		const initialPublicationBody = await initialPublication.text();
+
+		const legacyUpdate = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: legacyUpdate.proposal_id,
+			publisher,
+			title: 'Second update',
+			body: '',
+		});
+		await env.bucket.put(rootPublicationPath, initialPublicationBody);
+
+		const nextUpdate = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("third")' } }).instance,
+			{ targetProposalId: legacyUpdate.proposal_id },
+		);
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: nextUpdate.proposal_id,
+			publisher,
+			title: 'Third update',
+			body: '',
+		});
+		const updateFromRoot = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("fourth")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: updateFromRoot.proposal_id,
+			publisher,
+			title: 'Fourth update',
+			body: '',
+		});
+
+		expect(updateChangeRequest).toHaveBeenCalledTimes(3);
+		expect(updateChangeRequest.mock.calls[1]?.[0].changeRequest.headCommit).toBe('updated-head-1');
+		expect(updateChangeRequest.mock.calls[2]?.[0].changeRequest.headCommit).toBe('updated-head-2');
+	});
+
+	it('repairs the shared head on replay after its publication write fails', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		const updateChangeRequest = vi.fn(async () => ({
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+			headBranch,
+			headCommit: 'updated-head',
+		}));
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(async () => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch,
+				headCommit: 'initial-head',
+			})),
+			updateChangeRequest,
+		};
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+		const rootPublicationPath = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(initial.proposal_id).publication;
+		let failRootWrite = true;
+		const service = new NotebookProposalService(
+			proxyBucket(async (key, value, options) => {
+				if (key === rootPublicationPath && options?.onlyIfEtagMatches && failRootWrite) {
+					failRootWrite = false;
+					throw new Error('temporary root publication failure');
+				}
+				return env.bucket.put(key, value, options);
+			}),
+		);
+
+		await expect(
+			service.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId: update.proposal_id,
+				publisher,
+				title: 'Second update',
+				body: '',
+			}),
+		).rejects.toThrow('temporary root publication failure');
+		expect(
+			(await env.proposals.getProposal(projectId, notebookId, update.proposal_id)).publication,
+		).toMatchObject({ state: 'published', change_request: { head_commit: 'updated-head' } });
+
+		await expect(
+			service.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId: update.proposal_id,
+				title: 'Ignored on replay',
+				body: '',
+			}),
+		).resolves.toMatchObject({ headCommit: 'updated-head' });
+		expect(updateChangeRequest).toHaveBeenCalledOnce();
+		expect(
+			(await env.proposals.getProposal(projectId, notebookId, initial.proposal_id)).publication,
+		).toMatchObject({ state: 'published', change_request: { head_commit: 'updated-head' } });
+	});
+
+	it('does not advance the shared head before the update publication is durable', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		const updateChangeRequest = vi.fn(async (input) => ({
+			...input.changeRequest,
+			headCommit: 'updated-head',
+		}));
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(async () => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch,
+				headCommit: 'initial-head',
+			})),
+			updateChangeRequest,
+		};
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+		const updatePublicationPath = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(update.proposal_id).publication;
+		let failUpdatePublication = true;
+		const service = new NotebookProposalService(
+			proxyBucket(async (key, value, options) => {
+				if (key === updatePublicationPath && options?.onlyIfEtagMatches && failUpdatePublication) {
+					failUpdatePublication = false;
+					throw new Error('temporary update publication failure');
+				}
+				return env.bucket.put(key, value, options);
+			}),
+		);
+		const publishInput = {
+			projectId,
+			notebookId,
+			proposalId: update.proposal_id,
+			publisher,
+			title: 'Second update',
+			body: '',
+		};
+
+		await expect(service.publishChangeRequest(publishInput)).rejects.toThrow(
+			'temporary update publication failure',
+		);
+		expect(
+			(await env.proposals.getProposal(projectId, notebookId, initial.proposal_id)).publication,
+		).toMatchObject({ state: 'published', change_request: { head_commit: 'initial-head' } });
+
+		await expect(service.publishChangeRequest(publishInput)).resolves.toMatchObject({
+			headCommit: 'updated-head',
+		});
+		expect(updateChangeRequest).toHaveBeenCalledTimes(2);
+		expect(updateChangeRequest.mock.calls[1]?.[0].changeRequest.headCommit).toBe('initial-head');
+		expect(
+			(await env.proposals.getProposal(projectId, notebookId, initial.proposal_id)).publication,
+		).toMatchObject({ state: 'published', change_request: { head_commit: 'updated-head' } });
+	});
+
+	it('returns a published update when best-effort target repair cannot read the target', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(async () => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch,
+				headCommit: 'initial-head',
+			})),
+			updateChangeRequest: vi.fn(async () => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch,
+				headCommit: 'updated-head',
+			})),
+		};
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+		const published = await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: update.proposal_id,
+			publisher,
+			title: 'Second update',
+			body: '',
+		});
+		const targetMetaPath = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(initial.proposal_id).meta;
+		const replayService = new NotebookProposalService(
+			proxyBucket(
+				(key, value, options) => env.bucket.put(key, value, options),
+				(key) => env.bucket.delete(key),
+				async (key) => {
+					if (key === targetMetaPath) throw new Error('temporary target read failure');
+					return env.bucket.get(key);
+				},
+			),
+		);
+
+		await expect(
+			replayService.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId: update.proposal_id,
+				title: 'Ignored on replay',
+				body: '',
+			}),
+		).resolves.toEqual(published);
+	});
+
+	it('rejects a missing update target before calling the provider', async () => {
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: createProposalId() },
+		);
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(),
+			updateChangeRequest: vi.fn(),
+		};
+
+		await expect(
+			env.proposals.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId: update.proposal_id,
+				publisher,
+				title: 'Update',
+				body: '',
+			}),
+		).rejects.toThrow('not found');
+		expect(publisher.openChangeRequest).not.toHaveBeenCalled();
+		expect(publisher.updateChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('rejects an update captured from a different session than its target', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		const updateChangeRequest = vi.fn<NonNullable<SourceControlPublisher['updateChangeRequest']>>();
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(async () => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch,
+				headCommit: 'initial-head',
+			})),
+			updateChangeRequest,
+		};
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+		const otherSession = makeSession({
+			project_id: projectId,
+			notebook_id: notebookId,
+			source_version_id: versionId,
+		});
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ session: otherSession, targetProposalId: initial.proposal_id },
+		);
+
+		await expect(
+			env.proposals.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId: update.proposal_id,
+				publisher,
+				title: 'Second update',
+				body: '',
+			}),
+		).rejects.toThrow('target proposal belongs to a different change request');
+		expect(updateChangeRequest).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		['another project', () => ({ project_id: createProjectId() })],
 		['another notebook', () => ({ notebook_id: createNotebookId() })],
@@ -605,6 +1409,39 @@ describe('NotebookProposalService', () => {
 		expect(await env.bucket.head(proposalPaths.publication)).not.toBeNull();
 	});
 
+	it('repairs a partially written multi-file capture by content hash', async () => {
+		const proposalId = createProposalId();
+		const proposalPaths = paths.project(projectId).notebook(notebookId).proposal(proposalId);
+		let failSecondContentWrite = true;
+		const deleteObject = vi.fn<Bucket['delete']>((key) => env.bucket.delete(key));
+		const bucket = proxyBucket(async (key, value, options) => {
+			if (key === proposalPaths.change(1) && failSecondContentWrite) {
+				failSecondContentWrite = false;
+				throw new Error('temporary second-file failure');
+			}
+			return env.bucket.put(key, value, options);
+		}, deleteObject);
+		const service = new NotebookProposalService(bucket);
+		const sandbox = makeGitSandbox({
+			files: { 'first.txt': 'first', 'second.txt': 'second' },
+			untracked: ['first.txt', 'second.txt'],
+		}).instance;
+
+		await expect(captureWith(service, sandbox, proposalId)).rejects.toThrow(
+			'temporary second-file failure',
+		);
+		await expect(captureWith(service, sandbox, proposalId)).resolves.toMatchObject({
+			proposal_id: proposalId,
+			changes: [
+				expect.objectContaining({ path: 'first.txt' }),
+				expect.objectContaining({ path: 'second.txt' }),
+			],
+		});
+		expect(await (await env.bucket.get(proposalPaths.change(0)))?.text()).toBe('first');
+		expect(await (await env.bucket.get(proposalPaths.change(1)))?.text()).toBe('second');
+		expect(deleteObject).not.toHaveBeenCalled();
+	});
+
 	it('does not overwrite an interrupted capture with different session content', async () => {
 		const proposalId = createProposalId();
 		const proposalPaths = paths.project(projectId).notebook(notebookId).proposal(proposalId);
@@ -623,7 +1460,7 @@ describe('NotebookProposalService', () => {
 		await expect(captureWith(service, original, proposalId)).rejects.toThrow();
 		const manifestBefore = await (await env.bucket.get(proposalPaths.meta))?.text();
 		await expect(captureWith(service, different, proposalId)).rejects.toThrow(
-			'already capturing different notebook content',
+			'already capturing different workspace content',
 		);
 		expect(await (await env.bucket.get(proposalPaths.meta))?.text()).toBe(manifestBefore);
 		expect(await env.bucket.head(proposalPaths.change(0))).toBeNull();
@@ -926,6 +1763,28 @@ describe('NotebookProposalService', () => {
 		expect(await env.bucket.head(markerPath)).toBeNull();
 		expect(await env.bucket.head(proposalPaths.meta)).not.toBeNull();
 		expect(await env.bucket.head(proposalPaths.publication)).not.toBeNull();
+	});
+
+	it('prunes every retained payload in a multi-file proposal', async () => {
+		const proposalId = createProposalId();
+		const proposal = await capture(
+			makeGitSandbox({
+				files: { 'first.txt': 'first', 'second.txt': 'second' },
+				untracked: ['first.txt', 'second.txt'],
+			}).instance,
+			{ proposalId },
+		);
+		const proposalPaths = paths.project(projectId).notebook(notebookId).proposal(proposalId);
+		const markerPath = paths.proposalPayloadMarker(projectId, notebookId, proposalId);
+		const sweepAt =
+			Date.parse(proposal.created_at) +
+			DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS +
+			DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS;
+
+		expect(await env.proposals.pruneExpiredPayloads({ nowMs: sweepAt })).toBe(1);
+		expect(await env.bucket.head(proposalPaths.change(0))).toBeNull();
+		expect(await env.bucket.head(proposalPaths.change(1))).toBeNull();
+		expect(await env.bucket.head(markerPath)).toBeNull();
 	});
 
 	it('skips malformed retention markers without blocking valid payload pruning', async () => {

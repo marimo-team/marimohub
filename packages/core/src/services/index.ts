@@ -31,7 +31,7 @@ export {
 	NotebookProposalService,
 } from './content/NotebookProposalService';
 export type {
-	CaptureEntryNotebookProposalInput,
+	CaptureProposalInput,
 	NotebookProposalRecord,
 	PruneExpiredProposalPayloadsOptions,
 	PublishProposalChangeRequestInput,
@@ -371,7 +371,7 @@ export function createServices(
 		},
 	);
 	const proposals = wrap('NotebookProposalService', new NotebookProposalService(bucket, metrics), {
-		captureEntryNotebook: (input) => notebook(input.projectId, input.notebookId),
+		captureProposal: (input) => notebook(input.projectId, input.notebookId),
 		getProposal: proposal,
 		getReusableProposal: proposal,
 		publishChangeRequest: (input) => proposal(input.projectId, input.notebookId, input.proposalId),

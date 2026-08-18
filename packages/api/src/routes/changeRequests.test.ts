@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSandboxId, MAX_VERSIONS, paths, UnavailableError } from '@marimo-hub/core';
+import {
+	createProposalId,
+	createSandboxId,
+	MAX_VERSIONS,
+	paths,
+	UnavailableError,
+} from '@marimo-hub/core';
 import type {
 	ProposalId,
 	SourceControlPublisher,
@@ -127,6 +133,10 @@ describe('change request routes', () => {
 				baseBranch: 'main',
 				baseCommit: 'abc123',
 				draft: true,
+				coAuthor: {
+					name: ACTOR,
+					email: `${ACTOR}@example.com`,
+				},
 				changes: [expect.objectContaining({ path: 'apps/dashboard.py' })],
 			}),
 		);
@@ -169,6 +179,40 @@ describe('change request routes', () => {
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 	});
 
+	it('rejects a reusable proposal owned by another idempotency key', async () => {
+		const first = await expectOk<{ proposal_id: ProposalId }>(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'first-owner' }),
+			201,
+		);
+		const record = await setup.deps.services.proposals.getReusableProposal(
+			projectId,
+			notebookId,
+			first.proposal_id,
+		);
+		if (!record) throw new Error('Expected a reusable proposal');
+		vi.spyOn(setup.deps.services.proposals, 'getReusableProposal').mockResolvedValue(record);
+
+		await expectError(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'different-owner' }),
+			409,
+			'CONFLICT',
+		);
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+	});
+
+	it('preserves unexpected reusable-proposal lookup failures', async () => {
+		vi.spyOn(setup.deps.services.proposals, 'getReusableProposal').mockRejectedValue(
+			new UnavailableError('Proposal storage is unavailable'),
+		);
+
+		await expectError(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'lookup-failure' }),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
 	it('updates an existing change request or explicitly creates a new one', async () => {
 		const initial = await expectOk<{
 			proposal_id: string;
@@ -196,7 +240,14 @@ describe('change request routes', () => {
 			url: initial.change_request.url,
 			head_branch: initial.change_request.head_branch,
 		});
-		expect(updateChangeRequest).toHaveBeenCalledOnce();
+		expect(updateChangeRequest).toHaveBeenCalledWith(
+			expect.objectContaining({
+				coAuthor: {
+					name: ACTOR,
+					email: `${ACTOR}@example.com`,
+				},
+			}),
+		);
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 		const storedUpdate = await setup.deps.services.proposals.getProposal(
 			projectId,
@@ -221,6 +272,99 @@ describe('change request routes', () => {
 		expect(created.change_request.url).toBe('https://github.com/owner/repo/pull/18');
 		expect(created.change_request.head_branch).not.toBe(initial.change_request.head_branch);
 		expect(openChangeRequest).toHaveBeenCalledTimes(2);
+		const events = await setup.deps.services.events.getEvents(
+			new Date().toISOString().slice(0, 10),
+		);
+		expect(
+			events
+				.filter((event) => event.event.startsWith('notebook.change_request.'))
+				.map((event) => event.event),
+		).toEqual([
+			'notebook.change_request.open',
+			'notebook.change_request.update',
+			'notebook.change_request.open',
+		]);
+	});
+
+	it('recovers a published update when response recording fails and the publisher is disabled', async () => {
+		const initial = await expectOk<{ proposal_id: string }>(
+			await setup.request(
+				'POST',
+				route(),
+				{},
+				{ 'Idempotency-Key': 'initial-before-update-recovery' },
+			),
+			201,
+		);
+		vi.spyOn(setup.deps.services.idempotency, 'record').mockRejectedValueOnce(
+			new Error('response record unavailable'),
+		);
+		const headers = { 'Idempotency-Key': 'update-response-record-failure' };
+		const body = { target_proposal_id: initial.proposal_id };
+		await expectError(await setup.request('POST', route(), body, headers), 500, 'INTERNAL_ERROR');
+		expect(updateChangeRequest).toHaveBeenCalledOnce();
+
+		const getPublisher = vi.fn<SourceControlPublisherRegistry['getPublisher']>();
+		const withoutPublisher = createTestApi({
+			bucket: setup.bucket,
+			compute: setup.deps.compute,
+			deps: {
+				sourceControlPublishers: {
+					getPublisher,
+					configuredProviders: () => [],
+				},
+			},
+		});
+		const replay = await expectOk<{ proposal_id: string; change_request: { number: number } }>(
+			await withoutPublisher.request('POST', route(), body, headers),
+			201,
+		);
+
+		expect(replay.proposal_id).not.toBe(initial.proposal_id);
+		expect(replay.change_request.number).toBe(17);
+		expect(getPublisher).not.toHaveBeenCalled();
+		expect(updateChangeRequest).toHaveBeenCalledOnce();
+	});
+
+	it('rejects a missing update target without calling either provider operation', async () => {
+		await expectError(
+			await setup.request(
+				'POST',
+				route(),
+				{ target_proposal_id: createProposalId() },
+				{ 'Idempotency-Key': 'missing-update-target' },
+			),
+			404,
+			'NOT_FOUND',
+		);
+		expect(openChangeRequest).not.toHaveBeenCalled();
+		expect(updateChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('rejects an update target that has not been published', async () => {
+		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposal');
+		await expectError(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'pending-update-target' }),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		const captureResult = capture.mock.results[0];
+		if (captureResult?.type !== 'return') throw new Error('Expected proposal capture');
+		const target = await captureResult.value;
+
+		await expectError(
+			await setup.request(
+				'POST',
+				route(),
+				{ target_proposal_id: target.proposal_id },
+				{ 'Idempotency-Key': 'update-pending-target' },
+			),
+			409,
+			'CONFLICT',
+		);
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+		expect(updateChangeRequest).not.toHaveBeenCalled();
 	});
 
 	it('recovers a published proposal when response recording failed and its publisher is disabled', async () => {
@@ -324,7 +468,7 @@ describe('change request routes', () => {
 				},
 			},
 		});
-		const capture = vi.spyOn(withoutPublisher.deps.services.proposals, 'captureEntryNotebook');
+		const capture = vi.spyOn(withoutPublisher.deps.services.proposals, 'captureProposal');
 
 		await expectError(
 			await withoutPublisher.request('POST', route(), {}, headers),
@@ -339,7 +483,7 @@ describe('change request routes', () => {
 
 	it('finishes an incomplete proposal capture before retrying publication', async () => {
 		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
-		const capture = vi.spyOn(setup.deps.services.proposals, 'captureEntryNotebook');
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposal');
 		const headers = { 'Idempotency-Key': 'retry-incomplete-capture' };
 
 		await expectError(
@@ -365,7 +509,7 @@ describe('change request routes', () => {
 
 	it('resumes a captured proposal after its session and source version are removed', async () => {
 		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
-		const capture = vi.spyOn(setup.deps.services.proposals, 'captureEntryNotebook');
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposal');
 		const headers = { 'Idempotency-Key': 'retry-after-session-removal' };
 
 		await expectError(
@@ -453,7 +597,7 @@ describe('change request routes', () => {
 			bucket: setup.bucket,
 			compute: setup.deps.compute,
 		});
-		const capture = vi.spyOn(withoutPublisher.deps.services.proposals, 'captureEntryNotebook');
+		const capture = vi.spyOn(withoutPublisher.deps.services.proposals, 'captureProposal');
 		await expectError(
 			await withoutPublisher.request(
 				'POST',
@@ -485,6 +629,7 @@ describe('change request routes', () => {
 		['a whitespace-only title', { title: '   ' }],
 		['a title over 256 characters', { title: 'x'.repeat(257) }],
 		['a body over 64 KiB', { body: 'x'.repeat(65_537) }],
+		['a malformed target proposal id', { target_proposal_id: '../proposal' }],
 	])('rejects %s before capture or provider access', async (_label, body) => {
 		await expectError(
 			await setup.request('POST', route(), body, { 'Idempotency-Key': 'invalid-body' }),
@@ -535,6 +680,25 @@ describe('change request routes', () => {
 		expect(openChangeRequest).not.toHaveBeenCalled();
 	});
 
+	it('rejects a session without a synced source revision', async () => {
+		const session = await setup.deps.services.sessions.createSession({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: ACTOR,
+			sandbox_id: createSandboxId(),
+		});
+		sessionId = session.session_id;
+		await setup.deps.services.sessions.setRunning(projectId, sessionId, 'https://sandbox.example');
+
+		const error = await expectError(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'missing-source-revision' }),
+			409,
+			'CONFLICT',
+		);
+		expect(error.message).toContain('no synced source revision');
+		expect(openChangeRequest).not.toHaveBeenCalled();
+	});
+
 	it('rejects unchanged notebook content without calling the provider', async () => {
 		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("before")' } });
 		const unchanged = createTestApi({
@@ -565,14 +729,19 @@ describe('change request routes', () => {
 		);
 	});
 
-	it('replays the first response when a retry changes request text', async () => {
+	it('replays the first response when a retry changes text or update target', async () => {
 		const headers = { 'Idempotency-Key': 'same-operation' };
 		const first = await expectOk<{ change_request: { number: number } }>(
 			await setup.request('POST', route(), { title: 'First title' }, headers),
 			201,
 		);
 		const second = await expectOk<{ change_request: { number: number } }>(
-			await setup.request('POST', route(), { title: 'Different title' }, headers),
+			await setup.request(
+				'POST',
+				route(),
+				{ title: 'Different title', target_proposal_id: createProposalId() },
+				headers,
+			),
 			201,
 		);
 		expect(second).toEqual(first);

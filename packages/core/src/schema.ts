@@ -550,9 +550,10 @@ export const NotebookProposalSchema = z.object({
 	author: UserIdSchema,
 	created_at: z.iso.datetime(),
 	base_version_id: VersionIdSchema,
+	capture_strategy: z.enum(['entry-notebook', 'git-working-tree']).default('entry-notebook'),
 	source: GitSourceRevisionSchema.extend({ provider: z.string().min(1) }),
 	target_proposal_id: ProposalIdSchema.optional(),
-	changes: z.array(ProposalChangeSchema).min(1),
+	changes: z.array(ProposalChangeSchema).min(1).max(1_000),
 });
 
 export type NotebookProposal = z.infer<typeof NotebookProposalSchema>;
@@ -565,7 +566,6 @@ export const ProposalPayloadMarkerSchema = z.object({
 	expires_at: z.iso.datetime(),
 	change_indexes: z
 		.array(z.number().int().nonnegative())
-		.min(1)
 		.max(1_000)
 		.refine((indexes) => new Set(indexes).size === indexes.length, 'Change indexes must be unique'),
 });

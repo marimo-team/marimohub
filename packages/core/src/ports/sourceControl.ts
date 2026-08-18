@@ -13,6 +13,11 @@ export interface SourceControlDeleteChange {
 
 export type SourceControlChange = SourceControlContentChange | SourceControlDeleteChange;
 
+export interface SourceControlCommitIdentity {
+	name: string;
+	email: string;
+}
+
 export interface OpenChangeRequestInput {
 	/** Provider-specific repository coordinate from the synced source revision. */
 	repository: string;
@@ -25,6 +30,8 @@ export interface OpenChangeRequestInput {
 	title: string;
 	body: string;
 	draft: boolean;
+	/** Person whose workspace edits produced the commit. The provider keeps its integration as committer. */
+	coAuthor?: SourceControlCommitIdentity;
 	changes: readonly SourceControlChange[];
 }
 
@@ -46,6 +53,8 @@ export interface UpdateChangeRequestInput {
 	changeRequest: OpenChangeRequestResult;
 	title: string;
 	body: string;
+	/** Person whose workspace edits produced the commit. The provider keeps its integration as committer. */
+	coAuthor?: SourceControlCommitIdentity;
 	changes: readonly SourceControlChange[];
 }
 
