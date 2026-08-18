@@ -75,9 +75,10 @@ describe('buildMarimoLaunch', () => {
 		expect(start).toContain("'apps/my app.py'");
 	});
 
-	it('initializes a fresh project with marimohub metadata', () => {
+	it('initializes only a pyproject with marimohub metadata', () => {
 		const [setup] = buildMarimoLaunch(BASE).setup;
 		expect(setup).toContain('uv init');
+		expect(setup).toContain('--bare');
 		expect(setup).toContain('--no-package');
 		expect(setup).toContain('--name notebook');
 		expect(setup).toContain('--description "Built in marimohub"');
