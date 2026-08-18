@@ -411,6 +411,7 @@ destinations.
 | `MARIMOHUB_COMPUTE_COREWEAVE_API_KEY`           | `coreweave` backend: CoreWeave Sandbox API key (secret)                                          |
 | `MARIMOHUB_COMPUTE_COREWEAVE_HOSTNAME_TEMPLATE` | `coreweave` backend: public kernel URL scheme (`{sandboxId}`/`{port}`/`{host}`)                  |
 | `MARIMOHUB_COMPUTE_LOCAL_HOST`                  | `local` backend: host for the kernel URL (default `localhost`)                                   |
+| `MARIMOHUB_COMPUTE_LOCAL_ROOT`                  | `local` backend: parent directory for sandboxes (default: OS temporary directory)                |
 
 Modal derives its provider-side idle limit as 1.5 times
 `MARIMOHUB_SESSION_IDLE_TIMEOUT_SECONDS`. The record-driven lifecycle sweep

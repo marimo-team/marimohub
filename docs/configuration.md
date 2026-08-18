@@ -221,10 +221,11 @@ Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kube
 
 `MARIMOHUB_COMPUTE_BACKEND=local`
 
-Spawns `uv run marimo edit` as a host subprocess. Requires `uv` + Python on the host; not for shared/production use.
+Spawns `uv run marimo edit` as a host subprocess. Requires `uv` + Python on the host; not for shared/production use. Set the local root outside the OS temporary directory so marimo saves Hub-managed notebooks in place.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
+| `MARIMOHUB_COMPUTE_LOCAL_ROOT` | Parent directory for local sandboxes. Set this outside the OS temporary directory to prevent marimo from treating notebooks as temporary files. | — | `OS temporary directory` | `/var/lib/marimohub/sandboxes` |
 | `MARIMOHUB_COMPUTE_LOCAL_HOST` | Host the exposed kernel URL points to. | — | `localhost` | — |
 | `MARIMOHUB_COMPUTE_LOCAL_BIND_HOST` | Interface marimo binds to (set `0.0.0.0` in Docker). | — | `127.0.0.1` | — |
 | `MARIMOHUB_COMPUTE_LOCAL_PORTS` | Published port range (`start-end`). Required in Docker; omit for ephemeral ports. | — | — | `2718-2723` |

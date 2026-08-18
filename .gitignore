@@ -9,6 +9,7 @@ coverage
 *.tsbuildinfo
 .context
 .conductor/
+.marimohub/
 pnpm-debug.log*
 
 # Playwright e2e artifacts

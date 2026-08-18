@@ -115,6 +115,15 @@ describe('makeCompute backend selection', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'local' })).toBeInstanceOf(LocalCompute);
 	});
 
+	it('passes the configured sandbox root to local compute', () => {
+		expect(
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'local',
+				MARIMOHUB_COMPUTE_LOCAL_ROOT: '/var/lib/marimohub/sandboxes',
+			}),
+		).toMatchObject({ root: '/var/lib/marimohub/sandboxes' });
+	});
+
 	it('selects wandb (the CoreWeave adapter behind the W&B gateway)', () => {
 		expect(
 			makeCompute({
