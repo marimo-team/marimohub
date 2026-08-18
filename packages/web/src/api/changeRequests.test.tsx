@@ -23,6 +23,7 @@ function idempotencyKeys(fetch: ReturnType<typeof vi.fn>): (string | null)[] {
 }
 
 afterEach(() => {
+	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
 
@@ -270,5 +271,184 @@ describe('useNotebookChangeRequestPublisher', () => {
 		expect(keys).toHaveLength(4);
 		expect(keys[1]).toBe(keys[3]);
 		expect(keys[1]).not.toBe(keys[2]);
+	});
+
+	it('keeps a successful attempt until every same-key request settles', async () => {
+		const resolvers: ((response: Response) => void)[] = [];
+		const fetch = vi.fn().mockImplementation(
+			() =>
+				new Promise<Response>((resolve) => {
+					resolvers.push(resolve);
+				}),
+		);
+		vi.stubGlobal('fetch', fetch);
+		const { result } = renderHookWithClient(
+			() => useNotebookChangeRequestPublisher('proj-1', 'nb-1'),
+			{ toaster: false },
+		);
+
+		let firstRequest!: Promise<ReturnType<typeof publication>>;
+		let secondRequest!: Promise<ReturnType<typeof publication>>;
+		act(() => {
+			firstRequest = result.current.mutateAsync({ sessionId: 'sess-1', action: 'open' });
+			secondRequest = result.current.mutateAsync({ sessionId: 'sess-1', action: 'open' });
+		});
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+		expect(idempotencyKeys(fetch)[0]).toBe(idempotencyKeys(fetch)[1]);
+
+		await act(async () => {
+			resolvers[0](jsonOk(publication('prop-1', 17)));
+			await firstRequest;
+		});
+		let thirdRequest!: Promise<ReturnType<typeof publication>>;
+		act(() => {
+			thirdRequest = result.current.mutateAsync({ sessionId: 'sess-1', action: 'open' });
+		});
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+		expect(idempotencyKeys(fetch)[2]).toBe(idempotencyKeys(fetch)[0]);
+
+		await act(async () => {
+			resolvers[1](jsonOk(publication('prop-1', 17)));
+			resolvers[2](jsonOk(publication('prop-1', 17)));
+			await Promise.all([secondRequest, thirdRequest]);
+		});
+		let fourthRequest!: Promise<ReturnType<typeof publication>>;
+		act(() => {
+			fourthRequest = result.current.mutateAsync({ sessionId: 'sess-1', action: 'open' });
+		});
+		await waitFor(() => expect(fetch).toHaveBeenCalledTimes(4));
+		expect(idempotencyKeys(fetch)[3]).not.toBe(idempotencyKeys(fetch)[0]);
+		await act(async () => {
+			resolvers[3](jsonOk(publication('prop-2', 18)));
+			await fourthRequest;
+		});
+	});
+
+	it('expires a settled retry key after the proposal retention window', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date('2026-08-18T00:00:00Z'));
+		const fetch = vi
+			.fn()
+			.mockImplementation(() =>
+				Promise.resolve(jsonError('SERVICE_UNAVAILABLE', 'Provider unavailable', 503)),
+			);
+		vi.stubGlobal('fetch', fetch);
+		const { result } = renderHookWithClient(
+			() => useNotebookChangeRequestPublisher('proj-1', 'nb-1'),
+			{ toaster: false },
+		);
+
+		await act(async () => {
+			await expect(
+				result.current.mutateAsync({ sessionId: 'sess-1', action: 'open' }),
+			).rejects.toThrow('Provider unavailable');
+		});
+		vi.advanceTimersByTime(24 * 60 * 60 * 1000 - 1);
+		await act(async () => {
+			await expect(
+				result.current.mutateAsync({ sessionId: 'sess-1', action: 'open' }),
+			).rejects.toThrow('Provider unavailable');
+		});
+		vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+		await act(async () => {
+			await expect(
+				result.current.mutateAsync({ sessionId: 'sess-1', action: 'open' }),
+			).rejects.toThrow('Provider unavailable');
+		});
+
+		const keys = idempotencyKeys(fetch);
+		expect(keys).toHaveLength(3);
+		expect(keys[0]).toBe(keys[1]);
+		expect(keys[1]).not.toBe(keys[2]);
+	});
+
+	it('does not expire an in-flight attempt', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date('2026-08-18T00:00:00Z'));
+		let rejectFirst!: (response: Response) => void;
+		const firstResponse = new Promise<Response>((resolve) => {
+			rejectFirst = resolve;
+		});
+		const fetch = vi
+			.fn()
+			.mockImplementationOnce(() => firstResponse)
+			.mockImplementation(() =>
+				Promise.resolve(jsonError('SERVICE_UNAVAILABLE', 'Provider unavailable', 503)),
+			);
+		vi.stubGlobal('fetch', fetch);
+		const { result, rerender } = renderHookWithClient(
+			({ notebookId }) => useNotebookChangeRequestPublisher('proj-1', notebookId),
+			{ initialProps: { notebookId: 'nb-1' }, toaster: false },
+		);
+
+		let firstRequest!: Promise<ReturnType<typeof publication>>;
+		act(() => {
+			firstRequest = result.current.mutateAsync({ sessionId: 'sess-1', action: 'open' });
+		});
+		await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+		vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+		rerender({ notebookId: 'nb-2' });
+		await act(async () => {
+			await expect(
+				result.current.mutateAsync({ sessionId: 'sess-2', action: 'open' }),
+			).rejects.toThrow('Provider unavailable');
+		});
+		rerender({ notebookId: 'nb-1' });
+		await act(async () => {
+			await expect(
+				result.current.mutateAsync({ sessionId: 'sess-1', action: 'open' }),
+			).rejects.toThrow('Provider unavailable');
+		});
+
+		const keys = idempotencyKeys(fetch);
+		expect(keys[0]).toBe(keys[2]);
+		await act(async () => {
+			rejectFirst(jsonError('SERVICE_UNAVAILABLE', 'Provider unavailable', 503));
+			await expect(firstRequest).rejects.toThrow('Provider unavailable');
+		});
+	});
+
+	it('bounds settled attempts while preserving the most recently used retry keys', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date('2026-08-18T00:00:00Z'));
+		const fetch = vi
+			.fn()
+			.mockImplementation(() =>
+				Promise.resolve(jsonError('SERVICE_UNAVAILABLE', 'Provider unavailable', 503)),
+			);
+		vi.stubGlobal('fetch', fetch);
+		const { result, rerender } = renderHookWithClient(
+			({ notebookId }) => useNotebookChangeRequestPublisher('proj-1', notebookId),
+			{ initialProps: { notebookId: 'nb-0' }, toaster: false },
+		);
+
+		for (let index = 0; index < 33; index += 1) {
+			rerender({ notebookId: `nb-${index}` });
+			await act(async () => {
+				await expect(
+					result.current.mutateAsync({ sessionId: `sess-${index}`, action: 'open' }),
+				).rejects.toThrow('Provider unavailable');
+			});
+			vi.advanceTimersByTime(1);
+		}
+		const firstKey = idempotencyKeys(fetch)[0];
+		const latestKey = idempotencyKeys(fetch)[32];
+
+		rerender({ notebookId: 'nb-32' });
+		await act(async () => {
+			await expect(
+				result.current.mutateAsync({ sessionId: 'sess-32', action: 'open' }),
+			).rejects.toThrow('Provider unavailable');
+		});
+		rerender({ notebookId: 'nb-0' });
+		await act(async () => {
+			await expect(
+				result.current.mutateAsync({ sessionId: 'sess-0', action: 'open' }),
+			).rejects.toThrow('Provider unavailable');
+		});
+
+		const keys = idempotencyKeys(fetch);
+		expect(keys[33]).toBe(latestKey);
+		expect(keys[34]).not.toBe(firstKey);
 	});
 });

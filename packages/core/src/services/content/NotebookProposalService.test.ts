@@ -504,6 +504,99 @@ describe('NotebookProposalService', () => {
 		expect(sandbox.exec).toHaveBeenCalledWith("base64 < '/workspace/nested/new.txt'");
 	});
 
+	it('lists each shared directory once when capturing many nested files', async () => {
+		const changedPaths = Array.from(
+			{ length: 100 },
+			(_, index) => `generated/shared/deep/file-${index}.txt`,
+		);
+		const sandbox = makeGitSandbox({
+			files: Object.fromEntries(changedPaths.map((path) => [path, path])),
+			untracked: changedPaths,
+		});
+		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path) => {
+			const child =
+				path === '/workspace'
+					? 'generated'
+					: path === '/workspace/generated'
+						? 'shared'
+						: path === '/workspace/generated/shared'
+							? 'deep'
+							: null;
+			if (child) {
+				return {
+					success: true,
+					files: [
+						{
+							name: child,
+							absolutePath: `${path}/${child}`,
+							relativePath: `${path}/${child}`,
+							type: 'directory',
+							size: 0,
+						},
+					],
+				};
+			}
+			if (path === '/workspace/generated/shared/deep') {
+				return {
+					success: true,
+					files: changedPaths.map((filePath) => ({
+						name: filePath.split('/').at(-1) ?? '',
+						absolutePath: `/workspace/${filePath}`,
+						relativePath: filePath,
+						type: 'file' as const,
+						size: filePath.length,
+					})),
+				};
+			}
+			return { success: true, files: [] };
+		});
+
+		const proposal = await capture({ ...sandbox.instance, listFiles });
+		expect(proposal.changes).toHaveLength(changedPaths.length);
+		expect(proposal.changes).toContainEqual(
+			expect.objectContaining({ path: changedPaths[0], operation: 'add' }),
+		);
+		expect(listFiles).toHaveBeenCalledTimes(4);
+		expect(listFiles.mock.calls.map(([path]) => path)).toEqual([
+			'/workspace',
+			'/workspace/generated',
+			'/workspace/generated/shared',
+			'/workspace/generated/shared/deep',
+		]);
+	});
+
+	it('does not reuse directory inspection across captures', async () => {
+		const sandbox = makeGitSandbox({
+			files: { 'nested/new.txt': 'new bytes' },
+			untracked: ['nested/new.txt'],
+		});
+		let rootListings = 0;
+		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path, options) => {
+			if (path !== '/workspace') return sandbox.instance.listFiles(path, options);
+			rootListings++;
+			return {
+				success: true,
+				files: [
+					{
+						name: 'nested',
+						absolutePath: '/workspace/nested',
+						relativePath: 'nested',
+						type: rootListings === 1 ? 'directory' : 'symlink',
+						size: 0,
+					},
+				],
+			};
+		});
+
+		await expect(
+			capture({ ...sandbox.instance, listFiles }, { proposalId: createProposalId() }),
+		).resolves.toMatchObject({ changes: [expect.objectContaining({ path: 'nested/new.txt' })] });
+		await expect(
+			capture({ ...sandbox.instance, listFiles }, { proposalId: createProposalId() }),
+		).rejects.toThrow('has a non-directory parent');
+		expect(rootListings).toBe(2);
+	});
+
 	it('bounds the number of Git changes before reading their content', async () => {
 		const untracked = Array.from({ length: 1_001 }, (_, index) => `generated/${index}.txt`);
 		const { instance, calls } = makeGitSandbox({ files: {}, untracked });

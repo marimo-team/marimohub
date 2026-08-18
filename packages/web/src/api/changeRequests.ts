@@ -14,7 +14,14 @@ export interface PublishNotebookChangeRequestInput {
 
 interface PublishAttempt {
 	idempotencyKey: string;
+	inFlight: number;
+	lastUsedAt: number;
+	settledAt?: number;
+	discardWhenSettled: boolean;
 }
+
+const PUBLISH_ATTEMPT_IDLE_RETENTION_MS = 24 * 60 * 60 * 1000;
+const MAX_RETAINED_PUBLISH_ATTEMPTS = 32;
 
 interface ScopedChangeRequest {
 	scope: string;
@@ -29,6 +36,28 @@ function publishAttemptKey(scope: string, signature: string): string {
 	return JSON.stringify([scope, signature]);
 }
 
+function prunePublishAttempts(attempts: Map<string, PublishAttempt>, now: number): void {
+	for (const [key, attempt] of attempts) {
+		if (
+			attempt.inFlight === 0 &&
+			attempt.settledAt !== undefined &&
+			now - attempt.settledAt >= PUBLISH_ATTEMPT_IDLE_RETENTION_MS
+		) {
+			attempts.delete(key);
+		}
+	}
+
+	const excess = attempts.size - MAX_RETAINED_PUBLISH_ATTEMPTS;
+	if (excess <= 0) return;
+
+	const settled = [...attempts.entries()]
+		.filter(([, attempt]) => attempt.inFlight === 0)
+		.sort(([, left], [, right]) => left.lastUsedAt - right.lastUsedAt);
+	for (const [key] of settled.slice(0, excess)) {
+		attempts.delete(key);
+	}
+}
+
 export function useNotebookChangeRequestPublisher(projectId: string, notebookId: string) {
 	const scope = notebookChangeRequestScope(projectId, notebookId);
 	const currentScope = useRef(scope);
@@ -38,6 +67,8 @@ export function useNotebookChangeRequestPublisher(projectId: string, notebookId:
 	const attempts = useRef(new Map<string, PublishAttempt>());
 	const mutation = useMutation({
 		mutationFn: async ({ sessionId, title, action }: PublishNotebookChangeRequestInput) => {
+			const now = Date.now();
+			prunePublishAttempts(attempts.current, now);
 			const activeChangeRequest = published?.scope === scope ? published.value : undefined;
 			const targetProposalId = action === 'update' ? activeChangeRequest?.proposal_id : undefined;
 			if (action === 'update' && !targetProposalId) {
@@ -47,9 +78,17 @@ export function useNotebookChangeRequestPublisher(projectId: string, notebookId:
 			const attemptKey = publishAttemptKey(scope, signature);
 			let requestAttempt = attempts.current.get(attemptKey);
 			if (!requestAttempt) {
-				requestAttempt = { idempotencyKey: crypto.randomUUID() };
+				requestAttempt = {
+					idempotencyKey: crypto.randomUUID(),
+					inFlight: 0,
+					lastUsedAt: now,
+					discardWhenSettled: false,
+				};
 				attempts.current.set(attemptKey, requestAttempt);
 			}
+			requestAttempt.inFlight += 1;
+			requestAttempt.lastUsedAt = now;
+			requestAttempt.settledAt = undefined;
 			try {
 				const data = await apiData(
 					apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests', {
@@ -65,7 +104,7 @@ export function useNotebookChangeRequestPublisher(projectId: string, notebookId:
 					}),
 				);
 				if (currentScope.current === scope && attempts.current.get(attemptKey) === requestAttempt) {
-					attempts.current.delete(attemptKey);
+					requestAttempt.discardWhenSettled = true;
 					setPublished({ scope, value: data });
 				}
 				return data;
@@ -74,9 +113,24 @@ export function useNotebookChangeRequestPublisher(projectId: string, notebookId:
 					attempts.current.get(attemptKey) === requestAttempt &&
 					isApiErrorCode(error, 'PROPOSAL_RETRY_REQUIRED')
 				) {
-					attempts.current.delete(attemptKey);
+					requestAttempt.discardWhenSettled = true;
 				}
 				throw error;
+			} finally {
+				requestAttempt.inFlight -= 1;
+				if (requestAttempt.inFlight === 0) {
+					if (
+						requestAttempt.discardWhenSettled &&
+						attempts.current.get(attemptKey) === requestAttempt
+					) {
+						attempts.current.delete(attemptKey);
+					} else {
+						const settledAt = Date.now();
+						requestAttempt.lastUsedAt = settledAt;
+						requestAttempt.settledAt = settledAt;
+						prunePublishAttempts(attempts.current, settledAt);
+					}
+				}
 			}
 		},
 		onMutate: () => {

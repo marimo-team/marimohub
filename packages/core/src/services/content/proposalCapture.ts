@@ -2,7 +2,7 @@ import { MAX_REQUEST_BYTES } from '../../constants';
 import { ConflictError, NotFoundError, ValidationError } from '../../errors';
 import { isSafeWorkspacePath } from '../../integrations/remoteWorkspace';
 import type { Bucket } from '../../ports/bucket';
-import type { SandboxInstance } from '../../ports/sandbox';
+import type { FileInfo, SandboxInstance } from '../../ports/sandbox';
 import type { NotebookProposal, ProposalChange } from '../../schema';
 import type { VersionPaths } from '../../paths';
 import { shellQuote } from '../runtime/shell';
@@ -128,13 +128,21 @@ async function inspectRegularFile(
 	sandbox: SandboxInstance,
 	workdir: string,
 	path: string,
+	directoryListings: Map<string, readonly FileInfo[]> = new Map(),
 ): Promise<number> {
+	const listDirectory = async (directory: string): Promise<readonly FileInfo[]> => {
+		const cached = directoryListings.get(directory);
+		if (cached) return cached;
+		const listing = await sandbox.listFiles(directory, { includeHidden: true });
+		if (!listing.success) throw new ConflictError(`Could not inspect changed file ${path}`);
+		directoryListings.set(directory, listing.files);
+		return listing.files;
+	};
 	const components = path.split('/');
 	let parent = workdir;
 	for (const component of components.slice(0, -1)) {
-		const listing = await sandbox.listFiles(parent, { includeHidden: true });
-		if (!listing.success) throw new ConflictError(`Could not inspect changed file ${path}`);
-		const entry = listing.files.find((candidate) => candidate.name === component);
+		const listing = await listDirectory(parent);
+		const entry = listing.find((candidate) => candidate.name === component);
 		if (!entry) throw new ConflictError(`Changed file ${path} is missing from the session`);
 		if (entry.type !== 'directory') {
 			throw new ConflictError(`Changed path ${path} has a non-directory parent`);
@@ -142,9 +150,8 @@ async function inspectRegularFile(
 		parent = sandboxPath(parent, component);
 	}
 	const name = components.at(-1) ?? '';
-	const listing = await sandbox.listFiles(parent, { includeHidden: true });
-	if (!listing.success) throw new ConflictError(`Could not inspect changed file ${path}`);
-	const file = listing.files.find((candidate) => candidate.name === name);
+	const listing = await listDirectory(parent);
+	const file = listing.find((candidate) => candidate.name === name);
 	if (!file) throw new ConflictError(`Changed file ${path} is missing from the session`);
 	if (file.type !== 'file') {
 		throw new ConflictError(`Changed path ${path} is not a regular file`);
@@ -177,8 +184,9 @@ async function readGitChangedFile(
 	sandbox: SandboxInstance,
 	workdir: string,
 	path: string,
+	directoryListings: Map<string, readonly FileInfo[]>,
 ): Promise<Uint8Array> {
-	await inspectRegularFile(sandbox, workdir, path);
+	await inspectRegularFile(sandbox, workdir, path, directoryListings);
 	const result = await sandbox.exec(`base64 < ${shellQuote(sandboxPath(workdir, path))}`);
 	if (!result.success) throw new ConflictError(`Could not read changed file ${path}`);
 	const content = decodeProposalContent(result.stdout, 'base64');
@@ -221,6 +229,7 @@ async function captureGitWorkingTree(
 	}
 
 	const changes: CapturedProposalChange[] = [];
+	const directoryListings = new Map<string, readonly FileInfo[]>();
 	let totalBytes = 0;
 	for (const [path, operation] of [...operations].sort(([left], [right]) =>
 		left < right ? -1 : left > right ? 1 : 0,
@@ -233,7 +242,7 @@ async function captureGitWorkingTree(
 			changes.push({ change: { path, operation } });
 			continue;
 		}
-		const content = await readGitChangedFile(sandbox, workdir, path);
+		const content = await readGitChangedFile(sandbox, workdir, path, directoryListings);
 		if (baseObject && proposalBytesEqual(content, await baseObject.bytes())) continue;
 		totalBytes += content.byteLength;
 		if (totalBytes > MAX_REQUEST_BYTES) {
