@@ -14,11 +14,34 @@ export interface DuckDBPreviewStatement {
 
 export type DuckDBPreviewParameter = string | number | boolean | null;
 
+export interface DuckDBHttpAccess {
+	kind: 'iceberg-rest';
+	catalog: {
+		url: string;
+		authorization?: string;
+	};
+	storage: {
+		kind: 's3';
+		endpoint: string;
+		region: string;
+		credentials:
+			| { method: 'anonymous' }
+			| {
+					method: 'static';
+					accessKeyId: string;
+					secretAccessKey: string;
+					sessionToken?: string;
+			  };
+		locations: readonly { bucket: string; prefix: string }[];
+	};
+}
+
 export interface DuckDBPreviewProgram {
 	setup: readonly DuckDBPreviewStatement[];
 	query: DuckDBPreviewStatement;
 	cleanup?: readonly DuckDBPreviewStatement[];
 	requires?: readonly PreviewRuntimeFeature[];
+	httpAccess?: Readonly<DuckDBHttpAccess>;
 }
 
 export interface PythonPreviewProgram {

@@ -79,7 +79,7 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 // --no-build keeps it to wheels so a source build can't run arbitrary code /
 // stall the launch. The image must NOT set UV_COMPILE_BYTECODE (it would
 // conflict with --no-compile-bytecode). `|| true` never blocks launch.
-const PYPROJECT_LAYER_SETUP = `if python3 -c "import tomllib,sys;sys.exit(0 if tomllib.load(open('pyproject.toml','rb')).get('project',{}).get('dependencies') else 1)" 2>/dev/null; then uv sync --inexact --no-compile-bytecode --no-build || true; elif ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then { rm -f pyproject.toml && uv init --no-package --vcs none --name notebook --description "Built in marimohub"; } || true; fi`;
+const PYPROJECT_LAYER_SETUP = `if python3 -c "import tomllib,sys;sys.exit(0 if tomllib.load(open('pyproject.toml','rb')).get('project',{}).get('dependencies') else 1)" 2>/dev/null; then uv sync --inexact --no-compile-bytecode --no-build || true; elif ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then { rm -f pyproject.toml && uv init --bare --no-package --vcs none --name notebook --description "Built in marimohub"; } || true; fi`;
 
 // The env the kernel's `uv run --no-sync` will use — uv resolves the project
 // env as UV_PROJECT_ENVIRONMENT, else `.venv` in the project dir. Deliberately

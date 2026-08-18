@@ -1498,9 +1498,9 @@ See the [secret-source guide](./integration-secrets.md).`,
 				vars: [
 					{
 						id: 'MARIMOHUB_INTEGRATIONS_PROBE',
-						name: 'Connection-test egress policy',
+						name: 'Integration egress policy',
 						description:
-							'Policy for the "Test connection" probe, which makes server-side HTTP requests to manager-supplied addresses. `guarded` (default) allows public addresses only — private, loopback, link-local/metadata, and CGNAT ranges are rejected, redirects are never followed, and responses are size- and time-capped. `private` additionally permits private/loopback targets, for deployments whose catalogs/engines are on-prem. `off` disables testing entirely (kinds report `supports_test: false`).',
+							'Policy for integration HTTP requests, including tests, browsing, and the DuckDB-Wasm broker. `guarded` (default) allows public addresses only. It rejects private, loopback, link-local, metadata, and CGNAT addresses. `private` also permits private and loopback targets for private deployments. Requests have time and size limits. Connection tests never follow redirects. The DuckDB broker authorizes each redirect. `off` disables connection tests and requires `MARIMOHUB_DATA_BROWSER=off`.',
 						default: 'guarded',
 					},
 					{

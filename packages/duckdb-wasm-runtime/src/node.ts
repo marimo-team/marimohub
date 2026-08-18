@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -5,12 +6,20 @@ import type {
 	DataQueryExecution,
 	DataQueryExecutorFactory,
 	DataQueryResult,
+	DuckDBHttpAccess,
 	DuckDBPreviewProgram,
 	DuckDBWasmRuntime,
 	DuckDBWasmRuntimeFactory,
+	Metrics,
 	TablePreview,
 } from '@marimo-hub/core';
+import { noopMetrics } from '@marimo-hub/core';
 import { ICEBERG_HTTP_UNAVAILABLE } from './networkPolicy';
+import { isHttpBridgeRequestMessage, rejectHttpBridge, resolveHttpBridge } from './httpBridge';
+import type { HttpBridgeRequestMessage } from './httpBridge';
+import { IcebergHttpBrokerError } from './icebergHttpBroker';
+import type { IcebergHttpBrokerRequest, IcebergHttpBrokerResponse } from './icebergHttpBroker';
+import { isRuntimeResponse } from './protocol';
 import type { RuntimeRequestInput, RuntimeResponse } from './protocol';
 
 export {
@@ -25,6 +34,7 @@ export {
 	type IcebergHttpBrokerTransport,
 	type IcebergHttpBrokerTransportRequest,
 } from './icebergHttpBroker';
+export { HTTP_BRIDGE_BODY_BYTES } from './httpBridge';
 
 export type DuckDBWasmRuntimeMode = 'auto' | 'worker' | 'inline';
 
@@ -33,9 +43,31 @@ export interface NodeDuckDBWasmCapabilities {
 	unavailable: Readonly<Partial<Record<DuckDBWasmRuntime['features'][number], string>>>;
 }
 
+export interface DuckDBHttpSession {
+	fetch(
+		request: IcebergHttpBrokerRequest,
+		signal?: AbortSignal,
+	): Promise<IcebergHttpBrokerResponse>;
+	close(): void;
+}
+
+export interface DuckDBHttpSessionOptions {
+	expiresAtMs: number;
+}
+
+export type DuckDBHttpSessionFactory = (
+	access: Readonly<DuckDBHttpAccess>,
+	options: DuckDBHttpSessionOptions,
+) => DuckDBHttpSession;
+
 const CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
 	features: Object.freeze([]),
 	unavailable: Object.freeze({ 'iceberg-http': ICEBERG_HTTP_UNAVAILABLE }),
+});
+
+const HTTP_CAPABILITIES: NodeDuckDBWasmCapabilities = Object.freeze({
+	features: Object.freeze(['iceberg-http'] as const),
+	unavailable: Object.freeze({}),
 });
 
 export const DUCKDB_WORKER_RESOURCE_LIMITS = Object.freeze({
@@ -50,11 +82,14 @@ export function nodeDuckDBWasmCapabilities(): NodeDuckDBWasmCapabilities {
 
 export function createNodeDuckDBWasmRuntimeFactory(
 	mode: DuckDBWasmRuntimeMode = 'auto',
+	httpSessionFactory?: DuckDBHttpSessionFactory,
+	httpSessionTimeoutMs = 60_000,
+	metrics: Metrics = noopMetrics,
 ): DuckDBWasmRuntimeFactory {
 	return async () => {
 		if (mode === 'inline') throw inlineRuntimeUnavailable();
 		try {
-			return new WorkerRuntime();
+			return new WorkerRuntime(httpSessionFactory, httpSessionTimeoutMs, metrics);
 		} catch (error) {
 			if (mode === 'worker' || !isStructuralWorkerError(error)) throw error;
 			throw inlineRuntimeUnavailable();
@@ -64,11 +99,17 @@ export function createNodeDuckDBWasmRuntimeFactory(
 
 export function createNodeDataQueryExecutorFactory(options: {
 	memoryLimitMb: number;
+	httpSessionFactory?: DuckDBHttpSessionFactory;
+	metrics?: Metrics;
 }): DataQueryExecutorFactory {
 	return {
 		async create(signal) {
 			if (signal.aborted) throw abortError();
-			const runtime = new WorkerRuntime();
+			const runtime = new WorkerRuntime(
+				options.httpSessionFactory,
+				60_000,
+				options.metrics ?? noopMetrics,
+			);
 			const onAbort = () => {
 				void runtime.close().catch(() => {});
 			};
@@ -102,7 +143,6 @@ function inlineRuntimeUnavailable(): Error {
 
 class WorkerRuntime implements DuckDBWasmRuntime {
 	readonly mode = 'worker' as const;
-	readonly features = CAPABILITIES.features;
 	private readonly worker: Worker;
 	private readonly pending = new Map<
 		number,
@@ -110,41 +150,64 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	>();
 	private nextId = 1;
 	private closed = false;
+	private httpReady = false;
+	private activeHttpSession: DuckDBHttpSession | undefined;
+	private activeHttpNonce: string | undefined;
 
-	constructor() {
+	constructor(
+		private readonly httpSessionFactory?: DuckDBHttpSessionFactory,
+		private readonly httpSessionTimeoutMs = 60_000,
+		private readonly metrics: Metrics = noopMetrics,
+	) {
 		this.worker = new Worker(resolveWorkerUrl(), {
 			resourceLimits: DUCKDB_WORKER_RESOURCE_LIMITS,
 		});
-		this.worker.on('message', (response: RuntimeResponse) => this.onResponse(response));
+		this.worker.on('message', (message: unknown) => this.onMessage(message));
 		this.worker.on('error', (error: Error) => this.fail(error));
 		this.worker.on('exit', (code) => {
 			if (!this.closed) this.fail(new Error(`DuckDB-Wasm worker exited with code ${code}.`));
 		});
 	}
 
-	initialize(options: { memoryLimitMb: number }): Promise<void> {
-		return this.request({ type: 'initialize', memoryLimitMb: options.memoryLimitMb });
+	get features(): DuckDBWasmRuntime['features'] {
+		return this.httpReady ? HTTP_CAPABILITIES.features : CAPABILITIES.features;
 	}
 
-	async execute(program: DuckDBPreviewProgram): Promise<TablePreview> {
-		assertSupported(program);
-		return this.request({ type: 'execute', program });
+	async initialize(options: { memoryLimitMb: number }): Promise<void> {
+		await this.request({
+			type: 'initialize',
+			memoryLimitMb: options.memoryLimitMb,
+			httpEnabled: this.httpSessionFactory !== undefined,
+		});
+		this.httpReady = this.httpSessionFactory !== undefined;
+	}
+
+	async execute(program: DuckDBPreviewProgram, signal?: AbortSignal): Promise<TablePreview> {
+		assertSupported(program, this.features);
+		const { httpAccess, ...workerProgram } = program;
+		return this.withHttpAccess(httpAccess, signal, this.httpSessionTimeoutMs, (executionNonce) =>
+			this.request({ type: 'execute', program: workerProgram, executionNonce }),
+		);
 	}
 
 	async executeQuery(request: DataQueryExecution, signal: AbortSignal): Promise<DataQueryResult> {
 		if (signal.aborted) throw abortError();
-		const work = this.request<DataQueryResult>({ type: 'execute-query', request });
-		let rejectAbort!: (error: Error) => void;
-		const aborted = new Promise<never>((_resolve, reject) => {
-			rejectAbort = reject;
-		});
-		const onAbort = () => rejectAbort(abortError());
-		signal.addEventListener('abort', onAbort, { once: true });
-		try {
-			return await Promise.race([work, aborted]);
-		} finally {
-			signal.removeEventListener('abort', onAbort);
+		const httpAccess = request.connection.plan?.httpAccess;
+		let workerRequest = request;
+		if (httpAccess && request.connection.plan) {
+			const { httpAccess: _parentOnly, ...workerPlan } = request.connection.plan;
+			workerRequest = {
+				...request,
+				connection: { ...request.connection, files: [], vars: {}, plan: workerPlan },
+			};
 		}
+		return this.withHttpAccess(httpAccess, signal, request.limits.deadlineMs, (executionNonce) =>
+			this.request<DataQueryResult>({
+				type: 'execute-query',
+				request: workerRequest,
+				executionNonce,
+			}),
+		);
 	}
 
 	ping(): Promise<void> {
@@ -154,6 +217,11 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	async close(): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
+		this.httpReady = false;
+		this.activeHttpSession?.close();
+		this.activeHttpSession = undefined;
+		this.activeHttpNonce = undefined;
+		this.metrics.increment('duckdb_wasm.worker_termination', 1, { reason: 'requested' });
 		try {
 			await this.worker.terminate();
 		} finally {
@@ -175,12 +243,86 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 		});
 	}
 
+	private onMessage(message: unknown): void {
+		if (isHttpBridgeEnvelope(message)) {
+			if (!isHttpBridgeRequestMessage(message)) {
+				this.metrics.increment('duckdb_http_broker.bridge_failure', 1, {
+					reason: 'invalid_message',
+				});
+				this.fail(new Error('DuckDB HTTP bridge message is invalid.'));
+				return;
+			}
+			void this.onHttpRequest(message).catch((error) => this.fail(asError(error)));
+			return;
+		}
+		if (!isRuntimeResponse(message)) {
+			this.fail(new Error('DuckDB-Wasm worker response is invalid.'));
+			return;
+		}
+		this.onResponse(message);
+	}
+
 	private onResponse(response: RuntimeResponse): void {
 		const pending = this.pending.get(response.id);
 		if (!pending) return;
 		this.pending.delete(response.id);
 		if (response.ok) pending.resolve(response.value);
 		else pending.reject(new Error(response.error));
+	}
+
+	private async onHttpRequest(message: HttpBridgeRequestMessage): Promise<void> {
+		const session = this.activeHttpSession;
+		if (!session || message.executionNonce !== this.activeHttpNonce) {
+			const reason = session ? 'execution_mismatch' : 'no_active_session';
+			this.metrics.increment('duckdb_http_broker.bridge_failure', 1, {
+				reason,
+			});
+			rejectHttpBridge(message, 'DuckDB HTTP bridge execution capability is invalid.');
+			this.fail(new Error('DuckDB HTTP bridge execution capability is invalid.'));
+			return;
+		}
+		try {
+			resolveHttpBridge(message, await session.fetch(message.request));
+		} catch (error) {
+			const code = error instanceof IcebergHttpBrokerError ? error.code : 'transport_failed';
+			this.metrics.increment('duckdb_http_broker.bridge_failure', 1, { reason: code });
+			try {
+				rejectHttpBridge(message, `DuckDB HTTP broker request failed: ${code}.`);
+			} catch (bridgeError) {
+				this.fail(asError(bridgeError));
+			}
+		}
+	}
+
+	private async withHttpAccess<T>(
+		access: Readonly<DuckDBHttpAccess> | undefined,
+		signal: AbortSignal | undefined,
+		deadlineMs: number,
+		work: (executionNonce?: string) => Promise<T>,
+	): Promise<T> {
+		if (signal?.aborted) throw abortError();
+		if (!access) return abortable(work(), signal);
+		if (!this.httpSessionFactory) throw new Error(ICEBERG_HTTP_UNAVAILABLE);
+		if (this.activeHttpSession) throw new Error('DuckDB HTTP broker session is already active.');
+		if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1) {
+			throw new Error('DuckDB HTTP broker deadline is invalid.');
+		}
+		const session = this.httpSessionFactory(access, { expiresAtMs: Date.now() + deadlineMs });
+		const executionNonce = randomUUID();
+		this.activeHttpSession = session;
+		this.activeHttpNonce = executionNonce;
+		const onAbort = () => session.close();
+		signal?.addEventListener('abort', onAbort, { once: true });
+		try {
+			return await abortable(work(executionNonce), signal);
+		} finally {
+			signal?.removeEventListener('abort', onAbort);
+			session.close();
+			if (this.activeHttpSession === session) {
+				this.activeHttpSession = undefined;
+				this.activeHttpNonce = undefined;
+			}
+		}
 	}
 
 	private rejectAll(error: Error): void {
@@ -191,6 +333,11 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	private fail(error: Error): void {
 		if (this.closed) return;
 		this.closed = true;
+		this.httpReady = false;
+		this.activeHttpSession?.close();
+		this.activeHttpSession = undefined;
+		this.activeHttpNonce = undefined;
+		this.metrics.increment('duckdb_wasm.worker_termination', 1, { reason: 'failure' });
 		this.rejectAll(error);
 		try {
 			void this.worker.terminate().catch(() => {});
@@ -198,17 +345,49 @@ class WorkerRuntime implements DuckDBWasmRuntime {
 	}
 }
 
+function isHttpBridgeEnvelope(message: unknown): boolean {
+	return (
+		typeof message === 'object' &&
+		message !== null &&
+		'type' in message &&
+		message.type === 'http-request'
+	);
+}
+
+function asError(value: unknown): Error {
+	return value instanceof Error ? value : new Error('DuckDB-Wasm worker failed.');
+}
+
 function abortError(): Error {
 	return Object.assign(new Error('Data query cancelled.'), { name: 'AbortError' });
 }
 
-function assertSupported(program: DuckDBPreviewProgram): void {
+function assertSupported(
+	program: DuckDBPreviewProgram,
+	features: DuckDBWasmRuntime['features'],
+): void {
 	for (const feature of program.requires ?? []) {
-		if (CAPABILITIES.features.includes(feature)) continue;
+		if (features.includes(feature)) continue;
 		const reason = CAPABILITIES.unavailable[feature];
 		throw new Error(
 			`DuckDB-Wasm runtime does not support required feature ${feature}.${reason ? ` ${reason}` : ''}`,
 		);
+	}
+}
+
+async function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return work;
+	if (signal.aborted) throw abortError();
+	let rejectAbort!: (error: Error) => void;
+	const aborted = new Promise<never>((_resolve, reject) => {
+		rejectAbort = reject;
+	});
+	const onAbort = () => rejectAbort(abortError());
+	signal.addEventListener('abort', onAbort, { once: true });
+	try {
+		return await Promise.race([work, aborted]);
+	} finally {
+		signal.removeEventListener('abort', onAbort);
 	}
 }
 

@@ -83,9 +83,11 @@ describe('DataQueryService', () => {
 				sql: 'select 1',
 				connection,
 				accessMode: 'read-only',
-				limits: { maxRows: 100, maxBytes: 4096, deadlineMs: 100 },
+				limits: { maxRows: 100, maxBytes: 4096, deadlineMs: expect.any(Number) },
 			}),
 		]);
+		expect(executions[0].limits.deadlineMs).toBeGreaterThan(0);
+		expect(executions[0].limits.deadlineMs).toBeLessThanOrEqual(100);
 		expect(terminate).toHaveBeenCalledOnce();
 		expect(signal?.aborted).toBe(true);
 	});

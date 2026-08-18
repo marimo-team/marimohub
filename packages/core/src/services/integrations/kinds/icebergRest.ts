@@ -8,6 +8,7 @@ import type {
 	TableSchema,
 } from '../../../ports/integrations';
 import { INTEGRATIONS_DIR } from '../bundle';
+import type { DuckDBHttpAccess } from '../data-preview/programs';
 import { sqlIdentifier, sqlLiteral } from '../data-preview/sql';
 import { basicAuthHeader, defineIntegration, probeErrorDetails } from '../sdk';
 import { zSecret } from '../secretFields';
@@ -17,7 +18,7 @@ import {
 	ICEBERG_RUNTIME_DEFAULTS,
 	icebergRuntimeSchema,
 	icebergRequirements,
-	icebergStorageSchema,
+	icebergRestStorageSchema,
 	icebergStorageUiHints,
 	renderIcebergCatalog,
 	runtimeCatalogProperties,
@@ -83,7 +84,7 @@ const icebergRestConfig = z.strictObject({
 		.default(false)
 		.describe('Allow http:// endpoints to carry credentials — local development only'),
 	auth: authSchema,
-	storage: icebergStorageSchema,
+	storage: icebergRestStorageSchema,
 	runtime: icebergRuntimeSchema,
 	access_delegation: z
 		.enum(['none', 'vended_credentials', 'remote_signing', 'both'])
@@ -175,6 +176,7 @@ export const icebergRest = defineIntegration({
 		'auth.client_secret': { widget: 'password' },
 		'auth.credentials_json': { widget: 'password' },
 		...icebergStorageUiHints,
+		'storage.broker_read_locations': { advanced: true },
 		access_delegation: { group: 'Storage', order: 21 },
 		tls: { group: 'TLS', order: 25, advanced: true },
 		'tls.ca_bundle': { widget: 'textarea' },
@@ -272,6 +274,7 @@ export const icebergRest = defineIntegration({
 			};
 			if (duckdbPreviewBlocker(input.config)) return { python };
 			const alias = `preview_${input.integration.id.replaceAll('-', '_')}`;
+			const secret = duckdbS3Secret(input.config, alias);
 			const attachParams: (string | number | boolean | null)[] = [input.config.uri];
 			const options = ['TYPE iceberg', 'ENDPOINT ?'];
 			if (input.config.warehouse) {
@@ -286,6 +289,7 @@ export const icebergRest = defineIntegration({
 					setup: [
 						{ text: 'LOAD iceberg' },
 						{ text: 'LOAD httpfs' },
+						secret.create,
 						{
 							text: `ATTACH ${sqlLiteral(input.config.warehouse ?? input.integration.name)} AS ${sqlIdentifier(alias)} (${options.join(', ')})`,
 							params: attachParams,
@@ -295,8 +299,9 @@ export const icebergRest = defineIntegration({
 						text: `SELECT * FROM ${[alias, ...input.namespace, input.table].map(sqlIdentifier).join('.')} LIMIT ?`,
 						params: [input.limit],
 					},
-					cleanup: [{ text: `DETACH ${sqlIdentifier(alias)}` }],
+					cleanup: [secret.drop, { text: `DETACH ${sqlIdentifier(alias)}` }],
 					requires: ['iceberg-http'],
+					httpAccess: duckdbHttpAccess(input.config),
 				},
 				python,
 			};
@@ -306,12 +311,7 @@ export const icebergRest = defineIntegration({
 	query: {
 		available(config) {
 			const reason = duckdbPreviewBlocker(config);
-			return {
-				ok: false,
-				reason:
-					reason ??
-					'guarded catalog and object-store HTTP brokering is not available in DuckDB-Wasm',
-			};
+			return reason ? { ok: false as const, reason } : { ok: true as const };
 		},
 		plan({ config, integration }) {
 			const reason = duckdbPreviewBlocker(config);
@@ -326,16 +326,19 @@ export const icebergRest = defineIntegration({
 			options.push('ACCESS_DELEGATION_MODE ?', 'READ_ONLY');
 			params.push(config.access_delegation);
 			const alias = sqlIdentifier(integration.name);
+			const secret = duckdbS3Secret(config, integration.id.replaceAll('-', '_'));
 			return {
 				setup: [
 					{ text: 'LOAD iceberg' },
 					{ text: 'LOAD httpfs' },
+					secret.create,
 					{
 						text: `ATTACH ${sqlLiteral(config.warehouse ?? integration.name)} AS ${alias} (${options.join(', ')})`,
 						params,
 					},
 				],
-				cleanup: [{ text: `DETACH ${alias}` }],
+				cleanup: [secret.drop, { text: `DETACH ${alias}` }],
+				httpAccess: duckdbHttpAccess(config),
 			};
 		},
 	},
@@ -555,8 +558,53 @@ function duckdbPreviewBlocker(config: IcebergRestConfig): string | undefined {
 	if (Object.keys(config.headers).length > 0 || Object.keys(config.extra_properties).length > 0) {
 		return 'custom headers and properties are not supported by DuckDB-Wasm preview';
 	}
-	if (config.storage.scheme !== 'catalog') {
-		return 'explicit object-storage configuration is not supported by DuckDB-Wasm preview';
+	const catalogUrl = new URL(config.uri);
+	if (catalogUrl.search) {
+		return 'catalog URLs with query parameters are not supported by DuckDB-Wasm preview';
+	}
+	if (/%2f|%5c/i.test(catalogUrl.pathname)) {
+		return 'catalog URLs with encoded path separators are not supported by DuckDB-Wasm preview';
+	}
+	if (config.access_delegation !== 'none') {
+		return 'catalog access delegation is not supported by DuckDB-Wasm preview';
+	}
+	if (config.storage.scheme !== 's3') {
+		return 'DuckDB-Wasm preview requires explicit S3 storage configuration';
+	}
+	if (!config.storage.endpoint) {
+		return 'DuckDB-Wasm preview requires an explicit S3 endpoint';
+	}
+	const endpoint = new URL(config.storage.endpoint);
+	if (endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
+		return 'DuckDB-Wasm preview requires an origin-only S3 endpoint';
+	}
+	if (config.storage.force_virtual_addressing) {
+		return 'virtual-hosted S3 addressing is not supported by DuckDB-Wasm preview';
+	}
+	if (
+		config.storage.role_arn ||
+		config.storage.role_session_name ||
+		config.storage.signer ||
+		config.storage.signer_uri ||
+		config.storage.signer_endpoint ||
+		config.storage.resolve_region ||
+		config.storage.proxy_uri ||
+		config.storage.connect_timeout !== undefined ||
+		config.storage.request_timeout !== undefined
+	) {
+		return 'advanced S3 client options are not supported by DuckDB-Wasm preview';
+	}
+	if (!config.storage.anonymous && config.storage.credentials.method === 'ambient') {
+		return 'ambient S3 credentials are not supported by DuckDB-Wasm preview';
+	}
+	if (!config.storage.anonymous && config.storage.credentials.method === 'profile') {
+		return 'profile S3 credentials are not supported by DuckDB-Wasm preview';
+	}
+	if (!config.storage.anonymous && config.storage.credentials.method !== 'static') {
+		return 'DuckDB-Wasm preview requires static or anonymous S3 credentials';
+	}
+	if (config.storage.broker_read_locations.length === 0) {
+		return 'DuckDB-Wasm preview requires at least one guarded S3 read location';
 	}
 	if (JSON.stringify(config.runtime) !== JSON.stringify(ICEBERG_RUNTIME_DEFAULTS)) {
 		return 'PyIceberg runtime options are not supported by DuckDB-Wasm preview';
@@ -573,10 +621,10 @@ function duckdbAuthOptions(
 ): string[] {
 	switch (config.method) {
 		case 'none':
-			params.push('');
+			params.push('marimohub-parent-broker');
 			return ['TOKEN ?'];
 		case 'bearer_token':
-			params.push(config.token);
+			params.push('marimohub-parent-broker');
 			return ['TOKEN ?'];
 		case 'basic':
 		case 'entra':
@@ -586,6 +634,57 @@ function duckdbAuthOptions(
 		default:
 			throw new ValidationError('This authentication method requires the preview sandbox.');
 	}
+}
+
+function duckdbS3Secret(config: IcebergRestConfig, suffix: string) {
+	if (config.storage.scheme !== 's3' || !config.storage.endpoint) {
+		throw new ValidationError('DuckDB-Wasm requires explicit S3 storage configuration.');
+	}
+	const endpoint = new URL(config.storage.endpoint);
+	const name = sqlIdentifier(`marimohub_s3_${suffix}`);
+	return {
+		create: {
+			text:
+				`CREATE TEMPORARY SECRET ${name} (` +
+				"TYPE S3, KEY_ID 'marimohub-parent-broker', SECRET 'marimohub-parent-broker', " +
+				"REGION ?, ENDPOINT ?, URL_STYLE 'path', USE_SSL ?)",
+			params: [config.storage.region ?? 'us-east-1', endpoint.host, endpoint.protocol === 'https:'],
+		},
+		drop: { text: `DROP SECRET ${name}` },
+	};
+}
+
+function duckdbHttpAccess(config: IcebergRestConfig): DuckDBHttpAccess {
+	if (config.storage.scheme !== 's3' || !config.storage.endpoint) {
+		throw new ValidationError('DuckDB-Wasm requires explicit S3 storage configuration.');
+	}
+	const credentials =
+		config.storage.anonymous || config.storage.credentials.method !== 'static'
+			? ({ method: 'anonymous' } as const)
+			: {
+					method: 'static' as const,
+					accessKeyId: config.storage.credentials.access_key_id,
+					secretAccessKey: config.storage.credentials.secret_access_key,
+					...(config.storage.credentials.session_token
+						? { sessionToken: config.storage.credentials.session_token }
+						: {}),
+				};
+	return {
+		kind: 'iceberg-rest',
+		catalog: {
+			url: config.uri,
+			...(config.auth.method === 'bearer_token'
+				? { authorization: `Bearer ${config.auth.token}` }
+				: {}),
+		},
+		storage: {
+			kind: 's3',
+			endpoint: config.storage.endpoint,
+			region: config.storage.region ?? 'us-east-1',
+			credentials,
+			locations: config.storage.broker_read_locations,
+		},
+	};
 }
 
 /**

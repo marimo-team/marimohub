@@ -197,15 +197,23 @@ MARIMOHUB_EXPERIMENTS=duckdb-wasm-preview
 
 The Node server uses a worker thread. Blocking inline execution is unavailable
 because a query cannot be preempted at its deadline. Each query runs in a
-read-only transaction after the runtime disables external access, sets its
-memory limit, and locks configuration. DuckDB-Wasm does not currently advertise
-Iceberg HTTP support because its traffic cannot use the hub's guarded browse transport;
-Iceberg therefore continues to use the sandbox executor. The installed Node
-binding exposes synchronous file callbacks and rejects HTTP and S3, while the
-guarded transport is asynchronous. The runtime adds its own fail-closed remote
-protocol guard so a dependency update cannot silently open ambient egress. A
-future broker must validate every catalog request, redirect, and vended object
-URL before the runtime can advertise Iceberg HTTP support.
+read-only transaction after the runtime sets its memory limit and locks configuration.
+The unbrokered runtime disables external access and rejects remote Node file callbacks.
+
+The brokered runtime supports a narrow Iceberg REST configuration. It requires all these values:
+
+- no authentication or bearer-token authentication
+- no access delegation
+- explicit path-style S3 storage with an origin-only endpoint
+- static S3 credentials or anonymous access
+- one or more guarded S3 read locations
+- system TLS and default runtime options
+
+Set `storage.broker_read_locations` to the bucket prefixes that DuckDB can read.
+The worker receives no real catalog or S3 credentials.
+The parent broker authorizes each request, injects credentials, checks DNS results, and pins the target socket.
+
+Other Iceberg configurations continue to use the sandbox executor.
 
 Sandbox previews require `MARIMOHUB_DATA_PREVIEW_IMAGE`. The image must contain
 Python, PyIceberg, and PyArrow. The compute backend must support per-sandbox
@@ -229,10 +237,11 @@ MARIMOHUB_DATA_BROWSER=full
 
 Only project managers and administrators can run SQL. Each request receives a
 fresh DuckDB-Wasm worker, runs one statement in a read-only transaction, and is
-hard-terminated at its deadline. External access, extension installation,
-automatic extension loading, and configuration changes are disabled. Row,
-response-byte, concurrency, per-user, memory, and time limits apply. Successful
-queries create an audit event that records sizes and row counts, never SQL text.
+hard-terminated at its deadline. Direct remote callbacks, automatic extension
+installation, automatic extension loading, and configuration changes are disabled.
+Brokered Iceberg plans can load only the pinned local extensions and approved URLs.
+Row, response-byte, concurrency, per-user, memory, and time limits apply.
+Successful queries create an audit event that records sizes and row counts, never SQL text.
 
 ### Scope and caching
 

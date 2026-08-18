@@ -24,7 +24,10 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-`pnpm dev` runs the local memory, local compute, and dev auth stack. See
+`pnpm dev` runs the local memory, local compute, and dev auth stack with the
+full data browser and DuckDB-Wasm previews enabled. With Docker installed,
+`pnpm dev:services` also starts a local MinIO (S3) and Iceberg REST catalog that
+`pnpm dev` picks up as seeded integrations. See
 [docs/testing-locally.md](./docs/testing-locally.md) for the full local path.
 
 ## Verify changes

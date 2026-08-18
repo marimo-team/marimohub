@@ -22,7 +22,7 @@ export class BlockingDuckDBEngine {
 		this.createDatabase = createDatabase;
 	}
 
-	async initialize(memoryLimitMb: number): Promise<void> {
+	async initialize(memoryLimitMb: number, httpEnabled = false): Promise<void> {
 		if (this.db) return;
 		let db: Database | undefined;
 		try {
@@ -38,7 +38,13 @@ export class BlockingDuckDBEngine {
 				connection.query('SET allow_community_extensions=false');
 				connection.query('SET autoinstall_known_extensions=false');
 				connection.query('SET autoload_known_extensions=false');
-				connection.query('SET enable_external_access=false');
+				if (httpEnabled) {
+					for (const extension of ['httpfs', 'parquet', 'avro', 'iceberg']) {
+						connection.query(`LOAD ${extension}`);
+					}
+				} else {
+					connection.query('SET enable_external_access=false');
+				}
 				connection.query('SET lock_configuration=true');
 				connection.query('SELECT 1');
 			} finally {

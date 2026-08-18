@@ -1,12 +1,14 @@
 {
 	"name": "marimohub",
-	"version": "0.3.2",
+	"version": "0.3.3",
 	"private": true,
 	"license": "Apache-2.0",
 	"type": "module",
 	"scripts": {
 		"dev": "node scripts/dev-ports.mjs",
 		"dev:reset": "node scripts/reset-dev-storage.mjs",
+		"dev:services": "docker compose -f scripts/dev-services/compose.yaml up -d",
+		"dev:services:down": "docker compose -f scripts/dev-services/compose.yaml down",
 		"ready": "vp fmt && vp lint && pnpm typecheck && vp run -r test && vp run -r build",
 		"check": "vp check",
 		"typecheck": "vp run -r typecheck",

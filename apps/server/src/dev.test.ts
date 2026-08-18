@@ -15,6 +15,7 @@ function deferred() {
 
 describe('local development setup', () => {
 	const createDevDeps = () => createFromEnv(localDevEnv({ PORT: '4321' }));
+	const noServices = { MARIMOHUB_DEV_SERVICES: 'off' };
 	const nameConflict = () =>
 		new ValidationError(
 			'An integration named "local-development" already exists at the org level.',
@@ -42,8 +43,39 @@ describe('local development setup', () => {
 			MARIMOHUB_SUPER_ADMINS: 'user@localhost',
 			MARIMOHUB_INTEGRATIONS: 'on',
 			MARIMOHUB_INTEGRATIONS_PROBE: 'private',
-			MARIMOHUB_DATA_BROWSER: 'metadata',
+			MARIMOHUB_DATA_BROWSER: 'full',
+			MARIMOHUB_DATA_PREVIEW_IMAGE: 'ghcr.io/marimo-team/marimo-sandbox:latest',
+			MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preview,duckdb-wasm-sql',
 		});
+		expect(env.MARIMOHUB_SECRETS_KEK).toBeTruthy();
+	});
+
+	it('keeps caller overrides for experiments and the secrets KEK', () => {
+		const env = localDevEnv({
+			MARIMOHUB_EXPERIMENTS: '',
+			MARIMOHUB_SECRETS_KEK: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+		});
+
+		expect(env).toMatchObject({
+			MARIMOHUB_EXPERIMENTS: '',
+			MARIMOHUB_SECRETS_KEK: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+		});
+	});
+
+	it('generates a fresh KEK per process for ephemeral storage', () => {
+		const first = localDevEnv({}).MARIMOHUB_SECRETS_KEK;
+		const second = localDevEnv({}).MARIMOHUB_SECRETS_KEK;
+
+		expect(first).toBeTruthy();
+		expect(first).not.toBe(second);
+	});
+
+	it('reuses the persisted KEK across restarts when persistence is requested', () => {
+		const first = localDevEnv({ MARIMOHUB_DEV_PERSIST: 'true' }).MARIMOHUB_SECRETS_KEK;
+		const second = localDevEnv({ MARIMOHUB_DEV_PERSIST: 'true' }).MARIMOHUB_SECRETS_KEK;
+
+		expect(first).toBeTruthy();
+		expect(first).toBe(second);
 	});
 
 	it('uses filesystem storage only when persistence is requested', () => {
@@ -59,8 +91,8 @@ describe('local development setup', () => {
 	it('seeds a welcome notebook and one org-wide integration once', async () => {
 		const deps = createDevDeps();
 
-		await seedLocalDev(deps);
-		await seedLocalDev(deps);
+		await seedLocalDev(deps, noServices);
+		await seedLocalDev(deps, noServices);
 
 		const projects = await deps.services.projects.listProjects();
 		expect(projects).toHaveLength(1);
@@ -78,10 +110,53 @@ describe('local development setup', () => {
 		]);
 	});
 
+	it('seeds S3 and Iceberg integrations when the local services respond', async () => {
+		const deps = createDevDeps();
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+		try {
+			await seedLocalDev(deps, {});
+			await seedLocalDev(deps, {});
+		} finally {
+			vi.unstubAllGlobals();
+		}
+
+		const listed = await deps.orgIntegrations?.list();
+		expect(listed).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: 's3', name: 'local-minio', scope: 'org' }),
+				expect.objectContaining({ kind: 'iceberg_rest', name: 'local-iceberg', scope: 'org' }),
+			]),
+		);
+		expect(listed).toHaveLength(3);
+		const iceberg = listed?.find((entry) => entry.name === 'local-iceberg');
+		if (!iceberg) throw new Error('Expected the local Iceberg integration.');
+		expect(await deps.orgIntegrations?.get(iceberg.id)).toMatchObject({
+			config: {
+				storage: {
+					broker_read_locations: [{ bucket: 'warehouse', prefix: 'demo' }],
+				},
+			},
+		});
+	});
+
+	it('skips service integrations when the local services are down', async () => {
+		const deps = createDevDeps();
+		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+		try {
+			await seedLocalDev(deps, {});
+		} finally {
+			vi.unstubAllGlobals();
+		}
+
+		expect(await deps.orgIntegrations?.list()).toEqual([
+			expect.objectContaining({ kind: 'custom_env', name: 'local-development' }),
+		]);
+	});
+
 	it('does not mutate storage when integrations are unavailable', async () => {
 		const deps = createDevDeps();
 
-		await expect(seedLocalDev({ ...deps, orgIntegrations: undefined })).rejects.toThrow(
+		await expect(seedLocalDev({ ...deps, orgIntegrations: undefined }, noServices)).rejects.toThrow(
 			'Local development integrations are not enabled.',
 		);
 
@@ -93,7 +168,7 @@ describe('local development setup', () => {
 		await ensureInitialized(deps.bucket, UserId.parse('user'));
 		const createNotebook = vi.spyOn(deps.services.notebooks, 'createNotebook');
 
-		await Promise.all([seedLocalDev(deps), seedLocalDev(deps)]);
+		await Promise.all([seedLocalDev(deps, noServices), seedLocalDev(deps, noServices)]);
 
 		expect(createNotebook).toHaveBeenCalledOnce();
 		const [project] = await deps.services.projects.listProjects();
@@ -116,11 +191,11 @@ describe('local development setup', () => {
 
 		vi.useFakeTimers();
 		try {
-			const first = seedLocalDev(deps);
+			const first = seedLocalDev(deps, noServices);
 			await createDidStart.promise;
 			await vi.advanceTimersByTimeAsync(31_000);
 
-			const second = seedLocalDev(deps);
+			const second = seedLocalDev(deps, noServices);
 			await vi.advanceTimersByTimeAsync(25);
 			expect(createNotebook).toHaveBeenCalledOnce();
 
@@ -160,9 +235,9 @@ describe('local development setup', () => {
 			})
 			.mockImplementation(originalCreate);
 
-		const first = seedLocalDev(deps);
+		const first = seedLocalDev(deps, noServices);
 		await firstDidStart.promise;
-		const second = seedLocalDev(deps);
+		const second = seedLocalDev(deps, noServices);
 		await secondSawClaim.promise;
 		expect(createNotebook).toHaveBeenCalledOnce();
 
@@ -182,7 +257,7 @@ describe('local development setup', () => {
 			JSON.stringify({ holder: `${process.pid}:${Date.now() - 60_000}:previous-process` }),
 		);
 
-		await seedLocalDev(deps);
+		await seedLocalDev(deps, noServices);
 
 		const [project] = await deps.services.projects.listProjects();
 		expect(await deps.services.notebooks.listNotebooks(project.id)).toHaveLength(1);
@@ -198,10 +273,13 @@ describe('local development setup', () => {
 		const deps = createDevDeps();
 
 		await expect(
-			seedLocalDev({
-				...deps,
-				orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService,
-			}),
+			seedLocalDev(
+				{
+					...deps,
+					orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService,
+				},
+				noServices,
+			),
 		).resolves.toBeUndefined();
 		expect(create).toHaveBeenCalledOnce();
 	});
@@ -216,10 +294,13 @@ describe('local development setup', () => {
 		const deps = createDevDeps();
 
 		await expect(
-			seedLocalDev({
-				...deps,
-				orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService,
-			}),
+			seedLocalDev(
+				{
+					...deps,
+					orgIntegrations: orgIntegrations as unknown as OrgIntegrationsService,
+				},
+				noServices,
+			),
 		).rejects.toBe(conflict);
 
 		expect(create).toHaveBeenCalledWith(

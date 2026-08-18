@@ -25,6 +25,7 @@ interface RuntimeSlot {
 	runtime: DuckDBWasmRuntime;
 	capacityToken: symbol;
 	busy: boolean;
+	executions: number;
 	idleTimer?: ReturnType<typeof setTimeout>;
 	controller?: AbortController;
 	disposing?: Promise<void>;
@@ -35,7 +36,13 @@ interface RuntimeCapabilities {
 	features: readonly PreviewRuntimeFeature[];
 }
 
-type RecycleReason = 'execution_error' | 'timeout' | 'health_check' | 'idle' | 'shutdown';
+type RecycleReason =
+	| 'execution_error'
+	| 'timeout'
+	| 'health_check'
+	| 'brokered_execution'
+	| 'idle'
+	| 'shutdown';
 const MAX_TIMER_DURATION_MS = 2_147_483_647;
 
 class DuckDBExecutionTimeoutError extends Error {
@@ -140,12 +147,13 @@ export class DuckDBWasmDataPreview {
 		const queuedAt = Date.now();
 		let slot: RuntimeSlot;
 		try {
-			slot = await this.acquireSlot();
+			slot = await this.acquireSlot(program.httpAccess !== undefined);
 		} catch (error) {
 			if (error instanceof ResourceExhaustedError) throw error;
 			throw new UnavailableError('DuckDB-Wasm could not start a preview runtime.');
 		}
 		const runtime = slot.runtime;
+		slot.executions += 1;
 		const controller = new AbortController();
 		slot.controller = controller;
 		const tags = { executor: 'duckdb_wasm', runtime: runtime.mode };
@@ -163,19 +171,23 @@ export class DuckDBWasmDataPreview {
 			if (this.closed || controller.signal.aborted) {
 				throw new UnavailableError('DuckDB-Wasm was closed during preview execution.');
 			}
-			let healthy = true;
-			try {
-				await withDeadline(runtime.ping(), {
-					timeoutMs: this.options.executionTimeoutMs,
-					timeoutError: () => new DuckDBHealthCheckError(),
-				});
-			} catch {
-				healthy = false;
-				void this.disposeSlot(slot, 'health_check');
+			let reusable = !program.httpAccess;
+			if (program.httpAccess) {
+				await this.disposeSlot(slot, 'brokered_execution');
+			} else {
+				try {
+					await withDeadline(runtime.ping(), {
+						timeoutMs: this.options.executionTimeoutMs,
+						timeoutError: () => new DuckDBHealthCheckError(),
+					});
+				} catch {
+					reusable = false;
+					void this.disposeSlot(slot, 'health_check');
+				}
 			}
 			this.metrics.increment('data_preview.duckdb.execution', 1, { ...tags, outcome: 'success' });
 			this.metrics.gauge('data_preview.duckdb.rows', result.rows.length, tags);
-			if (healthy) this.releaseSlot(slot);
+			if (reusable) this.releaseSlot(slot);
 			return result;
 		} catch (error) {
 			controller.abort();
@@ -195,16 +207,22 @@ export class DuckDBWasmDataPreview {
 		}
 	}
 
-	private async acquireSlot(): Promise<RuntimeSlot> {
+	private async acquireSlot(dedicated: boolean): Promise<RuntimeSlot> {
 		if (!this.available()) {
 			throw new UnavailableError('DuckDB-Wasm cannot execute this preview program.');
 		}
+		let replacement: RuntimeSlot | undefined;
 		for (const slot of this.slots) {
 			if (slot.busy || slot.disposing) continue;
+			if (dedicated && slot.executions > 0) {
+				replacement ??= slot;
+				continue;
+			}
 			this.clearIdle(slot);
 			slot.busy = true;
 			return slot;
 		}
+		if (replacement) await this.disposeSlot(replacement, 'brokered_execution');
 		const slot = await this.startSlot();
 		if (this.closed) {
 			await this.disposeSlot(slot, 'shutdown');
@@ -267,7 +285,7 @@ export class DuckDBWasmDataPreview {
 					throw new UnavailableError('DuckDB-Wasm runtime capabilities changed within the pool.');
 				}
 				this.capabilities = capabilities;
-				const slot = { runtime, capacityToken, busy: false };
+				const slot = { runtime, capacityToken, busy: false, executions: 0 };
 				this.slots.add(slot);
 				this.recordPoolSize(runtime.mode);
 				return slot;

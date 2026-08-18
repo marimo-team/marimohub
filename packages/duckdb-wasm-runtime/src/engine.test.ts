@@ -58,6 +58,53 @@ describe('BlockingDuckDBEngine initialization', () => {
 		expect(() => engine.ping()).toThrow('not initialized');
 	});
 
+	it('loads every pinned HTTP prerequisite before locking configuration', async () => {
+		const connection = {
+			prepare: vi.fn(() => ({ query: vi.fn(), close: vi.fn() })),
+			query: vi.fn(),
+			close: vi.fn(),
+		};
+		const database = {
+			instantiate: vi.fn(),
+			open: vi.fn(),
+			connect: vi.fn(() => connection),
+			reset: vi.fn(),
+		};
+		const engine = new BlockingDuckDBEngine(async () => database as never);
+
+		await engine.initialize(64, true);
+
+		const statements = connection.query.mock.calls.map(([sql]) => sql);
+		expect(statements).toContain('LOAD httpfs');
+		expect(statements).toContain('LOAD parquet');
+		expect(statements).toContain('LOAD avro');
+		expect(statements).toContain('LOAD iceberg');
+		expect(statements.indexOf('LOAD iceberg')).toBeLessThan(
+			statements.indexOf('SET lock_configuration=true'),
+		);
+	});
+
+	it('does not initialize when a pinned HTTP prerequisite cannot load', async () => {
+		const connection = {
+			prepare: vi.fn(() => ({ query: vi.fn(), close: vi.fn() })),
+			query: vi.fn((sql: string) => {
+				if (sql === 'LOAD iceberg') throw new Error('extension checksum mismatch');
+			}),
+			close: vi.fn(),
+		};
+		const database = {
+			instantiate: vi.fn(),
+			open: vi.fn(),
+			connect: vi.fn(() => connection),
+			reset: vi.fn(),
+		};
+		const engine = new BlockingDuckDBEngine(async () => database as never);
+
+		await expect(engine.initialize(64, true)).rejects.toThrow('extension checksum mismatch');
+		expect(database.reset).toHaveBeenCalledOnce();
+		expect(() => engine.ping()).toThrow('not initialized');
+	});
+
 	it('clears its database handle before reset during close', async () => {
 		const connection = {
 			prepare: vi.fn(() => ({ query: vi.fn(), close: vi.fn() })),

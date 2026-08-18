@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite-plus';
+import { DUCKDB_EXTENSION_MANIFEST } from '../../packages/duckdb-wasm-runtime/src/extensionManifest';
 
 // Bundle the Node server into a self-contained dist/index.mjs. Workspace packages
 // are source-only (their exports point at src/*.ts), so they MUST be bundled;
@@ -59,6 +60,10 @@ export default defineConfig({
 				from: '../../packages/duckdb-wasm-runtime/node_modules/@duckdb/duckdb-wasm/dist/duckdb-eh.wasm',
 				to: 'dist',
 			},
+			...Object.values(DUCKDB_EXTENSION_MANIFEST).map(({ file }) => ({
+				from: `../../packages/duckdb-wasm-runtime/assets/extensions/${file}`,
+				to: 'dist',
+			})),
 		],
 	},
 });

@@ -89,6 +89,104 @@ describe('DuckDBWasmDataPreview', () => {
 		expect(failed.execute).toHaveBeenCalledOnce();
 	});
 
+	it('disposes a brokered runtime before another preview can use its worker', async () => {
+		const first = runtime({ features: ['iceberg-http'] });
+		const second = runtime({ features: ['iceberg-http'] });
+		const increment = vi.fn();
+		const factory = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+		const preview = new DuckDBWasmDataPreview(factory, {
+			...options,
+			metrics: { increment, gauge: vi.fn() },
+		});
+		await preview.check();
+		const brokered = {
+			setup: [],
+			query: { text: 'SELECT 1' },
+			requires: ['iceberg-http'] as const,
+			httpAccess: {
+				kind: 'iceberg-rest' as const,
+				catalog: { url: 'https://catalog.example.test' },
+				storage: {
+					kind: 's3' as const,
+					endpoint: 'https://objects.example.test',
+					region: 'us-east-1',
+					credentials: { method: 'anonymous' as const },
+					locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+				},
+			},
+		};
+
+		await expect(preview.preview({ setup: [], query: { text: 'SELECT 0' } })).resolves.toEqual({
+			columns: ['id'],
+			rows: [[1]],
+		});
+		expect(first.close).not.toHaveBeenCalled();
+		await expect(preview.preview(brokered)).resolves.toEqual({ columns: ['id'], rows: [[1]] });
+		expect(first.close).toHaveBeenCalledOnce();
+		expect(first.execute).toHaveBeenCalledOnce();
+		expect(second.execute).toHaveBeenCalledOnce();
+		expect(second.close).toHaveBeenCalledOnce();
+		expect(increment).toHaveBeenCalledWith('data_preview.duckdb.recycle', 1, {
+			runtime: 'worker',
+			reason: 'brokered_execution',
+		});
+		expect(factory).toHaveBeenCalledTimes(2);
+	});
+
+	it('replaces only one used idle runtime for a brokered preview', async () => {
+		let releaseExecutions = () => {};
+		const executionBarrier = new Promise<void>((resolve) => {
+			releaseExecutions = resolve;
+		});
+		const warm = Array.from({ length: 3 }, () =>
+			runtime({
+				features: ['iceberg-http'],
+				execute: vi.fn(async () => {
+					await executionBarrier;
+					return { columns: ['id'], rows: [[1]] };
+				}),
+			}),
+		);
+		const brokered = runtime({ features: ['iceberg-http'] });
+		const factory = vi.fn();
+		for (const instance of [...warm, brokered]) factory.mockResolvedValueOnce(instance);
+		const preview = new DuckDBWasmDataPreview(factory, { ...options, maxPoolSize: 3 });
+		await preview.check();
+
+		const localProgram = { setup: [], query: { text: 'SELECT 1' } };
+		const localPreviews = [
+			preview.preview(localProgram),
+			preview.preview(localProgram),
+			preview.preview(localProgram),
+		];
+		await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(3));
+		releaseExecutions();
+		await Promise.all(localPreviews);
+
+		await preview.preview({
+			...localProgram,
+			requires: ['iceberg-http'],
+			httpAccess: {
+				kind: 'iceberg-rest',
+				catalog: { url: 'https://catalog.example.test' },
+				storage: {
+					kind: 's3',
+					endpoint: 'https://objects.example.test',
+					region: 'us-east-1',
+					credentials: { method: 'anonymous' },
+					locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+				},
+			},
+		});
+
+		expect(factory).toHaveBeenCalledTimes(4);
+		expect(warm[0].close).toHaveBeenCalledOnce();
+		expect(warm[1].close).not.toHaveBeenCalled();
+		expect(warm[2].close).not.toHaveBeenCalled();
+		expect(brokered.close).toHaveBeenCalledOnce();
+		await preview.close();
+	});
+
 	it('does not mask an execution failure when runtime disposal also fails', async () => {
 		const instance = runtime({
 			execute: vi.fn(async () => {
