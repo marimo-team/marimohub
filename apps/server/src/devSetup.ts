@@ -96,15 +96,14 @@ const DEV_SERVICE_INTEGRATIONS: readonly { healthUrl: string; input: CreateInteg
 				allow_insecure_transport: true,
 				auth: { method: 'none' },
 				access_delegation: 'none',
-				// Explicit storage, not scheme 'catalog': the fixture vends no client
-				// S3 config, so PyIceberg readers need the endpoint and credentials
-				// spelled out. DuckDB-Wasm preview is off either way — the Node
-				// runtime never advertises iceberg-http.
+				// The fixture vends no client S3 config, so readers need the endpoint,
+				// credentials, and broker authorization prefix spelled out.
 				storage: {
 					scheme: 's3',
 					region: 'us-east-1',
 					endpoint: DEV_S3_ENDPOINT,
 					credentials: { method: 'static', ...DEV_SERVICE_CREDENTIALS },
+					broker_read_locations: [{ bucket: 'warehouse', prefix: 'demo' }],
 				},
 			},
 			change_note: 'Seeded by pnpm dev (Iceberg REST from pnpm dev:services)',

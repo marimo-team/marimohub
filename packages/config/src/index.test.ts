@@ -140,6 +140,17 @@ describe('createFromEnv auth backend selection', () => {
 		expect(deps.dataBrowser?.close).toBeTypeOf('function');
 	});
 
+	it('validates the integrations feature gate before its probe policy', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_DATA_BROWSER: 'full',
+				MARIMOHUB_INTEGRATIONS_PROBE: 'bogus',
+			}),
+		).toThrow(/MARIMOHUB_DATA_BROWSER requires MARIMOHUB_INTEGRATIONS=on/);
+	});
+
 	it('wires Run SQL whenever full data-browser mode is enabled', async () => {
 		const env = {
 			...baseEnv,

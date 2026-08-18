@@ -128,6 +128,15 @@ describe('local development setup', () => {
 			]),
 		);
 		expect(listed).toHaveLength(3);
+		const iceberg = listed?.find((entry) => entry.name === 'local-iceberg');
+		if (!iceberg) throw new Error('Expected the local Iceberg integration.');
+		expect(await deps.orgIntegrations?.get(iceberg.id)).toMatchObject({
+			config: {
+				storage: {
+					broker_read_locations: [{ bucket: 'warehouse', prefix: 'demo' }],
+				},
+			},
+		});
 	});
 
 	it('skips service integrations when the local services are down', async () => {

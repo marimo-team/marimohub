@@ -9,6 +9,7 @@ mc mb --ignore-existing local/dev-data
 mc mb --ignore-existing local/warehouse
 mc cp /seed/data/reports.csv local/dev-data/samples/reports.csv
 mc cp /seed/data/events.jsonl local/dev-data/samples/events.jsonl
+mc cp /seed/data/broker.parquet local/warehouse/broker-fixture/sample.parquet
 
 # The marker is uploaded only after the mirror succeeds, so an interrupted run
 # regenerates on the next attempt instead of leaving a partial fixture behind.

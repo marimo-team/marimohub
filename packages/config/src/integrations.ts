@@ -57,7 +57,7 @@ export function makeIntegrations(
 	const enabledDataQuery = dataBrowser === 'full' ? dataQuery : undefined;
 	// Parsed once so both probes interpret the same validated policy — neither
 	// depends on the other having rejected an invalid value first.
-	const policy = probePolicy(env);
+	const policy = integrationProbePolicy(env);
 	const objectBrowsers =
 		dataBrowser === 'off'
 			? undefined
@@ -306,9 +306,9 @@ function makeBrowseProbe(
 	});
 }
 
-type ProbePolicy = 'guarded' | 'private' | 'off';
+export type ProbePolicy = 'guarded' | 'private' | 'off';
 
-function probePolicy(env: Env): ProbePolicy {
+export function integrationProbePolicy(env: Env): ProbePolicy {
 	const setting = env.MARIMOHUB_INTEGRATIONS_PROBE?.trim().toLowerCase();
 	switch (setting) {
 		case undefined:

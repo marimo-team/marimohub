@@ -89,7 +89,6 @@ describe('integration schema contracts', () => {
 			'iceberg_dynamodb',
 			'iceberg_glue',
 			'iceberg_hive',
-			'iceberg_rest',
 			'iceberg_sql',
 		]) {
 			const properties = doc.components.schemas[kind].properties as Record<
@@ -100,6 +99,15 @@ describe('integration schema contracts', () => {
 			expect(properties.runtime.$ref).toBe('#/components/schemas/IcebergRuntime');
 			expect(properties.extra_properties.$ref).toBe('#/components/schemas/IcebergExtraProperties');
 		}
+		const restProperties = doc.components.schemas.iceberg_rest.properties as Record<
+			string,
+			{ $ref?: string }
+		>;
+		expect(restProperties.storage.$ref).toBe('#/components/schemas/IcebergRestStorage');
+		expect(restProperties.runtime.$ref).toBe('#/components/schemas/IcebergRuntime');
+		expect(restProperties.extra_properties.$ref).toBe(
+			'#/components/schemas/IcebergExtraProperties',
+		);
 	});
 
 	it('publishes environment conflicts and migration descriptions', () => {
