@@ -27,7 +27,9 @@ The endpoint is
 `POST /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests`. It requires an
 `Idempotency-Key` header. The key determines a stable proposal id and provider branch, so retrying
 after a timeout or partial provider failure resumes the same publication instead of creating a
-second provider change request.
+second provider change request. By default, the endpoint creates a new change request. Supplying a
+published proposal as `target_proposal_id` captures a new immutable proposal and publishes it to
+that proposal's existing change request.
 
 ## GitHub App setup
 
@@ -54,6 +56,12 @@ short-lived token restricted to that repository and those two permissions. It cr
 tree and commit based on the exact synced commit, then creates a deterministic
 `marimohub/<notebook-id>/<proposal-id>` branch and draft pull request. Retrying publication of the
 same proposal returns the existing pull request.
+
+An update normally appends a commit to the existing pull-request branch. If the captured file
+operations no longer apply to that branch, the adapter rebuilds the proposal from its original
+base and attempts a force update. The force update is conditional on the branch still pointing to
+the commit marimohub previously published, so collaborator or automation changes are never
+overwritten. A closed pull request or deleted branch must be replaced with a new pull request.
 
 ## Stored proposal
 
@@ -93,9 +101,11 @@ cannot use proposal storage independently. Those APIs are deferred rather than i
 stored format.
 
 The required idempotency key protects retries of one operation. The web client reuses its key
-after transient failures and rotates it only when the server returns `PROPOSAL_RETRY_REQUIRED`.
-The provider branch is stable for that proposal. A later operation with a new key creates another
-proposal even when the sandbox content is unchanged. Content-level
+after transient failures. It uses a new key after success and when the server returns
+`PROPOSAL_RETRY_REQUIRED`. The provider branch is stable for that proposal. Choosing Update creates
+a new proposal that targets the displayed change request; choosing Create new omits the target and
+replaces the displayed link without closing or deleting the old provider change request. A later
+operation with a new key creates another proposal even when the sandbox content is unchanged. Content-level
 deduplication needs an atomic object-store uniqueness claim; scanning proposal manifests would
 still race under concurrent requests and is not used as a substitute.
 
@@ -107,9 +117,10 @@ than being sent to GitHub as a commit author.
 ## Extension path
 
 Provider support lives behind `SourceControlPublisher`; the API and proposal service do not import
-the GitHub adapter. A GitLab, Bitbucket, or other provider adds an adapter and registers it in the
-configuration composition root. The provider owns authentication and API-specific branch/merge
-request operations, while the proposal format and authorization remain unchanged.
+the GitHub adapter. The port has a required create operation and an optional update operation. A
+GitLab, Bitbucket, or other provider adds an adapter and registers it in the configuration
+composition root. The provider owns authentication and API-specific branch/merge request
+operations, while the proposal format and authorization remain unchanged.
 
 Full-workspace sync is a capture-policy extension, not a provider rewrite. It should compare the
 sandbox workspace against the immutable version workspace, enforce file-count and total-byte

@@ -1257,6 +1257,12 @@ components:
           maxLength: 65536
           description: Change request description. Defaults to the session and base commit.
           example: Updates the regional revenue analysis.
+        target_proposal_id:
+          type: string
+          pattern: ^prop-[0-9a-z]{16}$
+          description: Published proposal whose existing change request should receive
+            this new proposal. Omit to create a new change request.
+          example: prop-7h2k9qm4xz7rp3w8
     SessionPage:
       type: object
       properties:
@@ -6267,14 +6273,16 @@ paths:
       operationId: openNotebookChangeRequest
       tags:
         - Source control publishing
-      summary: Open a draft change request from a live notebook session
+      summary: Publish notebook changes to a new or existing change request
       description: A proposal is an immutable set of notebook changes captured with
         its exact source revision. This operation captures a proposal from a
         running persistent editor session and publishes it as a pull request,
         merge request, or equivalent through the configured source-control
-        provider. The Idempotency-Key header is required; retry with the same
-        key to resume the same proposal and provider branch. If the error code
-        is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.
+        provider. Set target_proposal_id to update the change request published
+        by that proposal; omit it to create a new change request. The
+        Idempotency-Key header is required; retry with the same key to resume
+        the same operation. If the error code is PROPOSAL_RETRY_REQUIRED, retry
+        with a new key instead.
       parameters:
         - schema:
             type: string
@@ -6316,7 +6324,7 @@ paths:
               $ref: '#/components/schemas/OpenNotebookChangeRequestBody'
       responses:
         '201':
-          description: Draft change request opened
+          description: Change request published
           content:
             application/json:
               schema:

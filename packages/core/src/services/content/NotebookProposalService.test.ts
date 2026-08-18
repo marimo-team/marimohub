@@ -67,6 +67,7 @@ describe('NotebookProposalService', () => {
 			proposalId: ProposalId;
 			session: Session;
 			author: UserId;
+			targetProposalId: ProposalId;
 		}> = {},
 	) {
 		return env.proposals.captureEntryNotebook({
@@ -77,6 +78,7 @@ describe('NotebookProposalService', () => {
 			workdir: '/workspace',
 			author: overrides.author ?? ACTOR,
 			proposalId: overrides.proposalId,
+			targetProposalId: overrides.targetProposalId,
 		});
 	}
 
@@ -211,6 +213,194 @@ describe('NotebookProposalService', () => {
 				changes: [expect.objectContaining({ path: 'apps/dashboard.py', operation: 'modify' })],
 			}),
 		);
+	});
+
+	it('publishes a new proposal to an existing change request', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		const openChangeRequest = vi.fn(async () => ({
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+			headBranch,
+			headCommit: 'first-head',
+		}));
+		const updateChangeRequest = vi.fn(async () => ({
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+			headBranch,
+			headCommit: 'second-head',
+		}));
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest,
+			updateChangeRequest,
+		};
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+		const result = await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: update.proposal_id,
+			publisher,
+			title: 'Second update',
+			body: '',
+		});
+
+		expect(update.target_proposal_id).toBe(initial.proposal_id);
+		expect(result).toMatchObject({ number: 17, headBranch, headCommit: 'second-head' });
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+		expect(updateChangeRequest).toHaveBeenCalledWith(
+			expect.objectContaining({
+				baseCommit: 'abc123',
+				changeRequest: expect.objectContaining({
+					number: 17,
+					headBranch,
+					headCommit: 'first-head',
+				}),
+				changes: [expect.objectContaining({ path: 'apps/dashboard.py' })],
+			}),
+		);
+	});
+
+	it('does not silently open a new change request when updates are unsupported', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		const openChangeRequest = vi.fn(async () => ({
+			number: 17,
+			url: 'https://github.com/owner/repo/pull/17',
+			headBranch,
+			headCommit: 'first-head',
+		}));
+		const publisher: SourceControlPublisher = { provider: 'github', openChangeRequest };
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+
+		await expect(
+			env.proposals.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId: update.proposal_id,
+				publisher,
+				title: 'Second update',
+				body: '',
+			}),
+		).rejects.toThrow('Updating change requests is not configured');
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+	});
+
+	it('rejects an update whose target proposal is still pending', async () => {
+		const target = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: target.proposal_id },
+		);
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(),
+			updateChangeRequest: vi.fn(),
+		};
+
+		await expect(
+			env.proposals.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId: update.proposal_id,
+				publisher,
+				title: 'Second update',
+				body: '',
+			}),
+		).rejects.toThrow('target proposal has no published change request');
+		expect(publisher.openChangeRequest).not.toHaveBeenCalled();
+		expect(publisher.updateChangeRequest).not.toHaveBeenCalled();
+	});
+
+	it('rejects a provider update that substitutes another change request', async () => {
+		const initial = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("first")' } }).instance,
+		);
+		const headBranch = `marimohub/${notebookId}/${initial.proposal_id}`;
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest: vi.fn(async () => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch,
+				headCommit: 'first-head',
+			})),
+			updateChangeRequest: vi.fn(async () => ({
+				number: 18,
+				url: 'https://github.com/owner/repo/pull/18',
+				headBranch,
+				headCommit: 'second-head',
+			})),
+		};
+		await env.proposals.publishChangeRequest({
+			projectId,
+			notebookId,
+			proposalId: initial.proposal_id,
+			publisher,
+			title: 'Initial update',
+			body: '',
+		});
+		const update = await capture(
+			makeFsSandbox({ files: { 'dashboard.py': 'print("second")' } }).instance,
+			{ targetProposalId: initial.proposal_id },
+		);
+
+		await expect(
+			env.proposals.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId: update.proposal_id,
+				publisher,
+				title: 'Second update',
+				body: '',
+			}),
+		).rejects.toThrow('provider returned an invalid change request');
+		expect(
+			(await env.proposals.getProposal(projectId, notebookId, update.proposal_id)).publication
+				.state,
+		).toBe('pending');
+	});
+
+	it('keeps the target proposal immutable across capture retries', async () => {
+		const proposalId = createProposalId();
+		const firstTarget = createProposalId();
+		const sandbox = makeFsSandbox({ files: { 'dashboard.py': 'print("after")' } }).instance;
+		await capture(sandbox, { proposalId, targetProposalId: firstTarget });
+
+		await expect(
+			capture(sandbox, { proposalId, targetProposalId: createProposalId() }),
+		).rejects.toThrow('different source revision');
+		const stored = await env.proposals.getProposal(projectId, notebookId, proposalId);
+		expect(stored.proposal.target_proposal_id).toBe(firstTarget);
 	});
 
 	it.each([

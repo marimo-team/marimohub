@@ -4306,8 +4306,8 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/**
-		 * Open a draft change request from a live notebook session
-		 * @description A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. The Idempotency-Key header is required; retry with the same key to resume the same proposal and provider branch. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.
+		 * Publish notebook changes to a new or existing change request
+		 * @description A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. Set target_proposal_id to update the change request published by that proposal; omit it to create a new change request. The Idempotency-Key header is required; retry with the same key to resume the same operation. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.
 		 */
 		post: operations['openNotebookChangeRequest'];
 		delete?: never;
@@ -9871,6 +9871,11 @@ export interface components {
 			 * @example Updates the regional revenue analysis.
 			 */
 			body?: string;
+			/**
+			 * @description Published proposal whose existing change request should receive this new proposal. Omit to create a new change request.
+			 * @example prop-7h2k9qm4xz7rp3w8
+			 */
+			target_proposal_id?: string;
 		};
 		SessionPage: {
 			items: components['schemas']['Session'][];
@@ -10347,7 +10352,7 @@ export interface operations {
 			};
 		};
 		responses: {
-			/** @description Draft change request opened */
+			/** @description Change request published */
 			201: {
 				headers: {
 					[name: string]: unknown;

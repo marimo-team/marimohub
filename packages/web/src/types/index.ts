@@ -68,6 +68,7 @@ export type NotebookMeta = ClientNotebookMeta;
 export type NotebookDetail = ClientNotebookDetail;
 /** A saved notebook revision from `GET .../versions`. */
 export type NotebookVersion = ClientNotebookVersion;
+export type NotebookChangeRequest = components['schemas']['OpenNotebookChangeRequestResult'];
 /** Result of creating a git-synced notebook (`POST .../notebooks/git`). */
 export type GitNotebookCreateResult = ClientGitNotebookCreateResult;
 /** A sync URL + write-once token, returned on synced-notebook creation and token rotation. */

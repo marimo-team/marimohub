@@ -1657,6 +1657,8 @@ components:
             - root_path
             - entry_notebook
             - commit
+        target_proposal_id:
+          type: string
         changes:
           minItems: 1
           type: array

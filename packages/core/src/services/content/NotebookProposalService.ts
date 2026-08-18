@@ -55,6 +55,7 @@ export interface CaptureEntryNotebookProposalInput {
 	sandbox: SandboxInstance;
 	workdir: string;
 	author: UserId;
+	targetProposalId?: ProposalId;
 	resolvedSourceRevision?: NotebookProposal['source'];
 	legacySourceRevision?: GitSourceRevision;
 }
@@ -232,6 +233,7 @@ export class NotebookProposalService {
 			created_at: createdAt,
 			base_version_id: session.source_version_id,
 			source,
+			target_proposal_id: input.targetProposalId,
 			changes: [change],
 		};
 		const proposalPaths = notebook.proposal(proposalId);
@@ -345,7 +347,8 @@ export class NotebookProposalService {
 		}
 		if (
 			proposal.notebook_id !== input.notebookId ||
-			proposal.base_version_id !== input.session.source_version_id
+			proposal.base_version_id !== input.session.source_version_id ||
+			proposal.target_proposal_id !== input.targetProposalId
 		) {
 			throw new ConflictError('The idempotency key belongs to a different source revision');
 		}
@@ -491,17 +494,68 @@ export class NotebookProposalService {
 				};
 			}),
 		);
-		const headBranch = `marimohub/${proposal.notebook_id}/${proposal.proposal_id}`;
-		const result = await publisher.openChangeRequest({
-			repository: proposal.source.repo,
-			baseBranch: proposal.source.branch,
-			baseCommit: proposal.source.commit,
-			headBranch,
-			title: input.title,
-			body: input.body,
-			draft: true,
-			changes,
-		});
+		let headBranch: string;
+		let result: OpenChangeRequestResult;
+		let expectedChangeRequest: OpenChangeRequestResult | undefined;
+		if (proposal.target_proposal_id) {
+			const target = await this.getProposal(
+				input.projectId,
+				input.notebookId,
+				proposal.target_proposal_id,
+			);
+			if (target.publication.state !== 'published') {
+				throw new ConflictError('The target proposal has no published change request');
+			}
+			if (
+				target.proposal.session_id !== proposal.session_id ||
+				target.proposal.author !== proposal.author ||
+				target.proposal.base_version_id !== proposal.base_version_id ||
+				target.proposal.source.provider !== proposal.source.provider ||
+				target.proposal.source.repo !== proposal.source.repo ||
+				target.proposal.source.branch !== proposal.source.branch ||
+				target.proposal.source.root_path !== proposal.source.root_path ||
+				target.proposal.source.entry_notebook !== proposal.source.entry_notebook ||
+				target.proposal.source.commit !== proposal.source.commit
+			) {
+				throw new ConflictError('The target proposal belongs to a different change request');
+			}
+			if (target.publication.change_request.provider !== publisher.provider) {
+				throw new ConflictError('The target proposal uses a different source-control provider');
+			}
+			if (!publisher.updateChangeRequest) {
+				throw new UnavailableError(
+					`Updating change requests is not configured for ${publisher.provider}`,
+				);
+			}
+			headBranch = target.publication.change_request.head_branch;
+			expectedChangeRequest = {
+				number: target.publication.change_request.number,
+				url: target.publication.change_request.url,
+				headBranch,
+				headCommit: target.publication.change_request.head_commit,
+			};
+			result = await publisher.updateChangeRequest({
+				repository: proposal.source.repo,
+				baseBranch: proposal.source.branch,
+				baseCommit: proposal.source.commit,
+				changeRequest: expectedChangeRequest,
+				title: input.title,
+				body: input.body,
+				changes,
+			});
+		} else {
+			headBranch = `marimohub/${proposal.notebook_id}/${proposal.proposal_id}`;
+			result = await publisher.openChangeRequest({
+				repository: proposal.source.repo,
+				baseBranch: proposal.source.branch,
+				baseCommit: proposal.source.commit,
+				headBranch,
+				title: input.title,
+				body: input.body,
+				draft: true,
+				changes,
+			});
+		}
 		const parsedResult = ChangeRequestPublicationSchema.safeParse({
 			provider: publisher.provider,
 			number: result.number,
@@ -509,7 +563,13 @@ export class NotebookProposalService {
 			head_branch: result.headBranch,
 			head_commit: result.headCommit,
 		});
-		if (!parsedResult.success || result.headBranch !== headBranch) {
+		if (
+			!parsedResult.success ||
+			result.headBranch !== headBranch ||
+			(expectedChangeRequest &&
+				(result.number !== expectedChangeRequest.number ||
+					result.url !== expectedChangeRequest.url))
+		) {
 			throw new UnavailableError('Source-control provider returned an invalid change request');
 		}
 

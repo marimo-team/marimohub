@@ -37,6 +37,21 @@ const input = {
 	],
 };
 
+const updateInput = {
+	repository: input.repository,
+	baseBranch: input.baseBranch,
+	baseCommit: input.baseCommit,
+	changeRequest: {
+		number: 17,
+		url: 'https://github.com/owner/repo/pull/17',
+		headBranch: input.headBranch,
+		headCommit: 'existing-head',
+	},
+	title: 'Update dashboard again',
+	body: 'A later notebook proposal',
+	changes: input.changes,
+};
+
 function proposalTreeResponse(parsed: URL, proposalHeads: readonly string[] = []): Response | null {
 	if (parsed.pathname.endsWith('/pulls')) return response([]);
 	if (parsed.pathname.endsWith('/git/commits/base-sha')) {
@@ -65,6 +80,361 @@ function proposalTreeResponse(parsed: URL, proposalHeads: readonly string[] = []
 }
 
 describe('GitHubAppPublisher', () => {
+	it('appends a commit to an existing open pull request', async () => {
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'open',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: 'existing-head' },
+					},
+				]);
+			}
+			if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
+				return response({ object: { sha: 'existing-head' } });
+			}
+			if (parsed.pathname.endsWith('/git/commits/existing-head')) {
+				return response({ tree: { sha: 'existing-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/existing-tree')) {
+				return response({
+					truncated: false,
+					tree: [
+						{
+							path: 'apps/dashboard.py',
+							mode: '100644',
+							type: 'blob',
+							sha: 'old-blob',
+						},
+					],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
+			if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
+				return response({ sha: 'append-tree' }, 201);
+			}
+			if (parsed.pathname.endsWith('/git/commits') && method === 'POST') {
+				expect(JSON.parse(String(init?.body))).toMatchObject({ parents: ['existing-head'] });
+				return response({ sha: 'appended-head' }, 201);
+			}
+			if (parsed.pathname.includes('/git/refs/heads/') && method === 'PATCH') {
+				const body = JSON.parse(String(init?.body));
+				expect(body).toEqual({ sha: 'appended-head', force: false });
+				return response({ object: { sha: 'appended-head' } });
+			}
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).updateChangeRequest(updateInput)).resolves.toEqual({
+			...updateInput.changeRequest,
+			headCommit: 'appended-head',
+		});
+		expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/graphql'))).toBe(false);
+	});
+
+	it('force-replaces an owned branch when its current tree cannot accept the update', async () => {
+		let ref = 'existing-head';
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'open',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: ref },
+					},
+				]);
+			}
+			if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
+				return response({ object: { sha: ref } });
+			}
+			if (parsed.pathname.endsWith('/git/commits/existing-head')) {
+				return response({ tree: { sha: 'incompatible-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/incompatible-tree')) {
+				return response({ truncated: false, tree: [] });
+			}
+			if (parsed.pathname.endsWith('/git/commits/base-sha')) {
+				return response({ tree: { sha: 'base-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/base-tree')) {
+				return response({
+					truncated: false,
+					tree: [
+						{
+							path: 'apps/dashboard.py',
+							mode: '100644',
+							type: 'blob',
+							sha: 'base-blob',
+						},
+					],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
+			if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
+				return response({ sha: 'replacement-tree' }, 201);
+			}
+			if (parsed.pathname.endsWith('/git/commits') && method === 'POST') {
+				expect(JSON.parse(String(init?.body))).toMatchObject({ parents: ['base-sha'] });
+				return response({ sha: 'replacement-head' }, 201);
+			}
+			if (parsed.pathname === '/repos/owner/repo') return response({ node_id: 'repo-node' });
+			if (parsed.pathname === '/graphql') {
+				expect(JSON.parse(String(init?.body))).toMatchObject({
+					variables: {
+						input: {
+							repositoryId: 'repo-node',
+							refUpdates: [
+								{
+									name: `refs/heads/${updateInput.changeRequest.headBranch}`,
+									beforeOid: 'existing-head',
+									afterOid: 'replacement-head',
+									force: true,
+								},
+							],
+						},
+					},
+				});
+				ref = 'replacement-head';
+				return response({ data: { updateRefs: { clientMutationId: null } } });
+			}
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).updateChangeRequest(updateInput)).resolves.toEqual({
+			...updateInput.changeRequest,
+			headCommit: 'replacement-head',
+		});
+	});
+
+	it('does not report success when the conditional force update loses its race', async () => {
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'open',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: 'existing-head' },
+					},
+				]);
+			}
+			if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
+				return response({ object: { sha: 'existing-head' } });
+			}
+			if (parsed.pathname.endsWith('/git/commits/existing-head')) {
+				return response({ tree: { sha: 'incompatible-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/incompatible-tree')) {
+				return response({ truncated: false, tree: [] });
+			}
+			if (parsed.pathname.endsWith('/git/commits/base-sha')) {
+				return response({ tree: { sha: 'base-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/base-tree')) {
+				return response({
+					truncated: false,
+					tree: [
+						{
+							path: 'apps/dashboard.py',
+							mode: '100644',
+							type: 'blob',
+							sha: 'base-blob',
+						},
+					],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
+			if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
+				return response({ sha: 'replacement-tree' }, 201);
+			}
+			if (parsed.pathname.endsWith('/git/commits') && method === 'POST') {
+				return response({ sha: 'replacement-head' }, 201);
+			}
+			if (parsed.pathname === '/repos/owner/repo') return response({ node_id: 'repo-node' });
+			if (parsed.pathname === '/graphql') {
+				return response({
+					data: { updateRefs: null },
+					errors: [{ message: 'beforeOid does not match' }],
+				});
+			}
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
+			'branch changed while updating',
+		);
+	});
+
+	it('recovers an appended update after its publication record failed', async () => {
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'open',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: 'appended-head' },
+					},
+				]);
+			}
+			if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
+				return response({ object: { sha: 'appended-head' } });
+			}
+			if (parsed.pathname.endsWith('/git/commits/existing-head')) {
+				return response({ tree: { sha: 'existing-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/existing-tree')) {
+				return response({
+					truncated: false,
+					tree: [
+						{
+							path: 'apps/dashboard.py',
+							mode: '100644',
+							type: 'blob',
+							sha: 'old-blob',
+						},
+					],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
+			if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
+				return response({ sha: 'append-tree' }, 201);
+			}
+			if (parsed.pathname.endsWith('/git/commits/appended-head')) {
+				return response({ tree: { sha: 'append-tree' }, parents: [{ sha: 'existing-head' }] });
+			}
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).updateChangeRequest(updateInput)).resolves.toEqual({
+			...updateInput.changeRequest,
+			headCommit: 'appended-head',
+		});
+		expect(fetcher.mock.calls.some(([, init]) => (init?.method ?? 'GET') === 'PATCH')).toBe(false);
+	});
+
+	it('rejects an update when the pull request branch moved outside marimohub', async () => {
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'open',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: 'external-head' },
+					},
+				]);
+			}
+			if (parsed.pathname.includes('/git/ref/heads/') && method === 'GET') {
+				return response({ object: { sha: 'external-head' } });
+			}
+			if (parsed.pathname.endsWith('/git/commits/existing-head')) {
+				return response({ tree: { sha: 'existing-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/existing-tree')) {
+				return response({
+					truncated: false,
+					tree: [
+						{
+							path: 'apps/dashboard.py',
+							mode: '100644',
+							type: 'blob',
+							sha: 'old-blob',
+						},
+					],
+				});
+			}
+			if (parsed.pathname.endsWith('/git/blobs')) return response({ sha: 'new-blob' }, 201);
+			if (parsed.pathname.endsWith('/git/trees') && method === 'POST') {
+				return response({ sha: 'append-tree' }, 201);
+			}
+			if (parsed.pathname.endsWith('/git/commits/external-head')) {
+				return response({ tree: { sha: 'external-tree' }, parents: [{ sha: 'other-parent' }] });
+			}
+			if (parsed.pathname.endsWith('/git/commits/base-sha')) {
+				return response({ tree: { sha: 'base-tree' } });
+			}
+			if (parsed.pathname.endsWith('/git/trees/base-tree')) {
+				return response({
+					truncated: false,
+					tree: [
+						{
+							path: 'apps/dashboard.py',
+							mode: '100644',
+							type: 'blob',
+							sha: 'base-blob',
+						},
+					],
+				});
+			}
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
+			'changed outside marimohub',
+		);
+		expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/graphql'))).toBe(false);
+	});
+
+	it('requires a new pull request after the target pull request was closed', async () => {
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) {
+				return response({ token: 'installation-token' });
+			}
+			if (parsed.pathname.endsWith('/pulls')) {
+				return response([
+					{
+						number: 17,
+						state: 'closed',
+						html_url: updateInput.changeRequest.url,
+						head: { sha: 'existing-head' },
+					},
+				]);
+			}
+			throw new Error(`unexpected request: ${init?.method ?? 'GET'} ${parsed.pathname}`);
+		});
+
+		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
+			'pull request is closed; create a new pull request',
+		);
+		expect(fetcher.mock.calls.some(([url]) => String(url).includes('/git/ref/heads/'))).toBe(false);
+	});
+
 	it('preserves executable mode while creating a draft pull request', async () => {
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
 			const parsed = new URL(url);

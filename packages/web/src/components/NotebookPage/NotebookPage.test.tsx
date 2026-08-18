@@ -78,6 +78,12 @@ function makeFetch(opts: FetchOptions) {
 	let editorStateRequestCount = 0;
 	let meRequestCount = 0;
 	let changeRequestCount = 0;
+	let successfulChangeRequestCount = 0;
+	let nextChangeRequestNumber = 17;
+	const publications = new Map<
+		string,
+		{ provider: string; number: number; url: string; head_branch: string; head_commit: string }
+	>();
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? 'GET';
@@ -115,16 +121,22 @@ function makeFetch(opts: FetchOptions) {
 					{ status: failure.status, headers: { 'content-type': 'application/json' } },
 				);
 			}
-			return ok({
-				proposal_id: 'prop-1234567890abcdef',
-				change_request: {
-					provider: 'github',
-					number: 17,
-					url: 'https://github.com/org/repo/pull/17',
-					head_branch: 'marimohub/nb-1/prop-1234567890abcdef',
-					head_commit: 'abc123',
-				},
-			});
+			successfulChangeRequestCount += 1;
+			const proposalId = `prop-${successfulChangeRequestCount}234567890abcdef`;
+			const body = JSON.parse(String(init?.body ?? '{}')) as { target_proposal_id?: string };
+			const target = body.target_proposal_id
+				? publications.get(body.target_proposal_id)
+				: undefined;
+			const number = target?.number ?? nextChangeRequestNumber++;
+			const changeRequest = {
+				provider: 'github',
+				number,
+				url: `https://github.com/org/repo/pull/${number}`,
+				head_branch: target?.head_branch ?? `marimohub/nb-1/${proposalId}`,
+				head_commit: `head-${successfulChangeRequestCount}`,
+			};
+			publications.set(proposalId, changeRequest);
+			return ok({ proposal_id: proposalId, change_request: changeRequest });
 		}
 		if (url.endsWith(`/sessions/${(opts.session ?? runningSession()).session_id}`)) {
 			return ok(opts.session ?? runningSession());
@@ -785,6 +797,85 @@ describe('NotebookPage git-synced editor', () => {
 				([url, init]) => String(url).endsWith('/change-requests') && init?.method === 'POST',
 			),
 		).toBe(true);
+		expect(await screen.findByRole('button', { name: 'View PR' })).toBeEnabled();
+	});
+
+	it('views the published PR without creating another proposal', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'manager',
+			sourceType: 'git',
+			session: gitEditSession(),
+			sourceControlProviders: ['github'],
+		});
+		const pendingPopup = {
+			opener: window,
+			location: { href: 'about:blank' },
+			close: vi.fn(),
+		};
+		const viewPopup = { opener: window };
+		vi.spyOn(window, 'open')
+			.mockReturnValueOnce(pendingPopup as unknown as Window)
+			.mockReturnValueOnce(viewPopup as unknown as Window);
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open PR' }));
+		const viewButton = await screen.findByRole('button', { name: 'View PR' });
+		await user.click(viewButton);
+
+		expect(window.open).toHaveBeenLastCalledWith('https://github.com/org/repo/pull/17', '_blank');
+		expect(viewPopup.opener).toBeNull();
+		expect(
+			fetch.mock.calls.filter(
+				([url, init]) => String(url).endsWith('/change-requests') && init?.method === 'POST',
+			),
+		).toHaveLength(1);
+	});
+
+	it('updates the current PR and replaces it only when creating a new PR', async () => {
+		const user = userEvent.setup();
+		const fetch = makeFetch({
+			role: 'manager',
+			sourceType: 'git',
+			session: gitEditSession(),
+			sourceControlProviders: ['github'],
+		});
+		const firstPopup = { opener: window, location: { href: 'about:blank' }, close: vi.fn() };
+		const updatePopup = { opener: window, location: { href: 'about:blank' }, close: vi.fn() };
+		const newPopup = { opener: window, location: { href: 'about:blank' }, close: vi.fn() };
+		const viewPopup = { opener: window };
+		vi.spyOn(window, 'open')
+			.mockReturnValueOnce(firstPopup as unknown as Window)
+			.mockReturnValueOnce(updatePopup as unknown as Window)
+			.mockReturnValueOnce(newPopup as unknown as Window)
+			.mockReturnValueOnce(viewPopup as unknown as Window);
+		renderPage();
+
+		await user.click(await screen.findByRole('button', { name: 'Open PR' }));
+		await screen.findByRole('button', { name: 'View PR' });
+		await user.click(screen.getByRole('button', { name: 'pull request options' }));
+		await user.click(await screen.findByRole('menuitem', { name: 'Update PR' }));
+		await waitFor(() =>
+			expect(updatePopup.location.href).toBe('https://github.com/org/repo/pull/17'),
+		);
+
+		await user.click(screen.getByRole('button', { name: 'pull request options' }));
+		await user.click(await screen.findByRole('menuitem', { name: 'Create new PR' }));
+		await waitFor(() => expect(newPopup.location.href).toBe('https://github.com/org/repo/pull/18'));
+		await user.click(screen.getByRole('button', { name: 'View PR' }));
+		expect(window.open).toHaveBeenLastCalledWith('https://github.com/org/repo/pull/18', '_blank');
+
+		const requests = fetch.mock.calls.filter(
+			([url, init]) => String(url).endsWith('/change-requests') && init?.method === 'POST',
+		);
+		expect(requests).toHaveLength(3);
+		expect(JSON.parse(String(requests[0]?.[1]?.body))).not.toHaveProperty('target_proposal_id');
+		expect(JSON.parse(String(requests[1]?.[1]?.body))).toMatchObject({
+			target_proposal_id: 'prop-1234567890abcdef',
+		});
+		expect(JSON.parse(String(requests[2]?.[1]?.body))).not.toHaveProperty('target_proposal_id');
+		const keys = requests.map(([, init]) => new Headers(init?.headers).get('idempotency-key'));
+		expect(new Set(keys).size).toBe(3);
 	});
 
 	it('navigates the current tab when the pull-request popup is blocked', async () => {

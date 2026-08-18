@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSandboxId, MAX_VERSIONS, paths, UnavailableError } from '@marimo-hub/core';
 import type {
+	ProposalId,
 	SourceControlPublisher,
 	SourceControlPublisherRegistry,
 	VersionId,
@@ -21,19 +22,33 @@ describe('change request routes', () => {
 	>['session_id'];
 	let sourceVersionId: VersionId;
 	let openChangeRequest: ReturnType<typeof vi.fn<SourceControlPublisher['openChangeRequest']>>;
+	let updateChangeRequest: ReturnType<
+		typeof vi.fn<NonNullable<SourceControlPublisher['updateChangeRequest']>>
+	>;
 	const route = () =>
 		`/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`;
 
 	beforeEach(async () => {
 		const bucket = await createInitializedBucket();
 		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("after")' } });
-		openChangeRequest = vi.fn<SourceControlPublisher['openChangeRequest']>(async (input) => ({
-			number: 17,
-			url: 'https://github.com/owner/repo/pull/17',
-			headBranch: input.headBranch,
-			headCommit: 'def456',
-		}));
-		const publisher: SourceControlPublisher = { provider: 'github', openChangeRequest };
+		let nextPullRequestNumber = 17;
+		openChangeRequest = vi.fn<SourceControlPublisher['openChangeRequest']>(async (input) => {
+			const number = nextPullRequestNumber++;
+			return {
+				number,
+				url: `https://github.com/owner/repo/pull/${number}`,
+				headBranch: input.headBranch,
+				headCommit: `created-${number}`,
+			};
+		});
+		updateChangeRequest = vi.fn<NonNullable<SourceControlPublisher['updateChangeRequest']>>(
+			async (input) => ({ ...input.changeRequest, headCommit: 'updated-head' }),
+		);
+		const publisher: SourceControlPublisher = {
+			provider: 'github',
+			openChangeRequest,
+			updateChangeRequest,
+		};
 		setup = createTestApi({
 			bucket,
 			compute: fakeComputeFrom(instance),
@@ -152,6 +167,60 @@ describe('change request routes', () => {
 		expect(replay).toEqual(first);
 		expect(getPublisher).not.toHaveBeenCalled();
 		expect(openChangeRequest).toHaveBeenCalledOnce();
+	});
+
+	it('updates an existing change request or explicitly creates a new one', async () => {
+		const initial = await expectOk<{
+			proposal_id: string;
+			change_request: { number: number; url: string; head_branch: string };
+		}>(
+			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'initial-change-request' }),
+			201,
+		);
+		const updated = await expectOk<{
+			proposal_id: string;
+			change_request: { number: number; url: string; head_branch: string };
+		}>(
+			await setup.request(
+				'POST',
+				route(),
+				{ target_proposal_id: initial.proposal_id },
+				{ 'Idempotency-Key': 'update-change-request' },
+			),
+			201,
+		);
+
+		expect(updated.proposal_id).not.toBe(initial.proposal_id);
+		expect(updated.change_request).toMatchObject({
+			number: initial.change_request.number,
+			url: initial.change_request.url,
+			head_branch: initial.change_request.head_branch,
+		});
+		expect(updateChangeRequest).toHaveBeenCalledOnce();
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+		const storedUpdate = await setup.deps.services.proposals.getProposal(
+			projectId,
+			notebookId,
+			updated.proposal_id as ProposalId,
+		);
+		expect(storedUpdate.proposal.target_proposal_id).toBe(initial.proposal_id);
+
+		const created = await expectOk<{
+			proposal_id: string;
+			change_request: { number: number; url: string; head_branch: string };
+		}>(
+			await setup.request(
+				'POST',
+				route(),
+				{},
+				{ 'Idempotency-Key': 'create-another-change-request' },
+			),
+			201,
+		);
+		expect(created.change_request.number).toBe(18);
+		expect(created.change_request.url).toBe('https://github.com/owner/repo/pull/18');
+		expect(created.change_request.head_branch).not.toBe(initial.change_request.head_branch);
+		expect(openChangeRequest).toHaveBeenCalledTimes(2);
 	});
 
 	it('recovers a published proposal when response recording failed and its publisher is disabled', async () => {

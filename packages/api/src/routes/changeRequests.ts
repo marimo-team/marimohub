@@ -35,6 +35,16 @@ const OpenChangeRequestBody = z
 			description: 'Change request description. Defaults to the session and base commit.',
 			example: 'Updates the regional revenue analysis.',
 		}),
+		target_proposal_id: z
+			.string()
+			.regex(ProposalId.regex)
+			.refine(ProposalId.is)
+			.optional()
+			.openapi({
+				description:
+					'Published proposal whose existing change request should receive this new proposal. Omit to create a new change request.',
+				example: 'prop-7h2k9qm4xz7rp3w8',
+			}),
 	})
 	.openapi('OpenNotebookChangeRequestBody');
 
@@ -65,9 +75,9 @@ const openChangeRequest = createRoute({
 	path: '/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests',
 	operationId: 'openNotebookChangeRequest',
 	tags: ['Source control publishing'],
-	summary: 'Open a draft change request from a live notebook session',
+	summary: 'Publish notebook changes to a new or existing change request',
 	description:
-		'A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. The Idempotency-Key header is required; retry with the same key to resume the same proposal and provider branch. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.',
+		'A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. Set target_proposal_id to update the change request published by that proposal; omit it to create a new change request. The Idempotency-Key header is required; retry with the same key to resume the same operation. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.',
 	request: {
 		params: SessionIdParam,
 		headers: RequiredIdempotencyKeyHeader,
@@ -76,7 +86,7 @@ const openChangeRequest = createRoute({
 	responses: {
 		201: jsonContent(
 			z.object({ success: z.literal(true), data: ChangeRequestResponse }),
-			'Draft change request opened',
+			'Change request published',
 		),
 		...commonErrors(),
 		...errorResponses(400, 403, 404, 409, 503),
@@ -162,6 +172,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 				sandbox: deps.compute.create(session.sandbox_id),
 				workdir: deps.sandbox.workdir,
 				author: user.id,
+				targetProposalId: request.target_proposal_id,
 				resolvedSourceRevision: sourceRevision,
 			});
 		}
@@ -175,6 +186,9 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 				request.body ??
 				`Changes proposed from marimohub session ${sid}.\n\nBase commit: ${proposal.source.commit}`,
 		});
+		const auditEvent = proposal.target_proposal_id
+			? 'notebook.change_request.update'
+			: 'notebook.change_request.open';
 		await appendAudit(
 			{
 				requestId: c.get('requestId'),
@@ -182,10 +196,10 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 				path: c.req.path,
 				userId: user.id,
 			},
-			'notebook.change_request.open',
+			auditEvent,
 			() =>
 				deps.services.events.append({
-					event: 'notebook.change_request.open',
+					event: auditEvent,
 					actor: user.id,
 					project_id: pid,
 					notebook_id: nid,

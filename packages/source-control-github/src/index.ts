@@ -10,6 +10,7 @@ import type {
 	OpenChangeRequestInput,
 	OpenChangeRequestResult,
 	SourceControlPublisher,
+	UpdateChangeRequestInput,
 } from '@marimo-hub/core';
 
 type GitHubFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -359,13 +360,14 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 	}
 
 	private async createProposalTree(
-		input: OpenChangeRequestInput,
+		input: Pick<OpenChangeRequestInput, 'changes'>,
+		treeBaseCommit: string,
 		owner: string,
 		repo: string,
 		token: string,
 	): Promise<string> {
 		const commitResponse = await this.request(
-			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits/${encodeURIComponent(input.baseCommit)}`,
+			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits/${encodeURIComponent(treeBaseCommit)}`,
 			token,
 		);
 		const baseTree = nestedString(await json(commitResponse), 'tree', 'sha');
@@ -378,7 +380,7 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 				.map(async (change) => {
 					const exists = baseEntries
 						? baseEntries.has(change.path)
-						: await this.pathExistsAtCommit(owner, repo, change.path, input.baseCommit, token);
+						: await this.pathExistsAtCommit(owner, repo, change.path, treeBaseCommit, token);
 					if (exists) {
 						throw new ConflictError(`GitHub base tree already contains ${change.path}`);
 					}
@@ -389,12 +391,12 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 				const baseEntry = baseEntries?.get(change.path);
 				if (change.operation === 'delete') {
 					if (!baseEntry) {
-						throw new UnavailableError(`GitHub base tree is missing ${change.path}`);
+						throw new ConflictError(`GitHub base tree is missing ${change.path}`);
 					}
 					return { path: change.path, ...baseEntry, sha: null };
 				}
 				if (change.operation === 'modify' && baseEntry?.type !== 'blob') {
-					throw new UnavailableError(`GitHub base tree has no file at ${change.path}`);
+					throw new ConflictError(`GitHub base tree has no file at ${change.path}`);
 				}
 				const blobResponse = await this.request(
 					`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs`,
@@ -421,6 +423,95 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 			{ method: 'POST', body: JSON.stringify({ base_tree: baseTree, tree }) },
 		);
 		return stringField(await json(treeResponse), 'sha');
+	}
+
+	private async createProposalCommit(
+		owner: string,
+		repo: string,
+		parentCommit: string,
+		tree: string,
+		title: string,
+		body: string,
+		token: string,
+	): Promise<string> {
+		const response = await this.request(
+			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits`,
+			token,
+			{
+				method: 'POST',
+				body: JSON.stringify({
+					message: `${title}\n\n${body}`.trim(),
+					tree,
+					parents: [parentCommit],
+				}),
+			},
+		);
+		return stringField(await json(response), 'sha');
+	}
+
+	private async updateRef(
+		owner: string,
+		repo: string,
+		branch: string,
+		commit: string,
+		force: boolean,
+		token: string,
+	): Promise<boolean> {
+		const response = await this.request(
+			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs/heads/${refPath(branch)}`,
+			token,
+			{ method: 'PATCH', body: JSON.stringify({ sha: commit, force }) },
+			[409, 422],
+		);
+		if (response.status === 409 || response.status === 422) return false;
+		if (nestedString(await json(response), 'object', 'sha') !== commit) {
+			throw new UnavailableError('GitHub returned an invalid updated branch');
+		}
+		return true;
+	}
+
+	private async forceUpdateRef(
+		owner: string,
+		repo: string,
+		branch: string,
+		expectedCommit: string,
+		nextCommit: string,
+		token: string,
+	): Promise<void> {
+		const repositoryResponse = await this.request(
+			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+			token,
+		);
+		const repositoryId = stringField(await json(repositoryResponse), 'node_id');
+		const response = await this.request('/graphql', token, {
+			method: 'POST',
+			body: JSON.stringify({
+				query:
+					'mutation UpdateProposalRef($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }',
+				variables: {
+					input: {
+						repositoryId,
+						refUpdates: [
+							{
+								name: `refs/heads/${branch}`,
+								beforeOid: expectedCommit,
+								afterOid: nextCommit,
+								force: true,
+							},
+						],
+					},
+				},
+			}),
+		});
+		const payload = await json(response);
+		if (
+			!isRecord(payload) ||
+			(Array.isArray(payload.errors) && payload.errors.length > 0) ||
+			!isRecord(payload.data) ||
+			!isRecord(payload.data.updateRefs)
+		) {
+			throw new ConflictError('The GitHub proposal branch changed while updating');
+		}
 	}
 
 	private async proposalCommitMatches(
@@ -560,7 +651,7 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 			input.baseBranch,
 			token,
 		);
-		const treeSha = await this.createProposalTree(input, owner, repo, token);
+		const treeSha = await this.createProposalTree(input, input.baseCommit, owner, repo, token);
 		const existing = await this.matchingPullRequest(
 			pullRequests,
 			owner,
@@ -576,19 +667,15 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 			await this.assertProposalCommit(owner, repo, existingRef, input.baseCommit, treeSha, token);
 			return this.createPullRequest(input, owner, repo, token, existingRef);
 		}
-		const proposedCommitResponse = await this.request(
-			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/commits`,
+		const proposedCommit = await this.createProposalCommit(
+			owner,
+			repo,
+			input.baseCommit,
+			treeSha,
+			input.title,
+			input.body,
 			token,
-			{
-				method: 'POST',
-				body: JSON.stringify({
-					message: `${input.title}\n\n${input.body}`.trim(),
-					tree: treeSha,
-					parents: [input.baseCommit],
-				}),
-			},
 		);
-		const proposedCommit = stringField(await json(proposedCommitResponse), 'sha');
 		const refResponse = await this.request(
 			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`,
 			token,
@@ -607,6 +694,148 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 			await this.assertProposalCommit(owner, repo, headCommit, input.baseCommit, treeSha, token);
 		}
 		return this.createPullRequest(input, owner, repo, token, headCommit);
+	}
+
+	async updateChangeRequest(input: UpdateChangeRequestInput): Promise<OpenChangeRequestResult> {
+		const { owner, repo } = parseRepository(input.repository);
+		validateBranch(input.baseBranch);
+		validateBranch(input.changeRequest.headBranch);
+		validateChanges(input.changes);
+		if (typeof input.baseCommit !== 'string' || input.baseCommit.length === 0) {
+			throw new ValidationError('GitHub base commit is required');
+		}
+		if (typeof input.title !== 'string' || input.title.trim().length === 0) {
+			throw new ValidationError('GitHub pull request title is required');
+		}
+		if (typeof input.body !== 'string') {
+			throw new ValidationError('Invalid GitHub pull request metadata');
+		}
+		const token = await this.installationToken(owner, repo);
+		const pulls = await this.findPullRequests(
+			owner,
+			repo,
+			input.changeRequest.headBranch,
+			input.baseBranch,
+			token,
+		);
+		const pull = pulls.find((candidate) => candidate.number === input.changeRequest.number);
+		if (!pull || pull.url !== input.changeRequest.url) {
+			throw new ConflictError('The GitHub pull request no longer matches the published proposal');
+		}
+		if (pull.state !== 'open') {
+			throw new ConflictError('The GitHub pull request is closed; create a new pull request');
+		}
+		const expectedHead = input.changeRequest.headCommit;
+		let currentHead = await this.getRef(owner, repo, input.changeRequest.headBranch, token);
+		if (!currentHead) {
+			throw new ConflictError(
+				'The GitHub pull request branch was deleted; create a new pull request',
+			);
+		}
+
+		let appendTree: string | undefined;
+		try {
+			appendTree = await this.createProposalTree(input, expectedHead, owner, repo, token);
+		} catch (error) {
+			if (!(error instanceof ConflictError)) throw error;
+		}
+		if (currentHead !== expectedHead) {
+			if (
+				appendTree &&
+				(await this.proposalCommitMatches(
+					owner,
+					repo,
+					currentHead,
+					expectedHead,
+					appendTree,
+					token,
+				))
+			) {
+				return { ...input.changeRequest, headCommit: currentHead };
+			}
+			const replacementTree = await this.createProposalTree(
+				input,
+				input.baseCommit,
+				owner,
+				repo,
+				token,
+			);
+			if (
+				await this.proposalCommitMatches(
+					owner,
+					repo,
+					currentHead,
+					input.baseCommit,
+					replacementTree,
+					token,
+				)
+			) {
+				return { ...input.changeRequest, headCommit: currentHead };
+			}
+			throw new ConflictError('The GitHub pull request branch changed outside marimohub');
+		}
+
+		if (appendTree) {
+			const appendCommit = await this.createProposalCommit(
+				owner,
+				repo,
+				expectedHead,
+				appendTree,
+				input.title,
+				input.body,
+				token,
+			);
+			if (
+				await this.updateRef(
+					owner,
+					repo,
+					input.changeRequest.headBranch,
+					appendCommit,
+					false,
+					token,
+				)
+			) {
+				return { ...input.changeRequest, headCommit: appendCommit };
+			}
+			currentHead = await this.getRef(owner, repo, input.changeRequest.headBranch, token);
+			if (currentHead === appendCommit) {
+				return { ...input.changeRequest, headCommit: appendCommit };
+			}
+			if (currentHead !== expectedHead) {
+				throw new ConflictError('The GitHub pull request branch changed while updating');
+			}
+		}
+
+		const replacementTree = await this.createProposalTree(
+			input,
+			input.baseCommit,
+			owner,
+			repo,
+			token,
+		);
+		const replacementCommit = await this.createProposalCommit(
+			owner,
+			repo,
+			input.baseCommit,
+			replacementTree,
+			input.title,
+			input.body,
+			token,
+		);
+		await this.forceUpdateRef(
+			owner,
+			repo,
+			input.changeRequest.headBranch,
+			expectedHead,
+			replacementCommit,
+			token,
+		);
+		if (
+			(await this.getRef(owner, repo, input.changeRequest.headBranch, token)) !== replacementCommit
+		) {
+			throw new UnavailableError('GitHub did not update the pull request branch');
+		}
+		return { ...input.changeRequest, headCommit: replacementCommit };
 	}
 
 	private async createPullRequest(

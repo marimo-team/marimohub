@@ -551,6 +551,7 @@ export const NotebookProposalSchema = z.object({
 	created_at: z.iso.datetime(),
 	base_version_id: VersionIdSchema,
 	source: GitSourceRevisionSchema.extend({ provider: z.string().min(1) }),
+	target_proposal_id: ProposalIdSchema.optional(),
 	changes: z.array(ProposalChangeSchema).min(1),
 });
 

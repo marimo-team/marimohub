@@ -4,6 +4,7 @@ import {
 	AlertTriangle,
 	AppWindow,
 	ArrowLeft,
+	ChevronDown,
 	Eye,
 	GitBranch,
 	GitPullRequest,
@@ -15,6 +16,7 @@ import {
 	Button,
 	Chip,
 	ConfirmDialog,
+	DropdownMenu,
 	IconButton,
 	IconLink,
 	StatusDot,
@@ -345,6 +347,24 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 			: sourceProvider === 'github'
 				? 'Open PR'
 				: 'Open change request';
+	const viewChangeRequestLabel =
+		sourceProvider === 'gitlab'
+			? 'View MR'
+			: sourceProvider === 'github'
+				? 'View PR'
+				: 'View change request';
+	const updateChangeRequestLabel =
+		sourceProvider === 'gitlab'
+			? 'Update MR'
+			: sourceProvider === 'github'
+				? 'Update PR'
+				: 'Update change request';
+	const createChangeRequestLabel =
+		sourceProvider === 'gitlab'
+			? 'Create new MR'
+			: sourceProvider === 'github'
+				? 'Create new PR'
+				: 'Create new change request';
 	const canOpenChangeRequest =
 		!isApp &&
 		isRunning &&
@@ -353,21 +373,30 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 		!!sourceProvider &&
 		(capabilities?.source_control?.change_request_providers.includes(sourceProvider) ?? false) &&
 		canManageProject(project.your_role);
-	const handleOpenChangeRequest = () => {
+	const handlePublishChangeRequest = (action: 'open' | 'update' | 'create-new') => {
 		if (!session) return;
 		const pendingWindow = window.open('about:blank', '_blank');
 		if (pendingWindow) pendingWindow.opener = null;
 		openChangeRequest.mutate(
-			{ sessionId: session.session_id, title: `Update ${title}` },
+			{ sessionId: session.session_id, title: `Update ${title}`, action },
 			{
 				onSuccess: (data) => {
 					if (pendingWindow) pendingWindow.location.href = data.change_request.url;
 					else window.location.assign(data.change_request.url);
-					toast.success(`Opened ${changeRequestKind} #${data.change_request.number}`);
+					toast.success(
+						`${action === 'update' ? 'Updated' : 'Opened'} ${changeRequestKind} #${data.change_request.number}`,
+					);
 				},
 				onError: () => pendingWindow?.close(),
 			},
 		);
+	};
+	const handleViewChangeRequest = () => {
+		const url = openChangeRequest.activeChangeRequest?.change_request.url;
+		if (!url) return;
+		const opened = window.open(url, '_blank');
+		if (opened) opened.opener = null;
+		else window.location.assign(url);
 	};
 
 	return (
@@ -420,16 +449,47 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					</span>
 				)}
 				<div className="ml-auto flex items-center gap-2">
-					{canOpenChangeRequest && (
+					{canOpenChangeRequest && !openChangeRequest.activeChangeRequest && (
 						<Button
 							variant="unstyled"
 							className="flex h-[26px] items-center gap-1 rounded-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11"
 							isDisabled={openChangeRequest.isPending}
-							onPress={handleOpenChangeRequest}
+							onPress={() => handlePublishChangeRequest('open')}
 						>
 							<GitPullRequest className="size-3" />
 							{openChangeRequest.isPending ? 'Opening…' : openChangeRequestLabel}
 						</Button>
+					)}
+					{canOpenChangeRequest && openChangeRequest.activeChangeRequest && (
+						<div className="flex items-center">
+							<Button
+								variant="unstyled"
+								className="flex h-[26px] items-center gap-1 rounded-l-md border border-input px-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary max-md:min-h-11"
+								onPress={handleViewChangeRequest}
+							>
+								<GitPullRequest className="size-3" />
+								{viewChangeRequestLabel}
+							</Button>
+							<DropdownMenu
+								label={`${changeRequestKind} options`}
+								icon={<ChevronDown className="size-3" />}
+								triggerClassName="h-[26px] w-6 rounded-r-md border border-l-0 border-input hover:border-primary max-md:h-11"
+								isDisabled={openChangeRequest.isPending}
+								options={[
+									{
+										id: 'update',
+										label: updateChangeRequestLabel,
+										icon: <RefreshCw className="size-3.5" />,
+									},
+									{
+										id: 'create-new',
+										label: createChangeRequestLabel,
+										icon: <GitPullRequest className="size-3.5" />,
+									},
+								]}
+								onAction={(action) => handlePublishChangeRequest(action as 'update' | 'create-new')}
+							/>
+						</div>
 					)}
 					{!staticView && (
 						<ComputeProfileIndicator

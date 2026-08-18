@@ -36,10 +36,25 @@ export interface OpenChangeRequestResult {
 	headCommit: string;
 }
 
+export interface UpdateChangeRequestInput {
+	/** Provider-specific repository coordinate from the synced source revision. */
+	repository: string;
+	/** Branch and commit against which the change request was originally opened. */
+	baseBranch: string;
+	baseCommit: string;
+	/** Previously published change request whose provider branch should be updated. */
+	changeRequest: OpenChangeRequestResult;
+	title: string;
+	body: string;
+	changes: readonly SourceControlChange[];
+}
+
 export interface SourceControlPublisher {
 	/** Stable id stored on source revisions, such as `github` or `gitlab`. */
 	readonly provider: string;
 	openChangeRequest(input: OpenChangeRequestInput): Promise<OpenChangeRequestResult>;
+	/** Update an existing open change request, when supported by the provider. */
+	updateChangeRequest?(input: UpdateChangeRequestInput): Promise<OpenChangeRequestResult>;
 }
 
 /** Server-side publishers configured for this deployment. */
