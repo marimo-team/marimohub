@@ -136,6 +136,27 @@ describe('NotebookProposalService', () => {
 		).toEqual(expect.objectContaining({ state: 'pending' }));
 	});
 
+	it('inspects the entry notebook through its parent directory', async () => {
+		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("after")' } });
+		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path, options) => {
+			if (path !== '/workspace') return { success: true, files: [] };
+			const result = await instance.listFiles(path, options);
+			if (!result.success) return result;
+			return {
+				success: true,
+				files: result.files.map((file) => ({
+					...file,
+					absolutePath: `/provider-specific-root/${file.name}`,
+				})),
+			};
+		});
+
+		await expect(capture({ ...instance, listFiles })).resolves.toMatchObject({
+			base_version_id: versionId,
+		});
+		expect(listFiles).toHaveBeenCalledExactlyOnceWith('/workspace', { includeHidden: true });
+	});
+
 	it('does not create a proposal for unchanged content', async () => {
 		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("before")' } });
 		await expect(capture(instance)).rejects.toThrow('no changes');

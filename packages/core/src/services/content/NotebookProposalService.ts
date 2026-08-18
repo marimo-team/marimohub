@@ -184,11 +184,15 @@ export class NotebookProposalService {
 				input.legacySourceRevision,
 			));
 
-		const absolutePath = `${input.workdir}/${source.entry_notebook}`;
-		const listing = await input.sandbox.listFiles(absolutePath);
+		const workdir = input.workdir.replace(/\/+$/, '');
+		const absolutePath = `${workdir}/${source.entry_notebook}`;
+		const separator = absolutePath.lastIndexOf('/');
+		const parentPath = absolutePath.slice(0, separator) || '/';
+		const fileName = absolutePath.slice(separator + 1);
+		const listing = await input.sandbox.listFiles(parentPath, { includeHidden: true });
 		if (!listing.success) throw new ConflictError('Could not inspect the edited notebook');
 		const file = listing.files.find(
-			(candidate) => candidate.type === 'file' && candidate.absolutePath === absolutePath,
+			(candidate) => candidate.type === 'file' && candidate.name === fileName,
 		);
 		if (!file) throw new ConflictError('The edited notebook is missing from the session');
 		if (!Number.isSafeInteger(file.size) || file.size < 0) {
