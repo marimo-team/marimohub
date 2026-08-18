@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MAX_REQUEST_BYTES } from '../../constants';
 import { createNotebookId, createProjectId, createProposalId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId, ProposalId, UserId, VersionId } from '../../ids';
@@ -9,6 +13,7 @@ import type { OpenChangeRequestResult, SourceControlPublisher } from '../../port
 import type { SandboxInstance } from '../../ports/sandbox';
 import type { Session } from '../../schema';
 import { ACTOR, makeFsSandbox, makeSession, setupTestEnv, uid } from '../../testing';
+import { shellQuote } from '../runtime/shell';
 import {
 	DEFAULT_PROPOSAL_PAYLOAD_RETENTION_MS,
 	DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS,
@@ -28,6 +33,16 @@ function deferred<T>() {
 }
 const LARGE_CONTENT_TEST_TIMEOUT_MS = 15_000;
 
+function runShellCommand(command: string) {
+	const result = spawnSync('/bin/sh', ['-lc', command], {
+		encoding: 'utf8',
+		maxBuffer: Math.ceil(((MAX_REQUEST_BYTES + 1) * 4) / 3) + 1024,
+		timeout: 1_000,
+	});
+	if (result.error) throw result.error;
+	return execResult(result.status === 0, result.stdout ?? '', result.stderr);
+}
+
 interface GitSandboxOptions {
 	files: Record<string, string | Uint8Array>;
 	diff?: readonly (readonly [status: string, path: string])[];
@@ -39,6 +54,7 @@ interface GitSandboxOptions {
 	baseCommitOutput?: string;
 	diffFails?: boolean;
 	sizes?: Record<string, number>;
+	secureReadFailures?: readonly string[];
 }
 
 function makeGitSandbox(options: GitSandboxOptions) {
@@ -71,6 +87,17 @@ function makeGitSandbox(options: GitSandboxOptions) {
 				options.untrackedOutput ?? (options.untracked ?? []).map((path) => `${path}\0`).join(''),
 				'',
 			);
+		}
+		if (command.includes('os.O_NOFOLLOW')) {
+			const path = Object.keys(options.files).find((candidate) =>
+				command.endsWith(
+					` ${shellQuote('/workspace')} ${shellQuote(candidate)} ${MAX_REQUEST_BYTES}`,
+				),
+			);
+			if (!path || options.secureReadFailures?.includes(path)) {
+				return execResult(false, '', 'unsafe or missing file');
+			}
+			return sandbox.instance.exec(`base64 < ${shellQuote(`/workspace/${path}`)}`);
 		}
 		return sandbox.instance.exec(command);
 	});
@@ -127,6 +154,7 @@ describe('NotebookProposalService', () => {
 			session: Session;
 			author: UserId;
 			targetProposalId: ProposalId;
+			workdir: string;
 		}> = {},
 	) {
 		return env.proposals.captureProposal({
@@ -134,7 +162,7 @@ describe('NotebookProposalService', () => {
 			notebookId,
 			session: overrides.session ?? session,
 			sandbox,
-			workdir: '/workspace',
+			workdir: overrides.workdir ?? '/workspace',
 			author: overrides.author ?? ACTOR,
 			proposalId: overrides.proposalId,
 			targetProposalId: overrides.targetProposalId,
@@ -295,8 +323,13 @@ describe('NotebookProposalService', () => {
 		const commands = exec.mock.calls.map(([command]) => command).join('\n');
 		expect(commands).toContain(':(exclude,glob)**/__marimo__/**');
 		expect(commands).toContain(':(exclude,glob)**/.venv/**');
-		expect(commands).toContain("base64 < '/workspace/new.txt'");
-		for (const path of ignored) expect(commands).not.toContain(`base64 < '/workspace/${path}'`);
+		const reads = exec.mock.calls
+			.map(([command]) => command)
+			.filter((command) => command.includes('os.O_NOFOLLOW'));
+		expect(reads).toHaveLength(1);
+		expect(reads[0]).toMatch(
+			new RegExp(` ${shellQuote('/workspace')} ${shellQuote('new.txt')} ${MAX_REQUEST_BYTES}$`),
+		);
 	});
 
 	it('captures binary Git files byte for byte', async () => {
@@ -376,14 +409,20 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('ignores a mode-only tracked change whose bytes match the synced version', async () => {
-		const { instance, calls } = makeGitSandbox({
+		const { instance, calls, exec } = makeGitSandbox({
 			files: { 'dashboard.py': 'print("before")' },
 			diff: [['M', 'dashboard.py']],
 		});
 
 		await expect(capture(instance)).rejects.toThrow('no changes');
 		expect(calls.readFile).toHaveLength(0);
-		expect(calls.exec).toEqual(["base64 < '/workspace/dashboard.py'"]);
+		expect(exec).toHaveBeenCalledWith(
+			expect.stringMatching(
+				new RegExp(
+					` ${shellQuote('/workspace')} ${shellQuote('dashboard.py')} ${MAX_REQUEST_BYTES}$`,
+				),
+			),
+		);
 	});
 
 	it('treats a tracked deletion recreated as untracked content as a modification', async () => {
@@ -431,80 +470,46 @@ describe('NotebookProposalService', () => {
 	});
 
 	it('rejects changed symlinks without reading through them', async () => {
-		const sandbox = makeGitSandbox({
+		const { instance, exec } = makeGitSandbox({
 			files: { 'dashboard.py': 'print("before")', 'link.txt': 'target bytes' },
 			untracked: ['link.txt'],
-		});
-		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path, options) => {
-			const result = await sandbox.instance.listFiles(path, options);
-			if (!result.success) return result;
-			return {
-				...result,
-				files: result.files.map((file) =>
-					file.name === 'link.txt' ? { ...file, type: 'symlink' as const } : file,
-				),
-			};
+			secureReadFailures: ['link.txt'],
 		});
 
-		await expect(capture({ ...sandbox.instance, listFiles })).rejects.toThrow('not a regular file');
-		expect(sandbox.calls.readFile).toHaveLength(0);
+		await expect(capture(instance)).rejects.toThrow('Could not securely read changed file');
+		expect(exec).toHaveBeenCalledWith(expect.stringContaining('os.O_NOFOLLOW'));
 	});
 
 	it('rejects changed files beneath symlinked directories without reading through them', async () => {
-		const sandbox = makeGitSandbox({
+		const { instance, exec } = makeGitSandbox({
 			files: { 'linked/new.txt': 'outside bytes' },
 			untracked: ['linked/new.txt'],
-		});
-		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path, options) => {
-			if (path !== '/workspace') return sandbox.instance.listFiles(path, options);
-			return {
-				success: true,
-				files: [
-					{
-						name: 'linked',
-						absolutePath: '/workspace/linked',
-						relativePath: 'linked',
-						type: 'symlink',
-						size: 0,
-					},
-				],
-			};
+			secureReadFailures: ['linked/new.txt'],
 		});
 
-		await expect(capture({ ...sandbox.instance, listFiles })).rejects.toThrow(
-			'has a non-directory parent',
-		);
-		expect(sandbox.exec).not.toHaveBeenCalledWith(expect.stringContaining('base64 <'));
+		await expect(capture(instance)).rejects.toThrow('Could not securely read changed file');
+		expect(exec).toHaveBeenCalledWith(expect.stringContaining('os.O_DIRECTORY'));
 	});
 
-	it('captures changed files beneath inspected directories', async () => {
-		const sandbox = makeGitSandbox({
+	it('captures changed files through no-follow directory descriptors', async () => {
+		const { instance, exec } = makeGitSandbox({
 			files: { 'nested/new.txt': 'new bytes' },
 			untracked: ['nested/new.txt'],
 		});
-		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path, options) => {
-			if (path !== '/workspace') return sandbox.instance.listFiles(path, options);
-			return {
-				success: true,
-				files: [
-					{
-						name: 'nested',
-						absolutePath: '/workspace/nested',
-						relativePath: 'nested',
-						type: 'directory',
-						size: 0,
-					},
-				],
-			};
-		});
 
-		await expect(capture({ ...sandbox.instance, listFiles })).resolves.toMatchObject({
+		await expect(capture(instance)).resolves.toMatchObject({
 			changes: [expect.objectContaining({ path: 'nested/new.txt', operation: 'add' })],
 		});
-		expect(sandbox.exec).toHaveBeenCalledWith("base64 < '/workspace/nested/new.txt'");
+		expect(exec).toHaveBeenCalledWith(
+			expect.stringMatching(
+				new RegExp(
+					`os\\.O_NOFOLLOW[\\s\\S]* ${shellQuote('/workspace')} ${shellQuote('nested/new.txt')} ${MAX_REQUEST_BYTES}$`,
+				),
+			),
+		);
 	});
 
-	it('lists each shared directory once when capturing many nested files', async () => {
+	it('does not retain directory listings while capturing many nested files', async () => {
 		const changedPaths = Array.from(
 			{ length: 100 },
 			(_, index) => `generated/shared/deep/file-${index}.txt`,
@@ -513,42 +518,8 @@ describe('NotebookProposalService', () => {
 			files: Object.fromEntries(changedPaths.map((path) => [path, path])),
 			untracked: changedPaths,
 		});
-		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path) => {
-			const child =
-				path === '/workspace'
-					? 'generated'
-					: path === '/workspace/generated'
-						? 'shared'
-						: path === '/workspace/generated/shared'
-							? 'deep'
-							: null;
-			if (child) {
-				return {
-					success: true,
-					files: [
-						{
-							name: child,
-							absolutePath: `${path}/${child}`,
-							relativePath: `${path}/${child}`,
-							type: 'directory',
-							size: 0,
-						},
-					],
-				};
-			}
-			if (path === '/workspace/generated/shared/deep') {
-				return {
-					success: true,
-					files: changedPaths.map((filePath) => ({
-						name: filePath.split('/').at(-1) ?? '',
-						absolutePath: `/workspace/${filePath}`,
-						relativePath: filePath,
-						type: 'file' as const,
-						size: filePath.length,
-					})),
-				};
-			}
-			return { success: true, files: [] };
+		const listFiles = vi.fn<SandboxInstance['listFiles']>(async () => {
+			throw new Error('Git capture must not list directories');
 		});
 
 		const proposal = await capture({ ...sandbox.instance, listFiles });
@@ -556,45 +527,72 @@ describe('NotebookProposalService', () => {
 		expect(proposal.changes).toContainEqual(
 			expect.objectContaining({ path: changedPaths[0], operation: 'add' }),
 		);
-		expect(listFiles).toHaveBeenCalledTimes(4);
-		expect(listFiles.mock.calls.map(([path]) => path)).toEqual([
-			'/workspace',
-			'/workspace/generated',
-			'/workspace/generated/shared',
-			'/workspace/generated/shared/deep',
-		]);
+		expect(listFiles).not.toHaveBeenCalled();
+		expect(
+			sandbox.exec.mock.calls.filter(([command]) => command.includes('os.O_NOFOLLOW')),
+		).toHaveLength(changedPaths.length);
 	});
 
-	it('does not reuse directory inspection across captures', async () => {
-		const sandbox = makeGitSandbox({
-			files: { 'nested/new.txt': 'new bytes' },
-			untracked: ['nested/new.txt'],
-		});
-		let rootListings = 0;
-		const listFiles = vi.fn<SandboxInstance['listFiles']>(async (path, options) => {
-			if (path !== '/workspace') return sandbox.instance.listFiles(path, options);
-			rootListings++;
-			return {
-				success: true,
-				files: [
-					{
-						name: 'nested',
-						absolutePath: '/workspace/nested',
-						relativePath: 'nested',
-						type: rootListings === 1 ? 'directory' : 'symlink',
-						size: 0,
-					},
-				],
-			};
-		});
+	it('rejects a parent replaced by a symlink between changed-file reads', async () => {
+		const workdir = mkdtempSync(join(tmpdir(), 'marimohub-proposal-'));
+		const outside = mkdtempSync(join(tmpdir(), 'marimohub-proposal-outside-'));
+		try {
+			mkdirSync(join(workdir, 'nested'));
+			writeFileSync(join(workdir, 'nested', 'first.txt'), 'inside first');
+			writeFileSync(join(workdir, 'nested', 'second.txt'), 'inside second');
+			writeFileSync(join(outside, 'second.txt'), 'outside secret');
+			const sandbox = makeGitSandbox({
+				files: {
+					'nested/first.txt': 'inside first',
+					'nested/second.txt': 'inside second',
+				},
+				untracked: ['nested/first.txt', 'nested/second.txt'],
+			});
+			let secureReads = 0;
+			let racedStdout = '';
+			const exec = vi.fn<SandboxInstance['exec']>(async (command) => {
+				if (!command.includes('os.O_NOFOLLOW')) return sandbox.instance.exec(command);
+				secureReads++;
+				if (secureReads === 2) {
+					renameSync(join(workdir, 'nested'), join(workdir, 'original'));
+					symlinkSync(outside, join(workdir, 'nested'), 'dir');
+				}
+				const result = runShellCommand(command);
+				if (secureReads === 2) racedStdout = result.stdout;
+				return result;
+			});
 
-		await expect(
-			capture({ ...sandbox.instance, listFiles }, { proposalId: createProposalId() }),
-		).resolves.toMatchObject({ changes: [expect.objectContaining({ path: 'nested/new.txt' })] });
-		await expect(
-			capture({ ...sandbox.instance, listFiles }, { proposalId: createProposalId() }),
-		).rejects.toThrow('has a non-directory parent');
-		expect(rootListings).toBe(2);
+			await expect(capture({ ...sandbox.instance, exec }, { workdir })).rejects.toThrow(
+				'Could not securely read changed file nested/second.txt',
+			);
+			expect(secureReads).toBe(2);
+			expect(racedStdout).toBe('');
+		} finally {
+			rmSync(workdir, { recursive: true, force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
+	it('rejects a changed FIFO without blocking', async () => {
+		const workdir = mkdtempSync(join(tmpdir(), 'marimohub-proposal-fifo-'));
+		try {
+			const fifo = join(workdir, 'pipe');
+			const created = spawnSync('mkfifo', [fifo]);
+			if (created.status !== 0) throw new Error('mkfifo failed');
+			const sandbox = makeGitSandbox({ files: { pipe: '' }, untracked: ['pipe'] });
+			const exec = vi.fn<SandboxInstance['exec']>(async (command) =>
+				command.includes('os.O_NOFOLLOW')
+					? runShellCommand(command)
+					: sandbox.instance.exec(command),
+			);
+
+			await expect(capture({ ...sandbox.instance, exec }, { workdir })).rejects.toThrow(
+				'Could not securely read changed file pipe',
+			);
+			expect(exec).toHaveBeenCalledWith(expect.stringContaining('os.O_NONBLOCK'));
+		} finally {
+			rmSync(workdir, { recursive: true, force: true });
+		}
 	});
 
 	it('bounds the number of Git changes before reading their content', async () => {

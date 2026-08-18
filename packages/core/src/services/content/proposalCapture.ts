@@ -2,7 +2,7 @@ import { MAX_REQUEST_BYTES } from '../../constants';
 import { ConflictError, NotFoundError, ValidationError } from '../../errors';
 import { isSafeWorkspacePath } from '../../integrations/remoteWorkspace';
 import type { Bucket } from '../../ports/bucket';
-import type { FileInfo, SandboxInstance } from '../../ports/sandbox';
+import type { SandboxInstance } from '../../ports/sandbox';
 import type { NotebookProposal, ProposalChange } from '../../schema';
 import type { VersionPaths } from '../../paths';
 import { shellQuote } from '../runtime/shell';
@@ -36,6 +36,38 @@ const GIT_EXCLUDE_PATHS = [...IGNORED_DIRECTORY_NAMES].map(
 	(name) => `:(exclude,glob)**/${name}/**`,
 );
 GIT_EXCLUDE_PATHS.push(':(exclude,glob)**/.DS_Store');
+
+const READ_REGULAR_FILE_SCRIPT = `
+import base64
+import os
+import stat
+import sys
+
+root, relative_path, limit_text = sys.argv[1:]
+limit = int(limit_text)
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+directory_fd = os.open(root, directory_flags)
+try:
+    for component in relative_path.split('/')[:-1]:
+        next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+        os.close(directory_fd)
+        directory_fd = next_fd
+    file_fd = os.open(
+        relative_path.split('/')[-1],
+        os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+        dir_fd=directory_fd,
+    )
+    try:
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            raise OSError('not a regular file')
+        with os.fdopen(file_fd, 'rb', closefd=False) as file:
+            content = file.read(limit + 1)
+        sys.stdout.buffer.write(base64.b64encode(content))
+    finally:
+        os.close(file_fd)
+finally:
+    os.close(directory_fd)
+`.trim();
 
 function isIgnoredPath(path: string): boolean {
 	const segments = path.split('/');
@@ -128,21 +160,13 @@ async function inspectRegularFile(
 	sandbox: SandboxInstance,
 	workdir: string,
 	path: string,
-	directoryListings: Map<string, readonly FileInfo[]> = new Map(),
 ): Promise<number> {
-	const listDirectory = async (directory: string): Promise<readonly FileInfo[]> => {
-		const cached = directoryListings.get(directory);
-		if (cached) return cached;
-		const listing = await sandbox.listFiles(directory, { includeHidden: true });
-		if (!listing.success) throw new ConflictError(`Could not inspect changed file ${path}`);
-		directoryListings.set(directory, listing.files);
-		return listing.files;
-	};
 	const components = path.split('/');
 	let parent = workdir;
 	for (const component of components.slice(0, -1)) {
-		const listing = await listDirectory(parent);
-		const entry = listing.find((candidate) => candidate.name === component);
+		const listing = await sandbox.listFiles(parent, { includeHidden: true });
+		if (!listing.success) throw new ConflictError(`Could not inspect changed file ${path}`);
+		const entry = listing.files.find((candidate) => candidate.name === component);
 		if (!entry) throw new ConflictError(`Changed file ${path} is missing from the session`);
 		if (entry.type !== 'directory') {
 			throw new ConflictError(`Changed path ${path} has a non-directory parent`);
@@ -150,8 +174,9 @@ async function inspectRegularFile(
 		parent = sandboxPath(parent, component);
 	}
 	const name = components.at(-1) ?? '';
-	const listing = await listDirectory(parent);
-	const file = listing.find((candidate) => candidate.name === name);
+	const listing = await sandbox.listFiles(parent, { includeHidden: true });
+	if (!listing.success) throw new ConflictError(`Could not inspect changed file ${path}`);
+	const file = listing.files.find((candidate) => candidate.name === name);
 	if (!file) throw new ConflictError(`Changed file ${path} is missing from the session`);
 	if (file.type !== 'file') {
 		throw new ConflictError(`Changed path ${path} is not a regular file`);
@@ -184,11 +209,12 @@ async function readGitChangedFile(
 	sandbox: SandboxInstance,
 	workdir: string,
 	path: string,
-	directoryListings: Map<string, readonly FileInfo[]>,
 ): Promise<Uint8Array> {
-	await inspectRegularFile(sandbox, workdir, path, directoryListings);
-	const result = await sandbox.exec(`base64 < ${shellQuote(sandboxPath(workdir, path))}`);
-	if (!result.success) throw new ConflictError(`Could not read changed file ${path}`);
+	const args = `${shellQuote(READ_REGULAR_FILE_SCRIPT)} ${shellQuote(workdir)} ${shellQuote(path)} ${MAX_REQUEST_BYTES}`;
+	const result = await sandbox.exec(
+		`if command -v python3 >/dev/null 2>&1; then marimohub_python=python3; elif command -v python >/dev/null 2>&1; then marimohub_python=python; else exit 127; fi; "$marimohub_python" -c ${args}`,
+	);
+	if (!result.success) throw new ConflictError(`Could not securely read changed file ${path}`);
 	const content = decodeProposalContent(result.stdout, 'base64');
 	if (content.byteLength > MAX_REQUEST_BYTES) {
 		throw new ValidationError(`Changed file ${path} exceeds the ${MAX_REQUEST_BYTES}-byte limit`);
@@ -229,7 +255,6 @@ async function captureGitWorkingTree(
 	}
 
 	const changes: CapturedProposalChange[] = [];
-	const directoryListings = new Map<string, readonly FileInfo[]>();
 	let totalBytes = 0;
 	for (const [path, operation] of [...operations].sort(([left], [right]) =>
 		left < right ? -1 : left > right ? 1 : 0,
@@ -242,7 +267,7 @@ async function captureGitWorkingTree(
 			changes.push({ change: { path, operation } });
 			continue;
 		}
-		const content = await readGitChangedFile(sandbox, workdir, path, directoryListings);
+		const content = await readGitChangedFile(sandbox, workdir, path);
 		if (baseObject && proposalBytesEqual(content, await baseObject.bytes())) continue;
 		totalBytes += content.byteLength;
 		if (totalBytes > MAX_REQUEST_BYTES) {
