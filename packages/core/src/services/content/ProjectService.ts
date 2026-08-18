@@ -439,6 +439,7 @@ export class ProjectService {
 		// reclaim them too or they leak forever (project ids never recur).
 		await deleteByPrefix(this.bucket, paths.appClaimsForProject(id));
 		await deleteByPrefix(this.bucket, paths.editorClaimsForProject(id));
+		await deleteByPrefix(this.bucket, paths.versionPruneCutoffsForProject(id));
 	}
 
 	/**

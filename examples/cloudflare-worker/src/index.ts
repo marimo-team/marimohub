@@ -229,7 +229,7 @@ export default {
 	},
 	async scheduled(_event: ScheduledController, env: Env): Promise<void> {
 		const bucket = new R2BucketAdapter(env.NOTEBOOKS_BUCKET);
-		const { sessions, maintenance, notebooks, idempotency } = createServices(bucket);
+		const { sessions, maintenance, notebooks, proposals, idempotency } = createServices(bucket);
 		const compute = new CloudflareSandboxProvider(env.SANDBOX);
 
 		// The Workers scheduled trigger is already a platform singleton; the lease
@@ -251,6 +251,7 @@ export default {
 			await maintenance.expireSnapshots();
 			await maintenance.pruneEvents();
 			await idempotency.prune();
+			await proposals.pruneExpiredPayloads();
 		} finally {
 			await lock.release('cloudflare-scheduled');
 		}

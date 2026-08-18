@@ -16,6 +16,7 @@ import type { CatalogService } from '../catalog/CatalogService';
 import { MAX_VERSIONS } from './NotebookService';
 import type { NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
+import type { SessionService } from '../runtime/SessionService';
 import { listAllKeys, listAllPrefixes } from '../catalog/storage';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -34,6 +35,7 @@ describe('NotebookService', () => {
 	let bucket: MemoryBucket;
 	let notebooks: NotebookService;
 	let projects: ProjectService;
+	let sessions: SessionService;
 	let catalog: CatalogService;
 	let projectId: ProjectId;
 
@@ -42,6 +44,7 @@ describe('NotebookService', () => {
 		bucket = env.bucket;
 		notebooks = env.notebooks;
 		projects = env.projects;
+		sessions = env.sessions;
 		catalog = env.catalog;
 
 		const project = await projects.createProject(
@@ -1000,6 +1003,83 @@ describe('NotebookService', () => {
 			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe(`v${extraSaves}`);
 		});
 
+		it('retains an old version for its live session but closes it to new sessions', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v0' },
+				ACTOR,
+			);
+			const oldestVersionId = (await notebooks.listVersions(projectId, created.id))[0].version_id;
+			const liveSession = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: created.id,
+				user_id: ACTOR,
+				source_version_id: oldestVersionId,
+			});
+
+			for (let i = 1; i <= MAX_VERSIONS + 2; i++) {
+				await notebooks.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
+			}
+
+			const oldest = paths.project(projectId).notebook(created.id).version(oldestVersionId);
+			expect(await bucket.head(oldest.meta)).not.toBeNull();
+			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS + 1);
+			await expect(
+				sessions.createSession({
+					project_id: projectId,
+					notebook_id: created.id,
+					user_id: ACTOR,
+					source_version_id: oldestVersionId,
+				}),
+			).rejects.toThrow(ConflictError);
+
+			await sessions.markFailed(projectId, liveSession.session_id);
+			await notebooks.updateNotebook(projectId, created.id, { code: 'after session' }, ACTOR);
+			expect(await bucket.head(oldest.meta)).toBeNull();
+			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS);
+		});
+
+		it('rejects a session that starts after the prune cutoff advances', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v0' },
+				ACTOR,
+			);
+			const oldestVersionId = (await notebooks.listVersions(projectId, created.id))[0].version_id;
+			for (let i = 1; i < MAX_VERSIONS; i++) {
+				await notebooks.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
+			}
+
+			const oldestPrefix = `${paths.project(projectId).notebook(created.id).base}/versions/${oldestVersionId}/`;
+			const originalList = bucket.list.bind(bucket);
+			let overlappingSession: Promise<unknown> | undefined;
+			bucket.list = async (options) => {
+				if (!overlappingSession && options?.prefix === oldestPrefix && !options.delimiter) {
+					overlappingSession = sessions.createSession({
+						project_id: projectId,
+						notebook_id: created.id,
+						user_id: ACTOR,
+						source_version_id: oldestVersionId,
+					});
+					await overlappingSession.catch(() => {});
+				}
+				return originalList(options);
+			};
+
+			try {
+				await notebooks.updateNotebook(projectId, created.id, { code: 'triggers prune' }, ACTOR);
+			} finally {
+				bucket.list = originalList;
+			}
+
+			await expect(overlappingSession).rejects.toThrow(ConflictError);
+			expect(await listAllKeys(bucket, oldestPrefix)).toEqual([]);
+			const rejected = (await sessions.listSessions(created.id)).find(
+				(session) => session.source_version_id === oldestVersionId,
+			);
+			expect(rejected?.status).toBe('failed');
+		});
+
 		it('does not fail the save when pruning errors (best-effort)', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,
@@ -1032,6 +1112,45 @@ describe('NotebookService', () => {
 			expect(await notebooks.getNotebookContent(projectId, created.id)).toBe('v1');
 			const versions = await notebooks.listVersions(projectId, created.id);
 			expect(versions).toHaveLength(2);
+		});
+
+		it('keeps a failed-delete version closed to new sessions', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v0' },
+				ACTOR,
+			);
+			const oldestVersionId = (await notebooks.listVersions(projectId, created.id))[0].version_id;
+			for (let i = 1; i < MAX_VERSIONS; i++) {
+				await notebooks.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
+			}
+
+			const oldest = paths.project(projectId).notebook(created.id).version(oldestVersionId);
+			const oldestPrefix = `${paths.project(projectId).notebook(created.id).base}/versions/${oldestVersionId}/`;
+			const originalDelete = bucket.delete.bind(bucket);
+			const deleteSpy = vi.spyOn(bucket, 'delete').mockImplementation(async (keys) => {
+				const requested = Array.isArray(keys) ? keys : [keys];
+				if (requested.some((key) => key.startsWith(oldestPrefix))) {
+					throw new Error('simulated version delete failure');
+				}
+				return originalDelete(keys);
+			});
+
+			try {
+				await notebooks.updateNotebook(projectId, created.id, { code: 'triggers prune' }, ACTOR);
+			} finally {
+				deleteSpy.mockRestore();
+			}
+
+			expect(await bucket.head(oldest.meta)).not.toBeNull();
+			await expect(
+				sessions.createSession({
+					project_id: projectId,
+					notebook_id: created.id,
+					user_id: ACTOR,
+					source_version_id: oldestVersionId,
+				}),
+			).rejects.toThrow(ConflictError);
 		});
 	});
 
@@ -1941,6 +2060,7 @@ describe('NotebookService', () => {
 			const siblingKeysBefore = await listAllKeys(bucket, siblingPrefix);
 			expect(siblingKeysBefore.length).toBeGreaterThan(0);
 			expect((await listAllKeys(bucket, doomedPrefix)).length).toBeGreaterThan(0);
+			await sessions.advanceVersionPruneCutoff(projectId, doomed.id, createVersionId());
 
 			// Soft-delete first (the guard requires status === 'deleted').
 			await notebooks.deleteNotebook(projectId, doomed.id, ACTOR);
@@ -1949,6 +2069,7 @@ describe('NotebookService', () => {
 
 			// The right things were deleted: the doomed notebook's subtree is empty.
 			expect(await listAllKeys(bucket, doomedPrefix)).toEqual([]);
+			expect(await bucket.get(paths.versionPruneCutoff(projectId, doomed.id))).toBeNull();
 
 			// Live data survived: the sibling notebook is fully intact and resolvable.
 			expect(await listAllKeys(bucket, siblingPrefix)).toEqual(siblingKeysBefore);

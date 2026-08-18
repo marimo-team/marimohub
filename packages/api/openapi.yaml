@@ -86,6 +86,7 @@ components:
                 - PRECONDITION_FAILED
                 - NOT_FOUND
                 - CONFLICT
+                - PROPOSAL_RETRY_REQUIRED
                 - EDIT_SESSION_OWNED
                 - EDIT_SESSION_CHANGED
                 - TAKEOVER_IN_PROGRESS
@@ -147,6 +148,19 @@ components:
               type: boolean
           required:
             - available
+        source_control:
+          type: object
+          properties:
+            change_request_providers:
+              type: array
+              items:
+                type: string
+              description: Provider ids configured to publish pull requests, merge requests,
+                or equivalents from notebook sessions.
+              example:
+                - github
+          required:
+            - change_request_providers
         project_alerts:
           type: object
           properties:
@@ -286,6 +300,7 @@ components:
       required:
         - federation
         - integrations
+        - source_control
         - project_alerts
         - data_browser
         - viewer_mode
@@ -978,12 +993,21 @@ components:
       properties:
         repo:
           type: string
+          description: 'Normalized repository coordinate: owner/repo or an HTTPS
+            repository URL.'
+          example: marimo-team/marimohub
         branch:
           type: string
+          description: Synced repository branch.
+          example: main
         root_path:
           type: string
+          description: Repository-relative directory synced into the notebook workspace.
+          example: apps
         entry_notebook:
           type: string
+          description: Path to the entry notebook relative to root_path.
+          example: dashboard.py
       required:
         - repo
         - branch
@@ -1027,18 +1051,27 @@ components:
               type:
                 - string
                 - 'null'
-              enum:
-                - github
-                - gitlab
-                - null
+              minLength: 1
+              description: Detected Git provider id, or null when the repository host is not
+                recognized.
+              example: github
             repo:
               type: string
+              description: 'Normalized repository coordinate: owner/repo or an HTTPS
+                repository URL.'
+              example: marimo-team/marimohub
             branch:
               type: string
+              description: Synced repository branch.
+              example: main
             root_path:
               type: string
+              description: Repository-relative directory synced into the notebook workspace.
+              example: apps
             entry_notebook:
               type: string
+              description: Path to the entry notebook relative to root_path.
+              example: dashboard.py
             pending_config:
               $ref: '#/components/schemas/GitSourceConfig'
             sync_mode:
@@ -1109,6 +1142,8 @@ components:
           $ref: '#/components/schemas/SnapshotDescriptor'
         commit:
           type: string
+        git_source:
+          $ref: '#/components/schemas/GitSourceRevision'
       required:
         - version_id
         - notebook_id
@@ -1128,6 +1163,106 @@ components:
       required:
         - captured_at
         - size_bytes
+    GitSourceRevision:
+      type: object
+      properties:
+        provider:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          description: Detected provider id for this immutable source revision, or null
+            when the repository host is unrecognized.
+          example: github
+        repo:
+          type: string
+          description: 'Normalized repository coordinate: owner/repo or an HTTPS
+            repository URL.'
+          example: marimo-team/marimohub
+        branch:
+          type: string
+          description: Synced repository branch.
+          example: main
+        root_path:
+          type: string
+          description: Repository-relative directory synced into the notebook workspace.
+          example: apps
+        entry_notebook:
+          type: string
+          description: Path to the entry notebook relative to root_path.
+          example: dashboard.py
+        commit:
+          type: string
+          description: Immutable Git commit from which the saved version was synced.
+          example: 9e107d9d372bb6826bd81d3542a419d6
+      required:
+        - provider
+        - repo
+        - branch
+        - root_path
+        - entry_notebook
+        - commit
+    OpenNotebookChangeRequestResult:
+      type: object
+      properties:
+        proposal_id:
+          type: string
+          pattern: ^prop-[0-9a-z]{16}$
+          description: Identifier of the immutable proposal captured from the notebook
+            session and published by this change request.
+          example: prop-7h2k9qm4xz7rp3w8
+        change_request:
+          type: object
+          properties:
+            provider:
+              type: string
+              minLength: 1
+              example: github
+            number:
+              type: integer
+              exclusiveMinimum: 0
+              example: 42
+            url:
+              type: string
+              format: uri
+              example: https://github.com/acme/analytics/pull/42
+            head_branch:
+              type: string
+              minLength: 1
+              example: marimohub/nb-7h2k9qm4xz7rp3w8/prop-7h2k9qm4xz7rp3w8
+            head_commit:
+              type: string
+              minLength: 1
+              example: 9e107d9d372bb6826bd81d3542a419d6
+          required:
+            - provider
+            - number
+            - url
+            - head_branch
+            - head_commit
+      required:
+        - proposal_id
+        - change_request
+    OpenNotebookChangeRequestBody:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Change request title. Defaults to the notebook title.
+          example: Update revenue dashboard
+        body:
+          type: string
+          maxLength: 65536
+          description: Change request description. Defaults to the session and base commit.
+          example: Updates the regional revenue analysis.
+        target_proposal_id:
+          type: string
+          pattern: ^prop-[0-9a-z]{16}$
+          description: Published proposal whose existing change request should receive
+            this new proposal. Omit to create a new change request.
+          example: prop-7h2k9qm4xz7rp3w8
     SessionPage:
       type: object
       properties:
@@ -2459,8 +2594,11 @@ paths:
             type: string
             minLength: 1
             maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
             example: a1b2c3d4-e5f6-7890
           required: false
+          description: Stable client-generated key reused for retries of the same operation.
           name: idempotency-key
           in: header
       requestBody:
@@ -4565,8 +4703,11 @@ paths:
             type: string
             minLength: 1
             maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
             example: a1b2c3d4-e5f6-7890
           required: false
+          description: Stable client-generated key reused for retries of the same operation.
           name: idempotency-key
           in: header
       requestBody:
@@ -4711,9 +4852,9 @@ paths:
                   example: Synced from a git repository
                 provider:
                   type: string
-                  enum:
-                    - github
-                    - gitlab
+                  minLength: 1
+                  description: Git provider id. Recognized repository hosts take precedence over
+                    this explicit claim.
                   example: github
                 repo:
                   type: string
@@ -4996,18 +5137,28 @@ paths:
                             type:
                               - string
                               - 'null'
-                            enum:
-                              - github
-                              - gitlab
-                              - null
+                            minLength: 1
+                            description:
+                              Detected Git provider id, or null when the repository host is not
+                              recognized.
+                            example: github
                           repo:
                             type: string
+                            description: 'Normalized repository coordinate: owner/repo or an HTTPS
+                              repository URL.'
+                            example: marimo-team/marimohub
                           branch:
                             type: string
+                            description: Synced repository branch.
+                            example: main
                           root_path:
                             type: string
+                            description: Repository-relative directory synced into the notebook workspace.
+                            example: apps
                           entry_notebook:
                             type: string
+                            description: Path to the entry notebook relative to root_path.
+                            example: dashboard.py
                           pending_config:
                             $ref: '#/components/schemas/GitSourceConfig'
                           sync_mode:
@@ -6032,8 +6183,11 @@ paths:
             type: string
             minLength: 1
             maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
             example: a1b2c3d4-e5f6-7890
           required: false
+          description: Stable client-generated key reused for retries of the same operation.
           name: idempotency-key
           in: header
       requestBody:
@@ -6078,6 +6232,139 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests:
+    post:
+      operationId: openNotebookChangeRequest
+      tags:
+        - Source control publishing
+      summary: Publish notebook changes to a new or existing change request
+      description: A proposal is an immutable set of notebook changes captured with
+        its exact source revision. This operation captures a proposal from a
+        running persistent editor session and publishes it as a pull request,
+        merge request, or equivalent through the configured source-control
+        provider. Set target_proposal_id to update the change request published
+        by that proposal; omit it to create a new change request. The
+        Idempotency-Key header is required; retry with the same key to resume
+        the same operation. If the error code is PROPOSAL_RETRY_REQUIRED, retry
+        with a new key instead.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^sess-[0-9a-z]{16}$
+            example: sess-9qm4xz7rp3w8h2k9
+          required: true
+          name: sid
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
+            example: a1b2c3d4-e5f6-7890
+          required: true
+          description: Stable client-generated key reused for retries of the same operation.
+          name: idempotency-key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenNotebookChangeRequestBody'
+      responses:
+        '201':
+          description: Change request published
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/OpenNotebookChangeRequestResult'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
           content:
             application/json:
               schema:
@@ -6613,8 +6900,11 @@ paths:
             type: string
             minLength: 1
             maxLength: 255
+            description: Stable client-generated key reused for retries of the same
+              operation.
             example: a1b2c3d4-e5f6-7890
           required: false
+          description: Stable client-generated key reused for retries of the same operation.
           name: idempotency-key
           in: header
       requestBody:

@@ -43,6 +43,7 @@
 		"@marimo-hub/object-browser-gcs": "workspace:*",
 		"@marimo-hub/object-browser-s3": "workspace:*",
 		"@marimo-hub/secrets-aws": "workspace:*",
+		"@marimo-hub/source-control-github": "workspace:*",
 		"@marimo-hub/storage-azure": "workspace:*",
 		"@marimo-hub/storage-fs": "workspace:*",
 		"@marimo-hub/storage-gcs": "workspace:*",

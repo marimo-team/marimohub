@@ -3,6 +3,7 @@ import type {
 	IntegrationId,
 	NotebookId,
 	ProjectId,
+	ProposalId,
 	SessionId,
 	SnapshotId,
 	TokenId,
@@ -22,12 +23,16 @@ import {
 	IntegrationRecordSchema,
 	IntegrationVersionRecordSchema,
 	NotebookMetaSchema,
+	NotebookProposalSchema,
+	ProposalPayloadMarkerSchema,
 	ProjectSchema,
+	ProposalPublicationSchema,
 	SessionSchema,
 	SnapshotSchema,
 	SourceSchema,
 	TokenSchema,
 	VersionSchema,
+	VersionPruneCutoffSchema,
 } from '../schema';
 
 // Placeholder ids threaded through the real `paths` builders, so the templates
@@ -35,6 +40,7 @@ import {
 const PID = '{pid}' as ProjectId;
 const NID = '{nid}' as NotebookId;
 const VID = '{vid}' as VersionId;
+const PROPOSAL_ID = '{proposal_id}' as ProposalId;
 const SID = '{sid}' as SessionId;
 const IID = '{iid}' as IntegrationId;
 const TID = '{tid}' as TokenId;
@@ -63,6 +69,7 @@ interface BucketObject {
 
 const project = paths.project(PID);
 const notebook = project.notebook(NID);
+const proposal = notebook.proposal(PROPOSAL_ID);
 const projectIntegration = project.integration(IID);
 const orgIntegration = paths.orgIntegration(IID);
 
@@ -134,6 +141,31 @@ const OBJECTS: BucketObject[] = [
 		tag: 'notebook',
 	},
 	{
+		name: 'NotebookProposal',
+		key: proposal.meta,
+		schema: NotebookProposalSchema,
+		summary: 'Immutable synced-session change proposal.',
+		mutability: 'immutable',
+		tag: 'notebook',
+	},
+	{
+		name: 'ProposalPublication',
+		key: proposal.publication,
+		schema: ProposalPublicationSchema,
+		summary: 'CAS-managed publication state for a synced-session proposal.',
+		mutability: 'cas',
+		owner: 'NotebookProposalService',
+		tag: 'notebook',
+	},
+	{
+		name: 'ProposalPayloadMarker',
+		key: paths.proposalPayloadMarker(PID, NID, PROPOSAL_ID),
+		schema: ProposalPayloadMarkerSchema,
+		summary: 'Immutable retention marker for ephemeral proposal change content.',
+		mutability: 'immutable',
+		tag: 'notebook',
+	},
+	{
 		name: 'FsSnapshot',
 		key: notebook.fsSnapshot,
 		schema: FsSnapshotSchema,
@@ -189,6 +221,15 @@ const OBJECTS: BucketObject[] = [
 		key: paths.session(PID, SID),
 		schema: SessionSchema,
 		summary: 'Session lifecycle record, partitioned by project.',
+		mutability: 'cas',
+		owner: 'SessionService',
+		tag: 'session',
+	},
+	{
+		name: 'VersionPruneCutoff',
+		key: paths.versionPruneCutoff(PID, NID),
+		schema: VersionPruneCutoffSchema,
+		summary: 'Monotonic boundary that closes old versions to newly created sessions.',
 		mutability: 'cas',
 		owner: 'SessionService',
 		tag: 'session',

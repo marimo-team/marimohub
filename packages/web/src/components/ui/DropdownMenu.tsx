@@ -19,6 +19,7 @@ export interface DropdownMenuProps {
 	icon: ReactNode;
 	/** Override the trigger button styling. */
 	triggerClassName?: string;
+	isDisabled?: boolean;
 	options: DropdownMenuOption[];
 	onAction: (key: string) => void;
 }
@@ -32,6 +33,7 @@ export function DropdownMenu({
 	label,
 	icon,
 	triggerClassName,
+	isDisabled,
 	options,
 	onAction,
 }: DropdownMenuProps) {
@@ -39,6 +41,7 @@ export function DropdownMenu({
 		<MenuTrigger>
 			<Button
 				aria-label={label}
+				isDisabled={isDisabled}
 				className={cn(
 					'flex size-7 items-center justify-center text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
 					triggerClassName,

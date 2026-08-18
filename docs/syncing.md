@@ -9,18 +9,18 @@ description: Push read-only notebooks into marimohub from external source system
 > backwards-compatibility guarantee between releases.
 
 marimohub can serve a notebook whose source of truth lives **outside** the
-platform — today, a **git repository** mirrored in by an external pusher such as
-a CI workflow. The platform never reaches out to the repository host; content
-only ever arrives by **push**. That means:
+platform. Today, an external process such as a CI workflow can push content from
+a **git repository**. The sync process never pulls from the repository host.
+That means:
 
-- No host credentials are stored on the server, and there is no outbound network
-  call to a provider — so no SSRF surface.
+- Sync does not require repository credentials or an outbound provider request.
 - The push is authenticated by a **notebook-scoped sync token**, not a user
   cookie, so it works cleanly from headless CI.
 
-A synced notebook is a **read-only mirror**. Each push is captured as an
-immutable version; running sessions get a fresh copy of the latest pushed
-version. See [Read-only sessions](#read-only-sessions) below.
+A synced notebook stores a **read-only mirror** of each push. Running sessions
+get a fresh copy of the latest immutable version. Optional
+[source-control publishing](configuration.md#source-control-publishing) can send
+session edits to the provider without changing these stored versions.
 
 ## How it works
 
@@ -184,6 +184,45 @@ Producing the archive is a one-liner in CI — for example:
 git archive --format=tar.gz -o sync.tgz HEAD:apps   # tree under apps/
 ```
 
+### Include `.git` for multi-file publishing
+
+`git archive` excludes `.git`. This is sufficient for sync, but publishing then
+captures only the configured entry notebook.
+
+For multi-file capture, upload the repository root with its `.git` directory.
+marimohub uses Git to find added, modified, deleted, and untracked files. It
+honors `.gitignore` and excludes runtime and cache paths.
+
+Archive the complete checkout instead of using `git archive`:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 1
+    persist-credentials: false
+- name: Archive the repository
+  run: tar czf /tmp/sync.tgz .
+```
+
+Upload `/tmp/sync.tgz` with the headers from [Push an archive](#_2-push-an-archive).
+Omit `X-Marimohub-Root-Path`, or set it to an empty string.
+
+This method has these requirements:
+
+- Set `root_path` to `""`. A repository-level `.git` cannot describe a subtree
+  archive.
+- Keep the checkout shallow. Full Git history counts toward the archive limits.
+- Set `persist-credentials` to `false`. This prevents the workflow token from
+  entering the archive through `.git/config`.
+- Make sure that the archive contains the commit from `X-Marimohub-Commit`.
+- Keep the archive within 1,000 files, 25 MB per file, and 100 MB decompressed.
+  Files inside `.git` count toward these limits.
+
+marimohub stores `.git` with the immutable version and restores it into each
+session workspace. If `.git` or the `git` binary is unavailable, capture uses
+the entry-notebook fallback. If Git cannot resolve `X-Marimohub-Commit`,
+publishing fails without falling back.
+
 ### Idempotency
 
 Git commit SHAs are content-addressed, so re-pushing the **same commit** is a
@@ -272,14 +311,33 @@ the session starts.
 
 ## Read-only sessions
 
-Sessions on a synced notebook are **ephemeral**: the sandbox is populated from
-the latest pushed version, and edits made in the session are **discarded** on
-teardown — nothing is committed back to the store or to git. A session cannot be
-started until the notebook has been pushed at least once (`400` otherwise).
+Each session starts from the latest pushed version. Session edits do not change
+that version. The sandbox is discarded on teardown. Users can publish edits
+before teardown, but publishing does not create a marimohub version. A session
+cannot start before the first push (`400` otherwise).
 
-### Write-back is not yet supported
+### Publishing edits back to the repository
 
-There is currently **no path to push session edits back to the source
-repository** (e.g. opening a pull request). Treat synced notebooks as
-run-and-explore mirrors of the repo; make changes in the repo and let the next
-push update the notebook. Write-back is planned but not implemented.
+When [source-control publishing](configuration.md#source-control-publishing) is
+configured, a project manager can publish edits from a persistent editor
+session. The current GitHub App integration creates an immutable proposal and a
+draft pull request.
+
+After the first publication, the editor shows **View PR** and two more actions:
+
+- **Update PR** publishes a new proposal to the same pull request. It adds a
+  commit when possible. Otherwise, marimohub rebuilds the proposal branch from
+  the synced base. It never overwrites external branch changes.
+- **Create new PR** opens another pull request and replaces the displayed link.
+  The previous pull request remains on GitHub.
+
+The web interface uses this endpoint:
+
+```http
+POST /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests
+```
+
+If the synced version [includes `.git`](#include-git-for-multi-file-publishing),
+the proposal can contain changes from the full working tree. Otherwise, the
+proposal contains only the entry notebook. Each proposal supports 1,000 changes
+and 10 MB of added or modified content.

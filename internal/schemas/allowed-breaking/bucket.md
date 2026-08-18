@@ -26,3 +26,12 @@ already treat the field as a display hint. No migration needed.
 GET /projects/{pid}/notebooks/{nid}/source.json the `provider` response property const value `github` was removed for the status `200`
 GET /projects/{pid}/notebooks/{nid}/source.json response property `oneOf[subschema #2]/provider` list-of-types was widened by adding types `null` to media type `application/json` of response `200`
 ```
+
+`provider` is now an open, non-empty provider identifier. This accepts every
+previously valid value and allows provider adapters beyond GitHub and GitLab.
+
+```text
+PUT /projects/{pid}/notebooks/{nid}/source.json `removed the enum value `github` of the request property `oneOf[subschema #2]/provider/anyOf[subschema #1]/``
+PUT /projects/{pid}/notebooks/{nid}/source.json `removed the enum value `gitlab` of the request property `oneOf[subschema #2]/provider/anyOf[subschema #1]/``
+PUT /projects/{pid}/notebooks/{nid}/source.json `the `oneOf[subschema #2]/provider/anyOf[subschema #1]/` request property's minLength was increased from `0` to `1``
+```

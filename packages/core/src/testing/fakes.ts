@@ -169,12 +169,7 @@ export interface FsSandboxOptions {
 	root?: string;
 	/** Initial files, keyed by path relative to `root` (string or raw bytes). */
 	files?: Record<string, string | Uint8Array>;
-	/**
-	 * Overrides the size `listFiles` reports for a relative path, decoupling the
-	 * declared size from the stored payload. Lets size-cap tests declare large
-	 * files without allocating (and base64-round-tripping) the bytes — the capture
-	 * caps key off the *listed* size, not a read.
-	 */
+	/** Overrides the size `listFiles` reports for a relative path. */
 	sizes?: Record<string, number>;
 }
 
@@ -224,8 +219,8 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 	const instance = {
 		async exec(cmd: string): Promise<ExecResult> {
 			calls.exec.push(cmd);
-			// Capture: base64 -w0 '<path>'
-			const capture = cmd.match(/^base64 -w0 (.+)$/);
+			// Capture: base64 -w0 '<path>' or the portable base64 < '<path>' form.
+			const capture = cmd.match(/^base64(?: -w0)?(?: <)? (.+)$/);
 			if (capture) {
 				const rel = toRel(fsUnquote(capture[1]));
 				const bytes = fs.get(rel);

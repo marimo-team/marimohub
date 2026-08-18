@@ -39,9 +39,11 @@ import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog
 import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
 import { ComputeProfileIndicator } from '@/components/Notebook/ComputeProfileIndicator';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
+import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestActions';
 import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
 import type { Theme } from '@/context/ThemeContext';
+import { canManageProject } from '@/lib/roles';
 
 /** Copy for the app page's terminal panel, keyed by how the session ended. */
 function endedPanel(ended: SessionEnded): { title: string; message: string; canRestart: boolean } {
@@ -327,7 +329,15 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 	const showEditorStateFailure = editorStateFailed && !session && !showEditorChoice;
 	const showIdentityStateFailure =
 		identityStateFailed && !session && !showEditorChoice && !showEditorStateFailure;
-
+	const sourceProvider = notebook?.source.type === 'git' ? notebook.source.provider : null;
+	const canOpenChangeRequest =
+		!isApp &&
+		isRunning &&
+		!!session &&
+		!session.ephemeral &&
+		!!sourceProvider &&
+		(capabilities?.source_control?.change_request_providers.includes(sourceProvider) ?? false) &&
+		canManageProject(project.your_role);
 	return (
 		<div className="flex h-dvh flex-col">
 			<title>{`${title} · marimohub`}</title>
@@ -378,6 +388,14 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					</span>
 				)}
 				<div className="ml-auto flex items-center gap-2">
+					<ChangeRequestActions
+						projectId={pid!}
+						notebookId={nid!}
+						sessionId={session?.session_id}
+						notebookTitle={title}
+						provider={sourceProvider}
+						canPublish={canOpenChangeRequest}
+					/>
 					{!staticView && (
 						<ComputeProfileIndicator
 							profiles={computeProfiles}

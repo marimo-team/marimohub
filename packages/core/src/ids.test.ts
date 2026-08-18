@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
 	AlertDestinationId,
 	createAlertDestinationId,
+	deriveProposalId,
 	createNotebookId,
 	createProjectId,
 	createSandboxId,
 	createSessionId,
 	createVersionId,
 	NotebookId,
+	ProposalId,
 	ProjectId,
 	SandboxId,
 	SessionId,
@@ -69,6 +71,7 @@ const hyphenIds: { name: string; id: IdBrand<string>; prefix: string }[] = [
 	{ name: 'AlertDestinationId', id: AlertDestinationId, prefix: 'alert-' },
 	{ name: 'ProjectId', id: ProjectId, prefix: 'proj-' },
 	{ name: 'NotebookId', id: NotebookId, prefix: 'nb-' },
+	{ name: 'ProposalId', id: ProposalId, prefix: 'prop-' },
 	{ name: 'SnapshotId', id: SnapshotId, prefix: 'snap-' },
 	{ name: 'SessionId', id: SessionId, prefix: 'sess-' },
 	{ name: 'SandboxId', id: SandboxId, prefix: 'sb-' },
@@ -129,6 +132,21 @@ describe('VersionId namespace', () => {
 		const sorted = [...ids].sort();
 		expect(ids).toEqual(sorted);
 		expect(new Set(ids).size).toBe(ids.length);
+	});
+});
+
+describe('deriveProposalId', () => {
+	it('returns the same valid proposal id for the same scoped seed', async () => {
+		const first = await deriveProposalId('user\nroute\nretry-key');
+		const second = await deriveProposalId('user\nroute\nretry-key');
+
+		expect(second).toBe(first);
+		expect(ProposalId.is(first)).toBe(true);
+		expect(await deriveProposalId('user\nroute\nother-key')).not.toBe(first);
+	});
+
+	it('keeps the byte-to-alphabet mapping stable', async () => {
+		expect(await deriveProposalId('mapping-fixture')).toBe('prop-kc9ws4vcf2fpbwxz');
 	});
 });
 

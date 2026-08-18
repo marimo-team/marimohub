@@ -345,6 +345,19 @@ Server-wide settings; no backend selector.
 | `MARIMOHUB_VERSION` | Build/deploy version (usually the short git SHA or release tag) shown in the UI footer and returned by `GET /api/v1/version`. Baked into the image at build time. | — | `dev` | `a1b2c3d` |
 | `MARIMOHUB_IMAGE` | Fully-qualified Docker image reference (`repo:tag`) the deployment runs, shown in the UI footer. Baked into the image at build time. | — | — | `ghcr.io/marimo-team/marimohub:a1b2c3d` |
 
+## Source control publishing
+
+Optional server-side publishing for notebooks imported from a Git repository. Marimohub captures edited content and its exact source revision as an immutable proposal, then publishes that proposal as a provider change request. When the sandbox work directory has a usable `.git` repository, capture includes tracked and untracked workspace changes while honoring `.gitignore` and excluding runtime/cache paths. Other sandboxes fall back to capturing the configured entry notebook. Sandboxes supply file content only; provider credentials stay in the marimohub server. The first implementation opens draft GitHub pull requests through a GitHub App, while the core publishing contract remains provider-neutral.
+
+### GitHub App
+
+For GitHub.com, create a GitHub App with repository Contents (read/write) and Pull requests (read/write) permissions, install it on the repositories marimohub may publish to, and configure both values below. No webhook is required. Installation access tokens are minted only when marimohub publishes a proposal.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` | Numeric app id from the GitHub App settings page. | — | — | `123456` |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` 🔒 | PKCS8 or PKCS1 PEM private key downloaded for the GitHub App, or its single-line base64 encoding. Held by the server and never injected into notebook sandboxes. | — | — | `-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----` |
+
 ## Workload Identity Federation
 
 Optional: let a notebook reach cloud resources (object storage, and for AWS any API the role allows) with NO long-lived key. The hub becomes an OIDC issuer and, per session, mints a short-lived project-scoped JWT and exchanges it server-side (via the selected broker) for temporary credentials, which it injects into the sandbox — the JWT itself never reaches the sandbox. Deployment-wide capability; each project opts in via its `federation` setting. All-or-nothing on the generic vars: set them to enable, or none to disable. See docs/workload-identity-federation.md.

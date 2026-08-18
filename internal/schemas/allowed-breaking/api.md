@@ -26,3 +26,7 @@ GET /api/v1/projects/{pid}/integrations/{iid}/browse removed the required proper
 GET /api/v1/projects/{pid}/integrations/{iid}/browse removed the required property `data/preview` from the response with the `200` status
 GET /api/v1/projects/{pid}/integrations/{iid}/browse removed the optional property `data/reason` from the response with the `200` status
 POST /api/v1/projects/{pid}/integrations/{iid}/browse/objects/preview added `subschema #1, subschema #2, subschema #3` to the `data` response property `oneOf` list for the response status `200`
+
+POST /api/v1/projects/{pid}/notebooks/git removed the enum value `github` of the request property `provider`
+POST /api/v1/projects/{pid}/notebooks/git removed the enum value `gitlab` of the request property `provider`
+POST /api/v1/projects/{pid}/notebooks/git the `provider` request property's minLength was increased from `0` to `1`
