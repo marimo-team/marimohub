@@ -113,11 +113,12 @@ describeLive('guarded DuckDB HTTP broker live', () => {
 			.map((request) => new URL(request.url))
 			.filter((url) => url.origin === storageOrigin)
 			.map((url) => url.pathname);
+		// The REST response may embed table metadata, so object reads can begin at the manifests.
 		expect(storagePaths).toEqual(
 			expect.arrayContaining([
-				expect.stringMatching(/^\/warehouse\/demo\/events\/metadata\/.*\.metadata\.json$/),
 				expect.stringMatching(/^\/warehouse\/demo\/events\/metadata\/.*\.avro$/),
 				expect.stringMatching(/^\/warehouse\/demo\/events\/data\/.*\.parquet$/),
+				'/warehouse/broker-fixture/sample.parquet',
 			]),
 		);
 		expect(

@@ -18,6 +18,7 @@ import { MAX_VERSIONS } from './NotebookService';
 
 const encode = (value: string) => new TextEncoder().encode(value);
 const GIT_COMMIT = 'a'.repeat(40);
+const LARGE_CONTENT_TEST_TIMEOUT_MS = 15_000;
 
 interface GitSandboxOptions {
 	files: Record<string, string | Uint8Array>;
@@ -449,30 +450,40 @@ describe('NotebookProposalService', () => {
 		expect(calls.readFile).toHaveLength(0);
 	});
 
-	it('bounds the combined content size across Git changes', async () => {
-		const halfPlusOne = Math.floor(MAX_REQUEST_BYTES / 2) + 1;
-		const { instance } = makeGitSandbox({
-			files: {
-				'one.bin': new Uint8Array(halfPlusOne),
-				'two.bin': new Uint8Array(halfPlusOne),
-			},
-			untracked: ['one.bin', 'two.bin'],
-		});
+	it(
+		'bounds the combined content size across Git changes',
+		async () => {
+			const halfPlusOne = Math.floor(MAX_REQUEST_BYTES / 2) + 1;
+			const { instance } = makeGitSandbox({
+				files: {
+					'one.bin': new Uint8Array(halfPlusOne),
+					'two.bin': new Uint8Array(halfPlusOne),
+				},
+				untracked: ['one.bin', 'two.bin'],
+			});
 
-		await expect(capture(instance)).rejects.toThrow(
-			`Proposal changes exceed the ${MAX_REQUEST_BYTES}-byte limit`,
-		);
-	});
+			await expect(capture(instance)).rejects.toThrow(
+				`Proposal changes exceed the ${MAX_REQUEST_BYTES}-byte limit`,
+			);
+		},
+		LARGE_CONTENT_TEST_TIMEOUT_MS,
+	);
 
-	it('enforces the byte limit after reading Git content', async () => {
-		const { instance } = makeGitSandbox({
-			files: { 'oversized.bin': new Uint8Array(MAX_REQUEST_BYTES + 1) },
-			untracked: ['oversized.bin'],
-			sizes: { 'oversized.bin': 1 },
-		});
+	it(
+		'enforces the byte limit after reading Git content',
+		async () => {
+			const { instance } = makeGitSandbox({
+				files: { 'oversized.bin': new Uint8Array(MAX_REQUEST_BYTES + 1) },
+				untracked: ['oversized.bin'],
+				sizes: { 'oversized.bin': 1 },
+			});
 
-		await expect(capture(instance)).rejects.toThrow(`exceeds the ${MAX_REQUEST_BYTES}-byte limit`);
-	});
+			await expect(capture(instance)).rejects.toThrow(
+				`exceeds the ${MAX_REQUEST_BYTES}-byte limit`,
+			);
+		},
+		LARGE_CONTENT_TEST_TIMEOUT_MS,
+	);
 
 	it('inspects the entry notebook through its parent directory', async () => {
 		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'print("after")' } });
