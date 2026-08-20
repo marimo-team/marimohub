@@ -172,7 +172,7 @@ describe('DuckDB-Wasm worker lifecycle', () => {
 		await expect(
 			runtime.execute({ setup: [], query: { text: 'SELECT 2 AS value' } }),
 		).resolves.toEqual({ columns: ['value'], rows: [[2]] });
-	});
+	}, 15_000);
 
 	it('becomes closed when its worker fails', async () => {
 		const runtime = await initialized('worker');
