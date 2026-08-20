@@ -51,6 +51,7 @@ import { createSandboxClient, DEFAULT_CONTAINER_IMAGE } from '@coreweave/cwsandb
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
+	classifyListFilesFailure,
 	iterableToStream,
 	parseFindFilesOutput,
 	portWaitCommand,
@@ -511,7 +512,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// PERSIST_WORKSPACE=workspace.
 		try {
 			const res = await this.exec(buildFindFilesCommand(path, options));
-			if (!res.success) return listFilesFailure();
+			if (!res.success) {
+				return listFilesFailure(classifyListFilesFailure(res));
+			}
 			return { success: true, files: parseFindFilesOutput(res.stdout, path, options) };
 		} catch {
 			return listFilesFailure('BACKEND_ERROR');

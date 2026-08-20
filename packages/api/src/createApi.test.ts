@@ -72,7 +72,7 @@ describe('createApi onError mapping', () => {
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({
 			success: false,
-			error: { code: 'INTERNAL_ERROR', message: 'Internal server error' },
+			error: { code: 'INTERNAL_ERROR', message: 'Internal error' },
 		});
 		expect(log).toHaveBeenCalledOnce();
 		expect(log.mock.calls[0]?.[0]).toContain('request_error');

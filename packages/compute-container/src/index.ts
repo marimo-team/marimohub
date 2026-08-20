@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
+	classifyListFilesFailure,
 	mapWithConcurrency,
 	parseFindFilesOutput,
 	pollUntilReady,
@@ -190,7 +191,9 @@ class ContainerSandboxInstance implements SandboxInstance {
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
 		const res = await this.dexec(buildFindFilesCommand(path, options));
-		if (res.exitCode !== 0) return listFilesFailure();
+		if (res.exitCode !== 0) {
+			return listFilesFailure(classifyListFilesFailure(res));
+		}
 		return { success: true, files: parseFindFilesOutput(res.stdout, path, options) };
 	}
 

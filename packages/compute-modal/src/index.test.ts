@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NotFoundError } from 'modal';
+import { NotFoundError, SandboxFilesystemNotADirectoryError } from 'modal';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
@@ -93,7 +93,12 @@ class FakeSandbox implements ModalSandboxLike {
 		writeBytes: async (content: Uint8Array, path: string) => {
 			this.writeFile(path, content);
 		},
-		listFiles: async (path: string) => this.directories.get(path) ?? [],
+		listFiles: async (path: string) => {
+			if (this.files.has(path)) {
+				throw new SandboxFilesystemNotADirectoryError(`${path} is not a directory`);
+			}
+			return this.directories.get(path) ?? [];
+		},
 	};
 
 	async exec(
@@ -346,6 +351,19 @@ describe('ModalCompute', () => {
 			.listFiles('/workspace', { recursive: true });
 
 		expect(result.files.map((file) => file.relativePath)).toEqual(['a.py', 'sub', 'sub/b.py']);
+		expect(sandbox.execCalls).toEqual([]);
+	});
+
+	it('returns NOT_A_DIRECTORY when the SDK rejects a file path', async () => {
+		const world = makeWorld();
+		const sandbox = new FakeSandbox();
+		sandbox.files.set('/workspace/notebook.py', 'print(1)');
+		world.existing.set(SANDBOX_ID, sandbox);
+
+		await expect(
+			makeCompute(world).create(SANDBOX_ID).listFiles('/workspace/notebook.py'),
+		).resolves.toEqual(listFilesFailure('NOT_A_DIRECTORY'));
+		expect(sandbox.execCalls).toEqual([]);
 	});
 
 	it('returns BACKEND_ERROR when the SDK listing throws', async () => {
@@ -470,10 +488,11 @@ function contractWorld() {
 	const create = world.client.sandboxes.create.bind(world.client.sandboxes);
 	world.client.sandboxes.create = async (app, image, options) => {
 		const sandbox = (await create(app, image, options)) as FakeSandbox;
-		sandbox.execImpl = (command) =>
-			command[2]?.includes('mh-contract-fail')
+		sandbox.execImpl = (command) => {
+			return command[2]?.includes('mh-contract-fail')
 				? processResult(1, '', 'scripted failure')
 				: processResult();
+		};
 		return sandbox;
 	};
 	return world;

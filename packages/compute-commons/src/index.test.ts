@@ -1,13 +1,20 @@
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, it, expect } from 'vitest';
 import {
 	base64Encode,
+	buildDirectoryProbeCommand,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
+	classifyListFilesFailure,
 	iterableToStream,
 	mapWithConcurrency,
+	NOT_A_DIRECTORY_EXIT_CODE,
+	NOT_A_DIRECTORY_MARKER,
 	parseFindFilesOutput,
 	pollUntilReady,
 	portWaitCommand,
@@ -93,19 +100,71 @@ describe('removeUndefined', () => {
 
 describe('buildFindFilesCommand', () => {
 	it('builds a non-recursive find command by default', () => {
-		expect(buildFindFilesCommand('/workspace')).toBe(
-			"find '/workspace' -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%p\\n'",
+		expect(buildFindFilesCommand('/workspace')).toContain(
+			"find '/workspace' -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%p\\0'",
 		);
 	});
 
 	it('omits maxdepth for recursive listings', () => {
-		expect(buildFindFilesCommand('/workspace', { recursive: true })).toBe(
-			"find '/workspace' -mindepth 1 -printf '%y\\t%s\\t%p\\n'",
-		);
+		const command = buildFindFilesCommand('/workspace', { recursive: true });
+		expect(command).toContain("find '/workspace' -mindepth 1 -printf '%y\\t%s\\t%p\\0'");
+		expect(command).not.toContain('-maxdepth');
 	});
 
 	it('quotes the root path', () => {
 		expect(buildFindFilesCommand("/work'space")).toContain("'/work'\\''space'");
+	});
+});
+
+describe('buildDirectoryProbeCommand', () => {
+	it('distinguishes directories, files, and missing paths', () => {
+		const directory = mkdtempSync(join(tmpdir(), 'marimohub-list-files-'));
+		const file = join(directory, 'notebook.py');
+		const missing = join(directory, 'missing.py');
+		writeFileSync(file, 'print(1)');
+
+		try {
+			const directoryResult = spawnSync('sh', ['-c', buildDirectoryProbeCommand(directory)], {
+				encoding: 'utf8',
+			});
+			expect(directoryResult.status).toBe(0);
+			expect(directoryResult.stderr).toBe('');
+
+			const fileResult = spawnSync('sh', ['-c', buildDirectoryProbeCommand(file)], {
+				encoding: 'utf8',
+			});
+			expect(fileResult.status).toBe(NOT_A_DIRECTORY_EXIT_CODE);
+			expect(fileResult.stderr).toBe(`${NOT_A_DIRECTORY_MARKER}\n`);
+
+			const missingResult = spawnSync('sh', ['-c', buildDirectoryProbeCommand(missing)], {
+				encoding: 'utf8',
+			});
+			expect(missingResult.status).toBe(1);
+			expect(missingResult.stderr).toBe('');
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+});
+
+describe('classifyListFilesFailure', () => {
+	it('recognizes the non-directory marker on either output stream', () => {
+		expect(classifyListFilesFailure({ stdout: NOT_A_DIRECTORY_MARKER, stderr: '' })).toBe(
+			'NOT_A_DIRECTORY',
+		);
+		expect(classifyListFilesFailure({ stdout: '', stderr: NOT_A_DIRECTORY_MARKER })).toBe(
+			'NOT_A_DIRECTORY',
+		);
+	});
+
+	it('otherwise returns the generic list failure', () => {
+		expect(classifyListFilesFailure({ stdout: '', stderr: 'not found' })).toBe('LIST_FAILED');
+		expect(
+			classifyListFilesFailure({
+				stdout: '',
+				stderr: `find: '/tmp/${NOT_A_DIRECTORY_MARKER}': Permission denied`,
+			}),
+		).toBe('LIST_FAILED');
 	});
 });
 
@@ -117,10 +176,10 @@ describe('parseFindFilesOutput', () => {
 		's\t7\t/workspace/socket',
 		'f\t5\t/workspace/.hidden',
 		'not-enough-columns',
-	].join('\n');
+	].join('\0');
 
 	it('maps find rows into file info and filters hidden files by default', () => {
-		expect(parseFindFilesOutput(`${output}\n`, '/workspace')).toEqual([
+		expect(parseFindFilesOutput(`${output}\0`, '/workspace')).toEqual([
 			{
 				name: 'a.py',
 				absolutePath: '/workspace/a.py',
@@ -154,7 +213,7 @@ describe('parseFindFilesOutput', () => {
 
 	it('includes hidden files when requested', () => {
 		expect(
-			parseFindFilesOutput('f\t5\t/workspace/.hidden\n', '/workspace', { includeHidden: true }),
+			parseFindFilesOutput('f\t5\t/workspace/.hidden\0', '/workspace', { includeHidden: true }),
 		).toEqual([
 			{
 				name: '.hidden',
@@ -167,7 +226,7 @@ describe('parseFindFilesOutput', () => {
 	});
 
 	it('handles root paths and non-numeric sizes', () => {
-		expect(parseFindFilesOutput('f\tNaN\t/tmp/a.py\n', '/')).toEqual([
+		expect(parseFindFilesOutput('f\tNaN\t/tmp/a.py\0', '/')).toEqual([
 			{
 				name: 'a.py',
 				absolutePath: '/tmp/a.py',
@@ -178,17 +237,18 @@ describe('parseFindFilesOutput', () => {
 		]);
 	});
 
-	it('preserves tabs that appear inside file paths', () => {
-		expect(parseFindFilesOutput('f\t1\t/workspace/has\ttab.py\n', '/workspace')[0]).toMatchObject({
-			name: 'has\ttab.py',
-			absolutePath: '/workspace/has\ttab.py',
+	it('preserves tabs and newlines inside file paths', () => {
+		const path = '/workspace/has\ttab\nand-newline.py';
+		expect(parseFindFilesOutput(`f\t1\t${path}\0`, '/workspace')[0]).toMatchObject({
+			name: 'has\ttab\nand-newline.py',
+			absolutePath: path,
 		});
 	});
 
 	it('passes an absolute path outside rootPath through unchanged as relativePath', () => {
 		// A row whose path is NOT under rootPath keeps its absolute path as the
 		// relativePath (no accidental prefix-stripping of an unrelated dir).
-		expect(parseFindFilesOutput('f\t3\t/etc/passwd\n', '/workspace')).toEqual([
+		expect(parseFindFilesOutput('f\t3\t/etc/passwd\0', '/workspace')).toEqual([
 			{
 				name: 'passwd',
 				absolutePath: '/etc/passwd',

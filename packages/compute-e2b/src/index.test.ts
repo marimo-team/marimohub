@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import { Seconds } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectListFilesResult } from '@marimo-hub/core/testing';
-import { computeContract } from '@marimo-hub/core/testing/compute-contract';
+import {
+	computeContract,
+	isContractNonDirectoryFindCommand,
+} from '@marimo-hub/core/testing/compute-contract';
 import { createE2bClient, E2bCompute } from './index';
 import type {
 	E2bClient,
@@ -490,7 +494,7 @@ describe('E2bCompute', () => {
 	});
 
 	describe('listFiles()', () => {
-		const findOutput = (lines: string[]) => `${lines.join('\n')}\n`;
+		const findOutput = (lines: string[]) => `${lines.join('\0')}\0`;
 
 		it('parses find output and filters hidden files', async () => {
 			const fake = new FakeE2b({
@@ -739,7 +743,20 @@ describe('createE2bClient', () => {
 computeContract(
 	'E2bCompute',
 	() =>
-		new E2bCompute(baseConfig, new FakeE2b({ failOn: (cmd) => cmd.includes('mh-contract-fail') })),
+		new E2bCompute(
+			baseConfig,
+			new FakeE2b({
+				failOn: (cmd) => cmd.includes('mh-contract-fail'),
+				runResult: (cmd) =>
+					isContractNonDirectoryFindCommand(cmd)
+						? {
+								stdout: '',
+								stderr: NOT_A_DIRECTORY_MARKER,
+								exitCode: NOT_A_DIRECTORY_EXIT_CODE,
+							}
+						: undefined,
+			}),
+		),
 	{
 		mountFallsBack: true,
 		semantics: {

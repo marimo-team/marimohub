@@ -155,6 +155,30 @@ describe('change request routes', () => {
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 	});
 
+	it('reports entry-notebook inspection invariants with the request reference', async () => {
+		const { instance } = makeFsSandbox({ files: { 'other.py': 'print("other")' } });
+		const broken = createTestApi({
+			bucket: setup.bucket,
+			compute: fakeComputeFrom(instance),
+			deps: { sourceControlPublishers: setup.deps.sourceControlPublishers },
+		});
+		const error = await expectError(
+			await broken.request(
+				'POST',
+				route(),
+				{},
+				{ 'Idempotency-Key': 'missing-entry', 'X-Request-Id': 'capture-ref' },
+			),
+			500,
+			'INTERNAL_ERROR',
+		);
+
+		expect(error).toMatchObject({
+			message: 'Internal error — ref capture-ref',
+			request_id: 'capture-ref',
+		});
+	});
+
 	it('replays a recorded response after the publisher is disabled', async () => {
 		const headers = { 'Idempotency-Key': 'disabled-after-publish' };
 		const first = await expectOk(await setup.request('POST', route(), {}, headers), 201);

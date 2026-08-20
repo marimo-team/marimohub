@@ -42,6 +42,7 @@
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
+	classifyListFilesFailure,
 	mapWithConcurrency,
 	parseFindFilesOutput,
 	pollUntilReady,
@@ -413,7 +414,9 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		// on teardown to enumerate the working dir under PERSIST_WORKSPACE=workspace.
 		try {
 			const res = await this.exec(buildFindFilesCommand(path, options));
-			if (!res.success) return listFilesFailure();
+			if (!res.success) {
+				return listFilesFailure(classifyListFilesFailure(res));
+			}
 			return { success: true, files: parseFindFilesOutput(res.stdout, path, options) };
 		} catch {
 			return listFilesFailure('BACKEND_ERROR');

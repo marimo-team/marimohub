@@ -371,8 +371,10 @@ class LocalSandboxInstance implements SandboxInstance {
 				});
 			}
 			return { success: true, files };
-		} catch {
-			return listFilesFailure();
+		} catch (error) {
+			return listFilesFailure(
+				(error as NodeJS.ErrnoException).code === 'ENOTDIR' ? 'NOT_A_DIRECTORY' : 'LIST_FAILED',
+			);
 		}
 	}
 

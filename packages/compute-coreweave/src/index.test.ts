@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CWSandboxNotFoundError } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
+import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import type { SandboxId, SandboxProvider } from '@marimo-hub/core';
-import { computeContract } from '@marimo-hub/core/testing/compute-contract';
+import {
+	computeContract,
+	isContractNonDirectoryFindCommand,
+} from '@marimo-hub/core/testing/compute-contract';
 import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
 import { coreWeaveProfileResources, CoreWeaveCompute } from './index';
@@ -632,7 +636,7 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('listFiles()', () => {
-		const findOutput = (lines: string[]) => `${lines.join('\n')}\n`;
+		const findOutput = (lines: string[]) => `${lines.join('\0')}\0`;
 		const onlyFind = (stdout: string, exitCode = 0) => ({
 			runImpl: async (cmd: readonly string[]) =>
 				cmd.join(' ').includes('find') ? procResult({ stdout, exitCode }) : procResult(),
@@ -887,10 +891,20 @@ computeContract(
 	() =>
 		makeCompute(
 			makeWorld({
-				runImpl: async (command) =>
-					command.at(-1)?.includes('mh-contract-fail')
-						? procResult({ exitCode: 1, failed: true, ok: false, stderr: 'failed' })
-						: procResult(),
+				runImpl: async (command) => {
+					if (command.at(-1)?.includes('mh-contract-fail')) {
+						return procResult({ exitCode: 1, failed: true, ok: false, stderr: 'failed' });
+					}
+					if (isContractNonDirectoryFindCommand(command.at(-1))) {
+						return procResult({
+							exitCode: NOT_A_DIRECTORY_EXIT_CODE,
+							failed: true,
+							ok: false,
+							stderr: NOT_A_DIRECTORY_MARKER,
+						});
+					}
+					return procResult();
+				},
 			}),
 		),
 	{ mountFallsBack: true, semantics: { failingCommand: 'mh-contract-fail' } },

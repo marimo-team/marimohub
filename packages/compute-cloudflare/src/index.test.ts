@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
+import { NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
-import { computeContract } from '@marimo-hub/core/testing/compute-contract';
+import {
+	computeContract,
+	CONTRACT_NON_DIRECTORY_PATH,
+} from '@marimo-hub/core/testing/compute-contract';
 
 /**
  * Tests for the Cloudflare Containers compute adapter.
@@ -306,38 +310,42 @@ describe('CloudflareSandboxProvider', () => {
 	});
 
 	describe('instance.listFiles()', () => {
-		it('translates a vendor failure into the typed failure envelope', async () => {
-			fakeSandbox.listFiles.mockResolvedValueOnce({ success: false, files: [] });
+		it('translates a find failure into the typed failure envelope', async () => {
+			fakeSandbox.listFiles.mockClear();
+			fakeSandbox.exec.mockResolvedValueOnce({
+				success: false,
+				stdout: '',
+				stderr: 'find failed',
+				error: { code: 'COMMAND_FAILED' },
+			});
 			const res = await makeProvider().create(SANDBOX_ID).listFiles('/w');
 			expect(res).toEqual(listFilesFailure());
+			expect(fakeSandbox.listFiles).not.toHaveBeenCalled();
 		});
 
-		it('projects each FileInfo field and forwards the options', async () => {
-			fakeSandbox.listFiles.mockResolvedValueOnce({
+		it('lists and parses newline-containing filenames in one exec call', async () => {
+			fakeSandbox.listFiles.mockClear();
+			fakeSandbox.exec.mockResolvedValueOnce({
 				success: true,
-				files: [
-					{
-						name: 'a.py',
-						absolutePath: '/w/a.py',
-						relativePath: 'a.py',
-						type: 'file',
-						size: 12,
-						// an extra SDK field that must NOT leak through the projection
-						mode: 0o644,
-					},
-				],
+				stdout: 'f\t12\t/w/a\nnotebook.py\0',
+				stderr: '',
 			});
 			const res = await makeProvider()
 				.create(SANDBOX_ID)
 				.listFiles('/w', { recursive: true, includeHidden: true });
-			expect(fakeSandbox.listFiles).toHaveBeenCalledWith('/w', {
-				recursive: true,
-				includeHidden: true,
-			});
+			expect(fakeSandbox.exec).toHaveBeenLastCalledWith(expect.stringContaining("find '/w'"));
+			expect(fakeSandbox.exec.mock.calls.at(-1)?.[0]).not.toContain('-maxdepth');
+			expect(fakeSandbox.listFiles).not.toHaveBeenCalled();
 			expect(res).toEqual({
 				success: true,
 				files: [
-					{ name: 'a.py', absolutePath: '/w/a.py', relativePath: 'a.py', type: 'file', size: 12 },
+					{
+						name: 'a\nnotebook.py',
+						absolutePath: '/w/a\nnotebook.py',
+						relativePath: 'a\nnotebook.py',
+						type: 'file',
+						size: 12,
+					},
 				],
 			});
 		});
@@ -432,14 +440,21 @@ describe('CloudflareSandboxProvider', () => {
 
 function primeContractFakes() {
 	fakeSandbox.exec.mockImplementation(async (cmd: string) =>
-		cmd.includes('mh-contract-fail')
+		cmd.includes(CONTRACT_NON_DIRECTORY_PATH)
 			? {
 					success: false,
 					stdout: '',
-					stderr: 'scripted failure',
+					stderr: NOT_A_DIRECTORY_MARKER,
 					error: { code: 'COMMAND_FAILED' },
 				}
-			: { success: true, stdout: '', stderr: '' },
+			: cmd.includes('mh-contract-fail')
+				? {
+						success: false,
+						stdout: '',
+						stderr: 'scripted failure',
+						error: { code: 'COMMAND_FAILED' },
+					}
+				: { success: true, stdout: '', stderr: '' },
 	);
 	fakeSandbox.execStream.mockImplementation(async () => new ReadableStream());
 	fakeSandbox.readFile.mockImplementation(async () => ({ success: false }));

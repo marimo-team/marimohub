@@ -20,6 +20,7 @@
 import {
 	buildFindFilesCommand,
 	buildGitCloneCommand,
+	classifyListFilesFailure,
 	parseFindFilesOutput,
 	pollUntilReady,
 	withEnvPrefix,
@@ -225,7 +226,9 @@ class E2bSandboxInstance implements SandboxInstance {
 		// The SDK filesystem API has no recursive list shape we rely on; shell out
 		// via `find` (not on the provision/teardown hot path).
 		const res = await this.exec(buildFindFilesCommand(path, options));
-		if (!res.success) return listFilesFailure();
+		if (!res.success) {
+			return listFilesFailure(classifyListFilesFailure(res));
+		}
 		return { success: true, files: parseFindFilesOutput(res.stdout, path, options) };
 	}
 

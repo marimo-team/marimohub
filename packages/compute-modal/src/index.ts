@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
-import { ModalClient, NotFoundError as ModalNotFoundError } from 'modal';
+import {
+	ModalClient,
+	NotFoundError as ModalNotFoundError,
+	SandboxFilesystemNotADirectoryError,
+} from 'modal';
 import {
 	buildGitCloneCommand,
 	mapWithConcurrency,
@@ -135,6 +139,13 @@ function isNotFound(error: unknown): boolean {
 	return (
 		error instanceof ModalNotFoundError ||
 		(error instanceof Error && error.name === 'NotFoundError')
+	);
+}
+
+function isNotADirectory(error: unknown): boolean {
+	return (
+		error instanceof SandboxFilesystemNotADirectoryError ||
+		(error instanceof Error && error.name === 'SandboxFilesystemNotADirectoryError')
 	);
 }
 
@@ -315,8 +326,8 @@ class ModalSandboxInstance implements SandboxInstance {
 			};
 			await visit(path);
 			return { success: true, files };
-		} catch {
-			return listFilesFailure('BACKEND_ERROR');
+		} catch (error) {
+			return listFilesFailure(isNotADirectory(error) ? 'NOT_A_DIRECTORY' : 'BACKEND_ERROR');
 		}
 	}
 

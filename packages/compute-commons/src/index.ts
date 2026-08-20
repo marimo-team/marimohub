@@ -102,6 +102,24 @@ export interface ParsedFileInfo {
 	size: number;
 }
 
+export const NOT_A_DIRECTORY_MARKER = 'MARIMOHUB_NOT_A_DIRECTORY';
+export const NOT_A_DIRECTORY_EXIT_CODE = 20;
+
+export function buildDirectoryProbeCommand(path: string): string {
+	const quotedPath = shellQuote(path);
+	return `if [ -d ${quotedPath} ]; then :; elif [ -e ${quotedPath} ] || [ -L ${quotedPath} ]; then printf '${NOT_A_DIRECTORY_MARKER}\\n' >&2; exit ${NOT_A_DIRECTORY_EXIT_CODE}; else exit 1; fi`;
+}
+
+export function classifyListFilesFailure(output: {
+	stdout: string;
+	stderr: string;
+}): 'NOT_A_DIRECTORY' | 'LIST_FAILED' {
+	const hasMarkerLine = (value: string) => value.split(/\r?\n/).includes(NOT_A_DIRECTORY_MARKER);
+	return hasMarkerLine(output.stdout) || hasMarkerLine(output.stderr)
+		? 'NOT_A_DIRECTORY'
+		: 'LIST_FAILED';
+}
+
 export function buildFindFilesCommand(
 	path: string,
 	options?: Pick<FindFilesOptions, 'recursive'>,
@@ -111,9 +129,9 @@ export function buildFindFilesCommand(
 		shellQuote(path),
 		'-mindepth 1',
 		...(options?.recursive ? [] : ['-maxdepth 1']),
-		"-printf '%y\\t%s\\t%p\\n'",
+		"-printf '%y\\t%s\\t%p\\0'",
 	];
-	return parts.join(' ');
+	return `${buildDirectoryProbeCommand(path)}; ${parts.join(' ')}`;
 }
 
 export function parseFindFilesOutput(
@@ -122,9 +140,9 @@ export function parseFindFilesOutput(
 	options?: Pick<FindFilesOptions, 'includeHidden'>,
 ): ParsedFileInfo[] {
 	const files: ParsedFileInfo[] = [];
-	for (const line of stdout.split('\n')) {
-		if (!line) continue;
-		const [typeChar, sizeStr, ...pathParts] = line.split('\t');
+	for (const record of stdout.split('\0')) {
+		if (!record) continue;
+		const [typeChar, sizeStr, ...pathParts] = record.split('\t');
 		const absolutePath = pathParts.join('\t');
 		if (!absolutePath) continue;
 		const name = absolutePath.slice(absolutePath.lastIndexOf('/') + 1);

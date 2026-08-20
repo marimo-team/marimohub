@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
-import { computeContract } from '@marimo-hub/core/testing/compute-contract';
+import {
+	computeContract,
+	isContractNonDirectoryFindCommand,
+} from '@marimo-hub/core/testing/compute-contract';
 import {
 	expectExecResult,
 	expectFileResult,
@@ -360,7 +364,7 @@ describe('KubernetesCompute', () => {
 	});
 
 	describe('listFiles()', () => {
-		const findOutput = (lines: string[]) => `${lines.join('\n')}\n`;
+		const findOutput = (lines: string[]) => `${lines.join('\0')}\0`;
 
 		it('parses find output and filters hidden files', async () => {
 			const world = makeWorld({
@@ -815,8 +819,19 @@ computeContract(
 	() =>
 		makeCompute(
 			makeWorld({
-				execImpl: (command) =>
-					command.at(-1) === 'false' ? { stdout: '', stderr: 'failed', exitCode: 1 } : undefined,
+				execImpl: (command) => {
+					if (command.at(-1) === 'false') {
+						return { stdout: '', stderr: 'failed', exitCode: 1 };
+					}
+					if (isContractNonDirectoryFindCommand(command.at(-1))) {
+						return {
+							stdout: '',
+							stderr: NOT_A_DIRECTORY_MARKER,
+							exitCode: NOT_A_DIRECTORY_EXIT_CODE,
+						};
+					}
+					return;
+				},
 			}),
 		),
 	{ mountFallsBack: true, semantics: { failingCommand: 'false' } },
