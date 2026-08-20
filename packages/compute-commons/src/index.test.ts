@@ -1,14 +1,19 @@
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, it, expect } from 'vitest';
 import {
 	base64Encode,
+	buildDirectoryProbeCommand,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
 	classifyListFilesFailure,
 	iterableToStream,
 	mapWithConcurrency,
+	NOT_A_DIRECTORY_EXIT_CODE,
 	NOT_A_DIRECTORY_MARKER,
 	parseFindFilesOutput,
 	pollUntilReady,
@@ -106,12 +111,39 @@ describe('buildFindFilesCommand', () => {
 		expect(command).not.toContain('-maxdepth');
 	});
 
-	it('marks an existing non-directory before find can return an empty success', () => {
-		expect(buildFindFilesCommand('/workspace/file.py')).toContain(NOT_A_DIRECTORY_MARKER);
-	});
-
 	it('quotes the root path', () => {
 		expect(buildFindFilesCommand("/work'space")).toContain("'/work'\\''space'");
+	});
+});
+
+describe('buildDirectoryProbeCommand', () => {
+	it('distinguishes directories, files, and missing paths', () => {
+		const directory = mkdtempSync(join(tmpdir(), 'marimohub-list-files-'));
+		const file = join(directory, 'notebook.py');
+		const missing = join(directory, 'missing.py');
+		writeFileSync(file, 'print(1)');
+
+		try {
+			const directoryResult = spawnSync('sh', ['-c', buildDirectoryProbeCommand(directory)], {
+				encoding: 'utf8',
+			});
+			expect(directoryResult.status).toBe(0);
+			expect(directoryResult.stderr).toBe('');
+
+			const fileResult = spawnSync('sh', ['-c', buildDirectoryProbeCommand(file)], {
+				encoding: 'utf8',
+			});
+			expect(fileResult.status).toBe(NOT_A_DIRECTORY_EXIT_CODE);
+			expect(fileResult.stderr).toBe(`${NOT_A_DIRECTORY_MARKER}\n`);
+
+			const missingResult = spawnSync('sh', ['-c', buildDirectoryProbeCommand(missing)], {
+				encoding: 'utf8',
+			});
+			expect(missingResult.status).toBe(1);
+			expect(missingResult.stderr).toBe('');
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -127,6 +159,12 @@ describe('classifyListFilesFailure', () => {
 
 	it('otherwise returns the generic list failure', () => {
 		expect(classifyListFilesFailure({ stdout: '', stderr: 'not found' })).toBe('LIST_FAILED');
+		expect(
+			classifyListFilesFailure({
+				stdout: '',
+				stderr: `find: '/tmp/${NOT_A_DIRECTORY_MARKER}': Permission denied`,
+			}),
+		).toBe('LIST_FAILED');
 	});
 });
 

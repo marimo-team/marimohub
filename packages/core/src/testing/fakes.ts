@@ -219,7 +219,7 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 
 	/** Map an absolute (or already-relative) path to its `fs` key. */
 	const toRel = (path: string) =>
-		path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+		path === root ? '' : path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
 
 	const instance = {
 		async exec(cmd: string): Promise<ExecResult> {
@@ -245,12 +245,11 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 			return { success: true, content: new TextDecoder().decode(bytes), encoding: 'utf-8' };
 		},
 		async listFiles(path: string): Promise<ListFilesResult> {
-			if (fs.has(toRel(path))) return listFilesFailure('NOT_A_DIRECTORY');
+			const relativePath = toRel(path);
+			if (fs.has(relativePath)) return listFilesFailure('NOT_A_DIRECTORY');
+			const prefix = relativePath ? `${relativePath}/` : '';
 			const files: FileInfo[] = [...fs.entries()]
-				.filter(([rel]) => {
-					const abs = `${root}/${rel}`;
-					return abs.startsWith(`${path}/`);
-				})
+				.filter(([rel]) => rel.startsWith(prefix))
 				.map(([rel, bytes]) => ({
 					name: rel.split('/').pop() ?? rel,
 					absolutePath: `${root}/${rel}`,

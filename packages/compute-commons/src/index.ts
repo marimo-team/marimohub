@@ -114,8 +114,8 @@ export function classifyListFilesFailure(output: {
 	stdout: string;
 	stderr: string;
 }): 'NOT_A_DIRECTORY' | 'LIST_FAILED' {
-	return output.stdout.includes(NOT_A_DIRECTORY_MARKER) ||
-		output.stderr.includes(NOT_A_DIRECTORY_MARKER)
+	const hasMarkerLine = (value: string) => value.split(/\r?\n/).includes(NOT_A_DIRECTORY_MARKER);
+	return hasMarkerLine(output.stdout) || hasMarkerLine(output.stderr)
 		? 'NOT_A_DIRECTORY'
 		: 'LIST_FAILED';
 }

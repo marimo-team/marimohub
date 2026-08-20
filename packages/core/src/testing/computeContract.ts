@@ -163,7 +163,8 @@ export function computeContract(
 		it('listFiles of a file returns NOT_A_DIRECTORY, never an empty success', async () => {
 			const inst = provider.create(CONTRACT_ID);
 			await inst.writeFiles([{ path: CONTRACT_NON_DIRECTORY_PATH, content: 'contract' }]);
-			expect(await inst.listFiles(CONTRACT_NON_DIRECTORY_PATH)).toEqual({
+			const result = await inst.listFiles(CONTRACT_NON_DIRECTORY_PATH);
+			expectListFilesResult(result, {
 				success: false,
 				files: [],
 				error: { code: 'NOT_A_DIRECTORY' },

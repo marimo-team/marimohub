@@ -310,36 +310,32 @@ describe('CloudflareSandboxProvider', () => {
 	});
 
 	describe('instance.listFiles()', () => {
-		it('translates a vendor failure into the typed failure envelope', async () => {
-			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
-			fakeSandbox.listFiles.mockResolvedValueOnce({ success: false, files: [] });
+		it('translates a find failure into the typed failure envelope', async () => {
+			fakeSandbox.listFiles.mockClear();
+			fakeSandbox.exec.mockResolvedValueOnce({
+				success: false,
+				stdout: '',
+				stderr: 'find failed',
+				error: { code: 'COMMAND_FAILED' },
+			});
 			const res = await makeProvider().create(SANDBOX_ID).listFiles('/w');
 			expect(res).toEqual(listFilesFailure());
+			expect(fakeSandbox.listFiles).not.toHaveBeenCalled();
 		});
 
-		it('projects each FileInfo field and forwards the options', async () => {
-			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
-			fakeSandbox.listFiles.mockResolvedValueOnce({
+		it('lists and parses files in one exec call', async () => {
+			fakeSandbox.listFiles.mockClear();
+			fakeSandbox.exec.mockResolvedValueOnce({
 				success: true,
-				files: [
-					{
-						name: 'a.py',
-						absolutePath: '/w/a.py',
-						relativePath: 'a.py',
-						type: 'file',
-						size: 12,
-						// an extra SDK field that must NOT leak through the projection
-						mode: 0o644,
-					},
-				],
+				stdout: 'f\t12\t/w/a.py\n',
+				stderr: '',
 			});
 			const res = await makeProvider()
 				.create(SANDBOX_ID)
 				.listFiles('/w', { recursive: true, includeHidden: true });
-			expect(fakeSandbox.listFiles).toHaveBeenCalledWith('/w', {
-				recursive: true,
-				includeHidden: true,
-			});
+			expect(fakeSandbox.exec).toHaveBeenLastCalledWith(expect.stringContaining("find '/w'"));
+			expect(fakeSandbox.exec.mock.calls.at(-1)?.[0]).not.toContain('-maxdepth');
+			expect(fakeSandbox.listFiles).not.toHaveBeenCalled();
 			expect(res).toEqual({
 				success: true,
 				files: [

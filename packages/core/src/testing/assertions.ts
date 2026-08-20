@@ -88,7 +88,7 @@ export function expectListFilesResult(
 	expect(typeof received.success).toBe('boolean');
 	expect(Array.isArray(received.files)).toBe(true);
 	if (!received.success) {
-		expect(['LIST_FAILED', 'BACKEND_ERROR']).toContain(received.error.code);
+		expect(['NOT_A_DIRECTORY', 'LIST_FAILED', 'BACKEND_ERROR']).toContain(received.error.code);
 	}
 	for (const file of received.files) {
 		expect(typeof file.name).toBe('string');

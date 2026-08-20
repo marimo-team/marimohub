@@ -10,4 +10,14 @@ describe('makeFsSandbox', () => {
 			listFilesFailure('NOT_A_DIRECTORY'),
 		);
 	});
+
+	it('lists relative and absolute directory paths consistently', async () => {
+		const { instance } = makeFsSandbox({ files: { 'dir/notebook.py': 'print(1)' } });
+
+		const relative = await instance.listFiles('dir');
+		const absolute = await instance.listFiles('/workspace/dir');
+
+		expect(relative).toEqual(absolute);
+		expect(relative.files).toHaveLength(1);
+	});
 });

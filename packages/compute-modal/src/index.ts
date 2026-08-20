@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
-import { ModalClient, NotFoundError as ModalNotFoundError } from 'modal';
 import {
-	buildDirectoryProbeCommand,
+	ModalClient,
+	NotFoundError as ModalNotFoundError,
+	SandboxFilesystemNotADirectoryError,
+} from 'modal';
+import {
 	buildGitCloneCommand,
-	classifyListFilesFailure,
 	mapWithConcurrency,
 	shellQuote,
 	withEnvPrefix,
@@ -137,6 +139,13 @@ function isNotFound(error: unknown): boolean {
 	return (
 		error instanceof ModalNotFoundError ||
 		(error instanceof Error && error.name === 'NotFoundError')
+	);
+}
+
+function isNotADirectory(error: unknown): boolean {
+	return (
+		error instanceof SandboxFilesystemNotADirectoryError ||
+		(error instanceof Error && error.name === 'SandboxFilesystemNotADirectoryError')
 	);
 }
 
@@ -300,10 +309,6 @@ class ModalSandboxInstance implements SandboxInstance {
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
 		try {
-			const probe = await this.exec(buildDirectoryProbeCommand(path));
-			if (!probe.success) {
-				return listFilesFailure(classifyListFilesFailure(probe));
-			}
 			const filesystem = (await this.getSandbox()).filesystem;
 			const files: FileInfo[] = [];
 			const visit = async (directory: string): Promise<void> => {
@@ -321,8 +326,8 @@ class ModalSandboxInstance implements SandboxInstance {
 			};
 			await visit(path);
 			return { success: true, files };
-		} catch {
-			return listFilesFailure('BACKEND_ERROR');
+		} catch (error) {
+			return listFilesFailure(isNotADirectory(error) ? 'NOT_A_DIRECTORY' : 'BACKEND_ERROR');
 		}
 	}
 

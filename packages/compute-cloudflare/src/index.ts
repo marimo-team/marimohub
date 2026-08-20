@@ -2,10 +2,11 @@ import { getSandbox, proxyToSandbox } from '@cloudflare/sandbox';
 import type { Sandbox } from '@cloudflare/sandbox';
 import {
 	base64Encode,
-	buildDirectoryProbeCommand,
+	buildFindFilesCommand,
 	buildGitCloneCommand,
 	classifyListFilesFailure,
 	mapWithConcurrency,
+	parseFindFilesOutput,
 	withEnvPrefix,
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
@@ -93,22 +94,11 @@ class CloudflareSandboxInstance implements SandboxInstance {
 	}
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
-		const probe = await this.exec(buildDirectoryProbeCommand(path));
-		if (!probe.success) {
-			return listFilesFailure(classifyListFilesFailure(probe));
+		const result = await this.exec(buildFindFilesCommand(path, options));
+		if (!result.success) {
+			return listFilesFailure(classifyListFilesFailure(result));
 		}
-		const res = await this.sandbox.listFiles(path, options);
-		if (!res.success) return listFilesFailure();
-		return {
-			success: true,
-			files: res.files.map((f) => ({
-				name: f.name,
-				absolutePath: f.absolutePath,
-				relativePath: f.relativePath,
-				type: f.type,
-				size: f.size,
-			})),
-		};
+		return { success: true, files: parseFindFilesOutput(result.stdout, path, options) };
 	}
 
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
