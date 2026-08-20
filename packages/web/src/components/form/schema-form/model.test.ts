@@ -246,7 +246,7 @@ describe('redactSecretsForRequest', () => {
 			username: 'admin',
 			password: 'must-not-leave-the-form',
 			auth: { method: 'basic', user: 'reader', unexpected: 'nested-secret' },
-			props: { region: 'record-secret' },
+			props: { '': 'discarded-record-secret', region: 'record-secret' },
 			unexpected: 'root-secret',
 		};
 		const redacted = redactSecretsForRequest(schema, pruneForSubmit(schema, raw), raw);
@@ -261,8 +261,21 @@ describe('redactSecretsForRequest', () => {
 			unexpected: null,
 		});
 		expect(JSON.stringify(redacted)).not.toMatch(
-			/must-not|nested-secret|record-secret|root-secret/,
+			/must-not|nested-secret|record-secret|discarded-record-secret|root-secret/,
 		);
+	});
+
+	it('does not restore an empty optional array removed during pruning', () => {
+		const optionalArraySchema: JsonSchemaNode = {
+			type: 'object',
+			properties: {
+				values: { type: 'array', items: { type: 'string' } },
+			},
+		};
+		const raw = { values: [] };
+		expect(
+			redactSecretsForRequest(optionalArraySchema, pruneForSubmit(optionalArraySchema, raw), raw),
+		).toEqual({});
 	});
 
 	it('preserves an invalid record shape without retaining its value', () => {

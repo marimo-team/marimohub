@@ -201,10 +201,10 @@ export function redactSecretsForRequest(
 			return null;
 		}
 		const rawRecord = (rawValue as Record<string, unknown>) ?? {};
-		if (isRecordNode(node)) {
-			return Object.fromEntries(Object.keys(rawRecord).map((key) => [key, '']));
-		}
 		const record = (value as Record<string, unknown>) ?? {};
+		if (isRecordNode(node)) {
+			return Object.fromEntries(Object.keys(record).map((key) => [key, '']));
+		}
 		const properties = node.properties ?? {};
 		const entries: [string, unknown][] = [];
 		for (const [key, child] of Object.entries(properties)) {
@@ -217,6 +217,7 @@ export function redactSecretsForRequest(
 		return Object.fromEntries(entries);
 	}
 	if (node.type === 'array') {
+		if (value === undefined) return undefined;
 		if (rawValue !== undefined && !Array.isArray(rawValue)) return null;
 		const rawItems = (rawValue as unknown[]) ?? [];
 		return ((value as unknown[]) ?? []).map((item, index) =>
