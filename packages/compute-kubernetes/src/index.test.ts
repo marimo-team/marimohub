@@ -364,7 +364,7 @@ describe('KubernetesCompute', () => {
 	});
 
 	describe('listFiles()', () => {
-		const findOutput = (lines: string[]) => `${lines.join('\n')}\n`;
+		const findOutput = (lines: string[]) => `${lines.join('\0')}\0`;
 
 		it('parses find output and filters hidden files', async () => {
 			const world = makeWorld({

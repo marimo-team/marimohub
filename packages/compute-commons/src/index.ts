@@ -129,7 +129,7 @@ export function buildFindFilesCommand(
 		shellQuote(path),
 		'-mindepth 1',
 		...(options?.recursive ? [] : ['-maxdepth 1']),
-		"-printf '%y\\t%s\\t%p\\n'",
+		"-printf '%y\\t%s\\t%p\\0'",
 	];
 	return `${buildDirectoryProbeCommand(path)}; ${parts.join(' ')}`;
 }
@@ -140,9 +140,9 @@ export function parseFindFilesOutput(
 	options?: Pick<FindFilesOptions, 'includeHidden'>,
 ): ParsedFileInfo[] {
 	const files: ParsedFileInfo[] = [];
-	for (const line of stdout.split('\n')) {
-		if (!line) continue;
-		const [typeChar, sizeStr, ...pathParts] = line.split('\t');
+	for (const record of stdout.split('\0')) {
+		if (!record) continue;
+		const [typeChar, sizeStr, ...pathParts] = record.split('\t');
 		const absolutePath = pathParts.join('\t');
 		if (!absolutePath) continue;
 		const name = absolutePath.slice(absolutePath.lastIndexOf('/') + 1);

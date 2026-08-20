@@ -323,11 +323,11 @@ describe('CloudflareSandboxProvider', () => {
 			expect(fakeSandbox.listFiles).not.toHaveBeenCalled();
 		});
 
-		it('lists and parses files in one exec call', async () => {
+		it('lists and parses newline-containing filenames in one exec call', async () => {
 			fakeSandbox.listFiles.mockClear();
 			fakeSandbox.exec.mockResolvedValueOnce({
 				success: true,
-				stdout: 'f\t12\t/w/a.py\n',
+				stdout: 'f\t12\t/w/a\nnotebook.py\0',
 				stderr: '',
 			});
 			const res = await makeProvider()
@@ -339,7 +339,13 @@ describe('CloudflareSandboxProvider', () => {
 			expect(res).toEqual({
 				success: true,
 				files: [
-					{ name: 'a.py', absolutePath: '/w/a.py', relativePath: 'a.py', type: 'file', size: 12 },
+					{
+						name: 'a\nnotebook.py',
+						absolutePath: '/w/a\nnotebook.py',
+						relativePath: 'a\nnotebook.py',
+						type: 'file',
+						size: 12,
+					},
 				],
 			});
 		});

@@ -636,7 +636,7 @@ describe('CoreWeaveCompute', () => {
 	});
 
 	describe('listFiles()', () => {
-		const findOutput = (lines: string[]) => `${lines.join('\n')}\n`;
+		const findOutput = (lines: string[]) => `${lines.join('\0')}\0`;
 		const onlyFind = (stdout: string, exitCode = 0) => ({
 			runImpl: async (cmd: readonly string[]) =>
 				cmd.join(' ').includes('find') ? procResult({ stdout, exitCode }) : procResult(),

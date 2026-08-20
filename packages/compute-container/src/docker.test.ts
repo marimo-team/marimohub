@@ -400,7 +400,7 @@ describe('DockerCompute', () => {
 	});
 
 	describe('listFiles()', () => {
-		const findOutput = (lines: string[]) => `${lines.join('\n')}\n`;
+		const findOutput = (lines: string[]) => `${lines.join('\0')}\0`;
 		const onlyFind =
 			(stdout: string, exitCode = 0) =>
 			(args: string[]) => {

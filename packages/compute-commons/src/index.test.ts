@@ -101,13 +101,13 @@ describe('removeUndefined', () => {
 describe('buildFindFilesCommand', () => {
 	it('builds a non-recursive find command by default', () => {
 		expect(buildFindFilesCommand('/workspace')).toContain(
-			"find '/workspace' -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%p\\n'",
+			"find '/workspace' -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%p\\0'",
 		);
 	});
 
 	it('omits maxdepth for recursive listings', () => {
 		const command = buildFindFilesCommand('/workspace', { recursive: true });
-		expect(command).toContain("find '/workspace' -mindepth 1 -printf '%y\\t%s\\t%p\\n'");
+		expect(command).toContain("find '/workspace' -mindepth 1 -printf '%y\\t%s\\t%p\\0'");
 		expect(command).not.toContain('-maxdepth');
 	});
 
@@ -176,10 +176,10 @@ describe('parseFindFilesOutput', () => {
 		's\t7\t/workspace/socket',
 		'f\t5\t/workspace/.hidden',
 		'not-enough-columns',
-	].join('\n');
+	].join('\0');
 
 	it('maps find rows into file info and filters hidden files by default', () => {
-		expect(parseFindFilesOutput(`${output}\n`, '/workspace')).toEqual([
+		expect(parseFindFilesOutput(`${output}\0`, '/workspace')).toEqual([
 			{
 				name: 'a.py',
 				absolutePath: '/workspace/a.py',
@@ -213,7 +213,7 @@ describe('parseFindFilesOutput', () => {
 
 	it('includes hidden files when requested', () => {
 		expect(
-			parseFindFilesOutput('f\t5\t/workspace/.hidden\n', '/workspace', { includeHidden: true }),
+			parseFindFilesOutput('f\t5\t/workspace/.hidden\0', '/workspace', { includeHidden: true }),
 		).toEqual([
 			{
 				name: '.hidden',
@@ -226,7 +226,7 @@ describe('parseFindFilesOutput', () => {
 	});
 
 	it('handles root paths and non-numeric sizes', () => {
-		expect(parseFindFilesOutput('f\tNaN\t/tmp/a.py\n', '/')).toEqual([
+		expect(parseFindFilesOutput('f\tNaN\t/tmp/a.py\0', '/')).toEqual([
 			{
 				name: 'a.py',
 				absolutePath: '/tmp/a.py',
@@ -237,17 +237,18 @@ describe('parseFindFilesOutput', () => {
 		]);
 	});
 
-	it('preserves tabs that appear inside file paths', () => {
-		expect(parseFindFilesOutput('f\t1\t/workspace/has\ttab.py\n', '/workspace')[0]).toMatchObject({
-			name: 'has\ttab.py',
-			absolutePath: '/workspace/has\ttab.py',
+	it('preserves tabs and newlines inside file paths', () => {
+		const path = '/workspace/has\ttab\nand-newline.py';
+		expect(parseFindFilesOutput(`f\t1\t${path}\0`, '/workspace')[0]).toMatchObject({
+			name: 'has\ttab\nand-newline.py',
+			absolutePath: path,
 		});
 	});
 
 	it('passes an absolute path outside rootPath through unchanged as relativePath', () => {
 		// A row whose path is NOT under rootPath keeps its absolute path as the
 		// relativePath (no accidental prefix-stripping of an unrelated dir).
-		expect(parseFindFilesOutput('f\t3\t/etc/passwd\n', '/workspace')).toEqual([
+		expect(parseFindFilesOutput('f\t3\t/etc/passwd\0', '/workspace')).toEqual([
 			{
 				name: 'passwd',
 				absolutePath: '/etc/passwd',
