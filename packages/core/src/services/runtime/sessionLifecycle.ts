@@ -2,8 +2,9 @@ import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
-import type { NotebookId } from '../../ids';
+import type { NotebookId, SessionId } from '../../ids';
 import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import { createSlidingWindowBudget } from '../../rateLimit';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
@@ -12,6 +13,8 @@ import { isTerminal, sessionModePolicy, sessionPersistsEdits } from './sessionSt
 import type { SessionService } from './SessionService';
 
 const SESSION_SWEEP_CONCURRENCY = 8;
+/** Cadence for informational connection counts; reap decisions always probe immediately. */
+const CONNECTION_COUNT_REFRESH_MS = Millis.minutes(5);
 
 /**
  * How long after `started_at` an `expired` record's sandbox is left alone.
@@ -119,6 +122,10 @@ export interface SweepResult {
 export class SessionLifecycleService {
 	private readonly provisioner: SandboxProvisioner;
 	private readonly retirer: SessionRetirer;
+	private readonly connectionProbeBudget = createSlidingWindowBudget<SessionId>({
+		limit: 1,
+		windowMs: CONNECTION_COUNT_REFRESH_MS,
+	});
 
 	constructor(
 		private sessions: SessionService,
@@ -187,8 +194,8 @@ export class SessionLifecycleService {
 			// Only probe when a reap decision hinges on it (cost control: one exec per
 			// near-deadline/stale session per sweep, nothing for healthy ones). Only an
 			// `expired` record can still have a live kernel among the terminal ones.
-			// Exception: every running app session is probed each sweep — its
-			// connection count feeds the "~N connected" stop-confirm hint.
+			// Informational counts for apps/shared editors feed the "~N connected"
+			// stop-confirm hint, but refresh on the slower cadence below.
 			let active: number | null = null;
 			const reapCandidate =
 				s.status === 'expired' ||
@@ -197,7 +204,11 @@ export class SessionLifecycleService {
 				s.status === 'running' &&
 				(sessionModePolicy(s).singleton ||
 					(sessionPersistsEdits(s) && (s.editor_sandbox_sharing ?? 'shared') === 'shared'));
-			if (this.cfg.connectionAware && (reapCandidate || connectionCountCheck)) {
+			const connectionCountDue =
+				this.cfg.connectionAware &&
+				connectionCountCheck &&
+				this.connectionProbeBudget.consume(s.session_id, now);
+			if (this.cfg.connectionAware && (reapCandidate || connectionCountDue)) {
 				active = await this.probe(sandbox, kernelBasePath(s));
 				// A null probe is "unknown" — leave the last stamp rather than write a
 				// lie. An unchanged count is skipped too: no CAS/ETag churn against

@@ -72,6 +72,34 @@ describe('restoreWorkspace', () => {
 		]);
 	});
 
+	it('fetches up to 32 workspace objects concurrently', async () => {
+		const { nb } = nbCtx();
+		class ConcurrentGetBucket extends MemoryBucket {
+			activeGets = 0;
+			maxActiveGets = 0;
+
+			override async get(key: string) {
+				this.activeGets++;
+				this.maxActiveGets = Math.max(this.maxActiveGets, this.activeGets);
+				await Promise.resolve();
+				try {
+					return await super.get(key);
+				} finally {
+					this.activeGets--;
+				}
+			}
+		}
+		const bucket = new ConcurrentGetBucket();
+		for (let i = 0; i < 33; i++) {
+			await bucket.put(nb.workspaceFile(`file-${i}.txt`), 'x');
+		}
+		const { instance } = makeFsSandbox();
+
+		await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT);
+
+		expect(bucket.maxActiveGets).toBe(32);
+	});
+
 	it('round-trips binary files byte-identically', async () => {
 		const { nb } = nbCtx();
 		const bucket = new MemoryBucket();

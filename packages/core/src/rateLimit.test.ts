@@ -31,6 +31,33 @@ describe('createSlidingWindowBudget', () => {
 		expect(budget.consume('user')).toBe(true);
 	});
 
+	it('accepts an explicit observation time', () => {
+		const budget = createSlidingWindowBudget<string>({
+			limit: 1,
+			windowMs: 1_000,
+			now: () => 10_000,
+		});
+		expect(budget.consume('user', 0)).toBe(true);
+		expect(budget.consume('user', 999)).toBe(false);
+		expect(budget.consume('user', 1_000)).toBe(true);
+	});
+
+	it('does not treat an older timestamp for another key as a clock rollback', () => {
+		const budget = createSlidingWindowBudget<string>({ limit: 1, windowMs: 10_000 });
+		expect(budget.consume('alice', 1_000)).toBe(true);
+		expect(budget.consume('bob', 2_000)).toBe(true);
+		expect(budget.consume('alice', 1_500)).toBe(false);
+		expect(budget.consume('bob', 2_500)).toBe(false);
+	});
+
+	it('resets only the affected key when its clock moves backwards', () => {
+		const budget = createSlidingWindowBudget<string>({ limit: 1, windowMs: 1_000 });
+		expect(budget.consume('alice', 1_000)).toBe(true);
+		expect(budget.consume('bob', 1_000)).toBe(true);
+		expect(budget.consume('alice', 0)).toBe(true);
+		expect(budget.consume('bob', 1_500)).toBe(false);
+	});
+
 	it('forgets inactive keys during an amortized sweep', () => {
 		let now = 0;
 		const budget = createSlidingWindowBudget<string>({
