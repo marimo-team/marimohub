@@ -90,10 +90,14 @@ export interface FileInfo {
 
 export type ListFilesResult =
 	| { success: true; files: FileInfo[] }
-	| { success: false; files: []; error: { code: 'LIST_FAILED' | 'BACKEND_ERROR' } };
+	| {
+			success: false;
+			files: [];
+			error: { code: 'NOT_A_DIRECTORY' | 'LIST_FAILED' | 'BACKEND_ERROR' };
+	  };
 
 export function listFilesFailure(
-	code: 'LIST_FAILED' | 'BACKEND_ERROR' = 'LIST_FAILED',
+	code: 'NOT_A_DIRECTORY' | 'LIST_FAILED' | 'BACKEND_ERROR' = 'LIST_FAILED',
 ): ListFilesResult {
 	return { success: false, files: [], error: { code } };
 }
@@ -141,6 +145,10 @@ export interface SandboxInstance {
 	exec(cmd: string): Promise<ExecResult>;
 	execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream>;
 	readFile(path: string): Promise<ReadFileResult>;
+	/**
+	 * List entries below a directory. An existing non-directory path returns
+	 * `NOT_A_DIRECTORY`; it must never succeed with an empty file list.
+	 */
 	listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult>;
 	/**
 	 * Write a set of files, creating parent directories. Always a set, so the

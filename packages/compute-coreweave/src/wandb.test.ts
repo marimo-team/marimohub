@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import { Seconds } from '@marimo-hub/core';
 import type { SandboxId } from '@marimo-hub/core';
-import { computeContract } from '@marimo-hub/core/testing/compute-contract';
+import {
+	computeContract,
+	isContractNonDirectoryFindCommand,
+} from '@marimo-hub/core/testing/compute-contract';
 import { expectExecResult } from '@marimo-hub/core/testing';
 import { CoreWeaveCompute } from './index';
 import { buildWandbMetadata, createWandbCompute, serviceAddressResolver } from './wandb';
@@ -111,10 +115,20 @@ computeContract(
 		createWandbCompute(
 			baseConfig,
 			makeWorld({
-				runImpl: async (command) =>
-					command.at(-1) === 'false'
-						? procResult({ exitCode: 1, failed: true, ok: false, stderr: 'failed' })
-						: procResult(),
+				runImpl: async (command) => {
+					if (command.at(-1) === 'false') {
+						return procResult({ exitCode: 1, failed: true, ok: false, stderr: 'failed' });
+					}
+					if (isContractNonDirectoryFindCommand(command.at(-1))) {
+						return procResult({
+							exitCode: NOT_A_DIRECTORY_EXIT_CODE,
+							failed: true,
+							ok: false,
+							stderr: NOT_A_DIRECTORY_MARKER,
+						});
+					}
+					return procResult();
+				},
 			}).client,
 		),
 	{ mountFallsBack: true, semantics: { failingCommand: 'false' } },

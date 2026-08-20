@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { NotFoundError } from 'modal';
+import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,
+	CONTRACT_NON_DIRECTORY_PATH,
 	CONTRACT_VISIBLE_FILE,
 } from '@marimo-hub/core/testing/compute-contract';
 import { modalProfileResources, ModalCompute } from './index';
@@ -470,10 +472,14 @@ function contractWorld() {
 	const create = world.client.sandboxes.create.bind(world.client.sandboxes);
 	world.client.sandboxes.create = async (app, image, options) => {
 		const sandbox = (await create(app, image, options)) as FakeSandbox;
-		sandbox.execImpl = (command) =>
-			command[2]?.includes('mh-contract-fail')
+		sandbox.execImpl = (command) => {
+			if (command[2]?.includes(CONTRACT_NON_DIRECTORY_PATH)) {
+				return processResult(NOT_A_DIRECTORY_EXIT_CODE, '', NOT_A_DIRECTORY_MARKER);
+			}
+			return command[2]?.includes('mh-contract-fail')
 				? processResult(1, '', 'scripted failure')
 				: processResult();
+		};
 		return sandbox;
 	};
 	return world;

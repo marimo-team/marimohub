@@ -1504,15 +1504,15 @@ describe('NotebookProposalService', () => {
 		expect(calls.readFile).toHaveLength(0);
 	});
 
-	it('maps a sandbox listing failure to a safe conflict', async () => {
+	it('maps a sandbox listing failure to an internal error', async () => {
 		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'changed' } });
 		const sandbox = { ...instance, listFiles: async () => listFilesFailure('BACKEND_ERROR') };
-		await expect(capture(sandbox)).rejects.toThrow('Could not inspect');
+		await expect(capture(sandbox)).rejects.toThrow('Entry notebook inspection invariant failed');
 	});
 
-	it('rejects a missing entry notebook', async () => {
+	it('maps a missing entry notebook to an internal error', async () => {
 		const { instance } = makeFsSandbox({ files: { 'other.py': 'changed' } });
-		await expect(capture(instance)).rejects.toThrow('missing from the session');
+		await expect(capture(instance)).rejects.toThrow('Entry notebook inspection invariant failed');
 	});
 
 	it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 1.5])(
@@ -1522,7 +1522,7 @@ describe('NotebookProposalService', () => {
 				files: { 'dashboard.py': 'changed' },
 				sizes: { 'dashboard.py': size },
 			});
-			await expect(capture(instance)).rejects.toThrow('invalid file metadata');
+			await expect(capture(instance)).rejects.toThrow('Entry notebook inspection invariant failed');
 			expect(calls.readFile).toHaveLength(0);
 		},
 	);
@@ -1536,10 +1536,10 @@ describe('NotebookProposalService', () => {
 		expect(calls.readFile).toHaveLength(0);
 	});
 
-	it('maps a sandbox read failure to a safe conflict', async () => {
+	it('maps a sandbox read failure to an internal error', async () => {
 		const { instance } = makeFsSandbox({ files: { 'dashboard.py': 'changed' } });
 		const sandbox = { ...instance, readFile: async () => readFileFailure('BACKEND_ERROR') };
-		await expect(capture(sandbox)).rejects.toThrow('Could not read');
+		await expect(capture(sandbox)).rejects.toThrow('Entry notebook inspection invariant failed');
 	});
 
 	it.each([
@@ -1552,7 +1552,7 @@ describe('NotebookProposalService', () => {
 			readFile: async () =>
 				({ success: true, ...readResult }) as Awaited<ReturnType<SandboxInstance['readFile']>>,
 		};
-		await expect(capture(sandbox)).rejects.toThrow(/invalid (encoding|base64 content)/);
+		await expect(capture(sandbox)).rejects.toThrow('Entry notebook inspection invariant failed');
 	});
 
 	it('returns an existing proposal without touching the sandbox', async () => {

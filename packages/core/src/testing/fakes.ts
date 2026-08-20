@@ -66,6 +66,7 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 	instance: SandboxInstance;
 	calls: SandboxCalls;
 } {
+	const writtenFiles = new Set<string>();
 	const calls: SandboxCalls = {
 		exec: [],
 		mountBucket: [],
@@ -111,11 +112,15 @@ export function makeFakeSandbox(opts: FakeSandboxOptions = {}): {
 			}
 			return { success: true, content };
 		},
-		listFiles: async () => ({ success: true, files: [] }),
+		listFiles: async (path) =>
+			opts.files?.[path] !== undefined || writtenFiles.has(path)
+				? listFilesFailure('NOT_A_DIRECTORY')
+				: { success: true, files: [] },
 		writeFiles: async (files: readonly SandboxFileWrite[]) => {
 			calls.writeFiles.push([...files]);
 			calls.writeFile.push(...files);
 			calls.sequence.push('writeFiles');
+			for (const file of files) writtenFiles.add(file.path);
 		},
 		gitCheckout: async () => {},
 		setEnvVars: async (vars: Record<string, string>, options?: SetEnvVarsOptions) => {
@@ -240,10 +245,11 @@ export function makeFsSandbox(opts: FsSandboxOptions = {}): {
 			return { success: true, content: new TextDecoder().decode(bytes), encoding: 'utf-8' };
 		},
 		async listFiles(path: string): Promise<ListFilesResult> {
+			if (fs.has(toRel(path))) return listFilesFailure('NOT_A_DIRECTORY');
 			const files: FileInfo[] = [...fs.entries()]
 				.filter(([rel]) => {
 					const abs = `${root}/${rel}`;
-					return abs === path || abs.startsWith(`${path}/`);
+					return abs.startsWith(`${path}/`);
 				})
 				.map(([rel, bytes]) => ({
 					name: rel.split('/').pop() ?? rel,

@@ -20,6 +20,11 @@ import { expectExecResult, expectFileResult, expectListFilesResult } from './ass
 export const CONTRACT_SANDBOX_ID = 'sb-aaaaaaaaaaaaaaaa' as SandboxId;
 export const CONTRACT_VISIBLE_FILE = 'contract-visible.txt';
 export const CONTRACT_HIDDEN_FILE = '.contract-hidden';
+export const CONTRACT_NON_DIRECTORY_PATH = '/workspace/contract-file.txt';
+
+export function isContractNonDirectoryFindCommand(command: string | undefined): boolean {
+	return Boolean(command?.includes('find ') && command.includes(CONTRACT_NON_DIRECTORY_PATH));
+}
 
 const CONTRACT_ID = CONTRACT_SANDBOX_ID;
 
@@ -153,6 +158,16 @@ export function computeContract(
 		it('listFiles returns a well-formed ListFilesResult', async () => {
 			const res = await provider.create(CONTRACT_ID).listFiles('/workspace');
 			expectListFilesResult(res);
+		});
+
+		it('listFiles of a file returns NOT_A_DIRECTORY, never an empty success', async () => {
+			const inst = provider.create(CONTRACT_ID);
+			await inst.writeFiles([{ path: CONTRACT_NON_DIRECTORY_PATH, content: 'contract' }]);
+			expect(await inst.listFiles(CONTRACT_NON_DIRECTORY_PATH)).toEqual({
+				success: false,
+				files: [],
+				error: { code: 'NOT_A_DIRECTORY' },
+			});
 		});
 
 		it('unmountBucket resolves', async () => {

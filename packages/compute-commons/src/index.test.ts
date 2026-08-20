@@ -6,8 +6,10 @@ import {
 	base64Encode,
 	buildFindFilesCommand,
 	buildGitCloneCommand,
+	classifyListFilesFailure,
 	iterableToStream,
 	mapWithConcurrency,
+	NOT_A_DIRECTORY_MARKER,
 	parseFindFilesOutput,
 	pollUntilReady,
 	portWaitCommand,
@@ -93,19 +95,38 @@ describe('removeUndefined', () => {
 
 describe('buildFindFilesCommand', () => {
 	it('builds a non-recursive find command by default', () => {
-		expect(buildFindFilesCommand('/workspace')).toBe(
+		expect(buildFindFilesCommand('/workspace')).toContain(
 			"find '/workspace' -mindepth 1 -maxdepth 1 -printf '%y\\t%s\\t%p\\n'",
 		);
 	});
 
 	it('omits maxdepth for recursive listings', () => {
-		expect(buildFindFilesCommand('/workspace', { recursive: true })).toBe(
-			"find '/workspace' -mindepth 1 -printf '%y\\t%s\\t%p\\n'",
-		);
+		const command = buildFindFilesCommand('/workspace', { recursive: true });
+		expect(command).toContain("find '/workspace' -mindepth 1 -printf '%y\\t%s\\t%p\\n'");
+		expect(command).not.toContain('-maxdepth');
+	});
+
+	it('marks an existing non-directory before find can return an empty success', () => {
+		expect(buildFindFilesCommand('/workspace/file.py')).toContain(NOT_A_DIRECTORY_MARKER);
 	});
 
 	it('quotes the root path', () => {
 		expect(buildFindFilesCommand("/work'space")).toContain("'/work'\\''space'");
+	});
+});
+
+describe('classifyListFilesFailure', () => {
+	it('recognizes the non-directory marker on either output stream', () => {
+		expect(classifyListFilesFailure({ stdout: NOT_A_DIRECTORY_MARKER, stderr: '' })).toBe(
+			'NOT_A_DIRECTORY',
+		);
+		expect(classifyListFilesFailure({ stdout: '', stderr: NOT_A_DIRECTORY_MARKER })).toBe(
+			'NOT_A_DIRECTORY',
+		);
+	});
+
+	it('otherwise returns the generic list failure', () => {
+		expect(classifyListFilesFailure({ stdout: '', stderr: 'not found' })).toBe('LIST_FAILED');
 	});
 });
 

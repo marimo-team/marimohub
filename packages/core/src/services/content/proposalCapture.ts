@@ -293,7 +293,13 @@ async function captureEntryNotebook(
 	base: VersionPaths,
 	source: NotebookProposal['source'],
 ): Promise<CapturedProposalChanges> {
-	const content = await readChangedFile(sandbox, workdir, source.entry_notebook);
+	let content: Uint8Array;
+	try {
+		content = await readChangedFile(sandbox, workdir, source.entry_notebook);
+	} catch (error) {
+		if (!(error instanceof ConflictError)) throw error;
+		throw new Error('Entry notebook inspection invariant failed', { cause: error });
+	}
 	const baseObject = await bucket.get(base.workspaceFile(source.entry_notebook));
 	if (!baseObject) throw new NotFoundError('The synced entry notebook is missing');
 	if (proposalBytesEqual(content, await baseObject.bytes())) {

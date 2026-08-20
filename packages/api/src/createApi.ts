@@ -32,6 +32,10 @@ import { sandboxProxyMiddleware } from './sandboxProxy';
 import { createApp, fail } from './shared';
 import type { ErrorCode } from './shared';
 
+function internalErrorMessage(requestId: string | undefined): string {
+	return requestId ? `Internal error — ref ${requestId}` : 'Internal error';
+}
+
 const OPENAPI_DOC = {
 	openapi: '3.1.0' as const,
 	info: {
@@ -153,7 +157,7 @@ export function createApi(rawDeps: ApiDeps) {
 					status: res.status,
 					error: errorMetadata(err),
 				});
-				return fail(c, code, 'Internal server error', res.status);
+				return fail(c, code, internalErrorMessage(c.get('requestId')), res.status);
 			}
 			return fail(c, code, err.message || res.statusText || 'Request failed', res.status);
 		}
@@ -182,7 +186,7 @@ export function createApi(rawDeps: ApiDeps) {
 			status: 500,
 			error: describeError(err),
 		});
-		return fail(c, 'INTERNAL_ERROR', 'Internal server error', 500);
+		return fail(c, 'INTERNAL_ERROR', internalErrorMessage(c.get('requestId')), 500);
 	});
 
 	// Correlation id: reuse an inbound `X-Request-Id` or mint one, echo it on the

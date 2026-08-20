@@ -72,7 +72,7 @@ exports[`createApi onError mapping > maps domain errors to response envelopes 1`
     "body": {
       "error": {
         "code": "INTERNAL_ERROR",
-        "message": "Internal server error",
+        "message": "Internal error",
       },
       "success": false,
     },

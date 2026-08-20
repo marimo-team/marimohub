@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
+import { NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core';
 import { listFilesFailure } from '@marimo-hub/core/ports';
-import { computeContract } from '@marimo-hub/core/testing/compute-contract';
+import {
+	computeContract,
+	CONTRACT_NON_DIRECTORY_PATH,
+} from '@marimo-hub/core/testing/compute-contract';
 
 /**
  * Tests for the Cloudflare Containers compute adapter.
@@ -307,12 +311,14 @@ describe('CloudflareSandboxProvider', () => {
 
 	describe('instance.listFiles()', () => {
 		it('translates a vendor failure into the typed failure envelope', async () => {
+			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
 			fakeSandbox.listFiles.mockResolvedValueOnce({ success: false, files: [] });
 			const res = await makeProvider().create(SANDBOX_ID).listFiles('/w');
 			expect(res).toEqual(listFilesFailure());
 		});
 
 		it('projects each FileInfo field and forwards the options', async () => {
+			fakeSandbox.exec.mockResolvedValueOnce({ success: true, stdout: '', stderr: '' });
 			fakeSandbox.listFiles.mockResolvedValueOnce({
 				success: true,
 				files: [
@@ -432,14 +438,21 @@ describe('CloudflareSandboxProvider', () => {
 
 function primeContractFakes() {
 	fakeSandbox.exec.mockImplementation(async (cmd: string) =>
-		cmd.includes('mh-contract-fail')
+		cmd.includes(CONTRACT_NON_DIRECTORY_PATH)
 			? {
 					success: false,
 					stdout: '',
-					stderr: 'scripted failure',
+					stderr: NOT_A_DIRECTORY_MARKER,
 					error: { code: 'COMMAND_FAILED' },
 				}
-			: { success: true, stdout: '', stderr: '' },
+			: cmd.includes('mh-contract-fail')
+				? {
+						success: false,
+						stdout: '',
+						stderr: 'scripted failure',
+						error: { code: 'COMMAND_FAILED' },
+					}
+				: { success: true, stdout: '', stderr: '' },
 	);
 	fakeSandbox.execStream.mockImplementation(async () => new ReadableStream());
 	fakeSandbox.readFile.mockImplementation(async () => ({ success: false }));

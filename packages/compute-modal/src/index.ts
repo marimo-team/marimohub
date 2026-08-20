@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
 import { ModalClient, NotFoundError as ModalNotFoundError } from 'modal';
 import {
+	buildDirectoryProbeCommand,
 	buildGitCloneCommand,
+	classifyListFilesFailure,
 	mapWithConcurrency,
 	shellQuote,
 	withEnvPrefix,
@@ -298,6 +300,10 @@ class ModalSandboxInstance implements SandboxInstance {
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {
 		try {
+			const probe = await this.exec(buildDirectoryProbeCommand(path));
+			if (!probe.success) {
+				return listFilesFailure(classifyListFilesFailure(probe));
+			}
 			const filesystem = (await this.getSandbox()).filesystem;
 			const files: FileInfo[] = [];
 			const visit = async (directory: string): Promise<void> => {
