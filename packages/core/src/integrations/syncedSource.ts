@@ -3,6 +3,7 @@ import { BadRequestError, ConflictError, ValidationError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
 import { toHex } from '../internal/hex';
 import type { GitSource, GitSourceConfig, Source } from '../schema';
+import type { VersionId } from '../ids';
 import {
 	detectProvider,
 	normalizeRepo,
@@ -40,13 +41,16 @@ export interface SyncNotebookInput {
 	commit: string;
 	files: SyncedWorkspaceFile[];
 	/**
-	 * Optimistic precondition for server-initiated pulls: the source `commit`
-	 * observed when the branch head was resolved (null for a never-synced
-	 * source). When present, the sync conflicts if another sync advanced the
-	 * source in the meantime, so a pull of a stale head can never regress the
-	 * pointer. Pushes omit it — a CI archive is authoritative for its commit.
+	 * Optimistic precondition for server-initiated pulls: the source
+	 * `current_version_id` observed when the branch head was resolved (null for
+	 * a never-synced source). When present, the sync conflicts if another sync
+	 * advanced the source in the meantime, so a pull of a stale head can never
+	 * regress the pointer. Version ids are the token — unlike the commit, which
+	 * can cycle back (A → B → A) while a pull downloads, a fresh ULID per sync
+	 * can never falsely match. Pushes omit it — a CI archive is authoritative
+	 * for its commit.
 	 */
-	expected_commit?: string | null;
+	expected_source_version?: VersionId | null;
 }
 
 export type UpdateSyncedNotebookSourceInput = GitSourceConfig;
@@ -229,9 +233,12 @@ export function isAtBranchHead(source: GitSource, headCommit: string): boolean {
 	return !source.pending_config && source.commit === headCommit;
 }
 
-/** Enforce `expected_commit` (see {@link SyncNotebookInput}) against the live source. */
-export function assertSyncCommitPrecondition(source: GitSource, input: SyncNotebookInput): void {
-	if (input.expected_commit !== undefined && source.commit !== input.expected_commit) {
+/** Enforce `expected_source_version` (see {@link SyncNotebookInput}) against the live source. */
+export function assertSyncSourcePrecondition(source: GitSource, input: SyncNotebookInput): void {
+	if (
+		input.expected_source_version !== undefined &&
+		source.current_version_id !== input.expected_source_version
+	) {
 		throw new ConflictError('The synced source advanced while this sync was in flight; retry');
 	}
 }

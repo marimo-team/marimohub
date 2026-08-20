@@ -87,7 +87,7 @@ export async function pullSourceToHead(
 			files,
 			// The head was resolved against this source state; if another sync
 			// advances it during the download, conflict instead of regressing.
-			expected_commit: git.commit,
+			expected_source_version: git.current_version_id,
 		},
 		actor,
 	);

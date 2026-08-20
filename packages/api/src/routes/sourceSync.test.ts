@@ -412,6 +412,45 @@ describe('Source drift and sync-now routes', () => {
 		expect(detail.source.commit).toBe(NEWER);
 	});
 
+	it('rejects a stale pull even when the source commit cycles back to the observed one', async () => {
+		// ABA: the commit string alone would falsely match after C0 → C2 → C0, so
+		// the precondition must fence on the version id, which never repeats.
+		const C0 = '0000000000000000000000000000000000000000';
+		const C2 = '2222222222222222222222222222222222222222';
+		const push = (commit: string, deps: ReturnType<typeof api>['deps'], nid: string) =>
+			deps.services.notebooks.synced.sync(projectId, nid as NotebookId, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				commit,
+				files: [{ path: 'app.py', bytes: encode(`print("${commit}")`) }],
+			});
+		const midDownload: { advance?: () => Promise<unknown> } = {};
+		const reader = stubReader({
+			fetchWorkspace: async () => {
+				await midDownload.advance?.();
+				return [{ path: 'app.py', bytes: encode('stale head') }];
+			},
+		});
+		const { request, deps } = api(reader);
+		const nid = await createSyncedNotebook(request);
+		await push(C0, deps, nid);
+		midDownload.advance = async () => {
+			await push(C2, deps, nid);
+			await push(C0, deps, nid);
+		};
+
+		await expectError(
+			await request('POST', `/projects/${projectId}/notebooks/${nid}/source/sync`),
+			409,
+			'CONFLICT',
+		);
+		const detail = await expectOk<{ source: { commit: string } }>(
+			await request('GET', `/projects/${projectId}/notebooks/${nid}`),
+		);
+		expect(detail.source.commit).toBe(C0);
+	});
+
 	it('reports synced: false when a concurrent sync of the same commit wins (no audit event)', async () => {
 		const midDownload: { advance?: () => Promise<unknown> } = {};
 		const reader = stubReader({

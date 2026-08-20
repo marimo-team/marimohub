@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { ConflictError } from '../errors';
+import type { VersionId } from '../ids';
 import type { GitSource } from '../schema';
-import { createGitSource, isAtBranchHead, sourceDrift } from './syncedSource';
+import {
+	assertSyncSourcePrecondition,
+	createGitSource,
+	isAtBranchHead,
+	sourceDrift,
+} from './syncedSource';
 
 function syncedSource(overrides: Partial<GitSource> = {}): GitSource {
 	return {
@@ -26,6 +33,33 @@ describe('isAtBranchHead', () => {
 		expect(isAtBranchHead(syncedSource(), 'bbb222')).toBe(false);
 		expect(isAtBranchHead(syncedSource({ commit: null }), 'aaa111')).toBe(false);
 		expect(isAtBranchHead(syncedSource({ pending_config: PENDING }), 'aaa111')).toBe(false);
+	});
+});
+
+describe('assertSyncSourcePrecondition', () => {
+	const input = { repo: 'org/repo', branch: 'main', root_path: '', commit: 'headsha', files: [] };
+
+	it('fences on the version id, so a commit that cycled back still conflicts', () => {
+		// After C0 → C2 → C0 the commit matches what a stale pull observed, but
+		// the version id has moved — only the ULID token exposes the ABA.
+		const moved = syncedSource({ current_version_id: 'v3' as VersionId, commit: 'aaa111' });
+		expect(() =>
+			assertSyncSourcePrecondition(moved, {
+				...input,
+				expected_source_version: 'v1' as VersionId,
+			}),
+		).toThrow(ConflictError);
+		expect(() =>
+			assertSyncSourcePrecondition(moved, {
+				...input,
+				expected_source_version: 'v3' as VersionId,
+			}),
+		).not.toThrow();
+	});
+
+	it('is a no-op when the caller sent no expectation (push path)', () => {
+		const source = syncedSource({ current_version_id: 'v3' as VersionId });
+		expect(() => assertSyncSourcePrecondition(source, input)).not.toThrow();
 	});
 });
 
