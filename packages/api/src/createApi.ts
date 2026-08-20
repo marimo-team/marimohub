@@ -9,8 +9,10 @@ import {
 	ensureInitialized,
 	isPatRequest,
 	MAX_REQUEST_BYTES,
+	NotebookId,
 	noopNotifier,
 	probeKernelLiveness,
+	ProjectId,
 	SubdomainExposure,
 	UnavailableError,
 } from '@marimo-hub/core';
@@ -85,6 +87,16 @@ async function rejectionDetails(response: Response): Promise<{ code: string; mes
 	return {
 		code: `HTTP_${response.status}`,
 		message: response.statusText || 'Request rejected',
+	};
+}
+
+function rejectionResourceContext(path: string) {
+	const match = /\/projects\/([^/]+)(?:\/notebooks\/([^/]+))?/.exec(path);
+	const projectId = match?.[1];
+	const notebookId = match?.[2];
+	return {
+		...(ProjectId.is(projectId) ? { project_id: projectId } : {}),
+		...(NotebookId.is(notebookId) ? { notebook_id: notebookId } : {}),
 	};
 }
 
@@ -223,8 +235,6 @@ export function createApi(rawDeps: ApiDeps) {
 
 		const rejection = await rejectionDetails(c.res);
 		const route = routePath(c, -1) || c.req.path;
-		const projectId = c.req.param('pid');
-		const notebookId = c.req.param('nid');
 		deps.metrics?.increment('requests.rejected', 1, { route, code: rejection.code });
 		logEvent({
 			level: 'warn',
@@ -236,8 +246,7 @@ export function createApi(rawDeps: ApiDeps) {
 			message: rejection.message,
 			request_id: c.get('requestId') ?? null,
 			user: c.get('user')?.id ?? null,
-			...(projectId ? { project_id: projectId } : {}),
-			...(notebookId ? { notebook_id: notebookId } : {}),
+			...rejectionResourceContext(c.req.path),
 		});
 	};
 	app.use(`${API_PREFIX}/*`, observeRejection);

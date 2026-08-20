@@ -119,6 +119,38 @@ describe('createApi rejected request observability', () => {
 		});
 	});
 
+	it('captures resource context when mounted sync middleware rejects the request', async () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		const { app } = createTestApi({ deps: { metrics } });
+		const pid = createProjectId();
+		const nid = createNotebookId();
+
+		const res = await app.request(`/api/sync/git/v1/projects/${pid}/notebooks/${nid}`, {
+			method: 'POST',
+			headers: {
+				Authorization: 'Basic invalid',
+				'X-Request-Id': 'rejected-sync-request',
+			},
+		});
+
+		expect(res.status).toBe(400);
+		expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+			level: 'warn',
+			event: 'request_rejected',
+			route: '/api/sync/git/v1/projects/:pid/notebooks/:nid',
+			status: 400,
+			code: 'BAD_REQUEST',
+			request_id: 'rejected-sync-request',
+			project_id: pid,
+			notebook_id: nid,
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('requests.rejected', 1, {
+			route: '/api/sync/git/v1/projects/:pid/notebooks/:nid',
+			code: 'BAD_REQUEST',
+		});
+	});
+
 	it('observes request-schema 422 responses returned without throwing', async () => {
 		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		const metrics = { increment: vi.fn(), gauge: vi.fn() };
