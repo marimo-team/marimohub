@@ -1,6 +1,8 @@
 import { httpInstrumentationMiddleware } from '@hono/otel';
 import { metrics as metricsApi } from '@opentelemetry/api';
+import { logs as logsApi } from '@opentelemetry/api-logs';
 import { ExportResultCode } from '@opentelemetry/core';
+import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 import {
@@ -17,8 +19,8 @@ import {
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { Hono } from 'hono';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isTracingEnabled, metricsExporter, startOtel } from './otel';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { isLogsEnabled, isTracingEnabled, metricsExporter, startOtel } from './otel';
 
 describe('isTracingEnabled', () => {
 	it('is off without an OTLP endpoint', () => {
@@ -107,20 +109,89 @@ describe('metricsExporter', () => {
 	});
 });
 
+describe('isLogsEnabled', () => {
+	it('is off without an OTLP endpoint', () => {
+		expect(isLogsEnabled({})).toBe(false);
+	});
+
+	it('is on when OTEL_EXPORTER_OTLP_ENDPOINT is set (otlp is the default exporter)', () => {
+		expect(isLogsEnabled({ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318' })).toBe(true);
+	});
+
+	it('is on with only the logs-specific endpoint', () => {
+		expect(
+			isLogsEnabled({ OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: 'http://localhost:4318/v1/logs' }),
+		).toBe(true);
+	});
+
+	it('honors OTEL_LOGS_EXPORTER=none', () => {
+		expect(
+			isLogsEnabled({
+				OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
+				OTEL_LOGS_EXPORTER: 'none',
+			}),
+		).toBe(false);
+	});
+
+	it('honors OTEL_SDK_DISABLED', () => {
+		expect(
+			isLogsEnabled({
+				OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
+				OTEL_SDK_DISABLED: 'true',
+			}),
+		).toBe(false);
+	});
+
+	it('disables logs for unimplemented exporters', () => {
+		expect(
+			isLogsEnabled({
+				OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
+				OTEL_LOGS_EXPORTER: 'console',
+			}),
+		).toBe(false);
+	});
+});
+
 describe('startOtel', () => {
+	beforeEach(() => {
+		// Any endpoint-set test now also enables logs, so the otel_started event
+		// becomes a log record. Intercept the flush so shutdown never blocks on the
+		// (nonexistent) endpoint — order-independent, unlike a per-test mock.
+		vi.spyOn(OTLPLogExporter.prototype, 'export').mockImplementation((_logs, callback) => {
+			callback({ code: ExportResultCode.SUCCESS });
+		});
+	});
 	afterEach(() => {
 		vi.unstubAllEnvs();
 		vi.restoreAllMocks();
 		metricsApi.disable();
+		logsApi.disable();
 	});
 
 	it('returns null and registers nothing when disabled', () => {
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', '');
 		vi.stubEnv('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', '');
 		vi.stubEnv('OTEL_EXPORTER_OTLP_METRICS_ENDPOINT', '');
+		vi.stubEnv('OTEL_EXPORTER_OTLP_LOGS_ENDPOINT', '');
 		const register = vi.spyOn(NodeTracerProvider.prototype, 'register');
 		expect(startOtel()).toBeNull();
 		expect(register).not.toHaveBeenCalled();
+	});
+
+	it('starts logs-only when only an OTLP endpoint and OTEL_LOGS_EXPORTER apply', async () => {
+		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
+		vi.stubEnv('OTEL_TRACES_EXPORTER', 'none');
+		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
+		const register = vi.spyOn(NodeTracerProvider.prototype, 'register');
+		const setGlobal = vi.spyOn(logsApi, 'setGlobalLoggerProvider');
+		const handle = startOtel();
+		expect(handle).not.toBeNull();
+		expect(handle?.tracing).toBe(false);
+		expect(handle?.metrics).toBe(false);
+		expect(handle?.logs).toBe(true);
+		expect(register).not.toHaveBeenCalled();
+		expect(setGlobal).toHaveBeenCalledOnce();
+		await handle?.shutdown();
 	});
 
 	it('registers a provider with the env-configured service name when enabled', async () => {
@@ -146,6 +217,23 @@ describe('startOtel', () => {
 		expect(resource.attributes['process.pid']).toBe(process.pid);
 		expect(resource.attributes['host.name']).toBeDefined();
 		expect(resource.attributes['service.instance.id']).toBeDefined();
+		await handle?.shutdown();
+	});
+
+	it('falls back to the marimohub service name when OTEL_SERVICE_NAME is unset', async () => {
+		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
+		vi.stubEnv('OTEL_SERVICE_NAME', '');
+		vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', '');
+		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
+		const register = vi
+			.spyOn(NodeTracerProvider.prototype, 'register')
+			.mockImplementation(() => {});
+		const handle = startOtel();
+		const provider = register.mock.instances[0] as NodeTracerProvider;
+		const span = provider.getTracer('test').startSpan('probe');
+		const resource = (span as unknown as ReadableSpan).resource;
+		await resource.waitForAsyncAttributes?.();
+		expect(resource.attributes['service.name']).toBe('marimohub');
 		await handle?.shutdown();
 	});
 

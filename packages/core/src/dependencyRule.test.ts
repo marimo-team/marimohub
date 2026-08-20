@@ -13,9 +13,11 @@ import { describe, expect, it } from 'vitest';
  * red test. A dependency that *reaches* something belongs behind a port.
  */
 const ALLOWED_DEPENDENCIES = new Set([
-	// The vendor-neutral OTEL facade: pure and I/O-free, every call is a no-op
+	// The vendor-neutral OTEL facades: pure and I/O-free, every call is a no-op
 	// unless an entrypoint registers a provider (the SDK stays in apps/server).
+	// `api` backs the tracing wrapper; `api-logs` backs the emitLogRecord bridge.
 	'@opentelemetry/api',
+	'@opentelemetry/api-logs',
 	'better-all',
 	// Pure in-memory (de)compression for workspace archive parsing — no I/O.
 	'fflate',

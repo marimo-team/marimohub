@@ -7,6 +7,8 @@
  * work in the single-file bundle (no node_modules at runtime).
  */
 import { metrics as metricsApi } from '@opentelemetry/api';
+import { logs as logsApi } from '@opentelemetry/api-logs';
+import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
@@ -16,8 +18,10 @@ import {
 	envDetector,
 	hostDetector,
 	processDetector,
+	resourceFromAttributes,
 	serviceInstanceIdDetector,
 } from '@opentelemetry/resources';
+import { BatchLogRecordProcessor, LoggerProvider } from '@opentelemetry/sdk-logs';
 import type { IMetricReader } from '@opentelemetry/sdk-metrics';
 import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
@@ -29,6 +33,8 @@ export interface OtelHandle {
 	tracing: boolean;
 	/** True when a global MeterProvider is registered and exporting. */
 	metrics: boolean;
+	/** True when a global LoggerProvider is registered and exporting stdout wide-events. */
+	logs: boolean;
 	/** Flush buffered telemetry and stop exporting. */
 	shutdown(): Promise<void>;
 }
@@ -57,6 +63,18 @@ export function metricsExporter(
 	return env.OTEL_EXPORTER_OTLP_ENDPOINT || env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT ? 'otlp' : null;
 }
 
+/**
+ * True when structured logs should ship over OTLP. Mirrors {@link isTracingEnabled}:
+ * `otlp` is the spec default, so pointing the server at a collector exports the
+ * stdout wide-events too; `OTEL_LOGS_EXPORTER=none` keeps traces/metrics without
+ * logs, and any other (unimplemented) selection disables log export.
+ */
+export function isLogsEnabled(env: Record<string, string | undefined> = process.env): boolean {
+	if (env.OTEL_SDK_DISABLED === 'true') return false;
+	if ((env.OTEL_LOGS_EXPORTER ?? 'otlp') !== 'otlp') return false;
+	return Boolean(env.OTEL_EXPORTER_OTLP_ENDPOINT || env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT);
+}
+
 function envMillis(name: string, fallback: number): number {
 	const value = Number(process.env[name]);
 	return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -80,17 +98,22 @@ function otlpMetricReader(): PeriodicExportingMetricReader {
 export function startOtel(): OtelHandle | null {
 	const tracing = isTracingEnabled();
 	const metricsKind = metricsExporter();
-	if (!tracing && !metricsKind) return null;
+	const logsEnabled = isLogsEnabled();
+	if (!tracing && !metricsKind && !logsEnabled) return null;
 
 	// Only envDetector reads OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES
 	// (defaultResource() ignores them). Later detectors win on merge, so it goes
 	// last: operator-set attributes override detected ones like the random-UUID
-	// service.instance.id.
-	const resource = defaultResource().merge(
-		detectResources({
-			detectors: [hostDetector, processDetector, serviceInstanceIdDetector, envDetector],
-		}),
-	);
+	// service.instance.id. The fallback service.name is merged before the
+	// detectors so envDetector still overrides it, but an unset OTEL_SERVICE_NAME
+	// yields `marimohub` instead of the SDK's `unknown_service:node`.
+	const resource = defaultResource()
+		.merge(resourceFromAttributes({ 'service.name': 'marimohub' }))
+		.merge(
+			detectResources({
+				detectors: [hostDetector, processDetector, serviceInstanceIdDetector, envDetector],
+			}),
+		);
 
 	const shutdowns: (() => Promise<void>)[] = [];
 
@@ -117,19 +140,33 @@ export function startOtel(): OtelHandle | null {
 		shutdowns.push(() => meterProvider.shutdown());
 	}
 
+	if (logsEnabled) {
+		const loggerProvider = new LoggerProvider({
+			resource,
+			processors: [new BatchLogRecordProcessor({ exporter: new OTLPLogExporter() })],
+		});
+		// Backs the api-logs facade `emitLogRecord` calls from every logEvent, so
+		// stdout wide-events also land in the backend and survive the pod.
+		logsApi.setGlobalLoggerProvider(loggerProvider);
+		shutdowns.push(() => loggerProvider.shutdown());
+	}
+
 	logEvent({
 		level: 'info',
 		event: 'otel_started',
 		tracing,
 		metrics: metricsKind ?? 'off',
+		logs: logsEnabled,
 		endpoint:
 			process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ??
 			process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT ??
+			process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT ??
 			process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
 	});
 	return {
 		tracing,
 		metrics: metricsKind !== null,
+		logs: logsEnabled,
 		shutdown: async () => {
 			await Promise.allSettled(shutdowns.map((fn) => fn()));
 		},

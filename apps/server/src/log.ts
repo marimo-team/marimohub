@@ -4,8 +4,12 @@
  * that isn't part of the api package's public barrel, so duplicating the ~5
  * lines keeps the api/server boundary clean and avoids widening that surface.
  */
-import { traceContext } from '@marimo-hub/core';
+import { emitLogRecord, traceContext } from '@marimo-hub/core';
 
 export function logEvent(fields: Record<string, unknown>): void {
-	console.log(JSON.stringify({ ts: new Date().toISOString(), ...traceContext(), ...fields }));
+	const record = { ts: new Date().toISOString(), ...traceContext(), ...fields };
+	console.log(JSON.stringify(record));
+	// Mirror to the OTEL logs pipeline so the line survives the pod (no-op until
+	// startOtel registers a LoggerProvider).
+	emitLogRecord(record);
 }
