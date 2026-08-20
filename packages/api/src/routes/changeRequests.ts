@@ -1,8 +1,12 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { deriveProposalId, ProposalId } from '@marimo-hub/core';
-import type { AuthUser, SourceControlCommitIdentity } from '@marimo-hub/core';
+import { deriveProposalId, ProposalId, sourceControlPublishFailure } from '@marimo-hub/core';
+import type {
+	AuthUser,
+	OpenChangeRequestResult,
+	SourceControlCommitIdentity,
+} from '@marimo-hub/core';
 import { idempotentCreate } from '../idempotency';
-import { appendAudit } from '../log';
+import { appendAudit, logEvent } from '../log';
 import { prepareProposal } from './changeRequestPublishing';
 import {
 	assertProjectRole,
@@ -101,7 +105,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 	const routeId = `POST /projects/${pid}/notebooks/${nid}/sessions/${sid}/change-requests`;
 	const data = await idempotentCreate(c, routeId, async () => {
 		const proposalId = await deriveProposalId(`${user.id}\n${routeId}\n${idempotencyKey}`);
-		const { proposal, publisher, notebookTitle } = await prepareProposal({
+		const { proposal, publisher, notebookTitle, state } = await prepareProposal({
 			deps,
 			projectId: pid,
 			notebookId: nid,
@@ -110,17 +114,74 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 			author: user.id,
 			targetProposalId: request.target_proposal_id,
 		});
-		const changeRequest = await deps.services.proposals.publishChangeRequest({
-			projectId: pid,
-			notebookId: nid,
-			proposalId: proposal.proposal_id,
-			publisher,
-			title: request.title ?? `Update ${notebookTitle ?? 'notebook'}`,
-			body:
-				request.body ??
-				`Changes proposed from marimohub session ${sid}.\n\nBase commit: ${proposal.source.commit}`,
-			coAuthor: commitCoAuthor(user),
-		});
+		const eventContext = {
+			request_id: c.get('requestId') ?? null,
+			user_id: user.id,
+			project_id: pid,
+			notebook_id: nid,
+			proposal_id: proposal.proposal_id,
+		};
+		if (state === 'new') {
+			logEvent({
+				level: 'info',
+				event: 'change_request.captured',
+				...eventContext,
+				size_bytes: proposal.changes.reduce(
+					(total, change) => total + (change.operation === 'delete' ? 0 : change.size_bytes),
+					0,
+				),
+			});
+		}
+		const publishStartedAt = Date.now();
+		let changeRequest: OpenChangeRequestResult;
+		try {
+			changeRequest = await deps.services.proposals.publishChangeRequest({
+				projectId: pid,
+				notebookId: nid,
+				proposalId: proposal.proposal_id,
+				publisher,
+				title: request.title ?? `Update ${notebookTitle ?? 'notebook'}`,
+				body:
+					request.body ??
+					`Changes proposed from marimohub session ${sid}.\n\nBase commit: ${proposal.source.commit}`,
+				coAuthor: commitCoAuthor(user),
+			});
+		} catch (error) {
+			const failure = sourceControlPublishFailure(error);
+			if (failure) {
+				logEvent({
+					level: 'warn',
+					event: 'change_request.publish_failed',
+					...eventContext,
+					provider: failure.provider,
+					repo: proposal.source.repo,
+					stage: failure.stage,
+					status: failure.status ?? null,
+					latency_ms: Date.now() - publishStartedAt,
+				});
+			}
+			throw error;
+		}
+		if (state === 'published') {
+			logEvent({
+				level: 'info',
+				event: 'change_request.reused',
+				...eventContext,
+				provider: proposal.source.provider,
+				repo: proposal.source.repo,
+				pr_number: changeRequest.number,
+			});
+		} else {
+			logEvent({
+				level: 'info',
+				event: 'change_request.published',
+				...eventContext,
+				provider: proposal.source.provider,
+				repo: proposal.source.repo,
+				pr_number: changeRequest.number,
+				latency_ms: Date.now() - publishStartedAt,
+			});
+		}
 		const auditEvent = proposal.target_proposal_id
 			? 'notebook.change_request.update'
 			: 'notebook.change_request.open';

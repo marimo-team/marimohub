@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createProposalId,
 	createSandboxId,
+	markSourceControlPublishFailure,
 	MAX_VERSIONS,
 	paths,
 	UnavailableError,
@@ -383,6 +384,7 @@ describe('change request routes', () => {
 	});
 
 	it('recovers a published proposal when response recording failed and its publisher is disabled', async () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		const headers = { 'Idempotency-Key': 'disabled-before-response-recorded' };
 		vi.spyOn(setup.deps.services.idempotency, 'record').mockRejectedValueOnce(
 			new Error('response record unavailable'),
@@ -410,6 +412,15 @@ describe('change request routes', () => {
 		});
 		expect(getPublisher).not.toHaveBeenCalled();
 		expect(openChangeRequest).toHaveBeenCalledOnce();
+		const outcomes = log.mock.calls
+			.map(([line]) => JSON.parse(line as string) as { event?: string })
+			.filter(({ event }) => event?.startsWith('change_request.'));
+		expect(outcomes.map(({ event }) => event)).toEqual([
+			'change_request.captured',
+			'change_request.published',
+			'change_request.reused',
+		]);
+		log.mockRestore();
 	});
 
 	it('replays a recorded response after its source version is pruned', async () => {
@@ -445,17 +456,59 @@ describe('change request routes', () => {
 	});
 
 	it('resumes the same proposal after a publication failure', async () => {
-		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		openChangeRequest.mockRejectedValueOnce(
+			markSourceControlPublishFailure(
+				new UnavailableError('GitHub request failed with status 403'),
+				{ provider: 'github', stage: 'installation', status: 403 },
+			),
+		);
 		const path = `/projects/${projectId}/notebooks/${notebookId}/sessions/${sessionId}/change-requests`;
 		const headers = { 'Idempotency-Key': 'retry-dashboard-pr' };
 
-		await expectError(await setup.request('POST', path, {}, headers), 503, 'SERVICE_UNAVAILABLE');
+		const failure = await expectError(
+			await setup.request('POST', path, {}, headers),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
 		await expectOk(await setup.request('POST', path, {}, headers), 201);
 
+		expect(failure.message).toBe('GitHub request failed with status 403');
+		const events = log.mock.calls.map(
+			([line]) => JSON.parse(line as string) as Record<string, unknown>,
+		);
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					level: 'info',
+					event: 'change_request.captured',
+					project_id: projectId,
+					notebook_id: notebookId,
+					size_bytes: expect.any(Number),
+				}),
+				expect.objectContaining({
+					level: 'warn',
+					event: 'change_request.publish_failed',
+					provider: 'github',
+					stage: 'installation',
+					status: 403,
+				}),
+				expect.objectContaining({
+					level: 'info',
+					event: 'change_request.published',
+					provider: 'github',
+					pr_number: 17,
+				}),
+			]),
+		);
+		expect(
+			events.find((event) => event.event === 'change_request.publish_failed'),
+		).not.toHaveProperty('message');
 		expect(openChangeRequest).toHaveBeenCalledTimes(2);
 		expect(openChangeRequest.mock.calls[0]?.[0].headBranch).toBe(
 			openChangeRequest.mock.calls[1]?.[0].headBranch,
 		);
+		log.mockRestore();
 	});
 
 	it('requires a configured publisher when resuming a pending proposal', async () => {

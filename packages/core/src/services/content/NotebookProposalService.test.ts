@@ -4,11 +4,14 @@ import { mkdtempSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MAX_REQUEST_BYTES } from '../../constants';
+import { UnavailableError } from '../../errors';
 import { createNotebookId, createProjectId, createProposalId, createVersionId } from '../../ids';
 import type { NotebookId, ProjectId, ProposalId, UserId, VersionId } from '../../ids';
 import { paths } from '../../paths';
 import type { Bucket, BucketPutOptions } from '../../ports/bucket';
+import type { Metrics } from '../../ports/metrics';
 import { execResult, listFilesFailure, readFileFailure } from '../../ports/sandbox';
+import { markSourceControlPublishFailure } from '../../ports/sourceControl';
 import type { OpenChangeRequestResult, SourceControlPublisher } from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import type { Session } from '../../schema';
@@ -712,6 +715,74 @@ describe('NotebookProposalService', () => {
 				draft: true,
 				changes: [expect.objectContaining({ path: 'apps/dashboard.py', operation: 'modify' })],
 			}),
+		);
+	});
+
+	it('records capture, publish, failure, latency, and reuse metrics', async () => {
+		const histogram = vi.fn<NonNullable<Metrics['histogram']>>();
+		const metrics: Metrics = {
+			increment: vi.fn(),
+			gauge: vi.fn(),
+			histogram,
+		};
+		const service = new NotebookProposalService(env.bucket, metrics);
+		const proposal = await captureWith(
+			service,
+			makeFsSandbox({ files: { 'dashboard.py': 'print("after")' } }).instance,
+			createProposalId(),
+		);
+		const openChangeRequest = vi
+			.fn<SourceControlPublisher['openChangeRequest']>()
+			.mockRejectedValueOnce(
+				markSourceControlPublishFailure(new UnavailableError('GitHub rejected the push'), {
+					provider: 'github',
+					stage: 'push',
+					status: 403,
+				}),
+			)
+			.mockImplementation(async (input) => ({
+				number: 17,
+				url: 'https://github.com/owner/repo/pull/17',
+				headBranch: input.headBranch,
+				headCommit: 'published-head',
+			}));
+		const publishInput = {
+			projectId,
+			notebookId,
+			proposalId: proposal.proposal_id,
+			publisher: { provider: 'github', openChangeRequest } satisfies SourceControlPublisher,
+			title: 'Update dashboard',
+			body: '',
+		};
+
+		await expect(service.publishChangeRequest(publishInput)).rejects.toThrow(
+			'GitHub rejected the push',
+		);
+		await expect(service.publishChangeRequest(publishInput)).resolves.toMatchObject({ number: 17 });
+		await service.getReusableProposal(projectId, notebookId, proposal.proposal_id);
+
+		expect(vi.mocked(metrics.increment).mock.calls).toEqual(
+			expect.arrayContaining([
+				['change_requests.captured'],
+				['change_requests.failed', 1, { provider: 'github', stage: 'push' }],
+				['change_requests.published', 1, { provider: 'github' }],
+				['change_requests.reused', 1, { state: 'published' }],
+			]),
+		);
+		expect(histogram.mock.calls).toEqual(
+			expect.arrayContaining([
+				['change_requests.capture_size_bytes', expect.any(Number)],
+				[
+					'change_requests.publish_latency_ms',
+					expect.any(Number),
+					{ provider: 'github', stage: 'push', outcome: 'failure' },
+				],
+				[
+					'change_requests.publish_latency_ms',
+					expect.any(Number),
+					{ provider: 'github', outcome: 'success' },
+				],
+			]),
 		);
 	});
 

@@ -20,6 +20,10 @@ import type {
 	SourceControlCommitIdentity,
 	SourceControlPublisher,
 } from '../../ports/sourceControl';
+import {
+	markSourceControlPublishFailure,
+	sourceControlPublishFailure,
+} from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import {
 	NotebookProposalSchema,
@@ -202,8 +206,17 @@ export class NotebookProposalService {
 					await this.bucket.put(proposalPaths.meta, JSON.stringify(proposal), {
 						onlyIfNotExists: true,
 					});
+					this.metrics.increment('change_requests.captured');
+					this.metrics.histogram?.(
+						'change_requests.capture_size_bytes',
+						proposal.changes.reduce(
+							(total, change) => total + (change.operation === 'delete' ? 0 : change.size_bytes),
+							0,
+						),
+					);
 				} catch (error) {
 					if (!(error instanceof PreconditionFailedError)) throw error;
+					this.metrics.increment('change_requests.reused', 1, { state: 'pending' });
 					const existing = await this.bucket.get(proposalPaths.meta);
 					if (!existing) throw new ConflictError('Proposal capture raced with another request');
 					captured = await readStored(NotebookProposalSchema, existing, proposalPaths.meta);
@@ -392,6 +405,9 @@ export class NotebookProposalService {
 		proposalId: ProposalId,
 	): Promise<NotebookProposalRecord | undefined> {
 		const record = await this.getProposal(projectId, notebookId, proposalId);
+		this.metrics.increment('change_requests.reused', 1, {
+			state: record.publication.state,
+		});
 		if (record.publication.state === 'published') return record;
 		const { proposal } = record;
 		this.assertPayloadNotExpired(proposal);
@@ -507,6 +523,7 @@ export class NotebookProposalService {
 		let expectedChangeRequest: OpenChangeRequestResult | undefined;
 		let rootProposalId: ProposalId | undefined;
 		let observedHeadCommits: ReadonlySet<string> | undefined;
+		let publishStartedAt: number;
 		if (proposal.target_proposal_id) {
 			const target = await this.resolvePublishedChangeRequestTarget(
 				input.projectId,
@@ -523,29 +540,39 @@ export class NotebookProposalService {
 			expectedChangeRequest = target.changeRequest;
 			observedHeadCommits = target.observedHeadCommits;
 			headBranch = expectedChangeRequest.headBranch;
-			result = await publisher.updateChangeRequest({
-				repository: proposal.source.repo,
-				baseBranch: proposal.source.branch,
-				baseCommit: proposal.source.commit,
-				changeRequest: expectedChangeRequest,
-				title: input.title,
-				body: input.body,
-				coAuthor: input.coAuthor,
-				changes,
-			});
+			publishStartedAt = Date.now();
+			try {
+				result = await publisher.updateChangeRequest({
+					repository: proposal.source.repo,
+					baseBranch: proposal.source.branch,
+					baseCommit: proposal.source.commit,
+					changeRequest: expectedChangeRequest,
+					title: input.title,
+					body: input.body,
+					coAuthor: input.coAuthor,
+					changes,
+				});
+			} catch (error) {
+				throw this.recordPublishFailure(error, publisher.provider, publishStartedAt);
+			}
 		} else {
 			headBranch = `marimohub/${proposal.notebook_id}/${proposal.proposal_id}`;
-			result = await publisher.openChangeRequest({
-				repository: proposal.source.repo,
-				baseBranch: proposal.source.branch,
-				baseCommit: proposal.source.commit,
-				headBranch,
-				title: input.title,
-				body: input.body,
-				draft: true,
-				coAuthor: input.coAuthor,
-				changes,
-			});
+			publishStartedAt = Date.now();
+			try {
+				result = await publisher.openChangeRequest({
+					repository: proposal.source.repo,
+					baseBranch: proposal.source.branch,
+					baseCommit: proposal.source.commit,
+					headBranch,
+					title: input.title,
+					body: input.body,
+					draft: true,
+					coAuthor: input.coAuthor,
+					changes,
+				});
+			} catch (error) {
+				throw this.recordPublishFailure(error, publisher.provider, publishStartedAt);
+			}
 		}
 		const parsedResult = ChangeRequestPublicationSchema.safeParse({
 			provider: publisher.provider,
@@ -600,6 +627,11 @@ export class NotebookProposalService {
 		) {
 			throw new UnavailableError('Stored publication contains an invalid change request');
 		}
+		this.metrics.increment('change_requests.published', 1, { provider: publisher.provider });
+		this.metrics.histogram?.('change_requests.publish_latency_ms', Date.now() - publishStartedAt, {
+			provider: publisher.provider,
+			outcome: 'success',
+		});
 		if (rootProposalId && expectedChangeRequest && observedHeadCommits) {
 			await this.advanceChangeRequestHead(
 				input.projectId,
@@ -613,6 +645,29 @@ export class NotebookProposalService {
 			);
 		}
 		return publishedResult;
+	}
+
+	private recordPublishFailure(error: unknown, provider: string, startedAt: number): Error {
+		const status =
+			typeof (error as { status?: unknown })?.status === 'number'
+				? (error as { status: number }).status
+				: undefined;
+		const marked = markSourceControlPublishFailure(error, {
+			provider,
+			stage: 'pr',
+			status,
+		});
+		const failure = sourceControlPublishFailure(marked);
+		this.metrics.increment('change_requests.failed', 1, {
+			provider: failure?.provider ?? provider,
+			stage: failure?.stage ?? 'pr',
+		});
+		this.metrics.histogram?.('change_requests.publish_latency_ms', Date.now() - startedAt, {
+			provider: failure?.provider ?? provider,
+			stage: failure?.stage ?? 'pr',
+			outcome: 'failure',
+		});
+		return marked;
 	}
 
 	private async resolvePublishedChangeRequestTarget(

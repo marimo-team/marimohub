@@ -1,9 +1,15 @@
-import { ConflictError, UnavailableError, ValidationError } from '@marimo-hub/core';
+import {
+	ConflictError,
+	markSourceControlPublishFailure,
+	UnavailableError,
+	ValidationError,
+} from '@marimo-hub/core';
 import type {
 	OpenChangeRequestInput,
 	OpenChangeRequestResult,
 	SourceBranchHead,
 	SourceControlPublisher,
+	SourceControlPublishStage,
 	SourceControlReader,
 	SourceWorkspaceFile,
 	UpdateChangeRequestInput,
@@ -36,6 +42,18 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 
 	constructor(options: GitHubAppPublisherOptions, runtime: GitHubAppPublisherRuntime = {}) {
 		this.client = new GitHubClient(options, runtime);
+	}
+
+	private async atStage<T>(stage: SourceControlPublishStage, action: () => Promise<T>): Promise<T> {
+		try {
+			return await action();
+		} catch (error) {
+			const status =
+				typeof (error as { providerStatus?: unknown })?.providerStatus === 'number'
+					? (error as { providerStatus: number }).providerStatus
+					: undefined;
+			throw markSourceControlPublishFailure(error, { provider: 'github', stage, status });
+		}
 	}
 
 	private async publicationContext(owner: string, repo: string): Promise<GitHubPublicationContext> {
@@ -97,51 +115,77 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 
 	async openChangeRequest(input: OpenChangeRequestInput): Promise<OpenChangeRequestResult> {
 		const { owner, repo } = validateOpenInput(input);
-		const { repository, pullRequests } = await this.publicationContext(owner, repo);
-		const existingRef = await repository.getRef(input.headBranch);
-		const candidates = await pullRequests.listForBranch(input.headBranch, input.baseBranch);
-		const treeSha = await repository.createProposalTree(input, input.baseCommit);
-		const existing = await pullRequests.matchingProposal(candidates, input.baseCommit, treeSha);
+		const { repository, pullRequests } = await this.atStage('installation', () =>
+			this.publicationContext(owner, repo),
+		);
+		const existingRef = await this.atStage('branch', () => repository.getRef(input.headBranch));
+		const candidates = await this.atStage('pr', () =>
+			pullRequests.listForBranch(input.headBranch, input.baseBranch),
+		);
+		const treeSha = await this.atStage('push', () =>
+			repository.createProposalTree(input, input.baseCommit),
+		);
+		const existing = await this.atStage('pr', () =>
+			pullRequests.matchingProposal(candidates, input.baseCommit, treeSha),
+		);
 		if (existing) return existing;
 
 		if (existingRef) {
-			await repository.assertProposalCommit(existingRef, input.baseCommit, treeSha);
-			return pullRequests.create(input, existingRef);
+			await this.atStage('branch', () =>
+				repository.assertProposalCommit(existingRef, input.baseCommit, treeSha),
+			);
+			return this.atStage('pr', () => pullRequests.create(input, existingRef));
 		}
 
-		const proposedCommit = await repository.createProposalCommit(
-			input.baseCommit,
-			treeSha,
-			input.title,
-			input.body,
-			input.coAuthor,
+		const proposedCommit = await this.atStage('push', () =>
+			repository.createProposalCommit(
+				input.baseCommit,
+				treeSha,
+				input.title,
+				input.body,
+				input.coAuthor,
+			),
 		);
-		const createdRef = await repository.createRef(input.headBranch, proposedCommit);
+		const createdRef = await this.atStage('branch', () =>
+			repository.createRef(input.headBranch, proposedCommit),
+		);
 		if (createdRef.existed) {
-			await repository.assertProposalCommit(createdRef.headCommit, input.baseCommit, treeSha);
+			await this.atStage('branch', () =>
+				repository.assertProposalCommit(createdRef.headCommit, input.baseCommit, treeSha),
+			);
 		}
-		return pullRequests.create(input, createdRef.headCommit);
+		return this.atStage('pr', () => pullRequests.create(input, createdRef.headCommit));
 	}
 
 	async updateChangeRequest(input: UpdateChangeRequestInput): Promise<OpenChangeRequestResult> {
 		const { owner, repo } = validateUpdateInput(input);
-		const { repository, pullRequests } = await this.publicationContext(owner, repo);
-		const candidates = await pullRequests.listForBranch(
-			input.changeRequest.headBranch,
-			input.baseBranch,
+		const { repository, pullRequests } = await this.atStage('installation', () =>
+			this.publicationContext(owner, repo),
 		);
-		this.assertTargetPullRequest(candidates, input);
+		const candidates = await this.atStage('pr', () =>
+			pullRequests.listForBranch(input.changeRequest.headBranch, input.baseBranch),
+		);
+		try {
+			this.assertTargetPullRequest(candidates, input);
+		} catch (error) {
+			throw markSourceControlPublishFailure(error, { provider: 'github', stage: 'pr' });
+		}
 		const expectedHead = input.changeRequest.headCommit;
-		let currentHead = await repository.getRef(input.changeRequest.headBranch);
+		let currentHead = await this.atStage('branch', () =>
+			repository.getRef(input.changeRequest.headBranch),
+		);
 		if (!currentHead) {
-			throw new ConflictError(
-				'The GitHub pull request branch was deleted; create a new pull request',
+			throw markSourceControlPublishFailure(
+				new ConflictError('The GitHub pull request branch was deleted; create a new pull request'),
+				{ provider: 'github', stage: 'branch', status: 404 },
 			);
 		}
 
 		let appendTree: string | undefined;
 		try {
-			appendTree = await repository.createProposalTree(input, expectedHead);
+			appendTree = await this.atStage('push', () =>
+				repository.createProposalTree(input, expectedHead),
+			);
 		} catch (error) {
 			if (!(error instanceof ConflictError)) throw error;
 		}
@@ -152,31 +196,42 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 				currentHead,
 				appendTree,
 			);
-			return pullRequests.updateMetadata(input, recovered.headCommit);
+			return this.atStage('pr', () => pullRequests.updateMetadata(input, recovered.headCommit));
 		}
 
 		if (appendTree) {
-			const appendCommit = await repository.createProposalCommit(
-				expectedHead,
-				appendTree,
-				input.title,
-				input.body,
-				input.coAuthor,
+			const appendCommit = await this.atStage('push', () =>
+				repository.createProposalCommit(
+					expectedHead,
+					appendTree,
+					input.title,
+					input.body,
+					input.coAuthor,
+				),
 			);
-			if (await repository.updateRef(input.changeRequest.headBranch, appendCommit, false)) {
-				return pullRequests.updateMetadata(input, appendCommit);
+			if (
+				await this.atStage('branch', () =>
+					repository.updateRef(input.changeRequest.headBranch, appendCommit, false),
+				)
+			) {
+				return this.atStage('pr', () => pullRequests.updateMetadata(input, appendCommit));
 			}
-			currentHead = await repository.getRef(input.changeRequest.headBranch);
+			currentHead = await this.atStage('branch', () =>
+				repository.getRef(input.changeRequest.headBranch),
+			);
 			if (currentHead === appendCommit) {
-				return pullRequests.updateMetadata(input, appendCommit);
+				return this.atStage('pr', () => pullRequests.updateMetadata(input, appendCommit));
 			}
 			if (currentHead !== expectedHead) {
-				throw new ConflictError('The GitHub pull request branch changed while updating');
+				throw markSourceControlPublishFailure(
+					new ConflictError('The GitHub pull request branch changed while updating'),
+					{ provider: 'github', stage: 'branch', status: 409 },
+				);
 			}
 		}
 
 		const replaced = await this.replacePullRequestHead(input, repository, expectedHead);
-		return pullRequests.updateMetadata(input, replaced.headCommit);
+		return this.atStage('pr', () => pullRequests.updateMetadata(input, replaced.headCommit));
 	}
 
 	private assertTargetPullRequest(
@@ -201,15 +256,26 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 		const expectedHead = input.changeRequest.headCommit;
 		if (
 			appendTree &&
-			(await repository.proposalCommitMatches(currentHead, expectedHead, appendTree))
+			(await this.atStage('branch', () =>
+				repository.proposalCommitMatches(currentHead, expectedHead, appendTree),
+			))
 		) {
 			return { ...input.changeRequest, headCommit: currentHead };
 		}
-		const replacementTree = await repository.createProposalTree(input, input.baseCommit);
-		if (await repository.proposalCommitMatches(currentHead, input.baseCommit, replacementTree)) {
+		const replacementTree = await this.atStage('push', () =>
+			repository.createProposalTree(input, input.baseCommit),
+		);
+		if (
+			await this.atStage('branch', () =>
+				repository.proposalCommitMatches(currentHead, input.baseCommit, replacementTree),
+			)
+		) {
 			return { ...input.changeRequest, headCommit: currentHead };
 		}
-		throw new ConflictError('The GitHub pull request branch changed outside marimohub');
+		throw markSourceControlPublishFailure(
+			new ConflictError('The GitHub pull request branch changed outside marimohub'),
+			{ provider: 'github', stage: 'branch', status: 409 },
+		);
 	}
 
 	private async replacePullRequestHead(
@@ -217,21 +283,29 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 		repository: GitHubRepositoryWriter,
 		expectedHead: string,
 	): Promise<OpenChangeRequestResult> {
-		const replacementTree = await repository.createProposalTree(input, input.baseCommit);
-		const replacementCommit = await repository.createProposalCommit(
-			input.baseCommit,
-			replacementTree,
-			input.title,
-			input.body,
-			input.coAuthor,
+		const replacementTree = await this.atStage('push', () =>
+			repository.createProposalTree(input, input.baseCommit),
 		);
-		await repository.forceUpdateRef(
-			input.changeRequest.headBranch,
-			expectedHead,
-			replacementCommit,
+		const replacementCommit = await this.atStage('push', () =>
+			repository.createProposalCommit(
+				input.baseCommit,
+				replacementTree,
+				input.title,
+				input.body,
+				input.coAuthor,
+			),
 		);
-		if ((await repository.getRef(input.changeRequest.headBranch)) !== replacementCommit) {
-			throw new UnavailableError('GitHub did not update the pull request branch');
+		await this.atStage('branch', () =>
+			repository.forceUpdateRef(input.changeRequest.headBranch, expectedHead, replacementCommit),
+		);
+		if (
+			(await this.atStage('branch', () => repository.getRef(input.changeRequest.headBranch))) !==
+			replacementCommit
+		) {
+			throw markSourceControlPublishFailure(
+				new UnavailableError('GitHub did not update the pull request branch'),
+				{ provider: 'github', stage: 'branch' },
+			);
 		}
 		return { ...input.changeRequest, headCommit: replacementCommit };
 	}

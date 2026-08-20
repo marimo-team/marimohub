@@ -58,6 +58,44 @@ export interface UpdateChangeRequestInput {
 	changes: readonly SourceControlChange[];
 }
 
+export const SOURCE_CONTROL_PUBLISH_STAGES = [
+	'auth',
+	'installation',
+	'branch',
+	'push',
+	'pr',
+] as const;
+
+export type SourceControlPublishStage = (typeof SOURCE_CONTROL_PUBLISH_STAGES)[number];
+
+export interface SourceControlPublishFailure {
+	provider: string;
+	stage: SourceControlPublishStage;
+	status?: string | number;
+}
+
+const sourceControlPublishFailures = new WeakMap<Error, SourceControlPublishFailure>();
+
+export function markSourceControlPublishFailure(
+	error: unknown,
+	failure: SourceControlPublishFailure,
+): Error {
+	const annotated = error instanceof Error ? error : new Error('Source control failed');
+	const current = sourceControlPublishFailures.get(annotated);
+	const merged = { ...failure, ...current };
+	if (current?.status === undefined && failure.status !== undefined) {
+		merged.status = failure.status;
+	}
+	sourceControlPublishFailures.set(annotated, merged);
+	return annotated;
+}
+
+export function sourceControlPublishFailure(
+	error: unknown,
+): SourceControlPublishFailure | undefined {
+	return error instanceof Error ? sourceControlPublishFailures.get(error) : undefined;
+}
+
 export interface SourceControlPublisher {
 	/** Stable id stored on source revisions, such as `github` or `gitlab`. */
 	readonly provider: string;

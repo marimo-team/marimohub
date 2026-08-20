@@ -26,6 +26,12 @@ export interface PreparedProposal {
 	proposal: NotebookProposal;
 	publisher?: SourceControlPublisher;
 	notebookTitle?: string;
+	state: 'new' | 'pending' | 'published';
+}
+
+interface ReusableProposalLookup {
+	record?: NotebookProposalRecord;
+	exists: boolean;
 }
 
 function publisherFor(deps: PrepareProposalInput['deps'], provider: string) {
@@ -48,36 +54,36 @@ function assertReusableProposal(record: NotebookProposalRecord, input: PreparePr
 	}
 }
 
-async function reusableProposal(
-	input: PrepareProposalInput,
-): Promise<NotebookProposalRecord | undefined> {
+async function reusableProposal(input: PrepareProposalInput): Promise<ReusableProposalLookup> {
 	try {
-		return await input.deps.services.proposals.getReusableProposal(
+		const record = await input.deps.services.proposals.getReusableProposal(
 			input.projectId,
 			input.notebookId,
 			input.proposalId,
 		);
+		return { record, exists: true };
 	} catch (error) {
-		if (error instanceof NotFoundError) return undefined;
+		if (error instanceof NotFoundError) return { exists: false };
 		throw error;
 	}
 }
 
 export async function prepareProposal(input: PrepareProposalInput): Promise<PreparedProposal> {
 	const reusable = await reusableProposal(input);
-	if (reusable) {
-		assertReusableProposal(reusable, input);
-		if (reusable.publication.state === 'published') {
-			return { proposal: reusable.proposal };
+	if (reusable.record) {
+		assertReusableProposal(reusable.record, input);
+		if (reusable.record.publication.state === 'published') {
+			return { proposal: reusable.record.proposal, state: 'published' };
 		}
 		const notebook = await input.deps.services.notebooks.getNotebook(
 			input.projectId,
 			input.notebookId,
 		);
 		return {
-			proposal: reusable.proposal,
-			publisher: publisherFor(input.deps, reusable.proposal.source.provider),
+			proposal: reusable.record.proposal,
+			publisher: publisherFor(input.deps, reusable.record.proposal.source.provider),
 			notebookTitle: notebook.meta.title,
+			state: 'pending',
 		};
 	}
 
@@ -125,5 +131,10 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		targetProposalId: input.targetProposalId,
 		resolvedSourceRevision: sourceRevision,
 	});
-	return { proposal, publisher, notebookTitle: notebook.meta.title };
+	return {
+		proposal,
+		publisher,
+		notebookTitle: notebook.meta.title,
+		state: reusable.exists ? 'pending' : 'new',
+	};
 }

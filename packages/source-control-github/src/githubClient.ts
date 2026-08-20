@@ -1,5 +1,5 @@
 import { createPrivateKey, createSign } from 'node:crypto';
-import { UnavailableError } from '@marimo-hub/core';
+import { markSourceControlPublishFailure, UnavailableError } from '@marimo-hub/core';
 import { numberField, responseJson, stringField } from './githubResponses';
 
 export type GitHubFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -19,6 +19,22 @@ export interface GitHubAppPublisherRuntime {
 }
 
 const GITHUB_API_BASE_URL = 'https://api.github.com';
+class GitHubRequestError extends UnavailableError {
+	readonly providerStatus: number;
+
+	constructor(status: number, message: string) {
+		super(message);
+		this.name = 'GitHubRequestError';
+		this.providerStatus = status;
+	}
+}
+
+function githubRequestError(response: Response): GitHubRequestError {
+	return new GitHubRequestError(
+		response.status,
+		`GitHub request failed with status ${response.status}`,
+	);
+}
 
 function encodeBase64Url(value: string): string {
 	return Buffer.from(value).toString('base64url');
@@ -84,33 +100,60 @@ export class GitHubClient {
 			throw new UnavailableError('GitHub is unavailable', { cause: error });
 		}
 		if (!response.ok && !allowedStatuses.includes(response.status)) {
-			throw new UnavailableError(`GitHub request failed with status ${response.status}`);
+			throw githubRequestError(response);
 		}
 		return response;
 	}
 
 	async installationToken(owner: string, repo: string): Promise<string> {
-		const installationResponse = await this.request(
-			`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
-			this.appJwt(),
-			{},
-			[404],
-		);
+		let jwt: string;
+		try {
+			jwt = this.appJwt();
+		} catch (error) {
+			throw markSourceControlPublishFailure(error, { provider: 'github', stage: 'auth' });
+		}
+		let installationResponse: Response;
+		try {
+			installationResponse = await this.request(
+				`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
+				jwt,
+				{},
+				[404],
+			);
+		} catch (error) {
+			throw markSourceControlPublishFailure(error, {
+				provider: 'github',
+				stage: 'installation',
+				status: error instanceof GitHubRequestError ? error.providerStatus : undefined,
+			});
+		}
 		if (installationResponse.status === 404) {
-			throw new UnavailableError(`The GitHub App is not installed for ${owner}/${repo}`);
+			throw markSourceControlPublishFailure(
+				new UnavailableError(`The GitHub App is not installed for ${owner}/${repo}`),
+				{ provider: 'github', stage: 'installation', status: 404 },
+			);
 		}
 		const installationId = numberField(await responseJson(installationResponse), 'id');
-		const tokenResponse = await this.request(
-			`/app/installations/${installationId}/access_tokens`,
-			this.appJwt(),
-			{
-				method: 'POST',
-				body: JSON.stringify({
-					repositories: [repo],
-					permissions: { contents: 'write', pull_requests: 'write' },
-				}),
-			},
-		);
+		let tokenResponse: Response;
+		try {
+			tokenResponse = await this.request(
+				`/app/installations/${installationId}/access_tokens`,
+				jwt,
+				{
+					method: 'POST',
+					body: JSON.stringify({
+						repositories: [repo],
+						permissions: { contents: 'write', pull_requests: 'write' },
+					}),
+				},
+			);
+		} catch (error) {
+			throw markSourceControlPublishFailure(error, {
+				provider: 'github',
+				stage: 'auth',
+				status: error instanceof GitHubRequestError ? error.providerStatus : undefined,
+			});
+		}
 		return stringField(await responseJson(tokenResponse), 'token');
 	}
 }
