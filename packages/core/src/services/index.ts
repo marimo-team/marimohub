@@ -37,8 +37,15 @@ export type {
 	PublishProposalChangeRequestInput,
 } from './content/NotebookProposalService';
 export type { CreateNotebookInput, NotebookVersionProtector } from './content/NotebookService';
+export {
+	effectiveGitSourceConfig,
+	isAtBranchHead,
+	providerForRepo,
+	sourceDrift,
+} from '../integrations/syncedSource';
 export type {
 	CreateSyncedNotebookInput,
+	SourceDrift,
 	SyncNotebookInput,
 	UpdateSyncedNotebookSourceInput,
 } from '../integrations/syncedSource';

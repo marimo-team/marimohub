@@ -92,6 +92,7 @@ components:
                 - TAKEOVER_IN_PROGRESS
                 - FORBIDDEN
                 - VALIDATION_ERROR
+                - SYNC_NOT_CONFIGURED
                 - NOT_INITIALIZED
                 - SERVICE_UNAVAILABLE
                 - RESOURCE_EXHAUSTED
@@ -159,8 +160,17 @@ components:
                 or equivalents from notebook sessions.
               example:
                 - github
+            sync_providers:
+              type: array
+              items:
+                type: string
+              description: Provider ids configured for server-initiated pull sync (drift
+                lookup and "Sync now").
+              example:
+                - github
           required:
             - change_request_providers
+            - sync_providers
         project_alerts:
           type: object
           properties:
@@ -1013,6 +1023,47 @@ components:
         - branch
         - root_path
         - entry_notebook
+    SourceDrift:
+      type: object
+      properties:
+        current_commit:
+          type:
+            - string
+            - 'null'
+          description: Commit of the last successful sync; null before the first sync.
+        remote_commit:
+          type: string
+          description: Live head of the configured branch, resolved at request time.
+        in_sync:
+          type: boolean
+        pending_config:
+          type: boolean
+          description: Whether a settings edit is waiting for a matching sync.
+        checked_at:
+          type: string
+          format: date-time
+      required:
+        - current_commit
+        - remote_commit
+        - in_sync
+        - pending_config
+        - checked_at
+    SourceSyncResult:
+      type: object
+      properties:
+        synced:
+          type: boolean
+          description: False when the notebook was already at the branch head.
+        commit:
+          type: string
+        version_id:
+          type:
+            - string
+            - 'null'
+      required:
+        - synced
+        - commit
+        - version_id
     NotebookDetail:
       type: object
       properties:
@@ -5192,6 +5243,206 @@ paths:
                           - last_synced_at
                     required:
                       - source
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/source/drift:
+    get:
+      tags:
+        - Notebooks
+      summary: Compare a git-synced notebook against its branch head
+      description: Resolves the configured branch head via the server-side provider
+        credential and reports whether the notebook is behind it. Stateless —
+        nothing is stored. Requires a provider listed in
+        `capabilities.source_control.sync_providers`.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      responses:
+        '200':
+          description: Drift between the synced commit and the branch head
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/SourceDrift'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/source/sync:
+    post:
+      tags:
+        - Notebooks
+      summary: Pull the branch head into a git-synced notebook
+      description: 'Server-initiated sync: fetches the configured repository tree at
+        the branch head and ingests it exactly like a pushed archive. A no-op
+        when already at the head. Requires a provider listed in
+        `capabilities.source_control.sync_providers`.'
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      responses:
+        '200':
+          description: Sync outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/SourceSyncResult'
                 required:
                   - success
                   - data

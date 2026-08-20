@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { jsonOk, renderWithClient } from '@/test/render';
+import { jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { SyncSettingsDialog } from './SyncSettingsDialog';
 
 const PID = 'proj-x';
@@ -21,7 +21,17 @@ const activeSource = {
 	last_synced_at: '2025-03-05T14:00:00Z',
 };
 
-function setup(options: { canEdit?: boolean; initialToken?: string; pending?: boolean }) {
+function setup(options: {
+	canEdit?: boolean;
+	initialToken?: string;
+	pending?: boolean;
+	syncProviders?: string[];
+	remoteCommit?: string;
+	omitSourceControlCapability?: boolean;
+	driftError?: boolean;
+	driftNotConfigured?: boolean;
+	syncError?: boolean;
+}) {
 	const calls: { method: string; url: string; body?: unknown }[] = [];
 	const source = options.pending
 		? {
@@ -34,6 +44,7 @@ function setup(options: { canEdit?: boolean; initialToken?: string; pending?: bo
 				},
 			}
 		: activeSource;
+	const remoteCommit = options.remoteCommit ?? activeSource.commit;
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -41,6 +52,34 @@ function setup(options: { canEdit?: boolean; initialToken?: string; pending?: bo
 			const method = init?.method ?? 'GET';
 			const body = init?.body ? JSON.parse(init.body as string) : undefined;
 			calls.push({ method, url, body });
+			if (method === 'GET' && url.endsWith('/capabilities')) {
+				// The omit variant mimics an older server without the field (deploy skew).
+				return jsonOk(
+					options.omitSourceControlCapability
+						? {}
+						: {
+								source_control: {
+									change_request_providers: [],
+									sync_providers: options.syncProviders ?? [],
+								},
+							},
+				);
+			}
+			if (method === 'GET' && url.endsWith('/source/drift')) {
+				if (options.driftNotConfigured) {
+					return jsonError('SYNC_NOT_CONFIGURED', 'Server-initiated sync is not configured', 409);
+				}
+				if (options.driftError) {
+					return jsonError('SERVICE_UNAVAILABLE', 'GitHub is unavailable', 503);
+				}
+				return jsonOk({
+					current_commit: source.commit,
+					remote_commit: remoteCommit,
+					in_sync: remoteCommit === source.commit && !options.pending,
+					pending_config: options.pending ?? false,
+					checked_at: '2025-03-05T15:00:00Z',
+				});
+			}
 			if (method === 'GET') {
 				return jsonOk({
 					meta: { id: NID, title: 'Dash' },
@@ -55,6 +94,12 @@ function setup(options: { canEdit?: boolean; initialToken?: string; pending?: bo
 			}
 			if (method === 'POST' && url.endsWith('/sync-token/rotate')) {
 				return jsonOk({ sync_url: SYNC_URL, sync_token: 'mhsync_rotated' });
+			}
+			if (method === 'POST' && url.endsWith('/source/sync')) {
+				if (options.syncError) {
+					return jsonError('SERVICE_UNAVAILABLE', 'GitHub is unavailable', 503);
+				}
+				return jsonOk({ synced: true, commit: remoteCommit, version_id: 'ver-2' });
 			}
 			throw new Error(`unexpected fetch: ${method} ${url}`);
 		}),
@@ -157,5 +202,81 @@ describe('SyncSettingsDialog', () => {
 	it('shows the write-once token handed off by notebook creation', async () => {
 		setup({ initialToken: 'mhsync_created' });
 		expect(await screen.findByLabelText('Sync token')).toHaveValue('mhsync_created');
+	});
+
+	it('shows drift and syncs on demand when the provider supports server sync', async () => {
+		const user = userEvent.setup();
+		const { calls } = setup({ syncProviders: ['github'], remoteCommit: 'fedcba9876543210' });
+
+		expect(await screen.findByText(/behind/i)).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Sync now' }));
+
+		await waitFor(() =>
+			expect(
+				calls.some((call) => call.method === 'POST' && call.url.endsWith('/source/sync')),
+			).toBe(true),
+		);
+	});
+
+	it('shows the in-sync drift line when the commits match', async () => {
+		setup({ syncProviders: ['github'] });
+		expect(await screen.findByText(/in sync at/i)).toBeInTheDocument();
+	});
+
+	it('hides server-sync chrome when the provider has no reader', async () => {
+		setup({});
+		await screen.findByLabelText('Repository');
+		expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+		expect(callsToDrift()).toBe(false);
+
+		function callsToDrift() {
+			const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+			return fetchMock.mock.calls.some((call) => String(call[0]).endsWith('/source/drift'));
+		}
+	});
+
+	it('hides server-sync chrome for a viewer even when a reader exists', async () => {
+		setup({ canEdit: false, syncProviders: ['github'] });
+		await screen.findByLabelText('Repository');
+		expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+	});
+
+	it('hides server-sync chrome when the server predates the capability field', async () => {
+		setup({ syncProviders: ['github'], omitSourceControlCapability: true });
+		await screen.findByLabelText('Repository');
+		expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+	});
+
+	it('hides server-sync chrome when the server reports the repository unsupported', async () => {
+		// e.g. a GitHub Enterprise source: same `github` provider id in the
+		// capability list, but the server answers SYNC_NOT_CONFIGURED.
+		const { calls } = setup({ syncProviders: ['github'], driftNotConfigured: true });
+		await screen.findByLabelText('Repository');
+		await waitFor(() =>
+			expect(calls.some((call) => call.url.endsWith('/source/drift'))).toBe(true),
+		);
+		// The row may flash while the drift probe is in flight; it must settle away.
+		await waitFor(() => {
+			expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+			expect(screen.queryByText(/checking sync status/i)).not.toBeInTheDocument();
+		});
+	});
+
+	it('keeps Sync now usable when the drift probe fails', async () => {
+		setup({ syncProviders: ['github'], driftError: true });
+		expect(await screen.findByRole('button', { name: 'Sync now' })).toBeEnabled();
+		await waitFor(() =>
+			expect(screen.queryByText(/checking sync status/i)).not.toBeInTheDocument(),
+		);
+		expect(screen.queryByText(/behind|in sync at/i)).not.toBeInTheDocument();
+	});
+
+	it('re-enables Sync now after a failed sync', async () => {
+		const user = userEvent.setup();
+		setup({ syncProviders: ['github'], remoteCommit: 'fedcba9876543210', syncError: true });
+
+		await user.click(await screen.findByRole('button', { name: 'Sync now' }));
+
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled());
 	});
 });

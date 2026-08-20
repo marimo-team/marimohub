@@ -1,6 +1,13 @@
 import { expect } from 'vitest';
 import { CatalogService, createServices } from '@marimo-hub/core';
-import type { Authenticator, SandboxProvider, UserId } from '@marimo-hub/core';
+import type {
+	Authenticator,
+	SandboxProvider,
+	SourceControlPublisher,
+	SourceControlReader,
+	SourceControlRegistry,
+	UserId,
+} from '@marimo-hub/core';
 import { ACTOR, MemoryBucket, noopCompute } from '@marimo-hub/core/testing';
 import type { ApiDeps } from '../context';
 import { createApi } from '../createApi';
@@ -26,6 +33,22 @@ export function makeTestDeps(bucket: MemoryBucket, overrides: Partial<ApiDeps> =
 		},
 		policy: {},
 		...overrides,
+	};
+}
+
+/**
+ * A `SourceControlRegistry` serving the given publisher and/or reader under
+ * their own provider ids — the deps stub for change-request and sync tests.
+ */
+export function stubSourceControl(
+	options: { publisher?: SourceControlPublisher; reader?: SourceControlReader } = {},
+): SourceControlRegistry {
+	const { publisher, reader } = options;
+	return {
+		getPublisher: (provider) => (provider === publisher?.provider ? publisher : undefined),
+		getReader: (provider) => (provider === reader?.provider ? reader : undefined),
+		publisherProviders: () => (publisher ? [publisher.provider] : []),
+		readerProviders: () => (reader ? [reader.provider] : []),
 	};
 }
 

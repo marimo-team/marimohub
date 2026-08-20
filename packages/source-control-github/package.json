@@ -18,7 +18,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@marimo-hub/core": "workspace:*"
+		"@marimo-hub/core": "workspace:*",
+		"fflate": "^0.8.2"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",

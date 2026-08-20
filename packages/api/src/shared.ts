@@ -1004,6 +1004,11 @@ export const CapabilitiesResponseSchema = z
 					'Provider ids configured to publish pull requests, merge requests, or equivalents from notebook sessions.',
 				example: ['github'],
 			}),
+			sync_providers: z.array(z.string()).openapi({
+				description:
+					'Provider ids configured for server-initiated pull sync (drift lookup and "Sync now").',
+				example: ['github'],
+			}),
 		}),
 		project_alerts: z.object({
 			available: z.boolean(),

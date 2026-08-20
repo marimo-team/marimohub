@@ -667,6 +667,7 @@ export function Project() {
 										<GitSourcePopover
 											projectId={pid!}
 											notebookId={nb.id}
+											canSync={project.your_role !== 'viewer'}
 											triggerClassName="shrink-0 cursor-pointer rounded-lg"
 											trigger={
 												<span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">

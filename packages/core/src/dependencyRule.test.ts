@@ -17,6 +17,8 @@ const ALLOWED_DEPENDENCIES = new Set([
 	// unless an entrypoint registers a provider (the SDK stays in apps/server).
 	'@opentelemetry/api',
 	'better-all',
+	// Pure in-memory (de)compression for workspace archive parsing — no I/O.
+	'fflate',
 	'smol-toml',
 	'ulidx',
 	'yaml',

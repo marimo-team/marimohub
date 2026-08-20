@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { makeSourceControlPublishing } from './sourceControl';
+import { makeSourceControl } from './sourceControl';
 
 function privateKey(): string {
 	return generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -8,30 +8,33 @@ function privateKey(): string {
 		.toString();
 }
 
-describe('makeSourceControlPublishing', () => {
+describe('makeSourceControl', () => {
 	it('is disabled when GitHub App credentials are absent', () => {
-		expect(makeSourceControlPublishing({})).toEqual({});
+		expect(makeSourceControl({})).toEqual({});
 	});
 
 	it('treats whitespace-only credentials as absent', () => {
 		expect(
-			makeSourceControlPublishing({
+			makeSourceControl({
 				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '  ',
 				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: '\n',
 			}),
 		).toEqual({});
 	});
 
-	it('registers the GitHub publisher without exposing other providers', () => {
-		const result = makeSourceControlPublishing({
+	it('registers the GitHub adapter as publisher and reader without exposing other providers', () => {
+		const result = makeSourceControl({
 			MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
 			MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: privateKey(),
 		});
-		if (!result.sourceControlPublishers) throw new Error('Expected source control configuration');
+		if (!result.sourceControl) throw new Error('Expected source control configuration');
 
-		expect(result.sourceControlPublishers.getPublisher('github')?.provider).toBe('github');
-		expect(result.sourceControlPublishers.getPublisher('gitlab')).toBeUndefined();
-		expect(result.sourceControlPublishers.configuredProviders()).toEqual(['github']);
+		expect(result.sourceControl.getPublisher('github')?.provider).toBe('github');
+		expect(result.sourceControl.getPublisher('gitlab')).toBeUndefined();
+		expect(result.sourceControl.getReader('github')?.provider).toBe('github');
+		expect(result.sourceControl.getReader('gitlab')).toBeUndefined();
+		expect(result.sourceControl.publisherProviders()).toEqual(['github']);
+		expect(result.sourceControl.readerProviders()).toEqual(['github']);
 	});
 
 	it.each([
@@ -44,12 +47,12 @@ describe('makeSourceControlPublishing', () => {
 			'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID',
 		],
 	])('rejects partial GitHub App configuration', (env, variable) => {
-		expect(() => makeSourceControlPublishing(env)).toThrow(new RegExp(variable));
+		expect(() => makeSourceControl(env)).toThrow(new RegExp(variable));
 	});
 
 	it('rejects an invalid GitHub App private key at startup', () => {
 		expect(() =>
-			makeSourceControlPublishing({
+			makeSourceControl({
 				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
 				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: 'not-a-key',
 			}),
@@ -58,7 +61,7 @@ describe('makeSourceControlPublishing', () => {
 
 	it.each(['not-an-id', '0', '-1', '1.5'])('rejects invalid GitHub App id %s', (appId) => {
 		expect(() =>
-			makeSourceControlPublishing({
+			makeSourceControl({
 				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: appId,
 				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: privateKey(),
 			}),
@@ -66,18 +69,18 @@ describe('makeSourceControlPublishing', () => {
 	});
 
 	it('trims the app id and accepts a base64-encoded private key', () => {
-		const result = makeSourceControlPublishing({
+		const result = makeSourceControl({
 			MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: ' 123 ',
 			MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: Buffer.from(privateKey()).toString('base64'),
 		});
-		expect(result.sourceControlPublishers?.configuredProviders()).toEqual(['github']);
+		expect(result.sourceControl?.publisherProviders()).toEqual(['github']);
 	});
 
 	it('does not include invalid private-key material in configuration errors', () => {
 		const secret = 'not-a-key-secret-value';
 		let thrown: unknown;
 		try {
-			makeSourceControlPublishing({
+			makeSourceControl({
 				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID: '123',
 				MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: secret,
 			});

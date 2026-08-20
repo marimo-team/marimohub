@@ -18,6 +18,7 @@ import {
 	WriteOnceWarning,
 } from '@/components/ui';
 import { useNotebookQuery, useRotateSyncToken, useUpdateGitSource } from '@/api/hooks';
+import { ServerSyncRow } from '@/components/Notebook/SyncNow';
 import {
 	ENTRY_NOTEBOOK_HINT,
 	ENTRY_NOTEBOOK_PATTERN,
@@ -152,6 +153,16 @@ export function SyncSettingsDialog({
 		</div>
 	);
 
+	const serverSync = (
+		<ServerSyncRow
+			projectId={projectId}
+			notebookId={notebookId}
+			source={source}
+			enabled={canEdit}
+			className="rounded-md border border-input bg-muted/40 px-3 py-2"
+		/>
+	);
+
 	const sourceStatus = source ? (
 		source.pending_config ? (
 			<p className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
@@ -215,6 +226,7 @@ export function SyncSettingsDialog({
 				</form.AppField>
 			</div>
 			{sourceStatus}
+			{serverSync}
 			{credentials}
 		</FormDialog>
 	) : (
@@ -227,6 +239,7 @@ export function SyncSettingsDialog({
 					<TextField label="Notebook file" value={values.entryNotebook} isReadOnly />
 				</div>
 				{sourceStatus}
+				{serverSync}
 				{credentials}
 				<div className="flex justify-end pt-2">
 					<Button variant="primary" onPress={onClose}>

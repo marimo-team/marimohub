@@ -8,6 +8,7 @@ import {
 	NotFoundError,
 	notificationRouter,
 	ProjectId,
+	sourceDrift,
 	toPublicNotebookMeta,
 	toPublicSource,
 	toPublicVersion,
@@ -39,6 +40,8 @@ import {
 	SuccessResponseSchema,
 } from '../shared';
 import { idempotentCreate } from '../idempotency';
+import { appendAudit } from '../log';
+import { pullSourceToHead, resolveSyncTarget } from './sourcePullSync';
 import type { HonoEnv, SandboxConfig } from '../context';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
 import { scheduleProjectAlert } from '../notifications';
@@ -269,6 +272,72 @@ const updateGitSource = createRoute({
 				data: z.object({ source: GitSourceResponseSchema }),
 			}),
 			'Git source updated',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403, 404, 409),
+	},
+});
+
+const SourceDriftResponseSchema = z
+	.object({
+		current_commit: z.string().nullable().openapi({
+			description: 'Commit of the last successful sync; null before the first sync.',
+		}),
+		remote_commit: z.string().openapi({
+			description: 'Live head of the configured branch, resolved at request time.',
+		}),
+		in_sync: z.boolean(),
+		pending_config: z.boolean().openapi({
+			description: 'Whether a settings edit is waiting for a matching sync.',
+		}),
+		checked_at: z.iso.datetime(),
+	})
+	.openapi('SourceDrift');
+
+const SourceSyncResponseSchema = z
+	.object({
+		synced: z.boolean().openapi({
+			description: 'False when the notebook was already at the branch head.',
+		}),
+		commit: z.string(),
+		version_id: z.string().nullable(),
+	})
+	.openapi('SourceSyncResult');
+
+const getSourceDrift = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebooks/{nid}/source/drift',
+	tags: ['Notebooks'],
+	summary: 'Compare a git-synced notebook against its branch head',
+	description:
+		'Resolves the configured branch head via the server-side provider credential and reports ' +
+		'whether the notebook is behind it. Stateless — nothing is stored. Requires a provider ' +
+		'listed in `capabilities.source_control.sync_providers`.',
+	request: { params: NotebookIdParam },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: SourceDriftResponseSchema }),
+			'Drift between the synced commit and the branch head',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 409),
+	},
+});
+
+const syncSourceNow = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/notebooks/{nid}/source/sync',
+	tags: ['Notebooks'],
+	summary: 'Pull the branch head into a git-synced notebook',
+	description:
+		'Server-initiated sync: fetches the configured repository tree at the branch head and ' +
+		'ingests it exactly like a pushed archive. A no-op when already at the head. Requires a ' +
+		'provider listed in `capabilities.source_control.sync_providers`.',
+	request: { params: NotebookIdParam },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: SourceSyncResponseSchema }),
+			'Sync outcome',
 		),
 		...commonErrors(),
 		...errorResponses(400, 403, 404, 409),
@@ -545,6 +614,45 @@ app.openapi(updateGitSource, async (c) => {
 	const source = await notebooks.synced.updateSource(pid, nid, c.req.valid('json'), user.id);
 	const { schema_version: _schemaVersion, ...publicSource } = source;
 	return c.json({ success: true, data: { source: publicSource } }, 200);
+});
+
+app.openapi(getSourceDrift, async (c) => {
+	const deps = c.get('deps');
+	const { notebooks, projects } = deps.services;
+	const user = c.get('user');
+	const { pid, nid } = c.req.valid('param');
+	await assertProjectRole(projects, pid, user, 'editor', deps.policy);
+	const { source } = await notebooks.getNotebook(pid, nid);
+	const { git, head } = await resolveSyncTarget(deps, source);
+	return c.json(
+		{ success: true, data: sourceDrift(git, head.commit, new Date().toISOString()) },
+		200,
+	);
+});
+
+app.openapi(syncSourceNow, async (c) => {
+	const deps = c.get('deps');
+	const { projects } = deps.services;
+	const user = c.get('user');
+	const { pid, nid } = c.req.valid('param');
+	await assertProjectRole(projects, pid, user, 'editor', deps.policy);
+	const outcome = await pullSourceToHead(deps, pid, nid, user.id);
+	if (outcome.synced) {
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			'notebook.source.sync',
+			() =>
+				deps.services.events.append({
+					event: 'notebook.source.sync',
+					actor: user.id,
+					project_id: pid,
+					notebook_id: nid,
+					commit: outcome.commit,
+					trigger: 'manual',
+				}),
+		);
+	}
+	return c.json({ success: true, data: outcome }, 200);
 });
 
 app.openapi(getNotebook, async (c) => {

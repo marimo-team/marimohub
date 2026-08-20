@@ -66,8 +66,49 @@ export interface SourceControlPublisher {
 	updateChangeRequest?(input: UpdateChangeRequestInput): Promise<OpenChangeRequestResult>;
 }
 
-/** Server-side publishers configured for this deployment. */
-export interface SourceControlPublisherRegistry {
+export interface SourceBranchHead {
+	/** Full commit SHA at the branch tip. */
+	commit: string;
+}
+
+export interface SourceWorkspaceFile {
+	/** Path relative to the requested root path. */
+	path: string;
+	bytes: Uint8Array;
+}
+
+/** The read side of a provider: resolve branch heads and fetch workspace trees. */
+export interface SourceControlReader {
+	/** Same id namespace as `SourceControlPublisher` (`github`, `gitlab`, …). */
+	readonly provider: string;
+	/**
+	 * Whether this reader can serve the repository coordinate. Provider ids are
+	 * host-detected, so a provider match is not enough — e.g. the GitHub App
+	 * serves github.com only, while a GitHub Enterprise repository carries the
+	 * same `github` id. Unsupported repositories stay push-only.
+	 */
+	supportsRepository(repository: string): boolean;
+	/** Resolve the current tip of a branch. */
+	getBranchHead(repository: string, branch: string): Promise<SourceBranchHead>;
+	/**
+	 * Fetch the tree under `rootPath` at `commit` as workspace files.
+	 * Implementations MUST enforce the same caps as archive ingest (file count,
+	 * per-file bytes, total bytes) and skip symlinks/specials, so pull-created
+	 * versions are never laxer than push-created ones.
+	 */
+	fetchWorkspace(
+		repository: string,
+		commit: string,
+		rootPath: string,
+	): Promise<SourceWorkspaceFile[]>;
+}
+
+/** Server-side source-control capabilities configured for this deployment. */
+export interface SourceControlRegistry {
 	getPublisher(provider: string): SourceControlPublisher | undefined;
-	configuredProviders(): readonly string[];
+	getReader(provider: string): SourceControlReader | undefined;
+	/** Provider ids that can publish change requests. */
+	publisherProviders(): readonly string[];
+	/** Provider ids that can serve server-initiated pull sync. */
+	readerProviders(): readonly string[];
 }

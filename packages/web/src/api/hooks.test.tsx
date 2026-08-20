@@ -18,6 +18,7 @@ import {
 	useRestartSession,
 	useStartSession,
 	useStopSession,
+	useSyncNotebookNow,
 	useUpdateGitSource,
 	useUpdateIntegration,
 	useUpdateNotebook,
@@ -531,6 +532,26 @@ describe('list + detail invalidation', () => {
 		});
 
 		expect(invalidatedKeys(spy)).toEqual([notebookKeys.list(PID), notebookKeys.detail(PID, NID)]);
+	});
+
+	it('useSyncNotebookNow invalidates drift, versions, detail, and the list', async () => {
+		stubFetch(async () => jsonOk({ synced: true, commit: 'abc', version_id: 'ver-2' }));
+
+		const { result, client } = renderHookWithClient(() => useSyncNotebookNow(PID), {
+			toaster: false,
+		});
+		const spy = vi.spyOn(client, 'invalidateQueries');
+
+		await act(async () => {
+			await result.current.mutateAsync(NID);
+		});
+
+		expect(invalidatedKeys(spy)).toEqual([
+			notebookKeys.sourceDrift(PID, NID),
+			notebookKeys.versions(PID, NID),
+			notebookKeys.detail(PID, NID),
+			notebookKeys.list(PID),
+		]);
 	});
 
 	it('useUpdateProject drops both the list and the project it patched', async () => {

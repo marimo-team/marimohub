@@ -212,6 +212,38 @@ export function assertSyncedSource(source: Source): GitSource {
 	return source;
 }
 
+/**
+ * Whether a sync at `headCommit` would be a no-op: the source already serves
+ * that commit and no settings edit is waiting for a matching sync. Git commits
+ * are content-addressed, so a same-commit sync carries identical bytes.
+ */
+export function isAtBranchHead(source: GitSource, headCommit: string): boolean {
+	return !source.pending_config && source.commit === headCommit;
+}
+
+export interface SourceDrift {
+	/** Commit of the last successful sync; null before the first sync. */
+	current_commit: string | null;
+	/** Live head of the configured branch. */
+	remote_commit: string;
+	in_sync: boolean;
+	/** Whether a settings edit is waiting for a matching sync. */
+	pending_config: boolean;
+	/** When the branch head was resolved. */
+	checked_at: string;
+}
+
+/** Drift between a synced source and a freshly resolved branch head. */
+export function sourceDrift(source: GitSource, headCommit: string, checkedAt: string): SourceDrift {
+	return {
+		current_commit: source.commit,
+		remote_commit: headCommit,
+		in_sync: isAtBranchHead(source, headCommit),
+		pending_config: source.pending_config !== undefined,
+		checked_at: checkedAt,
+	};
+}
+
 export function prepareSync(
 	source: GitSource,
 	input: SyncNotebookInput,

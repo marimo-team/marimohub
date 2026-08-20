@@ -9,6 +9,7 @@ import {
 	createSyncTokenRecord,
 	gitSourceConfig,
 	gitSourceConfigsEqual,
+	isAtBranchHead,
 	normalizeGitSourceConfig,
 	prepareSync,
 	providerForRepo,
@@ -218,9 +219,8 @@ export class SyncedNotebookService {
 		const syncedSource = assertSyncedSource(source);
 		const prepared = prepareSync(syncedSource, input);
 
-		// Git commits are content-addressed, so re-pushing the same commit (a retried
-		// CI run) carries identical bytes — a genuine no-op, not a conflict.
-		if (!syncedSource.pending_config && syncedSource.commit === prepared.commit) {
+		// Re-syncing the same commit (a retried CI run) is a genuine no-op, not a conflict.
+		if (isAtBranchHead(syncedSource, prepared.commit)) {
 			return existing;
 		}
 
@@ -270,7 +270,7 @@ export class SyncedNotebookService {
 					(current) => {
 						const git = assertSyncedSource(current);
 						const currentPrepared = prepareSync(git, input);
-						if (!git.pending_config && git.commit === currentPrepared.commit) return null;
+						if (isAtBranchHead(git, currentPrepared.commit)) return null;
 						const { pending_config: _pendingConfig, ...withoutPending } = git;
 						return {
 							...withoutPending,

@@ -1,4 +1,8 @@
-import type { SourceControlPublisher, SourceControlPublisherRegistry } from '@marimo-hub/core';
+import type {
+	SourceControlPublisher,
+	SourceControlReader,
+	SourceControlRegistry,
+} from '@marimo-hub/core';
 import { GitHubAppPublisher } from '@marimo-hub/source-control-github';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -6,24 +10,33 @@ import { ConfigError } from './errors';
 const GITHUB_APP_ID_ENV = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID';
 const GITHUB_APP_PRIVATE_KEY_ENV = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY';
 
-type SourceControlPublishingConfig = {
-	sourceControlPublishers?: SourceControlPublisherRegistry;
+type SourceControlConfig = {
+	sourceControl?: SourceControlRegistry;
 };
 
-function publisherRegistry(
+function sourceControlRegistry(
 	publishers: readonly SourceControlPublisher[],
-): SourceControlPublisherRegistry {
-	const byProvider = new Map(publishers.map((publisher) => [publisher.provider, publisher]));
-	if (byProvider.size !== publishers.length) {
-		throw new ConfigError('Source-control publisher provider ids must be unique');
+	readers: readonly SourceControlReader[],
+): SourceControlRegistry {
+	const publishersByProvider = new Map(
+		publishers.map((publisher) => [publisher.provider, publisher]),
+	);
+	const readersByProvider = new Map(readers.map((reader) => [reader.provider, reader]));
+	if (
+		publishersByProvider.size !== publishers.length ||
+		readersByProvider.size !== readers.length
+	) {
+		throw new ConfigError('Source-control provider ids must be unique');
 	}
 	return {
-		getPublisher: (provider) => byProvider.get(provider),
-		configuredProviders: () => [...byProvider.keys()],
+		getPublisher: (provider) => publishersByProvider.get(provider),
+		getReader: (provider) => readersByProvider.get(provider),
+		publisherProviders: () => [...publishersByProvider.keys()],
+		readerProviders: () => [...readersByProvider.keys()],
 	};
 }
 
-export function makeSourceControlPublishing(env: Env): SourceControlPublishingConfig {
+export function makeSourceControl(env: Env): SourceControlConfig {
 	const appId = env[GITHUB_APP_ID_ENV]?.trim();
 	const privateKey = env[GITHUB_APP_PRIVATE_KEY_ENV]?.trim();
 	if (!appId && !privateKey) return {};
@@ -44,9 +57,11 @@ export function makeSourceControlPublishing(env: Env): SourceControlPublishingCo
 		);
 	}
 
-	let publisher: GitHubAppPublisher;
+	// One credential, two capabilities: the GitHub App publishes change requests
+	// and serves server-initiated pull sync.
+	let github: GitHubAppPublisher;
 	try {
-		publisher = new GitHubAppPublisher({ appId, privateKey });
+		github = new GitHubAppPublisher({ appId, privateKey });
 	} catch {
 		throw new ConfigError(`Invalid ${GITHUB_APP_PRIVATE_KEY_ENV}`, {
 			variable: GITHUB_APP_PRIVATE_KEY_ENV,
@@ -54,6 +69,6 @@ export function makeSourceControlPublishing(env: Env): SourceControlPublishingCo
 	}
 
 	return {
-		sourceControlPublishers: publisherRegistry([publisher]),
+		sourceControl: sourceControlRegistry([github], [github]),
 	};
 }

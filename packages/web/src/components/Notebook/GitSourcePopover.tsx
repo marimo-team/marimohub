@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { useNotebookQuery } from '@/api/hooks';
+import { ServerSyncRow } from '@/components/Notebook/SyncNow';
 import { Popover } from '@/components/ui';
 import { formatRelative } from '@/lib/time';
 import {
@@ -15,7 +16,15 @@ import {
 
 const LINK_CLASSES = 'text-primary underline-offset-2 hover:underline';
 
-function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebookId: string }) {
+function GitSourceDetails({
+	projectId,
+	notebookId,
+	canSync = false,
+}: {
+	projectId: string;
+	notebookId: string;
+	canSync?: boolean;
+}) {
 	// Lazy (popover-open only) fetch; `staleTime: 0` because a background push
 	// can advance the source underneath a cached read and nothing invalidates it.
 	const { data: notebook, isError } = useNotebookQuery(projectId, notebookId, { staleTime: 0 });
@@ -100,6 +109,13 @@ function GitSourceDetails({ projectId, notebookId }: { projectId: string; notebo
 					{source.last_synced_at ? formatRelative(source.last_synced_at) : 'Not synced yet'}
 				</dd>
 			</dl>
+			<ServerSyncRow
+				projectId={projectId}
+				notebookId={notebookId}
+				source={source}
+				enabled={canSync}
+				className="border-t pt-2"
+			/>
 			{coords && (
 				<a
 					href={gitSourceUrl(coords)}
@@ -125,11 +141,14 @@ export function GitSourcePopover({
 	notebookId,
 	trigger,
 	triggerClassName,
+	canSync,
 }: {
 	projectId: string;
 	notebookId: string;
 	trigger: ReactNode;
 	triggerClassName?: string;
+	/** Show drift + Sync now (the viewer must be an editor; the provider gate is internal). */
+	canSync?: boolean;
 }) {
 	return (
 		<Popover
@@ -138,7 +157,7 @@ export function GitSourcePopover({
 			trigger={trigger}
 			triggerClassName={triggerClassName}
 		>
-			<GitSourceDetails projectId={projectId} notebookId={notebookId} />
+			<GitSourceDetails projectId={projectId} notebookId={notebookId} canSync={canSync} />
 		</Popover>
 	);
 }

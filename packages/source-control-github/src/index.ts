@@ -1,8 +1,11 @@
-import { ConflictError, UnavailableError } from '@marimo-hub/core';
+import { ConflictError, UnavailableError, ValidationError } from '@marimo-hub/core';
 import type {
 	OpenChangeRequestInput,
 	OpenChangeRequestResult,
+	SourceBranchHead,
 	SourceControlPublisher,
+	SourceControlReader,
+	SourceWorkspaceFile,
 	UpdateChangeRequestInput,
 } from '@marimo-hub/core';
 import { GitHubClient } from './githubClient';
@@ -10,7 +13,15 @@ import type { GitHubAppPublisherOptions, GitHubAppPublisherRuntime } from './git
 import { GitHubPullRequests } from './githubPullRequests';
 import type { PullRequestCandidate } from './githubPullRequests';
 import { GitHubRepositoryWriter } from './githubRepository';
-import { validateOpenInput, validateUpdateInput } from './githubValidation';
+import { nestedString, responseJson } from './githubResponses';
+import {
+	parseRepository,
+	refPath,
+	validateBranch,
+	validateOpenInput,
+	validateUpdateInput,
+} from './githubValidation';
+import { collectTarballWorkspace, validateCommit, validateRootPath } from './githubWorkspace';
 
 export type { GitHubAppPublisherOptions, GitHubAppPublisherRuntime } from './githubClient';
 
@@ -19,7 +30,7 @@ interface GitHubPublicationContext {
 	pullRequests: GitHubPullRequests;
 }
 
-export class GitHubAppPublisher implements SourceControlPublisher {
+export class GitHubAppPublisher implements SourceControlPublisher, SourceControlReader {
 	readonly provider = 'github' as const;
 	private readonly client: GitHubClient;
 
@@ -34,6 +45,54 @@ export class GitHubAppPublisher implements SourceControlPublisher {
 			repository,
 			pullRequests: new GitHubPullRequests(this.client, repository, owner, repo, token),
 		};
+	}
+
+	/** Repo API prefix + short-lived installation token, shared by the reader methods. */
+	private async readContext(repository: string): Promise<{ base: string; token: string }> {
+		const { owner, repo } = parseRepository(repository);
+		return {
+			base: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+			token: await this.client.installationToken(owner, repo),
+		};
+	}
+
+	supportsRepository(repository: string): boolean {
+		try {
+			parseRepository(repository);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	async getBranchHead(repository: string, branch: string): Promise<SourceBranchHead> {
+		validateBranch(branch);
+		const { base, token } = await this.readContext(repository);
+		const response = await this.client.request(
+			`${base}/branches/${refPath(branch)}`,
+			token,
+			{},
+			[404],
+		);
+		if (response.status === 404) {
+			throw new ValidationError(`GitHub branch not found: ${branch}`);
+		}
+		return { commit: nestedString(await responseJson(response), 'commit', 'sha') };
+	}
+
+	async fetchWorkspace(
+		repository: string,
+		commit: string,
+		rootPath: string,
+	): Promise<SourceWorkspaceFile[]> {
+		validateCommit(commit);
+		validateRootPath(rootPath);
+		const { base, token } = await this.readContext(repository);
+		const response = await this.client.request(
+			`${base}/tarball/${encodeURIComponent(commit)}`,
+			token,
+		);
+		return collectTarballWorkspace(response, rootPath);
 	}
 
 	async openChangeRequest(input: OpenChangeRequestInput): Promise<OpenChangeRequestResult> {

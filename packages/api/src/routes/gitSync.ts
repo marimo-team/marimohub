@@ -4,10 +4,10 @@ import {
 	NotebookId,
 	NotFoundError,
 	notificationRouter,
+	parseWorkspaceArchive,
 	ProjectId,
 	toPublicNotebookMeta,
 } from '@marimo-hub/core';
-import { parseWorkspaceArchive } from '../integrations/archive';
 import { createApp, fail } from '../shared';
 import { scheduleProjectAlert } from '../notifications';
 
