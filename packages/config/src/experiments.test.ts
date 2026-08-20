@@ -18,15 +18,18 @@ describe('parseExperiments', () => {
 		]).toEqual(['duckdb-wasm-preview']);
 	});
 
-	it('ignores unknown IDs with a warning', () => {
+	it('warns and ignores unknown IDs without throwing', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		expect([
 			...parseExperiments({ MARIMOHUB_EXPERIMENTS: 'duckdb-wasm-preveiw,duckdb-wasm-preview' }),
 		]).toEqual(['duckdb-wasm-preview']);
 		expect(warn).toHaveBeenCalledOnce();
-		expect(warn.mock.calls[0]?.[0]).toContain(
-			'Unknown MARIMOHUB_EXPERIMENTS value: duckdb-wasm-preveiw',
-		);
+		expect(JSON.parse(warn.mock.calls[0]?.[0] as string)).toEqual({
+			ts: expect.any(String),
+			event: 'experiment_unknown',
+			id: 'duckdb-wasm-preveiw',
+			known: ['duckdb-wasm-preview', 'duckdb-wasm-sql'],
+		});
 	});
 
 	it.each(['constructor', 'toString', 'hasOwnProperty', '__proto__'])(

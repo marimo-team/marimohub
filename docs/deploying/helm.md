@@ -23,7 +23,8 @@ kubectl -n marimohub create secret generic marimohub-secrets \
   --from-literal=MARIMOHUB_AUTH_SESSION_SECRET="$(openssl rand -hex 32)" \
   --from-literal=MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=... \
   --from-literal=MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=... \
-  --from-literal=MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=...
+  --from-literal=MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=... \
+  --from-file=MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY=./github-app.pem
 
 helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
   --version <VERSION> -n marimohub -f values.yaml
@@ -34,6 +35,10 @@ Replace `<VERSION>` with a tag from
 the leading `v`. Start from
 [`charts/marimohub/ci/example-values.yaml`](https://github.com/marimo-team/marimohub/blob/main/charts/marimohub/ci/example-values.yaml).
 Reference the secret you created with `secrets.existingSecret: marimohub-secrets`.
+Use `--from-file=KEY=PATH` for PEMs, certificates, and other multiline values;
+Kubernetes preserves their newlines. The chart's development-only `secrets.data`
+alternative also accepts YAML block scalars, but places the values in the Helm
+release metadata.
 The full `MARIMOHUB_*` surface is in [Configuration](../configuration.md).
 Set `config.MARIMOHUB_EDITOR_SANDBOX_SHARING` to `shared` or `exclusive`. Before
 you change it in an existing deployment, follow the required drain procedure in

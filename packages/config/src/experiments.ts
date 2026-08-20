@@ -14,19 +14,17 @@ export type Experiment = keyof typeof EXPERIMENTS;
 
 export function parseExperiments(env: Env): ReadonlySet<Experiment> {
 	const enabled = new Set<Experiment>();
+	const known = Object.keys(EXPERIMENTS);
 	for (const raw of env.MARIMOHUB_EXPERIMENTS?.split(',') ?? []) {
 		const id = raw.trim().toLowerCase();
 		if (!id) continue;
-		// An experiment id from a newer or older deployment must not brick boot;
-		// ignore it so config stays forward- and backward-compatible.
 		if (!Object.hasOwn(EXPERIMENTS, id)) {
 			console.warn(
 				JSON.stringify({
 					ts: new Date().toISOString(),
-					event: 'unknown_experiment_ignored',
-					message:
-						`Unknown MARIMOHUB_EXPERIMENTS value: ${id}. ` +
-						`Known experiments: ${Object.keys(EXPERIMENTS).join(', ')}.`,
+					event: 'experiment_unknown',
+					id,
+					known,
 				}),
 			);
 			continue;

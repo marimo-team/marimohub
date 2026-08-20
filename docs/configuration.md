@@ -324,7 +324,7 @@ Server-wide settings; no backend selector.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current values: `duckdb-wasm-preview`. | — | — | `duckdb-wasm-preview` |
+| `MARIMOHUB_EXPERIMENTS` | Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current values: `duckdb-wasm-preview`, `duckdb-wasm-sql`. | — | — | `duckdb-wasm-preview` |
 | `PORT` | Port the HTTP server listens on. | — | `3000` | — |
 | `MARIMOHUB_STATIC_ROOT` | Directory containing the web UI's static files. | — | `./public` | — |
 | `MARIMOHUB_RUN_MAINTENANCE` | Run background maintenance (expiring old sessions, cleaning up sandboxes) on this replica only. | — | `false` | `true` |

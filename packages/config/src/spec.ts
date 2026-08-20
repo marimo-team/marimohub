@@ -916,7 +916,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_EXPERIMENTS',
 						name: 'Experiments',
 						description:
-							'Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current values: `duckdb-wasm-preview`.',
+							'Comma-separated experimental feature IDs. Unknown IDs are ignored with a startup warning. Current values: `duckdb-wasm-preview`, `duckdb-wasm-sql`.',
 						example: 'duckdb-wasm-preview',
 					},
 					{
