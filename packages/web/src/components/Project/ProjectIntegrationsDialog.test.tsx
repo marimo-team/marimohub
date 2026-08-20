@@ -189,6 +189,16 @@ function makeFetch({
 			return kinds === null ? notFound() : ok(kinds);
 		}
 		if (url.includes('/api/v1/org/integrations')) {
+			if (method === 'POST' && url.includes('/query-readiness')) {
+				return ok([
+					{
+						label: 'Set access delegation to none',
+						ready: false,
+						field: 'access_delegation',
+						reason: 'delegation is unsupported',
+					},
+				]);
+			}
 			if (method === 'GET') return ok({ items: orgEntries, next_cursor: null });
 			if (method === 'POST' && !url.includes('/test')) {
 				return ok(
@@ -210,6 +220,28 @@ function makeFetch({
 		}
 		if (url.includes(`/projects/${PID}/integrations/test`) && method === 'POST') {
 			return ok({ ok: true, latency_ms: 5 });
+		}
+		if (url.includes(`/projects/${PID}/integrations/query-readiness`) && method === 'POST') {
+			return ok([
+				{
+					label: 'Set access delegation to none',
+					ready: false,
+					field: 'access_delegation',
+					reason: 'delegation is unsupported',
+				},
+				{
+					label: 'Switch Storage to the s3 scheme',
+					ready: false,
+					field: 'storage',
+					reason: 's3 storage is required',
+				},
+				{
+					label: 'Add at least one guarded S3 read location',
+					ready: false,
+					field: 'storage',
+					reason: 'a read location is required',
+				},
+			]);
 		}
 		if (
 			(url.endsWith('/api/v1/projects') || url.includes('/api/v1/projects?')) &&
@@ -466,7 +498,7 @@ describe('ProjectIntegrationsPanel — create flow', () => {
 		await user.click(screen.getByText('Iceberg REST Catalog'));
 
 		expect(screen.getByRole('heading', { name: 'Run SQL readiness' })).toBeInTheDocument();
-		expect(screen.getByText('Set access delegation to none')).toBeInTheDocument();
+		expect(await screen.findByText('Set access delegation to none')).toBeInTheDocument();
 		expect(screen.getByText('Switch Storage to the s3 scheme')).toBeInTheDocument();
 		expect(screen.getByText('Add at least one guarded S3 read location')).toBeInTheDocument();
 	});

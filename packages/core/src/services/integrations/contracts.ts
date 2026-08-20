@@ -12,6 +12,8 @@ import type {
 	IntegrationVersionPageRequest,
 	IntegrationSecretSources,
 	KindDescriptor,
+	QueryReadinessCheck,
+	QueryReadinessRequest,
 	SessionRender,
 	SessionRenderContext,
 	TableSchema,
@@ -72,6 +74,7 @@ export interface ProjectIntegrationsService {
 		request: TestIntegrationRequest,
 		objectContext?: ObjectBrowseContext,
 	): Promise<TestResult>;
+	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[];
 	/**
 	 * Read-only catalog browsing. Unlike `get`/`test`, the id resolves
 	 * project-first, then the inherited org tier (shadowed org instances read
@@ -193,4 +196,5 @@ export interface OrgIntegrationsService {
 		page?: IntegrationVersionPageRequest,
 	): Promise<IntegrationVersionPage>;
 	test(request: TestIntegrationRequest, objectContext?: ObjectBrowseContext): Promise<TestResult>;
+	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[];
 }

@@ -1,3 +1,4 @@
+/* oxlint-disable jsx-a11y/prefer-tag-over-role -- output cannot contain this status's paragraphs */
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -298,7 +299,8 @@ export default function DataBrowserPage() {
 					</div>
 				)}
 			{showQuerySurface && !querySurfaceAvailable && (
-				<output
+				<div
+					role="status"
 					id="query-surface-unavailable"
 					className="block rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm"
 				>
@@ -312,7 +314,7 @@ export default function DataBrowserPage() {
 						Edit this integration under Project environment → Integrations to see its SQL-ready
 						checklist.
 					</p>
-				</output>
+				</div>
 			)}
 			{!available ? (
 				<EmptyState

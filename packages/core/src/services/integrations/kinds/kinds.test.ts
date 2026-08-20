@@ -777,6 +777,45 @@ describe('kind renders (golden)', () => {
 		});
 	});
 
+	it('iceberg_rest derives query availability from its complete readiness result', () => {
+		const config = icebergRest.configSchema.parse({
+			uri: 'https://catalog.example.com/api',
+			auth: { method: 'none' },
+			access_delegation: 'none',
+			storage: {
+				scheme: 's3',
+				endpoint: 'https://objects.example.com',
+				anonymous: true,
+				broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+			},
+		});
+		const readyChecks = icebergRest.query?.readiness?.(config) ?? [];
+		expect(readyChecks.length).toBeGreaterThan(0);
+		expect(readyChecks.every((check) => check.ready)).toBe(true);
+		expect(icebergRest.query?.available(config)).toEqual({ ok: true });
+
+		const blocked = {
+			...config,
+			headers: { 'X-Custom': 'value' },
+			extra_properties: { 'rest.custom-option': 'true' },
+		};
+		const blockedChecks = icebergRest.query?.readiness?.(blocked) ?? [];
+		expect(blockedChecks).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ label: 'Remove custom headers', field: 'headers', ready: false }),
+				expect.objectContaining({
+					label: 'Remove extra properties',
+					field: 'extra_properties',
+					ready: false,
+				}),
+			]),
+		);
+		expect(icebergRest.query?.available(blocked)).toEqual({
+			ok: false,
+			reason: blockedChecks.find((check) => !check.ready)?.reason,
+		});
+	});
+
 	it('iceberg_rest keeps every remote value bound when optional warehouse is absent', () => {
 		const uri = "https://catalog.example.com/a'b";
 		const programs = icebergPreviewPrograms(

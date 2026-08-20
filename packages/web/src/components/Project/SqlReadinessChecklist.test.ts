@@ -1,58 +1,58 @@
+import { createElement } from 'react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { icebergRestSqlReadiness } from './SqlReadinessChecklist';
+import { SqlReadinessChecklist } from './SqlReadinessChecklist';
 
-const sqlReadyConfig = {
-	uri: 'https://catalog.example.com/api',
-	auth: { method: 'bearer_token', token: 'redacted' },
-	access_delegation: 'none',
-	storage: {
-		scheme: 's3',
-		endpoint: 'https://objects.example.com',
-		credentials: { method: 'static', access_key_id: 'key', secret_access_key: 'secret' },
-		force_virtual_addressing: false,
-		anonymous: false,
-		broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
-	},
-	tls: {},
-	headers: {},
-	extra_properties: {},
-	runtime: {},
-	rest: {
-		snapshot_loading_mode: 'all',
-		metrics_reporting_enabled: true,
-		view_endpoints_supported: false,
-		scan_planning_mode: 'client',
-		namespace_separator: '%1F',
-		table_cache_expire_after_write_ms: 300_000,
-		table_cache_max_entries: 100,
-	},
-};
+const check = (label: string, field: string, ready = false) => ({
+	label,
+	field,
+	ready,
+	reason: `${label} is required`,
+});
 
-describe('icebergRestSqlReadiness', () => {
-	it('accepts the brokered SQL profile', () => {
-		expect(icebergRestSqlReadiness(sqlReadyConfig).every((check) => check.ready)).toBe(true);
+describe('SqlReadinessChecklist', () => {
+	it('renders the server-provided readiness result', () => {
+		render(
+			createElement(SqlReadinessChecklist, {
+				checks: [
+					check('Set access delegation to none', 'access_delegation'),
+					check('Ready', 'uri', true),
+				],
+				isPending: false,
+				isError: false,
+			}),
+		);
+
+		expect(
+			screen.getByText(
+				'1 of 2 configuration checks pass. Select a failing check to edit its field.',
+			),
+		).toBeTruthy();
+		expect(screen.getByRole('link', { name: /Set access delegation to none/ })).toHaveAttribute(
+			'href',
+			'#integration-field-access_delegation',
+		);
 	});
 
-	it('returns every blocker instead of stopping after access delegation', () => {
-		const checks = icebergRestSqlReadiness({
-			...sqlReadyConfig,
-			uri: 'https://catalog.example.com/api?tenant=demo',
-			auth: { method: 'oauth2_client_credentials' },
-			access_delegation: 'vended_credentials',
-			storage: { scheme: 'catalog' },
-			headers: { 'X-Custom': 'value' },
-			runtime: { max_workers: 2 },
-		});
-		const blockers = checks.filter((check) => !check.ready).map((check) => check.label);
-
-		expect(blockers).toContain('Use no catalog authentication or a bearer token');
-		expect(blockers).toContain('Remove custom headers and extra properties');
-		expect(blockers).toContain(
-			'Use a catalog URL without query parameters or encoded path separators',
+	it('links header and extra-property blockers to separate fields', () => {
+		render(
+			createElement(SqlReadinessChecklist, {
+				checks: [
+					check('Remove custom headers', 'headers'),
+					check('Remove extra properties', 'extra_properties'),
+				],
+				isPending: false,
+				isError: false,
+			}),
 		);
-		expect(blockers).toContain('Set access delegation to none');
-		expect(blockers).toContain('Switch Storage to the s3 scheme');
-		expect(blockers).toContain('Add at least one guarded S3 read location');
-		expect(blockers).toContain('Keep PyIceberg runtime options at their defaults');
+
+		expect(screen.getByRole('link', { name: /Remove custom headers/ })).toHaveAttribute(
+			'href',
+			'#integration-field-headers',
+		);
+		expect(screen.getByRole('link', { name: /Remove extra properties/ })).toHaveAttribute(
+			'href',
+			'#integration-field-extra_properties',
+		);
 	});
 });

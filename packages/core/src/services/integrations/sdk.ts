@@ -7,6 +7,7 @@ import type {
 	IntegrationCategory,
 	IntegrationProbe,
 	IntegrationVersionPin,
+	QueryReadinessCheck,
 	KindBrand,
 	ProbeRequestInit,
 	TableSchema,
@@ -200,6 +201,7 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 		programs(input: PreviewProgramInput<z.infer<S>>): PreviewPrograms;
 	};
 	query?: {
+		readiness?(config: unknown): QueryReadinessCheck[];
 		available(config: z.infer<S>): { ok: true } | { ok: false; reason: string };
 		plan(input: { config: z.infer<S>; integration: IntegrationVersionPin }): DataQueryPlan;
 	};
@@ -268,7 +270,38 @@ function guardedQuery<C>(
 	pathsOf: () => SecretPath[],
 ): NonNullable<IntegrationDefinition<z.ZodType<C>>['query']> {
 	const available = query.available.bind(query);
+	const readiness = query.readiness?.bind(query);
 	return {
+		...(readiness
+			? {
+					readiness(config: unknown) {
+						try {
+							return readiness(config).map((check) => {
+								if (
+									echoesSecret(check.label, config, pathsOf()) ||
+									echoesSecret(check.reason, config, pathsOf())
+								) {
+									return {
+										...check,
+										label: 'Meet the SQL configuration requirements',
+										reason: 'this configuration cannot run SQL from the hub',
+									};
+								}
+								return check;
+							});
+						} catch {
+							return [
+								{
+									label: 'Use a supported SQL configuration',
+									ready: false,
+									field: '',
+									reason: 'this configuration cannot run SQL from the hub',
+								},
+							];
+						}
+					},
+				}
+			: {}),
 		available(config) {
 			let verdict: ReturnType<typeof available>;
 			try {

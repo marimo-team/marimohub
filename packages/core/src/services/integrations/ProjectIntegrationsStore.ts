@@ -41,6 +41,8 @@ import type {
 	IntegrationVersionPageRequest,
 	IntegrationSecretSources,
 	KindDescriptor,
+	QueryReadinessCheck,
+	QueryReadinessRequest,
 	SessionRender,
 	SessionRenderContext,
 	TableSchema,
@@ -819,6 +821,16 @@ class ScopedIntegrationsStore {
 				details: objectTestFailure(error, metadata.root_kind),
 			};
 		}
+	}
+
+	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[] {
+		const readiness = this.registry.get(request.kind).query?.readiness;
+		if (!readiness) {
+			throw new ValidationError(
+				`Integration kind "${request.kind}" does not expose SQL readiness checks.`,
+			);
+		}
+		return readiness(request.config);
 	}
 
 	/**
@@ -1720,6 +1732,10 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		return this.store.test(projectScope(projectId), request, objectContext);
 	}
 
+	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[] {
+		return this.store.queryReadiness(request);
+	}
+
 	copy(
 		sourceProjectId: ProjectId,
 		id: IntegrationId,
@@ -1996,6 +2012,10 @@ export class OrgIntegrationsStore implements OrgIntegrationsService {
 
 	test(request: TestIntegrationRequest, objectContext?: ObjectBrowseContext): Promise<TestResult> {
 		return this.store.test(ORG_SCOPE, request, objectContext);
+	}
+
+	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[] {
+		return this.store.queryReadiness(request);
 	}
 }
 

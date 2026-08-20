@@ -422,6 +422,13 @@ describe('Integrations routes', () => {
 			}),
 			403,
 		);
+		await expectError(
+			await editorReq('POST', `/projects/${pid}/integrations/query-readiness`, {
+				kind: 'iceberg_rest',
+				config: {},
+			}),
+			403,
+		);
 
 		const managed = await expectOk<{ id: string }>(
 			await managerReq('POST', `/projects/${pid}/integrations`, {
@@ -586,6 +593,35 @@ describe('Integrations routes', () => {
 			}),
 			422,
 		);
+	});
+
+	it('returns every SQL readiness blocker without echoing draft secrets', async () => {
+		const pid = await createProject();
+		const secret = 'preflight-secret-must-not-return';
+		const response = await request('POST', `/projects/${pid}/integrations/query-readiness`, {
+			kind: 'iceberg_rest',
+			config: {
+				uri: 'https://catalog.example.com/api',
+				auth: { method: 'bearer_token', token: secret },
+				headers: { 'X-Custom': 'value' },
+				extra_properties: { 'rest.custom-option': 'true' },
+				storage: { scheme: 'catalog' },
+			},
+		});
+		const checks =
+			await expectOk<{ label: string; ready: boolean; field: string; reason: string }[]>(response);
+
+		expect(checks).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ label: 'Remove custom headers', field: 'headers', ready: false }),
+				expect.objectContaining({
+					label: 'Remove extra properties',
+					field: 'extra_properties',
+					ready: false,
+				}),
+			]),
+		);
+		expect(JSON.stringify(checks)).not.toContain(secret);
 	});
 
 	it('accepts a stored integration id when testing an edited draft', async () => {
@@ -767,6 +803,13 @@ describe('Org integrations routes', () => {
 				source: 'draft',
 				kind: 'postgres',
 				config: PG_CONFIG,
+			}),
+			403,
+		);
+		await expectError(
+			await asUser('POST', '/org/integrations/query-readiness', {
+				kind: 'iceberg_rest',
+				config: {},
 			}),
 			403,
 		);

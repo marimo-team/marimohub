@@ -14,6 +14,7 @@ import type {
 	ObjectBrowseContext,
 	ProjectIntegrationsService,
 	OrgIntegrationsService,
+	QueryReadinessRequest,
 	SlidingWindowBudget,
 	TestIntegrationRequest,
 } from '@marimo-hub/core';
@@ -198,6 +199,20 @@ const TestIntegrationBody = z
 	])
 	.openapi('IntegrationTestRequest');
 
+const QueryReadinessBody = z
+	.object({ kind: z.string().min(1), config: ConfigSchema })
+	.strict()
+	.openapi('IntegrationQueryReadinessRequest');
+
+const QueryReadinessCheckSchema = z
+	.object({
+		label: z.string().min(1),
+		ready: z.boolean(),
+		field: z.string(),
+		reason: z.string().min(1),
+	})
+	.openapi('IntegrationQueryReadinessCheck');
+
 const CopyIntegrationBody = z
 	.object({
 		source_project_id: z
@@ -367,6 +382,22 @@ const testIntegration = createRoute({
 	},
 });
 
+const queryReadiness = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/integrations/query-readiness',
+	tags: ['Integrations'],
+	summary: 'Evaluate SQL readiness for an unsaved integration config (manager only)',
+	request: { params: ProjectIdParam, body: jsonBody(QueryReadinessBody) },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: z.array(QueryReadinessCheckSchema) }),
+			'All SQL readiness checks',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
 // Org-scoped (deployment-wide) instances, inherited by every project. All
 // management is super-admin only — org integrations render into every
 // project's sessions, so no project role can be sufficient.
@@ -488,6 +519,22 @@ const testOrgIntegration = createRoute({
 		),
 		...commonErrors(),
 		...errorResponses(403, 404, 429),
+	},
+});
+
+const queryOrgReadiness = createRoute({
+	method: 'post',
+	path: '/org/integrations/query-readiness',
+	tags: ['Integrations'],
+	summary: 'Evaluate SQL readiness for an unsaved org config (super admin only)',
+	request: { body: jsonBody(QueryReadinessBody) },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: z.array(QueryReadinessCheckSchema) }),
+			'All SQL readiness checks',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
 	},
 });
 
@@ -747,6 +794,16 @@ app.openapi(testIntegration, async (c) => {
 	return c.json({ success: true, data: await integrations.test(pid, body, objectContext) }, 200);
 });
 
+app.openapi(queryReadiness, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid } = c.req.valid('param');
+	const integrations = requireIntegrations(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'manager', deps.policy);
+	const body = c.req.valid('json') as QueryReadinessRequest;
+	return c.json({ success: true, data: integrations.queryReadiness(body) }, 200);
+});
+
 app.route('/', integrationBrowseApp);
 
 app.openapi(listOrgIntegrations, async (c) => {
@@ -881,6 +938,14 @@ app.openapi(testOrgIntegration, async (c) => {
 			}),
 	);
 	return c.json({ success: true, data: await integrations.test(body, objectContext) }, 200);
+});
+
+app.openapi(queryOrgReadiness, (c) => {
+	const deps = c.get('deps');
+	const integrations = requireOrgIntegrations(deps);
+	assertSuperAdmin(c.get('user'), deps.policy);
+	const body = c.req.valid('json') as QueryReadinessRequest;
+	return c.json({ success: true, data: integrations.queryReadiness(body) }, 200);
 });
 
 async function objectTestContext(

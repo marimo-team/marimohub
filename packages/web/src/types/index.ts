@@ -83,6 +83,7 @@ export type IntegrationEntry = ClientIntegrationEntry;
 export type IntegrationDetail = ClientIntegrationDetail;
 /** Outcome of the integration "Test" probe. */
 export type IntegrationTestResult = ClientIntegrationTestResult;
+export type QueryReadinessCheck = components['schemas']['IntegrationQueryReadinessCheck'];
 /** Whether one integration instance can be browsed (and why not). */
 export type IntegrationBrowseCapability = ClientIntegrationBrowseCapability;
 export type IntegrationBrowseNamespacePage = ClientIntegrationBrowseNamespacePage;

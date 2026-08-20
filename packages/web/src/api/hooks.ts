@@ -700,6 +700,27 @@ export function useTestIntegration(scope: IntegrationsScope) {
 	});
 }
 
+export function useQueryReadinessQuery(
+	scope: IntegrationsScope,
+	request: { kind: string; config: Record<string, unknown> },
+	enabled = true,
+) {
+	return useQuery({
+		queryKey: ['integration-query-readiness', integrationsListKey(scope), request],
+		enabled,
+		retry: false,
+		queryFn: () =>
+			apiData(
+				scope === 'org'
+					? apiClient.POST('/api/v1/org/integrations/query-readiness', { body: request })
+					: apiClient.POST('/api/v1/projects/{pid}/integrations/query-readiness', {
+							params: { path: { pid: scope.pid } },
+							body: request,
+						}),
+			),
+	});
+}
+
 // Data browser (read-only catalog metadata over an integration)
 
 /**

@@ -4,6 +4,7 @@ import { asRecord } from '../../../internal/validation';
 import type {
 	BrowsePageRequest,
 	IntegrationProbe,
+	QueryReadinessCheck,
 	TableColumn,
 	TableSchema,
 } from '../../../ports/integrations';
@@ -310,6 +311,7 @@ export const icebergRest = defineIntegration({
 	},
 
 	query: {
+		readiness: duckdbPreviewReadiness,
 		available(config) {
 			const reason = duckdbPreviewBlocker(config);
 			return reason ? { ok: false as const, reason } : { ok: true as const };
@@ -549,71 +551,192 @@ rows = [[json_safe(record.get(column)) for column in columns] for record in arro
 print(json.dumps({"columns": columns, "rows": rows}, allow_nan=False, default=str, separators=(",", ":")))
 `;
 
+const advancedS3Fields = [
+	'role_arn',
+	'role_session_name',
+	'signer',
+	'signer_uri',
+	'signer_endpoint',
+	'resolve_region',
+	'proxy_uri',
+	'connect_timeout',
+	'request_timeout',
+] as const;
+
+function readinessCheck(
+	label: string,
+	ready: boolean,
+	field: string,
+	reason: string,
+): QueryReadinessCheck {
+	return { label, ready, field, reason };
+}
+
+function parsedUrl(value: unknown): URL | undefined {
+	if (typeof value !== 'string') return undefined;
+	try {
+		return new URL(value);
+	} catch {
+		return undefined;
+	}
+}
+
+function duckdbPreviewReadiness(value: unknown): QueryReadinessCheck[] {
+	const config = asRecord(value) ?? {};
+	const auth = asRecord(config.auth) ?? {};
+	const tls = asRecord(config.tls) ?? {};
+	const headers = asRecord(config.headers) ?? {};
+	const extraProperties = asRecord(config.extra_properties) ?? {};
+	const storage = asRecord(config.storage) ?? {};
+	const credentials = asRecord(storage.credentials) ?? {};
+	const runtime = asRecord(config.runtime) ?? {};
+	const rest: Record<string, unknown> = asRecord(config.rest) ?? ICEBERG_REST_DEFAULTS;
+	const catalogUrl = parsedUrl(config.uri);
+	const endpoint = parsedUrl(storage.endpoint);
+	const hasEndpoint = typeof storage.endpoint === 'string' && storage.endpoint.length > 0;
+	const storageIsS3 = storage.scheme === 's3';
+	const endpointOriginOnly = endpoint
+		? endpoint.pathname === '/' && endpoint.search === '' && endpoint.hash === ''
+		: false;
+	const authMethod = auth.method;
+	const credentialsMethod = credentials.method;
+	const advancedField = advancedS3Fields.find((field) => {
+		const fieldValue = storage[field];
+		return field === 'connect_timeout' || field === 'request_timeout'
+			? fieldValue !== undefined
+			: Boolean(fieldValue);
+	});
+	const supportedCredentials =
+		storageIsS3 &&
+		(storage.anonymous === true || (storage.anonymous !== true && credentialsMethod === 'static'));
+	const credentialsReason =
+		credentialsMethod === 'ambient'
+			? 'ambient S3 credentials are not supported by DuckDB-Wasm preview'
+			: credentialsMethod === 'profile'
+				? 'profile S3 credentials are not supported by DuckDB-Wasm preview'
+				: 'DuckDB-Wasm preview requires static or anonymous S3 credentials';
+	const defaultRestOptions =
+		(rest.snapshot_loading_mode ?? ICEBERG_REST_DEFAULTS.snapshot_loading_mode) ===
+			ICEBERG_REST_DEFAULTS.snapshot_loading_mode &&
+		(rest.metrics_reporting_enabled ?? ICEBERG_REST_DEFAULTS.metrics_reporting_enabled) ===
+			ICEBERG_REST_DEFAULTS.metrics_reporting_enabled &&
+		rest.page_size === undefined &&
+		(rest.view_endpoints_supported ?? ICEBERG_REST_DEFAULTS.view_endpoints_supported) ===
+			ICEBERG_REST_DEFAULTS.view_endpoints_supported &&
+		(rest.scan_planning_mode ?? ICEBERG_REST_DEFAULTS.scan_planning_mode) ===
+			ICEBERG_REST_DEFAULTS.scan_planning_mode &&
+		(rest.namespace_separator ?? ICEBERG_REST_DEFAULTS.namespace_separator) ===
+			ICEBERG_REST_DEFAULTS.namespace_separator &&
+		(rest.table_cache_expire_after_write_ms ??
+			ICEBERG_REST_DEFAULTS.table_cache_expire_after_write_ms) ===
+			ICEBERG_REST_DEFAULTS.table_cache_expire_after_write_ms &&
+		(rest.table_cache_max_entries ?? ICEBERG_REST_DEFAULTS.table_cache_max_entries) ===
+			ICEBERG_REST_DEFAULTS.table_cache_max_entries;
+
+	return [
+		readinessCheck(
+			'Use no catalog authentication or a bearer token',
+			authMethod === 'none' || authMethod === 'bearer_token',
+			'auth',
+			`${String(authMethod)} authentication is not supported by DuckDB-Wasm preview`,
+		),
+		readinessCheck(
+			'Use system TLS without custom certificates',
+			!tls.ca_bundle && !tls.client_certificate,
+			'tls',
+			'custom TLS material is not supported by DuckDB-Wasm preview',
+		),
+		readinessCheck(
+			'Remove custom headers',
+			Object.keys(headers).length === 0,
+			'headers',
+			'custom headers are not supported by DuckDB-Wasm preview',
+		),
+		readinessCheck(
+			'Remove extra properties',
+			Object.keys(extraProperties).length === 0,
+			'extra_properties',
+			'extra properties are not supported by DuckDB-Wasm preview',
+		),
+		readinessCheck(
+			'Use a catalog URL without query parameters',
+			catalogUrl?.search === '',
+			'uri',
+			'catalog URLs with query parameters are not supported by DuckDB-Wasm preview',
+		),
+		readinessCheck(
+			'Use a catalog URL without encoded path separators',
+			catalogUrl !== undefined && !/%2f|%5c/i.test(catalogUrl.pathname),
+			'uri',
+			'catalog URLs with encoded path separators are not supported by DuckDB-Wasm preview',
+		),
+		readinessCheck(
+			'Set access delegation to none',
+			config.access_delegation === 'none',
+			'access_delegation',
+			'catalog access delegation is not supported by DuckDB-Wasm preview',
+		),
+		readinessCheck(
+			'Switch Storage to the s3 scheme',
+			storageIsS3,
+			'storage',
+			'DuckDB-Wasm preview requires explicit S3 storage configuration',
+		),
+		readinessCheck(
+			'Set an explicit S3 endpoint',
+			storageIsS3 && hasEndpoint,
+			storageIsS3 ? 'storage.endpoint' : 'storage',
+			'DuckDB-Wasm preview requires an explicit S3 endpoint',
+		),
+		readinessCheck(
+			'Use an origin-only S3 endpoint',
+			storageIsS3 && endpointOriginOnly,
+			storageIsS3 ? 'storage.endpoint' : 'storage',
+			'DuckDB-Wasm preview requires an origin-only S3 endpoint',
+		),
+		readinessCheck(
+			'Use path-style S3 addressing',
+			storageIsS3 && storage.force_virtual_addressing !== true,
+			storageIsS3 ? 'storage.force_virtual_addressing' : 'storage',
+			'virtual-hosted S3 addressing is not supported by DuckDB-Wasm preview',
+		),
+		readinessCheck(
+			'Remove advanced S3 client options',
+			storageIsS3 && advancedField === undefined,
+			storageIsS3 && advancedField ? `storage.${advancedField}` : 'storage',
+			'advanced S3 client options are not supported by DuckDB-Wasm preview',
+		),
+		readinessCheck(
+			'Use static S3 credentials or anonymous access',
+			supportedCredentials,
+			storageIsS3 ? 'storage.credentials' : 'storage',
+			credentialsReason,
+		),
+		readinessCheck(
+			'Add at least one guarded S3 read location',
+			storageIsS3 &&
+				Array.isArray(storage.broker_read_locations) &&
+				storage.broker_read_locations.length > 0,
+			storageIsS3 ? 'storage.broker_read_locations' : 'storage',
+			'DuckDB-Wasm preview requires at least one guarded S3 read location',
+		),
+		readinessCheck(
+			'Keep PyIceberg runtime options at their defaults',
+			Object.keys(runtime).length === Object.keys(ICEBERG_RUNTIME_DEFAULTS).length,
+			'runtime',
+			'PyIceberg runtime options are not supported by DuckDB-Wasm preview',
+		),
+		readinessCheck(
+			'Keep REST client options at their defaults',
+			defaultRestOptions,
+			'rest',
+			'custom REST client options are not supported by DuckDB-Wasm preview',
+		),
+	];
+}
+
 function duckdbPreviewBlocker(config: IcebergRestConfig): string | undefined {
-	if (config.auth.method !== 'none' && config.auth.method !== 'bearer_token') {
-		return `${config.auth.method} authentication is not supported by DuckDB-Wasm preview`;
-	}
-	if (config.tls.ca_bundle || config.tls.client_certificate) {
-		return 'custom TLS material is not supported by DuckDB-Wasm preview';
-	}
-	if (Object.keys(config.headers).length > 0 || Object.keys(config.extra_properties).length > 0) {
-		return 'custom headers and properties are not supported by DuckDB-Wasm preview';
-	}
-	const catalogUrl = new URL(config.uri);
-	if (catalogUrl.search) {
-		return 'catalog URLs with query parameters are not supported by DuckDB-Wasm preview';
-	}
-	if (/%2f|%5c/i.test(catalogUrl.pathname)) {
-		return 'catalog URLs with encoded path separators are not supported by DuckDB-Wasm preview';
-	}
-	if (config.access_delegation !== 'none') {
-		return 'catalog access delegation is not supported by DuckDB-Wasm preview';
-	}
-	if (config.storage.scheme !== 's3') {
-		return 'DuckDB-Wasm preview requires explicit S3 storage configuration';
-	}
-	if (!config.storage.endpoint) {
-		return 'DuckDB-Wasm preview requires an explicit S3 endpoint';
-	}
-	const endpoint = new URL(config.storage.endpoint);
-	if (endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
-		return 'DuckDB-Wasm preview requires an origin-only S3 endpoint';
-	}
-	if (config.storage.force_virtual_addressing) {
-		return 'virtual-hosted S3 addressing is not supported by DuckDB-Wasm preview';
-	}
-	if (
-		config.storage.role_arn ||
-		config.storage.role_session_name ||
-		config.storage.signer ||
-		config.storage.signer_uri ||
-		config.storage.signer_endpoint ||
-		config.storage.resolve_region ||
-		config.storage.proxy_uri ||
-		config.storage.connect_timeout !== undefined ||
-		config.storage.request_timeout !== undefined
-	) {
-		return 'advanced S3 client options are not supported by DuckDB-Wasm preview';
-	}
-	if (!config.storage.anonymous && config.storage.credentials.method === 'ambient') {
-		return 'ambient S3 credentials are not supported by DuckDB-Wasm preview';
-	}
-	if (!config.storage.anonymous && config.storage.credentials.method === 'profile') {
-		return 'profile S3 credentials are not supported by DuckDB-Wasm preview';
-	}
-	if (!config.storage.anonymous && config.storage.credentials.method !== 'static') {
-		return 'DuckDB-Wasm preview requires static or anonymous S3 credentials';
-	}
-	if (config.storage.broker_read_locations.length === 0) {
-		return 'DuckDB-Wasm preview requires at least one guarded S3 read location';
-	}
-	if (JSON.stringify(config.runtime) !== JSON.stringify(ICEBERG_RUNTIME_DEFAULTS)) {
-		return 'PyIceberg runtime options are not supported by DuckDB-Wasm preview';
-	}
-	if (JSON.stringify(config.rest) !== JSON.stringify(ICEBERG_REST_DEFAULTS)) {
-		return 'custom REST client options are not supported by DuckDB-Wasm preview';
-	}
-	return undefined;
+	return duckdbPreviewReadiness(config).find((check) => !check.ready)?.reason;
 }
 
 function duckdbAuthOptions(

@@ -184,6 +184,29 @@ export function pruneForSubmit(node: JsonSchemaNode, value: unknown): unknown {
 	return value;
 }
 
+/** Replaces schema-marked values before a draft is sent to non-secret preflight APIs. */
+export function redactSecretsForRequest(node: JsonSchemaNode, value: unknown): unknown {
+	const branch = branchForValue(node, value);
+	if (branch) return redactSecretsForRequest(branch, value);
+	if (isSecretNode(node)) return value === undefined ? undefined : KEEP_SECRET;
+	if (node.type === 'object') {
+		if (isRecordNode(node)) return value;
+		const record = (value as Record<string, unknown>) ?? {};
+		const out: Record<string, unknown> = {};
+		for (const [key, child] of Object.entries(node.properties ?? {})) {
+			const redacted = redactSecretsForRequest(child, record[key]);
+			if (redacted !== undefined) out[key] = redacted;
+		}
+		return out;
+	}
+	if (node.type === 'array') {
+		return ((value as unknown[]) ?? []).map((item) =>
+			redactSecretsForRequest(node.items ?? {}, item),
+		);
+	}
+	return value;
+}
+
 /** Performs lightweight form validation; the server schema remains authoritative. */
 export function validateValue(
 	node: JsonSchemaNode,

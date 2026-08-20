@@ -9,6 +9,7 @@ import {
 	KEEP_SECRET,
 	needsSecretSource,
 	pruneForSubmit,
+	redactSecretsForRequest,
 	validateValue,
 } from './model';
 import type { JsonSchemaNode, UiHints } from './model';
@@ -234,6 +235,28 @@ describe('pruneForSubmit', () => {
 			},
 		};
 		expect(pruneForSubmit(optionalSecretSchema, { password: '' })).toEqual({});
+	});
+});
+
+describe('redactSecretsForRequest', () => {
+	it('replaces secret values while retaining non-secret draft fields', () => {
+		expect(
+			redactSecretsForRequest(schema, {
+				host: 'db.internal',
+				database: 'app',
+				username: 'admin',
+				password: 'must-not-leave-the-form',
+				auth: { method: 'basic', user: 'reader' },
+				props: { region: 'us-east-1' },
+			}),
+		).toEqual({
+			host: 'db.internal',
+			database: 'app',
+			username: 'admin',
+			password: KEEP_SECRET,
+			auth: { method: 'basic', user: 'reader' },
+			props: { region: 'us-east-1' },
+		});
 	});
 });
 
