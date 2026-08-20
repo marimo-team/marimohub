@@ -178,20 +178,40 @@ describe('startOtel', () => {
 		expect(register).not.toHaveBeenCalled();
 	});
 
-	it('starts logs-only when only an OTLP endpoint and OTEL_LOGS_EXPORTER apply', async () => {
+	it('starts logs-only and exports the otel_started record to the configured endpoint', async () => {
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
 		vi.stubEnv('OTEL_TRACES_EXPORTER', 'none');
 		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
 		const register = vi.spyOn(NodeTracerProvider.prototype, 'register');
 		const setGlobal = vi.spyOn(logsApi, 'setGlobalLoggerProvider');
+		// Capture the batch the log exporter flushes so we verify a real record
+		// actually flows logEvent → emitLogRecord → LoggerProvider → exporter.
+		const exported: Parameters<typeof OTLPLogExporter.prototype.export>[0] = [];
+		vi.spyOn(OTLPLogExporter.prototype, 'export').mockImplementation((records, callback) => {
+			exported.push(...records);
+			callback({ code: ExportResultCode.SUCCESS });
+		});
+
 		const handle = startOtel();
-		expect(handle).not.toBeNull();
 		expect(handle?.tracing).toBe(false);
 		expect(handle?.metrics).toBe(false);
 		expect(handle?.logs).toBe(true);
 		expect(register).not.toHaveBeenCalled();
 		expect(setGlobal).toHaveBeenCalledOnce();
+
+		// shutdown flushes the batch that startOtel's own otel_started event produced.
 		await handle?.shutdown();
+		const started = exported.find((r) => r.attributes.event === 'otel_started');
+		expect(started).toBeDefined();
+		expect(started?.body).toBe('otel_started');
+		expect(started?.severityText).toBe('info');
+		expect(started?.attributes).toMatchObject({
+			event: 'otel_started',
+			tracing: false,
+			metrics: 'off',
+			logs: true,
+			endpoint: 'http://localhost:4318',
+		});
 	});
 
 	it('registers a provider with the env-configured service name when enabled', async () => {

@@ -4,12 +4,14 @@ import {
 	LoggerProvider,
 	SimpleLogRecordProcessor,
 } from '@opentelemetry/sdk-logs';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { emitLogRecord } from './logs';
 
-// Must run before the provider is registered below: the facade must no-op when
-// nothing is wired (as in a Worker), and priming the cached proxy logger here is
-// safe — it binds its delegate lazily, so the later registration still takes.
+// Runs first, before the beforeAll below registers a provider (that registration
+// is a hook, so it fires in the run phase — not at collection time like a bare
+// describe-body statement would), so this exercises the real no-op path a Worker
+// relies on. The emit also primes the module's cached proxy logger, which is
+// safe: it binds its delegate lazily once a provider is registered.
 describe('emitLogRecord without a provider', () => {
 	it('is a no-op that never throws', () => {
 		expect(() => emitLogRecord({ level: 'error', event: 'boot_failed' })).not.toThrow();
@@ -19,8 +21,8 @@ describe('emitLogRecord without a provider', () => {
 describe('emitLogRecord with a registered provider', () => {
 	const exporter = new InMemoryLogRecordExporter();
 	const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor({ exporter })] });
-	logs.setGlobalLoggerProvider(provider);
 
+	beforeAll(() => logs.setGlobalLoggerProvider(provider));
 	beforeEach(() => exporter.reset());
 	afterAll(async () => {
 		logs.disable();
