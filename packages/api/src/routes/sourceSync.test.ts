@@ -412,6 +412,35 @@ describe('Source drift and sync-now routes', () => {
 		expect(detail.source.commit).toBe(NEWER);
 	});
 
+	it('reports synced: false when a concurrent sync of the same commit wins (no audit event)', async () => {
+		const midDownload: { advance?: () => Promise<unknown> } = {};
+		const reader = stubReader({
+			fetchWorkspace: async () => {
+				await midDownload.advance?.();
+				return [{ path: 'app.py', bytes: encode('print("synced")') }];
+			},
+		});
+		const { request, deps } = api(reader);
+		const nid = await createSyncedNotebook(request);
+		midDownload.advance = () =>
+			deps.services.notebooks.synced.sync(projectId, nid as NotebookId, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				commit: HEAD,
+				files: [{ path: 'app.py', bytes: encode('print("synced")') }],
+			});
+
+		const outcome = await expectOk<{ synced: boolean; version_id: string | null }>(
+			await request('POST', `/projects/${projectId}/notebooks/${nid}/source/sync`),
+		);
+		expect(outcome).toEqual({ synced: false, commit: HEAD, version_id: null });
+
+		const today = new Date().toISOString().slice(0, 10);
+		const events = await deps.services.events.getEvents(today);
+		expect(events.filter((e) => e.event === 'notebook.source.sync')).toHaveLength(0);
+	});
+
 	it('resolves the head and tree from pending coordinates, not the active ones', async () => {
 		const branchCalls: [string, string][] = [];
 		const fetchCalls: [string, string][] = [];

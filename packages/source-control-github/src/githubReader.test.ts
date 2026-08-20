@@ -320,6 +320,6 @@ describe('collectTarballWorkspace', () => {
 		// could ingest silently.
 		await expect(
 			collectTarballWorkspace(new Response(Uint8Array.from(GZIP_HEADER)), ''),
-		).rejects.toThrow(/Truncated repository tarball/);
+		).rejects.toThrow(/missing end-of-archive marker/);
 	});
 });

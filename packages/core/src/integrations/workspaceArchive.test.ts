@@ -304,14 +304,18 @@ describe('parseWorkspaceArchive', () => {
 			collector.push(archive.subarray(offset, offset + 7));
 		}
 		expect(collector.finish()).toEqual(parseWorkspaceArchive(archive, 'tar', ''));
-		expect(collector.sawEndOfArchive).toBe(true);
 	});
 
-	it('reports a stream that ends without the end-of-archive marker', () => {
+	it('rejects a tar that ends cleanly but without the end-of-archive marker', () => {
+		// A complete entry with no trailer — an upload cut at an entry boundary
+		// is indistinguishable from a complete archive without this check.
 		const collector = new WorkspaceTarCollector();
 		collector.push(tarEntry('a.py', encode('print(1)'), '0'));
-		expect(collector.finish().map((f) => f.path)).toEqual(['a.py']);
-		expect(collector.sawEndOfArchive).toBe(false);
+		expect(() => collector.finish()).toThrow(/missing end-of-archive marker/);
+
+		expect(() =>
+			parseWorkspaceArchive(tarEntry('a.py', encode('print(1)'), '0'), 'tar', ''),
+		).toThrow(/missing end-of-archive marker/);
 	});
 
 	it('rejects an oversized pax metadata entry before buffering it', () => {

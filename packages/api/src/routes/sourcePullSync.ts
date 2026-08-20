@@ -76,7 +76,7 @@ export async function pullSourceToHead(
 		return { synced: false, commit: head.commit, version_id: null };
 	}
 	const files = await reader.fetchWorkspace(config.repo, head.commit, config.root_path);
-	await notebooks.synced.sync(
+	const { versionId } = await notebooks.synced.sync(
 		projectId,
 		notebookId,
 		{
@@ -91,12 +91,11 @@ export async function pullSourceToHead(
 		},
 		actor,
 	);
-	// Re-read rather than trusting this request's write: a concurrent sync of the
-	// same commit may have won the CAS, in which case its version is current.
-	const after = await notebooks.getNotebook(projectId, notebookId);
-	const versionId =
-		after.source.type === 'git' && after.source.commit === head.commit
-			? after.source.current_version_id
-			: null;
+	// A null versionId means a concurrent sync of the same commit won the
+	// advance while this one downloaded — report the truthful "already there"
+	// so the audit trail never credits this request with a sync it didn't do.
+	if (versionId === null) {
+		return { synced: false, commit: head.commit, version_id: null };
+	}
 	return { synced: true, commit: head.commit, version_id: versionId };
 }

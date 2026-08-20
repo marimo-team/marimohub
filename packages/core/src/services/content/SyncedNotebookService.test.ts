@@ -382,7 +382,7 @@ describe('SyncedNotebookService', () => {
 				releaseSourcePut();
 				const synced = await syncing;
 
-				expect(synced.updated_at).toBe(concurrent.updated_at);
+				expect(synced.meta.updated_at).toBe(concurrent.updated_at);
 				await expect(
 					notebooks.updateNotebook(
 						projectId,
@@ -403,7 +403,11 @@ describe('SyncedNotebookService', () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 
 			const updated = await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
-			expect(updated.status).toBe('active');
+			expect(updated.meta.status).toBe('active');
+			expect(updated.versionId).not.toBeNull();
+
+			const noop = await notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa'));
+			expect(noop.versionId).toBeNull();
 
 			const nb = await notebooks.getNotebook(projectId, meta.id);
 			expect(nb.source.type).toBe('git');
@@ -463,7 +467,7 @@ describe('SyncedNotebookService', () => {
 				...syncInput('commit-aaaa'),
 				repo: 'group1/marimo/nb',
 			});
-			expect(updated.status).toBe('active');
+			expect(updated.meta.status).toBe('active');
 		});
 
 		it('reports every mismatched source header with received and expected values', async () => {

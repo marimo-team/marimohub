@@ -107,9 +107,14 @@ function parseZip(bytes: Uint8Array, mapPath: (path: string) => string | null): 
 		throw new BadRequestError('Invalid zip archive');
 	}
 	const files = new Map<string, Uint8Array>();
+	// Re-enforce the caps on the actual inflated sizes. fflate sizes each output
+	// from the central-directory metadata checked above, so today this can never
+	// fire — it pins the invariant locally instead of relying on that behavior.
+	const actual: ArchiveLimitState = { fileCount: 0, totalBytes: 0 };
 	for (const [path, body] of Object.entries(unzipped)) {
 		const mapped = mapPath(path);
 		if (mapped === null) continue;
+		enforceArchiveFileLimits(actual, mapped, body.length);
 		addFile(files, mapped, body);
 	}
 	return toArchiveFiles(files);
@@ -237,26 +242,18 @@ export class WorkspaceTarCollector {
 	}
 
 	finish(): ArchiveFile[] {
-		// Mirrors the whole-buffer semantics: entry data must be complete, while a
-		// missing final padding block or trailing partial block is tolerated.
-		if (this.entry) {
-			if (this.entry.dataRemaining > 0) {
-				throw new BadRequestError(`Truncated tar entry: ${this.entry.path}`);
-			}
-			this.completeEntry(this.entry);
-			this.entry = null;
+		if (this.entry && this.entry.dataRemaining > 0) {
+			throw new BadRequestError(`Truncated tar entry: ${this.entry.path}`);
+		}
+		// The end-of-archive marker (a zero block) is required: neither an upload
+		// nor gzip inflation reports anything for input cut cleanly at an entry
+		// boundary (or inside a padding block), and only the marker distinguishes
+		// a complete archive from a silently partial one. Every real producer —
+		// tar, bsdtar, `git archive`, GitHub codeload — writes it.
+		if (!this.done) {
+			throw new BadRequestError('Truncated tar archive: missing end-of-archive marker');
 		}
 		return toArchiveFiles(this.files);
-	}
-
-	/**
-	 * Whether the archive's end-of-archive marker (a zero block) was seen.
-	 * Streaming callers should require this: gzip inflation reports no error for
-	 * a connection cut at an entry boundary, and only the marker distinguishes a
-	 * complete archive from a truncated one.
-	 */
-	get sawEndOfArchive(): boolean {
-		return this.done;
 	}
 
 	private startEntry(block: Uint8Array): void {

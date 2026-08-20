@@ -113,9 +113,6 @@ export async function collectTarballWorkspace(
 	} finally {
 		await reader.cancel().catch(() => {});
 	}
-	const files = collector.finish();
-	if (!collector.sawEndOfArchive) {
-		throw new BadRequestError('Truncated repository tarball');
-	}
-	return files;
+	// `finish` rejects streams cut before the tar end-of-archive marker.
+	return collector.finish();
 }
