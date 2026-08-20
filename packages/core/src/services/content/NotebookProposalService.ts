@@ -72,6 +72,7 @@ export interface CaptureProposalInput {
 export interface CaptureProposalResult {
 	proposal: NotebookProposal;
 	created: boolean;
+	publicationState: ProposalPublication['state'];
 }
 
 export interface PublishProposalChangeRequestInput {
@@ -149,12 +150,12 @@ export class NotebookProposalService {
 				this.assertProposalRetry(proposal, input);
 				if (publication.state === 'published') {
 					this.recordCaptureReuse(proposal, publication.state);
-					return { proposal, created: false };
+					return { proposal, created: false, publicationState: publication.state };
 				}
 				this.assertPayloadNotExpired(proposal);
 				if (await this.hasCompletePayload(input.projectId, input.notebookId, proposal)) {
 					this.recordCaptureReuse(proposal, publication.state);
-					return { proposal, created: false };
+					return { proposal, created: false, publicationState: publication.state };
 				}
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
@@ -214,6 +215,7 @@ export class NotebookProposalService {
 		const proposalPaths = notebook.proposal(proposalId);
 		let captured = proposal;
 		let created = true;
+		let publicationState: ProposalPublication['state'] = 'pending';
 		await saga(metricsObserver(this.metrics, 'saga.notebook_proposal_capture'))
 			.step('write_proposal', async () => {
 				try {
@@ -319,7 +321,9 @@ export class NotebookProposalService {
 					if (!(error instanceof PreconditionFailedError)) throw error;
 					const existing = await this.bucket.get(proposalPaths.publication);
 					if (!existing) throw new ConflictError('Proposal state raced with another request');
-					await readStored(ProposalPublicationSchema, existing, proposalPaths.publication);
+					publicationState = (
+						await readStored(ProposalPublicationSchema, existing, proposalPaths.publication)
+					).state;
 				}
 			})
 			.run();
@@ -335,9 +339,9 @@ export class NotebookProposalService {
 				{ provider },
 			);
 		} else {
-			this.recordCaptureReuse(captured, 'pending');
+			this.recordCaptureReuse(captured, publicationState);
 		}
-		return { proposal: captured, created };
+		return { proposal: captured, created, publicationState };
 	}
 
 	private recordCaptureReuse(
@@ -435,11 +439,15 @@ export class NotebookProposalService {
 		proposalId: ProposalId,
 	): Promise<NotebookProposalRecord | undefined> {
 		const record = await this.getProposal(projectId, notebookId, proposalId);
-		this.recordCaptureReuse(record.proposal, record.publication.state);
-		if (record.publication.state === 'published') return record;
+		if (record.publication.state === 'published') {
+			this.recordCaptureReuse(record.proposal, record.publication.state);
+			return record;
+		}
 		const { proposal } = record;
 		this.assertPayloadNotExpired(proposal);
-		return (await this.hasCompletePayload(projectId, notebookId, proposal)) ? record : undefined;
+		if (!(await this.hasCompletePayload(projectId, notebookId, proposal))) return undefined;
+		this.recordCaptureReuse(proposal, record.publication.state);
+		return record;
 	}
 
 	private async hasCompletePayload(

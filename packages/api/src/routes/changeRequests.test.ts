@@ -166,7 +166,7 @@ describe('change request routes', () => {
 		const broken = createTestApi({
 			bucket: setup.bucket,
 			compute: fakeComputeFrom(instance),
-			deps: { sourceControlPublishers: setup.deps.sourceControlPublishers },
+			deps: { sourceControl: setup.deps.sourceControl },
 		});
 		const error = await expectError(
 			await broken.request(
@@ -539,6 +539,32 @@ describe('change request routes', () => {
 		const eventNames = events.map(({ event }) => event);
 		expect(eventNames).not.toContain('change_request.captured');
 		expect(eventNames).toContain('change_request.published');
+	});
+
+	it('reports reuse when another request publishes after the reusable lookup misses', async () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const headers = { 'Idempotency-Key': 'published-lookup-race' };
+		vi.spyOn(setup.deps.services.idempotency, 'record').mockRejectedValueOnce(
+			new Error('response record unavailable'),
+		);
+
+		await expectError(await setup.request('POST', route(), {}, headers), 500, 'INTERNAL_ERROR');
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+		log.mockClear();
+
+		vi.spyOn(setup.deps.services.proposals, 'getReusableProposal').mockRejectedValueOnce(
+			new NotFoundError('Proposal lookup missed a concurrent publication'),
+		);
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposalWithOutcome');
+
+		await expectOk(await setup.request('POST', route(), {}, headers), 201);
+
+		expect(capture).toHaveBeenCalledOnce();
+		expect(openChangeRequest).toHaveBeenCalledOnce();
+		const outcomes = log.mock.calls
+			.map(([line]) => JSON.parse(line as string) as { event?: string })
+			.filter(({ event }) => event?.startsWith('change_request.'));
+		expect(outcomes.map(({ event }) => event)).toEqual(['change_request.reused']);
 	});
 
 	it('requires a configured publisher when resuming a pending proposal', async () => {

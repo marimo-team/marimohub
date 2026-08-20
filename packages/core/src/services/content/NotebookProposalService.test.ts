@@ -1783,8 +1783,8 @@ describe('NotebookProposalService', () => {
 		);
 
 		await expect(
-			captureWith(new NotebookProposalService(bucket), sandbox, proposalId),
-		).resolves.toEqual(proposal);
+			captureWithOutcome(new NotebookProposalService(bucket), sandbox, proposalId),
+		).resolves.toEqual({ proposal, created: false, publicationState: 'published' });
 		expect(
 			(await env.proposals.getProposal(projectId, notebookId, proposalId)).publication,
 		).toMatchObject({ state: 'published', change_request: { head_commit: 'published-head' } });
@@ -1918,6 +1918,42 @@ describe('NotebookProposalService', () => {
 		await expect(
 			env.proposals.getReusableProposal(projectId, notebookId, proposalId),
 		).resolves.toBeUndefined();
+	});
+
+	it('records one reuse when an incomplete proposal payload is repaired', async () => {
+		const metrics: Metrics = {
+			increment: vi.fn(),
+			gauge: vi.fn(),
+			histogram: vi.fn(),
+		};
+		const service = new NotebookProposalService(env.bucket, metrics);
+		const proposalId = createProposalId();
+		const sandbox = makeFsSandbox({ files: { 'dashboard.py': 'changed' } }).instance;
+		const first = await captureWithOutcome(service, sandbox, proposalId);
+		const changePath = paths.project(projectId).notebook(notebookId).proposal(proposalId).change(0);
+		vi.mocked(metrics.increment).mockClear();
+		await env.bucket.delete(changePath);
+
+		await expect(
+			service.getReusableProposal(projectId, notebookId, proposalId),
+		).resolves.toBeUndefined();
+		expect(metrics.increment).not.toHaveBeenCalledWith(
+			'change_requests.reused',
+			expect.anything(),
+			expect.anything(),
+		);
+		await expect(captureWithOutcome(service, sandbox, proposalId)).resolves.toMatchObject({
+			proposal: { proposal_id: first.proposal.proposal_id },
+			created: false,
+			publicationState: 'pending',
+		});
+
+		const reuseMetrics = vi
+			.mocked(metrics.increment)
+			.mock.calls.filter(([name]) => name === 'change_requests.reused');
+		expect(reuseMetrics).toEqual([
+			['change_requests.reused', 1, { provider: 'github', state: 'pending' }],
+		]);
 	});
 
 	it('resolves repository coordinates for a version written before git_source was stored', async () => {

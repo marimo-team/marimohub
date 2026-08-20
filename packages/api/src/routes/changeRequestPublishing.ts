@@ -116,21 +116,22 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		legacySourceRevision,
 	);
 	const publisher = publisherFor(input.deps, sourceRevision.provider);
-	const { proposal, created } = await input.deps.services.proposals.captureProposalWithOutcome({
-		projectId: input.projectId,
-		notebookId: input.notebookId,
-		proposalId: input.proposalId,
-		session,
-		sandbox: input.deps.compute.create(session.sandbox_id),
-		workdir: input.deps.sandbox.workdir,
-		author: input.author,
-		targetProposalId: input.targetProposalId,
-		resolvedSourceRevision: sourceRevision,
-	});
+	const { proposal, created, publicationState } =
+		await input.deps.services.proposals.captureProposalWithOutcome({
+			projectId: input.projectId,
+			notebookId: input.notebookId,
+			proposalId: input.proposalId,
+			session,
+			sandbox: input.deps.compute.create(session.sandbox_id),
+			workdir: input.deps.sandbox.workdir,
+			author: input.author,
+			targetProposalId: input.targetProposalId,
+			resolvedSourceRevision: sourceRevision,
+		});
 	return {
 		proposal,
 		publisher,
 		notebookTitle: notebook.meta.title,
-		state: created ? 'new' : 'pending',
+		state: created ? 'new' : publicationState,
 	};
 }
