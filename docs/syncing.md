@@ -155,7 +155,7 @@ The sync endpoint downloads the repository tree under `root_path` at the
 resolved commit. It applies the same file-count and size limits as push sync to
 the files under `root_path`. Files outside `root_path` do not count against
 these limits, so a small subtree can sync from a large monorepo. The repository
-download itself is limited to 100 MB compressed. If
+download itself is limited to 100 MB compressed and 2 GB uncompressed. If
 no source settings are pending and the notebook already points to that commit,
 it returns `synced: false` and does not create a version. A successful sync
 against pending source settings makes those settings active. The response also

@@ -6,13 +6,21 @@ import { shortCommit } from '@/lib/git';
 import { cn } from '@/lib/utils';
 
 /**
- * Whether this deployment can server-pull the given provider — the first gate
+ * Whether this deployment can server-pull the given source — the first gate
  * for drift/Sync-now chrome. Deploy-skew tolerant: a server without the
- * capability field grants nothing.
+ * capability field grants nothing. Pending settings can move the source to
+ * another provider while the stored provider only updates on promotion, so
+ * with anything pending any configured reader is enough to probe — the
+ * server's drift answer is authoritative and SYNC_NOT_CONFIGURED hides the row.
  */
-function useCanSyncNow(provider: string | null | undefined): boolean {
+function useServerSyncGate(
+	source: { provider: string | null; pending_config?: unknown } | undefined,
+): boolean {
 	const { data: capabilities } = useCapabilitiesQuery();
-	return !!provider && (capabilities?.source_control?.sync_providers?.includes(provider) ?? false);
+	const providers = capabilities?.source_control?.sync_providers ?? [];
+	if (!source) return false;
+	if (source.pending_config) return providers.length > 0;
+	return !!source.provider && providers.includes(source.provider);
 }
 
 function SourceDriftLine({
@@ -85,12 +93,12 @@ export function ServerSyncRow({
 }: {
 	projectId: string;
 	notebookId: string;
-	source: { provider: string | null; branch: string } | undefined;
+	source: { provider: string | null; branch: string; pending_config?: unknown } | undefined;
 	/** The caller's role check — pass false for viewers. */
 	enabled?: boolean;
 	className?: string;
 }) {
-	const gate = (useCanSyncNow(source?.provider) && enabled) || false;
+	const gate = (useServerSyncGate(source) && enabled) || false;
 	const drift = useSourceDriftQuery(projectId, notebookId, gate);
 	if (!gate || !source) return null;
 	if (isApiErrorCode(drift.error, 'SYNC_NOT_CONFIGURED')) return null;

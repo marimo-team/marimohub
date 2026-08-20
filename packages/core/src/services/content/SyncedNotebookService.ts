@@ -3,6 +3,7 @@ import { NotFoundError } from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR } from '../../ids';
 import type { NotebookId, ProjectId, UserId, VersionId } from '../../ids';
 import {
+	assertSyncCommitPrecondition,
 	assertSyncedSource,
 	createGitSource,
 	createSyncToken,
@@ -223,6 +224,8 @@ export class SyncedNotebookService {
 		if (isAtBranchHead(syncedSource, prepared.commit)) {
 			return existing;
 		}
+		// Fast-fail before writing any version files; the CAS callback re-checks.
+		assertSyncCommitPrecondition(syncedSource, input);
 
 		const nb = paths.project(projectId).notebook(notebookId);
 		const now = new Date().toISOString();
@@ -271,6 +274,10 @@ export class SyncedNotebookService {
 						const git = assertSyncedSource(current);
 						const currentPrepared = prepareSync(git, input);
 						if (isAtBranchHead(git, currentPrepared.commit)) return null;
+						// A pull that resolved its head against an older source state must
+						// not regress a pointer another sync advanced meanwhile. Failing
+						// here aborts the saga, which cleans up the orphan version.
+						assertSyncCommitPrecondition(git, input);
 						const { pending_config: _pendingConfig, ...withoutPending } = git;
 						return {
 							...withoutPending,

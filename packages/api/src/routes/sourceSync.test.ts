@@ -381,6 +381,37 @@ describe('Source drift and sync-now routes', () => {
 		expect(detail.source.commit).toBe(HEAD);
 	});
 
+	it('rejects a stale pull when the source advances mid-download (409)', async () => {
+		const NEWER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+		const midDownload: { advance?: () => Promise<unknown> } = {};
+		const reader = stubReader({
+			fetchWorkspace: async () => {
+				await midDownload.advance?.();
+				return [{ path: 'app.py', bytes: encode('stale') }];
+			},
+		});
+		const { request, deps } = api(reader);
+		const nid = await createSyncedNotebook(request);
+		midDownload.advance = () =>
+			deps.services.notebooks.synced.sync(projectId, nid as NotebookId, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				commit: NEWER,
+				files: [{ path: 'app.py', bytes: encode('newer') }],
+			});
+
+		await expectError(
+			await request('POST', `/projects/${projectId}/notebooks/${nid}/source/sync`),
+			409,
+			'CONFLICT',
+		);
+		const detail = await expectOk<{ source: { commit: string } }>(
+			await request('GET', `/projects/${projectId}/notebooks/${nid}`),
+		);
+		expect(detail.source.commit).toBe(NEWER);
+	});
+
 	it('resolves the head and tree from pending coordinates, not the active ones', async () => {
 		const branchCalls: [string, string][] = [];
 		const fetchCalls: [string, string][] = [];

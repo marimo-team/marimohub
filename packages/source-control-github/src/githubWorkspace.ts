@@ -10,12 +10,22 @@ import {
 import type { ArchiveFile } from '@marimo-hub/core';
 
 /**
- * GitHub serves whole-repository tarballs only, so the download itself needs a
- * bound — the workspace caps apply to the *selected* subtree, which says
- * nothing about the rest of a monorepo. 100 MB compressed is far beyond any
- * reasonable source tree while still capping bandwidth and decompression work.
+ * GitHub serves whole-repository tarballs only, so the download needs bounds of
+ * its own — the workspace caps apply to the *selected* subtree, which says
+ * nothing about the rest of a monorepo. The compressed cap bounds bandwidth;
+ * the inflated cap bounds decompression work, since a small compressed bomb
+ * outside `root_path` would otherwise inflate without limit before the
+ * collector discards it. 2 GiB admits any plausible source tree (a ~20:1
+ * ratio on the largest allowed download).
  */
 const MAX_COMPRESSED_TARBALL_BYTES = MAX_DECOMPRESSED_ARCHIVE_BYTES;
+const MAX_INFLATED_TARBALL_BYTES = 2 * 1024 * 1024 * 1024;
+
+/** Injectable for tests only — production callers use the defaults. */
+export interface TarballLimits {
+	maxCompressedBytes?: number;
+	maxInflatedBytes?: number;
+}
 
 export function validateCommit(commit: unknown): asserts commit is string {
 	if (typeof commit !== 'string' || !/^[0-9a-f]{7,64}$/i.test(commit)) {
@@ -67,11 +77,21 @@ function pushCompressed(gunzip: Gunzip, data: Uint8Array, final = false): void {
 export async function collectTarballWorkspace(
 	response: Response,
 	rootPath: string,
+	limits: TarballLimits = {},
 ): Promise<ArchiveFile[]> {
+	const maxCompressed = limits.maxCompressedBytes ?? MAX_COMPRESSED_TARBALL_BYTES;
+	const maxInflated = limits.maxInflatedBytes ?? MAX_INFLATED_TARBALL_BYTES;
 	const body = response.body;
 	if (!body) throw new UnavailableError('GitHub returned an empty tarball response');
 	const collector = new WorkspaceTarCollector({ mapPath: tarballPathMapper(rootPath) });
-	const gunzip = new Gunzip((data) => collector.push(data));
+	let inflated = 0;
+	const gunzip = new Gunzip((data) => {
+		inflated += data.length;
+		if (inflated > maxInflated) {
+			throw new BadRequestError('Repository tarball inflates beyond the size limit');
+		}
+		collector.push(data);
+	});
 	const reader = body.getReader();
 	let compressed = 0;
 	try {
@@ -84,7 +104,7 @@ export async function collectTarballWorkspace(
 			}
 			if (result.done) break;
 			compressed += result.value.length;
-			if (compressed > MAX_COMPRESSED_TARBALL_BYTES) {
+			if (compressed > maxCompressed) {
 				throw new BadRequestError('Repository tarball exceeds the size limit');
 			}
 			pushCompressed(gunzip, result.value);

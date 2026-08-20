@@ -305,6 +305,15 @@ describe('collectTarballWorkspace', () => {
 		await expect(collectTarballWorkspace(new Response(null), '')).rejects.toThrow(UnavailableError);
 	});
 
+	it('rejects a tarball that inflates beyond the work limit', async () => {
+		// Zeros compress ~1000:1, so a tiny download can hide a huge inflation —
+		// the inflated cap (injected small here) bounds the decompression work.
+		const bomb = new Uint8Array(gzipSync(new Uint8Array(256 * 1024)));
+		await expect(
+			collectTarballWorkspace(new Response(bomb), 'apps', { maxInflatedBytes: 64 * 1024 }),
+		).rejects.toThrow(/inflates beyond the size limit/);
+	});
+
 	it('rejects a stream cut before the end-of-archive marker', async () => {
 		// gzip inflation reports nothing for a clean cut, so the tar trailer is
 		// the only integrity signal — without this check a partial workspace

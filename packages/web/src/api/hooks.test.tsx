@@ -531,7 +531,11 @@ describe('list + detail invalidation', () => {
 			});
 		});
 
-		expect(invalidatedKeys(spy)).toEqual([notebookKeys.list(PID), notebookKeys.detail(PID, NID)]);
+		expect(invalidatedKeys(spy)).toEqual([
+			notebookKeys.list(PID),
+			notebookKeys.detail(PID, NID),
+			notebookKeys.sourceDrift(PID, NID),
+		]);
 	});
 
 	it('useSyncNotebookNow invalidates drift, versions, detail, and the list', async () => {

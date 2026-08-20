@@ -25,6 +25,7 @@ function setup(options: {
 	canEdit?: boolean;
 	initialToken?: string;
 	pending?: boolean;
+	provider?: string;
 	syncProviders?: string[];
 	remoteCommit?: string;
 	omitSourceControlCapability?: boolean;
@@ -33,9 +34,10 @@ function setup(options: {
 	syncError?: boolean;
 }) {
 	const calls: { method: string; url: string; body?: unknown }[] = [];
+	const base = { ...activeSource, provider: options.provider ?? activeSource.provider };
 	const source = options.pending
 		? {
-				...activeSource,
+				...base,
 				pending_config: {
 					repo: 'acme/new-analytics',
 					branch: 'release',
@@ -43,7 +45,7 @@ function setup(options: {
 					entry_notebook: 'new_dashboard.py',
 				},
 			}
-		: activeSource;
+		: base;
 	const remoteCommit = options.remoteCommit ?? activeSource.commit;
 	vi.stubGlobal(
 		'fetch',
@@ -237,6 +239,20 @@ describe('SyncSettingsDialog', () => {
 
 	it('hides server-sync chrome for a viewer even when a reader exists', async () => {
 		setup({ canEdit: false, syncProviders: ['github'] });
+		await screen.findByLabelText('Repository');
+		expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+	});
+
+	it('shows server-sync chrome while pending settings move to a supported provider', async () => {
+		// Active provider is gitlab (no reader); the pending settings may land on
+		// GitHub, so the server — not the stored provider — decides.
+		setup({ provider: 'gitlab', pending: true, syncProviders: ['github'] });
+		expect(await screen.findByRole('button', { name: 'Sync now' })).toBeInTheDocument();
+		expect(await screen.findByText(/pending settings awaiting sync/i)).toBeInTheDocument();
+	});
+
+	it('hides server-sync chrome for an unsupported provider with nothing pending', async () => {
+		setup({ provider: 'gitlab', syncProviders: ['github'] });
 		await screen.findByLabelText('Repository');
 		expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
 	});

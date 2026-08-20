@@ -1301,7 +1301,13 @@ export function useUpdateGitSource(projectId: string) {
 					body,
 				}),
 			),
-		({ notebookId }) => [notebookKeys.list(projectId), notebookKeys.detail(projectId, notebookId)],
+		({ notebookId }) => [
+			notebookKeys.list(projectId),
+			notebookKeys.detail(projectId, notebookId),
+			// Drift compares against the configured coordinates, so a settings
+			// edit invalidates any cached comparison.
+			notebookKeys.sourceDrift(projectId, notebookId),
+		],
 	);
 }
 

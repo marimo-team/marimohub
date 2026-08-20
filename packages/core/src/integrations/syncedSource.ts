@@ -39,6 +39,14 @@ export interface SyncNotebookInput {
 	root_path: string;
 	commit: string;
 	files: SyncedWorkspaceFile[];
+	/**
+	 * Optimistic precondition for server-initiated pulls: the source `commit`
+	 * observed when the branch head was resolved (null for a never-synced
+	 * source). When present, the sync conflicts if another sync advanced the
+	 * source in the meantime, so a pull of a stale head can never regress the
+	 * pointer. Pushes omit it — a CI archive is authoritative for its commit.
+	 */
+	expected_commit?: string | null;
 }
 
 export type UpdateSyncedNotebookSourceInput = GitSourceConfig;
@@ -219,6 +227,13 @@ export function assertSyncedSource(source: Source): GitSource {
  */
 export function isAtBranchHead(source: GitSource, headCommit: string): boolean {
 	return !source.pending_config && source.commit === headCommit;
+}
+
+/** Enforce `expected_commit` (see {@link SyncNotebookInput}) against the live source. */
+export function assertSyncCommitPrecondition(source: GitSource, input: SyncNotebookInput): void {
+	if (input.expected_commit !== undefined && source.commit !== input.expected_commit) {
+		throw new ConflictError('The synced source advanced while this sync was in flight; retry');
+	}
 }
 
 export interface SourceDrift {
