@@ -21,26 +21,27 @@ export function createSlidingWindowBudget<Key>(
 	}
 	const now = options.now ?? (() => Date.now());
 	const recentByKey = new Map<Key, number[]>();
+	const lastObservedByKey = new Map<Key, number>();
 	let lastSweptAt: number | undefined;
-	let lastObservedAt: number | undefined;
 
 	return {
 		consume(key, timestamp): boolean {
 			const currentTime = timestamp ?? now();
+			const lastObservedAt = lastObservedByKey.get(key);
 			const clockRolledBack = lastObservedAt !== undefined && currentTime < lastObservedAt;
-			lastObservedAt = currentTime;
 			if (clockRolledBack) {
-				recentByKey.clear();
-				lastSweptAt = currentTime;
+				recentByKey.delete(key);
 			}
 			if (lastSweptAt === undefined || currentTime - lastSweptAt >= options.windowMs) {
 				lastSweptAt = currentTime;
 				for (const [trackedKey, timestamps] of recentByKey) {
 					if (timestamps.every((timestamp) => currentTime - timestamp >= options.windowMs)) {
 						recentByKey.delete(trackedKey);
+						lastObservedByKey.delete(trackedKey);
 					}
 				}
 			}
+			lastObservedByKey.set(key, currentTime);
 			const recent = (recentByKey.get(key) ?? []).filter(
 				(timestamp) => currentTime - timestamp < options.windowMs,
 			);
