@@ -17,7 +17,8 @@ kubectl -n marimohub create secret generic marimohub-secrets \
   --from-literal=MARIMOHUB_AUTH_SESSION_SECRET="$(openssl rand -hex 32)" \
   --from-literal=MARIMOHUB_AUTH_OIDC_CLIENT_SECRET=... \
   --from-literal=MARIMOHUB_STORAGE_S3_ACCESS_KEY_ID=... \
-  --from-literal=MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=...
+  --from-literal=MARIMOHUB_STORAGE_S3_SECRET_ACCESS_KEY=... \
+  --from-file=MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY=./github-app.pem
 
 helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
   --version 1.4.2 -n marimohub -f my-values.yaml
@@ -25,6 +26,20 @@ helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
 
 Start from `ci/example-values.yaml`. The full `MARIMOHUB_*` surface is in
 [`apps/server/.env.example`](../../apps/server/.env.example).
+
+Use `--from-file=KEY=PATH` for PEMs, certificates, and other multiline values;
+Kubernetes preserves their newlines. Set `secrets.existingSecret` to
+`marimohub-secrets` in `my-values.yaml`. For development, `secrets.data` also accepts
+YAML block scalars:
+
+```yaml
+secrets:
+  data:
+    MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY: |
+      -----BEGIN PRIVATE KEY-----
+      ...
+      -----END PRIVATE KEY-----
+```
 
 ## Update
 
