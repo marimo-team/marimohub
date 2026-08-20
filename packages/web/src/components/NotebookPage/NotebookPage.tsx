@@ -372,6 +372,7 @@ export function NotebookPage({ variant = 'edit' }: { variant?: 'edit' | 'app' })
 					<GitSourcePopover
 						projectId={pid!}
 						notebookId={nid!}
+						canSync={!isViewer}
 						triggerClassName="shrink-0 cursor-pointer rounded-full"
 						trigger={
 							<span className="flex max-w-[16rem] items-center gap-1 rounded-full border border-input px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary">

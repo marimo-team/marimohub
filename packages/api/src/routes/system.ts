@@ -98,7 +98,8 @@ app.openapi(capabilitiesRoute, (c) => {
 		federation: { available: Boolean(deps.wif) },
 		integrations: { available: Boolean(deps.integrations) },
 		source_control: {
-			change_request_providers: [...(deps.sourceControlPublishers?.configuredProviders() ?? [])],
+			change_request_providers: [...(deps.sourceControl?.publisherProviders() ?? [])],
+			sync_providers: [...(deps.sourceControl?.readerProviders() ?? [])],
 		},
 		project_alerts: {
 			available: Boolean(deps.projectAlerts),

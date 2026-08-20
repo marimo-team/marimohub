@@ -4,10 +4,10 @@ import {
 	NotebookId,
 	NotFoundError,
 	notificationRouter,
+	parseWorkspaceArchive,
 	ProjectId,
 	toPublicNotebookMeta,
 } from '@marimo-hub/core';
-import { parseWorkspaceArchive } from '../integrations/archive';
 import { createApp, fail } from '../shared';
 import { scheduleProjectAlert } from '../notifications';
 
@@ -56,7 +56,7 @@ app.post('/projects/:pid/notebooks/:nid', async (c) => {
 			c.req.header('x-marimohub-archive-format'),
 			c.req.header('content-type'),
 		);
-		const meta = await deps.services.notebooks.synced.sync(pidRaw, nidRaw, {
+		const { meta } = await deps.services.notebooks.synced.sync(pidRaw, nidRaw, {
 			repo: header(c, 'x-marimohub-repo'),
 			branch: header(c, 'x-marimohub-branch'),
 			root_path: c.req.header('x-marimohub-root-path')?.trim() ?? '',

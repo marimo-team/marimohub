@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MemoryBucket, uid } from '@marimo-hub/core/testing';
 import type { Authenticator } from '@marimo-hub/core';
 import { createApi } from './createApi';
-import { expectError, expectOk, makeTestDeps } from './testing';
+import { expectError, expectOk, makeTestDeps, stubSourceControl } from './testing';
 
 const authed: Authenticator = {
 	authenticate: async () => ({ id: uid('u'), email: 'u@example.com' }),
@@ -66,6 +66,31 @@ describe('GET /api/v1/capabilities', () => {
 		});
 		expect(await expectOk(await createApi(open).request('/api/v1/capabilities'))).toMatchObject({
 			default_role: 'editor',
+		});
+	});
+
+	it('reports configured source-control publisher and reader providers', async () => {
+		const none = makeTestDeps(new MemoryBucket(), { authenticator: authed });
+		expect(await expectOk(await createApi(none).request('/api/v1/capabilities'))).toMatchObject({
+			source_control: { change_request_providers: [], sync_providers: [] },
+		});
+
+		const configured = makeTestDeps(new MemoryBucket(), {
+			authenticator: authed,
+			sourceControl: stubSourceControl({
+				publisher: { provider: 'github', openChangeRequest: vi.fn() },
+				reader: {
+					provider: 'github',
+					supportsRepository: () => true,
+					getBranchHead: vi.fn(),
+					fetchWorkspace: vi.fn(),
+				},
+			}),
+		});
+		expect(
+			await expectOk(await createApi(configured).request('/api/v1/capabilities')),
+		).toMatchObject({
+			source_control: { change_request_providers: ['github'], sync_providers: ['github'] },
 		});
 	});
 

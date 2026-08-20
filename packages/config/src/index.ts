@@ -61,7 +61,7 @@ import { integrationProbePolicy, makeIntegrations } from './integrations';
 import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
 import { makeNotifier } from './notifications';
 import { makeProjectAlerts } from './projectAlerts';
-import { makeSourceControlPublishing } from './sourceControl';
+import { makeSourceControl } from './sourceControl';
 import { makeStorage, makeSandboxBucketConfig, storageBackend } from './storage';
 import { makeWif } from './wif';
 import { makeSandboxUserHome } from './userHome';
@@ -598,7 +598,7 @@ export function createFromEnv(
 		...makeWif(env),
 		// Managed AI proxy (no-op unless MARIMOHUB_AI_BACKEND is configured).
 		...makeAi(env),
-		...makeSourceControlPublishing(env),
+		...makeSourceControl(env),
 		// Project integrations (no-op unless MARIMOHUB_INTEGRATIONS=on — opt-in per the
 		// two-phase rollout note on makeIntegrations).
 		...makeIntegrations(env, bucket, metrics, dataPreview, dataQuery),

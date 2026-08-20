@@ -1078,12 +1078,12 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Source control publishing',
 		description:
-			'Optional server-side publishing for notebooks imported from a Git repository. Marimohub captures edited content and its exact source revision as an immutable proposal, then publishes that proposal as a provider change request. When the sandbox work directory has a usable `.git` repository, capture includes tracked and untracked workspace changes while honoring `.gitignore` and excluding runtime/cache paths. Other sandboxes fall back to capturing the configured entry notebook. Sandboxes supply file content only; provider credentials stay in the marimohub server. The first implementation opens draft GitHub pull requests through a GitHub App, while the core publishing contract remains provider-neutral.',
+			'Connect git-synced notebooks to source control from the server. Editors can compare a notebook with its branch head and pull the current GitHub content with **Sync now**. Managers can publish session edits as draft pull requests. The server keeps the provider credentials and never sends them to a notebook sandbox. The first implementation supports GitHub.com through a GitHub App. See [Syncing from external sources](./syncing.md) for sync behavior and limits.',
 		backends: [
 			{
 				name: 'GitHub App',
 				description:
-					'For GitHub.com, create a GitHub App with repository Contents (read/write) and Pull requests (read/write) permissions, install it on the repositories marimohub may publish to, and configure both values below. No webhook is required. Installation access tokens are minted only when marimohub publishes a proposal.',
+					'Create a GitHub App with Contents (read and write) and Pull requests (read and write) repository permissions. Install it only on repositories that marimohub can sync from or publish to. Then set both variables below. The integration does not require a webhook. Marimohub creates short-lived installation tokens for drift checks, syncs, and pull-request publishing.',
 				vars: [
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID',

@@ -3,6 +3,7 @@ import { BadRequestError, ConflictError, ValidationError } from '../errors';
 import { toBase64Url } from '../internal/base64url';
 import { toHex } from '../internal/hex';
 import type { GitSource, GitSourceConfig, Source } from '../schema';
+import type { VersionId } from '../ids';
 import {
 	detectProvider,
 	normalizeRepo,
@@ -39,6 +40,17 @@ export interface SyncNotebookInput {
 	root_path: string;
 	commit: string;
 	files: SyncedWorkspaceFile[];
+	/**
+	 * Optimistic precondition for server-initiated pulls: the source
+	 * `current_version_id` observed when the branch head was resolved (null for
+	 * a never-synced source). When present, the sync conflicts if another sync
+	 * advanced the source in the meantime, so a pull of a stale head can never
+	 * regress the pointer. Version ids are the token — unlike the commit, which
+	 * can cycle back (A → B → A) while a pull downloads, a fresh ULID per sync
+	 * can never falsely match. Pushes omit it — a CI archive is authoritative
+	 * for its commit.
+	 */
+	expected_source_version?: VersionId | null;
 }
 
 export type UpdateSyncedNotebookSourceInput = GitSourceConfig;
@@ -210,6 +222,48 @@ export function assertSyncedSource(source: Source): GitSource {
 		throw new ConflictError('Notebook is not backed by a synced source');
 	}
 	return source;
+}
+
+/**
+ * Whether a sync at `headCommit` would be a no-op: the source already serves
+ * that commit and no settings edit is waiting for a matching sync. Git commits
+ * are content-addressed, so a same-commit sync carries identical bytes.
+ */
+export function isAtBranchHead(source: GitSource, headCommit: string): boolean {
+	return !source.pending_config && source.commit === headCommit;
+}
+
+/** Enforce `expected_source_version` (see {@link SyncNotebookInput}) against the live source. */
+export function assertSyncSourcePrecondition(source: GitSource, input: SyncNotebookInput): void {
+	if (
+		input.expected_source_version !== undefined &&
+		source.current_version_id !== input.expected_source_version
+	) {
+		throw new ConflictError('The synced source advanced while this sync was in flight; retry');
+	}
+}
+
+export interface SourceDrift {
+	/** Commit of the last successful sync; null before the first sync. */
+	current_commit: string | null;
+	/** Live head of the configured branch. */
+	remote_commit: string;
+	in_sync: boolean;
+	/** Whether a settings edit is waiting for a matching sync. */
+	pending_config: boolean;
+	/** When the branch head was resolved. */
+	checked_at: string;
+}
+
+/** Drift between a synced source and a freshly resolved branch head. */
+export function sourceDrift(source: GitSource, headCommit: string, checkedAt: string): SourceDrift {
+	return {
+		current_commit: source.commit,
+		remote_commit: headCommit,
+		in_sync: isAtBranchHead(source, headCommit),
+		pending_config: source.pending_config !== undefined,
+		checked_at: checkedAt,
+	};
 }
 
 export function prepareSync(

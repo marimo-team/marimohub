@@ -287,7 +287,7 @@ describe('NotebookService', () => {
 				{ path: 'data/cars.csv', bytes: enc('a,b\n1,2\n') },
 			]);
 
-			expect(synced.status).toBe('active');
+			expect(synced.meta.status).toBe('active');
 			expect(await notebooks.getNotebookContent(projectId, meta.id)).toBe('print("app")');
 			const detail = await notebooks.getNotebook(projectId, meta.id);
 			expect(detail.source.type).toBe('git');
@@ -415,7 +415,7 @@ describe('NotebookService', () => {
 			// bytes; a re-push is a no-op, not a conflict.
 			const second = await sync(meta.id, 'abc123', [{ path: 'app.py', bytes: enc('v2') }]);
 
-			expect(second.updated_at).toBe(first.updated_at);
+			expect(second.meta.updated_at).toBe(first.meta.updated_at);
 			expect(await notebooks.getNotebookContent(projectId, meta.id)).toBe('v1');
 			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(1);
 		});

@@ -30,6 +30,7 @@
 	"dependencies": {
 		"@opentelemetry/api": "catalog:",
 		"better-all": "catalog:",
+		"fflate": "^0.8.2",
 		"smol-toml": "catalog:",
 		"ulidx": "catalog:",
 		"yaml": "catalog:",

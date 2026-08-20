@@ -3165,6 +3165,255 @@ export interface paths {
 		};
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/source/drift': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Compare a git-synced notebook against its branch head
+		 * @description Resolves the configured branch head via the server-side provider credential and reports whether the notebook is behind it. Stateless — nothing is stored. Requires a provider listed in `capabilities.source_control.sync_providers`.
+		 */
+		get: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+					nid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Drift between the synced commit and the branch head */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['SourceDrift'];
+						};
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/source/sync': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Pull the branch head into a git-synced notebook
+		 * @description Server-initiated sync: fetches the configured repository tree at the branch head and ingests it exactly like a pushed archive. A no-op when already at the head. Requires a provider listed in `capabilities.source_control.sync_providers`.
+		 */
+		post: {
+			parameters: {
+				query?: never;
+				header?: never;
+				path: {
+					pid: string;
+					nid: string;
+				};
+				cookie?: never;
+			};
+			requestBody?: never;
+			responses: {
+				/** @description Sync outcome */
+				200: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': {
+							/** @enum {boolean} */
+							success: true;
+							data: components['schemas']['SourceSyncResult'];
+						};
+					};
+				};
+				/** @description Bad request */
+				400: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Authentication required */
+				401: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Access forbidden */
+				403: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Not found */
+				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Conflict */
+				409: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Request body too large */
+				413: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Validation error */
+				422: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Internal server error */
+				500: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Service unavailable */
+				503: {
+					headers: {
+						/** @description Seconds to wait before retrying. */
+						'Retry-After': string;
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+			};
+		};
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}': {
 		parameters: {
 			query?: never;
@@ -9328,6 +9577,7 @@ export interface components {
 					| 'TAKEOVER_IN_PROGRESS'
 					| 'FORBIDDEN'
 					| 'VALIDATION_ERROR'
+					| 'SYNC_NOT_CONFIGURED'
 					| 'NOT_INITIALIZED'
 					| 'SERVICE_UNAVAILABLE'
 					| 'RESOURCE_EXHAUSTED'
@@ -9364,6 +9614,13 @@ export interface components {
 				 *     ]
 				 */
 				change_request_providers: string[];
+				/**
+				 * @description Provider ids configured for server-initiated pull sync (drift lookup and "Sync now").
+				 * @example [
+				 *       "github"
+				 *     ]
+				 */
+				sync_providers: string[];
 			};
 			project_alerts: {
 				available: boolean;
@@ -9727,6 +9984,23 @@ export interface components {
 			 * @example dashboard.py
 			 */
 			entry_notebook: string;
+		};
+		SourceDrift: {
+			/** @description Commit of the last successful sync; null before the first sync. */
+			current_commit: string | null;
+			/** @description Live head of the configured branch, resolved at request time. */
+			remote_commit: string;
+			in_sync: boolean;
+			/** @description Whether a settings edit is waiting for a matching sync. */
+			pending_config: boolean;
+			/** Format: date-time */
+			checked_at: string;
+		};
+		SourceSyncResult: {
+			/** @description False when the notebook was already at the branch head. */
+			synced: boolean;
+			commit: string;
+			version_id: string | null;
 		};
 		NotebookDetail: {
 			meta: components['schemas']['NotebookMeta'];

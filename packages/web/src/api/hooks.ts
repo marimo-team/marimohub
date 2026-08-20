@@ -1301,7 +1301,52 @@ export function useUpdateGitSource(projectId: string) {
 					body,
 				}),
 			),
-		({ notebookId }) => [notebookKeys.list(projectId), notebookKeys.detail(projectId, notebookId)],
+		({ notebookId }) => [
+			notebookKeys.list(projectId),
+			notebookKeys.detail(projectId, notebookId),
+			// Drift compares against the configured coordinates, so a settings
+			// edit invalidates any cached comparison.
+			notebookKeys.sourceDrift(projectId, notebookId),
+		],
+	);
+}
+
+/**
+ * Drift between a git-synced notebook and its configured branch head, resolved
+ * live via the server-side provider credential. Only enable it when the
+ * source's provider is in `capabilities.source_control.sync_providers` and the
+ * caller is an editor — the endpoint 403s/409s otherwise.
+ */
+export function useSourceDriftQuery(projectId: string, notebookId: string, enabled = true) {
+	return useQuery({
+		queryKey: notebookKeys.sourceDrift(projectId, notebookId),
+		queryFn: () =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/source/drift', {
+					params: { path: { pid: projectId, nid: notebookId } },
+				}),
+			),
+		enabled,
+		staleTime: 60_000,
+		retry: false,
+	});
+}
+
+/** Server-initiated pull sync: ingest the branch head exactly like a pushed archive. */
+export function useSyncNotebookNow(projectId: string) {
+	return useApiMutation(
+		(notebookId: string) =>
+			apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/source/sync', {
+					params: { path: { pid: projectId, nid: notebookId } },
+				}),
+			),
+		(notebookId) => [
+			notebookKeys.sourceDrift(projectId, notebookId),
+			notebookKeys.versions(projectId, notebookId),
+			notebookKeys.detail(projectId, notebookId),
+			notebookKeys.list(projectId),
+		],
 	);
 }
 

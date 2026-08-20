@@ -32,6 +32,12 @@ export type {
 	WorkspaceLoadMode,
 	WorkspaceSourcePolicy,
 } from './integrations/remoteWorkspace';
+export {
+	MAX_DECOMPRESSED_ARCHIVE_BYTES,
+	parseWorkspaceArchive,
+	WorkspaceTarCollector,
+} from './integrations/workspaceArchive';
+export type { ArchiveFile, ParseWorkspaceArchiveOptions } from './integrations/workspaceArchive';
 
 // Trace↔log correlation (the `traced` span wrapper stays internal to createServices)
 export { traceContext } from './tracing';

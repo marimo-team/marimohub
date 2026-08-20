@@ -92,6 +92,8 @@ export const notebookKeys = {
 	list: (projectId: string) => [...notebookKeys.all, 'list', { projectId }] as const,
 	detail: (projectId: string, notebookId: string) =>
 		[...notebookKeys.all, 'detail', { projectId, notebookId }] as const,
+	sourceDrift: (projectId: string, notebookId: string) =>
+		[...notebookKeys.all, 'source-drift', { projectId, notebookId }] as const,
 	versions: (projectId: string, notebookId: string) =>
 		[...notebookKeys.all, 'versions', { projectId, notebookId }] as const,
 	version: (projectId: string, notebookId: string, versionId: string) =>

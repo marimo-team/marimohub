@@ -14,6 +14,7 @@ export const DOMAIN_ERROR_CODES = [
 	'TAKEOVER_IN_PROGRESS',
 	'FORBIDDEN',
 	'VALIDATION_ERROR',
+	'SYNC_NOT_CONFIGURED',
 	'NOT_INITIALIZED',
 	'SERVICE_UNAVAILABLE',
 	'RESOURCE_EXHAUSTED',
@@ -126,6 +127,19 @@ export class ValidationError extends DomainError {
 	constructor(message = 'Validation failed') {
 		super(message);
 		this.name = 'ValidationError';
+	}
+}
+
+/**
+ * Server-initiated sync was requested but no configured reader covers the
+ * source's provider — the deployment can still receive pushes for it.
+ */
+export class SyncNotConfiguredError extends DomainError {
+	readonly code = 'SYNC_NOT_CONFIGURED';
+	readonly status = 409;
+	constructor(message = 'Server-initiated sync is not configured for this source') {
+		super(message);
+		this.name = 'SyncNotConfiguredError';
 	}
 }
 

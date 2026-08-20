@@ -9,11 +9,17 @@ import {
 import type {
 	ProposalId,
 	SourceControlPublisher,
-	SourceControlPublisherRegistry,
+	SourceControlRegistry,
 	VersionId,
 } from '@marimo-hub/core';
 import { ACTOR, fakeComputeFrom, makeFsSandbox, uid } from '@marimo-hub/core/testing';
-import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import {
+	createInitializedBucket,
+	createTestApi,
+	expectError,
+	expectOk,
+	stubSourceControl,
+} from '../testing';
 
 const encode = (value: string) => new TextEncoder().encode(value);
 
@@ -58,12 +64,7 @@ describe('change request routes', () => {
 		setup = createTestApi({
 			bucket,
 			compute: fakeComputeFrom(instance),
-			deps: {
-				sourceControlPublishers: {
-					getPublisher: (provider) => (provider === 'github' ? publisher : undefined),
-					configuredProviders: () => ['github'],
-				},
-			},
+			deps: { sourceControl: stubSourceControl({ publisher }) },
 		});
 		const project = await setup.deps.services.projects.createProject(
 			{ name: 'Dashboards', description: 'd' },
@@ -157,16 +158,11 @@ describe('change request routes', () => {
 	it('replays a recorded response after the publisher is disabled', async () => {
 		const headers = { 'Idempotency-Key': 'disabled-after-publish' };
 		const first = await expectOk(await setup.request('POST', route(), {}, headers), 201);
-		const getPublisher = vi.fn<SourceControlPublisherRegistry['getPublisher']>();
+		const getPublisher = vi.fn<SourceControlRegistry['getPublisher']>();
 		const withoutPublisher = createTestApi({
 			bucket: setup.bucket,
 			compute: setup.deps.compute,
-			deps: {
-				sourceControlPublishers: {
-					getPublisher,
-					configuredProviders: () => [],
-				},
-			},
+			deps: { sourceControl: { ...stubSourceControl(), getPublisher } },
 		});
 
 		const replay = await expectOk(
@@ -304,16 +300,11 @@ describe('change request routes', () => {
 		await expectError(await setup.request('POST', route(), body, headers), 500, 'INTERNAL_ERROR');
 		expect(updateChangeRequest).toHaveBeenCalledOnce();
 
-		const getPublisher = vi.fn<SourceControlPublisherRegistry['getPublisher']>();
+		const getPublisher = vi.fn<SourceControlRegistry['getPublisher']>();
 		const withoutPublisher = createTestApi({
 			bucket: setup.bucket,
 			compute: setup.deps.compute,
-			deps: {
-				sourceControlPublishers: {
-					getPublisher,
-					configuredProviders: () => [],
-				},
-			},
+			deps: { sourceControl: { ...stubSourceControl(), getPublisher } },
 		});
 		const replay = await expectOk<{ proposal_id: string; change_request: { number: number } }>(
 			await withoutPublisher.request('POST', route(), body, headers),
@@ -376,16 +367,11 @@ describe('change request routes', () => {
 		await expectError(await setup.request('POST', route(), {}, headers), 500, 'INTERNAL_ERROR');
 		expect(openChangeRequest).toHaveBeenCalledOnce();
 
-		const getPublisher = vi.fn<SourceControlPublisherRegistry['getPublisher']>();
+		const getPublisher = vi.fn<SourceControlRegistry['getPublisher']>();
 		const withoutPublisher = createTestApi({
 			bucket: setup.bucket,
 			compute: setup.deps.compute,
-			deps: {
-				sourceControlPublishers: {
-					getPublisher,
-					configuredProviders: () => [],
-				},
-			},
+			deps: { sourceControl: { ...stubSourceControl(), getPublisher } },
 		});
 
 		const replay = await expectOk<{
@@ -457,16 +443,11 @@ describe('change request routes', () => {
 			'SERVICE_UNAVAILABLE',
 		);
 
-		const getPublisher = vi.fn<SourceControlPublisherRegistry['getPublisher']>();
+		const getPublisher = vi.fn<SourceControlRegistry['getPublisher']>();
 		const withoutPublisher = createTestApi({
 			bucket: setup.bucket,
 			compute: setup.deps.compute,
-			deps: {
-				sourceControlPublishers: {
-					getPublisher,
-					configuredProviders: () => [],
-				},
-			},
+			deps: { sourceControl: { ...stubSourceControl(), getPublisher } },
 		});
 		const capture = vi.spyOn(withoutPublisher.deps.services.proposals, 'captureProposal');
 
@@ -577,7 +558,7 @@ describe('change request routes', () => {
 			bucket: setup.bucket,
 			userId: uid('outsider'),
 			compute: setup.deps.compute,
-			deps: { sourceControlPublishers: setup.deps.sourceControlPublishers },
+			deps: { sourceControl: setup.deps.sourceControl },
 		});
 		await expectError(
 			await outsider.request(
@@ -704,7 +685,7 @@ describe('change request routes', () => {
 		const unchanged = createTestApi({
 			bucket: setup.bucket,
 			compute: fakeComputeFrom(instance),
-			deps: { sourceControlPublishers: setup.deps.sourceControlPublishers },
+			deps: { sourceControl: setup.deps.sourceControl },
 		});
 		await expectError(
 			await unchanged.request('POST', route(), {}, { 'Idempotency-Key': 'unchanged-notebook' }),

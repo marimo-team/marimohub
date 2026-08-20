@@ -948,6 +948,9 @@ importers:
       better-all:
         specifier: 'catalog:'
         version: 0.0.7
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.3
       smol-toml:
         specifier: 'catalog:'
         version: 1.7.0
@@ -1293,6 +1296,9 @@ importers:
       '@marimo-hub/core':
         specifier: workspace:*
         version: link:../core
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.3
     devDependencies:
       '@marimo-hub/tsconfig':
         specifier: workspace:*

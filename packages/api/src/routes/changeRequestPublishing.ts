@@ -13,7 +13,7 @@ import type {
 import type { ApiDeps } from '../context';
 
 interface PrepareProposalInput {
-	deps: Pick<ApiDeps, 'compute' | 'sandbox' | 'services' | 'sourceControlPublishers'>;
+	deps: Pick<ApiDeps, 'compute' | 'sandbox' | 'services' | 'sourceControl'>;
 	projectId: ProjectId;
 	notebookId: NotebookId;
 	sessionId: SessionId;
@@ -29,7 +29,7 @@ export interface PreparedProposal {
 }
 
 function publisherFor(deps: PrepareProposalInput['deps'], provider: string) {
-	const publisher = deps.sourceControlPublishers?.getPublisher(provider);
+	const publisher = deps.sourceControl?.getPublisher(provider);
 	if (!publisher) {
 		throw new UnavailableError(`Change-request publishing is not configured for ${provider}`);
 	}

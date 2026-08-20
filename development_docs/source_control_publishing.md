@@ -68,22 +68,29 @@ Create a GitHub App with these repository permissions:
 - Contents: read and write
 - Pull requests: read and write
 
-Install the app only on repositories marimohub may publish to. Configure
+Install the app only on repositories marimohub may publish to or sync from. Configure
 `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` and
 `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` on the server. Set both variables to enable
-GitHub publishing; setting only one fails startup. The key may be PEM or a single-line base64
-encoding of the PEM. No GitHub App webhook is required.
+GitHub source control. If only one variable is set, startup fails. The key can be PEM or a
+single-line base64 encoding of the PEM. No GitHub App webhook is required.
 
-The installation's selected repositories are the v1 repository authorization boundary. The
-adapter discovers the installation from the notebook's stored repository coordinate; marimohub
-does not maintain a second allowlist that binds projects or tenants to installations. A project
-manager who can configure a git-synced notebook can therefore publish to any repository on which
-this App is installed. Multi-tenant deployments should use narrowly selected installations and
-must not install this App across repositories that project managers should not share.
+The GitHub App supports publishing and
+[server-initiated sync](../docs/syncing.md#server-initiated-sync-with-github). Project editors can
+compare a synced notebook with its branch head and pull that commit on demand. Pulls use the same
+workspace parser and limits as pushed archives. The drift and sync endpoints always use the
+source coordinates stored on the notebook. They do not accept a repository from the caller.
 
-For each request, the adapter discovers the installation for the target repository and mints a
-short-lived token restricted to that repository and those two permissions. It creates blobs, a
-tree and commit based on the exact synced commit, then creates a deterministic
+The repositories selected during App installation define the v1 repository authorization
+boundary. Marimohub does not keep a second allowlist that binds projects or tenants to an App
+installation. A project manager can configure or publish to any repository on which the App is
+installed. A project editor can pull from the repository configured on the notebook. Multi-tenant
+deployments must use narrowly selected installations. Do not install the App on repositories that
+project managers must not share.
+
+The adapter discovers the installation for the target repository and creates a short-lived token.
+The token is restricted to that repository and to the configured App permissions. During
+publication, the adapter creates blobs, a tree, and a commit from the exact synced commit. It then
+creates a deterministic
 `marimohub/<notebook-id>/<proposal-id>` branch and draft pull request. Retrying publication of the
 same proposal returns the existing pull request.
 

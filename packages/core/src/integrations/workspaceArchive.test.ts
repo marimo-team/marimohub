@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { gzipSync, zipSync } from 'fflate';
-import { BadRequestError, MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core';
-import { parseWorkspaceArchive } from './archive';
+import { MAX_WORKSPACE_FILE_BYTES } from '../constants';
+import { BadRequestError } from '../errors';
+import { parseWorkspaceArchive, WorkspaceTarCollector } from './workspaceArchive';
 
 const encode = (s: string) => new TextEncoder().encode(s);
 
@@ -254,5 +255,93 @@ describe('parseWorkspaceArchive', () => {
 		expect(() =>
 			parseWorkspaceArchive(tarArchive({ 'app.py': 'print(1)' }, { truncate: true }), 'tar', ''),
 		).toThrow(BadRequestError);
+	});
+
+	it('rewrites and filters entries through mapPath, in tar and zip alike', () => {
+		const mapPath = (path: string) =>
+			path.startsWith('root/apps/') ? path.slice('root/apps/'.length) : null;
+
+		const tarFiles = parseWorkspaceArchive(
+			tarArchive({
+				'root/README.md': 'skip',
+				'root/apps/nb.py': 'print(1)',
+				'root/apps/sub/util.py': 'print(2)',
+			}),
+			'tar',
+			'',
+			{ mapPath },
+		);
+		expect(tarFiles.map((f) => f.path).sort()).toEqual(['nb.py', 'sub/util.py']);
+
+		const zipFiles = parseWorkspaceArchive(
+			zipSync({
+				'root/README.md': encode('skip'),
+				'root/apps/nb.py': encode('print(1)'),
+			}),
+			'zip',
+			'',
+			{ mapPath },
+		);
+		expect(zipFiles.map((f) => f.path)).toEqual(['nb.py']);
+	});
+
+	it('applies the file-count limit to mapped entries only', () => {
+		const entries: [string, string][] = Array.from({ length: 1001 }, (_, i) => [
+			`skip/${i}.txt`,
+			'x',
+		]);
+		entries.push(['keep/app.py', 'print(1)']);
+		const files = parseWorkspaceArchive(tarArchive(entries), 'tar', '', {
+			mapPath: (path) => (path.startsWith('keep/') ? path.slice('keep/'.length) : null),
+		});
+		expect(files.map((f) => f.path)).toEqual(['app.py']);
+	});
+
+	it('collects identical output regardless of push chunking', () => {
+		const archive = tarArchive({ 'a.py': 'print(1)', 'dir/b.txt': 'bb', 'dir/c.txt': 'cc' });
+		const collector = new WorkspaceTarCollector();
+		for (let offset = 0; offset < archive.length; offset += 7) {
+			collector.push(archive.subarray(offset, offset + 7));
+		}
+		expect(collector.finish()).toEqual(parseWorkspaceArchive(archive, 'tar', ''));
+	});
+
+	it('rejects a tar that ends cleanly but without the end-of-archive marker', () => {
+		// A complete entry with no trailer — an upload cut at an entry boundary
+		// is indistinguishable from a complete archive without this check.
+		const collector = new WorkspaceTarCollector();
+		collector.push(tarEntry('a.py', encode('print(1)'), '0'));
+		expect(() => collector.finish()).toThrow(/missing end-of-archive marker/);
+
+		expect(() =>
+			parseWorkspaceArchive(tarEntry('a.py', encode('print(1)'), '0'), 'tar', ''),
+		).toThrow(/missing end-of-archive marker/);
+	});
+
+	it('rejects an oversized pax metadata entry before buffering it', () => {
+		const collector = new WorkspaceTarCollector();
+		expect(() => collector.push(tarHeader('big-pax', 2 * 1024 * 1024, 'x'))).toThrow(
+			/metadata entry exceeds/,
+		);
+	});
+
+	it('rejects mapped paths that collide or are unsafe', () => {
+		expect(() =>
+			parseWorkspaceArchive(
+				tarArchive([
+					['a/app.py', 'a'],
+					['b/app.py', 'b'],
+				]),
+				'tar',
+				'',
+				{ mapPath: (path) => path.slice(path.indexOf('/') + 1) },
+			),
+		).toThrow(/Duplicate archive path/);
+
+		expect(() =>
+			parseWorkspaceArchive(tarArchive({ 'app.py': 'a' }), 'tar', '', {
+				mapPath: () => '../evil.py',
+			}),
+		).toThrow(/Unsafe archive path/);
 	});
 });

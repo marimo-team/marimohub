@@ -3,12 +3,14 @@ import { NotFoundError } from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR } from '../../ids';
 import type { NotebookId, ProjectId, UserId, VersionId } from '../../ids';
 import {
+	assertSyncSourcePrecondition,
 	assertSyncedSource,
 	createGitSource,
 	createSyncToken,
 	createSyncTokenRecord,
 	gitSourceConfig,
 	gitSourceConfigsEqual,
+	isAtBranchHead,
 	normalizeGitSourceConfig,
 	prepareSync,
 	providerForRepo,
@@ -205,12 +207,18 @@ export class SyncedNotebookService {
 		return verifySyncTokenRecord(record, token);
 	}
 
+	/**
+	 * `versionId` is the version this call created and the source now points at;
+	 * null when the sync was a no-op — including the race where a concurrent
+	 * sync of the same commit won the pointer advance. Callers use it to tell
+	 * "this request synced" from "someone already had".
+	 */
 	async sync(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		input: SyncNotebookInput,
 		actor: UserId = SYSTEM_ACTOR,
-	): Promise<NotebookMeta> {
+	): Promise<{ meta: NotebookMeta; versionId: VersionId | null }> {
 		const { meta: existing, source } = await this.hooks.getNotebook(projectId, notebookId);
 		if (existing.status === 'deleted') {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
@@ -218,11 +226,12 @@ export class SyncedNotebookService {
 		const syncedSource = assertSyncedSource(source);
 		const prepared = prepareSync(syncedSource, input);
 
-		// Git commits are content-addressed, so re-pushing the same commit (a retried
-		// CI run) carries identical bytes — a genuine no-op, not a conflict.
-		if (!syncedSource.pending_config && syncedSource.commit === prepared.commit) {
-			return existing;
+		// Re-syncing the same commit (a retried CI run) is a genuine no-op, not a conflict.
+		if (isAtBranchHead(syncedSource, prepared.commit)) {
+			return { meta: existing, versionId: null };
 		}
+		// Fast-fail before writing any version files; the CAS callback re-checks.
+		assertSyncSourcePrecondition(syncedSource, input);
 
 		const nb = paths.project(projectId).notebook(notebookId);
 		const now = new Date().toISOString();
@@ -270,7 +279,11 @@ export class SyncedNotebookService {
 					(current) => {
 						const git = assertSyncedSource(current);
 						const currentPrepared = prepareSync(git, input);
-						if (!git.pending_config && git.commit === currentPrepared.commit) return null;
+						if (isAtBranchHead(git, currentPrepared.commit)) return null;
+						// A pull that resolved its head against an older source state must
+						// not regress a pointer another sync advanced meanwhile. Failing
+						// here aborts the saga, which cleans up the orphan version.
+						assertSyncSourcePrecondition(git, input);
 						const { pending_config: _pendingConfig, ...withoutPending } = git;
 						return {
 							...withoutPending,
@@ -309,6 +322,6 @@ export class SyncedNotebookService {
 		);
 
 		await this.hooks.pruneVersions(projectId, notebookId, versionToKeep);
-		return updatedMeta;
+		return { meta: updatedMeta, versionId: versionToKeep === versionId ? versionId : null };
 	}
 }

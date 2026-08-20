@@ -8,27 +8,51 @@ import { GitSourcePopover } from './GitSourcePopover';
 const PID = 'proj-1';
 const NID = 'nb-1';
 
-function renderPopover(source: Record<string, unknown>) {
+function renderPopover(
+	source: Record<string, unknown>,
+	options: { canSync?: boolean; syncProviders?: string[] } = {},
+) {
+	const json = (data: unknown) =>
+		new Response(JSON.stringify({ success: true, data }), {
+			headers: { 'content-type': 'application/json' },
+		});
 	vi.stubGlobal(
 		'fetch',
-		vi.fn(
-			async () =>
-				new Response(
-					JSON.stringify({
-						success: true,
-						data: { meta: { id: NID, title: 'NB', author: 'u-1' }, source },
-					}),
-					{ headers: { 'content-type': 'application/json' } },
-				),
-		),
+		vi.fn(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.endsWith('/capabilities')) {
+				return json({
+					source_control: {
+						change_request_providers: [],
+						sync_providers: options.syncProviders ?? [],
+					},
+				});
+			}
+			if (url.endsWith('/source/drift')) {
+				return json({
+					current_commit: source.commit,
+					remote_commit: source.commit,
+					in_sync: true,
+					pending_config: false,
+					checked_at: '2026-07-01T11:00:00Z',
+				});
+			}
+			return json({ meta: { id: NID, title: 'NB', author: 'u-1' }, source });
+		}),
 	);
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={client}>{children}</QueryClientProvider>
 	);
-	return render(<GitSourcePopover projectId={PID} notebookId={NID} trigger={<span>git</span>} />, {
-		wrapper,
-	});
+	return render(
+		<GitSourcePopover
+			projectId={PID}
+			notebookId={NID}
+			trigger={<span>git</span>}
+			canSync={options.canSync}
+		/>,
+		{ wrapper },
+	);
 }
 
 const GIT_SOURCE = {
@@ -136,5 +160,29 @@ describe('GitSourcePopover', () => {
 
 		expect(await screen.findByText('git@github.com:acme/analytics.git')).toBeInTheDocument();
 		expect(screen.queryByRole('link')).toBeNull();
+	});
+
+	it('shows drift and Sync now for an editor when the provider supports server sync', async () => {
+		renderPopover(GIT_SOURCE, { canSync: true, syncProviders: ['github'] });
+		await userEvent.click(screen.getByRole('button'));
+
+		expect(await screen.findByText(/in sync at/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Sync now' })).toBeInTheDocument();
+	});
+
+	it('hides server-sync chrome without editor access even when a reader exists', async () => {
+		renderPopover(GIT_SOURCE, { syncProviders: ['github'] });
+		await userEvent.click(screen.getByRole('button'));
+
+		await screen.findByRole('link', { name: 'acme/analytics' });
+		expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+	});
+
+	it('hides server-sync chrome for an editor when no reader covers the provider', async () => {
+		renderPopover(GIT_SOURCE, { canSync: true, syncProviders: [] });
+		await userEvent.click(screen.getByRole('button'));
+
+		await screen.findByRole('link', { name: 'acme/analytics' });
+		expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
 	});
 });
