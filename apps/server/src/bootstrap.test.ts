@@ -188,7 +188,7 @@ describe('bootstrap', () => {
 	it('flushes OpenTelemetry during drain', async () => {
 		const shutdown = vi.fn().mockResolvedValue(undefined);
 		const harness = makeHarness(deps, {
-			otel: { tracing: false, metrics: false, shutdown },
+			otel: { tracing: false, metrics: false, logs: false, shutdown },
 		});
 		await bootstrap(BASE_ENV, harness.overrides);
 

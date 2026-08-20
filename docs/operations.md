@@ -107,7 +107,9 @@ over inline literals so they stay out of `helm get values`. A secrets manager
 The server emits **structured wide-event logs** (one JSON line per request /
 maintenance cycle) carrying backend signals — catalog CAS contention, reaper
 activity, snapshot timing. Ship stdout to your log pipeline and alert on
-`level: error` events (e.g. `boot_failed`, `unhandled_rejection`).
+`level: error` events (e.g. `boot_failed`, `unhandled_rejection`). Set an OTLP
+endpoint (see [Logs](#logs-opentelemetry) below) to also ship these lines over
+OpenTelemetry, so they outlive the pod after a redeploy.
 
 ### Tracing (OpenTelemetry)
 
@@ -129,10 +131,12 @@ The middleware traces every request, including static assets; use
 `OTEL_TRACES_SAMPLER=parentbased_traceidratio` with a ratio in
 `OTEL_TRACES_SAMPLER_ARG` to reduce span volume.
 
-Spans and metrics share one resource: `service.name` and
+Spans, metrics, and logs share one resource: `service.name` and
 `OTEL_RESOURCE_ATTRIBUTES` from env, plus detected host and process attributes
 and a random `service.instance.id` (override it per pod via
 `OTEL_RESOURCE_ATTRIBUTES`, e.g. from the Kubernetes Downward API).
+`service.name` defaults to `marimohub` when `OTEL_SERVICE_NAME` is unset,
+rather than the SDK's `unknown_service:node`.
 
 While tracing is enabled, every log line emitted inside a traced request also
 carries `trace_id` / `span_id`, so your log pipeline can pivot from a line
@@ -171,6 +175,26 @@ the mode:
 
 Any other `OTEL_METRICS_EXPORTER` value disables metrics;
 `OTEL_SDK_DISABLED=true` turns everything off.
+
+### Logs (OpenTelemetry)
+
+The same structured wide-event lines that go to stdout are also exported over
+OTLP/HTTP whenever an OTLP endpoint is set, so log history survives a pod
+restart or redeploy instead of living only in `kubectl logs`. This covers both
+the server's own events (`boot_failed`, `otel_started`, maintenance cycles) and
+the request-path events from the API layer (rejections, best-effort failures).
+Each record carries the wide event's `level` as its severity, its `event` (or
+`message`) as the body, and every field as an attribute; while tracing is on it
+also joins its trace via `trace_id` / `span_id`.
+
+`OTEL_LOGS_EXPORTER` selects the mode: `otlp` (the spec default) pushes over
+OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` (or
+`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`) is set — so pointing the server at a
+collector exports traces, metrics, _and_ logs. `OTEL_LOGS_EXPORTER=none` keeps
+traces/metrics without shipping logs (stdout still gets every line); any other
+value disables log export, and `OTEL_SDK_DISABLED=true` turns everything off.
+stdout is always written regardless, so it stays the source of truth even when
+export is off or the collector is unreachable.
 
 ## Cost control
 

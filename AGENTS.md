@@ -28,10 +28,11 @@ Use these as the done-criteria for any change.
 - **`packages/core`** holds the domain model, services, and the port interfaces.
   It imports **no vendor SDK** — nothing that speaks to a specific provider or
   performs I/O. Its deps are generic, side-effect-free utilities only: `ulidx`,
-  `zod`, `better-all`, `@opentelemetry/api` (a no-op tracing facade unless an
-  entrypoint registers a provider), the format serializers `smol-toml`
-  and `yaml` (core renders `marimo.toml` and integration config files), and
-  `fflate` (in-memory archive decompression for workspace ingest). A
+  `zod`, `better-all`, `@opentelemetry/api` and `@opentelemetry/api-logs` (no-op
+  tracing/logs facades unless an entrypoint registers a provider), the format
+  serializers `smol-toml` and `yaml` (core renders `marimo.toml` and integration
+  config files), and `fflate` (in-memory archive decompression for workspace
+  ingest). A
   serializer is a pure function, not a vendor, so a
   port around it would buy no substitutability.
   Anything that _reaches_ something — a store, a cluster, an IdP — is a port.

@@ -4,10 +4,14 @@
  * Workers build dependency-free; `traceContext` is the pure OTEL facade, so
  * that still holds).
  */
-import { traceContext } from '@marimo-hub/core';
+import { emitLogRecord, traceContext } from '@marimo-hub/core';
 
 export function logEvent(fields: Record<string, unknown>): void {
-	console.log(JSON.stringify({ ts: new Date().toISOString(), ...traceContext(), ...fields }));
+	const record = { ts: new Date().toISOString(), ...traceContext(), ...fields };
+	console.log(JSON.stringify(record));
+	// Mirror to the OTEL logs pipeline (a no-op facade until an entrypoint wires a
+	// LoggerProvider — the Cloudflare Worker never does, so its build stays clean).
+	emitLogRecord(record);
 }
 
 /**
