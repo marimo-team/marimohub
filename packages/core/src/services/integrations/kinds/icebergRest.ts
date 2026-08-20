@@ -88,7 +88,8 @@ const icebergRestConfig = z.strictObject({
 	runtime: icebergRuntimeSchema,
 	access_delegation: z
 		.enum(['none', 'vended_credentials', 'remote_signing', 'both'])
-		.default('vended_credentials'),
+		.default('vended_credentials')
+		.describe('Catalog delegation mode. Run SQL requires none.'),
 	tls: z
 		.strictObject({
 			ca_bundle: z.string().min(1).optional(),

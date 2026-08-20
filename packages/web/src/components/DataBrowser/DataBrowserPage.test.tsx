@@ -82,6 +82,7 @@ function makeFetch({
 	tables = ['orders'],
 	capability = { metadata: true, preview: false },
 	querySurface,
+	queryEnabled = querySurface !== undefined,
 	role = 'editor',
 	namespacesDown = false,
 	kind = icebergKind,
@@ -120,6 +121,7 @@ function makeFetch({
 	tables?: string[];
 	capability?: { metadata: boolean; preview: boolean; reason?: string };
 	querySurface?: { available: boolean; reason?: string };
+	queryEnabled?: boolean;
 	role?: 'editor' | 'manager';
 	namespacesDown?: boolean;
 	kind?: IntegrationKind;
@@ -163,7 +165,7 @@ function makeFetch({
 		const target = new URL(url, 'http://test');
 		if (url.includes('/api/v1/capabilities')) {
 			return ok({
-				data_browser: { available, preview: false, query: querySurface !== undefined },
+				data_browser: { available, preview: false, query: queryEnabled },
 			});
 		}
 		if (url.includes('/api/v1/integrations/kinds')) {
@@ -354,17 +356,33 @@ afterEach(() => {
 });
 
 describe('DataBrowserPage', () => {
-	it('hides Query when the server reports it unavailable', async () => {
+	it('shows a disabled Query control with the server blocker reason', async () => {
 		setup(`/projects/${PID}/data/${IID}`, {
 			role: 'manager',
 			querySurface: { available: false, reason: 'Broker unavailable.' },
 		});
 
 		await screen.findByTestId('browse-namespace', undefined, { timeout: 5000 });
-		expect(screen.queryByRole('button', { name: 'Tables' })).not.toBeInTheDocument();
-		expect(screen.queryByRole('button', { name: 'Query' })).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Tables' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Query' })).toBeDisabled();
 		expect(screen.queryByRole('button', { name: 'Objects' })).not.toBeInTheDocument();
-		expect(screen.queryByText(/Run SQL unavailable/)).not.toBeInTheDocument();
+		expect(screen.getByText('Run SQL unavailable.')).toBeInTheDocument();
+		expect(screen.getByText('Broker unavailable.')).toBeInTheDocument();
+	});
+
+	it('shows the deployment blocker when the global Run SQL capability is off', async () => {
+		setup(`/projects/${PID}/data/${IID}`, {
+			role: 'manager',
+			queryEnabled: false,
+			querySurface: {
+				available: false,
+				reason: 'Run SQL is not enabled on this deployment.',
+			},
+		});
+
+		await screen.findByTestId('browse-namespace', undefined, { timeout: 5000 });
+		expect(screen.getByRole('button', { name: 'Query' })).toBeDisabled();
+		expect(screen.getByText('Run SQL is not enabled on this deployment.')).toBeInTheDocument();
 	});
 
 	it('restores a deep link: tree expanded to the namespace, table selected, schema shown', async () => {

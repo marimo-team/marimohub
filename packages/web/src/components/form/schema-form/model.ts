@@ -36,6 +36,9 @@ export type UiHints = Record<string, FieldHint | undefined>;
 
 export type SecretSources = IntegrationKind['secret_sources'];
 
+export const schemaFieldId = (path: string): string =>
+	`integration-field-${encodeURIComponent(path)}`;
+
 /** Submitted for an untouched secret to retain its stored value. */
 export const KEEP_SECRET = { $secret: { kind: 'managed', set: true } } as const;
 

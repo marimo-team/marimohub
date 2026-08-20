@@ -16,7 +16,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `auth.method` | `none`, `bearer_token`, `basic`, `oauth2_client_credentials`, `sigv4`, `google`, `entra` | Yes |  |  |
 | `storage` |  |  |  |  |
 | `runtime` |  |  |  |  |
-| `access_delegation` | `none`, `vended_credentials`, `remote_signing`, `both` |  | `vended_credentials` |  |
+| `access_delegation` | `none`, `vended_credentials`, `remote_signing`, `both` |  | `vended_credentials` | Catalog delegation mode. Run SQL requires none. |
 | `tls.ca_bundle` | string |  |  |  |
 | `tls.client_certificate` | string |  |  |  |
 | `tls.client_key` 🔒 | string |  |  |  |

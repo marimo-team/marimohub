@@ -200,10 +200,12 @@ export default function DataBrowserPage() {
 	const requestedSurface = searchParams.get('surface');
 	const selectedCapability = useBrowseCapabilityQuery(pid!, iid ?? '', selected !== undefined);
 	const querySurface = selectedCapability.data?.surfaces.query;
-	const canManageQueries =
+	const canManageQueries = project.your_role === 'manager' || project.your_role === 'admin';
+	const querySurfaceAvailable =
+		canManageQueries &&
 		(capabilities?.data_browser?.query ?? false) &&
-		(project.your_role === 'manager' || project.your_role === 'admin');
-	const querySurfaceAvailable = canManageQueries && (querySurface?.available ?? false);
+		(querySurface?.available ?? false);
+	const showQuerySurface = canManageQueries && querySurface !== undefined;
 	const selectedSurface =
 		requestedSurface === 'query' && querySurfaceAvailable
 			? 'query'
@@ -258,7 +260,7 @@ export default function DataBrowserPage() {
 				[
 					supportsTableBrowse(selectedKind),
 					supportsObjectBrowse(selectedKind),
-					querySurfaceAvailable,
+					showQuerySurface,
 				].filter(Boolean).length > 1 && (
 					<div
 						className="flex w-fit rounded-md border border-input p-1"
@@ -282,17 +284,36 @@ export default function DataBrowserPage() {
 								Objects
 							</Button>
 						) : null}
-						{querySurfaceAvailable ? (
+						{showQuerySurface ? (
 							<Button
 								size="sm"
 								variant={selectedSurface === 'query' ? 'primary' : 'ghost'}
 								onPress={() => selectSurface('query')}
+								isDisabled={!querySurfaceAvailable}
+								aria-describedby={querySurfaceAvailable ? undefined : 'query-surface-unavailable'}
 							>
 								Query
 							</Button>
 						) : null}
 					</div>
 				)}
+			{showQuerySurface && !querySurfaceAvailable && (
+				<output
+					id="query-surface-unavailable"
+					className="block rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm"
+				>
+					<p>
+						<span className="font-medium">Run SQL unavailable.</span>{' '}
+						<span className="text-muted-foreground">
+							{querySurface.reason ?? 'This integration is not SQL-ready.'}
+						</span>
+					</p>
+					<p className="mt-1 text-xs text-muted-foreground">
+						Edit this integration under Project environment → Integrations to see its SQL-ready
+						checklist.
+					</p>
+				</output>
+			)}
 			{!available ? (
 				<EmptyState
 					icon={<Database />}

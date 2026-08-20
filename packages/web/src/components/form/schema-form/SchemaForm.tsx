@@ -16,6 +16,7 @@ import {
 	KEEP_SECRET,
 	needsSecretSource,
 	referenceSecret,
+	schemaFieldId,
 	unionBranches,
 } from './model';
 import type { FieldHint, JsonSchemaNode, SecretSources, UiHints } from './model';
@@ -93,7 +94,6 @@ function GroupSection({
 	advanced: boolean;
 	children: ReactNode;
 }) {
-	const [open, setOpen] = useState(!advanced);
 	if (!advanced) {
 		return (
 			<section className="flex flex-col gap-3">
@@ -103,17 +103,13 @@ function GroupSection({
 		);
 	}
 	return (
-		<section className="flex flex-col gap-2 border-t pt-3">
-			<button
-				type="button"
-				className="flex items-center gap-1 text-left text-xs font-semibold text-muted-foreground hover:text-foreground"
-				onClick={() => setOpen((o) => !o)}
-			>
-				<ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+		<details className="group border-t pt-3">
+			<summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground">
+				<ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
 				{title || 'Advanced'}
-			</button>
-			{open && <div className="flex flex-col gap-3">{children}</div>}
-		</section>
+			</summary>
+			<div className="mt-3 flex flex-col gap-3">{children}</div>
+		</details>
 	);
 }
 
@@ -129,6 +125,14 @@ interface SchemaFieldProps {
 }
 
 function SchemaField(props: SchemaFieldProps) {
+	return (
+		<div id={schemaFieldId(props.path)} data-schema-field={props.path}>
+			<SchemaFieldControl {...props} />
+		</div>
+	);
+}
+
+function SchemaFieldControl(props: SchemaFieldProps) {
 	const { path, node, hints, value, onChange, errors } = props;
 	const hint = hintFor(hints, path);
 	const error = errors?.[path];
@@ -274,23 +278,18 @@ function UnionField(props: SchemaFieldProps & { label: string }) {
 					if (branch) onChange(buildDefaults(branch));
 				}}
 			/>
-			<div className="flex flex-col gap-3 border-l-2 border-input pl-3 empty:hidden">
-				{Object.entries(active.properties ?? {})
-					.filter(([key]) => key !== discriminator?.key)
-					.map(([key, child]) => (
-						<SchemaField
-							key={key}
-							path={`${path}.${key}`}
-							node={child}
-							hints={hints}
-							value={record[key]}
-							onChange={(next) => onChange({ ...record, [key]: next })}
-							errors={errors}
-							editing={editing}
-							secretSources={secretSources}
-						/>
-					))}
-			</div>
+			<NestedFields
+				path={path}
+				properties={Object.fromEntries(
+					Object.entries(active.properties ?? {}).filter(([key]) => key !== discriminator?.key),
+				)}
+				hints={hints}
+				record={record}
+				onChange={onChange}
+				errors={errors}
+				editing={editing}
+				secretSources={secretSources}
+			/>
 		</div>
 	);
 }
@@ -301,21 +300,69 @@ function NestedObjectField(props: SchemaFieldProps & { label: string }) {
 	return (
 		<div className="flex flex-col gap-2">
 			<span className="text-xs font-medium text-muted-foreground">{label}</span>
-			<div className="flex flex-col gap-3 border-l-2 border-input pl-3">
-				{Object.entries(node.properties ?? {}).map(([key, child]) => (
-					<SchemaField
-						key={key}
-						path={`${path}.${key}`}
-						node={child}
-						hints={hints}
-						value={record[key]}
-						onChange={(next) => onChange({ ...record, [key]: next })}
-						errors={errors}
-						editing={editing}
-						secretSources={secretSources}
-					/>
-				))}
-			</div>
+			<NestedFields
+				path={path}
+				properties={node.properties ?? {}}
+				hints={hints}
+				record={record}
+				onChange={onChange}
+				errors={errors}
+				editing={editing}
+				secretSources={secretSources}
+			/>
+		</div>
+	);
+}
+
+function NestedFields({
+	path,
+	properties,
+	hints,
+	record,
+	onChange,
+	errors,
+	editing,
+	secretSources,
+}: {
+	path: string;
+	properties: Record<string, JsonSchemaNode>;
+	hints: UiHints;
+	record: Record<string, unknown>;
+	onChange: (next: unknown) => void;
+	errors?: Record<string, string>;
+	editing?: boolean;
+	secretSources: SecretSources;
+}) {
+	const entries = Object.entries(properties);
+	const advanced = entries.filter(([key]) => hintFor(hints, `${path}.${key}`)?.advanced);
+	const regular = entries.filter(([key]) => !hintFor(hints, `${path}.${key}`)?.advanced);
+	const fields = (items: [string, JsonSchemaNode][]) =>
+		items.map(([key, child]) => (
+			<SchemaField
+				key={key}
+				path={`${path}.${key}`}
+				node={child}
+				hints={hints}
+				value={record[key]}
+				onChange={(next) => onChange({ ...record, [key]: next })}
+				errors={errors}
+				editing={editing}
+				secretSources={secretSources}
+			/>
+		));
+
+	return (
+		<div className="flex flex-col gap-3 border-l-2 border-input pl-3 empty:hidden">
+			{fields(regular)}
+			{advanced.length > 0 && (
+				<details className="group border-t pt-2">
+					<summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground">
+						<ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+						Advanced
+					</summary>
+					<div className="mt-3 flex flex-col gap-3">{fields(advanced)}</div>
+				</details>
+			)}
 		</div>
 	);
 }

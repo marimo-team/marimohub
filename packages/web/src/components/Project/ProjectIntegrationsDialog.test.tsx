@@ -100,6 +100,13 @@ const clickhouseKind: IntegrationKind = {
 	},
 };
 
+const icebergRestKind: IntegrationKind = {
+	...postgresKind,
+	kind: 'iceberg_rest',
+	title: 'Iceberg REST Catalog',
+	category: 'catalog',
+};
+
 const entry = (over: Partial<IntegrationEntry> = {}): IntegrationEntry => ({
 	id: 'i_1',
 	kind: 'postgres',
@@ -451,6 +458,19 @@ describe('ProjectIntegrationsPanel — list view', () => {
 });
 
 describe('ProjectIntegrationsPanel — create flow', () => {
+	it('shows the SQL-ready preflight for Iceberg REST', async () => {
+		const user = userEvent.setup();
+		setup({}, { kinds: [icebergRestKind], entries: [] });
+
+		await user.click(await screen.findByRole('button', { name: /add integration/i }));
+		await user.click(screen.getByText('Iceberg REST Catalog'));
+
+		expect(screen.getByRole('heading', { name: 'Run SQL readiness' })).toBeInTheDocument();
+		expect(screen.getByText('Set access delegation to none')).toBeInTheDocument();
+		expect(screen.getByText('Switch Storage to the s3 scheme')).toBeInTheDocument();
+		expect(screen.getByText('Add at least one guarded S3 read location')).toBeInTheDocument();
+	});
+
 	it('picks a kind from the catalog, fills the form, and POSTs the pruned config', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({}, { kinds: [postgresKind, customEnvKind], entries: [] });

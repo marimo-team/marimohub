@@ -209,7 +209,10 @@ The brokered runtime supports a narrow Iceberg REST configuration. It requires a
 - one or more guarded S3 read locations
 - system TLS and default runtime options
 
-Set `storage.broker_read_locations` to the bucket prefixes that DuckDB can read.
+Switch **Storage** from the default `catalog` scheme to `s3` before configuring the brokered
+profile. The `storage.broker_read_locations` field only appears on that `s3` branch; set it to
+the bucket prefixes that DuckDB can read. Set **Access delegation** to `none` because the default
+`vended_credentials` mode is not supported by Run SQL.
 The worker receives no real catalog or S3 credentials.
 The parent broker authorizes each request, injects credentials, checks DNS results, and pins the target socket.
 

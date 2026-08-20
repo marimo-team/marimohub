@@ -47,6 +47,7 @@ import {
 } from '@/api/hooks';
 import type { IntegrationsScope } from '@/api/hooks';
 import { BRAND_ICONS } from './brandIcons';
+import { SqlReadinessChecklist } from './SqlReadinessChecklist';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { canManageProject } from '@/lib/roles';
 import { filterBySearch } from '@/lib/search';
@@ -900,6 +901,7 @@ function EditorForm({
 				onChange={setName}
 				error={errors.__name}
 			/>
+			{kind.kind === 'iceberg_rest' && <SqlReadinessChecklist config={config} />}
 			<SchemaForm
 				schema={schema}
 				hints={hints}
