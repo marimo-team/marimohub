@@ -1,18 +1,22 @@
+import type { MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { etag } from 'hono/etag';
 import { HTTPException } from 'hono/http-exception';
 import { requestId } from 'hono/request-id';
+import { routePath } from 'hono/route';
 import {
 	DomainError,
 	ensureInitialized,
 	isPatRequest,
 	MAX_REQUEST_BYTES,
+	NotebookId,
 	noopNotifier,
 	probeKernelLiveness,
+	ProjectId,
 	SubdomainExposure,
 	UnavailableError,
 } from '@marimo-hub/core';
-import type { ApiDeps } from './context';
+import type { ApiDeps, HonoEnv } from './context';
 import { describeError, errorMetadata, logEvent } from './log';
 import adminApp from './routes/admin';
 import { createAiProxy } from './routes/ai';
@@ -29,7 +33,7 @@ import tokensApp from './routes/tokens';
 import usersApp from './routes/users';
 import { createOidcDiscovery } from './oidcDiscovery';
 import { sandboxProxyMiddleware } from './sandboxProxy';
-import { createApp, fail } from './shared';
+import { createApp, ErrorResponseSchema, fail } from './shared';
 import type { ErrorCode } from './shared';
 
 const OPENAPI_DOC = {
@@ -68,6 +72,33 @@ const AI_PROXY_PREFIX = '/api/ai/v1';
 
 /** `/api/v1/*` paths that skip the catalog auto-init — metadata that must render before any catalog exists. */
 const SKIP_INIT_PATHS = new Set([`${API_PREFIX}/version`, `${API_PREFIX}/capabilities`]);
+
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+async function rejectionDetails(response: Response): Promise<{ code: string; message: string }> {
+	try {
+		const result = ErrorResponseSchema.safeParse(await response.clone().json());
+		if (result.success) {
+			return { code: result.data.error.code, message: result.data.error.message };
+		}
+	} catch {
+		// Unknown routes can return Hono's plain-text 404.
+	}
+	return {
+		code: `HTTP_${response.status}`,
+		message: response.statusText || 'Request rejected',
+	};
+}
+
+function rejectionResourceContext(path: string) {
+	const match = /\/projects\/([^/]+)(?:\/notebooks\/([^/]+))?/.exec(path);
+	const projectId = match?.[1];
+	const notebookId = match?.[2];
+	return {
+		...(ProjectId.is(projectId) ? { project_id: projectId } : {}),
+		...(NotebookId.is(notebookId) ? { notebook_id: notebookId } : {}),
+	};
+}
 
 /**
  * Build the provider-agnostic marimohub API. All external dependencies arrive
@@ -189,6 +220,37 @@ export function createApi(rawDeps: ApiDeps) {
 	// response header, and thread it into error envelopes + logs for tracing.
 	app.use(`${API_PREFIX}/*`, requestId());
 	app.use('/api/sync/*', requestId());
+
+	const observeRejection: MiddlewareHandler<HonoEnv> = async (c, next) => {
+		await next();
+		if (
+			!MUTATING_METHODS.has(c.req.method) ||
+			c.res.status < 400 ||
+			c.res.status >= 500 ||
+			c.res.status === 401 ||
+			c.res.status === 403
+		) {
+			return;
+		}
+
+		const rejection = await rejectionDetails(c.res);
+		const route = routePath(c, -1) || c.req.path;
+		deps.metrics?.increment('requests.rejected', 1, { route, code: rejection.code });
+		logEvent({
+			level: 'warn',
+			event: 'request_rejected',
+			route,
+			method: c.req.method,
+			status: c.res.status,
+			code: rejection.code,
+			message: rejection.message,
+			request_id: c.get('requestId') ?? null,
+			user: c.get('user')?.id ?? null,
+			...rejectionResourceContext(c.req.path),
+		});
+	};
+	app.use(`${API_PREFIX}/*`, observeRejection);
+	app.use('/api/sync/*', observeRejection);
 
 	// Body-size cap: the API buffers request bodies in full (Hono parses JSON in
 	// memory), so an unbounded POST could OOM the service. Reject anything past
