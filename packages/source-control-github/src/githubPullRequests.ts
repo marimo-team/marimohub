@@ -1,4 +1,9 @@
-import { ConflictError, ProposalRetryRequiredError, UnavailableError } from '@marimo-hub/core';
+import {
+	ConflictError,
+	markSourceControlPublishFailure,
+	ProposalRetryRequiredError,
+	UnavailableError,
+} from '@marimo-hub/core';
 import type {
 	OpenChangeRequestInput,
 	OpenChangeRequestResult,
@@ -125,7 +130,10 @@ export class GitHubPullRequests {
 					headCommit: existing.headCommit,
 				};
 			}
-			throw new UnavailableError('GitHub rejected the pull request');
+			throw markSourceControlPublishFailure(
+				new UnavailableError('GitHub rejected the pull request'),
+				{ provider: 'github', stage: 'pr', status: 422 },
+			);
 		}
 		const pull = await responseJson(response);
 		const number = numberField(pull, 'number');
@@ -163,7 +171,10 @@ export class GitHubPullRequests {
 			throw new UnavailableError('GitHub returned unexpected updated pull request metadata');
 		}
 		if (nestedString(pull, 'head', 'sha') !== headCommit) {
-			throw new ConflictError('The GitHub pull request branch changed while updating');
+			throw markSourceControlPublishFailure(
+				new ConflictError('The GitHub pull request branch changed while updating'),
+				{ provider: 'github', stage: 'pr', condition: 'branch_changed' },
+			);
 		}
 		return { ...input.changeRequest, headCommit };
 	}

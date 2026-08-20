@@ -26,6 +26,7 @@ export interface PreparedProposal {
 	proposal: NotebookProposal;
 	publisher?: SourceControlPublisher;
 	notebookTitle?: string;
+	state: 'new' | 'pending' | 'published';
 }
 
 function publisherFor(deps: PrepareProposalInput['deps'], provider: string) {
@@ -68,7 +69,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 	if (reusable) {
 		assertReusableProposal(reusable, input);
 		if (reusable.publication.state === 'published') {
-			return { proposal: reusable.proposal };
+			return { proposal: reusable.proposal, state: 'published' };
 		}
 		const notebook = await input.deps.services.notebooks.getNotebook(
 			input.projectId,
@@ -78,6 +79,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 			proposal: reusable.proposal,
 			publisher: publisherFor(input.deps, reusable.proposal.source.provider),
 			notebookTitle: notebook.meta.title,
+			state: 'pending',
 		};
 	}
 
@@ -114,16 +116,22 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		legacySourceRevision,
 	);
 	const publisher = publisherFor(input.deps, sourceRevision.provider);
-	const proposal = await input.deps.services.proposals.captureProposal({
-		projectId: input.projectId,
-		notebookId: input.notebookId,
-		proposalId: input.proposalId,
-		session,
-		sandbox: input.deps.compute.create(session.sandbox_id),
-		workdir: input.deps.sandbox.workdir,
-		author: input.author,
-		targetProposalId: input.targetProposalId,
-		resolvedSourceRevision: sourceRevision,
-	});
-	return { proposal, publisher, notebookTitle: notebook.meta.title };
+	const { proposal, created, publicationState } =
+		await input.deps.services.proposals.captureProposalWithOutcome({
+			projectId: input.projectId,
+			notebookId: input.notebookId,
+			proposalId: input.proposalId,
+			session,
+			sandbox: input.deps.compute.create(session.sandbox_id),
+			workdir: input.deps.sandbox.workdir,
+			author: input.author,
+			targetProposalId: input.targetProposalId,
+			resolvedSourceRevision: sourceRevision,
+		});
+	return {
+		proposal,
+		publisher,
+		notebookTitle: notebook.meta.title,
+		state: created ? 'new' : publicationState,
+	};
 }

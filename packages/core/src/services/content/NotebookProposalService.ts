@@ -20,6 +20,10 @@ import type {
 	SourceControlCommitIdentity,
 	SourceControlPublisher,
 } from '../../ports/sourceControl';
+import {
+	markSourceControlPublishFailure,
+	sourceControlPublishFailure,
+} from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import {
 	NotebookProposalSchema,
@@ -63,6 +67,12 @@ export interface CaptureProposalInput {
 	targetProposalId?: ProposalId;
 	resolvedSourceRevision?: NotebookProposal['source'];
 	legacySourceRevision?: GitSourceRevision;
+}
+
+export interface CaptureProposalResult {
+	proposal: NotebookProposal;
+	created: boolean;
+	publicationState: ProposalPublication['state'];
 }
 
 export interface PublishProposalChangeRequestInput {
@@ -125,6 +135,10 @@ export class NotebookProposalService {
 	}
 
 	async captureProposal(input: CaptureProposalInput): Promise<NotebookProposal> {
+		return (await this.captureProposalWithOutcome(input)).proposal;
+	}
+
+	async captureProposalWithOutcome(input: CaptureProposalInput): Promise<CaptureProposalResult> {
 		const { session } = input;
 		if (input.proposalId) {
 			try {
@@ -134,10 +148,14 @@ export class NotebookProposalService {
 					input.proposalId,
 				);
 				this.assertProposalRetry(proposal, input);
-				if (publication.state === 'published') return proposal;
+				if (publication.state === 'published') {
+					this.recordCaptureReuse(proposal, publication.state);
+					return { proposal, created: false, publicationState: publication.state };
+				}
 				this.assertPayloadNotExpired(proposal);
 				if (await this.hasCompletePayload(input.projectId, input.notebookId, proposal)) {
-					return proposal;
+					this.recordCaptureReuse(proposal, publication.state);
+					return { proposal, created: false, publicationState: publication.state };
 				}
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
@@ -196,6 +214,8 @@ export class NotebookProposalService {
 		};
 		const proposalPaths = notebook.proposal(proposalId);
 		let captured = proposal;
+		let created = true;
+		let publicationState: ProposalPublication['state'] = 'pending';
 		await saga(metricsObserver(this.metrics, 'saga.notebook_proposal_capture'))
 			.step('write_proposal', async () => {
 				try {
@@ -204,6 +224,7 @@ export class NotebookProposalService {
 					});
 				} catch (error) {
 					if (!(error instanceof PreconditionFailedError)) throw error;
+					created = false;
 					const existing = await this.bucket.get(proposalPaths.meta);
 					if (!existing) throw new ConflictError('Proposal capture raced with another request');
 					captured = await readStored(NotebookProposalSchema, existing, proposalPaths.meta);
@@ -300,11 +321,37 @@ export class NotebookProposalService {
 					if (!(error instanceof PreconditionFailedError)) throw error;
 					const existing = await this.bucket.get(proposalPaths.publication);
 					if (!existing) throw new ConflictError('Proposal state raced with another request');
-					await readStored(ProposalPublicationSchema, existing, proposalPaths.publication);
+					publicationState = (
+						await readStored(ProposalPublicationSchema, existing, proposalPaths.publication)
+					).state;
 				}
 			})
 			.run();
-		return captured;
+		if (created) {
+			const provider = captured.source.provider;
+			this.metrics.increment('change_requests.captured', 1, { provider });
+			this.metrics.histogram?.(
+				'change_requests.capture_size_bytes',
+				captured.changes.reduce(
+					(total, change) => total + (change.operation === 'delete' ? 0 : change.size_bytes),
+					0,
+				),
+				{ provider },
+			);
+		} else {
+			this.recordCaptureReuse(captured, publicationState);
+		}
+		return { proposal: captured, created, publicationState };
+	}
+
+	private recordCaptureReuse(
+		proposal: NotebookProposal,
+		state: ProposalPublication['state'],
+	): void {
+		this.metrics.increment('change_requests.reused', 1, {
+			provider: proposal.source.provider,
+			state,
+		});
 	}
 
 	private assertProposalRetry(proposal: NotebookProposal, input: CaptureProposalInput): void {
@@ -392,10 +439,15 @@ export class NotebookProposalService {
 		proposalId: ProposalId,
 	): Promise<NotebookProposalRecord | undefined> {
 		const record = await this.getProposal(projectId, notebookId, proposalId);
-		if (record.publication.state === 'published') return record;
+		if (record.publication.state === 'published') {
+			this.recordCaptureReuse(record.proposal, record.publication.state);
+			return record;
+		}
 		const { proposal } = record;
 		this.assertPayloadNotExpired(proposal);
-		return (await this.hasCompletePayload(projectId, notebookId, proposal)) ? record : undefined;
+		if (!(await this.hasCompletePayload(projectId, notebookId, proposal))) return undefined;
+		this.recordCaptureReuse(proposal, record.publication.state);
+		return record;
 	}
 
 	private async hasCompletePayload(
@@ -507,6 +559,7 @@ export class NotebookProposalService {
 		let expectedChangeRequest: OpenChangeRequestResult | undefined;
 		let rootProposalId: ProposalId | undefined;
 		let observedHeadCommits: ReadonlySet<string> | undefined;
+		let publishStartedAt: number;
 		if (proposal.target_proposal_id) {
 			const target = await this.resolvePublishedChangeRequestTarget(
 				input.projectId,
@@ -523,29 +576,39 @@ export class NotebookProposalService {
 			expectedChangeRequest = target.changeRequest;
 			observedHeadCommits = target.observedHeadCommits;
 			headBranch = expectedChangeRequest.headBranch;
-			result = await publisher.updateChangeRequest({
-				repository: proposal.source.repo,
-				baseBranch: proposal.source.branch,
-				baseCommit: proposal.source.commit,
-				changeRequest: expectedChangeRequest,
-				title: input.title,
-				body: input.body,
-				coAuthor: input.coAuthor,
-				changes,
-			});
+			publishStartedAt = Date.now();
+			try {
+				result = await publisher.updateChangeRequest({
+					repository: proposal.source.repo,
+					baseBranch: proposal.source.branch,
+					baseCommit: proposal.source.commit,
+					changeRequest: expectedChangeRequest,
+					title: input.title,
+					body: input.body,
+					coAuthor: input.coAuthor,
+					changes,
+				});
+			} catch (error) {
+				throw this.recordPublishFailure(error, publisher.provider, publishStartedAt);
+			}
 		} else {
 			headBranch = `marimohub/${proposal.notebook_id}/${proposal.proposal_id}`;
-			result = await publisher.openChangeRequest({
-				repository: proposal.source.repo,
-				baseBranch: proposal.source.branch,
-				baseCommit: proposal.source.commit,
-				headBranch,
-				title: input.title,
-				body: input.body,
-				draft: true,
-				coAuthor: input.coAuthor,
-				changes,
-			});
+			publishStartedAt = Date.now();
+			try {
+				result = await publisher.openChangeRequest({
+					repository: proposal.source.repo,
+					baseBranch: proposal.source.branch,
+					baseCommit: proposal.source.commit,
+					headBranch,
+					title: input.title,
+					body: input.body,
+					draft: true,
+					coAuthor: input.coAuthor,
+					changes,
+				});
+			} catch (error) {
+				throw this.recordPublishFailure(error, publisher.provider, publishStartedAt);
+			}
 		}
 		const parsedResult = ChangeRequestPublicationSchema.safeParse({
 			provider: publisher.provider,
@@ -561,7 +624,11 @@ export class NotebookProposalService {
 				(result.number !== expectedChangeRequest.number ||
 					result.url !== expectedChangeRequest.url))
 		) {
-			throw new UnavailableError('Source-control provider returned an invalid change request');
+			throw this.recordPublishFailure(
+				new UnavailableError('Source-control provider returned an invalid change request'),
+				publisher.provider,
+				publishStartedAt,
+			);
 		}
 		const published = await mutateObject(
 			this.bucket,
@@ -600,6 +667,11 @@ export class NotebookProposalService {
 		) {
 			throw new UnavailableError('Stored publication contains an invalid change request');
 		}
+		this.metrics.increment('change_requests.published', 1, { provider: publisher.provider });
+		this.metrics.histogram?.('change_requests.publish_latency_ms', Date.now() - publishStartedAt, {
+			provider: publisher.provider,
+			outcome: 'success',
+		});
 		if (rootProposalId && expectedChangeRequest && observedHeadCommits) {
 			await this.advanceChangeRequestHead(
 				input.projectId,
@@ -613,6 +685,24 @@ export class NotebookProposalService {
 			);
 		}
 		return publishedResult;
+	}
+
+	private recordPublishFailure(error: unknown, provider: string, startedAt: number): Error {
+		const marked = markSourceControlPublishFailure(error, {
+			provider,
+			stage: 'pr',
+		});
+		const failure = sourceControlPublishFailure(marked);
+		this.metrics.increment('change_requests.failed', 1, {
+			provider: failure?.provider ?? provider,
+			stage: failure?.stage ?? 'pr',
+		});
+		this.metrics.histogram?.('change_requests.publish_latency_ms', Date.now() - startedAt, {
+			provider: failure?.provider ?? provider,
+			stage: failure?.stage ?? 'pr',
+			outcome: 'failure',
+		});
+		return marked;
 	}
 
 	private async resolvePublishedChangeRequestTarget(

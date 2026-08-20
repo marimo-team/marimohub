@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { sourceControlPublishFailure } from '@marimo-hub/core';
 import type { GitHubClient } from './githubClient';
 import { GitHubPullRequests } from './githubPullRequests';
 import type { GitHubRepositoryWriter } from './githubRepository';
@@ -79,5 +80,22 @@ describe('GitHubPullRequests.updateMetadata', () => {
 		await expect(githubPullRequests.updateMetadata(updateInput, 'updated-head')).rejects.toThrow(
 			'unexpected updated pull request metadata',
 		);
+	});
+
+	it('marks a mismatched response head as a local branch change', async () => {
+		const { pullRequests: githubPullRequests } = pullRequests(
+			updatedPull({ head: { sha: 'different-head' } }),
+		);
+
+		const error = await githubPullRequests
+			.updateMetadata(updateInput, 'updated-head')
+			.catch((failure) => failure);
+
+		expect(error).toBeInstanceOf(Error);
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'pr',
+			condition: 'branch_changed',
+		});
 	});
 });

@@ -1,5 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import { sourceControlPublishFailure } from '@marimo-hub/core';
 import { GitHubAppPublisher } from './index';
 
 const PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -405,9 +406,16 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
-			'branch changed while updating',
-		);
+		const error = await publisher(fetcher)
+			.updateChangeRequest(updateInput)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain('branch changed while updating');
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'branch',
+			condition: 'branch_changed',
+		});
 	});
 
 	it('recovers an appended update after its publication record failed', async () => {
@@ -689,9 +697,16 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
-			'changed outside marimohub',
-		);
+		const error = await publisher(fetcher)
+			.updateChangeRequest(updateInput)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain('changed outside marimohub');
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'branch',
+			condition: 'branch_changed',
+		});
 		expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/graphql'))).toBe(false);
 	});
 
@@ -742,9 +757,18 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${init?.method ?? 'GET'} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
+		const error = await publisher(fetcher)
+			.updateChangeRequest(updateInput)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain(
 			'pull request branch was deleted; create a new pull request',
 		);
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'branch',
+			condition: 'branch_deleted',
+		});
 		expect(fetcher.mock.calls.some(([url]) => String(url).includes('/git/commits/'))).toBe(false);
 	});
 
@@ -1518,14 +1542,23 @@ describe('GitHubAppPublisher', () => {
 
 	it('reports an app installation miss without trying to mint a token', async () => {
 		const fetcher = vi.fn(async () => response({ message: 'secret details' }, 404));
-		await expect(publisher(fetcher).openChangeRequest(input)).rejects.toThrow(
-			'The GitHub App is not installed for owner/repo',
-		);
+		const error = await publisher(fetcher)
+			.openChangeRequest(input)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toBe('The GitHub App is not installed for owner/repo');
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'installation',
+			status: 404,
+		});
 		expect(fetcher).toHaveBeenCalledOnce();
 	});
 
-	it('does not expose a GitHub error response body', async () => {
-		const fetcher = vi.fn(async () => response({ message: 'sensitive upstream detail' }, 500));
+	it('does not expose the GitHub error response body', async () => {
+		const fetcher = vi.fn(async () =>
+			response({ message: 'Resource not accessible by integration' }, 403),
+		);
 		let thrown: unknown;
 		try {
 			await publisher(fetcher).openChangeRequest(input);
@@ -1533,17 +1566,28 @@ describe('GitHubAppPublisher', () => {
 			thrown = error;
 		}
 		expect(thrown).toBeInstanceOf(Error);
-		expect((thrown as Error).message).toBe('GitHub request failed with status 500');
-		expect((thrown as Error).message).not.toContain('sensitive');
+		expect((thrown as Error).message).toBe('GitHub request failed with status 403');
+		expect((thrown as Error).message).not.toContain('Resource not accessible by integration');
+		expect(sourceControlPublishFailure(thrown)).toEqual({
+			provider: 'github',
+			stage: 'installation',
+			status: 403,
+		});
 	});
 
 	it('maps a network exception to a provider availability error', async () => {
 		const fetcher = vi.fn(async () => {
 			throw new Error('socket included a credential');
 		});
-		await expect(publisher(fetcher).openChangeRequest(input)).rejects.toThrow(
-			'GitHub is unavailable',
-		);
+		const error = await publisher(fetcher)
+			.openChangeRequest(input)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toBe('GitHub is unavailable');
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'installation',
+		});
 	});
 
 	it('rejects invalid JSON from GitHub', async () => {
@@ -1824,6 +1868,37 @@ describe('GitHubAppPublisher', () => {
 			headCommit: 'existing-head',
 		});
 		expect(fetcher).toHaveBeenCalledTimes(11);
+	});
+
+	it('does not expose a pull request rejection body when no matching request exists', async () => {
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			const parsed = new URL(url);
+			const method = init?.method ?? 'GET';
+			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
+			if (parsed.pathname.endsWith('/access_tokens')) return response({ token: 'token' });
+			if (parsed.pathname.includes('/git/ref/heads/')) {
+				return response({ object: { sha: 'existing-head' } });
+			}
+			if (parsed.pathname.endsWith('/pulls') && method === 'GET') return response([]);
+			if (parsed.pathname.endsWith('/pulls') && method === 'POST') {
+				return response({ message: 'App lacks pull request permission' }, 422);
+			}
+			const proposalResponse = proposalTreeResponse(parsed, ['existing-head']);
+			if (proposalResponse) return proposalResponse;
+			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
+		});
+
+		const error = await publisher(fetcher)
+			.openChangeRequest(input)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toBe('GitHub rejected the pull request');
+		expect((error as Error).message).not.toContain('App lacks pull request permission');
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'pr',
+			status: 422,
+		});
 	});
 
 	it('renders delete changes as null tree entries without creating blobs', async () => {
