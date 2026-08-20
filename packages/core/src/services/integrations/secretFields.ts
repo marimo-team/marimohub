@@ -180,31 +180,11 @@ export async function sealConfig(options: {
 	check?: (parsed: unknown) => void;
 }): Promise<Record<string, unknown>> {
 	const { schema, paths, authoring, previous, seal, check } = options;
+	const parsed = parseAuthoringWithPlaceholders({ schema, paths, authoring, check });
 
-	// 1. Structural validation on a placeholder-substituted copy.
-	const sanitized = structuredClone(authoring);
-	for (const path of paths) {
-		for (const concrete of expandPath(sanitized, path)) {
-			const value = getAt(sanitized, concrete);
-			if (typeof value === 'string' || isKeepMarker(value) || isReferenceSecret(value)) {
-				setAt(sanitized, concrete, PLACEHOLDER);
-			} else if (value !== undefined) {
-				// Anything else (e.g. a forged stored envelope) is rejected outright.
-				throw new ValidationError(
-					`Secret field "${dotted(concrete)}" must be an encrypted value, an external reference, or a keep marker.`,
-				);
-			}
-		}
-	}
-	const parsed = schema.safeParse(sanitized);
-	if (!parsed.success) {
-		throw new ValidationError(`Invalid config: ${z.prettifyError(parsed.error)}`);
-	}
-	check?.(parsed.data);
-
-	// 2. Swap sealed values into the parsed output (which has defaults applied
-	//    and unknown keys stripped).
-	const stored = parsed.data as Record<string, unknown>;
+	// Swap sealed values into the parsed output (which has defaults applied
+	// and unknown keys stripped).
+	const stored = parsed as Record<string, unknown>;
 	for (const path of paths) {
 		for (const concrete of expandPath(stored, path)) {
 			if (getAt(stored, concrete) !== PLACEHOLDER) continue;
@@ -232,6 +212,36 @@ export async function sealConfig(options: {
 		}
 	}
 	return stored;
+}
+
+/** Parses authoring config without resolving or retaining its secret values. */
+export function parseAuthoringWithPlaceholders(options: {
+	schema: z.ZodType;
+	paths: SecretPath[];
+	authoring: Record<string, unknown>;
+	check?: (parsed: unknown) => void;
+}): unknown {
+	const { schema, paths, authoring, check } = options;
+	const sanitized = structuredClone(authoring);
+	for (const path of paths) {
+		for (const concrete of expandPath(sanitized, path)) {
+			const value = getAt(sanitized, concrete);
+			if (typeof value === 'string' || isKeepMarker(value) || isReferenceSecret(value)) {
+				setAt(sanitized, concrete, PLACEHOLDER);
+			} else if (value !== undefined) {
+				// Anything else (e.g. a forged stored envelope) is rejected outright.
+				throw new ValidationError(
+					`Secret field "${dotted(concrete)}" must be an encrypted value, an external reference, or a keep marker.`,
+				);
+			}
+		}
+	}
+	const parsed = schema.safeParse(sanitized);
+	if (!parsed.success) {
+		throw new ValidationError(`Invalid config: ${z.prettifyError(parsed.error)}`);
+	}
+	check?.(parsed.data);
+	return parsed.data;
 }
 
 /**

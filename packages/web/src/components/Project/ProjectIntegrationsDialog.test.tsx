@@ -105,6 +105,21 @@ const icebergRestKind: IntegrationKind = {
 	kind: 'iceberg_rest',
 	title: 'Iceberg REST Catalog',
 	category: 'catalog',
+	json_schema: {
+		type: 'object',
+		properties: {
+			headers: {
+				type: 'object',
+				additionalProperties: { type: 'string' },
+				default: {},
+			},
+			extra_properties: {
+				type: 'object',
+				additionalProperties: { type: 'string' },
+				default: {},
+			},
+		},
+	},
 };
 
 const entry = (over: Partial<IntegrationEntry> = {}): IntegrationEntry => ({
@@ -626,6 +641,40 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 				},
 			});
 		});
+	});
+
+	it('redacts arbitrary record values from automatic readiness requests', async () => {
+		const user = userEvent.setup();
+		const icebergEntry = entry({ id: 'i_iceberg', kind: 'iceberg_rest', name: 'lake' });
+		const { calls } = setup(
+			{},
+			{
+				kinds: [icebergRestKind],
+				entries: [icebergEntry],
+				details: {
+					i_iceberg: {
+						...icebergEntry,
+						config: {
+							headers: { 'X-Custom': 'header-credential' },
+							extra_properties: { option: 'property-credential' },
+						},
+					},
+				},
+			},
+		);
+
+		await user.click(await screen.findByRole('button', { name: 'Edit lake' }));
+		await waitFor(() => {
+			const readiness = calls.find((call) => call.url.includes('/query-readiness'));
+			expect(readiness?.body).toEqual({
+				kind: 'iceberg_rest',
+				config: {
+					headers: { 'X-Custom': '' },
+					extra_properties: { option: '' },
+				},
+			});
+		});
+		expect(JSON.stringify(calls)).not.toMatch(/header-credential|property-credential/);
 	});
 
 	it('does not PATCH after Replace is selected but the required secret is left blank', async () => {

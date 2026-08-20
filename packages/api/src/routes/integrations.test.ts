@@ -624,6 +624,28 @@ describe('Integrations routes', () => {
 		expect(JSON.stringify(checks)).not.toContain(secret);
 	});
 
+	it('rejects invalid raw config before evaluating SQL readiness', async () => {
+		const pid = await createProject();
+		await expectError(
+			await request('POST', `/projects/${pid}/integrations/query-readiness`, {
+				kind: 'iceberg_rest',
+				config: {
+					uri: 'https://catalog.example.com/api',
+					auth: { method: 'none' },
+					access_delegation: 'none',
+					storage: {
+						scheme: 's3',
+						endpoint: 'https://objects.example.com',
+						anonymous: true,
+						broker_read_locations: [{ bucket: 'warehouse', prefix: 'tables' }],
+					},
+					rest: { unsupported_option: true },
+				},
+			}),
+			422,
+		);
+	});
+
 	it('accepts a stored integration id when testing an edited draft', async () => {
 		const pid = await createProject();
 		const created = await createPg(pid);

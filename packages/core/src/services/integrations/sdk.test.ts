@@ -389,7 +389,7 @@ describe('defineIntegration available-reason guard', () => {
 					{
 						label: `Remove ${String((config as { token?: unknown }).token)}`,
 						ready: false,
-						field: 'token',
+						field: String((config as { token?: unknown }).token),
 						reason: `query denied for ${String((config as { token?: unknown }).token)}`,
 					},
 				],
@@ -408,7 +408,7 @@ describe('defineIntegration available-reason guard', () => {
 			{
 				label: 'Meet the SQL configuration requirements',
 				ready: false,
-				field: 'token',
+				field: '',
 				reason: 'this configuration cannot run SQL from the hub',
 			},
 		]);

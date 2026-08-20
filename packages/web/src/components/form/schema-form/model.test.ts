@@ -239,24 +239,35 @@ describe('pruneForSubmit', () => {
 });
 
 describe('redactSecretsForRequest', () => {
-	it('replaces secret values while retaining non-secret draft fields', () => {
-		expect(
-			redactSecretsForRequest(schema, {
-				host: 'db.internal',
-				database: 'app',
-				username: 'admin',
-				password: 'must-not-leave-the-form',
-				auth: { method: 'basic', user: 'reader' },
-				props: { region: 'us-east-1' },
-			}),
-		).toEqual({
+	it('redacts secret-capable values and retains evidence of unknown fields', () => {
+		const raw = {
+			host: 'db.internal',
+			database: 'app',
+			username: 'admin',
+			password: 'must-not-leave-the-form',
+			auth: { method: 'basic', user: 'reader', unexpected: 'nested-secret' },
+			props: { region: 'record-secret' },
+			unexpected: 'root-secret',
+		};
+		const redacted = redactSecretsForRequest(schema, pruneForSubmit(schema, raw), raw);
+
+		expect(redacted).toEqual({
 			host: 'db.internal',
 			database: 'app',
 			username: 'admin',
 			password: KEEP_SECRET,
-			auth: { method: 'basic', user: 'reader' },
-			props: { region: 'us-east-1' },
+			auth: { method: 'basic', user: 'reader', unexpected: null },
+			props: { region: '' },
+			unexpected: null,
 		});
+		expect(JSON.stringify(redacted)).not.toMatch(
+			/must-not|nested-secret|record-secret|root-secret/,
+		);
+	});
+
+	it('preserves an invalid record shape without retaining its value', () => {
+		const props = schema.properties!.props;
+		expect(redactSecretsForRequest(props, {}, 'credential')).toBeNull();
 	});
 });
 

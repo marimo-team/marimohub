@@ -840,7 +840,10 @@ function EditorForm({
 	const testIntegration = useTestIntegration(scope);
 	const readinessConfig = useMemo(
 		() =>
-			redactSecretsForRequest(schema, pruneForSubmit(schema, config)) as Record<string, unknown>,
+			redactSecretsForRequest(schema, pruneForSubmit(schema, config), config) as Record<
+				string,
+				unknown
+			>,
 		[schema, config],
 	);
 	const debouncedReadinessConfig = useDebouncedValue(readinessConfig);

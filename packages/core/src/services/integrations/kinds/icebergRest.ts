@@ -581,7 +581,7 @@ function parsedUrl(value: unknown): URL | undefined {
 	}
 }
 
-function duckdbPreviewReadiness(value: unknown): QueryReadinessCheck[] {
+function duckdbPreviewReadiness(value: IcebergRestConfig): QueryReadinessCheck[] {
 	const config = asRecord(value) ?? {};
 	const auth = asRecord(config.auth) ?? {};
 	const tls = asRecord(config.tls) ?? {};

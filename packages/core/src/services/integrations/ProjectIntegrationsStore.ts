@@ -102,6 +102,7 @@ import {
 	findStraySecretBoxes,
 	configForCopy,
 	openConfig,
+	parseAuthoringWithPlaceholders,
 	parseStoredWithPlaceholders,
 	redactConfig,
 	sealConfig,
@@ -824,13 +825,20 @@ class ScopedIntegrationsStore {
 	}
 
 	queryReadiness(request: QueryReadinessRequest): QueryReadinessCheck[] {
-		const readiness = this.registry.get(request.kind).query?.readiness;
+		const def = this.registry.get(request.kind);
+		const readiness = def.query?.readiness;
 		if (!readiness) {
 			throw new ValidationError(
 				`Integration kind "${request.kind}" does not expose SQL readiness checks.`,
 			);
 		}
-		return readiness(request.config);
+		const parsed = parseAuthoringWithPlaceholders({
+			schema: def.configSchema,
+			paths: this.registry.secretPathsOf(def.kind),
+			authoring: request.config,
+			check: def.validate?.bind(def),
+		});
+		return readiness(parsed);
 	}
 
 	/**
