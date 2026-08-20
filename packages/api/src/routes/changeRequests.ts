@@ -156,6 +156,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 					provider: failure.provider,
 					repo: proposal.source.repo,
 					stage: failure.stage,
+					condition: failure.condition ?? null,
 					status: failure.status ?? null,
 					latency_ms: Date.now() - publishStartedAt,
 				});

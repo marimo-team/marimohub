@@ -68,9 +68,15 @@ export const SOURCE_CONTROL_PUBLISH_STAGES = [
 
 export type SourceControlPublishStage = (typeof SOURCE_CONTROL_PUBLISH_STAGES)[number];
 
+export const SOURCE_CONTROL_PUBLISH_CONDITIONS = ['branch_deleted', 'branch_changed'] as const;
+
+export type SourceControlPublishCondition = (typeof SOURCE_CONTROL_PUBLISH_CONDITIONS)[number];
+
 export interface SourceControlPublishFailure {
 	provider: string;
 	stage: SourceControlPublishStage;
+	condition?: SourceControlPublishCondition;
+	/** HTTP status returned by the source-control provider. */
 	status?: string | number;
 }
 
@@ -80,12 +86,18 @@ export function markSourceControlPublishFailure(
 	error: unknown,
 	failure: SourceControlPublishFailure,
 ): Error {
-	const annotated = error instanceof Error ? error : new Error('Source control failed');
+	const annotated =
+		error instanceof Error ? error : new Error('Source control failed', { cause: error });
 	const current = sourceControlPublishFailures.get(annotated);
 	const merged = { ...failure, ...current };
+	if (current?.condition === undefined && failure.condition !== undefined) {
+		merged.condition = failure.condition;
+	}
 	if (current?.status === undefined && failure.status !== undefined) {
 		merged.status = failure.status;
 	}
+	if (merged.condition === undefined) delete merged.condition;
+	if (merged.status === undefined) delete merged.status;
 	sourceControlPublishFailures.set(annotated, merged);
 	return annotated;
 }

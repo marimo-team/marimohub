@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createProposalId,
 	createSandboxId,
 	markSourceControlPublishFailure,
 	MAX_VERSIONS,
+	NotFoundError,
 	paths,
 	UnavailableError,
 } from '@marimo-hub/core';
@@ -106,6 +107,10 @@ describe('change request routes', () => {
 		});
 		sessionId = session.session_id;
 		await setup.deps.services.sessions.setRunning(projectId, sessionId, 'https://sandbox.example');
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
 	it('opens a draft change request from the exact session revision', async () => {
@@ -359,7 +364,7 @@ describe('change request routes', () => {
 
 	it('rejects an update target that has not been published', async () => {
 		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
-		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposal');
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposalWithOutcome');
 		await expectError(
 			await setup.request('POST', route(), {}, { 'Idempotency-Key': 'pending-update-target' }),
 			503,
@@ -367,7 +372,7 @@ describe('change request routes', () => {
 		);
 		const captureResult = capture.mock.results[0];
 		if (captureResult?.type !== 'return') throw new Error('Expected proposal capture');
-		const target = await captureResult.value;
+		const { proposal: target } = await captureResult.value;
 
 		await expectError(
 			await setup.request(
@@ -420,7 +425,6 @@ describe('change request routes', () => {
 			'change_request.published',
 			'change_request.reused',
 		]);
-		log.mockRestore();
 	});
 
 	it('replays a recorded response after its source version is pruned', async () => {
@@ -491,6 +495,7 @@ describe('change request routes', () => {
 					event: 'change_request.publish_failed',
 					provider: 'github',
 					stage: 'installation',
+					condition: null,
 					status: 403,
 				}),
 				expect.objectContaining({
@@ -508,7 +513,32 @@ describe('change request routes', () => {
 		expect(openChangeRequest.mock.calls[0]?.[0].headBranch).toBe(
 			openChangeRequest.mock.calls[1]?.[0].headBranch,
 		);
-		log.mockRestore();
+	});
+
+	it('does not report a second capture when another capture wins a lookup race', async () => {
+		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
+		const headers = { 'Idempotency-Key': 'capture-lookup-race' };
+		await expectError(
+			await setup.request('POST', route(), {}, headers),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		vi.spyOn(setup.deps.services.proposals, 'getReusableProposal').mockRejectedValueOnce(
+			new NotFoundError('Proposal lookup missed a concurrent capture'),
+		);
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposalWithOutcome');
+
+		await expectOk(await setup.request('POST', route(), {}, headers), 201);
+
+		expect(capture).toHaveBeenCalledOnce();
+		const events = log.mock.calls.map(
+			([line]) => JSON.parse(line as string) as Record<string, unknown>,
+		);
+		const eventNames = events.map(({ event }) => event);
+		expect(eventNames).not.toContain('change_request.captured');
+		expect(eventNames).toContain('change_request.published');
 	});
 
 	it('requires a configured publisher when resuming a pending proposal', async () => {
@@ -526,7 +556,10 @@ describe('change request routes', () => {
 			compute: setup.deps.compute,
 			deps: { sourceControl: { ...stubSourceControl(), getPublisher } },
 		});
-		const capture = vi.spyOn(withoutPublisher.deps.services.proposals, 'captureProposal');
+		const capture = vi.spyOn(
+			withoutPublisher.deps.services.proposals,
+			'captureProposalWithOutcome',
+		);
 
 		await expectError(
 			await withoutPublisher.request('POST', route(), {}, headers),
@@ -541,7 +574,7 @@ describe('change request routes', () => {
 
 	it('finishes an incomplete proposal capture before retrying publication', async () => {
 		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
-		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposal');
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposalWithOutcome');
 		const headers = { 'Idempotency-Key': 'retry-incomplete-capture' };
 
 		await expectError(
@@ -551,7 +584,7 @@ describe('change request routes', () => {
 		);
 		const firstCapture = capture.mock.results[0];
 		if (firstCapture?.type !== 'return') throw new Error('Expected proposal capture');
-		const proposal = await firstCapture.value;
+		const { proposal } = await firstCapture.value;
 		const changePath = paths
 			.project(projectId)
 			.notebook(notebookId)
@@ -567,7 +600,7 @@ describe('change request routes', () => {
 
 	it('resumes a captured proposal after its session and source version are removed', async () => {
 		openChangeRequest.mockRejectedValueOnce(new UnavailableError('GitHub is unavailable'));
-		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposal');
+		const capture = vi.spyOn(setup.deps.services.proposals, 'captureProposalWithOutcome');
 		const headers = { 'Idempotency-Key': 'retry-after-session-removal' };
 
 		await expectError(
@@ -655,7 +688,10 @@ describe('change request routes', () => {
 			bucket: setup.bucket,
 			compute: setup.deps.compute,
 		});
-		const capture = vi.spyOn(withoutPublisher.deps.services.proposals, 'captureProposal');
+		const capture = vi.spyOn(
+			withoutPublisher.deps.services.proposals,
+			'captureProposalWithOutcome',
+		);
 		await expectError(
 			await withoutPublisher.request(
 				'POST',

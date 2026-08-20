@@ -69,6 +69,11 @@ export interface CaptureProposalInput {
 	legacySourceRevision?: GitSourceRevision;
 }
 
+export interface CaptureProposalResult {
+	proposal: NotebookProposal;
+	created: boolean;
+}
+
 export interface PublishProposalChangeRequestInput {
 	projectId: ProjectId;
 	notebookId: NotebookId;
@@ -129,6 +134,10 @@ export class NotebookProposalService {
 	}
 
 	async captureProposal(input: CaptureProposalInput): Promise<NotebookProposal> {
+		return (await this.captureProposalWithOutcome(input)).proposal;
+	}
+
+	async captureProposalWithOutcome(input: CaptureProposalInput): Promise<CaptureProposalResult> {
 		const { session } = input;
 		if (input.proposalId) {
 			try {
@@ -138,10 +147,14 @@ export class NotebookProposalService {
 					input.proposalId,
 				);
 				this.assertProposalRetry(proposal, input);
-				if (publication.state === 'published') return proposal;
+				if (publication.state === 'published') {
+					this.recordCaptureReuse(proposal, publication.state);
+					return { proposal, created: false };
+				}
 				this.assertPayloadNotExpired(proposal);
 				if (await this.hasCompletePayload(input.projectId, input.notebookId, proposal)) {
-					return proposal;
+					this.recordCaptureReuse(proposal, publication.state);
+					return { proposal, created: false };
 				}
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
@@ -200,23 +213,16 @@ export class NotebookProposalService {
 		};
 		const proposalPaths = notebook.proposal(proposalId);
 		let captured = proposal;
+		let created = true;
 		await saga(metricsObserver(this.metrics, 'saga.notebook_proposal_capture'))
 			.step('write_proposal', async () => {
 				try {
 					await this.bucket.put(proposalPaths.meta, JSON.stringify(proposal), {
 						onlyIfNotExists: true,
 					});
-					this.metrics.increment('change_requests.captured');
-					this.metrics.histogram?.(
-						'change_requests.capture_size_bytes',
-						proposal.changes.reduce(
-							(total, change) => total + (change.operation === 'delete' ? 0 : change.size_bytes),
-							0,
-						),
-					);
 				} catch (error) {
 					if (!(error instanceof PreconditionFailedError)) throw error;
-					this.metrics.increment('change_requests.reused', 1, { state: 'pending' });
+					created = false;
 					const existing = await this.bucket.get(proposalPaths.meta);
 					if (!existing) throw new ConflictError('Proposal capture raced with another request');
 					captured = await readStored(NotebookProposalSchema, existing, proposalPaths.meta);
@@ -317,7 +323,31 @@ export class NotebookProposalService {
 				}
 			})
 			.run();
-		return captured;
+		if (created) {
+			const provider = captured.source.provider;
+			this.metrics.increment('change_requests.captured', 1, { provider });
+			this.metrics.histogram?.(
+				'change_requests.capture_size_bytes',
+				captured.changes.reduce(
+					(total, change) => total + (change.operation === 'delete' ? 0 : change.size_bytes),
+					0,
+				),
+				{ provider },
+			);
+		} else {
+			this.recordCaptureReuse(captured, 'pending');
+		}
+		return { proposal: captured, created };
+	}
+
+	private recordCaptureReuse(
+		proposal: NotebookProposal,
+		state: ProposalPublication['state'],
+	): void {
+		this.metrics.increment('change_requests.reused', 1, {
+			provider: proposal.source.provider,
+			state,
+		});
 	}
 
 	private assertProposalRetry(proposal: NotebookProposal, input: CaptureProposalInput): void {
@@ -405,9 +435,7 @@ export class NotebookProposalService {
 		proposalId: ProposalId,
 	): Promise<NotebookProposalRecord | undefined> {
 		const record = await this.getProposal(projectId, notebookId, proposalId);
-		this.metrics.increment('change_requests.reused', 1, {
-			state: record.publication.state,
-		});
+		this.recordCaptureReuse(record.proposal, record.publication.state);
 		if (record.publication.state === 'published') return record;
 		const { proposal } = record;
 		this.assertPayloadNotExpired(proposal);
@@ -588,7 +616,11 @@ export class NotebookProposalService {
 				(result.number !== expectedChangeRequest.number ||
 					result.url !== expectedChangeRequest.url))
 		) {
-			throw new UnavailableError('Source-control provider returned an invalid change request');
+			throw this.recordPublishFailure(
+				new UnavailableError('Source-control provider returned an invalid change request'),
+				publisher.provider,
+				publishStartedAt,
+			);
 		}
 		const published = await mutateObject(
 			this.bucket,
@@ -648,14 +680,9 @@ export class NotebookProposalService {
 	}
 
 	private recordPublishFailure(error: unknown, provider: string, startedAt: number): Error {
-		const status =
-			typeof (error as { status?: unknown })?.status === 'number'
-				? (error as { status: number }).status
-				: undefined;
 		const marked = markSourceControlPublishFailure(error, {
 			provider,
 			stage: 'pr',
-			status,
 		});
 		const failure = sourceControlPublishFailure(marked);
 		this.metrics.increment('change_requests.failed', 1, {

@@ -11,7 +11,10 @@ import { paths } from '../../paths';
 import type { Bucket, BucketPutOptions } from '../../ports/bucket';
 import type { Metrics } from '../../ports/metrics';
 import { execResult, listFilesFailure, readFileFailure } from '../../ports/sandbox';
-import { markSourceControlPublishFailure } from '../../ports/sourceControl';
+import {
+	markSourceControlPublishFailure,
+	sourceControlPublishFailure,
+} from '../../ports/sourceControl';
 import type { OpenChangeRequestResult, SourceControlPublisher } from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import type { Session } from '../../schema';
@@ -196,6 +199,22 @@ describe('NotebookProposalService', () => {
 		proposalId: ProposalId,
 	) {
 		return service.captureProposal({
+			projectId,
+			notebookId,
+			proposalId,
+			session,
+			sandbox,
+			workdir: '/workspace',
+			author: ACTOR,
+		});
+	}
+
+	function captureWithOutcome(
+		service: NotebookProposalService,
+		sandbox: SandboxInstance,
+		proposalId: ProposalId,
+	) {
+		return service.captureProposalWithOutcome({
 			projectId,
 			notebookId,
 			proposalId,
@@ -763,15 +782,15 @@ describe('NotebookProposalService', () => {
 
 		expect(vi.mocked(metrics.increment).mock.calls).toEqual(
 			expect.arrayContaining([
-				['change_requests.captured'],
+				['change_requests.captured', 1, { provider: 'github' }],
 				['change_requests.failed', 1, { provider: 'github', stage: 'push' }],
 				['change_requests.published', 1, { provider: 'github' }],
-				['change_requests.reused', 1, { state: 'published' }],
+				['change_requests.reused', 1, { provider: 'github', state: 'published' }],
 			]),
 		);
 		expect(histogram.mock.calls).toEqual(
 			expect.arrayContaining([
-				['change_requests.capture_size_bytes', expect.any(Number)],
+				['change_requests.capture_size_bytes', expect.any(Number), { provider: 'github' }],
 				[
 					'change_requests.publish_latency_ms',
 					expect.any(Number),
@@ -783,6 +802,40 @@ describe('NotebookProposalService', () => {
 					{ provider: 'github', outcome: 'success' },
 				],
 			]),
+		);
+	});
+
+	it('does not record a capture when persistence fails after proposal metadata is written', async () => {
+		const histogram = vi.fn<NonNullable<Metrics['histogram']>>();
+		const metrics: Metrics = {
+			increment: vi.fn(),
+			gauge: vi.fn(),
+			histogram,
+		};
+		const proposalId = createProposalId();
+		const publicationPath = paths
+			.project(projectId)
+			.notebook(notebookId)
+			.proposal(proposalId).publication;
+		const bucket = proxyBucket(async (key, value, options) => {
+			if (key === publicationPath) throw new Error('publication write failed');
+			return env.bucket.put(key, value, options);
+		});
+		const service = new NotebookProposalService(bucket, metrics);
+
+		await expect(
+			captureWith(
+				service,
+				makeFsSandbox({ files: { 'dashboard.py': 'print("after")' } }).instance,
+				proposalId,
+			),
+		).rejects.toThrow('publication write failed');
+
+		expect(vi.mocked(metrics.increment).mock.calls.map(([name]) => name)).not.toContain(
+			'change_requests.captured',
+		);
+		expect(histogram.mock.calls.map(([name]) => name)).not.toContain(
+			'change_requests.capture_size_bytes',
 		);
 	});
 
@@ -1643,20 +1696,42 @@ describe('NotebookProposalService', () => {
 		const proposalId = createProposalId();
 		const puts: { key: string; options?: BucketPutOptions }[] = [];
 		const deleteObject = vi.fn<Bucket['delete']>((key) => env.bucket.delete(key));
+		const histogram = vi.fn<NonNullable<Metrics['histogram']>>();
+		const metrics: Metrics = {
+			increment: vi.fn(),
+			gauge: vi.fn(),
+			histogram,
+		};
 		const bucket = proxyBucket(async (key, value, options) => {
 			puts.push({ key, options });
 			return env.bucket.put(key, value, options);
 		}, deleteObject);
-		const service = new NotebookProposalService(bucket);
+		const service = new NotebookProposalService(bucket, metrics);
 		const first = makeFsSandbox({ files: { 'dashboard.py': 'concurrent change' } }).instance;
 		const second = makeFsSandbox({ files: { 'dashboard.py': 'concurrent change' } }).instance;
 
 		const [left, right] = await Promise.all([
-			captureWith(service, first, proposalId),
-			captureWith(service, second, proposalId),
+			captureWithOutcome(service, first, proposalId),
+			captureWithOutcome(service, second, proposalId),
 		]);
 
-		expect(right).toEqual(left);
+		expect(right.proposal).toEqual(left.proposal);
+		expect([left.created, right.created]).toEqual(expect.arrayContaining([false, true]));
+		const changeRequestMetrics = vi
+			.mocked(metrics.increment)
+			.mock.calls.filter(([name]) => name.startsWith('change_requests.'));
+		expect(changeRequestMetrics).toEqual(
+			expect.arrayContaining([
+				['change_requests.captured', 1, { provider: 'github' }],
+				['change_requests.reused', 1, { provider: 'github', state: 'pending' }],
+			]),
+		);
+		expect(changeRequestMetrics).toHaveLength(2);
+		expect(histogram).toHaveBeenCalledExactlyOnceWith(
+			'change_requests.capture_size_bytes',
+			expect.any(Number),
+			{ provider: 'github' },
+		);
 		expect(puts.filter(({ key }) => key.includes(`/proposals/${proposalId}/`))).not.toHaveLength(0);
 		expect(
 			puts
@@ -2051,6 +2126,54 @@ describe('NotebookProposalService', () => {
 		expect(
 			(await env.proposals.getProposal(projectId, notebookId, proposal.proposal_id)).publication,
 		).toMatchObject({ state: 'pending' });
+	});
+
+	it('records an invalid provider result as a pull-request failure', async () => {
+		const histogram = vi.fn<NonNullable<Metrics['histogram']>>();
+		const metrics: Metrics = {
+			increment: vi.fn(),
+			gauge: vi.fn(),
+			histogram,
+		};
+		const service = new NotebookProposalService(env.bucket, metrics);
+		const proposal = await captureWith(
+			service,
+			makeFsSandbox({ files: { 'dashboard.py': 'changed' } }).instance,
+			createProposalId(),
+		);
+		const failure = await service
+			.publishChangeRequest({
+				projectId,
+				notebookId,
+				proposalId: proposal.proposal_id,
+				publisher: {
+					provider: 'github',
+					openChangeRequest: async (input) => ({
+						number: 0,
+						url: 'https://github.com/owner/repo/pull/1',
+						headBranch: input.headBranch,
+						headCommit: 'head-sha',
+					}),
+				},
+				title: 'Update',
+				body: '',
+			})
+			.catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(UnavailableError);
+		expect(sourceControlPublishFailure(failure)).toEqual({
+			provider: 'github',
+			stage: 'pr',
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('change_requests.failed', 1, {
+			provider: 'github',
+			stage: 'pr',
+		});
+		expect(histogram).toHaveBeenCalledWith(
+			'change_requests.publish_latency_ms',
+			expect.any(Number),
+			{ provider: 'github', stage: 'pr', outcome: 'failure' },
+		);
 	});
 
 	it('leaves the proposal pending when the provider is unavailable', async () => {

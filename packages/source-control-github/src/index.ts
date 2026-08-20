@@ -177,7 +177,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 		if (!currentHead) {
 			throw markSourceControlPublishFailure(
 				new ConflictError('The GitHub pull request branch was deleted; create a new pull request'),
-				{ provider: 'github', stage: 'branch', status: 404 },
+				{ provider: 'github', stage: 'branch', condition: 'branch_deleted' },
 			);
 		}
 
@@ -225,7 +225,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 			if (currentHead !== expectedHead) {
 				throw markSourceControlPublishFailure(
 					new ConflictError('The GitHub pull request branch changed while updating'),
-					{ provider: 'github', stage: 'branch', status: 409 },
+					{ provider: 'github', stage: 'branch', condition: 'branch_changed' },
 				);
 			}
 		}
@@ -274,7 +274,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 		}
 		throw markSourceControlPublishFailure(
 			new ConflictError('The GitHub pull request branch changed outside marimohub'),
-			{ provider: 'github', stage: 'branch', status: 409 },
+			{ provider: 'github', stage: 'branch', condition: 'branch_changed' },
 		);
 	}
 
@@ -295,9 +295,18 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 				input.coAuthor,
 			),
 		);
-		await this.atStage('branch', () =>
-			repository.forceUpdateRef(input.changeRequest.headBranch, expectedHead, replacementCommit),
-		);
+		try {
+			await this.atStage('branch', () =>
+				repository.forceUpdateRef(input.changeRequest.headBranch, expectedHead, replacementCommit),
+			);
+		} catch (error) {
+			if (!(error instanceof ConflictError)) throw error;
+			throw markSourceControlPublishFailure(error, {
+				provider: 'github',
+				stage: 'branch',
+				condition: 'branch_changed',
+			});
+		}
 		if (
 			(await this.atStage('branch', () => repository.getRef(input.changeRequest.headBranch))) !==
 			replacementCommit

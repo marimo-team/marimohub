@@ -171,7 +171,10 @@ export class GitHubPullRequests {
 			throw new UnavailableError('GitHub returned unexpected updated pull request metadata');
 		}
 		if (nestedString(pull, 'head', 'sha') !== headCommit) {
-			throw new ConflictError('The GitHub pull request branch changed while updating');
+			throw markSourceControlPublishFailure(
+				new ConflictError('The GitHub pull request branch changed while updating'),
+				{ provider: 'github', stage: 'pr', condition: 'branch_changed' },
+			);
 		}
 		return { ...input.changeRequest, headCommit };
 	}

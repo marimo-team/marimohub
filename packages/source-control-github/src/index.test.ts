@@ -406,9 +406,16 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
-			'branch changed while updating',
-		);
+		const error = await publisher(fetcher)
+			.updateChangeRequest(updateInput)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain('branch changed while updating');
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'branch',
+			condition: 'branch_changed',
+		});
 	});
 
 	it('recovers an appended update after its publication record failed', async () => {
@@ -690,9 +697,16 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
-			'changed outside marimohub',
-		);
+		const error = await publisher(fetcher)
+			.updateChangeRequest(updateInput)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain('changed outside marimohub');
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'branch',
+			condition: 'branch_changed',
+		});
 		expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/graphql'))).toBe(false);
 	});
 
@@ -743,9 +757,18 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${init?.method ?? 'GET'} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).rejects.toThrow(
+		const error = await publisher(fetcher)
+			.updateChangeRequest(updateInput)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain(
 			'pull request branch was deleted; create a new pull request',
 		);
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'branch',
+			condition: 'branch_deleted',
+		});
 		expect(fetcher.mock.calls.some(([url]) => String(url).includes('/git/commits/'))).toBe(false);
 	});
 
@@ -1556,9 +1579,15 @@ describe('GitHubAppPublisher', () => {
 		const fetcher = vi.fn(async () => {
 			throw new Error('socket included a credential');
 		});
-		await expect(publisher(fetcher).openChangeRequest(input)).rejects.toThrow(
-			'GitHub is unavailable',
-		);
+		const error = await publisher(fetcher)
+			.openChangeRequest(input)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toBe('GitHub is unavailable');
+		expect(sourceControlPublishFailure(error)).toEqual({
+			provider: 'github',
+			stage: 'installation',
+		});
 	});
 
 	it('rejects invalid JSON from GitHub', async () => {

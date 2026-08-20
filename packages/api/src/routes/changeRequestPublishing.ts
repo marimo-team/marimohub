@@ -29,11 +29,6 @@ export interface PreparedProposal {
 	state: 'new' | 'pending' | 'published';
 }
 
-interface ReusableProposalLookup {
-	record?: NotebookProposalRecord;
-	exists: boolean;
-}
-
 function publisherFor(deps: PrepareProposalInput['deps'], provider: string) {
 	const publisher = deps.sourceControl?.getPublisher(provider);
 	if (!publisher) {
@@ -54,34 +49,35 @@ function assertReusableProposal(record: NotebookProposalRecord, input: PreparePr
 	}
 }
 
-async function reusableProposal(input: PrepareProposalInput): Promise<ReusableProposalLookup> {
+async function reusableProposal(
+	input: PrepareProposalInput,
+): Promise<NotebookProposalRecord | undefined> {
 	try {
-		const record = await input.deps.services.proposals.getReusableProposal(
+		return await input.deps.services.proposals.getReusableProposal(
 			input.projectId,
 			input.notebookId,
 			input.proposalId,
 		);
-		return { record, exists: true };
 	} catch (error) {
-		if (error instanceof NotFoundError) return { exists: false };
+		if (error instanceof NotFoundError) return undefined;
 		throw error;
 	}
 }
 
 export async function prepareProposal(input: PrepareProposalInput): Promise<PreparedProposal> {
 	const reusable = await reusableProposal(input);
-	if (reusable.record) {
-		assertReusableProposal(reusable.record, input);
-		if (reusable.record.publication.state === 'published') {
-			return { proposal: reusable.record.proposal, state: 'published' };
+	if (reusable) {
+		assertReusableProposal(reusable, input);
+		if (reusable.publication.state === 'published') {
+			return { proposal: reusable.proposal, state: 'published' };
 		}
 		const notebook = await input.deps.services.notebooks.getNotebook(
 			input.projectId,
 			input.notebookId,
 		);
 		return {
-			proposal: reusable.record.proposal,
-			publisher: publisherFor(input.deps, reusable.record.proposal.source.provider),
+			proposal: reusable.proposal,
+			publisher: publisherFor(input.deps, reusable.proposal.source.provider),
 			notebookTitle: notebook.meta.title,
 			state: 'pending',
 		};
@@ -120,7 +116,7 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		legacySourceRevision,
 	);
 	const publisher = publisherFor(input.deps, sourceRevision.provider);
-	const proposal = await input.deps.services.proposals.captureProposal({
+	const { proposal, created } = await input.deps.services.proposals.captureProposalWithOutcome({
 		projectId: input.projectId,
 		notebookId: input.notebookId,
 		proposalId: input.proposalId,
@@ -135,6 +131,6 @@ export async function prepareProposal(input: PrepareProposalInput): Promise<Prep
 		proposal,
 		publisher,
 		notebookTitle: notebook.meta.title,
-		state: reusable.exists ? 'pending' : 'new',
+		state: created ? 'new' : 'pending',
 	};
 }
