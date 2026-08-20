@@ -5,7 +5,8 @@ export interface SlidingWindowBudgetOptions {
 }
 
 export interface SlidingWindowBudget<Key> {
-	consume(key: Key): boolean;
+	/** Consume capacity at `timestamp`, or at the configured clock's current time when omitted. */
+	consume(key: Key, timestamp?: number): boolean;
 	tracked(): number;
 }
 
@@ -24,8 +25,8 @@ export function createSlidingWindowBudget<Key>(
 	let lastObservedAt: number | undefined;
 
 	return {
-		consume(key): boolean {
-			const currentTime = now();
+		consume(key, timestamp): boolean {
+			const currentTime = timestamp ?? now();
 			const clockRolledBack = lastObservedAt !== undefined && currentTime < lastObservedAt;
 			lastObservedAt = currentTime;
 			if (clockRolledBack) {

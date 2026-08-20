@@ -10,11 +10,12 @@ import { listAllKeys, listAllObjects } from '../catalog/storage';
 import type { CommitSessionInput } from '../content/NotebookService';
 
 /**
- * Max concurrent per-file transfers: the bucket reads a restore batch issues, and
- * the per-file `exec` reads a capture makes. Bounded so neither floods the object
- * store nor the sandbox's command channel.
+ * Restore GETs touch only the object store and byte-bounded API memory, so they
+ * can fan out further than capture reads, which contend on the sandbox command
+ * channel.
  */
-const SANDBOX_FILE_CONCURRENCY = 8;
+const RESTORE_FETCH_CONCURRENCY = 32;
+const CAPTURE_FILE_CONCURRENCY = 8;
 
 /**
  * Attempts for an idempotent sandbox write. A backend stream can reset mid-call
@@ -163,7 +164,7 @@ export async function restoreWorkspace(
 	let objectCount = 0;
 	let bytes = 0;
 	for (const batch of batchByBytes(wanted, RESTORE_BATCH_BYTES)) {
-		const fetched = await mapWithConcurrency(batch, SANDBOX_FILE_CONCURRENCY, async (f) => {
+		const fetched = await mapWithConcurrency(batch, RESTORE_FETCH_CONCURRENCY, async (f) => {
 			const body = await bucket.get(f.key);
 			if (!body) return;
 			return { path: f.dest, content: await body.bytes() };
@@ -255,7 +256,7 @@ export async function captureWorkspace(
 
 		// A read failure skips just that file (logged); successful ones join the
 		// `present` mirror set that drives the delete pass below.
-		const captured = await mapWithConcurrency(selected, SANDBOX_FILE_CONCURRENCY, async (rel) => {
+		const captured = await mapWithConcurrency(selected, CAPTURE_FILE_CONCURRENCY, async (rel) => {
 			const result = await sandbox.exec(`base64 -w0 ${shellQuote(`${workingDir}/${rel}`)}`);
 			if (!result.success) {
 				console.warn(`captureWorkspace: could not read ${rel}; skipping`);

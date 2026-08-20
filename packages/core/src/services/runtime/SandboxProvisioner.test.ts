@@ -80,6 +80,7 @@ describe('SandboxProvisioner', () => {
 			expect(result.usedFallback).toBe(false);
 			expect(result.url).toBe(EXPOSED_URL);
 			expect(result.sandbox).toBe(instance);
+			expect(result.timings.total).toEqual(expect.any(Number));
 
 			expect(calls.exec).toContain('true');
 			// Bucket was mounted (no fallback file copy).

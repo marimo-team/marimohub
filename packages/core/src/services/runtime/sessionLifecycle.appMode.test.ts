@@ -132,6 +132,27 @@ describe('SessionLifecycleService (app sessions)', () => {
 		expect((await getStored(s)).connections_checked_at).toBe(iso(-60_000));
 	});
 
+	it('refreshes informational connection counts at most every five minutes', async () => {
+		await putSession();
+		const service = makeService();
+
+		await service.sweep(now);
+		await service.sweep(now + 60_000);
+		await service.sweep(now + 5 * 60_000);
+
+		expect(probe).toHaveBeenCalledTimes(2);
+	});
+
+	it('probes immediately when a reap decision becomes due', async () => {
+		await putSession({ expires_at: iso(30_000) });
+		const service = makeService();
+
+		await service.sweep(now);
+		await service.sweep(now + 60_000);
+
+		expect(probe).toHaveBeenCalledTimes(2);
+	});
+
 	it('probes under the kernel base path recovered from the client URL', async () => {
 		await putSession({ sandbox_url: 'https://hub.example/proxy/tok-abc/' });
 		await putSession({

@@ -148,7 +148,7 @@ export interface ProvisionResult {
 	url: string;
 	/** Whether files were loaded via manual copy (true) or bucket mount (false) */
 	usedFallback: boolean;
-	/** Per-phase ms: handle, reachable, files, inject, start, waitport, expose. */
+	/** Wall-clock total and per-phase ms: handle, reachable, files, inject, start, waitport, expose. */
 	timings: Timings;
 	/**
 	 * Non-duration measurements for the same wide event — workspace objects/bytes
@@ -280,6 +280,7 @@ export class SandboxProvisioner {
 	) {}
 
 	async provision(options: ProvisionOptions): Promise<ProvisionResult> {
+		const provisionStart = Date.now();
 		// A restored sandbox boots from the snapshot image; the workspace load below
 		// still refreshes the code from the bucket cache.
 		const createStart = Date.now();
@@ -297,6 +298,7 @@ export class SandboxProvisioner {
 			// Constructing the (usually lazy) handle, NOT the backend's create — that
 			// lands in `reachable_create` once the adapter resolves it.
 			result.timings.handle = createMs;
+			result.timings.total = Date.now() - provisionStart;
 			return result;
 		} catch (err) {
 			// Provisioning failed partway — destroy any partial sandbox before

@@ -31,6 +31,17 @@ describe('createSlidingWindowBudget', () => {
 		expect(budget.consume('user')).toBe(true);
 	});
 
+	it('accepts an explicit observation time', () => {
+		const budget = createSlidingWindowBudget<string>({
+			limit: 1,
+			windowMs: 1_000,
+			now: () => 10_000,
+		});
+		expect(budget.consume('user', 0)).toBe(true);
+		expect(budget.consume('user', 999)).toBe(false);
+		expect(budget.consume('user', 1_000)).toBe(true);
+	});
+
 	it('forgets inactive keys during an amortized sweep', () => {
 		let now = 0;
 		const budget = createSlidingWindowBudget<string>({
