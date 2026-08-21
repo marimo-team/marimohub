@@ -39,6 +39,9 @@ export type {
 } from './content/NotebookProposalService';
 export type { CreateNotebookInput, NotebookVersionProtector } from './content/NotebookService';
 export {
+	applyGitSourceUpdate,
+	assertSyncedSource,
+	createGitSource,
 	effectiveGitSourceConfig,
 	isAtBranchHead,
 	providerForRepo,

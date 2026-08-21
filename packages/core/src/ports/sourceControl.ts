@@ -151,6 +151,15 @@ export interface SourceControlReader {
 		commit: string,
 		rootPath: string,
 	): Promise<SourceWorkspaceFile[]>;
+	/**
+	 * Materialize a credential-free Git directory for the exact commit. Paths
+	 * are relative to `.git`; the returned object database must resolve commit.
+	 */
+	fetchGitDirectory?(
+		repository: string,
+		commit: string,
+		branch: string,
+	): Promise<SourceWorkspaceFile[]>;
 }
 
 /** Server-side source-control capabilities configured for this deployment. */
@@ -161,4 +170,6 @@ export interface SourceControlRegistry {
 	publisherProviders(): readonly string[];
 	/** Provider ids that can serve server-initiated pull sync. */
 	readerProviders(): readonly string[];
+	/** Provider ids that can create pull-mode sources with a real Git working tree. */
+	pullSourceProviders(): readonly string[];
 }

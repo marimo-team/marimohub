@@ -717,7 +717,7 @@ export const GitSourceResponseSchema = z.object({
 	}),
 	...GitSourceConfigResponseSchema.shape,
 	pending_config: GitSourceConfigResponseSchema.optional(),
-	sync_mode: z.literal('push'),
+	sync_mode: z.enum(['push', 'pull']),
 	current_version_id: z.string().nullable(),
 	commit: z.string().nullable(),
 	last_synced_at: nullableDt(),
@@ -1007,6 +1007,11 @@ export const CapabilitiesResponseSchema = z
 			sync_providers: z.array(z.string()).openapi({
 				description:
 					'Provider ids configured for server-initiated pull sync (drift lookup and "Sync now").',
+				example: ['github'],
+			}),
+			pull_source_providers: z.array(z.string()).openapi({
+				description:
+					'Provider ids configured to create pull-mode sources with server-materialized Git metadata.',
 				example: ['github'],
 			}),
 		}),

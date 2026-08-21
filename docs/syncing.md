@@ -8,17 +8,19 @@ description: Sync read-only notebooks into marimohub from external Git repositor
 > request/response shapes documented here are not yet stable, and there is no
 > backwards-compatibility guarantee between releases.
 
-marimohub can serve a notebook whose source of truth lives in an external
-**Git repository**. You can update the notebook with either sync method:
+marimohub can serve a notebook whose source of truth is an external **Git
+repository**. Choose a source mode when you create the notebook:
 
-- **Push sync** sends an archive from a CI workflow. It uses a notebook-scoped
-  sync token and does not give marimohub repository credentials.
-- **Server-initiated sync** pulls a configured GitHub branch on demand. It uses
-  the server's GitHub App credentials and does not require a CI workflow.
+| Mode   | Primary sync path               | Credential | Supported path  | Git metadata                    |
+| ------ | ------------------------------- | ---------- | --------------- | ------------------------------- |
+| `push` | CI upload or **Sync now**       | Sync token | Root or subtree | Only when the upload has `.git` |
+| `pull` | Create request and **Sync now** | GitHub App | Root only       | Included in every version       |
 
-You can use both methods for the same notebook. Each successful sync creates an
-immutable version of the repository files under `root_path`. Running sessions
-get a fresh copy of the latest version. Optional
+The source mode cannot change after creation. For a push source, **Sync now**
+updates the files but does not add Git metadata to the version.
+
+Each successful sync creates an immutable version of the repository files under
+`root_path`. Each session starts with a fresh copy of the latest version. Optional
 [source-control publishing](configuration.md#source-control-publishing) can send
 session edits to the provider without changing these stored versions.
 
@@ -43,7 +45,7 @@ Each sync writes the repository files into a fresh
 notebook's source pointer. Concurrent syncs cannot combine files from different
 versions. The source pointer always references one complete version.
 
-## 1. Create a synced notebook
+## Create a synced notebook
 
 ```http
 POST /api/v1/projects/{pid}/notebooks/git
@@ -56,31 +58,31 @@ Content-Type: application/json
   "repo": "acme/analytics",
   "branch": "main",
   "root_path": "apps",
-  "entry_notebook": "dashboard.py"
+  "entry_notebook": "dashboard.py",
+  "sync_mode": "push"
 }
 ```
 
-| Field            | Required | Notes                                                                                      |
-| ---------------- | -------- | ------------------------------------------------------------------------------------------ |
-| `provider`       | no       | `github` or `gitlab`. Usually derived from `repo`; see below.                              |
-| `repo`           | yes      | Repository URL or `owner/name`. Server sync pulls from it, and push headers must match it. |
-| `branch`         | yes      | Branch this notebook tracks.                                                               |
-| `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`).                |
-| `entry_notebook` | yes      | The notebook to open (`.py`, `.md`, `.markdown`, or `.qmd`), **relative to `root_path`**.  |
+| Field            | Required | Notes                                                                                     |
+| ---------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `provider`       | no       | `github` or `gitlab`. Usually derived from `repo`.                                        |
+| `repo`           | yes      | Repository URL or `owner/name`. Pull mode currently supports GitHub.com only.             |
+| `branch`         | yes      | Branch this notebook tracks.                                                              |
+| `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`).               |
+| `entry_notebook` | yes      | The notebook to open (`.py`, `.md`, `.markdown`, or `.qmd`), **relative to `root_path`**. |
+| `sync_mode`      | no       | `push` (default) or `pull`. Pull mode is GitHub-only and requires `root_path: ""`.        |
 
-`repo` accepts `owner/repo` (GitHub shorthand; gitlab.com when `provider` is
-`gitlab`) or a repository URL such as
-`https://gitlab.example.com/group/subgroup/project` — nested GitLab groups
-included. Scheme-less `host.tld/group/project` and SSH remotes
-(`git@host:path.git`) are rewritten to https on write.
+`repo` accepts `owner/repo` or a repository URL. The shorthand refers to GitHub,
+unless `provider` is `gitlab`. GitLab URLs can contain nested groups, such as
+`https://gitlab.example.com/group/subgroup/project`. marimohub converts
+scheme-less and SSH remotes to HTTPS when it stores them.
 
-`provider` picks the UI's link layout (GitLab nests deep links under `/-/`).
-It is derived from the host name — hosts containing `github` or `gitlab` are
-recognized — so pass it only when the host doesn't give it away (e.g.
-`code.example.com`). With no recognized host and no `provider`, the UI shows
-the sync metadata without links.
+marimohub normally derives `provider` from the host name. Set it only when a
+custom host does not identify the provider. The value controls provider links
+in the web interface. If neither the host nor `provider` identifies a provider,
+the interface shows the sync metadata without links.
 
-The response returns the notebook plus its sync credentials:
+For push mode, the response returns the notebook plus its sync credentials:
 
 ```json
 {
@@ -96,11 +98,50 @@ The response returns the notebook plus its sync credentials:
 The `sync_token` is shown **once**. Store it as a CI secret. The server keeps
 only a SHA-256 of it.
 
+### Pull mode: connect a GitHub repository
+
+Use pull mode when marimohub must sync the repository. Set `sync_mode` to
+`pull` and use an empty `root_path`:
+
+```json
+{
+	"title": "Sales dashboard",
+	"description": "Connected to the analytics repo",
+	"repo": "acme/analytics",
+	"branch": "main",
+	"root_path": "",
+	"entry_notebook": "apps/dashboard.py",
+	"sync_mode": "pull"
+}
+```
+
+The deployment must list `"github"` in `source_control.pull_source_providers`
+from `GET /api/v1/capabilities`. The create request reads the branch head before
+it returns. On success, the response contains an active notebook without
+`sync_url` or `sync_token`.
+
+If the first pull fails, the response contains a draft notebook and
+`sync_error`. Correct the repository coordinates or GitHub App access. Then use
+**Sync now** to retry.
+
+Pull mode supports only the repository root in v1. Put the full
+repository-relative path in `entry_notebook`. For example, use
+`apps/dashboard.py` instead of `root_path: "apps"`.
+
+Each pull stores a shallow, credential-free Git directory for the exact commit.
+marimohub restores this directory into the session workspace. Session startup
+fails if the Git directory cannot be restored completely. The GitHub
+installation token stays on the server.
+
+Git data larger than 25 MB is rejected. Use push mode for a repository that
+exceeds this limit.
+
 ### View or edit sync settings
 
-In the project notebook menu, open **Sync settings** to view the repository,
-branch, repo folder, entry notebook, sync URL, and last successful sync. Project
-editors can change all four source coordinates:
+In the notebook menu, open **Sync settings** to view the repository, branch,
+repository folder, entry notebook, and last successful sync. Push sources also
+show the sync URL and token controls. Project editors can change the four source
+coordinates:
 
 ```http
 PATCH /api/v1/projects/{pid}/notebooks/{nid}/source
@@ -114,28 +155,36 @@ Content-Type: application/json
 }
 ```
 
-When editing, a bare `owner/repo` keeps naming a path on the host the source
-already lives on; github.com shorthand stays bare.
+For an existing custom-host source, a bare `owner/repo` continues to use that
+host. GitHub.com shorthand remains bare.
+
+The source mode cannot change. A pull source must continue to use the repository
+root and a supported GitHub.com repository. marimohub rejects unsupported source
+changes before it stores them.
 
 Before the first successful sync, changes take effect immediately. After that,
-changes remain pending until a push or server pull matches the new source
+changes remain pending until a CI upload or server sync matches the new source
 coordinates. The notebook continues to serve its last successful version in
 the meantime. Editing the source does not change the sync URL or rotate its
-token.
+token. Pull sources promote pending settings on the next **Sync now**. Push
+sources promote them on a matching CI upload or server sync.
 
-## Server-initiated sync with GitHub
+## Sync now with GitHub
 
-For GitHub notebooks, this method can replace push step 2. The deployment must
-have a configured [GitHub App](configuration.md#source-control-publishing). A
-project editor can compare a notebook with its branch head and pull that commit
-into marimohub. This method currently supports GitHub.com repositories only.
+**Sync now** reads a GitHub branch through the server. Pull sources use this
+action as their normal sync method. Push sources can use it as an alternative to
+a CI upload.
+
+The deployment must have a configured
+[GitHub App](configuration.md#source-control-publishing). This feature currently
+supports GitHub.com repositories only.
 
 The deployment advertises supported providers in
 `source_control.sync_providers` from `GET /api/v1/capabilities`. The list
 contains `"github"` when the GitHub App is configured. The notebook's
 `source.provider` must appear in this list.
 
-The API provides two endpoints:
+The API provides these endpoints:
 
 | Endpoint                                                  | Result                                                                        |
 | --------------------------------------------------------- | ----------------------------------------------------------------------------- |
@@ -151,28 +200,33 @@ The drift response includes `current_commit`, `remote_commit`, `in_sync`,
 time and does not change notebook state. Pending source settings always set
 `in_sync` to `false`.
 
-The sync endpoint downloads the repository tree under `root_path` at the
-resolved commit. It applies the same file-count and size limits as push sync to
-the files under `root_path`. Files outside `root_path` do not count against
-these limits, so a small subtree can sync from a large monorepo. The repository
-download itself is limited to 100 MB compressed and 2 GB uncompressed. If
-no source settings are pending and the notebook already points to that commit,
-it returns `synced: false` and does not create a version. A successful sync
-against pending source settings makes those settings active. The response also
-includes the resolved `commit` and the new `version_id`. The `version_id` is
-`null` for a no-op.
+The sync endpoint reads the repository tree at the resolved commit. It applies
+the push-sync file-count and size limits to files under `root_path`. For a push
+source, files outside `root_path` do not count against these limits. Pull sources
+always use the repository root.
 
-The web interface shows the drift status and a **Sync now** button in **Sync
-settings** and in the repository popover. The button is available only to
-editors when the source provider supports server-initiated sync.
+Server sync omits symlinks and other special entries from the workspace. For a
+pull source, proposal capture also ignores these omitted Git index entries.
 
-Push sync and server-initiated sync share commit-based idempotency. If either
-method already synced a commit, the other method does not create a duplicate
-version. GitHub archives do not include `.git`, so a server-pulled workspace
-supports entry-notebook publishing only. To capture changes across multiple
-files, use push sync and [include `.git`](#include-git-for-multi-file-publishing).
+The repository download is limited to 100 MB compressed and 2 GB uncompressed.
+If no settings are pending and the notebook already points to the commit, the
+endpoint returns `synced: false` and creates no version. A sync against pending
+source settings makes those settings active. The response includes the resolved
+`commit` and the new `version_id`. For a no-op, `version_id` is `null`.
 
-## 2. Push an archive
+The web interface shows drift status and **Sync now** in **Sync settings** and
+the repository popover. The action is available to editors when the provider
+supports server sync.
+
+CI uploads and **Sync now** share commit-based idempotency. If one method already
+synced a commit, the other method does not create a duplicate version.
+
+A pull-mode version always includes `.git`. Publishing can therefore capture
+added, modified, and deleted files across the working tree. A push-mode server
+sync stores repository files only. Include `.git` in CI archives when a push
+source needs multi-file capture.
+
+## Push an archive
 
 Use push sync for GitLab, self-hosted Git providers, or deployments without a
 GitHub App. You can also use it for GitHub notebooks that support **Sync now**.
@@ -257,7 +311,7 @@ Archive the complete checkout instead of using `git archive`:
   run: tar czf /tmp/sync.tgz .
 ```
 
-Upload `/tmp/sync.tgz` with the headers from [Push an archive](#_2-push-an-archive).
+Upload `/tmp/sync.tgz` with the headers from [Push an archive](#push-an-archive).
 Omit `X-Marimohub-Root-Path`, or set it to an empty string.
 
 This method has these requirements:
@@ -272,9 +326,9 @@ This method has these requirements:
   Files inside `.git` count toward these limits.
 
 marimohub stores `.git` with the immutable version and restores it into each
-session workspace. If `.git` or the `git` binary is unavailable, capture uses
-the entry-notebook fallback. If Git cannot resolve `X-Marimohub-Commit`,
-publishing fails without falling back.
+session workspace. If `.git` is absent or the `git` binary is unavailable,
+capture uses the entry-notebook fallback. If Git cannot resolve
+`X-Marimohub-Commit`, publishing fails without falling back.
 
 ### Idempotency
 

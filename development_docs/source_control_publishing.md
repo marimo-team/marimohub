@@ -49,11 +49,18 @@ Capture selects one of two strategies automatically and records the choice in
   configured entry notebook with the immutable source version, preserving compatibility with
   copy-based sandbox backends.
 
+Pull-mode GitHub sources store a shallow Git directory for the exact synced
+commit. The control plane restores it when the session starts. Repository
+credentials never enter the sandbox. Pull sources therefore use
+`git-working-tree`. Push sources use this strategy only when the uploaded archive
+contains `.git`.
+
 The Git strategy uses Git only to discover paths and operations. The control plane reads the final
 file bytes through the sandbox port, hashes them, and stores normal provider-neutral proposal
 changes; it does not trust or persist an opaque patch. Tracked modifications and deletions must
-exist in the immutable source version. New regular files may be added. Symlinks and other special
-files are rejected, and mode-only changes are ignored because the proposal format is content-only.
+exist in the immutable source version. New regular files can be added. Source ingest omits
+symlinks and other special files. Capture ignores their missing index entries. It also ignores
+mode-only changes because the proposal format stores content only.
 
 Capture is limited to 1,000 changes and 10 MB of combined content. It excludes `.git`,
 `__marimo__`, `.venv`, `__pycache__`, `node_modules`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`,
@@ -75,7 +82,7 @@ GitHub source control. If only one variable is set, startup fails. The key can b
 single-line base64 encoding of the PEM. No GitHub App webhook is required.
 
 The GitHub App supports publishing and
-[server-initiated sync](../docs/syncing.md#server-initiated-sync-with-github). Project editors can
+[server sync](../docs/syncing.md#sync-now-with-github). Project editors can
 compare a synced notebook with its branch head and pull that commit on demand. Pulls use the same
 workspace parser and limits as pushed archives. The drift and sync endpoints always use the
 source coordinates stored on the notebook. They do not accept a repository from the caller.

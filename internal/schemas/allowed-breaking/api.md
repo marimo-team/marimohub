@@ -30,3 +30,13 @@ POST /api/v1/projects/{pid}/integrations/{iid}/browse/objects/preview added `sub
 POST /api/v1/projects/{pid}/notebooks/git removed the enum value `github` of the request property `provider`
 POST /api/v1/projects/{pid}/notebooks/git removed the enum value `gitlab` of the request property `provider`
 POST /api/v1/projects/{pid}/notebooks/git the `provider` request property's minLength was increased from `0` to `1`
+
+`sync_mode` now accepts pull sources. Pull creation omits the push-only token
+and URL. Existing push responses still contain both fields.
+
+```text
+POST /api/v1/projects/{pid}/notebooks/git the response property `data/sync_token` became optional for the status `201`
+POST /api/v1/projects/{pid}/notebooks/git the response property `data/sync_url` became optional for the status `201`
+GET /api/v1/projects/{pid}/notebooks/{nid} added the new `pull` enum value to the `data/source/oneOf[subschema #2]/sync_mode` response property for the response status `200`
+PATCH /api/v1/projects/{pid}/notebooks/{nid}/source added the new `pull` enum value to the `data/source/sync_mode` response property for the response status `200`
+```

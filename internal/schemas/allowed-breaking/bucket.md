@@ -35,3 +35,13 @@ PUT /projects/{pid}/notebooks/{nid}/source.json `removed the enum value `github`
 PUT /projects/{pid}/notebooks/{nid}/source.json `removed the enum value `gitlab` of the request property `oneOf[subschema #2]/provider/anyOf[subschema #1]/``
 PUT /projects/{pid}/notebooks/{nid}/source.json `the `oneOf[subschema #2]/provider/anyOf[subschema #1]/` request property's minLength was increased from `0` to `1``
 ```
+
+`sync_mode` changed from the stored literal `push` to the `push | pull` enum.
+Existing source records remain valid. New pull records use the second value.
+
+```text
+GET /projects/{pid}/notebooks/{nid}/source.json the `sync_mode` response property const value `push` was removed for the status `200`
+PUT /projects/{pid}/notebooks/{nid}/source.json request property `oneOf[subschema #2]/sync_mode` was restricted to a list of enum values
+GET /projects/{pid}/notebooks/{nid}/source.json added the new `pull` enum value to the `oneOf[subschema #2]/sync_mode` response property for the response status `200`
+GET /projects/{pid}/notebooks/{nid}/source.json added the new `push` enum value to the `oneOf[subschema #2]/sync_mode` response property for the response status `200`
+```

@@ -32,9 +32,15 @@ function setup(options: {
 	driftError?: boolean;
 	driftNotConfigured?: boolean;
 	syncError?: boolean;
+	syncMode?: 'push' | 'pull';
 }) {
 	const calls: { method: string; url: string; body?: unknown }[] = [];
-	const base = { ...activeSource, provider: options.provider ?? activeSource.provider };
+	const base = {
+		...activeSource,
+		provider: options.provider ?? activeSource.provider,
+		sync_mode: options.syncMode ?? activeSource.sync_mode,
+		root_path: options.syncMode === 'pull' ? '' : activeSource.root_path,
+	};
 	const source = options.pending
 		? {
 				...base,
@@ -63,6 +69,7 @@ function setup(options: {
 								source_control: {
 									change_request_providers: [],
 									sync_providers: options.syncProviders ?? [],
+									pull_source_providers: [],
 								},
 							},
 				);
@@ -138,6 +145,17 @@ describe('SyncSettingsDialog', () => {
 		expect(screen.getByText(/last synced/i)).toBeInTheDocument();
 	});
 
+	it('shows Sync now but no token, URL, or subtree controls for a pull source', async () => {
+		setup({ syncMode: 'pull', syncProviders: ['github'], remoteCommit: 'fedcba9876543210' });
+
+		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
+		expect(screen.queryByLabelText('Folder in repo (optional)')).not.toBeInTheDocument();
+		expect(screen.queryByLabelText('Sync URL')).not.toBeInTheDocument();
+		expect(screen.queryByText('Sync credentials')).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Sync now' })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Rotate token' })).not.toBeInTheDocument();
+	});
+
 	it('shows desired settings while explaining which active source remains served', async () => {
 		setup({ pending: true });
 
@@ -191,7 +209,7 @@ describe('SyncSettingsDialog', () => {
 	it('rotates the token after confirmation and displays it once', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({});
-		await screen.findByLabelText('Repository');
+		await waitFor(() => expect(screen.getByLabelText('Repository')).toHaveValue('acme/analytics'));
 
 		await user.click(screen.getByRole('button', { name: 'Rotate token' }));
 		await user.click(screen.getByRole('button', { name: 'Rotate' }));

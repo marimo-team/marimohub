@@ -100,6 +100,7 @@ app.openapi(capabilitiesRoute, (c) => {
 		source_control: {
 			change_request_providers: [...(deps.sourceControl?.publisherProviders() ?? [])],
 			sync_providers: [...(deps.sourceControl?.readerProviders() ?? [])],
+			pull_source_providers: [...(deps.sourceControl?.pullSourceProviders() ?? [])],
 		},
 		project_alerts: {
 			available: Boolean(deps.projectAlerts),

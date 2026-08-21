@@ -28,6 +28,7 @@ import {
 	validateUpdateInput,
 } from './githubValidation';
 import { collectTarballWorkspace, validateCommit, validateRootPath } from './githubWorkspace';
+import { materializeGitDirectory } from './githubGitDirectory';
 
 export type { GitHubAppPublisherOptions, GitHubAppPublisherRuntime } from './githubClient';
 
@@ -39,9 +40,11 @@ interface GitHubPublicationContext {
 export class GitHubAppPublisher implements SourceControlPublisher, SourceControlReader {
 	readonly provider = 'github' as const;
 	private readonly client: GitHubClient;
+	private readonly fetcher: NonNullable<GitHubAppPublisherRuntime['fetcher']>;
 
 	constructor(options: GitHubAppPublisherOptions, runtime: GitHubAppPublisherRuntime = {}) {
 		this.client = new GitHubClient(options, runtime);
+		this.fetcher = runtime.fetcher ?? fetch;
 	}
 
 	private async atStage<T>(stage: SourceControlPublishStage, action: () => Promise<T>): Promise<T> {
@@ -111,6 +114,25 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 			token,
 		);
 		return collectTarballWorkspace(response, rootPath);
+	}
+
+	async fetchGitDirectory(
+		repository: string,
+		commit: string,
+		branch: string,
+	): Promise<SourceWorkspaceFile[]> {
+		validateCommit(commit);
+		validateBranch(branch);
+		const { owner, repo } = parseRepository(repository);
+		return materializeGitDirectory({
+			repository,
+			owner,
+			repo,
+			commit,
+			branch,
+			token: await this.client.installationToken(owner, repo),
+			fetcher: this.fetcher,
+		});
 	}
 
 	async openChangeRequest(input: OpenChangeRequestInput): Promise<OpenChangeRequestResult> {

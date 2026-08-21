@@ -49,6 +49,7 @@ export function stubSourceControl(
 		getReader: (provider) => (provider === reader?.provider ? reader : undefined),
 		publisherProviders: () => (publisher ? [publisher.provider] : []),
 		readerProviders: () => (reader ? [reader.provider] : []),
+		pullSourceProviders: () => (reader?.fetchGitDirectory ? [reader.provider] : []),
 	};
 }
 

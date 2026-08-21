@@ -32,6 +32,7 @@ export interface CreateSyncedNotebookInput {
 	runtime?: { python_version?: string; marimo_version?: string };
 	base_image?: string;
 	compute_profile?: string;
+	sync_mode?: 'push' | 'pull';
 }
 
 export interface SyncNotebookInput {
@@ -40,6 +41,8 @@ export interface SyncNotebookInput {
 	root_path: string;
 	commit: string;
 	files: SyncedWorkspaceFile[];
+	/** Files relative to `.git`, present only for pull-mode sources. */
+	git_files?: SyncedWorkspaceFile[];
 	/**
 	 * Optimistic precondition for server-initiated pulls: the source
 	 * `current_version_id` observed when the branch head was resolved (null for
@@ -53,7 +56,9 @@ export interface SyncNotebookInput {
 	expected_source_version?: VersionId | null;
 }
 
-export type UpdateSyncedNotebookSourceInput = GitSourceConfig;
+export type UpdateSyncedNotebookSourceInput = GitSourceConfig & {
+	sync_mode?: 'push' | 'pull';
+};
 
 export const SyncTokenRecordSchema = z.object({
 	schema_version: z.literal(1),
@@ -173,12 +178,44 @@ export function resolveUpdatedConfig(
 	return rehomed;
 }
 
+export function applyGitSourceUpdate(
+	current: GitSource,
+	input: UpdateSyncedNotebookSourceInput,
+): GitSource | null {
+	const desired = normalizeGitSourceConfig(input);
+	if (input.sync_mode && input.sync_mode !== current.sync_mode) {
+		throw new BadRequestError('Changing sync_mode is not supported');
+	}
+	if (current.sync_mode === 'pull' && desired.root_path !== '') {
+		throw new BadRequestError('Pull-mode sources require root_path to be empty');
+	}
+	const resolved = resolveUpdatedConfig(current, desired);
+	const active = gitSourceConfig(current);
+	if (current.pending_config && gitSourceConfigsEqual(current.pending_config, resolved))
+		return null;
+	const { pending_config: _pendingConfig, ...withoutPending } = current;
+	if (gitSourceConfigsEqual(active, resolved)) {
+		return current.pending_config ? withoutPending : null;
+	}
+	if (current.current_version_id === null) {
+		return {
+			...withoutPending,
+			...resolved,
+			provider: providerForRepo(current, resolved.repo),
+		};
+	}
+	return { ...current, pending_config: resolved };
+}
+
 export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
 	// Shorthand means github.com — unless the caller says GitLab, then gitlab.com.
 	const config = rehomeShorthand(
 		normalizeGitSourceConfig(input),
 		input.provider === 'gitlab' ? 'https://gitlab.com' : null,
 	);
+	if (input.sync_mode === 'pull' && config.root_path !== '') {
+		throw new BadRequestError('Pull-mode sources require root_path to be empty');
+	}
 	return {
 		schema_version: 1,
 		type: 'git',
@@ -186,7 +223,7 @@ export function createGitSource(input: CreateSyncedNotebookInput): GitSource {
 		// never contradict a recognized host; the claim covers unknown hosts.
 		provider: detectProvider(config.repo) ?? input.provider ?? null,
 		...config,
-		sync_mode: 'push',
+		sync_mode: input.sync_mode ?? 'push',
 		current_version_id: null,
 		commit: null,
 		last_synced_at: null,

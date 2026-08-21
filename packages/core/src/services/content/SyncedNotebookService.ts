@@ -1,20 +1,17 @@
 import type { Bucket } from '../../ports/bucket';
-import { NotFoundError } from '../../errors';
+import { BadRequestError, ConflictError, NotFoundError } from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR } from '../../ids';
 import type { NotebookId, ProjectId, UserId, VersionId } from '../../ids';
 import {
+	applyGitSourceUpdate,
 	assertSyncSourcePrecondition,
 	assertSyncedSource,
 	createGitSource,
 	createSyncToken,
 	createSyncTokenRecord,
-	gitSourceConfig,
-	gitSourceConfigsEqual,
 	isAtBranchHead,
-	normalizeGitSourceConfig,
 	prepareSync,
 	providerForRepo,
-	resolveUpdatedConfig,
 	SyncTokenRecordSchema,
 	verifySyncTokenRecord,
 } from '../../integrations/syncedSource';
@@ -35,6 +32,7 @@ import { buildNotebookEntry, buildNotebookMeta, buildVersion } from './notebookM
 import { listAllKeys } from '../catalog/storage';
 import type { GitSource, NotebookMeta, Source } from '../../schema';
 import { loadNotebookCatalogPatch } from './catalogProjection';
+import { toSyncedWorkspaceFileMap } from '../../integrations/remoteWorkspace';
 
 interface SyncedNotebookServiceHooks {
 	getNotebook: (
@@ -45,8 +43,8 @@ interface SyncedNotebookServiceHooks {
 }
 
 /**
- * Notebooks whose source is push-synced from an external git repo (see
- * `GitSource`). A version per push is the unit of truth: each sync writes a fresh,
+ * Notebooks whose source is synced from an external git repo (see `GitSource`).
+ * A version per sync is the unit of truth: each sync writes a fresh,
  * immutable `versions/{vid}/workspace/` mirror and then compare-and-swaps the
  * notebook's `source.json` pointer to it. There is no mutable workspace mirror to
  * corrupt, so concurrent pushes can only orphan a version, never interleave one.
@@ -63,11 +61,11 @@ export class SyncedNotebookService {
 		projectId: ProjectId,
 		input: CreateSyncedNotebookInput,
 		actor: UserId,
-	): Promise<{ meta: NotebookMeta; sync_token: string }> {
+	): Promise<{ meta: NotebookMeta; sync_token?: string }> {
 		const notebookId = createNotebookId();
 		const now = new Date().toISOString();
 		const source = createGitSource(input);
-		const syncToken = createSyncToken();
+		const syncToken = source.sync_mode === 'push' ? createSyncToken() : undefined;
 
 		const meta = buildNotebookMeta({
 			notebookId,
@@ -83,10 +81,11 @@ export class SyncedNotebookService {
 			computeProfile: input.compute_profile,
 		});
 
-		const tokenRecord = await createSyncTokenRecord(syncToken, now);
+		const tokenRecord = syncToken ? await createSyncTokenRecord(syncToken, now) : undefined;
 
 		const nb = paths.project(projectId).notebook(notebookId);
-		const contentKeys = [nb.meta, nb.readme, nb.source, nb.integrationSyncToken];
+		const contentKeys = [nb.meta, nb.readme, nb.source];
+		if (tokenRecord) contentKeys.push(nb.integrationSyncToken);
 
 		await saga(metricsObserver(this.metrics, 'saga.synced_notebook_create'))
 			.step(
@@ -100,7 +99,9 @@ export class SyncedNotebookService {
 								input.readme ?? `# ${input.title}\n\n${input.description}\n`,
 							),
 						() => this.bucket.put(nb.source, JSON.stringify(source)),
-						() => this.bucket.put(nb.integrationSyncToken, JSON.stringify(tokenRecord)),
+						...(tokenRecord
+							? [() => this.bucket.put(nb.integrationSyncToken, JSON.stringify(tokenRecord))]
+							: []),
 					],
 					() => this.bucket.delete(contentKeys),
 				),
@@ -115,17 +116,23 @@ export class SyncedNotebookService {
 			)
 			.run();
 
-		return { meta, sync_token: syncToken };
+		return { meta, ...(syncToken ? { sync_token: syncToken } : {}) };
 	}
 
 	private async deleteVersion(versionPaths: VersionPaths): Promise<void> {
-		const keys = await listAllKeys(this.bucket, versionPaths.workspacePrefix);
-		await this.bucket.delete([versionPaths.meta, ...keys]);
+		const [workspaceKeys, gitKeys] = await Promise.all([
+			listAllKeys(this.bucket, versionPaths.workspacePrefix),
+			listAllKeys(this.bucket, versionPaths.gitPrefix),
+		]);
+		await this.bucket.delete([versionPaths.meta, ...workspaceKeys, ...gitKeys]);
 	}
 
 	async rotateToken(projectId: ProjectId, notebookId: NotebookId): Promise<{ sync_token: string }> {
 		const { source } = await this.hooks.getNotebook(projectId, notebookId);
-		assertSyncedSource(source);
+		const git = assertSyncedSource(source);
+		if (git.sync_mode !== 'push') {
+			throw new ConflictError('Pull-mode sources do not use sync tokens');
+		}
 		const token = createSyncToken();
 		const record = await createSyncTokenRecord(token, new Date().toISOString());
 		await this.bucket.put(
@@ -141,31 +148,12 @@ export class SyncedNotebookService {
 		input: UpdateSyncedNotebookSourceInput,
 		actor: UserId,
 	): Promise<GitSource> {
-		const desired = normalizeGitSourceConfig(input);
 		const nb = paths.project(projectId).notebook(notebookId);
 		const source = await mutateObject(
 			this.bucket,
 			nb.source,
 			(raw) => assertSyncedSource(parseStored(SourceSchema, raw, nb.source)),
-			(current) => {
-				const resolved = resolveUpdatedConfig(current, desired);
-				const active = gitSourceConfig(current);
-				if (current.pending_config && gitSourceConfigsEqual(current.pending_config, resolved)) {
-					return null;
-				}
-				const { pending_config: _pendingConfig, ...withoutPending } = current;
-				if (gitSourceConfigsEqual(active, resolved)) {
-					return current.pending_config ? withoutPending : null;
-				}
-				if (current.current_version_id === null) {
-					return {
-						...withoutPending,
-						...resolved,
-						provider: providerForRepo(current, resolved.repo),
-					};
-				}
-				return { ...current, pending_config: resolved };
-			},
+			(current) => applyGitSourceUpdate(current, input),
 		);
 		const now = new Date().toISOString();
 		await mutateObject(
@@ -225,6 +213,10 @@ export class SyncedNotebookService {
 		}
 		const syncedSource = assertSyncedSource(source);
 		const prepared = prepareSync(syncedSource, input);
+		const gitFiles = input.git_files ? toSyncedWorkspaceFileMap(input.git_files) : undefined;
+		if (syncedSource.sync_mode === 'pull' && !gitFiles) {
+			throw new BadRequestError('Pull sync did not include Git metadata');
+		}
 
 		// Re-syncing the same commit (a retried CI run) is a genuine no-op, not a conflict.
 		if (isAtBranchHead(syncedSource, prepared.commit)) {
@@ -264,6 +256,11 @@ export class SyncedNotebookService {
 							([path, bytes]) =>
 								() =>
 									this.bucket.put(versionPaths.workspaceFile(path), bytes),
+						),
+						...[...(gitFiles?.entries() ?? [])].map(
+							([path, bytes]) =>
+								() =>
+									this.bucket.put(versionPaths.gitFile(path), bytes),
 						),
 					],
 					() => this.deleteVersion(versionPaths),

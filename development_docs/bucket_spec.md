@@ -198,8 +198,8 @@ selected version and cannot write changes back.
 | `_system/integrations/_names/{name}.json`                                 | JSON     | Organization-wide name claim. Claims are unique within this tier, so a project integration can use the same name.                                                                                                                                                                                                                                                                                                                                                                                      |
 | `projects/{pid}/notebooks/{nid}/meta.json`                                | JSON     | Notebook metadata: title, description, status, author, tags, last_run_at. Never contains code or paths.                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/README.md`                                | Markdown | Human-readable description and usage notes.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `projects/{pid}/notebooks/{nid}/source.json`                              | JSON     | Typed source record. `local` stores the current version pointer. `git` stores Git coordinates, sync state, and the current pushed version.                                                                                                                                                                                                                                                                                                                                                             |
-| `projects/{pid}/notebooks/{nid}/integration_sync_token.json`              | JSON     | Git-sync credential for one notebook. The record stores a token hash, not the plaintext token. Present only for Git-synced notebooks.                                                                                                                                                                                                                                                                                                                                                                  |
+| `projects/{pid}/notebooks/{nid}/source.json`                              | JSON     | Typed source record. `local` stores the current version pointer. `git` stores Git coordinates, mode, sync state, and the current synced version.                                                                                                                                                                                                                                                                                                                                                       |
+| `projects/{pid}/notebooks/{nid}/integration_sync_token.json`              | JSON     | Push-sync credential for one notebook. The record stores a token hash, not the plaintext token. Present only for push-mode Git notebooks.                                                                                                                                                                                                                                                                                                                                                              |
 | `projects/{pid}/notebooks/{nid}/fs_snapshot.json`                         | JSON     | **Optional.** Pointer to the notebook's current CoreWeave-native filesystem snapshot (`{ snapshot_id, captured_at, owner_user_id }`). Mutable, last-writer-wins, written only by the teardown snapshot path. Exclusive editors restore snapshots only for the same owner; shared editors may restore across starters. Present only under `MARIMOHUB_COMPUTE_COREWEAVE_FILESYSTEM_SNAPSHOT=true`. **Not recommended alongside `MARIMOHUB_PERSIST_WORKSPACE=workspace`** — the two double-persist state. |
 | `projects/{pid}/notebooks/{nid}/proposals/{proposal-id}/proposal.json`    | JSON     | Immutable proposal manifest containing capture strategy, author/session provenance, pinned Git source revision, and ordered change hashes. Created with create-if-absent.                                                                                                                                                                                                                                                                                                                              |
 | `projects/{pid}/notebooks/{nid}/proposals/{proposal-id}/changes/{index}`  | any      | Temporary bytes for a non-delete proposal change. The index corresponds to `proposal.json.changes`; delete changes have no object. These objects may be deleted after retention expires even though their manifest remains.                                                                                                                                                                                                                                                                            |
@@ -210,7 +210,8 @@ selected version and cannot write changes back.
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.py`               | Python   | Immutable version snapshot of the code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/pyproject.toml`            | TOML     | Dependency snapshot at time of version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/version.json`              | JSON     | Version metadata: saved_at, author, message, parent_id, optional snapshot descriptors.                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace/`                | any      | Complete immutable tree from one Git push. Present only for a `git` source version.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/workspace/`                | any      | Complete immutable tree from one Git sync. Present only for a `git` source version.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `projects/{pid}/notebooks/{nid}/versions/{vid}/git/`                      | any      | Immutable credential-free `.git` payload for a pull-mode source version. Restored into the sandbox workdir at provision and pruned with the enclosing version.                                                                                                                                                                                                                                                                                                                                         |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.html`             | HTML     | **Optional.** Rendered HTML snapshot, copied from `__marimo__/notebook.html` on session teardown. Immutable once written.                                                                                                                                                                                                                                                                                                                                                                              |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/session.json`              | JSON     | **Optional.** marimo session state (cell outputs), copied from `__marimo__/session/{notebook}.py.json` on teardown. Immutable.                                                                                                                                                                                                                                                                                                                                                                         |
 
@@ -334,20 +335,23 @@ workspace. A local source uses this shape:
 }
 ```
 
-A Git source stores `type: "git"`, `provider: "github"`, `sync_mode: "push"`,
+A Git source stores `type: "git"`, a provider, `sync_mode: "push" | "pull"`,
 Git coordinates, and sync timestamps. `current_version_id` is `null` before the
-first push.
+first successful sync.
 
 ### 4.6 Source types
 
 `source.json` is a discriminated union on `type`. The current schema supports
 `local` and `git` records. A `local` record points to the current version in the
-bucket. A `git` record stores Git coordinates and the state of the last push.
+bucket. A `git` record stores Git coordinates, its push or pull mode, and the
+state of the last sync.
 
-The hub does not fetch a `git` source from GitHub. An external workflow sends
-the workspace to `/api/sync/git/v1` with a notebook-scoped sync token. The hub
-stores the pushed files under `versions/{vid}/workspace/` and creates an
-immutable version.
+In push mode, an external workflow sends the workspace to `/api/sync/git/v1`
+with a notebook-scoped sync token. Pull mode has no token. The hub reads the
+GitHub branch and creates a credential-free shallow Git directory through the
+source-control adapter. Both modes store repository files under
+`versions/{vid}/workspace/`. Pull mode also stores `.git` content under the
+sibling `versions/{vid}/git/` prefix.
 See the [sync guide](../docs/syncing.md) for the API and token lifecycle.
 
 ### 4.7 `versions/{vid}/version.json`
@@ -367,7 +371,7 @@ See the [sync guide](../docs/syncing.md) for the API and token lifecycle.
 
 Versions are immutable once written. A local save writes a new version, updates
 `source.current_version_id`, and updates the notebook-level workspace. A Git
-push writes the complete workspace inside the new version, then advances the
+sync writes the complete workspace inside the new version. It then advances the
 source pointer with CAS.
 
 **Optional snapshot descriptors.** `html_snapshot` and `session_snapshot` record the _presence and metadata_ of a rendered HTML snapshot (`notebook.html`) and a marimo session state file (`session.json`) sitting alongside the code in the version folder. They carry `captured_at` and `size_bytes` — **never a storage path** (clients address notebooks by ID, §13). Each field is **absent** when that artifact wasn't captured; both are written only on session teardown (§8) and only if marimo actually produced the source file, so most versions have neither. Adding these optional fields is forward-tolerant — a reader that doesn't know them ignores them — so it requires no breaking migration of existing `version.json` objects.
@@ -754,8 +758,9 @@ PUT _system/catalog.json  If-Match: {current_etag}
 PUT _system/events/{today}/{event-id}.json
 ```
 
-A Git sync uses a different content write. It writes the uploaded tree under a
-new `versions/{vid}/workspace/` prefix. It then advances
+A Git sync uses a different content write. It stores the fetched or uploaded
+tree under a new `versions/{vid}/workspace/` prefix. Pull mode also stores Git
+metadata under `versions/{vid}/git/`. The sync then advances
 `source.current_version_id` with ETag CAS. See §4.6.
 
 > **Conflict Safety:** If two writers race on Step 5, one receives `412 Precondition Failed` and retries from Step 3. Steps 1–2 are idempotent — re-running them on retry is safe; the content files are already written before the conflict window opens. The loser also deletes the snapshot it wrote in Step 4 before retrying, so a failed attempt never leaves an orphan. Note that the content files in Step 1 are written _before and outside_ the conditional swap: two concurrent saves to the **same** notebook are last-writer-wins on the live `workspace/notebook.py`, while the immutable `versions/{vid}/` objects remain the authoritative per-version record.

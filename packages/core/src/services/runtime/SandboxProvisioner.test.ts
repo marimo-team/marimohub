@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Millis } from '../../duration';
-import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
+import { createNotebookId, createProjectId, createSandboxId, createVersionId } from '../../ids';
 import { paths } from '../../paths';
 import {
 	ACTOR,
@@ -635,6 +635,155 @@ describe('SandboxProvisioner', () => {
 			expect(calls.mountBucket).toHaveLength(0);
 			expect(calls.writeFiles.flat().some((f) => f.path.endsWith('apps/my_app.py'))).toBe(true);
 			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/my_app.py'");
+		});
+
+		it('restores pull-source Git metadata into the workspace .git directory', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+			await bucketHandle.put(version.gitFile('objects/pack/pack-a.pack'), 'pack');
+
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				entryNotebook: 'app.py',
+				workspaceLoadMode: 'copy-only',
+				workspacePrefix: version.workspacePrefix,
+				gitPrefix: version.gitPrefix,
+			});
+
+			const restored = calls.writeFiles.flat().map((file) => file.path);
+			expect(restored).toContain(`${MOUNT_PATH}/app.py`);
+			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
+			expect(restored).toContain(`${MOUNT_PATH}/.git/objects/pack/pack-a.pack`);
+			expect(result.counters).toMatchObject({ files_objects: 3 });
+		});
+
+		it('restores Git metadata after a successful workspace mount', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+
+			const result = await provisioner.provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				entryNotebook: 'app.py',
+				workspacePrefix: version.workspacePrefix,
+				gitPrefix: version.gitPrefix,
+			});
+
+			expect(result.usedFallback).toBe(false);
+			expect(calls.mountBucket).toHaveLength(1);
+			expect(calls.writeFiles.flat().map((file) => file.path)).toEqual([`${MOUNT_PATH}/.git/HEAD`]);
+			expect(result.counters).toMatchObject({ files_objects: 1 });
+		});
+
+		it('fails provisioning when a later Git metadata batch cannot be restored', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const writeFiles = instance.writeFiles.bind(instance);
+			let gitWriteAttempts = 0;
+			const failingInstance: SandboxInstance = {
+				...instance,
+				async writeFiles(files) {
+					await writeFiles(files);
+					if (files.some((file) => file.path.includes('/.git/')) && ++gitWriteAttempts > 1) {
+						throw new Error('Git pack write failed');
+					}
+				},
+			};
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(failingInstance));
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+			await bucketHandle.put(
+				version.gitFile('objects/pack/pack-a.pack'),
+				new Uint8Array(8 * 1024 * 1024),
+			);
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+					entryNotebook: 'app.py',
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					gitPrefix: version.gitPrefix,
+				}),
+			).rejects.toThrow('restoring Git metadata into the sandbox');
+			expect(gitWriteAttempts).toBeGreaterThan(1);
+			expect(calls.writeFiles.flat().map((file) => file.path)).toEqual(
+				expect.arrayContaining([
+					`${MOUNT_PATH}/.git/HEAD`,
+					`${MOUNT_PATH}/.git/objects/pack/pack-a.pack`,
+				]),
+			);
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('fails provisioning when the stored Git directory is empty', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+					entryNotebook: 'app.py',
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					gitPrefix: version.gitPrefix,
+				}),
+			).rejects.toThrow('restoring Git metadata into the sandbox');
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('fails provisioning when Git metadata has no bucket handle', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					entryNotebook: 'app.py',
+					workspacePrefix: version.workspacePrefix,
+					gitPrefix: version.gitPrefix,
+				}),
+			).rejects.toThrow('restoring Git metadata into the sandbox');
+			expect(calls.mountBucket).toHaveLength(1);
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
 		});
 
 		it('uses the injected workspace loader selected by workspaceLoadMode', async () => {

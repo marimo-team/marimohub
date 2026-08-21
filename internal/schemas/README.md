@@ -4,11 +4,11 @@ OpenAPI 3.1 renderings of marimohub's persisted-data and API contracts,
 committed so every contract change shows up in review as a plain-text diff and
 CI can flag the breaking ones.
 
-| Spec                                                                 | Contract                                  | Generated from                                             |
-| -------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------- |
-| [`bucket.yml`](./bucket.yml)                                         | Every JSON object persisted in the bucket | zod schemas in `packages/core/src/schema.ts` + `paths.ts`  |
-| [`integrations.yml`](./integrations.yml)                             | Every integration kind's config schema    | `defaultRegistry()` (`core/…/services/integrations/kinds`) |
-| [`../../packages/api/openapi.yaml`](../../packages/api/openapi.yaml) | The HTTP API                              | `@hono/zod-openapi` routes in `packages/api`               |
+| Spec                                                                 | Contract                                          | Generated from                                             |
+| -------------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------- |
+| [`bucket.yml`](./bucket.yml)                                         | Persisted JSON objects and artifact path families | zod schemas in `packages/core/src/schema.ts` + `paths.ts`  |
+| [`integrations.yml`](./integrations.yml)                             | Configuration schema for each integration kind    | `defaultRegistry()` (`core/…/services/integrations/kinds`) |
+| [`../../packages/api/openapi.yaml`](../../packages/api/openapi.yaml) | The HTTP API                                      | `@hono/zod-openapi` routes in `packages/api`               |
 
 The API spec stays in `packages/api` (it is published at `/openapi.yaml` and
 feeds `@marimo-hub/client` codegen) but is covered by the same CI gate.

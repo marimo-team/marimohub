@@ -1,5 +1,6 @@
 import { toast } from 'sonner';
 import { z } from 'zod';
+import { useSelector } from '@tanstack/react-store';
 import {
 	FormDialog,
 	optionalText,
@@ -8,7 +9,7 @@ import {
 	useAppForm,
 	useSeedOnOpen,
 } from '@/components/form';
-import { useCreateSyncedNotebook } from '@/api/hooks';
+import { useCapabilitiesQuery, useCreateSyncedNotebook } from '@/api/hooks';
 import {
 	ENTRY_NOTEBOOK_HINT,
 	ENTRY_NOTEBOOK_PATTERN,
@@ -19,19 +20,20 @@ import {
 export interface SyncedNotebookCreated {
 	notebookId: string;
 	title: string;
-	syncUrl: string;
-	token: string;
+	syncUrl?: string;
+	token?: string;
+	syncMode: 'push' | 'pull';
 }
 
 export interface SyncedNotebookDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
 	projectId: string;
-	/** Fired after a successful create, with the write-once sync credentials. */
 	onCreated: (result: SyncedNotebookCreated) => void;
 }
 
 const syncedSchema = z.object({
+	syncMode: z.enum(['push', 'pull']),
 	title: requiredText('Notebook name'),
 	repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
 	branch: requiredText('Branch'),
@@ -39,23 +41,29 @@ const syncedSchema = z.object({
 	entryNotebook: requiredText('Notebook file').regex(ENTRY_NOTEBOOK_PATTERN, ENTRY_NOTEBOOK_HINT),
 });
 
-const EMPTY = { title: '', repo: '', branch: 'main', rootPath: '', entryNotebook: '' };
+const emptyValues = (syncMode: 'push' | 'pull') => ({
+	syncMode,
+	title: '',
+	repo: '',
+	branch: 'main',
+	rootPath: '',
+	entryNotebook: '',
+});
 
-/**
- * Create a git-synced notebook. A repo subtree is mirrored in by an external
- * pusher (e.g. a CI workflow); see `docs/syncing.md`. The resulting write-once
- * token is handed to `onCreated` for the caller to surface (the server never
- * returns it again).
- */
 export function SyncedNotebookDialog({
 	isOpen,
 	onClose,
 	projectId,
 	onCreated,
 }: SyncedNotebookDialogProps) {
+	const { data: capabilities } = useCapabilitiesQuery();
+	const pullAvailable = (capabilities?.source_control?.pull_source_providers ?? []).includes(
+		'github',
+	);
+	const initialValues = emptyValues(pullAvailable ? 'pull' : 'push');
 	const createSynced = useCreateSyncedNotebook(projectId);
 	const form = useAppForm({
-		defaultValues: EMPTY,
+		defaultValues: initialValues,
 		validators: schemaValidators(syncedSchema),
 		onSubmit: async ({ value }) => {
 			try {
@@ -64,22 +72,31 @@ export function SyncedNotebookDialog({
 					description: value.title.trim(),
 					repo: value.repo.trim(),
 					branch: value.branch.trim(),
-					root_path: value.rootPath.trim() || undefined,
+					root_path: value.syncMode === 'pull' ? '' : value.rootPath.trim() || undefined,
 					entry_notebook: value.entryNotebook.trim(),
+					sync_mode: value.syncMode,
 				});
-				toast.success(`Created "${data.notebook.title}"`);
+				if (data.sync_error) {
+					toast.warning(`Created "${data.notebook.title}", but the first sync failed`, {
+						description: data.sync_error.message,
+					});
+				} else {
+					toast.success(`Created "${data.notebook.title}"`);
+				}
 				onCreated({
 					notebookId: data.notebook.id,
 					title: data.notebook.title,
 					syncUrl: data.sync_url,
 					token: data.sync_token,
+					syncMode: value.syncMode,
 				});
 			} catch {
 				return;
 			}
 		},
 	});
-	useSeedOnOpen(form, isOpen, EMPTY);
+	useSeedOnOpen(form, isOpen, initialValues);
+	const syncMode = useSelector(form.store, (state) => state.values.syncMode);
 
 	return (
 		<FormDialog
@@ -87,10 +104,31 @@ export function SyncedNotebookDialog({
 			isPending={createSynced.isPending}
 			isOpen={isOpen}
 			onClose={onClose}
-			title="Sync from a git repository"
+			title="Add a git repository"
 			submitLabel="Create"
 			pendingLabel="Creating..."
 		>
+			{pullAvailable && (
+				<form.AppField name="syncMode">
+					{(f) => (
+						<f.RadioGroupField
+							label="How content is synced"
+							options={[
+								{
+									value: 'pull',
+									label: 'Connect to GitHub',
+									description: 'The server pulls the repository; no CI setup is required.',
+								},
+								{
+									value: 'push',
+									label: 'Push from CI',
+									description: 'An external workflow pushes repository archives.',
+								},
+							]}
+						/>
+					)}
+				</form.AppField>
+			)}
 			<form.AppField name="title">
 				{(f) => <f.TextField label="Notebook name" placeholder="my_dashboard" autoFocus />}
 			</form.AppField>
@@ -98,16 +136,22 @@ export function SyncedNotebookDialog({
 				{(f) => (
 					<f.TextField
 						label="Repository"
-						placeholder="owner/repo or https://gitlab.example.com/group/project"
+						placeholder={
+							syncMode === 'pull'
+								? 'owner/repo'
+								: 'owner/repo or https://gitlab.example.com/group/project'
+						}
 					/>
 				)}
 			</form.AppField>
 			<form.AppField name="branch">
 				{(f) => <f.TextField label="Branch" placeholder="main" />}
 			</form.AppField>
-			<form.AppField name="rootPath">
-				{(f) => <f.TextField label="Folder in repo (optional)" placeholder="apps" />}
-			</form.AppField>
+			{syncMode === 'push' && (
+				<form.AppField name="rootPath">
+					{(f) => <f.TextField label="Folder in repo (optional)" placeholder="apps" />}
+				</form.AppField>
+			)}
 			<form.AppField name="entryNotebook">
 				{(f) => <f.TextField label="Notebook file" placeholder="dashboard.py" />}
 			</form.AppField>

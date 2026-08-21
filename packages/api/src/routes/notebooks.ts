@@ -2,7 +2,11 @@ import { createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { zipSync } from 'fflate';
 import {
+	applyGitSourceUpdate,
+	assertSyncedSource,
 	BadRequestError,
+	createGitSource,
+	DomainError,
 	ForbiddenError,
 	NotebookId,
 	NotFoundError,
@@ -41,7 +45,7 @@ import {
 } from '../shared';
 import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
-import { pullSourceToHead, resolveSyncTarget } from './sourcePullSync';
+import { assertPullSourceSupported, pullSourceToHead, resolveSyncTarget } from './sourcePullSync';
 import type { HonoEnv, SandboxConfig } from '../context';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
 import { scheduleProjectAlert } from '../notifications';
@@ -89,6 +93,7 @@ const CreateGitNotebookBody = z.object({
 	runtime: RuntimeResponseSchema.optional(),
 	base_image: z.string().min(1).optional(),
 	compute_profile: z.string().min(1).optional(),
+	sync_mode: z.enum(['push', 'pull']).optional().default('push'),
 });
 
 const SyncTokenResponseSchema = z
@@ -101,8 +106,12 @@ const SyncTokenResponseSchema = z
 const GitNotebookCreateResponseSchema = z
 	.object({
 		notebook: NotebookMetaResponseSchema,
-		sync_url: z.string(),
-		sync_token: z.string(),
+		sync_url: z.string().optional(),
+		sync_token: z.string().optional(),
+		sync_error: z.object({ code: z.string(), message: z.string() }).optional().openapi({
+			description:
+				'Initial pull failure. The draft notebook remains available and can be retried with Sync now.',
+		}),
 	})
 	.openapi('GitNotebookCreateResult');
 
@@ -111,6 +120,7 @@ const UpdateGitSourceBody = z.object({
 	branch: z.string().min(1).openapi({ example: 'main' }),
 	root_path: z.string().openapi({ example: 'apps' }),
 	entry_notebook: z.string().min(1).openapi({ example: 'my_app.py' }),
+	sync_mode: z.enum(['push', 'pull']).optional(),
 });
 
 const UpdateNotebookBody = z.object({
@@ -239,7 +249,7 @@ const createGitNotebook = createRoute({
 			'Git-synced notebook created',
 		),
 		...commonErrors(),
-		...errorResponses(400, 403, 404),
+		...errorResponses(400, 403, 404, 409),
 	},
 });
 
@@ -577,18 +587,54 @@ app.openapi(createGitNotebook, async (c) => {
 	const body = c.req.valid('json');
 	const base_image = checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined;
 	const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined;
-	const { meta, sync_token } = await notebooks.synced.create(
-		pid,
-		{ ...body, base_image, compute_profile },
-		user.id,
-	);
+	const input = { ...body, base_image, compute_profile };
+	const prospectiveSource = createGitSource(input);
+	if (prospectiveSource.sync_mode === 'pull') {
+		assertPullSourceSupported(deps, prospectiveSource);
+	}
+	const { meta, sync_token } = await notebooks.synced.create(pid, input, user.id);
+	let syncError: { code: string; message: string } | undefined;
+	if (prospectiveSource.sync_mode === 'pull') {
+		try {
+			const outcome = await pullSourceToHead(deps, pid, meta.id, user.id);
+			if (outcome.synced) {
+				await appendAudit(
+					{
+						requestId: c.get('requestId'),
+						method: c.req.method,
+						path: c.req.path,
+						userId: user.id,
+					},
+					'notebook.source.sync',
+					() =>
+						deps.services.events.append({
+							event: 'notebook.source.sync',
+							actor: user.id,
+							project_id: pid,
+							notebook_id: meta.id,
+							commit: outcome.commit,
+							trigger: 'create',
+						}),
+				);
+			}
+		} catch (error) {
+			syncError =
+				error instanceof DomainError
+					? { code: error.code, message: error.message }
+					: { code: 'SYNC_FAILED', message: 'The initial repository sync failed' };
+		}
+	}
+	const createdMeta =
+		prospectiveSource.sync_mode === 'pull'
+			? (await notebooks.getNotebook(pid, meta.id)).meta
+			: meta;
 	return c.json(
 		{
 			success: true,
 			data: {
-				notebook: toPublicNotebookMeta(meta),
-				sync_url: syncUrl(c, pid, meta.id),
-				sync_token,
+				notebook: toPublicNotebookMeta(createdMeta),
+				...(sync_token ? { sync_url: syncUrl(c, pid, meta.id), sync_token } : {}),
+				...(syncError ? { sync_error: syncError } : {}),
 			},
 		},
 		201,
@@ -611,7 +657,11 @@ app.openapi(updateGitSource, async (c) => {
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'editor', deps.policy);
-	const source = await notebooks.synced.updateSource(pid, nid, c.req.valid('json'), user.id);
+	const input = c.req.valid('json');
+	const current = assertSyncedSource((await notebooks.getNotebook(pid, nid)).source);
+	const prospective = applyGitSourceUpdate(current, input) ?? current;
+	if (current.sync_mode === 'pull') assertPullSourceSupported(deps, prospective);
+	const source = await notebooks.synced.updateSource(pid, nid, input, user.id);
 	const { schema_version: _schemaVersion, ...publicSource } = source;
 	return c.json({ success: true, data: { source: publicSource } }, 200);
 });

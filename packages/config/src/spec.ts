@@ -1078,7 +1078,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Source control publishing',
 		description:
-			'Connect git-synced notebooks to source control from the server. Editors can compare a notebook with its branch head and pull the current GitHub content with **Sync now**. Managers can publish session edits as draft pull requests. The server keeps the provider credentials and never sends them to a notebook sandbox. The first implementation supports GitHub.com through a GitHub App. See [Syncing from external sources](./syncing.md) for sync behavior and limits.',
+			'Connect Git-synced notebooks to GitHub through the server. Editors can create pull sources without a CI workflow. They can also compare and sync either source mode with **Sync now**. Managers can publish session edits as draft pull requests.\n\nThe server stores credential-free Git metadata for pull sources. Provider credentials never enter a notebook sandbox. GitHub.com is the only supported provider in this release. See [Syncing from external sources](./syncing.md) for source modes and limits.',
 		backends: [
 			{
 				name: 'GitHub App',

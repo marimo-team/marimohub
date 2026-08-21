@@ -17,6 +17,9 @@ export interface VersionPaths {
 	meta: string;
 	workspacePrefix: string;
 	workspaceFile: (rel: string) => string;
+	/** Pull-source Git metadata, stored outside the workspace mirror. */
+	gitPrefix: string;
+	gitFile: (rel: string) => string;
 	/** Optional rendered HTML snapshot captured on teardown (`notebook.html`). */
 	html: string;
 	/** Optional marimo session-state snapshot captured on teardown (`session.json`). */
@@ -91,12 +94,15 @@ export interface ProjectPaths {
 function versionPaths(base: string, vid: VersionId): VersionPaths {
 	const prefix = `${base}/versions/${vid}`;
 	const workspace = `${prefix}/workspace`;
+	const git = `${prefix}/git`;
 	return {
 		code: `${prefix}/notebook.py`,
 		deps: `${prefix}/pyproject.toml`,
 		meta: `${prefix}/version.json`,
 		workspacePrefix: `${workspace}/`,
 		workspaceFile: (rel: string) => `${workspace}/${rel}`,
+		gitPrefix: `${git}/`,
+		gitFile: (rel: string) => `${git}/${rel}`,
 		html: `${prefix}/notebook.html`,
 		session: `${prefix}/session.json`,
 	};

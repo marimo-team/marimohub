@@ -429,14 +429,10 @@ export const LocalSourceSchema = z.object({
 	current_version_id: VersionIdSchema,
 });
 
-// A git repository mirrored into the store by an external pusher (e.g. a CI
-// workflow). The platform never reaches out to the host — content arrives by
-// `push` only — so `provider` is informational (for display/links) and `repo`,
-// `branch`, `commit` are plain git coordinates, host-agnostic. `repo` is
-// either `owner/repo` (GitHub shorthand) or a repository URL. Host detection
-// takes precedence over an explicit provider claim; provider is null when
-// neither is available. Sync fields are null until the first push lands; see
-// `SyncedNotebookService`.
+// A Git repository mirrored into the store by CI push or a configured provider
+// reader. `repo`, `branch`, and `commit` remain provider-neutral coordinates.
+// Host detection takes precedence over an explicit provider claim; provider is
+// null when neither is available. Sync fields are null until the first sync.
 // Static repository coordinates supplied when a git-backed notebook is configured.
 export const GitSourceConfigSchema = z.object({
 	repo: z.string(),
@@ -463,7 +459,7 @@ export const GitSourceSchema = z.object({
 	provider: z.string().min(1).nullable(),
 	...GitSourceConfigSchema.shape,
 	pending_config: GitSourceConfigSchema.optional(),
-	sync_mode: z.literal('push'),
+	sync_mode: z.enum(['push', 'pull']),
 	current_version_id: VersionIdSchema.nullable(),
 	commit: z.string().nullable(),
 	last_synced_at: z.iso.datetime().nullable(),
