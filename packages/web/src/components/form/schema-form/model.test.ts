@@ -278,6 +278,18 @@ describe('redactSecretsForRequest', () => {
 		).toEqual({});
 	});
 
+	it('retains evidence of an invalid array shape when the pruned value is absent', () => {
+		const optionalArraySchema: JsonSchemaNode = {
+			type: 'object',
+			properties: {
+				values: { type: 'array', items: { type: 'string' } },
+			},
+		};
+		expect(redactSecretsForRequest(optionalArraySchema, {}, { values: 'invalid' })).toEqual({
+			values: null,
+		});
+	});
+
 	it('preserves an invalid record shape without retaining its value', () => {
 		const props = schema.properties!.props;
 		expect(redactSecretsForRequest(props, {}, 'credential')).toBeNull();

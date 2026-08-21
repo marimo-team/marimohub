@@ -217,8 +217,8 @@ export function redactSecretsForRequest(
 		return Object.fromEntries(entries);
 	}
 	if (node.type === 'array') {
-		if (value === undefined) return undefined;
 		if (rawValue !== undefined && !Array.isArray(rawValue)) return null;
+		if (value === undefined) return undefined;
 		const rawItems = (rawValue as unknown[]) ?? [];
 		return ((value as unknown[]) ?? []).map((item, index) =>
 			redactSecretsForRequest(node.items ?? {}, item, rawItems[index]),
