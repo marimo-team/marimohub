@@ -5,6 +5,8 @@ export {
 	isKeepMarker,
 	KEEP_SECRET,
 	pruneForSubmit,
+	redactSecretsForRequest,
+	schemaFieldId,
 	SECRET_MARK,
 	validateValue,
 } from './model';

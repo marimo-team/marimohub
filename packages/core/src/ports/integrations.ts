@@ -277,6 +277,18 @@ export type TestIntegrationRequest =
 	| { source: 'draft'; kind: string; config: Record<string, unknown>; id?: IntegrationId }
 	| { source: 'stored'; id: IntegrationId };
 
+export interface QueryReadinessRequest {
+	kind: string;
+	config: Record<string, unknown>;
+}
+
+export interface QueryReadinessCheck {
+	label: string;
+	ready: boolean;
+	field: string;
+	reason: string;
+}
+
 export interface CopyIntegrationOptions {
 	/** Name for the copy; defaults to the source instance's name. */
 	name?: string;

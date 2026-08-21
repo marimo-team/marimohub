@@ -100,6 +100,28 @@ const clickhouseKind: IntegrationKind = {
 	},
 };
 
+const icebergRestKind: IntegrationKind = {
+	...postgresKind,
+	kind: 'iceberg_rest',
+	title: 'Iceberg REST Catalog',
+	category: 'catalog',
+	json_schema: {
+		type: 'object',
+		properties: {
+			headers: {
+				type: 'object',
+				additionalProperties: { type: 'string' },
+				default: {},
+			},
+			extra_properties: {
+				type: 'object',
+				additionalProperties: { type: 'string' },
+				default: {},
+			},
+		},
+	},
+};
+
 const entry = (over: Partial<IntegrationEntry> = {}): IntegrationEntry => ({
 	id: 'i_1',
 	kind: 'postgres',
@@ -182,6 +204,16 @@ function makeFetch({
 			return kinds === null ? notFound() : ok(kinds);
 		}
 		if (url.includes('/api/v1/org/integrations')) {
+			if (method === 'POST' && url.includes('/query-readiness')) {
+				return ok([
+					{
+						label: 'Set access delegation to none',
+						ready: false,
+						field: 'access_delegation',
+						reason: 'delegation is unsupported',
+					},
+				]);
+			}
 			if (method === 'GET') return ok({ items: orgEntries, next_cursor: null });
 			if (method === 'POST' && !url.includes('/test')) {
 				return ok(
@@ -203,6 +235,28 @@ function makeFetch({
 		}
 		if (url.includes(`/projects/${PID}/integrations/test`) && method === 'POST') {
 			return ok({ ok: true, latency_ms: 5 });
+		}
+		if (url.includes(`/projects/${PID}/integrations/query-readiness`) && method === 'POST') {
+			return ok([
+				{
+					label: 'Set access delegation to none',
+					ready: false,
+					field: 'access_delegation',
+					reason: 'delegation is unsupported',
+				},
+				{
+					label: 'Switch Storage to the s3 scheme',
+					ready: false,
+					field: 'storage',
+					reason: 's3 storage is required',
+				},
+				{
+					label: 'Add at least one guarded S3 read location',
+					ready: false,
+					field: 'storage',
+					reason: 'a read location is required',
+				},
+			]);
 		}
 		if (
 			(url.endsWith('/api/v1/projects') || url.includes('/api/v1/projects?')) &&
@@ -451,6 +505,19 @@ describe('ProjectIntegrationsPanel — list view', () => {
 });
 
 describe('ProjectIntegrationsPanel — create flow', () => {
+	it('shows the SQL-ready preflight for Iceberg REST', async () => {
+		const user = userEvent.setup();
+		setup({}, { kinds: [icebergRestKind], entries: [] });
+
+		await user.click(await screen.findByRole('button', { name: /add integration/i }));
+		await user.click(screen.getByText('Iceberg REST Catalog'));
+
+		expect(screen.getByRole('heading', { name: 'Run SQL readiness' })).toBeInTheDocument();
+		expect(await screen.findByText('Set access delegation to none')).toBeInTheDocument();
+		expect(screen.getByText('Switch Storage to the s3 scheme')).toBeInTheDocument();
+		expect(screen.getByText('Add at least one guarded S3 read location')).toBeInTheDocument();
+	});
+
 	it('picks a kind from the catalog, fills the form, and POSTs the pruned config', async () => {
 		const user = userEvent.setup();
 		const { calls } = setup({}, { kinds: [postgresKind, customEnvKind], entries: [] });
@@ -574,6 +641,40 @@ describe('ProjectIntegrationsPanel — edit flow', () => {
 				},
 			});
 		});
+	});
+
+	it('redacts arbitrary record values from automatic readiness requests', async () => {
+		const user = userEvent.setup();
+		const icebergEntry = entry({ id: 'i_iceberg', kind: 'iceberg_rest', name: 'lake' });
+		const { calls } = setup(
+			{},
+			{
+				kinds: [icebergRestKind],
+				entries: [icebergEntry],
+				details: {
+					i_iceberg: {
+						...icebergEntry,
+						config: {
+							headers: { 'X-Custom': 'header-credential' },
+							extra_properties: { option: 'property-credential' },
+						},
+					},
+				},
+			},
+		);
+
+		await user.click(await screen.findByRole('button', { name: 'Edit lake' }));
+		await waitFor(() => {
+			const readiness = calls.find((call) => call.url.includes('/query-readiness'));
+			expect(readiness?.body).toEqual({
+				kind: 'iceberg_rest',
+				config: {
+					headers: { 'X-Custom': '' },
+					extra_properties: { option: '' },
+				},
+			});
+		});
+		expect(JSON.stringify(calls)).not.toMatch(/header-credential|property-credential/);
 	});
 
 	it('does not PATCH after Replace is selected but the required secret is left blank', async () => {

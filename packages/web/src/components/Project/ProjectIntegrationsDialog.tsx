@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
 	ArrowLeft,
@@ -30,6 +30,7 @@ import {
 	SchemaForm,
 	buildDefaults,
 	pruneForSubmit,
+	redactSecretsForRequest,
 	validateValue,
 } from '@/components/form/schema-form';
 import type { JsonSchemaNode, UiHints } from '@/components/form/schema-form';
@@ -42,12 +43,15 @@ import {
 	useIntegrationsQuery,
 	useProjectPickerQuery,
 	useProjectRoleQuery,
+	useQueryReadinessQuery,
 	useTestIntegration,
 	useUpdateIntegration,
 } from '@/api/hooks';
 import type { IntegrationsScope } from '@/api/hooks';
 import { BRAND_ICONS } from './brandIcons';
+import { SqlReadinessChecklist } from './SqlReadinessChecklist';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { canManageProject } from '@/lib/roles';
 import { filterBySearch } from '@/lib/search';
 import type { IntegrationEntry, IntegrationKind, ProjectDetail } from '@/types';
@@ -834,6 +838,20 @@ function EditorForm({
 	const createIntegration = useCreateIntegration(scope);
 	const updateIntegration = useUpdateIntegration(scope);
 	const testIntegration = useTestIntegration(scope);
+	const readinessConfig = useMemo(
+		() =>
+			redactSecretsForRequest(schema, pruneForSubmit(schema, config), config) as Record<
+				string,
+				unknown
+			>,
+		[schema, config],
+	);
+	const debouncedReadinessConfig = useDebouncedValue(readinessConfig);
+	const readinessQuery = useQueryReadinessQuery(
+		scope,
+		{ kind: kind.kind, config: debouncedReadinessConfig },
+		kind.kind === 'iceberg_rest',
+	);
 	const isPending = createIntegration.isPending || updateIntegration.isPending;
 
 	const submit = async () => {
@@ -900,6 +918,13 @@ function EditorForm({
 				onChange={setName}
 				error={errors.__name}
 			/>
+			{kind.kind === 'iceberg_rest' && (
+				<SqlReadinessChecklist
+					checks={readinessQuery.data}
+					isPending={readinessQuery.isPending || readinessConfig !== debouncedReadinessConfig}
+					isError={readinessQuery.isError}
+				/>
+			)}
 			<SchemaForm
 				schema={schema}
 				hints={hints}

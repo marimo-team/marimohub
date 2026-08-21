@@ -385,6 +385,14 @@ describe('defineIntegration available-reason guard', () => {
 			configSchema: z.object({ token: zSecret() }),
 			render: () => ({}),
 			query: {
+				readiness: (config) => [
+					{
+						label: `Remove ${String((config as { token?: unknown }).token)}`,
+						ready: false,
+						field: String((config as { token?: unknown }).token),
+						reason: `query denied for ${String((config as { token?: unknown }).token)}`,
+					},
+				],
 				available: (config) => ({ ok: false, reason: `query denied for ${config.token}` }),
 				plan: ({ config }) => {
 					throw new ValidationError(`bad plan for ${encodeURIComponent(config.token)}`);
@@ -396,6 +404,14 @@ describe('defineIntegration available-reason guard', () => {
 			ok: false,
 			reason: 'this instance cannot run SQL from the hub',
 		});
+		expect(queryLeaky.query!.readiness?.({ token: 'query secret/value' })).toEqual([
+			{
+				label: 'Meet the SQL configuration requirements',
+				ready: false,
+				field: '',
+				reason: 'this configuration cannot run SQL from the hub',
+			},
+		]);
 		expect(() =>
 			queryLeaky.query!.plan({
 				config: { token: 'query secret/value' },

@@ -36,6 +36,9 @@ export type UiHints = Record<string, FieldHint | undefined>;
 
 export type SecretSources = IntegrationKind['secret_sources'];
 
+export const schemaFieldId = (path: string): string =>
+	`integration-field-${encodeURIComponent(path)}`;
+
 /** Submitted for an untouched secret to retain its stored value. */
 export const KEEP_SECRET = { $secret: { kind: 'managed', set: true } } as const;
 
@@ -177,6 +180,49 @@ export function pruneForSubmit(node: JsonSchemaNode, value: unknown): unknown {
 	}
 	if (node.type === 'array') {
 		return ((value as unknown[]) ?? []).map((item) => pruneForSubmit(node.items ?? {}, item));
+	}
+	return value;
+}
+
+/** Removes secret-capable values without hiding invalid fields from server validation. */
+export function redactSecretsForRequest(
+	node: JsonSchemaNode,
+	value: unknown,
+	rawValue: unknown = value,
+): unknown {
+	const branch = branchForValue(node, rawValue);
+	if (branch) return redactSecretsForRequest(branch, value, rawValue);
+	if (isSecretNode(node)) return value === undefined ? undefined : KEEP_SECRET;
+	if (node.type === 'object') {
+		if (
+			rawValue !== undefined &&
+			(typeof rawValue !== 'object' || rawValue === null || Array.isArray(rawValue))
+		) {
+			return null;
+		}
+		const rawRecord = (rawValue as Record<string, unknown>) ?? {};
+		const record = (value as Record<string, unknown>) ?? {};
+		if (isRecordNode(node)) {
+			return Object.fromEntries(Object.keys(record).map((key) => [key, '']));
+		}
+		const properties = node.properties ?? {};
+		const entries: [string, unknown][] = [];
+		for (const [key, child] of Object.entries(properties)) {
+			const redacted = redactSecretsForRequest(child, record[key], rawRecord[key]);
+			if (redacted !== undefined) entries.push([key, redacted]);
+		}
+		for (const key of Object.keys(rawRecord)) {
+			if (!(key in properties)) entries.push([key, null]);
+		}
+		return Object.fromEntries(entries);
+	}
+	if (node.type === 'array') {
+		if (rawValue !== undefined && !Array.isArray(rawValue)) return null;
+		if (value === undefined) return undefined;
+		const rawItems = (rawValue as unknown[]) ?? [];
+		return ((value as unknown[]) ?? []).map((item, index) =>
+			redactSecretsForRequest(node.items ?? {}, item, rawItems[index]),
+		);
 	}
 	return value;
 }

@@ -3029,6 +3029,7 @@ components:
           $ref: '#/components/schemas/IcebergRuntime'
         access_delegation:
           default: vended_credentials
+          description: Catalog delegation mode. Run SQL requires none.
           type: string
           enum:
             - none
@@ -3267,6 +3268,7 @@ components:
           $ref: '#/components/schemas/IcebergRuntimeStored'
         access_delegation:
           default: vended_credentials
+          description: Catalog delegation mode. Run SQL requires none.
           type: string
           enum:
             - none

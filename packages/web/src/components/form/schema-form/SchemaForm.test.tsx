@@ -305,6 +305,46 @@ describe('textarea widget', () => {
 	});
 });
 
+describe('advanced union fields', () => {
+	const storageSchema: JsonSchemaNode = {
+		type: 'object',
+		properties: {
+			storage: {
+				oneOf: [
+					{
+						type: 'object',
+						properties: {
+							scheme: { type: 'string', const: 's3' },
+							endpoint: { type: 'string' },
+							broker_read_locations: { type: 'array', items: { type: 'object' } },
+						},
+					},
+				],
+			},
+		},
+	};
+
+	it('renders advanced hints in a nested disclosure', async () => {
+		const user = userEvent.setup();
+		const value = buildDefaults(storageSchema) as Record<string, unknown>;
+		render(
+			<SchemaForm
+				schema={storageSchema}
+				hints={{ 'storage.broker_read_locations': { advanced: true } }}
+				value={value}
+				onChange={() => {}}
+			/>,
+		);
+
+		expect(screen.getByLabelText('Endpoint')).toBeVisible();
+		expect(screen.getByText('Advanced').closest('details')).not.toHaveAttribute('open');
+		expect(screen.getByText('Broker read locations')).not.toBeVisible();
+
+		await user.click(screen.getByText('Advanced'));
+		expect(screen.getByText('Broker read locations')).toBeVisible();
+	});
+});
+
 describe('kv-pairs editor', () => {
 	// A record widget: rows convert via Object.fromEntries, which silently keeps
 	// only the LAST value per key — duplicates/blank names must be called out.
