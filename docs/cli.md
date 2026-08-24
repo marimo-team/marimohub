@@ -34,7 +34,7 @@ to install a pinned CLI version in a workflow:
 ```yaml
 - uses: marimo-team/setup-marimohub-cli@v1
   with:
-    version: '0.3.5'
+    version: '0.3.6'
 ```
 
 The CLI reads automation credentials from `MARIMOHUB_URL` and
