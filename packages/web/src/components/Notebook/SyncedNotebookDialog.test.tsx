@@ -149,6 +149,12 @@ describe('SyncedNotebookDialog', () => {
 
 		expect(await screen.findByText('Connect to GitHub')).toBeInTheDocument();
 		expect(screen.getByText('Push from CI')).toBeInTheDocument();
+		expect(screen.getByRole('dialog').closest('.max-w-md')).not.toBeNull();
+		const pullDescription = screen.getByText(
+			'The server pulls the repository; no CI setup is required.',
+		);
+		expect(pullDescription).toHaveClass('whitespace-normal', 'break-words');
+		expect(pullDescription).not.toHaveClass('truncate');
 		expect(screen.queryByLabelText('Folder in repo (optional)')).not.toBeInTheDocument();
 		await user.type(screen.getByLabelText('Notebook name'), 'Connected');
 		await user.type(screen.getByLabelText('Repository'), 'acme/analytics');

@@ -121,6 +121,7 @@ export function SyncedNotebookDialog({
 			isOpen={isOpen}
 			onClose={onClose}
 			title="Add a git repository"
+			width="md"
 			submitLabel="Create"
 			pendingLabel="Creating..."
 		>
