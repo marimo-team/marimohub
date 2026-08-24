@@ -56,8 +56,9 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=sandboxes.example.net     # kernels at https:
 MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
 MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=traefik
 MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
-# OpenShift default certificate alternative: remove or comment out the
-# TLS_SECRET line above, then uncomment these settings:
+# OpenShift alternative: replace `traefik` above with the cluster's IngressClass
+# (usually `openshift-default`; verify with `oc get ingressclass`), remove or comment
+# out the TLS_SECRET line, then uncomment these settings:
 # MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default
 # MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS='{"route.openshift.io/termination":"edge"}'
 MARIMOHUB_EDITOR_SANDBOX_SHARING=shared                     # shared | exclusive
@@ -83,9 +84,12 @@ OpenShift creates a Route for each sandbox Ingress. Set
 `spec.tls` entry that selects the cluster's default ingress certificate. Use
 `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS` for deployment-controlled
 Route annotations. Do not set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` with
-this mode. For example:
+this mode. Set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS` to the cluster's
+IngressClass, usually `openshift-default`; verify it with `oc get ingressclass`.
+For example:
 
 ```bash
+MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=openshift-default
 MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default
 MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS='{"route.openshift.io/termination":"edge"}'
 ```

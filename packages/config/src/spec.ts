@@ -572,7 +572,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				selectorValue: 'kubernetes',
 				supportsComputeProfiles: true,
 				description:
-					"Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME`, provide an ingress class, and choose one TLS source: a named wildcard secret or the ingress controller's default certificate. Set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for named-secret TLS, or set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default` and leave the secret unset for controller-default TLS. The `default` and `disabled` modes cannot be combined with a TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.",
+					"Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. TLS is optional: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default` and leave the secret unset for the ingress controller's default certificate, or set the mode to `disabled` and leave the secret unset to omit Ingress TLS. The `default` and `disabled` modes cannot be combined with a TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.",
 				vars: [
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE',

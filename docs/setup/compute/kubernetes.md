@@ -19,8 +19,9 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com           # kernels at https:
 MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
 MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=traefik
 MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
-# For OpenShift's default certificate, remove or comment out the TLS_SECRET line
-# above, then uncomment these settings:
+# For OpenShift, replace `traefik` above with the cluster's IngressClass
+# (usually `openshift-default`; verify with `oc get ingressclass`), remove or
+# comment out the TLS_SECRET line, then uncomment these settings:
 # MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default
 # MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS='{"route.openshift.io/termination":"edge"}'
 # Optional per-kernel resources:
