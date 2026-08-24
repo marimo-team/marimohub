@@ -28,6 +28,17 @@ PowerShell, Homebrew, and npm installers. It also defines the standalone
 this configuration. The existing workflow remains the release owner while the
 team creates the Homebrew tap and configures npm credentials.
 
+## Recover a CLI release
+
+If a publication job fails, first use **Re-run failed jobs** on the release workflow.
+The publication jobs reuse the successful build artifacts and do not rebuild the CLI.
+
+If the workflow file caused the failure, run the **Recover CLI release** workflow from `main`.
+Provide the release tag and the run ID of the failed release workflow.
+The recovery workflow checks that the run built the specified tag.
+It then publishes the stored artifacts and recreates missing release metadata.
+You can run the recovery workflow more than once for the same tag.
+
 End users then upgrade with:
 
 ```sh

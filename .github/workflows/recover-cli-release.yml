@@ -1,0 +1,131 @@
+name: Recover CLI release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to recover, for example v0.3.6
+        required: true
+        type: string
+      source-run-id:
+        description: Release workflow run containing the CLI artifacts
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: recover-cli-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Recover ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      SOURCE_RUN_ID: ${{ inputs.source-run-id }}
+    steps:
+      - name: Validate recovery source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          if [[ ! "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid source run ID: $SOURCE_RUN_ID"
+            exit 1
+          fi
+          SOURCE_RUN=$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")
+          SOURCE_TAG=$(jq -r '.head_branch' <<< "$SOURCE_RUN")
+          SOURCE_WORKFLOW=$(jq -r '.name' <<< "$SOURCE_RUN")
+          SOURCE_EVENT=$(jq -r '.event' <<< "$SOURCE_RUN")
+          if [[ "$SOURCE_TAG" != "$RELEASE_TAG" ]]; then
+            echo "::error::Run $SOURCE_RUN_ID built $SOURCE_TAG, not $RELEASE_TAG"
+            exit 1
+          fi
+          if [[ "$SOURCE_WORKFLOW" != "Release" || "$SOURCE_EVENT" != "push" ]]; then
+            echo "::error::Run $SOURCE_RUN_ID is not a tag-triggered Release workflow"
+            exit 1
+          fi
+
+      - name: Checkout recovery workflow
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - name: Checkout release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag }}
+          path: release-source
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source-run-id }}
+          pattern: mohub-*
+          path: release-downloads
+
+      - name: Stage and validate CLI artifacts
+        run: scripts/stage-cli-release-assets.sh release-downloads release-assets
+
+      - name: Create or reuse GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4; do
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              echo "Release $RELEASE_TAG already exists; keeping its release notes."
+              break
+            fi
+            if gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --generate-notes \
+              --title "$RELEASE_TAG"; then
+              break
+            fi
+            if [[ "$attempt" == 4 ]]; then
+              exit 1
+            fi
+            sleep $((2 ** attempt))
+          done
+
+      - name: Attach validated CLI artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          scripts/retry.sh gh release upload "$RELEASE_TAG"
+          release-assets/* --clobber
+
+      - name: Create checksums and dependency SBOM
+        env:
+          CARGO_NET_RETRY: 5
+        run: |
+          scripts/retry.sh cargo install cargo-cyclonedx --locked --version 0.5.7
+          (cd release-source/apps/cli && cargo cyclonedx \
+            --format json --override-filename mohub.cdx)
+          cp release-source/apps/cli/mohub.cdx.json release-assets/mohub.cdx.json
+          (cd release-assets && sha256sum ./* > SHA256SUMS)
+
+      - name: Attest CLI artifacts
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: 'release-assets/*'
+
+      - name: Attach release metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          scripts/retry.sh gh release upload "$RELEASE_TAG"
+          release-assets/mohub.cdx.json release-assets/SHA256SUMS --clobber

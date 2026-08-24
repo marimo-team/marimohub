@@ -264,15 +264,13 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
         run: helm push "marimohub-$VERSION.tgz" "$CHART_REGISTRY"
 
-  release-notes:
-    name: Publish GitHub release notes
+  publish-cli-release:
+    name: Publish CLI release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [cli, cli-linux-x64, cli-installers]
     permissions:
       contents: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -283,35 +281,63 @@ jobs:
         with:
           pattern: mohub-*
           path: release-downloads
-          merge-multiple: true
 
       - name: Stage and validate CLI artifacts
+        run: scripts/stage-cli-release-assets.sh release-downloads release-assets
+
+      - name: Generate changelog and create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir release-assets
-          find release-downloads -type f -exec cp {} release-assets/ \;
-          EXPECTED=(
-            mohub-aarch64-apple-darwin.tar.gz
-            mohub-aarch64-unknown-linux-gnu.tar.gz
-            mohub-x86_64-apple-darwin.tar.gz
-            mohub-x86_64-pc-windows-msvc.zip
-            mohub-x86_64-unknown-linux-gnu.tar.gz
-          )
-          for archive in "${EXPECTED[@]}"; do
-            test -f "release-assets/$archive" || {
-              echo "::error::Missing CLI archive: $archive"
+          for attempt in 1 2 3 4; do
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              echo "Release $GITHUB_REF_NAME already exists; keeping its release notes."
+              break
+            fi
+            if npx changelogithub@14.0.0; then
+              break
+            fi
+            if [[ "$attempt" == 4 ]]; then
               exit 1
-            }
-            test -f "release-assets/$archive.sha256" || {
-              echo "::error::Missing CLI checksum: $archive.sha256"
-              exit 1
-            }
+            fi
+            sleep $((2 ** attempt))
           done
 
+      - name: Attach CLI artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          scripts/retry.sh gh release upload "$GITHUB_REF_NAME"
+          release-assets/* --clobber
+
+  cli-release-metadata:
+    name: Publish CLI release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [publish-cli-release]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: mohub-*
+          path: release-downloads
+
+      - name: Stage and validate CLI artifacts
+        run: scripts/stage-cli-release-assets.sh release-downloads release-assets
+
       - name: Create checksums and dependency SBOM
+        env:
+          CARGO_NET_RETRY: 5
         run: |
-          cargo install cargo-cyclonedx --locked --version 0.5.7
+          scripts/retry.sh cargo install cargo-cyclonedx --locked --version 0.5.7
           (cd apps/cli && cargo cyclonedx \
-            --format json --override-filename mohub.cdx.json)
+            --format json --override-filename mohub.cdx)
           cp apps/cli/mohub.cdx.json release-assets/mohub.cdx.json
           (cd release-assets && sha256sum ./* > SHA256SUMS)
 
@@ -320,22 +346,20 @@ jobs:
         with:
           subject-path: 'release-assets/*'
 
-      - name: Generate changelog and create GitHub release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx changelogithub@14.0.0
-
-      - name: Attach CLI artifacts
+      - name: Attach release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+        run: >-
+          scripts/retry.sh gh release upload "$GITHUB_REF_NAME"
+          release-assets/mohub.cdx.json release-assets/SHA256SUMS --clobber
 
   notify:
     name: Notify Slack
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Report the overall outcome once every release job has finished.
-    needs: [cli, cli-linux-x64, cli-installers, image, chart, release-notes]
+    needs:
+      [cli, cli-linux-x64, cli-installers, image, chart, publish-cli-release, cli-release-metadata]
     if: always()
     steps:
       - name: Notify Slack - Release Success
