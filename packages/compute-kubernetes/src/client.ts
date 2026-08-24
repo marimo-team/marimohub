@@ -14,7 +14,14 @@
  */
 import { Readable, Writable } from 'node:stream';
 import type * as K8s from '@kubernetes/client-node';
-import type { V1Container, V1Ingress, V1Pod, V1Service, V1Status } from '@kubernetes/client-node';
+import type {
+	V1Container,
+	V1Ingress,
+	V1IngressTLS,
+	V1Pod,
+	V1Service,
+	V1Status,
+} from '@kubernetes/client-node';
 import { SandboxId } from '@marimo-hub/core';
 import {
 	defaultImagePullPolicy,
@@ -104,16 +111,25 @@ function serviceManifest(o: EnsureSandboxOptions): V1Service {
 	};
 }
 
+function ingressTls(o: EnsureSandboxOptions): V1IngressTLS[] | undefined {
+	const mode = o.ingressTlsMode ?? (o.tlsSecretName ? 'secret' : 'disabled');
+	if (mode === 'disabled') return undefined;
+	if (mode === 'default') return [{}];
+	if (!o.tlsSecretName) throw new Error('Ingress TLS mode "secret" requires a TLS secret name');
+	return [{ hosts: [o.host], secretName: o.tlsSecretName }];
+}
+
 function ingressManifest(o: EnsureSandboxOptions): V1Ingress {
 	return {
 		metadata: {
 			name: o.name,
 			namespace: o.namespace,
 			labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+			annotations: o.ingressAnnotations,
 		},
 		spec: {
 			ingressClassName: o.ingressClassName,
-			tls: o.tlsSecretName ? [{ hosts: [o.host], secretName: o.tlsSecretName }] : undefined,
+			tls: ingressTls(o),
 			rules: [
 				{
 					host: o.host,
@@ -220,17 +236,18 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 
 	return {
 		async ensure(o: EnsureSandboxOptions): Promise<{ createdPod: boolean }> {
+			const pod = podManifest(o);
+			const service = serviceManifest(o);
+			const ingress = o.host ? ingressManifest(o) : undefined;
 			const { core, net } = await apis();
 			// Order-independent: k8s is declarative (a Service's selector / an
 			// Ingress's backend need not pre-exist), so the creates fan out.
 			const [createdPod] = await Promise.all([
-				createTolerant(() => core.createNamespacedPod({ namespace, body: podManifest(o) })),
-				createTolerant(() => core.createNamespacedService({ namespace, body: serviceManifest(o) })),
+				createTolerant(() => core.createNamespacedPod({ namespace, body: pod })),
+				createTolerant(() => core.createNamespacedService({ namespace, body: service })),
 				// No host configured → no Ingress (the URL will be unroutable; documented).
-				o.host
-					? createTolerant(() =>
-							net.createNamespacedIngress({ namespace, body: ingressManifest(o) }),
-						)
+				ingress
+					? createTolerant(() => net.createNamespacedIngress({ namespace, body: ingress }))
 					: undefined,
 			]);
 			return { createdPod };

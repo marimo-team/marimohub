@@ -36,6 +36,9 @@ const configOf = (provider: unknown) =>
 				bindHost?: string;
 				network?: string;
 				idleFallbackMs?: number;
+				ingressAnnotations?: Record<string, string>;
+				ingressTlsMode?: string;
+				tlsSecretName?: string;
 			};
 		}
 	).config;
@@ -205,6 +208,70 @@ describe('makeCompute fail-fast', () => {
 				MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY: 'ifnotpresent',
 			}),
 		).toThrow(/MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY/);
+	});
+
+	it('forwards kubernetes ingress annotations and default-certificate TLS mode', () => {
+		expect(
+			configOf(
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS:
+						'{"route.openshift.io/termination":"edge"}',
+					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'default',
+				}),
+			),
+		).toMatchObject({
+			ingressAnnotations: { 'route.openshift.io/termination': 'edge' },
+			ingressTlsMode: 'default',
+		});
+	});
+
+	it('preserves implicit TLS-secret behavior for kubernetes ingress', () => {
+		expect(
+			configOf(
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: 'wildcard-cert',
+				}),
+			),
+		).toMatchObject({ ingressTlsMode: 'secret', tlsSecretName: 'wildcard-cert' });
+		expect(configOf(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'kubernetes' }))).toMatchObject({
+			ingressTlsMode: 'disabled',
+		});
+	});
+
+	it.each(['not-json', '[]', '{"route.openshift.io/termination":true}', '{"":"edge"}'])(
+		'rejects invalid kubernetes ingress annotations: %s',
+		(annotations) => {
+			expect(() =>
+				makeCompute({
+					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS: annotations,
+				}),
+			).toThrow(/MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS/);
+		},
+	);
+
+	it('rejects invalid or contradictory kubernetes ingress TLS settings', () => {
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'other',
+			}),
+		).toThrow(/MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE/);
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'secret',
+			}),
+		).toThrow(/requires MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET/);
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'default',
+				MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: 'wildcard-cert',
+			}),
+		).toThrow(/conflicts with MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET/);
 	});
 
 	it('requires the e2b api key before constructing the adapter', () => {

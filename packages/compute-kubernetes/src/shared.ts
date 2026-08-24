@@ -14,6 +14,8 @@ export const SANDBOX_ID_ANNOTATION = 'marimohub.io/sandbox-id';
 /** `imagePullPolicy` for the kernel container. See `defaultImagePullPolicy`. */
 export type ImagePullPolicy = 'Always' | 'IfNotPresent' | 'Never';
 
+export type IngressTlsMode = 'disabled' | 'default' | 'secret';
+
 /**
  * Tag-sensitive pull-policy default, mirroring Kubernetes' own: `Always` for a
  * mutable `:latest`/untagged image (correctness — a cached stale image would
@@ -63,6 +65,10 @@ export interface KubernetesConfig {
 	hostnameTemplate?: string;
 	/** `ingressClassName` for the per-session Ingress (e.g. `traefik`, `nginx`). */
 	ingressClassName?: string;
+	/** Deployment-controlled annotations copied to every per-session Ingress. */
+	ingressAnnotations?: Record<string, string>;
+	/** TLS declaration mode. Unset preserves the legacy secret-or-disabled behavior. */
+	ingressTlsMode?: IngressTlsMode;
 	/** TLS secret (typically a wildcard cert for `*.{host}`) for the Ingress. */
 	tlsSecretName?: string;
 	/** ServiceAccount the kernel Pod runs as. Omit for the namespace default. */
@@ -96,6 +102,8 @@ export interface EnsureSandboxOptions {
 	port: number;
 	namespace: string;
 	ingressClassName?: string;
+	ingressAnnotations?: Record<string, string>;
+	ingressTlsMode?: IngressTlsMode;
 	tlsSecretName?: string;
 	serviceAccountName?: string;
 	imagePullSecret?: string;

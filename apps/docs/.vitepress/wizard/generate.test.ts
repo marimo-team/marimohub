@@ -116,6 +116,23 @@ describe('config -> code generators', () => {
 			}),
 		).toContain('MARIMOHUB_COMPUTE_PROFILES=small:cpu=1;mem=2Gi');
 	});
+
+	it('emits an OpenShift default-certificate configuration without a TLS secret', () => {
+		const selection: WizardSelection = {
+			...CASES['azure + kubernetes + oidc'],
+			values: {
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS:
+					'{"route.openshift.io/termination":"edge"}',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'default',
+			},
+		};
+		const env = generateEnv(selection);
+		expect(env).toContain('MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default');
+		expect(env).toContain(
+			'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS={"route.openshift.io/termination":"edge"}',
+		);
+		expect(env).not.toContain('MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET');
+	});
 });
 
 describe('validateSelection', () => {

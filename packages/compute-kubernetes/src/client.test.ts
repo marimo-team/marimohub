@@ -96,6 +96,9 @@ describe('createK8sClient', () => {
 				port: 2718,
 				namespace: 'kernels',
 				ingressClassName: 'nginx',
+				ingressAnnotations: {
+					'route.openshift.io/termination': 'edge',
+				},
 				tlsSecretName: 'wildcard-cert',
 				serviceAccountName: 'kernel-sa',
 				imagePullSecret: 'regcred',
@@ -137,12 +140,64 @@ describe('createK8sClient', () => {
 			spec: { selector: { 'marimohub.io/sandbox-name': 'mh-sb' } },
 		});
 		expect(k8sMock.net.createNamespacedIngress.mock.calls[0]?.[0].body).toMatchObject({
+			metadata: {
+				annotations: { 'route.openshift.io/termination': 'edge' },
+			},
 			spec: {
 				ingressClassName: 'nginx',
 				tls: [{ hosts: ['sb.example.com'], secretName: 'wildcard-cert' }],
 				rules: [{ host: 'sb.example.com' }],
 			},
 		});
+	});
+
+	it('emits an empty TLS entry for the ingress-controller default certificate', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		await client.ensure({
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			host: 'sb.example.com',
+			image: 'kernel-image:v1',
+			port: 2718,
+			namespace: 'kernels',
+			ingressTlsMode: 'default',
+		});
+
+		const ingress = k8sMock.net.createNamespacedIngress.mock.calls[0]?.[0].body;
+		expect(ingress.spec.tls).toEqual([{}]);
+	});
+
+	it('omits TLS when ingress TLS is disabled', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		await client.ensure({
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			host: 'sb.example.com',
+			image: 'kernel-image:v1',
+			port: 2718,
+			namespace: 'kernels',
+			ingressTlsMode: 'disabled',
+		});
+
+		const ingress = k8sMock.net.createNamespacedIngress.mock.calls[0]?.[0].body;
+		expect(ingress.spec.tls).toBeUndefined();
+	});
+
+	it('rejects secret TLS mode without a secret name', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: 'sb.example.com',
+				image: 'kernel-image:v1',
+				port: 2718,
+				namespace: 'kernels',
+				ingressTlsMode: 'secret',
+			}),
+		).rejects.toThrow(/requires a TLS secret name/);
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+		expect(k8sMock.core.createNamespacedService).not.toHaveBeenCalled();
 	});
 
 	it('skips ingress creation when no host is configured', async () => {

@@ -197,10 +197,12 @@ describe('KubernetesCompute', () => {
 			expect(world.ensured[0]).toMatchObject({ image: 'override-image' });
 		});
 
-		it('passes resources, service account, and image pull settings through', async () => {
+		it('passes deployment settings through to the client', async () => {
 			const world = makeWorld();
 			await makeCompute(world, {
 				...baseConfig,
+				ingressAnnotations: { 'route.openshift.io/termination': 'edge' },
+				ingressTlsMode: 'default',
 				serviceAccountName: 'marimo-kernel',
 				imagePullSecret: 'regcred',
 				imagePullPolicy: 'Always',
@@ -209,6 +211,8 @@ describe('KubernetesCompute', () => {
 				.create(SANDBOX_ID)
 				.exec('true');
 			expect(world.ensured[0]).toMatchObject({
+				ingressAnnotations: { 'route.openshift.io/termination': 'edge' },
+				ingressTlsMode: 'default',
 				serviceAccountName: 'marimo-kernel',
 				imagePullSecret: 'regcred',
 				imagePullPolicy: 'Always',

@@ -153,6 +153,14 @@ const compute = new KubernetesCompute({
 	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
 	hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
 	ingressClassName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
+	ingressAnnotations: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS
+		? JSON.parse(process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS)
+		: undefined,
+	ingressTlsMode: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE as
+		| 'disabled'
+		| 'default'
+		| 'secret'
+		| undefined,
 	tlsSecretName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
 });
 
@@ -789,6 +797,14 @@ const compute = new KubernetesCompute({
 	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
 	hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
 	ingressClassName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
+	ingressAnnotations: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS
+		? JSON.parse(process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS)
+		: undefined,
+	ingressTlsMode: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE as
+		| 'disabled'
+		| 'default'
+		| 'secret'
+		| undefined,
 	tlsSecretName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
 });
 

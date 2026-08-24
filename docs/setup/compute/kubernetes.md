@@ -8,7 +8,8 @@ the cluster is ready:
 2. **Grant RBAC:** marimohub's ServiceAccount needs `pods`, `services`, and
    `ingresses` in the kernel namespace.
 3. **Wildcard ingress + TLS:** an ingress controller, a `*.{host}` DNS record,
-   and a matching wildcard TLS secret so each `{id}.{host}` kernel URL is HTTPS.
+   and either a matching wildcard TLS secret or an ingress-controller default
+   certificate so each `{id}.{host}` kernel URL is HTTPS.
 4. **Set the env:**
 
 ```bash
@@ -18,6 +19,9 @@ MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME=hub.example.com           # kernels at https:
 MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
 MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=traefik
 MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
+# For OpenShift's default ingress certificate, omit TLS_SECRET and use:
+# MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default
+# MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS='{"route.openshift.io/termination":"edge"}'
 # Optional per-kernel resources:
 # MARIMOHUB_COMPUTE_KUBERNETES_CPU=2  MARIMOHUB_COMPUTE_KUBERNETES_MEMORY=4Gi  MARIMOHUB_COMPUTE_KUBERNETES_GPU=1
 # Optional tuning:

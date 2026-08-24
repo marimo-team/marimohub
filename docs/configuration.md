@@ -208,6 +208,8 @@ Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kube
 | `MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE` | Namespace the kernel Pod/Service/Ingress are created in. | — | `default` | `marimo-kernels` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE` | Template for the public kernel URL. Substitutes `{id}`, `{port}`, `{host}`, `{token}`. | — | `https://{id}.{host}` | — |
 | `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS` | `ingressClassName` for the per-session Ingress. | — | — | `traefik` |
+| `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS` | JSON object of string annotations copied to every per-session Ingress. | — | — | `{"route.openshift.io/termination":"edge"}` |
+| `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE` | How each per-session Ingress declares TLS: `disabled` omits `spec.tls`, `default` emits `tls: [{}]` for an ingress-controller default certificate, and `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`. When unset, a configured secret selects `secret`; otherwise TLS is disabled. | — | `secret when TLS secret is set, else disabled` | `default` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` | TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress. | — | — | `marimo-kernels-wildcard-tls` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT` | ServiceAccount the kernel Pod runs as. Omit for the namespace default. | — | — | `marimo-kernel` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET` | `imagePullSecrets` name for pulling a private kernel image. | — | — | `regcred` |

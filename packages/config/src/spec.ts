@@ -595,6 +595,22 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'traefik',
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS',
+						name: 'Kubernetes ingress annotations',
+						description: 'JSON object of string annotations copied to every per-session Ingress.',
+						example: '{"route.openshift.io/termination":"edge"}',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE',
+						name: 'Kubernetes ingress TLS mode',
+						description:
+							'How each per-session Ingress declares TLS: `disabled` omits `spec.tls`, `default` emits `tls: [{}]` for an ingress-controller default certificate, and `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`. When unset, a configured secret selects `secret`; otherwise TLS is disabled.',
+						default: 'secret when TLS secret is set, else disabled',
+						example: 'default',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET',
 						name: 'Kubernetes TLS secret',
 						description:
