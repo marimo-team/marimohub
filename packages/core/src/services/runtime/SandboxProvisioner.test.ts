@@ -764,6 +764,34 @@ describe('SandboxProvisioner', () => {
 			expect(calls.destroy).toBe(1);
 		});
 
+		it('fails provisioning instead of skipping an unsafe Git metadata path', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			await bucketHandle.put(version.workspaceFile('app.py'), 'import marimo as mo');
+			await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main\n');
+			await bucketHandle.put(`${version.gitPrefix}../config`, 'unsafe');
+
+			await expect(
+				provisioner.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+					entryNotebook: 'app.py',
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					gitPrefix: version.gitPrefix,
+				}),
+			).rejects.toThrow('restoring Git metadata into the sandbox');
+			expect(calls.writeFiles.flat().some((file) => file.path.includes('/.git/'))).toBe(false);
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+		});
+
 		it('fails provisioning when Git metadata has no bucket handle', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));

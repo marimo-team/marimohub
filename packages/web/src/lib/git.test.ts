@@ -193,6 +193,8 @@ describe('isGitHubRepoInput', () => {
 			'acme/analytics',
 			'acme/analytics.git',
 			'https://github.com/acme/analytics',
+			'github.com/acme/analytics',
+			'GitHub.com/acme/analytics.git',
 			'HTTPS://GitHub.COM/acme/analytics.git/',
 		]) {
 			expect(isGitHubRepoInput(repo), repo).toBe(true);
@@ -209,7 +211,6 @@ describe('isGitHubRepoInput', () => {
 			'https://github.com/acme/team/analytics',
 			'https://github.com/acme/analytics?tab=readme',
 			'https://github.com/acme/analytics#readme',
-			'github.com/acme/analytics',
 			'git@github.com:acme/analytics.git',
 			'ssh://git@github.com/acme/analytics.git',
 			'-acme/analytics',

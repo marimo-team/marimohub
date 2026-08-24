@@ -204,6 +204,7 @@ export const REPO_INPUT_HINT =
 
 export function isGitHubRepoInput(input: string): boolean {
 	let path = input.trim();
+	if (/^github\.com\//i.test(path)) path = `https://${path}`;
 	if (/^https:\/\//i.test(path)) {
 		let url: URL;
 		try {

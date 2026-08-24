@@ -626,7 +626,10 @@ app.openapi(createGitNotebook, async (c) => {
 	}
 	const createdMeta =
 		prospectiveSource.sync_mode === 'pull'
-			? (await notebooks.getNotebook(pid, meta.id)).meta
+			? await notebooks
+					.getNotebook(pid, meta.id)
+					.then(({ meta: refreshedMeta }) => refreshedMeta)
+					.catch(() => meta)
 			: meta;
 	return c.json(
 		{

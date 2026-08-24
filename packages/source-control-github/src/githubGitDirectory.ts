@@ -226,18 +226,6 @@ export async function materializeGitDirectory(options: {
 			value: options.commit,
 			force: true,
 		});
-		await git.setConfig({
-			fs,
-			dir: directory,
-			path: `branch.${options.branch}.remote`,
-			value: 'origin',
-		});
-		await git.setConfig({
-			fs,
-			dir: directory,
-			path: `branch.${options.branch}.merge`,
-			value: `refs/heads/${options.branch}`,
-		});
 		await git.checkout({ fs, dir: directory, ref: options.branch, force: true });
 		await assertGitCheckoutLimits(directory, options.repository);
 		return await collectGitDirectoryFiles(gitdir, options.repository);

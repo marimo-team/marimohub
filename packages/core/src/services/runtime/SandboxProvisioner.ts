@@ -419,6 +419,7 @@ export class SandboxProvisioner {
 				options.bucketHandle,
 				options.gitPrefix,
 				`${mountPath}/.git`,
+				{ requireComplete: true },
 			);
 			if (gitStats.objectCount === 0) {
 				throw new Error('the stored Git directory is empty');

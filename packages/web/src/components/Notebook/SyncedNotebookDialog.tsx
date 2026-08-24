@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import { useSelector } from '@tanstack/react-store';
@@ -108,6 +109,9 @@ export function SyncedNotebookDialog({
 		},
 	});
 	useSeedOnOpen(form, isOpen, initialValues);
+	useEffect(() => {
+		if (isOpen && pullAvailable) form.setFieldValue('syncMode', 'pull');
+	}, [form, isOpen, pullAvailable]);
 	const syncMode = useSelector(form.store, (state) => state.values.syncMode);
 
 	return (

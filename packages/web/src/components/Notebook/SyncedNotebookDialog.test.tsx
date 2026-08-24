@@ -6,17 +6,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { SyncedNotebookDialog } from './SyncedNotebookDialog';
 
-function renderDialog(fetchImpl = vi.fn(), pullAvailable = false) {
+function renderDialog(fetchImpl = vi.fn(), pullAvailable: boolean | Promise<boolean> = false) {
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
 			if (String(url).endsWith('/api/v1/capabilities')) {
+				const available = await pullAvailable;
 				return new Response(
 					JSON.stringify({
 						success: true,
 						data: {
 							source_control: {
-								pull_source_providers: pullAvailable ? ['github'] : [],
+								pull_source_providers: available ? ['github'] : [],
 							},
 						},
 					}),
@@ -166,6 +167,25 @@ describe('SyncedNotebookDialog', () => {
 			token: undefined,
 			syncMode: 'pull',
 		});
+	});
+
+	it('selects pull mode when capabilities load after the dialog opens', async () => {
+		const user = userEvent.setup();
+		let resolveCapabilities: (available: boolean) => void = () => {};
+		const pullAvailable = new Promise<boolean>((resolve) => {
+			resolveCapabilities = resolve;
+		});
+		renderDialog(vi.fn(), pullAvailable);
+
+		await user.type(screen.getByLabelText('Notebook name'), 'Connected');
+		expect(screen.getByLabelText('Notebook name')).toHaveValue('Connected');
+		expect(screen.getByLabelText('Folder in repo (optional)')).toBeInTheDocument();
+
+		resolveCapabilities(true);
+
+		expect(await screen.findByText('Connect to GitHub')).toBeInTheDocument();
+		expect(screen.getByLabelText('Notebook name')).toHaveValue('Connected');
+		expect(screen.queryByLabelText('Folder in repo (optional)')).not.toBeInTheDocument();
 	});
 
 	it.each([

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createNotebookId, createProjectId } from '../../ids';
+import { createNotebookId, createProjectId, createVersionId } from '../../ids';
 import { paths } from '../../paths';
 import { MAX_ARTIFACT_BYTES, MAX_WORKSPACE_FILE_BYTES } from '../../constants';
 import {
@@ -23,6 +23,17 @@ function nbCtx() {
 }
 
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
+
+class VanishingObjectBucket extends MemoryBucket {
+	constructor(private readonly missingKey: string) {
+		super();
+	}
+
+	override async get(key: string) {
+		if (key === this.missingKey) return null;
+		return super.get(key);
+	}
+}
 
 describe('restoreWorkspace', () => {
 	it('restores every workspace key without spending a mkdir exec', async () => {
@@ -171,6 +182,19 @@ describe('restoreWorkspace', () => {
 		expect(fs.size).toBe(0);
 	});
 
+	it('skips a listed object that disappears during a best-effort restore', async () => {
+		const { nb } = nbCtx();
+		const missingKey = nb.workspaceFile('missing.txt');
+		const bucket = new VanishingObjectBucket(missingKey);
+		await bucket.put(missingKey, 'content');
+		const { instance, calls } = makeFsSandbox();
+
+		const stats = await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT);
+
+		expect(stats).toEqual({ objectCount: 0, bytes: 0 });
+		expect(calls.writeFiles).toHaveLength(0);
+	});
+
 	describe('caps', () => {
 		let warn: ReturnType<typeof vi.spyOn>;
 		beforeEach(() => {
@@ -197,6 +221,22 @@ describe('restoreWorkspace', () => {
 			expect(rec.calls.get).toContain(nb.workspaceFile('small.txt'));
 			expect(rec.calls.get).not.toContain(bigKey);
 			expect(warn).toHaveBeenCalled();
+		});
+
+		it('rejects an oversized object when a complete restore is required', async () => {
+			const { nb } = nbCtx();
+			const rec = new RecordingBucket(new MemoryBucket());
+			const version = nb.version(createVersionId());
+			const bigKey = version.gitFile('objects/huge');
+			await rec.put(bigKey, bytesOfSize(MAX_WORKSPACE_FILE_BYTES + 1));
+			const { instance } = makeFsSandbox();
+
+			await expect(
+				restoreWorkspace(instance, rec, version.gitPrefix, `${MOUNT}/.git`, {
+					requireComplete: true,
+				}),
+			).rejects.toThrow('per-file cap');
+			expect(rec.calls.get).not.toContain(bigKey);
 		});
 	});
 });
@@ -525,6 +565,37 @@ describe('sandboxFiles security', () => {
 		for (const cmd of calls.exec) {
 			if (cmd.startsWith('mkdir -p ')) expect(cmd).not.toContain('/../');
 		}
+	});
+
+	it('rejects an unsafe path when a complete restore is required', async () => {
+		const { nb } = nbCtx();
+		const version = nb.version(createVersionId());
+		const bucket = new MemoryBucket();
+		await bucket.put(`${version.gitPrefix}../config`, 'unsafe');
+		const { instance, calls } = makeFsSandbox();
+
+		await expect(
+			restoreWorkspace(instance, bucket, version.gitPrefix, `${MOUNT}/.git`, {
+				requireComplete: true,
+			}),
+		).rejects.toThrow('unsafe workspace path');
+		expect(calls.writeFiles).toHaveLength(0);
+	});
+
+	it('rejects a listed object that disappears during a complete restore', async () => {
+		const { nb } = nbCtx();
+		const version = nb.version(createVersionId());
+		const missingKey = version.gitFile('objects/missing');
+		const bucket = new VanishingObjectBucket(missingKey);
+		await bucket.put(missingKey, 'object');
+		const { instance, calls } = makeFsSandbox();
+
+		await expect(
+			restoreWorkspace(instance, bucket, version.gitPrefix, `${MOUNT}/.git`, {
+				requireComplete: true,
+			}),
+		).rejects.toThrow('listed object is missing');
+		expect(calls.writeFiles).toHaveLength(0);
 	});
 
 	it('captureWorkspace shell-safely handles a filename with shell metacharacters', async () => {

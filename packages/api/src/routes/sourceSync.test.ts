@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { zipSync } from 'fflate';
 import {
 	BadRequestError,
@@ -138,6 +138,41 @@ describe('Source drift and sync-now routes', () => {
 				paths.project(projectId).notebook(created.notebook.id as NotebookId).integrationSyncToken,
 			),
 		).toBeNull();
+	});
+
+	it('returns the created notebook when the post-sync refetch fails', async () => {
+		const reader = stubReader({
+			fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }],
+		});
+		const { request, deps } = api(reader);
+		const getNotebook = deps.services.notebooks.getNotebook.bind(deps.services.notebooks);
+		const notebookLookup = vi
+			.spyOn(deps.services.notebooks, 'getNotebook')
+			.mockImplementationOnce(getNotebook)
+			.mockImplementationOnce(getNotebook)
+			.mockRejectedValueOnce(new UnavailableError('Notebook refetch failed'));
+
+		const created = await expectOk<{
+			notebook: { id: string; status: string };
+			sync_error?: unknown;
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+
+		expect(created.notebook.status).toBe('draft');
+		expect(created.sync_error).toBeUndefined();
+		expect(notebookLookup).toHaveBeenCalledTimes(3);
+		expect(
+			await deps.services.notebooks.listVersions(projectId, created.notebook.id as NotebookId),
+		).toHaveLength(1);
 	});
 
 	it('rejects pull creation without Git materialization support or with a subtree', async () => {

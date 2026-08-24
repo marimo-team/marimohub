@@ -153,6 +153,36 @@ describe('materializeGitDirectory', () => {
 		expect(git(restored, ['status', '--porcelain'])).toBe('');
 	});
 
+	it('produces valid Git metadata for a branch containing a double quote', async () => {
+		const branch = 'feature/"quoted';
+		const source = await temporaryDirectory('marimohub-git-quoted-branch-source-');
+		git(source, ['init', '-b', branch]);
+		await writeFile(join(source, 'app.py'), 'print("quoted branch")\n');
+		git(source, ['add', 'app.py']);
+		git(source, ['commit', '-m', 'Add app']);
+		const commit = git(source, ['rev-parse', 'HEAD']);
+
+		const files = await materializeGitDirectory({
+			repository: 'owner/repo',
+			owner: 'owner',
+			repo: 'repo',
+			commit,
+			branch,
+			token: 'installation-secret',
+			fetcher: uploadPackFetcher(source),
+		});
+		const restored = await temporaryDirectory('marimohub-git-quoted-branch-restored-');
+		await writeFile(join(restored, 'app.py'), 'print("quoted branch")\n');
+		for (const file of files) {
+			const path = join(restored, '.git', file.path);
+			await mkdir(join(path, '..'), { recursive: true });
+			await writeFile(path, file.bytes);
+		}
+
+		expect(git(restored, ['branch', '--show-current'])).toBe(branch);
+		expect(git(restored, ['status', '--porcelain'])).toBe('');
+	});
+
 	it('rejects a smart-HTTP response beyond the Git pack limit', async () => {
 		const fetcher: GitHubFetch = async () =>
 			new Response('too large', {
