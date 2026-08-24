@@ -394,6 +394,7 @@ const testIntegration = createRoute({
 const queryReadiness = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/query-readiness',
+	operationId: 'integrations.project.query-readiness',
 	tags: ['Integrations'],
 	summary: 'Evaluate SQL readiness for an unsaved integration config (manager only)',
 	request: { params: ProjectIdParam, body: jsonBody(QueryReadinessBody) },
@@ -541,6 +542,7 @@ const testOrgIntegration = createRoute({
 const queryOrgReadiness = createRoute({
 	method: 'post',
 	path: '/org/integrations/query-readiness',
+	operationId: 'integrations.org.query-readiness',
 	tags: ['Integrations'],
 	summary: 'Evaluate SQL readiness for an unsaved org config (super admin only)',
 	request: { body: jsonBody(QueryReadinessBody) },

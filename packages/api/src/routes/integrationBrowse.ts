@@ -229,6 +229,7 @@ const GenerateSqlBody = z
 const browseCapability = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse',
+	operationId: 'integrations.project.browse.get',
 	tags: ['Integrations'],
 	summary: 'Whether this integration instance can be browsed (editor or above)',
 	description:
@@ -249,6 +250,7 @@ const browseCapability = createRoute({
 const browseNamespaces = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/namespaces',
+	operationId: 'integrations.project.browse.namespaces',
 	tags: ['Integrations'],
 	summary: 'List catalog namespaces (editor or above)',
 	request: {
@@ -270,6 +272,7 @@ const browseNamespaces = createRoute({
 const browseTables = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/tables',
+	operationId: 'integrations.project.browse.tables',
 	tags: ['Integrations'],
 	summary: 'List tables in a namespace (editor or above)',
 	request: {
@@ -289,6 +292,7 @@ const browseTables = createRoute({
 const browseTableSchema = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/schema',
+	operationId: 'integrations.project.browse.schema',
 	tags: ['Integrations'],
 	summary: "Get a table's schema (editor or above)",
 	request: {
@@ -315,6 +319,7 @@ const browseTableSchema = createRoute({
 const browseTablePreview = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/{iid}/browse/preview',
+	operationId: 'integrations.project.browse.preview',
 	tags: ['Integrations'],
 	summary: "Preview a table's rows (editor or above)",
 	description:
@@ -334,6 +339,7 @@ const browseTablePreview = createRoute({
 const runDataQuery = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/{iid}/browse/query',
+	operationId: 'integrations.project.browse.query',
 	tags: ['Integrations'],
 	summary: 'Run SQL against one integration (manager or above)',
 	description:
@@ -353,6 +359,7 @@ const runDataQuery = createRoute({
 const getDataQuerySchema = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/query/schema',
+	operationId: 'integrations.project.browse.query-schema',
 	tags: ['Integrations'],
 	summary: 'Get bounded SQL completion schema (manager or above)',
 	request: {
@@ -375,6 +382,7 @@ const getDataQuerySchema = createRoute({
 const generateDataQuerySql = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/{iid}/browse/query/generate',
+	operationId: 'integrations.project.browse.generate-query',
 	tags: ['Integrations'],
 	summary: 'Generate or revise SQL with managed AI (manager or above)',
 	request: { params: IntegrationIdParam, body: jsonBody(GenerateSqlBody) },
@@ -521,6 +529,7 @@ const ObjectPreviewSchema = z
 const browseObjectBuckets = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/objects/buckets',
+	operationId: 'integrations.project.browse.object-buckets',
 	tags: ['Integrations'],
 	summary: 'List object-store buckets (editor or above)',
 	request: { params: IntegrationIdParam, query: ObjectPageQuery },
@@ -540,6 +549,7 @@ const browseObjectBuckets = createRoute({
 const browseObjects = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/objects',
+	operationId: 'integrations.project.browse.objects',
 	tags: ['Integrations'],
 	summary: 'List direct object-store children (editor or above)',
 	request: {
@@ -565,6 +575,7 @@ const browseObjects = createRoute({
 const searchObjects = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/objects/search',
+	operationId: 'integrations.project.browse.search-objects',
 	tags: ['Integrations'],
 	summary: 'Run a bounded object-key search (editor or above)',
 	request: {
@@ -601,6 +612,7 @@ const searchObjects = createRoute({
 const browseObjectHead = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/objects/head',
+	operationId: 'integrations.project.browse.object-head',
 	tags: ['Integrations'],
 	summary: 'Read object metadata and tags (editor or above)',
 	request: {
@@ -620,6 +632,7 @@ const browseObjectHead = createRoute({
 const browseObjectVersions = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/objects/versions',
+	operationId: 'integrations.project.browse.object-versions',
 	tags: ['Integrations'],
 	summary: 'List object versions and delete markers (editor or above)',
 	request: {
@@ -642,6 +655,7 @@ const browseObjectVersions = createRoute({
 const browseObjectPreview = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/{iid}/browse/objects/preview',
+	operationId: 'integrations.project.browse.preview-object',
 	tags: ['Integrations'],
 	summary: 'Preview bounded object content (editor or above)',
 	request: {
@@ -670,6 +684,7 @@ const ObjectContentBinary = z.string().openapi({ format: 'binary' });
 const browseObjectContent = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/browse/objects/content',
+	operationId: 'integrations.project.browse.object-content',
 	tags: ['Integrations'],
 	summary: 'Stream object content (editor or above)',
 	description:

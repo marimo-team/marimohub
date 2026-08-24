@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn embedded_manifest_covers_the_api() {
         let manifest = manifest::load();
-        assert_eq!(manifest.operations.len(), 59);
+        assert_eq!(manifest.operations.len(), 86);
         assert_eq!(manifest.api_version, "1.0.0");
         assert_eq!(
             manifest
@@ -453,11 +453,23 @@ mod tests {
                 .iter()
                 .filter(|operation| operation.paginated)
                 .count(),
-            10
+            17
         );
-        assert!(manifest.operations.iter().all(|operation| {
-            !operation.accepts_if_match || operation.preflight_operation_id.is_some()
-        }));
+        assert_eq!(
+            manifest
+                .operations
+                .iter()
+                .filter(|operation| {
+                    operation.accepts_if_match && operation.preflight_operation_id.is_none()
+                })
+                .map(|operation| operation.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "alerts.destinations.delete",
+                "alerts.destinations.test",
+                "alerts.destinations.update",
+            ]
+        );
     }
 
     #[test]

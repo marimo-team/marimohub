@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use clap::{value_parser, Arg, ArgAction, Command, ValueHint};
 
@@ -42,10 +42,10 @@ fn parameter_arg(parameter: &Parameter) -> Option<Arg> {
     Some(arg)
 }
 
-fn body_arg(property: &BodyProperty) -> Arg {
+fn body_arg(property: &BodyProperty, cli_name: String) -> Arg {
     let id = format!("body:{}", property.name);
     let mut arg = Arg::new(id)
-        .long(property.cli_name.clone())
+        .long(cli_name)
         .value_name(property.value_type.to_ascii_uppercase())
         .action(if property.repeatable {
             ArgAction::Append
@@ -59,8 +59,25 @@ fn body_arg(property: &BodyProperty) -> Arg {
 }
 
 fn operation_args(mut command: Command, operation: &Operation) -> Command {
+    let mut used_cli_names = BTreeSet::from([
+        "all".to_owned(),
+        "base-url".to_owned(),
+        "body".to_owned(),
+        "idempotency-key".to_owned(),
+        "if-match".to_owned(),
+        "no-if-match".to_owned(),
+        "no-update-check".to_owned(),
+        "output".to_owned(),
+        "profile".to_owned(),
+        "raw-envelope".to_owned(),
+        "timeout".to_owned(),
+        "token".to_owned(),
+        "token-file".to_owned(),
+        "yes".to_owned(),
+    ]);
     for parameter in &operation.parameters {
         if let Some(arg) = parameter_arg(parameter) {
+            used_cli_names.insert(parameter.cli_name.clone());
             command = command.arg(arg);
         }
     }
@@ -73,7 +90,11 @@ fn operation_args(mut command: Command, operation: &Operation) -> Command {
                 .help("Complete JSON request body; @FILE reads a file and - reads stdin"),
         );
         for property in &body.properties {
-            command = command.arg(body_arg(property));
+            let mut cli_name = property.cli_name.clone();
+            while !used_cli_names.insert(cli_name.clone()) {
+                cli_name = format!("body-{cli_name}");
+            }
+            command = command.arg(body_arg(property, cli_name));
         }
     }
     if operation.accepts_if_match {
@@ -291,5 +312,19 @@ mod tests {
     #[test]
     fn generated_command_tree_is_valid() {
         build(&crate::manifest::load()).debug_assert();
+    }
+
+    #[test]
+    fn request_body_fields_do_not_shadow_reserved_flags() {
+        let command = build(&crate::manifest::load());
+        let operation = command
+            .find_subcommand("openNotebookChangeRequest")
+            .unwrap();
+        let body = operation
+            .get_arguments()
+            .find(|argument| argument.get_id() == "body:body")
+            .unwrap();
+
+        assert_eq!(body.get_long(), Some("body-body"));
     }
 }

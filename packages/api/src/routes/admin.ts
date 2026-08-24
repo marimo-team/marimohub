@@ -84,6 +84,8 @@ const getConfig = createRoute({
 const suspendUser = createRoute({
 	method: 'put',
 	path: '/users/{id}/suspension',
+	operationId: 'admin.users.suspend',
+	'x-cli-destructive': true,
 	tags: ['Users', 'Admin'],
 	summary: 'Suspend a user',
 	description:
@@ -104,6 +106,7 @@ const suspendUser = createRoute({
 const unsuspendUser = createRoute({
 	method: 'delete',
 	path: '/users/{id}/suspension',
+	operationId: 'admin.users.unsuspend',
 	tags: ['Users', 'Admin'],
 	summary: 'Reactivate a suspended user',
 	description: 'Restores authentication for a known user. Super-admin only and session-only.',

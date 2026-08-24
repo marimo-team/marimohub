@@ -3531,6 +3531,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/alert-destinations:
     get:
+      operationId: alerts.destinations.list
       tags:
         - Alerts
       summary: List project alert destinations
@@ -3610,6 +3611,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
+      operationId: alerts.destinations.create
       tags:
         - Alerts
       summary: Create a project alert destination
@@ -3798,6 +3800,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/alert-destinations/{aid}:
     patch:
+      operationId: alerts.destinations.update
       tags:
         - Alerts
       summary: Update a project alert destination
@@ -3950,6 +3953,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
+      operationId: alerts.destinations.delete
       tags:
         - Alerts
       summary: Delete a project alert destination
@@ -4045,6 +4049,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/alert-destinations/{aid}/test:
     post:
+      operationId: alerts.destinations.test
       tags:
         - Alerts
       summary: Send a test project alert
@@ -4466,6 +4471,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/users/{id}/suspension:
     put:
+      operationId: admin.users.suspend
+      x-cli-destructive: true
       tags:
         - Users
         - Admin
@@ -4551,6 +4558,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
+      operationId: admin.users.unsuspend
       tags:
         - Users
         - Admin
@@ -5401,6 +5409,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/source/drift:
     get:
+      operationId: notebooks.source.drift
       tags:
         - Notebooks
       summary: Compare a git-synced notebook against its branch head
@@ -5498,6 +5507,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/source/sync:
     post:
+      operationId: notebooks.source.sync
+      x-cli-destructive: true
       tags:
         - Notebooks
       summary: Pull the branch head into a git-synced notebook
@@ -8356,6 +8367,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/query-readiness:
     post:
+      operationId: integrations.project.query-readiness
       tags:
         - Integrations
       summary: Evaluate SQL readiness for an unsaved integration config (manager only)
@@ -8444,6 +8456,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse:
     get:
+      operationId: integrations.project.browse.get
       tags:
         - Integrations
       summary: Whether this integration instance can be browsed (editor or above)
@@ -8534,6 +8547,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/namespaces:
     get:
+      operationId: integrations.project.browse.namespaces
       tags:
         - Integrations
       summary: List catalog namespaces (editor or above)
@@ -8673,6 +8687,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/tables:
     get:
+      operationId: integrations.project.browse.tables
       tags:
         - Integrations
       summary: List tables in a namespace (editor or above)
@@ -8812,6 +8827,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/schema:
     get:
+      operationId: integrations.project.browse.schema
       tags:
         - Integrations
       summary: Get a table's schema (editor or above)
@@ -8938,6 +8954,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/preview:
     post:
+      operationId: integrations.project.browse.preview
       tags:
         - Integrations
       summary: Preview a table's rows (editor or above)
@@ -9066,6 +9083,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/query:
     post:
+      operationId: integrations.project.browse.query
       tags:
         - Integrations
       summary: Run SQL against one integration (manager or above)
@@ -9182,6 +9200,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/query/schema:
     get:
+      operationId: integrations.project.browse.query-schema
       tags:
         - Integrations
       summary: Get bounded SQL completion schema (manager or above)
@@ -9295,6 +9314,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/query/generate:
     post:
+      operationId: integrations.project.browse.generate-query
       tags:
         - Integrations
       summary: Generate or revise SQL with managed AI (manager or above)
@@ -9423,6 +9443,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/objects/buckets:
     get:
+      operationId: integrations.project.browse.object-buckets
       tags:
         - Integrations
       summary: List object-store buckets (editor or above)
@@ -9559,6 +9580,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/objects:
     get:
+      operationId: integrations.project.browse.objects
       tags:
         - Integrations
       summary: List direct object-store children (editor or above)
@@ -9709,6 +9731,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/objects/search:
     get:
+      operationId: integrations.project.browse.search-objects
       tags:
         - Integrations
       summary: Run a bounded object-key search (editor or above)
@@ -9897,6 +9920,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/objects/head:
     get:
+      operationId: integrations.project.browse.object-head
       tags:
         - Integrations
       summary: Read object metadata and tags (editor or above)
@@ -10020,6 +10044,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/objects/versions:
     get:
+      operationId: integrations.project.browse.object-versions
       tags:
         - Integrations
       summary: List object versions and delete markers (editor or above)
@@ -10178,6 +10203,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/objects/preview:
     post:
+      operationId: integrations.project.browse.preview-object
       tags:
         - Integrations
       summary: Preview bounded object content (editor or above)
@@ -10307,6 +10333,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse/objects/content:
     get:
+      operationId: integrations.project.browse.object-content
       tags:
         - Integrations
       summary: Stream object content (editor or above)
@@ -11143,6 +11170,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/org/integrations/query-readiness:
     post:
+      operationId: integrations.org.query-readiness
       tags:
         - Integrations
       summary: Evaluate SQL readiness for an unsaved org config (super admin only)

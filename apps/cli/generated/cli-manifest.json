@@ -33,6 +33,271 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "admin.users.suspend",
+			"command": ["admin", "users", "suspend"],
+			"method": "PUT",
+			"path": "/api/v1/users/{id}/suspension",
+			"summary": "Suspend a user",
+			"description": "Blocks the user at authentication time, including personal access tokens. Super-admin only and session-only. A super admin cannot suspend their own account.",
+			"parameters": [
+				{
+					"name": "id",
+					"cli_name": "id",
+					"in": "path",
+					"required": true,
+					"description": "The user's identity-provider subject id",
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": true,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "admin.users.unsuspend",
+			"command": ["admin", "users", "unsuspend"],
+			"method": "DELETE",
+			"path": "/api/v1/users/{id}/suspension",
+			"summary": "Reactivate a suspended user",
+			"description": "Restores authentication for a known user. Super-admin only and session-only.",
+			"parameters": [
+				{
+					"name": "id",
+					"cli_name": "id",
+					"in": "path",
+					"required": true,
+					"description": "The user's identity-provider subject id",
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": true,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "alerts.destinations.create",
+			"command": ["alerts", "destinations", "create"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/alert-destinations",
+			"summary": "Create a project alert destination",
+			"description": "New destinations subscribe to all 10 project alert kinds when kinds is omitted. They remain disabled until a successful test.",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": []
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "alerts.destinations.delete",
+			"command": ["alerts", "destinations", "delete"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/alert-destinations/{aid}",
+			"summary": "Delete a project alert destination",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "aid",
+					"cli_name": "aid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "alerts.destinations.list",
+			"command": ["alerts", "destinations", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/alert-destinations",
+			"summary": "List project alert destinations",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "alerts.destinations.test",
+			"command": ["alerts", "destinations", "test"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/alert-destinations/{aid}/test",
+			"summary": "Send a test project alert",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "aid",
+					"cli_name": "aid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "alerts.destinations.update",
+			"command": ["alerts", "destinations", "update"],
+			"method": "PATCH",
+			"path": "/api/v1/projects/{pid}/alert-destinations/{aid}",
+			"summary": "Update a project alert destination",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "aid",
+					"cli_name": "aid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "enabled",
+						"cli_name": "enabled",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "kinds",
+						"cli_name": "kinds",
+						"required": false,
+						"value_type": "string",
+						"repeatable": true
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "signing_secret",
+						"cli_name": "signing-secret",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "url",
+						"cli_name": "url",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "webhook_url",
+						"cli_name": "webhook-url",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "audit.list",
 			"command": ["audit", "list"],
 			"method": "GET",
@@ -342,6 +607,39 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "integrations.org.query-readiness",
+			"command": ["integrations", "org", "query-readiness"],
+			"method": "POST",
+			"path": "/api/v1/org/integrations/query-readiness",
+			"summary": "Evaluate SQL readiness for an unsaved org config (super admin only)",
+			"parameters": [],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "config",
+						"cli_name": "config",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "kind",
+						"cli_name": "kind",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "integrations.org.test",
 			"command": ["integrations", "org", "test"],
 			"method": "POST",
@@ -453,6 +751,943 @@
 					"in": "query",
 					"required": false,
 					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.generate-query",
+			"command": ["integrations", "project", "browse", "generate-query"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/query/generate",
+			"summary": "Generate or revise SQL with managed AI (manager or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "instruction",
+						"cli_name": "instruction",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "mode",
+						"cli_name": "mode",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "sql",
+						"cli_name": "sql",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.get",
+			"command": ["integrations", "project", "browse", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse",
+			"summary": "Whether this integration instance can be browsed (editor or above)",
+			"description": "Browse routes resolve the id against the project tier first, then the inherited org tier; a shadowed org instance reads as absent. All browse operations are strictly read-only against the upstream.",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.namespaces",
+			"command": ["integrations", "project", "browse", "namespaces"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/namespaces",
+			"summary": "List catalog namespaces (editor or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "fresh",
+					"cli_name": "fresh",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "parent",
+					"cli_name": "parent",
+					"in": "query",
+					"required": false,
+					"description": "Namespace parts joined by U+001F (percent-encoded as %1F).",
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.object-buckets",
+			"command": ["integrations", "project", "browse", "object-buckets"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/buckets",
+			"summary": "List object-store buckets (editor or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "fresh",
+					"cli_name": "fresh",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.object-content",
+			"command": ["integrations", "project", "browse", "object-content"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/content",
+			"summary": "Stream object content (editor or above)",
+			"description": "Streams the object bytes raw — the target of the `content_url` embedded in preview responses. `inline=true` serves a sandboxed inline rendering (CSP forces an opaque origin); otherwise the response is a download (`Content-Disposition: attachment`). Supports single-part `Range` requests and an `etag` precondition (412 on mismatch).",
+			"parameters": [
+				{
+					"name": "range",
+					"cli_name": "range",
+					"in": "header",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "bucket",
+					"cli_name": "bucket",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "etag",
+					"cli_name": "etag",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "inline",
+					"cli_name": "inline",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "key",
+					"cli_name": "key",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "version_id",
+					"cli_name": "version-id",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "raw",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.object-head",
+			"command": ["integrations", "project", "browse", "object-head"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/head",
+			"summary": "Read object metadata and tags (editor or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "bucket",
+					"cli_name": "bucket",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "key",
+					"cli_name": "key",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "version_id",
+					"cli_name": "version-id",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.object-versions",
+			"command": ["integrations", "project", "browse", "object-versions"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/versions",
+			"summary": "List object versions and delete markers (editor or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "bucket",
+					"cli_name": "bucket",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "fresh",
+					"cli_name": "fresh",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "key",
+					"cli_name": "key",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "version_id",
+					"cli_name": "version-id",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.objects",
+			"command": ["integrations", "project", "browse", "objects"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects",
+			"summary": "List direct object-store children (editor or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "bucket",
+					"cli_name": "bucket",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "fresh",
+					"cli_name": "fresh",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "prefix",
+					"cli_name": "prefix",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.preview",
+			"command": ["integrations", "project", "browse", "preview"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/preview",
+			"summary": "Preview a table's rows (editor or above)",
+			"description": "Runs a bounded read-only scan. HTTP-native integrations execute through the guarded browse probe; other integrations use a fresh, isolated preview sandbox.",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "limit",
+						"cli_name": "limit",
+						"required": false,
+						"value_type": "integer",
+						"repeatable": false
+					},
+					{
+						"name": "namespace",
+						"cli_name": "namespace",
+						"required": true,
+						"value_type": "string",
+						"repeatable": true
+					},
+					{
+						"name": "table",
+						"cli_name": "table",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.preview-object",
+			"command": ["integrations", "project", "browse", "preview-object"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/preview",
+			"summary": "Preview bounded object content (editor or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "bucket",
+						"cli_name": "bucket",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "key",
+						"cli_name": "key",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "limit",
+						"cli_name": "limit",
+						"required": false,
+						"value_type": "integer",
+						"repeatable": false
+					},
+					{
+						"name": "version_id",
+						"cli_name": "version-id",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.query",
+			"command": ["integrations", "project", "browse", "query"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/query",
+			"summary": "Run SQL against one integration (manager or above)",
+			"description": "SQL execution gated by deployment configuration. Each request uses a fresh isolated worker with hard execution, row, and byte limits.",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "sql",
+						"cli_name": "sql",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.query-schema",
+			"command": ["integrations", "project", "browse", "query-schema"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/query/schema",
+			"summary": "Get bounded SQL completion schema (manager or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "focus_namespace",
+					"cli_name": "focus-namespace",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "focus_table",
+					"cli_name": "focus-table",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.schema",
+			"command": ["integrations", "project", "browse", "schema"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/schema",
+			"summary": "Get a table's schema (editor or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "fresh",
+					"cli_name": "fresh",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "namespace",
+					"cli_name": "namespace",
+					"in": "query",
+					"required": true,
+					"description": "Namespace parts joined by U+001F (percent-encoded as %1F).",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "table",
+					"cli_name": "table",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.search-objects",
+			"command": ["integrations", "project", "browse", "search-objects"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/search",
+			"summary": "Run a bounded object-key search (editor or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "bucket",
+					"cli_name": "bucket",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "formats",
+					"cli_name": "formats",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "max_size",
+					"cli_name": "max-size",
+					"in": "query",
+					"required": false,
+					"value_type": "number",
+					"repeatable": false
+				},
+				{
+					"name": "min_size",
+					"cli_name": "min-size",
+					"in": "query",
+					"required": false,
+					"value_type": "number",
+					"repeatable": false
+				},
+				{
+					"name": "modified_after",
+					"cli_name": "modified-after",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "modified_before",
+					"cli_name": "modified-before",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "prefix",
+					"cli_name": "prefix",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "query",
+					"cli_name": "query",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "integrations.project.browse.tables",
+			"command": ["integrations", "project", "browse", "tables"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/tables",
+			"summary": "List tables in a namespace (editor or above)",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "fresh",
+					"cli_name": "fresh",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "namespace",
+					"cli_name": "namespace",
+					"in": "query",
+					"required": true,
+					"description": "Namespace parts joined by U+001F (percent-encoded as %1F).",
+					"value_type": "string",
 					"repeatable": false
 				}
 			],
@@ -679,6 +1914,48 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "integrations.project.query-readiness",
+			"command": ["integrations", "project", "query-readiness"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/query-readiness",
+			"summary": "Evaluate SQL readiness for an unsaved integration config (manager only)",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "config",
+						"cli_name": "config",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "kind",
+						"cli_name": "kind",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "integrations.project.test",
 			"command": ["integrations", "project", "test"],
 			"method": "POST",
@@ -882,6 +2159,7 @@
 					"cli_name": "idempotency-key",
 					"in": "header",
 					"required": false,
+					"description": "Stable client-generated key reused for retries of the same operation.",
 					"value_type": "string",
 					"repeatable": false
 				},
@@ -1027,6 +2305,7 @@
 						"name": "provider",
 						"cli_name": "provider",
 						"required": false,
+						"description": "Git provider id. Recognized repository hosts take precedence over this explicit claim.",
 						"value_type": "string",
 						"repeatable": false
 					},
@@ -1133,6 +2412,7 @@
 					"cli_name": "idempotency-key",
 					"in": "header",
 					"required": false,
+					"description": "Stable client-generated key reused for retries of the same operation.",
 					"value_type": "string",
 					"repeatable": false
 				},
@@ -1280,6 +2560,70 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate",
 			"summary": "Rotate a notebook sync token",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.source.drift",
+			"command": ["notebooks", "source", "drift"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/source/drift",
+			"summary": "Compare a git-synced notebook against its branch head",
+			"description": "Resolves the configured branch head via the server-side provider credential and reports whether the notebook is behind it. Stateless — nothing is stored. Requires a provider listed in `capabilities.source_control.sync_providers`.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.source.sync",
+			"command": ["notebooks", "source", "sync"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/source/sync",
+			"summary": "Pull the branch head into a git-synced notebook",
+			"description": "Server-initiated sync: fetches the configured repository tree at the branch head and ingests it exactly like a pushed archive. A no-op when already at the head. Requires a provider listed in `capabilities.source_control.sync_providers`.",
 			"parameters": [
 				{
 					"name": "nid",
@@ -1643,6 +2987,84 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "openNotebookChangeRequest",
+			"command": ["openNotebookChangeRequest"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/change-requests",
+			"summary": "Publish notebook changes to a new or existing change request",
+			"description": "A proposal is an immutable set of notebook changes captured with its exact source revision. This operation captures a proposal from a running persistent editor session and publishes it as a pull request, merge request, or equivalent through the configured source-control provider. Set target_proposal_id to update the change request published by that proposal; omit it to create a new change request. The Idempotency-Key header is required; retry with the same key to resume the same operation. If the error code is PROPOSAL_RETRY_REQUIRED, retry with a new key instead.",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": true,
+					"description": "Stable client-generated key reused for retries of the same operation.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "sid",
+					"cli_name": "sid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "body",
+						"cli_name": "body",
+						"required": false,
+						"description": "Change request description. Defaults to the session and base commit.",
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "target_proposal_id",
+						"cli_name": "target-proposal-id",
+						"required": false,
+						"description": "Published proposal whose existing change request should receive this new proposal. Omit to create a new change request.",
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "title",
+						"cli_name": "title",
+						"required": false,
+						"description": "Change request title. Defaults to the notebook title.",
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"session_only": false,
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
+		},
+		{
 			"id": "projects.audit.list",
 			"command": ["projects", "audit", "list"],
 			"method": "GET",
@@ -1687,6 +3109,7 @@
 					"cli_name": "idempotency-key",
 					"in": "header",
 					"required": false,
+					"description": "Stable client-generated key reused for retries of the same operation.",
 					"value_type": "string",
 					"repeatable": false
 				}
@@ -2045,6 +3468,7 @@
 					"cli_name": "idempotency-key",
 					"in": "header",
 					"required": false,
+					"description": "Stable client-generated key reused for retries of the same operation.",
 					"value_type": "string",
 					"repeatable": false
 				},

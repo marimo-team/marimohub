@@ -93,6 +93,7 @@ const UpdateDestinationBody = DestinationInputCommonSchema.partial()
 const listDestinations = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/alert-destinations',
+	operationId: 'alerts.destinations.list',
 	tags: ['Alerts'],
 	summary: 'List project alert destinations',
 	request: { params: ProjectIdParam },
@@ -112,6 +113,7 @@ const listDestinations = createRoute({
 const createDestination = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/alert-destinations',
+	operationId: 'alerts.destinations.create',
 	tags: ['Alerts'],
 	summary: 'Create a project alert destination',
 	description: `New destinations subscribe to all ${PROJECT_ALERT_KINDS.length} project alert kinds when kinds is omitted. They remain disabled until a successful test.`,
@@ -130,6 +132,7 @@ const createDestination = createRoute({
 const updateDestination = createRoute({
 	method: 'patch',
 	path: '/projects/{pid}/alert-destinations/{aid}',
+	operationId: 'alerts.destinations.update',
 	tags: ['Alerts'],
 	summary: 'Update a project alert destination',
 	request: {
@@ -151,6 +154,7 @@ const updateDestination = createRoute({
 const deleteDestination = createRoute({
 	method: 'delete',
 	path: '/projects/{pid}/alert-destinations/{aid}',
+	operationId: 'alerts.destinations.delete',
 	tags: ['Alerts'],
 	summary: 'Delete a project alert destination',
 	request: { params: AlertDestinationIdParam, headers: IfMatchHeader },
@@ -164,6 +168,7 @@ const deleteDestination = createRoute({
 const testDestination = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/alert-destinations/{aid}/test',
+	operationId: 'alerts.destinations.test',
 	tags: ['Alerts'],
 	summary: 'Send a test project alert',
 	request: { params: AlertDestinationIdParam, headers: IfMatchHeader },

@@ -323,6 +323,7 @@ const SourceSyncResponseSchema = z
 const getSourceDrift = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/notebooks/{nid}/source/drift',
+	operationId: 'notebooks.source.drift',
 	tags: ['Notebooks'],
 	summary: 'Compare a git-synced notebook against its branch head',
 	description:
@@ -343,6 +344,8 @@ const getSourceDrift = createRoute({
 const syncSourceNow = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebooks/{nid}/source/sync',
+	operationId: 'notebooks.source.sync',
+	'x-cli-destructive': true,
 	tags: ['Notebooks'],
 	summary: 'Pull the branch head into a git-synced notebook',
 	description:
