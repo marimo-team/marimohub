@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { ConflictError } from '../errors';
+import { BadRequestError, ConflictError } from '../errors';
 import type { VersionId } from '../ids';
 import type { GitSource } from '../schema';
 import {
+	applyGitSourceUpdate,
 	assertSyncSourcePrecondition,
 	createGitSource,
 	isAtBranchHead,
@@ -26,6 +27,80 @@ function syncedSource(overrides: Partial<GitSource> = {}): GitSource {
 }
 
 const PENDING = { repo: 'org/repo', branch: 'main', root_path: '', entry_notebook: 'other.py' };
+const ACTIVE = { repo: 'org/repo', branch: 'main', root_path: '', entry_notebook: 'app.py' };
+
+describe('createGitSource', () => {
+	it('rejects a pull source rooted below the repository root', () => {
+		expect(() =>
+			createGitSource({
+				title: 'Dash',
+				description: 'd',
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: 'notebooks',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+		).toThrow(BadRequestError);
+	});
+});
+
+describe('applyGitSourceUpdate', () => {
+	it('rejects mode changes in both directions', () => {
+		expect(() => applyGitSourceUpdate(syncedSource(), { ...ACTIVE, sync_mode: 'pull' })).toThrow(
+			'Changing sync_mode is not supported',
+		);
+		expect(() =>
+			applyGitSourceUpdate(syncedSource({ sync_mode: 'pull' }), {
+				...ACTIVE,
+				sync_mode: 'push',
+			}),
+		).toThrow('Changing sync_mode is not supported');
+	});
+
+	it('rejects subtree settings for a pull source when the mode is omitted', () => {
+		expect(() =>
+			applyGitSourceUpdate(syncedSource({ sync_mode: 'pull' }), {
+				...ACTIVE,
+				root_path: 'apps',
+			}),
+		).toThrow('Pull-mode sources require root_path to be empty');
+	});
+
+	it('returns no mutation for active and already-pending settings', () => {
+		expect(applyGitSourceUpdate(syncedSource(), ACTIVE)).toBeNull();
+		expect(applyGitSourceUpdate(syncedSource({ pending_config: PENDING }), PENDING)).toBeNull();
+	});
+
+	it('clears pending settings when the active settings are restored', () => {
+		const updated = applyGitSourceUpdate(syncedSource({ pending_config: PENDING }), ACTIVE);
+
+		expect(updated?.pending_config).toBeUndefined();
+		expect(updated).toMatchObject(ACTIVE);
+	});
+
+	it('applies a draft update immediately and derives its provider from the new host', () => {
+		const updated = applyGitSourceUpdate(syncedSource(), {
+			...ACTIVE,
+			repo: 'https://gitlab.com/group/project',
+		});
+
+		expect(updated).toMatchObject({
+			repo: 'https://gitlab.com/group/project',
+			provider: 'gitlab',
+		});
+		expect(updated?.pending_config).toBeUndefined();
+	});
+
+	it('stages an update after the first sync without changing the active source', () => {
+		const updated = applyGitSourceUpdate(
+			syncedSource({ current_version_id: 'ver_01ARZ3NDEKTSV4RRFFQ69G5FAV' as VersionId }),
+			PENDING,
+		);
+
+		expect(updated).toMatchObject({ ...ACTIVE, pending_config: PENDING });
+	});
+});
 
 describe('isAtBranchHead', () => {
 	it('is true only for the synced commit with nothing pending', () => {

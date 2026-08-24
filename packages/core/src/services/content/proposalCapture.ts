@@ -261,6 +261,9 @@ async function captureGitWorkingTree(
 	)) {
 		const baseObject = operation === 'add' ? null : await bucket.get(base.workspaceFile(path));
 		if (operation !== 'add' && !baseObject) {
+			// Provider workspace ingest omits symlinks and special files, although
+			// they remain tracked in the restored Git index as missing paths.
+			if (operation === 'delete') continue;
 			throw new ConflictError(`Changed file ${path} is missing from the synced source version`);
 		}
 		if (operation === 'delete') {

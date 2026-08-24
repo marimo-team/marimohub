@@ -141,6 +141,8 @@ export interface ProvisionOptions {
 	 * `versions/{vid}/workspace/` prefix instead.
 	 */
 	workspacePrefix?: string;
+	/** Pull-source Git metadata restored into `<workdir>/.git`. */
+	gitPrefix?: string;
 }
 
 export interface ProvisionResult {
@@ -398,7 +400,7 @@ export class SandboxProvisioner {
 			options.workspaceLoadMode === 'copy-only'
 				? this.workspaceLoadStrategies.copyOnly
 				: this.workspaceLoadStrategies.mountOrCopy;
-		return await strategy.load({
+		const loaded = await strategy.load({
 			sandbox,
 			projectId: options.projectId,
 			notebookId: options.notebookId,
@@ -407,6 +409,42 @@ export class SandboxProvisioner {
 			mountPath,
 			workspacePrefix,
 		});
+		if (!options.gitPrefix) return loaded;
+		try {
+			if (!options.bucketHandle) {
+				throw new Error('bucket handle is required for Git metadata restoration');
+			}
+			const gitStats = await restoreWorkspace(
+				sandbox,
+				options.bucketHandle,
+				options.gitPrefix,
+				`${mountPath}/.git`,
+				{ requireComplete: true },
+			);
+			if (gitStats.objectCount === 0) {
+				throw new Error('the stored Git directory is empty');
+			}
+			if (!loaded.stats) return { ...loaded, stats: gitStats };
+			return {
+				...loaded,
+				stats: {
+					objectCount: loaded.stats.objectCount + gitStats.objectCount,
+					bytes: loaded.stats.bytes + gitStats.bytes,
+				},
+			};
+		} catch (error) {
+			logOperationalError(
+				'git_workspace_restore_failed',
+				{
+					operation: 'session.git.restore',
+					object: options.gitPrefix,
+					project_id: options.projectId,
+					notebook_id: options.notebookId,
+				},
+				error,
+			);
+			throw provisionFailure('restoring Git metadata into the sandbox', error);
+		}
 	}
 
 	private async injectSessionEnv(

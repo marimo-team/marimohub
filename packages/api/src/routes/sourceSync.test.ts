@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { zipSync } from 'fflate';
 import {
 	BadRequestError,
 	createNotebookId,
 	createServices,
+	MAX_GIT_DIRECTORY_FILES,
 	paths,
 	UnavailableError,
 } from '@marimo-hub/core';
@@ -73,6 +74,343 @@ describe('Source drift and sync-now routes', () => {
 		);
 		return data.notebook.id;
 	}
+
+	async function createPullNotebook(request: ReturnType<typeof createTestApi>['request']) {
+		const data = await expectOk<{ notebook: { id: string } }>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+		return data.notebook.id;
+	}
+
+	it('creates a pull source with an inline first sync and no push credentials', async () => {
+		const reader = stubReader({
+			fetchGitDirectory: async () => [
+				{ path: 'HEAD', bytes: encode('ref: refs/heads/main\n') },
+				{ path: 'index', bytes: encode('index') },
+			],
+		});
+		const { request, deps } = api(reader);
+		const created = await expectOk<{
+			notebook: { id: string; status: string };
+			sync_url?: string;
+			sync_token?: string;
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+		expect(created.notebook.status).toBe('active');
+		expect(created.sync_url).toBeUndefined();
+		expect(created.sync_token).toBeUndefined();
+
+		const detail = await deps.services.notebooks.getNotebook(
+			projectId,
+			created.notebook.id as NotebookId,
+		);
+		expect(detail.source).toMatchObject({ sync_mode: 'pull', commit: HEAD });
+		if (detail.source.type !== 'git' || !detail.source.current_version_id) {
+			throw new Error('expected pull source version');
+		}
+		const version = paths
+			.project(projectId)
+			.notebook(created.notebook.id as NotebookId)
+			.version(detail.source.current_version_id);
+		expect(await (await bucket.get(version.gitFile('HEAD')))!.text()).toBe(
+			'ref: refs/heads/main\n',
+		);
+		expect(
+			await bucket.get(
+				paths.project(projectId).notebook(created.notebook.id as NotebookId).integrationSyncToken,
+			),
+		).toBeNull();
+	});
+
+	it('returns the created notebook when the post-sync refetch fails', async () => {
+		const reader = stubReader({
+			fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }],
+		});
+		const { request, deps } = api(reader);
+		const getNotebook = deps.services.notebooks.getNotebook.bind(deps.services.notebooks);
+		const notebookLookup = vi
+			.spyOn(deps.services.notebooks, 'getNotebook')
+			.mockImplementationOnce(getNotebook)
+			.mockImplementationOnce(getNotebook)
+			.mockRejectedValueOnce(new UnavailableError('Notebook refetch failed'));
+
+		const created = await expectOk<{
+			notebook: { id: string; status: string };
+			sync_error?: unknown;
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+
+		expect(created.notebook.status).toBe('draft');
+		expect(created.sync_error).toBeUndefined();
+		expect(notebookLookup).toHaveBeenCalledTimes(3);
+		expect(
+			await deps.services.notebooks.listVersions(projectId, created.notebook.id as NotebookId),
+		).toHaveLength(1);
+	});
+
+	it('rejects pull creation without Git materialization support or with a subtree', async () => {
+		const { request } = api(stubReader());
+		const body = {
+			title: 'Connected app',
+			description: 'Pulled by the server',
+			repo: 'org/repo',
+			branch: 'main',
+			root_path: '',
+			entry_notebook: 'app.py',
+			sync_mode: 'pull',
+		};
+		await expectError(
+			await request('POST', `/projects/${projectId}/notebooks/git`, body),
+			409,
+			'SYNC_NOT_CONFIGURED',
+		);
+		const capable = api(stubReader({ fetchGitDirectory: async () => [] }));
+		await expectError(
+			await capable.request('POST', `/projects/${projectId}/notebooks/git`, {
+				...body,
+				root_path: 'apps',
+			}),
+			400,
+		);
+	});
+
+	it('keeps a draft pull source and surfaces an inline sync failure', async () => {
+		const reader = stubReader({
+			fetchWorkspace: async () => {
+				throw new UnavailableError('GitHub tarball is unavailable');
+			},
+			fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }],
+		});
+		const { request } = api(reader);
+		const created = await expectOk<{
+			notebook: { id: string; status: string };
+			sync_error: { code: string; message: string };
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+		expect(created.notebook.status).toBe('draft');
+		expect(created.sync_error).toMatchObject({
+			code: 'SERVICE_UNAVAILABLE',
+			message: 'GitHub tarball is unavailable',
+		});
+		expect(
+			(
+				await expectOk<any>(
+					await request('GET', `/projects/${projectId}/notebooks/${created.notebook.id}`),
+				)
+			).source,
+		).toMatchObject({ sync_mode: 'pull', current_version_id: null });
+	});
+
+	it('rejects oversized Git metadata before persisting a version', async () => {
+		const reader = stubReader({
+			fetchGitDirectory: async () =>
+				Array.from({ length: MAX_GIT_DIRECTORY_FILES + 1 }, (_, index) => ({
+					path: `objects/${index}`,
+					bytes: new Uint8Array(),
+				})),
+		});
+		const { request, deps } = api(reader);
+		const created = await expectOk<{
+			notebook: { id: string; status: string };
+			sync_error: { code: string; message: string };
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+
+		expect(created.notebook.status).toBe('draft');
+		expect(created.sync_error).toMatchObject({ code: 'BAD_REQUEST' });
+		expect(created.sync_error.message).toMatch(`${MAX_GIT_DIRECTORY_FILES}-file limit`);
+		expect(
+			await deps.services.notebooks.listVersions(projectId, created.notebook.id as NotebookId),
+		).toHaveLength(0);
+	});
+
+	it('rejects mode switching for a pull source', async () => {
+		const { request } = api(
+			stubReader({
+				supportsRepository: (repo) => !repo.includes('enterprise'),
+				fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }],
+			}),
+		);
+		const notebookId = await createPullNotebook(request);
+		const path = `/projects/${projectId}/notebooks/${notebookId}/source`;
+		await expectError(
+			await request('PATCH', path, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'app.py',
+				sync_mode: 'push',
+			}),
+			400,
+		);
+		const detail = await expectOk<{ source: { sync_mode: string } }>(
+			await request('GET', `/projects/${projectId}/notebooks/${notebookId}`),
+		);
+		expect(detail.source.sync_mode).toBe('pull');
+	});
+
+	it('rejects subtree settings for a pull source', async () => {
+		const { request } = api(
+			stubReader({ fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }] }),
+		);
+		const notebookId = await createPullNotebook(request);
+		const path = `/projects/${projectId}/notebooks/${notebookId}/source`;
+
+		await expectError(
+			await request('PATCH', path, {
+				repo: 'org/repo',
+				branch: 'main',
+				root_path: 'apps',
+				entry_notebook: 'app.py',
+			}),
+			400,
+		);
+		const detail = await expectOk<{
+			source: { root_path: string; pending_config?: unknown };
+		}>(await request('GET', `/projects/${projectId}/notebooks/${notebookId}`));
+		expect(detail.source).toMatchObject({ root_path: '' });
+		expect(detail.source.pending_config).toBeUndefined();
+	});
+
+	it('rejects unsupported pull repositories without mutating the source', async () => {
+		const { request } = api(
+			stubReader({
+				supportsRepository: (repo) => !repo.includes('enterprise'),
+				fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }],
+			}),
+		);
+		const notebookId = await createPullNotebook(request);
+		const path = `/projects/${projectId}/notebooks/${notebookId}/source`;
+
+		await expectError(
+			await request('PATCH', path, {
+				repo: 'https://gitlab.com/org/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'app.py',
+			}),
+			409,
+			'SYNC_NOT_CONFIGURED',
+		);
+		await expectError(
+			await request('PATCH', path, {
+				repo: 'https://github.enterprise.example/org/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'app.py',
+			}),
+			409,
+			'SYNC_NOT_CONFIGURED',
+		);
+		const detail = await expectOk<{
+			source: { repo: string; branch: string; pending_config?: unknown };
+		}>(await request('GET', `/projects/${projectId}/notebooks/${notebookId}`));
+		expect(detail.source).toMatchObject({ repo: 'org/repo', branch: 'main' });
+		expect(detail.source.pending_config).toBeUndefined();
+	});
+
+	it('keeps a supported pending update when a later pull-source update is rejected', async () => {
+		const { request } = api(
+			stubReader({ fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }] }),
+		);
+		const notebookId = await createPullNotebook(request);
+		const path = `/projects/${projectId}/notebooks/${notebookId}/source`;
+		await expectOk(
+			await request('PATCH', path, {
+				repo: 'other/repo',
+				branch: 'release',
+				root_path: '',
+				entry_notebook: 'app.py',
+			}),
+		);
+		await expectError(
+			await request('PATCH', path, {
+				repo: 'https://gitlab.com/org/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'app.py',
+			}),
+			409,
+			'SYNC_NOT_CONFIGURED',
+		);
+
+		const detail = await expectOk<{
+			source: { pending_config?: { repo: string; branch: string } };
+		}>(await request('GET', `/projects/${projectId}/notebooks/${notebookId}`));
+		expect(detail.source.pending_config).toMatchObject({
+			repo: 'other/repo',
+			branch: 'release',
+		});
+	});
+
+	it('rejects pull-source updates when the configured reader is removed', async () => {
+		const capable = api(
+			stubReader({ fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('HEAD') }] }),
+		);
+		const notebookId = await createPullNotebook(capable.request);
+		const disconnected = api();
+
+		await expectError(
+			await disconnected.request('PATCH', `/projects/${projectId}/notebooks/${notebookId}/source`, {
+				repo: 'other/repo',
+				branch: 'main',
+				root_path: '',
+				entry_notebook: 'app.py',
+			}),
+			409,
+			'SYNC_NOT_CONFIGURED',
+		);
+		const detail = await expectOk<{ source: { repo: string; pending_config?: unknown } }>(
+			await disconnected.request('GET', `/projects/${projectId}/notebooks/${notebookId}`),
+		);
+		expect(detail.source.repo).toBe('org/repo');
+		expect(detail.source.pending_config).toBeUndefined();
+	});
 
 	it('rejects drift and sync when no reader is configured (409 SYNC_NOT_CONFIGURED)', async () => {
 		const { request } = api();

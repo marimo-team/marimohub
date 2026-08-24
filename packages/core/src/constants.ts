@@ -42,7 +42,7 @@ export type SessionMode = (typeof SESSION_MODES)[number];
 export const EDITOR_SANDBOX_SHARING_VALUES = ['shared', 'exclusive'] as const;
 export type EditorSandboxSharing = (typeof EDITOR_SANDBOX_SHARING_VALUES)[number];
 
-/** Where a notebook's source lives. `git` = a git repo push-synced from an external host. */
+/** Where a notebook's source lives. `git` = a repository synced from an external host. */
 export const SOURCE_TYPES = ['local', 'git'] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 

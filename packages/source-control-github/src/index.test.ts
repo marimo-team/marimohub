@@ -1438,7 +1438,7 @@ describe('GitHubAppPublisher', () => {
 		expect(fetcher).not.toHaveBeenCalled();
 	});
 
-	it.each(['feature+one', 'release@2026', 'topic#1', 'δοκιμή', 'a'.repeat(256)])(
+	it.each(['feature+one', 'feature/"quoted', 'release@2026', 'topic#1', 'δοκιμή', 'a'.repeat(256)])(
 		'accepts valid Git branch name %j',
 		async (branch) => {
 			const fetcher = vi.fn(async () => response({}, 404));

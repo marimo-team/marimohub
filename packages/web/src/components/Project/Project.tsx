@@ -421,11 +421,13 @@ export function Project() {
 
 	const handleSyncedCreated = (result: SyncedNotebookCreated) => {
 		syncedCreateModal.close();
-		syncSettings.open({
-			notebookId: result.notebookId,
-			title: result.title,
-			token: result.token,
-		});
+		if (result.syncMode === 'push') {
+			syncSettings.open({
+				notebookId: result.notebookId,
+				title: result.title,
+				token: result.token,
+			});
+		}
 	};
 
 	const notebookActions = (nb: NotebookEntry): DropdownMenuOption[] => {

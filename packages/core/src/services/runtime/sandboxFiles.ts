@@ -109,6 +109,10 @@ export interface WorkspaceRestoreStats {
 	bytes: number;
 }
 
+export interface WorkspaceRestoreOptions {
+	requireComplete?: boolean;
+}
+
 /**
  * Restore a workspace mirror (every key under `sourcePrefix`) from the bucket into
  * the sandbox working directory. Unconditional and binary-safe: every object is
@@ -125,6 +129,7 @@ export async function restoreWorkspace(
 	bucket: Bucket,
 	sourcePrefix: string,
 	workingDir: string,
+	options: WorkspaceRestoreOptions = {},
 ): Promise<WorkspaceRestoreStats> {
 	// Select from the LISTING (sizes included) so an oversized object is skipped
 	// before `bucket.get()` buffers its body — the size check must never use the
@@ -136,12 +141,20 @@ export async function restoreWorkspace(
 		if (!rel) continue;
 		// A poisoned key (e.g. from a compromised/synced source) whose relative path
 		// carries `..`/absolute/backslash segments would escape workingDir once
-		// concatenated. Skip it — the sandbox working dir is a hard boundary.
+		// concatenated. Reject or skip it — the sandbox working dir is a hard boundary.
 		if (!isSafeWorkspacePath(rel)) {
+			if (options.requireComplete) {
+				throw new Error(`restoreWorkspace: unsafe workspace path: ${rel}`);
+			}
 			console.warn(`restoreWorkspace: unsafe workspace path; skipping ${rel}`);
 			continue;
 		}
 		if (obj.size > MAX_WORKSPACE_FILE_BYTES) {
+			if (options.requireComplete) {
+				throw new Error(
+					`restoreWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded: ${rel} (${obj.size} bytes)`,
+				);
+			}
 			console.warn(
 				`restoreWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded; skipping ${rel} (${obj.size} bytes)`,
 			);
@@ -166,7 +179,12 @@ export async function restoreWorkspace(
 	for (const batch of batchByBytes(wanted, RESTORE_BATCH_BYTES)) {
 		const fetched = await mapWithConcurrency(batch, RESTORE_FETCH_CONCURRENCY, async (f) => {
 			const body = await bucket.get(f.key);
-			if (!body) return;
+			if (!body) {
+				if (options.requireComplete) {
+					throw new Error(`restoreWorkspace: listed object is missing: ${f.key}`);
+				}
+				return;
+			}
 			return { path: f.dest, content: await body.bytes() };
 		});
 		const files = fetched.filter((f) => f !== undefined);

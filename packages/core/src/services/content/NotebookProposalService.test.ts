@@ -323,6 +323,35 @@ describe('NotebookProposalService', () => {
 		);
 	});
 
+	it('ignores deleted Git entries that were excluded from the synced workspace', async () => {
+		const { instance } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("after")' },
+			diff: [
+				['M', 'dashboard.py'],
+				['D', 'link-to-data'],
+			],
+		});
+
+		const proposal = await capture(instance);
+
+		expect(proposal.changes).toEqual([
+			expect.objectContaining({ path: 'dashboard.py', operation: 'modify' }),
+		]);
+	});
+
+	it('treats a workspace with only excluded Git deletions as unchanged', async () => {
+		const { instance, exec } = makeGitSandbox({
+			files: { 'dashboard.py': 'print("before")' },
+			diff: [
+				['D', 'link-to-data'],
+				['D', 'device-node'],
+			],
+		});
+
+		await expect(capture(instance)).rejects.toThrow('no changes');
+		expect(exec.mock.calls.some(([command]) => command.includes('os.O_NOFOLLOW'))).toBe(false);
+	});
+
 	it('excludes runtime and cache files from Git capture', async () => {
 		const ignored = [
 			'__marimo__/state.json',

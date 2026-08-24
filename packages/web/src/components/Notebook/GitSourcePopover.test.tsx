@@ -25,6 +25,7 @@ function renderPopover(
 					source_control: {
 						change_request_providers: [],
 						sync_providers: options.syncProviders ?? [],
+						pull_source_providers: [],
 					},
 				});
 			}

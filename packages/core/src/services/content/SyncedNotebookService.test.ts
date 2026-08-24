@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { MAX_WORKSPACE_FILE_BYTES } from '../../constants';
 import { PreconditionFailedError } from '../../errors';
 import { ACTOR, restoreClock, setupTestEnv, useFakeClock } from '../../testing';
 import type { MemoryBucket } from '../../testing';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { noopMetrics } from '../../ports/metrics';
+import { MAX_GIT_DIRECTORY_BYTES, MAX_GIT_DIRECTORY_FILES } from '../../ports/sourceControl';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
@@ -76,6 +78,21 @@ describe('SyncedNotebookService', () => {
 
 			const p = (await catalog.getCurrentSnapshot()).projects.find((pr) => pr.id === projectId);
 			expect(p?.notebook_count).toBe(1);
+		});
+
+		it('creates pull sources without a sync-token sidecar', async () => {
+			const created = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			const nb = paths.project(projectId).notebook(created.meta.id);
+			expect(created.sync_token).toBeUndefined();
+			expect(await bucket.get(nb.integrationSyncToken)).toBeNull();
+			expect((await notebooks.getNotebook(projectId, created.meta.id)).source).toMatchObject({
+				type: 'git',
+				sync_mode: 'pull',
+			});
 		});
 
 		it('rejects a repo that is neither owner/repo nor a repository URL', async () => {
@@ -150,6 +167,18 @@ describe('SyncedNotebookService', () => {
 			expect(rotated).not.toBe(sync_token);
 			expect(await notebooks.synced.verifyToken(projectId, meta.id, rotated)).toBe(true);
 			expect(await notebooks.synced.verifyToken(projectId, meta.id, sync_token)).toBe(false);
+		});
+
+		it('does not mint a token for a pull source', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			expect(await notebooks.synced.verifyToken(projectId, meta.id, 'mhsync_any')).toBe(false);
+			await expect(notebooks.synced.rotateToken(projectId, meta.id)).rejects.toThrow(
+				'Pull-mode sources do not use sync tokens',
+			);
 		});
 	});
 
@@ -423,6 +452,109 @@ describe('SyncedNotebookService', () => {
 
 			const e = await entry(meta.id);
 			expect(e?.status).toBe('active');
+		});
+
+		it('stores pull-source Git metadata beside the immutable workspace', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			const synced = await notebooks.synced.sync(projectId, meta.id, {
+				...syncInput('commit-aaaa'),
+				git_files: [
+					{ path: 'HEAD', bytes: enc('ref: refs/heads/main\n') },
+					{ path: 'objects/pack/pack-a.pack', bytes: enc('pack') },
+				],
+			});
+			const version = paths.project(projectId).notebook(meta.id).version(synced.versionId!);
+			expect(await (await bucket.get(version.gitFile('HEAD')))!.text()).toBe(
+				'ref: refs/heads/main\n',
+			);
+			expect(await (await bucket.get(version.gitFile('objects/pack/pack-a.pack')))!.text()).toBe(
+				'pack',
+			);
+		});
+
+		it('rejects a pull sync without Git metadata', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			await expect(
+				notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa')),
+			).rejects.toThrow('Pull sync did not include Git metadata');
+		});
+
+		it('rejects a pull sync with an empty Git metadata set', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			await expect(
+				notebooks.synced.sync(projectId, meta.id, {
+					...syncInput('commit-aaaa'),
+					git_files: [],
+				}),
+			).rejects.toThrow('Sync archive did not contain any files');
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
+		});
+
+		it('rejects pull Git metadata beyond the file-count cap before persistence', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			const empty = new Uint8Array();
+			await expect(
+				notebooks.synced.sync(projectId, meta.id, {
+					...syncInput('commit-aaaa'),
+					git_files: Array.from({ length: MAX_GIT_DIRECTORY_FILES + 1 }, (_, index) => ({
+						path: `objects/${index}`,
+						bytes: empty,
+					})),
+				}),
+			).rejects.toThrow(`${MAX_GIT_DIRECTORY_FILES}-file limit`);
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
+		});
+
+		it('rejects an oversized pull Git metadata file before persistence', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			await expect(
+				notebooks.synced.sync(projectId, meta.id, {
+					...syncInput('commit-aaaa'),
+					git_files: [
+						{ path: 'objects/large', bytes: new Uint8Array(MAX_WORKSPACE_FILE_BYTES + 1) },
+					],
+				}),
+			).rejects.toThrow(`${MAX_WORKSPACE_FILE_BYTES}-byte limit`);
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
+		});
+
+		it('rejects pull Git metadata beyond the cumulative-byte cap before persistence', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			const part = new Uint8Array(Math.floor(MAX_GIT_DIRECTORY_BYTES / 5) + 1);
+			await expect(
+				notebooks.synced.sync(projectId, meta.id, {
+					...syncInput('commit-aaaa'),
+					git_files: Array.from({ length: 5 }, (_, index) => ({
+						path: `objects/${index}`,
+						bytes: part,
+					})),
+				}),
+			).rejects.toThrow(`${MAX_GIT_DIRECTORY_BYTES}-byte limit`);
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
 		});
 
 		it('records a null provider on versions synced from an unrecognized host', async () => {

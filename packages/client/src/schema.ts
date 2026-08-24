@@ -2770,6 +2770,11 @@ export interface paths {
 						};
 						base_image?: string;
 						compute_profile?: string;
+						/**
+						 * @default push
+						 * @enum {string}
+						 */
+						sync_mode?: 'push' | 'pull';
 					};
 				};
 			};
@@ -2816,6 +2821,15 @@ export interface paths {
 				};
 				/** @description Not found */
 				404: {
+					headers: {
+						[name: string]: unknown;
+					};
+					content: {
+						'application/json': components['schemas']['ErrorResponse'];
+					};
+				};
+				/** @description Conflict */
+				409: {
 					headers: {
 						[name: string]: unknown;
 					};
@@ -3021,6 +3035,8 @@ export interface paths {
 						root_path: string;
 						/** @example my_app.py */
 						entry_notebook: string;
+						/** @enum {string} */
+						sync_mode?: 'push' | 'pull';
 					};
 				};
 			};
@@ -3065,7 +3081,7 @@ export interface paths {
 									entry_notebook: string;
 									pending_config?: components['schemas']['GitSourceConfig'];
 									/** @enum {string} */
-									sync_mode: 'push';
+									sync_mode: 'push' | 'pull';
 									current_version_id: string | null;
 									commit: string | null;
 									/**
@@ -9841,6 +9857,13 @@ export interface components {
 				 *     ]
 				 */
 				sync_providers: string[];
+				/**
+				 * @description Provider ids configured to create pull-mode sources with server-materialized Git metadata.
+				 * @example [
+				 *       "github"
+				 *     ]
+				 */
+				pull_source_providers: string[];
 			};
 			project_alerts: {
 				available: boolean;
@@ -10176,8 +10199,13 @@ export interface components {
 		};
 		GitNotebookCreateResult: {
 			notebook: components['schemas']['NotebookMeta'];
-			sync_url: string;
-			sync_token: string;
+			sync_url?: string;
+			sync_token?: string;
+			/** @description Initial pull failure. The draft notebook remains available and can be retried with Sync now. */
+			sync_error?: {
+				code: string;
+				message: string;
+			};
 		};
 		SyncToken: {
 			sync_url: string;
@@ -10263,7 +10291,7 @@ export interface components {
 					entry_notebook: string;
 					pending_config?: components['schemas']['GitSourceConfig'];
 					/** @enum {string} */
-					sync_mode: 'push';
+					sync_mode: 'push' | 'pull';
 					current_version_id: string | null;
 					commit: string | null;
 					/**

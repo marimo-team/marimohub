@@ -50,7 +50,7 @@ export function RadioGroupField({ label, options }: RadioGroupFieldProps) {
 									<span className="flex min-w-0 flex-col">
 										<span className="truncate text-foreground">{option.label}</span>
 										{option.description && (
-											<span className="truncate text-xs text-muted-foreground">
+											<span className="whitespace-normal break-words text-xs leading-4 text-muted-foreground">
 												{option.description}
 											</span>
 										)}

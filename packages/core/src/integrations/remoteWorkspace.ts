@@ -13,7 +13,7 @@ export type WorkspaceLoadMode = 'mount-or-copy' | 'copy-only';
 /**
  * How a notebook's source behaves as a sandbox workspace. Local notebooks are
  * editable and round-trip session edits back to the store; synced (git) sources
- * are read-only mirrors restored fresh from their last push. Source-type-specific
+ * are read-only mirrors restored fresh from their last sync. Source-type-specific
  * behavior is funnelled through this one descriptor so the provisioner, session
  * route, and read paths stay source-agnostic — see `WORKSPACE_SOURCE_POLICIES`.
  */

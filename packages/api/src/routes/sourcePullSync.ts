@@ -42,7 +42,17 @@ function requireSyncReader(
 	const provider = providerForRepo(source, config.repo);
 	const reader = provider ? deps.sourceControl?.getReader(provider) : undefined;
 	if (!reader?.supportsRepository(config.repo)) throw new SyncNotConfiguredError();
+	if (source.sync_mode === 'pull' && !reader.fetchGitDirectory) {
+		throw new SyncNotConfiguredError();
+	}
 	return { git: source, reader, config };
+}
+
+export function assertPullSourceSupported(deps: PullSyncDeps, source: Source): void {
+	if (source.type !== 'git' || source.sync_mode !== 'pull') {
+		throw new SyncNotConfiguredError();
+	}
+	requireSyncReader(deps, source);
 }
 
 /** Resolve the reader and live branch head for a notebook's effective sync coordinates. */
@@ -75,7 +85,12 @@ export async function pullSourceToHead(
 	if (isAtBranchHead(git, head.commit)) {
 		return { synced: false, commit: head.commit, version_id: null };
 	}
-	const files = await reader.fetchWorkspace(config.repo, head.commit, config.root_path);
+	const [files, gitFiles] = await Promise.all([
+		reader.fetchWorkspace(config.repo, head.commit, config.root_path),
+		git.sync_mode === 'pull'
+			? reader.fetchGitDirectory!(config.repo, head.commit, config.branch)
+			: undefined,
+	]);
 	const { versionId } = await notebooks.synced.sync(
 		projectId,
 		notebookId,
@@ -85,6 +100,7 @@ export async function pullSourceToHead(
 			root_path: config.root_path,
 			commit: head.commit,
 			files,
+			...(gitFiles ? { git_files: gitFiles } : {}),
 			// The head was resolved against this source state; if another sync
 			// advances it during the download, conflict instead of regressing.
 			expected_source_version: git.current_version_id,

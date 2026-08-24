@@ -33,6 +33,10 @@ function sourceControlRegistry(
 		getReader: (provider) => readersByProvider.get(provider),
 		publisherProviders: () => [...publishersByProvider.keys()],
 		readerProviders: () => [...readersByProvider.keys()],
+		pullSourceProviders: () =>
+			[...readersByProvider.values()]
+				.filter((reader) => reader.fetchGitDirectory)
+				.map((reader) => reader.provider),
 	};
 }
 

@@ -67,6 +67,14 @@ interface BucketObject {
 	tag: string;
 }
 
+interface BucketArtifact {
+	name: string;
+	key: string;
+	summary: string;
+	mutability: Mutability;
+	tag: string;
+}
+
 const project = paths.project(PID);
 const notebook = project.notebook(NID);
 const proposal = notebook.proposal(PROPOSAL_ID);
@@ -279,6 +287,16 @@ const OBJECTS: BucketObject[] = [
 	},
 ];
 
+const ARTIFACTS: BucketArtifact[] = [
+	{
+		name: 'GitDirectoryFile',
+		key: notebook.version(VID).gitFile('{relative_path}'),
+		summary: 'Immutable pull-source Git metadata file, addressed relative to `.git`.',
+		mutability: 'immutable',
+		tag: 'notebook',
+	},
+];
+
 function jsonSchema(schema: z.ZodType): Record<string, unknown> {
 	// `io: 'input'` — the stored bytes are what parse must accept, so defaulted
 	// fields stay optional and transforms describe their pre-parse shape.
@@ -346,6 +364,34 @@ export function buildBucketSpec(): Record<string, unknown> {
 		};
 	}
 
+	for (const artifact of ARTIFACTS) {
+		const opSuffix = artifact.key
+			.replaceAll(/\{[a-z_]+\}/g, '')
+			.replaceAll(/[^a-zA-Z0-9]+/g, '_')
+			.replaceAll(/^_+|_+$/g, '');
+		const content = {
+			'application/octet-stream': { schema: { type: 'string', format: 'binary' } },
+		};
+		specPaths[`/${artifact.key}`] = {
+			summary: artifact.summary,
+			parameters: pathParams(artifact.key),
+			'x-mutability': artifact.mutability,
+			get: {
+				operationId: `read_${opSuffix}`,
+				summary: `Read ${artifact.name}`,
+				tags: [artifact.tag],
+				responses: { '200': { description: 'The stored artifact.', content } },
+			},
+			put: {
+				operationId: `write_${opSuffix}`,
+				summary: `Write ${artifact.name}`,
+				tags: [artifact.tag],
+				requestBody: { required: true, content },
+				responses: { '204': { description: 'Stored.' } },
+			},
+		};
+	}
+
 	return {
 		openapi: '3.1.0',
 		info: {
@@ -353,7 +399,8 @@ export function buildBucketSpec(): Record<string, unknown> {
 			version: '1.0.0',
 			description: [
 				'Machine-checkable description of every JSON object marimohub persists in',
-				'its storage bucket, generated from the zod schemas in',
+				'its storage bucket plus artifact families with contractual storage',
+				'semantics, generated from the zod schemas in',
 				'`packages/core/src/schema.ts` and the key templates in',
 				'`packages/core/src/paths.ts`. This is not an HTTP API: paths are bucket',
 				'key templates, GET models what readers must accept, PUT models what',
@@ -361,10 +408,11 @@ export function buildBucketSpec(): Record<string, unknown> {
 				'invariants in AGENTS.md and development_docs/bucket_spec.md.',
 				'',
 				'Deliberately excluded (no zod schema; internal operational records or',
-				'non-JSON artifacts): idempotency records, integration name claims,',
+				'other non-JSON artifacts): idempotency records, integration name claims,',
 				'reconcile orphan markers, advisory locks, and version/workspace file',
 				'artifacts (notebook.py, pyproject.toml, notebook.html, session.json,',
-				'README.md, workspace files).',
+				'README.md, workspace files). Pull-source Git metadata is included because',
+				'its immutable version-scoped location is part of the sync contract.',
 			].join('\n'),
 		},
 		tags: [

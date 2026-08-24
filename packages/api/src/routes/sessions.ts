@@ -897,9 +897,14 @@ app.openapi(createSession, async (c) => {
 	if (!workspacePolicy.persistSessionEdits && !syncedVersionId) {
 		throw new ConflictError('Synced notebook has not been synced yet');
 	}
-	const workspacePrefix = syncedVersionId
-		? paths.project(pid).notebook(nid).version(syncedVersionId).workspacePrefix
+	const syncedVersionPaths = syncedVersionId
+		? paths.project(pid).notebook(nid).version(syncedVersionId)
 		: undefined;
+	const workspacePrefix = syncedVersionPaths?.workspacePrefix;
+	const gitPrefix =
+		notebook.source.type === 'git' && notebook.source.sync_mode === 'pull'
+			? syncedVersionPaths?.gitPrefix
+			: undefined;
 	// Staleness provenance: a session that serves a frozen snapshot — a
 	// non-persisting mode (`app`), or any mode on a synced source (a read-only
 	// mirror, even under `edit`) — is stamped with the head committed version it
@@ -1293,6 +1298,7 @@ app.openapi(createSession, async (c) => {
 								? 'copy-only'
 								: workspacePolicy.loadMode,
 						workspacePrefix,
+						gitPrefix,
 					});
 					({ url, usedFallback } = provisionResult);
 					// Per-phase durations onto the session_provision event.

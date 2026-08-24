@@ -83,6 +83,8 @@ describe('paths', () => {
 			{
 			  "code": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/notebook.py",
 			  "deps": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/pyproject.toml",
+			  "gitFile": [Function],
+			  "gitPrefix": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/git/",
 			  "html": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/notebook.html",
 			  "meta": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/version.json",
 			  "session": "projects/proj_01HXY11111ABCDEFGHJKMN/notebooks/nb_01HXYZ22222PQRSTUVWXYZ/versions/ver_01HXYZ33333RSTUVWXYZAB/session.json",

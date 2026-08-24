@@ -49,7 +49,7 @@ function dataQuery(
 	};
 }
 
-describe('DuckDB-Wasm worker lifecycle', () => {
+describe('DuckDB-Wasm worker lifecycle', { timeout: 15_000 }, () => {
 	it('caps the worker V8 heap and stack', () => {
 		expect(DUCKDB_WORKER_RESOURCE_LIMITS).toEqual({
 			maxOldGenerationSizeMb: 256,

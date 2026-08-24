@@ -1271,7 +1271,6 @@ export function useDuplicateNotebook(projectId: string) {
 	);
 }
 
-/** Create a git-synced notebook; the response carries its write-once sync token. */
 export function useCreateSyncedNotebook(projectId: string) {
 	return useApiMutation(
 		(body: {
@@ -1281,6 +1280,7 @@ export function useCreateSyncedNotebook(projectId: string) {
 			branch: string;
 			root_path?: string;
 			entry_notebook: string;
+			sync_mode?: 'push' | 'pull';
 		}) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/git', {

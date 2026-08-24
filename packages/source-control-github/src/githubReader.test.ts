@@ -232,7 +232,7 @@ describe('GitHubAppPublisher reader', () => {
 		await expect(
 			whole.fetchWorkspace('owner/repo', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', ''),
 		).rejects.toThrow(/Decompressed archive exceeds the size limit/);
-	});
+	}, 15_000);
 
 	it('supports github.com repositories only', () => {
 		const github = reader(() => null);

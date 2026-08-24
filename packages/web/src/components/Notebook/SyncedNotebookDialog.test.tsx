@@ -6,8 +6,27 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { SyncedNotebookDialog } from './SyncedNotebookDialog';
 
-function renderDialog(fetchImpl = vi.fn()) {
-	vi.stubGlobal('fetch', fetchImpl);
+function renderDialog(fetchImpl = vi.fn(), pullAvailable: boolean | Promise<boolean> = false) {
+	vi.stubGlobal(
+		'fetch',
+		vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+			if (String(url).endsWith('/api/v1/capabilities')) {
+				const available = await pullAvailable;
+				return new Response(
+					JSON.stringify({
+						success: true,
+						data: {
+							source_control: {
+								pull_source_providers: available ? ['github'] : [],
+							},
+						},
+					}),
+					{ headers: { 'content-type': 'application/json' } },
+				);
+			}
+			return fetchImpl(url, init);
+		}),
+	);
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const onClose = vi.fn();
 	const onCreated = vi.fn();
@@ -103,12 +122,119 @@ describe('SyncedNotebookDialog', () => {
 			branch: 'main',
 			root_path: 'apps',
 			entry_notebook: 'dashboard.py',
+			sync_mode: 'push',
 		});
 		expect(onCreated).toHaveBeenCalledWith({
 			notebookId: 'nb-9',
 			title: 'Dash',
 			syncUrl: 'https://host/api/sync/git/v1/projects/proj-x/notebooks/nb-9',
 			token: 'mhsync_secret',
+			syncMode: 'push',
 		});
+	});
+
+	it('offers GitHub pull mode and creates without CI credentials', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = vi.fn(
+			async (_url: RequestInfo | URL, _init?: RequestInit) =>
+				new Response(
+					JSON.stringify({
+						success: true,
+						data: { notebook: { id: 'nb-pull', title: 'Connected', status: 'active' } },
+					}),
+					{ headers: { 'content-type': 'application/json' } },
+				),
+		);
+		const { onCreated } = renderDialog(fetchImpl, true);
+
+		expect(await screen.findByText('Connect to GitHub')).toBeInTheDocument();
+		expect(screen.getByText('Push from CI')).toBeInTheDocument();
+		expect(screen.getByRole('dialog').closest('.max-w-md')).not.toBeNull();
+		const pullDescription = screen.getByText(
+			'The server pulls the repository; no CI setup is required.',
+		);
+		expect(pullDescription).toHaveClass('whitespace-normal', 'break-words');
+		expect(pullDescription).not.toHaveClass('truncate');
+		expect(screen.queryByLabelText('Folder in repo (optional)')).not.toBeInTheDocument();
+		await user.type(screen.getByLabelText('Notebook name'), 'Connected');
+		await user.type(screen.getByLabelText('Repository'), 'acme/analytics');
+		await user.type(screen.getByLabelText('Notebook file'), 'dashboard.py');
+		await user.click(screen.getByRole('button', { name: 'Create' }));
+
+		const [, init] = fetchImpl.mock.calls[0];
+		expect(JSON.parse(init!.body as string)).toMatchObject({
+			root_path: '',
+			sync_mode: 'pull',
+		});
+		expect(onCreated).toHaveBeenCalledWith({
+			notebookId: 'nb-pull',
+			title: 'Connected',
+			syncUrl: undefined,
+			token: undefined,
+			syncMode: 'pull',
+		});
+	});
+
+	it('selects pull mode when capabilities load after the dialog opens', async () => {
+		const user = userEvent.setup();
+		let resolveCapabilities: (available: boolean) => void = () => {};
+		const pullAvailable = new Promise<boolean>((resolve) => {
+			resolveCapabilities = resolve;
+		});
+		renderDialog(vi.fn(), pullAvailable);
+
+		await user.type(screen.getByLabelText('Notebook name'), 'Connected');
+		expect(screen.getByLabelText('Notebook name')).toHaveValue('Connected');
+		expect(screen.getByLabelText('Folder in repo (optional)')).toBeInTheDocument();
+
+		resolveCapabilities(true);
+
+		expect(await screen.findByText('Connect to GitHub')).toBeInTheDocument();
+		expect(screen.getByLabelText('Notebook name')).toHaveValue('Connected');
+		expect(screen.queryByLabelText('Folder in repo (optional)')).not.toBeInTheDocument();
+	});
+
+	it.each([
+		['GitLab', 'https://gitlab.com/acme/analytics'],
+		['GitHub Enterprise', 'https://github.mycompany.com/acme/analytics'],
+	])('rejects %s repositories in pull mode', async (_label, repository) => {
+		const user = userEvent.setup();
+		const fetchImpl = vi.fn();
+		renderDialog(fetchImpl, true);
+
+		await user.type(screen.getByLabelText('Repository'), repository);
+		await user.tab();
+
+		expect(screen.getByText(/pull mode supports github\.com repositories/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
+	it('revalidates the repository when switching between pull and push modes', async () => {
+		const user = userEvent.setup();
+		renderDialog(vi.fn(), true);
+
+		await user.type(screen.getByLabelText('Notebook name'), 'Dash');
+		await user.type(
+			screen.getByLabelText('Repository'),
+			'https://gitlab.example.com/acme/analytics',
+		);
+		await user.type(screen.getByLabelText('Notebook file'), 'dashboard.py');
+		await user.tab();
+
+		expect(screen.getByText(/pull mode supports github\.com repositories/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+
+		await user.click(screen.getByText('Push from CI'));
+
+		expect(
+			screen.queryByText(/pull mode supports github\.com repositories/i),
+		).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+
+		await user.click(screen.getByText('Connect to GitHub'));
+
+		expect(screen.getByText(/pull mode supports github\.com repositories/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
 	});
 });
