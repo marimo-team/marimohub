@@ -166,7 +166,7 @@ mirror of the sandbox working directory. It contains `notebook.py` and
 - **Runtime files are opt-in.** Under the default `MARIMOHUB_PERSIST_WORKSPACE=source`, `workspace/` contains only `notebook.py` + `pyproject.toml`. Under `workspace`, the sandbox's non-source files are captured here on teardown and restored on the next session (§8).
 - **The mount is rooted at `workspace/`.** When a sandbox mounts the bucket, the working dir maps to `workspace/`. Because `meta.json` / `README.md` / `source.json` / `versions/` sit **outside** `workspace/`, control metadata is never exposed to user code in the sandbox.
 
-For a `git` source, each push writes a complete tree under
+For a `git` source, each sync writes a complete tree under
 `versions/{vid}/workspace/`. The source pointer selects one immutable version.
 The notebook has no mutable workspace mirror. A session receives a copy of the
 selected version and cannot write changes back.

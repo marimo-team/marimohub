@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { zipSync } from 'fflate';
 import {
 	BadRequestError,
@@ -202,7 +202,7 @@ describe('Source drift and sync-now routes', () => {
 		).toMatchObject({ sync_mode: 'pull', current_version_id: null });
 	});
 
-	it('rejects oversized Git metadata before calling the sync service', async () => {
+	it('rejects oversized Git metadata before persisting a version', async () => {
 		const reader = stubReader({
 			fetchGitDirectory: async () =>
 				Array.from({ length: MAX_GIT_DIRECTORY_FILES + 1 }, (_, index) => ({
@@ -211,7 +211,6 @@ describe('Source drift and sync-now routes', () => {
 				})),
 		});
 		const { request, deps } = api(reader);
-		const sync = vi.spyOn(deps.services.notebooks.synced, 'sync');
 		const created = await expectOk<{
 			notebook: { id: string; status: string };
 			sync_error: { code: string; message: string };
@@ -230,7 +229,9 @@ describe('Source drift and sync-now routes', () => {
 		expect(created.notebook.status).toBe('draft');
 		expect(created.sync_error).toMatchObject({ code: 'BAD_REQUEST' });
 		expect(created.sync_error.message).toMatch(`${MAX_GIT_DIRECTORY_FILES}-file limit`);
-		expect(sync).not.toHaveBeenCalled();
+		expect(
+			await deps.services.notebooks.listVersions(projectId, created.notebook.id as NotebookId),
+		).toHaveLength(0);
 	});
 
 	it('rejects mode switching for a pull source', async () => {

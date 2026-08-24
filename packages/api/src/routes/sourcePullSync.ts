@@ -1,5 +1,4 @@
 import {
-	assertGitDirectoryLimits,
 	effectiveGitSourceConfig,
 	isAtBranchHead,
 	NotFoundError,
@@ -92,7 +91,6 @@ export async function pullSourceToHead(
 			? reader.fetchGitDirectory!(config.repo, head.commit, config.branch)
 			: undefined,
 	]);
-	if (gitFiles) assertGitDirectoryLimits(gitFiles);
 	const { versionId } = await notebooks.synced.sync(
 		projectId,
 		notebookId,
