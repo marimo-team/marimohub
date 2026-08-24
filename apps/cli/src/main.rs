@@ -93,23 +93,7 @@ fn handle_profile(matches: &ArgMatches) -> Result<(), Error> {
 }
 
 fn normalize_base_url(value: &str) -> Result<String, Error> {
-    let url = url::Url::parse(value)?;
-    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
-        return Err(Error::Usage(
-            "server URL must be an absolute HTTP or HTTPS URL".into(),
-        ));
-    }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(Error::Usage(
-            "server URL must not contain a username or password".into(),
-        ));
-    }
-    if url.query().is_some() || url.fragment().is_some() {
-        return Err(Error::Usage(
-            "server URL must not contain a query string or fragment".into(),
-        ));
-    }
-    Ok(url.as_str().trim_end_matches('/').to_owned())
+    config::normalize_base_url(value)
 }
 
 fn server_label(value: &str) -> String {
