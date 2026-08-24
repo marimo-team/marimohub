@@ -167,4 +167,48 @@ describe('SyncedNotebookDialog', () => {
 			syncMode: 'pull',
 		});
 	});
+
+	it.each([
+		['GitLab', 'https://gitlab.com/acme/analytics'],
+		['GitHub Enterprise', 'https://github.mycompany.com/acme/analytics'],
+	])('rejects %s repositories in pull mode', async (_label, repository) => {
+		const user = userEvent.setup();
+		const fetchImpl = vi.fn();
+		renderDialog(fetchImpl, true);
+
+		await user.type(screen.getByLabelText('Repository'), repository);
+		await user.tab();
+
+		expect(screen.getByText(/pull mode supports github\.com repositories/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
+	it('revalidates the repository when switching between pull and push modes', async () => {
+		const user = userEvent.setup();
+		renderDialog(vi.fn(), true);
+
+		await user.type(screen.getByLabelText('Notebook name'), 'Dash');
+		await user.type(
+			screen.getByLabelText('Repository'),
+			'https://gitlab.example.com/acme/analytics',
+		);
+		await user.type(screen.getByLabelText('Notebook file'), 'dashboard.py');
+		await user.tab();
+
+		expect(screen.getByText(/pull mode supports github\.com repositories/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+
+		await user.click(screen.getByText('Push from CI'));
+
+		expect(
+			screen.queryByText(/pull mode supports github\.com repositories/i),
+		).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+
+		await user.click(screen.getByText('Connect to GitHub'));
+
+		expect(screen.getByText(/pull mode supports github\.com repositories/i)).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+	});
 });

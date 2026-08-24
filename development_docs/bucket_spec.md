@@ -131,8 +131,8 @@ s3-bucket/
             └── {notebook-id}/
                 ├── meta.json               ← notebook metadata (title, author, tags…)
                 ├── README.md               ← human description
-                ├── source.json             ← `local` or push-synced `git` source metadata
-                ├── integration_sync_token.json ← Git-sync token hash (Git sources only)
+                ├── source.json             ← `local` or `git` source metadata
+                ├── integration_sync_token.json ← push-sync token hash (push-mode Git sources only)
                 ├── fs_snapshot.json        ← optional provider filesystem-snapshot pointer
                 ├── workspace/              ← local sources only: latest sandbox workspace
                 │   ├── notebook.py          ← latest local code
@@ -149,7 +149,8 @@ s3-bucket/
                         ├── version.json
                         ├── notebook.py         ← local source snapshot
                         ├── pyproject.toml      ← local dependency snapshot
-                        ├── workspace/          ← Git sources only: complete pushed tree
+                        ├── workspace/          ← Git sources only: complete synced tree
+                        ├── git/                ← pull-mode Git sources only: credential-free `.git` payload
                         ├── notebook.html       ← optional snapshot (see below)
                         └── session.json        ← optional snapshot (see below)
 ```

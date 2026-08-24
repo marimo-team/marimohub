@@ -13,6 +13,8 @@ import { useCapabilitiesQuery, useCreateSyncedNotebook } from '@/api/hooks';
 import {
 	ENTRY_NOTEBOOK_HINT,
 	ENTRY_NOTEBOOK_PATTERN,
+	GITHUB_REPO_INPUT_HINT,
+	isGitHubRepoInput,
 	isRepoInput,
 	REPO_INPUT_HINT,
 } from '@/lib/git';
@@ -32,14 +34,24 @@ export interface SyncedNotebookDialogProps {
 	onCreated: (result: SyncedNotebookCreated) => void;
 }
 
-const syncedSchema = z.object({
-	syncMode: z.enum(['push', 'pull']),
-	title: requiredText('Notebook name'),
-	repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
-	branch: requiredText('Branch'),
-	rootPath: optionalText(),
-	entryNotebook: requiredText('Notebook file').regex(ENTRY_NOTEBOOK_PATTERN, ENTRY_NOTEBOOK_HINT),
-});
+const syncedSchema = z
+	.object({
+		syncMode: z.enum(['push', 'pull']),
+		title: requiredText('Notebook name'),
+		repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
+		branch: requiredText('Branch'),
+		rootPath: optionalText(),
+		entryNotebook: requiredText('Notebook file').regex(ENTRY_NOTEBOOK_PATTERN, ENTRY_NOTEBOOK_HINT),
+	})
+	.superRefine((value, context) => {
+		if (value.syncMode === 'pull' && isRepoInput(value.repo) && !isGitHubRepoInput(value.repo)) {
+			context.addIssue({
+				code: 'custom',
+				path: ['repo'],
+				message: GITHUB_REPO_INPUT_HINT,
+			});
+		}
+	});
 
 const emptyValues = (syncMode: 'push' | 'pull') => ({
 	syncMode,

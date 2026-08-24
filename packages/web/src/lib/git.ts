@@ -23,6 +23,51 @@ export interface GitSourceCoords {
 // OWNER_REPO_PATTERN (core gitRepo.ts), including the dot-only repo-name
 // rejection (`owner/..` would escape the owner in a built URL).
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_-]+\/(?!\.+$)[A-Za-z0-9._-]+$/;
+// Pull support is narrower than the generic source shape. Keep these rules in
+// sync with source-control-github's parseRepository boundary.
+const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+const GITHUB_REPO_PATTERN = /^(?!\.+$)[A-Za-z0-9_.-]{1,100}$/;
+
+interface ParsedRepoInput {
+	path: string;
+	url: URL | null;
+}
+
+function parseRepoInput(input: string): ParsedRepoInput | null {
+	const trimmed = input.trim();
+	if (!trimmed) return null;
+	const bare = trimmed.replace(/\.git$/, '');
+	if (OWNER_REPO_PATTERN.test(bare)) return { path: bare, url: null };
+
+	let candidate = trimmed;
+	const ssh =
+		/^ssh:\/\/git@([^/:\s]+)(?::\d+)?\/(.+)$/i.exec(candidate) ??
+		/^git@([^/:\s]+):(.+)$/.exec(candidate);
+	if (ssh) {
+		candidate = `https://${ssh[1]}/${ssh[2]}`;
+	} else if (!/^https?:\/\//i.test(candidate)) {
+		const [firstSegment] = candidate.split('/', 1);
+		if (!firstSegment?.includes('.')) return null;
+		candidate = `https://${candidate}`;
+	}
+	let url: URL;
+	try {
+		url = new URL(candidate);
+	} catch {
+		return null;
+	}
+	if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+	if (!url.hostname || url.username || url.password) return null;
+	const segments = url.pathname
+		.replace(/\/+$/, '')
+		.replace(/\.git$/, '')
+		.split('/')
+		.filter(Boolean);
+	if (segments.length < 2 || segments.some((segment) => segment === '.' || segment === '..')) {
+		return null;
+	}
+	return { path: segments.join('/'), url };
+}
 
 /**
  * Percent-encode each segment while keeping `/` separators — branches and
@@ -151,38 +196,43 @@ export function versionCommit(version: Pick<NotebookVersion, 'message' | 'commit
  * scheme-less `host.tld/group/repo`, or an SSH remote.
  */
 export function isRepoInput(input: string): boolean {
-	const trimmed = input.trim();
-	if (!trimmed) return false;
-	if (OWNER_REPO_PATTERN.test(trimmed.replace(/\.git$/, ''))) return true;
-	let candidate = trimmed;
-	const ssh =
-		/^ssh:\/\/git@([^/:\s]+)(?::\d+)?\/(.+)$/i.exec(candidate) ??
-		/^git@([^/:\s]+):(.+)$/.exec(candidate);
-	if (ssh) {
-		candidate = `https://${ssh[1]}/${ssh[2]}`;
-	} else if (!/^https?:\/\//i.test(candidate)) {
-		const [firstSegment] = candidate.split('/', 1);
-		if (!firstSegment?.includes('.')) return false;
-		candidate = `https://${candidate}`;
-	}
-	let url: URL;
-	try {
-		url = new URL(candidate);
-	} catch {
-		return false;
-	}
-	if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
-	if (!url.hostname || url.username || url.password) return false;
-	const segments = url.pathname
-		.replace(/\/+$/, '')
-		.replace(/\.git$/, '')
-		.split('/')
-		.filter(Boolean);
-	return segments.length >= 2 && !segments.some((s) => s === '.' || s === '..');
+	return parseRepoInput(input) !== null;
 }
 
 export const REPO_INPUT_HINT =
 	'Use owner/repo or a repository URL, e.g. acme/analytics or https://gitlab.example.com/group/project';
+
+export function isGitHubRepoInput(input: string): boolean {
+	let path = input.trim();
+	if (/^https:\/\//i.test(path)) {
+		let url: URL;
+		try {
+			url = new URL(path);
+		} catch {
+			return false;
+		}
+		if (
+			url.hostname.toLowerCase() !== 'github.com' ||
+			url.port ||
+			url.username ||
+			url.password ||
+			url.search ||
+			url.hash
+		) {
+			return false;
+		}
+		path = url.pathname.replaceAll(/^\/+|\/+$/g, '');
+	}
+	const parts = path.replace(/\.git$/, '').split('/');
+	return (
+		parts.length === 2 &&
+		GITHUB_OWNER_PATTERN.test(parts[0] ?? '') &&
+		GITHUB_REPO_PATTERN.test(parts[1] ?? '')
+	);
+}
+
+export const GITHUB_REPO_INPUT_HINT =
+	'Pull mode supports github.com repositories, e.g. acme/analytics or https://github.com/acme/analytics';
 
 // Mirrors the server's notebook-extension gate (core `isNotebookFilePath`),
 // including its non-empty-stem rule: a bare dotfile like `.md` is not a notebook.

@@ -1,11 +1,24 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BadRequestError, MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core';
+import {
+	BadRequestError,
+	MAX_GIT_DIRECTORY_BYTES,
+	MAX_GIT_DIRECTORY_FILES,
+	MAX_GIT_EXPANDED_BYTES,
+	MAX_GIT_EXPANDED_FILES,
+	MAX_GIT_FETCH_BYTES,
+	MAX_WORKSPACE_FILE_BYTES,
+} from '@marimo-hub/core';
 import type { GitHubFetch } from './githubClient';
-import { materializeGitDirectory } from './githubGitDirectory';
+import {
+	assertGitCheckoutLimits,
+	collectGitDirectoryFiles,
+	GitFetchByteLimit,
+	materializeGitDirectory,
+} from './githubGitDirectory';
 
 const temporaryDirectories: string[] = [];
 
@@ -85,6 +98,14 @@ afterEach(async () => {
 });
 
 describe('materializeGitDirectory', () => {
+	it('caps the combined bytes from all smart-HTTP responses', () => {
+		const limit = new GitFetchByteLimit('owner/repo');
+		limit.record(Math.ceil(MAX_GIT_FETCH_BYTES / 2));
+		expect(() => limit.record(Math.floor(MAX_GIT_FETCH_BYTES / 2) + 1)).toThrow(
+			`${MAX_GIT_FETCH_BYTES}-byte pull-source limit`,
+		);
+	});
+
 	it('preserves an exact signed commit and produces a clean credential-free working tree', async () => {
 		const source = await temporaryDirectory('marimohub-git-source-');
 		git(source, ['init', '-b', 'main']);
@@ -135,7 +156,7 @@ describe('materializeGitDirectory', () => {
 	it('rejects a smart-HTTP response beyond the Git pack limit', async () => {
 		const fetcher: GitHubFetch = async () =>
 			new Response('too large', {
-				headers: { 'content-length': String(MAX_WORKSPACE_FILE_BYTES + 1) },
+				headers: { 'content-length': String(MAX_GIT_FETCH_BYTES + 1) },
 			});
 		await expect(
 			materializeGitDirectory({
@@ -148,6 +169,67 @@ describe('materializeGitDirectory', () => {
 				fetcher,
 			}),
 		).rejects.toBeInstanceOf(BadRequestError);
+	});
+
+	it('rejects a file beyond the expanded-object per-file cap', async () => {
+		const checkout = await temporaryDirectory('marimohub-git-expanded-file-');
+		const file = join(checkout, 'large.bin');
+		await writeFile(file, '');
+		await truncate(file, MAX_WORKSPACE_FILE_BYTES + 1);
+
+		await expect(assertGitCheckoutLimits(checkout, 'owner/expanded')).rejects.toThrow(
+			`${MAX_WORKSPACE_FILE_BYTES}-byte limit`,
+		);
+	});
+
+	it('rejects too many files after Git pack expansion', async () => {
+		const checkout = await temporaryDirectory('marimohub-git-expanded-files-');
+		for (let index = 0; index < MAX_GIT_EXPANDED_FILES + 1; index++) {
+			await writeFile(join(checkout, `file-${index}`), '');
+		}
+
+		await expect(assertGitCheckoutLimits(checkout, 'owner/expanded')).rejects.toThrow(
+			`${MAX_GIT_EXPANDED_FILES}-file limit`,
+		);
+	});
+
+	it('rejects cumulative bytes after Git pack expansion', async () => {
+		const checkout = await temporaryDirectory('marimohub-git-expanded-bytes-');
+		const fileSize = Math.floor(MAX_GIT_EXPANDED_BYTES / 5) + 1;
+		for (let index = 0; index < 5; index++) {
+			const path = join(checkout, `file-${index}`);
+			await writeFile(path, '');
+			await truncate(path, fileSize);
+		}
+
+		await expect(assertGitCheckoutLimits(checkout, 'owner/expanded')).rejects.toThrow(
+			`${MAX_GIT_EXPANDED_BYTES}-byte limit`,
+		);
+	});
+
+	it('rejects a materialized Git directory beyond the file-count cap', async () => {
+		const gitdir = await temporaryDirectory('marimohub-git-many-files-');
+		for (let index = 0; index < MAX_GIT_DIRECTORY_FILES + 1; index++) {
+			await writeFile(join(gitdir, `object-${index}`), '');
+		}
+
+		await expect(collectGitDirectoryFiles(gitdir, 'owner/many-files')).rejects.toThrow(
+			`${MAX_GIT_DIRECTORY_FILES}-file limit`,
+		);
+	});
+
+	it('rejects cumulative materialized bytes beyond the cap', async () => {
+		const gitdir = await temporaryDirectory('marimohub-git-expanded-');
+		const fileSize = Math.floor(MAX_GIT_DIRECTORY_BYTES / 5) + 1;
+		for (let index = 0; index < 5; index++) {
+			const path = join(gitdir, `object-${index}`);
+			await writeFile(path, '');
+			await truncate(path, fileSize);
+		}
+
+		await expect(collectGitDirectoryFiles(gitdir, 'owner/expanded')).rejects.toThrow(
+			`${MAX_GIT_DIRECTORY_BYTES}-byte limit`,
+		);
 	});
 
 	it('preserves a symlink index entry when the workspace omits the symlink', async () => {

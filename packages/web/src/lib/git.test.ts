@@ -7,6 +7,7 @@ import {
 	gitCoords,
 	gitEntryPath,
 	gitSourceUrl,
+	isGitHubRepoInput,
 	isRepoInput,
 	providerLabel,
 	shortCommit,
@@ -183,6 +184,38 @@ describe('isRepoInput', () => {
 		expect(isRepoInput('https://gitlab.com/only-group')).toBe(false);
 		expect(isRepoInput('https://oauth2:token@gitlab.com/group/project')).toBe(false);
 		expect(isRepoInput('ftp://gitlab.com/group/project')).toBe(false);
+	});
+});
+
+describe('isGitHubRepoInput', () => {
+	it('accepts GitHub shorthand and HTTPS URL forms', () => {
+		for (const repo of [
+			'acme/analytics',
+			'acme/analytics.git',
+			'https://github.com/acme/analytics',
+			'HTTPS://GitHub.COM/acme/analytics.git/',
+		]) {
+			expect(isGitHubRepoInput(repo), repo).toBe(true);
+		}
+	});
+
+	it('rejects other providers and unsupported GitHub hosts or coordinates', () => {
+		for (const repo of [
+			'https://gitlab.com/acme/analytics',
+			'https://github.mycompany.com/acme/analytics',
+			'https://github.com:444/acme/analytics',
+			'http://github.com/acme/analytics',
+			'https://notgithub.com/acme/analytics',
+			'https://github.com/acme/team/analytics',
+			'https://github.com/acme/analytics?tab=readme',
+			'https://github.com/acme/analytics#readme',
+			'github.com/acme/analytics',
+			'git@github.com:acme/analytics.git',
+			'ssh://git@github.com/acme/analytics.git',
+			'-acme/analytics',
+		]) {
+			expect(isGitHubRepoInput(repo), repo).toBe(false);
+		}
 	});
 });
 

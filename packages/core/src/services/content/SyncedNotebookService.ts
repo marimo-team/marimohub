@@ -21,6 +21,7 @@ import type {
 	UpdateSyncedNotebookSourceInput,
 } from '../../integrations/syncedSource';
 import type { Metrics } from '../../ports/metrics';
+import { assertGitDirectoryLimits } from '../../ports/sourceControl';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import type { VersionPaths } from '../../paths';
@@ -213,6 +214,7 @@ export class SyncedNotebookService {
 		}
 		const syncedSource = assertSyncedSource(source);
 		const prepared = prepareSync(syncedSource, input);
+		if (input.git_files) assertGitDirectoryLimits(input.git_files);
 		const gitFiles = input.git_files ? toSyncedWorkspaceFileMap(input.git_files) : undefined;
 		if (syncedSource.sync_mode === 'pull' && !gitFiles) {
 			throw new BadRequestError('Pull sync did not include Git metadata');

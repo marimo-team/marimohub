@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { zipSync } from 'fflate';
 import {
 	BadRequestError,
 	createNotebookId,
 	createServices,
+	MAX_GIT_DIRECTORY_FILES,
 	paths,
 	UnavailableError,
 } from '@marimo-hub/core';
@@ -199,6 +200,37 @@ describe('Source drift and sync-now routes', () => {
 				)
 			).source,
 		).toMatchObject({ sync_mode: 'pull', current_version_id: null });
+	});
+
+	it('rejects oversized Git metadata before calling the sync service', async () => {
+		const reader = stubReader({
+			fetchGitDirectory: async () =>
+				Array.from({ length: MAX_GIT_DIRECTORY_FILES + 1 }, (_, index) => ({
+					path: `objects/${index}`,
+					bytes: new Uint8Array(),
+				})),
+		});
+		const { request, deps } = api(reader);
+		const sync = vi.spyOn(deps.services.notebooks.synced, 'sync');
+		const created = await expectOk<{
+			notebook: { id: string; status: string };
+			sync_error: { code: string; message: string };
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Connected app',
+				description: 'Pulled by the server',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+
+		expect(created.notebook.status).toBe('draft');
+		expect(created.sync_error).toMatchObject({ code: 'BAD_REQUEST' });
+		expect(created.sync_error.message).toMatch(`${MAX_GIT_DIRECTORY_FILES}-file limit`);
+		expect(sync).not.toHaveBeenCalled();
 	});
 
 	it('rejects mode switching for a pull source', async () => {

@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { MAX_WORKSPACE_FILE_BYTES } from '../../constants';
 import { PreconditionFailedError } from '../../errors';
 import { ACTOR, restoreClock, setupTestEnv, useFakeClock } from '../../testing';
 import type { MemoryBucket } from '../../testing';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { noopMetrics } from '../../ports/metrics';
+import { MAX_GIT_DIRECTORY_BYTES, MAX_GIT_DIRECTORY_FILES } from '../../ports/sourceControl';
 import type { CatalogService } from '../catalog/CatalogService';
 import type { NotebookService } from './NotebookService';
 import type { ProjectService } from './ProjectService';
@@ -497,6 +499,61 @@ describe('SyncedNotebookService', () => {
 					git_files: [],
 				}),
 			).rejects.toThrow('Sync archive did not contain any files');
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
+		});
+
+		it('rejects pull Git metadata beyond the file-count cap before persistence', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			const empty = new Uint8Array();
+			await expect(
+				notebooks.synced.sync(projectId, meta.id, {
+					...syncInput('commit-aaaa'),
+					git_files: Array.from({ length: MAX_GIT_DIRECTORY_FILES + 1 }, (_, index) => ({
+						path: `objects/${index}`,
+						bytes: empty,
+					})),
+				}),
+			).rejects.toThrow(`${MAX_GIT_DIRECTORY_FILES}-file limit`);
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
+		});
+
+		it('rejects an oversized pull Git metadata file before persistence', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			await expect(
+				notebooks.synced.sync(projectId, meta.id, {
+					...syncInput('commit-aaaa'),
+					git_files: [
+						{ path: 'objects/large', bytes: new Uint8Array(MAX_WORKSPACE_FILE_BYTES + 1) },
+					],
+				}),
+			).rejects.toThrow(`${MAX_WORKSPACE_FILE_BYTES}-byte limit`);
+			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
+		});
+
+		it('rejects pull Git metadata beyond the cumulative-byte cap before persistence', async () => {
+			const { meta } = await notebooks.synced.create(
+				projectId,
+				{ ...CREATE_INPUT, sync_mode: 'pull' },
+				ACTOR,
+			);
+			const part = new Uint8Array(Math.floor(MAX_GIT_DIRECTORY_BYTES / 5) + 1);
+			await expect(
+				notebooks.synced.sync(projectId, meta.id, {
+					...syncInput('commit-aaaa'),
+					git_files: Array.from({ length: 5 }, (_, index) => ({
+						path: `objects/${index}`,
+						bytes: part,
+					})),
+				}),
+			).rejects.toThrow(`${MAX_GIT_DIRECTORY_BYTES}-byte limit`);
 			expect(await notebooks.listVersions(projectId, meta.id)).toHaveLength(0);
 		});
 
