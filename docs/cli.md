@@ -53,7 +53,6 @@ jobs:
     env:
       MARIMOHUB_URL: ${{ vars.MARIMOHUB_URL }}
       MARIMOHUB_TOKEN: ${{ secrets.MARIMOHUB_TOKEN }}
-      MARIMOHUB_NO_UPDATE_CHECK: '1'
       MARIMOHUB_PROJECT_ID: ${{ vars.MARIMOHUB_PROJECT_ID }}
       MARIMOHUB_NOTEBOOK_ID: ${{ vars.MARIMOHUB_NOTEBOOK_ID }}
     steps:
@@ -137,8 +136,8 @@ mohub projects list --all --output jsonl
 Use `json`, `jsonl`, `raw`, or `csv` in scripts. These formats do not contain
 terminal colors. Progress and update notices use standard error.
 
-Use `--no-update-check` or `MARIMOHUB_NO_UPDATE_CHECK=1` to turn off the daily
-release check.
+The CLI skips its daily release check when standard error is not a terminal, including in CI. Use
+`--no-update-check` or `MARIMOHUB_NO_UPDATE_CHECK=true` to disable it explicitly.
 
 ## Profiles
 
