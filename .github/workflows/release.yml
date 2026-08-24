@@ -282,8 +282,30 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: mohub-*
-          path: release-assets
+          path: release-downloads
           merge-multiple: true
+
+      - name: Stage and validate CLI artifacts
+        run: |
+          mkdir release-assets
+          find release-downloads -type f -exec cp {} release-assets/ \;
+          EXPECTED=(
+            mohub-aarch64-apple-darwin.tar.gz
+            mohub-aarch64-unknown-linux-gnu.tar.gz
+            mohub-x86_64-apple-darwin.tar.gz
+            mohub-x86_64-pc-windows-msvc.zip
+            mohub-x86_64-unknown-linux-gnu.tar.gz
+          )
+          for archive in "${EXPECTED[@]}"; do
+            test -f "release-assets/$archive" || {
+              echo "::error::Missing CLI archive: $archive"
+              exit 1
+            }
+            test -f "release-assets/$archive.sha256" || {
+              echo "::error::Missing CLI checksum: $archive.sha256"
+              exit 1
+            }
+          done
 
       - name: Create checksums and dependency SBOM
         run: |

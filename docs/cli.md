@@ -26,6 +26,38 @@ uv tool run --from ./marimohub_cli-*.whl mohub --version
 If you do not use `uv`, download the standalone archive. Extract it and put
 `mohub` (`mohub.exe` on Windows) on your `PATH`.
 
+### GitHub Actions
+
+Use [`setup-marimohub-cli`](https://github.com/marimo-team/setup-marimohub-cli)
+to install a pinned CLI version in a workflow:
+
+```yaml
+- uses: marimo-team/setup-marimohub-cli@v1
+  with:
+    version: '0.3.5'
+```
+
+The CLI reads automation credentials from `MARIMOHUB_URL` and
+`MARIMOHUB_TOKEN`. Store the token as a GitHub Actions secret.
+
+To synchronize a git-backed notebook after a push, configure
+`MARIMOHUB_PROJECT_ID` and `MARIMOHUB_NOTEBOOK_ID` as repository variables and
+run:
+
+```yaml
+- name: Sync notebook
+  run: >-
+    mohub notebooks source sync
+    --pid "$MARIMOHUB_PROJECT_ID"
+    --nid "$MARIMOHUB_NOTEBOOK_ID"
+    --yes
+```
+
+Synchronization is server-initiated, so the job does not need to check out the
+repository. It is a no-op when the notebook already matches the configured
+branch head. For production, keep the variables and token in a protected GitHub
+Environment.
+
 ## Sign in
 
 Sign in to marimohub in your browser. Open the user menu, select **API tokens**,

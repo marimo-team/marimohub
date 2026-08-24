@@ -23,7 +23,7 @@ The x86-64 Linux build uses a glibc 2.28 image. Each native archive contains
 shell completions and man pages.
 
 [`apps/cli/dist-workspace.toml`](../apps/cli/dist-workspace.toml) defines shell,
-PowerShell, Homebrew, MSI, and npm installers. It also defines the standalone
+PowerShell, Homebrew, and npm installers. It also defines the standalone
 `mohub-update` program. Run `dist plan --allow-dirty` from `apps/cli` to check
 this configuration. The existing workflow remains the release owner while the
 team creates the Homebrew tap and configures npm credentials.
