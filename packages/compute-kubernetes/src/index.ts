@@ -33,9 +33,9 @@
  *
  * INTEGRATION SURFACE (validate against a live cluster before production, the same
  * caveat the Modal/CoreWeave adapters carry): the Ingress host scheme and TLS are
- * cluster/ingress-controller specific (`ingressClassName`, a wildcard-cert
- * `tlsSecretName`, and a matching `*.{host}` DNS record are required for the
- * returned URL to resolve); marimo must run tokenless behind marimohub's own auth
+ * cluster/ingress-controller specific. The returned URL requires `ingressClassName`,
+ * a matching `*.{host}` DNS record, and TLS from either a named wildcard secret or
+ * the controller's default certificate; marimo must run tokenless behind marimohub's own auth
  * (the provisioner passes `--no-token`); and the in-pod port wait assumes
  * `python3` is on the image PATH (see `portWaitCommand`).
  */
@@ -213,6 +213,8 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			port: this.kernelPort,
 			namespace: this.namespace,
 			ingressClassName: this.config.ingressClassName,
+			ingressAnnotations: this.config.ingressAnnotations,
+			ingressTlsMode: this.config.ingressTlsMode,
 			tlsSecretName: this.config.tlsSecretName,
 			serviceAccountName: this.config.serviceAccountName,
 			imagePullSecret: this.config.imagePullSecret,

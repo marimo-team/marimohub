@@ -22,9 +22,10 @@ cluster.
    `pnpm add @kubernetes/client-node` (or `npm i @kubernetes/client-node`).
 2. **A sandbox image** with marimo + uv + python3 + git
    (`MARIMOHUB_COMPUTE_IMAGE`).
-3. **An ingress controller**, a wildcard DNS record `*.hub.example.com`, and a
-   wildcard TLS secret `marimo-kernels-wildcard-tls` in the `marimo-kernels`
-   namespace so each `https://<id>.hub.example.com` kernel URL resolves.
+3. **An ingress controller**, a wildcard DNS record `*.hub.example.com`, and
+   either a wildcard TLS secret `marimo-kernels-wildcard-tls` in the
+   `marimo-kernels` namespace or an ingress-controller default certificate so
+   each `https://<id>.hub.example.com` kernel URL resolves.
 4. A **config Secret** `marimohub-config` holding every `MARIMOHUB_*` variable
    (storage / compute / auth). The compute keys for this backend:
 
@@ -35,6 +36,17 @@ cluster.
    MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE=marimo-kernels
    MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS=traefik
    MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET=marimo-kernels-wildcard-tls
+   ```
+
+   On OpenShift, you can use the default ingress certificate instead of a named
+   secret. Remove or comment out `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` from
+   the block above, change `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS` to the
+   cluster's IngressClass (usually `openshift-default`; verify with
+   `oc get ingressclass`), then add:
+
+   ```bash
+   MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default
+   MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS='{"route.openshift.io/termination":"edge"}'
    ```
 
 ## Apply

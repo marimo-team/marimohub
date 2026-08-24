@@ -7,7 +7,11 @@ import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
 import { E2bCompute } from '@marimo-hub/compute-e2b';
-import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
+import {
+	KubernetesCompute,
+	parseIngressAnnotations,
+	resolveIngressTlsMode,
+} from '@marimo-hub/compute-kubernetes';
 import { parseBool, parseEnum, parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -68,6 +72,31 @@ const computeVar = (env: Env, key: string, backend: string) =>
 		remediation: `Required for the ${backend} compute backend.`,
 		docs: 'docs/configuration.md#compute',
 	});
+
+function kubernetesIngressAnnotations(env: Env, key: string): Record<string, string> | undefined {
+	try {
+		return parseIngressAnnotations(env[key]);
+	} catch (cause) {
+		const detail = cause instanceof Error ? cause.message : 'invalid annotations';
+		throw new ConfigError(`Invalid ${key} (${detail})`, {
+			variable: key,
+		});
+	}
+}
+
+function kubernetesIngressTlsMode(env: Env): 'disabled' | 'default' | 'secret' {
+	const key = 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE';
+	try {
+		return resolveIngressTlsMode(env[key], env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET);
+	} catch (cause) {
+		const detail = cause instanceof Error ? cause.message : 'invalid TLS settings';
+		throw new ConfigError(`Invalid ${key} (${detail})`, {
+			variable: key,
+			remediation:
+				'Use secret with a TLS secret name, or remove the secret when using default/disabled.',
+		});
+	}
+}
 
 export interface ComputeOptions {
 	/**
@@ -297,8 +326,9 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 			// Native Kubernetes: one keep-alive Pod + Service + Ingress per session,
 			// created via @kubernetes/client-node and exec'd into to run marimo. The
 			// kernel is reached directly at its `{id}.{host}` Ingress host, so set
-			// MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME and provide an ingress class + a
-			// wildcard-cert TLS secret. `proxy()` is a no-op like local/coreweave.
+			// MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME and provide an ingress class plus either
+			// a named wildcard TLS secret or controller-default TLS. `proxy()` is a no-op
+			// like local/coreweave.
 			const resources = {
 				cpu: env.MARIMOHUB_COMPUTE_KUBERNETES_CPU,
 				memory: env.MARIMOHUB_COMPUTE_KUBERNETES_MEMORY,
@@ -310,6 +340,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				'MARIMOHUB_COMPUTE_KUBERNETES_POD_READY_TIMEOUT_SECONDS',
 			);
 			const pullPolicy = env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY;
+			const ingressTlsMode = kubernetesIngressTlsMode(env);
 			if (pullPolicy && !['Always', 'IfNotPresent', 'Never'].includes(pullPolicy)) {
 				throw new ConfigError(
 					`Invalid MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY: ${pullPolicy}`,
@@ -325,6 +356,11 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
 				hostnameTemplate: env.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE,
 				ingressClassName: env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
+				ingressAnnotations: kubernetesIngressAnnotations(
+					env,
+					'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS',
+				),
+				ingressTlsMode,
 				tlsSecretName: env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
 				serviceAccountName: env.MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT,
 				imagePullSecret: env.MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET,

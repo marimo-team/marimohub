@@ -18,6 +18,8 @@ const k8sMock = vi.hoisted(() => {
 	};
 	const net = {
 		createNamespacedIngress: vi.fn(),
+		readNamespacedIngress: vi.fn(),
+		replaceNamespacedIngress: vi.fn(),
 		deleteNamespacedIngress: vi.fn(),
 	};
 	const exec = vi.fn();
@@ -73,6 +75,8 @@ beforeEach(() => {
 		k8sMock.core.deleteNamespacedPod,
 		k8sMock.core.listNamespacedPod,
 		k8sMock.net.createNamespacedIngress,
+		k8sMock.net.readNamespacedIngress,
+		k8sMock.net.replaceNamespacedIngress,
 		k8sMock.net.deleteNamespacedIngress,
 		k8sMock.exec,
 	]) {
@@ -96,6 +100,9 @@ describe('createK8sClient', () => {
 				port: 2718,
 				namespace: 'kernels',
 				ingressClassName: 'nginx',
+				ingressAnnotations: {
+					'route.openshift.io/termination': 'edge',
+				},
 				tlsSecretName: 'wildcard-cert',
 				serviceAccountName: 'kernel-sa',
 				imagePullSecret: 'regcred',
@@ -137,12 +144,176 @@ describe('createK8sClient', () => {
 			spec: { selector: { 'marimohub.io/sandbox-name': 'mh-sb' } },
 		});
 		expect(k8sMock.net.createNamespacedIngress.mock.calls[0]?.[0].body).toMatchObject({
+			metadata: {
+				annotations: { 'route.openshift.io/termination': 'edge' },
+			},
 			spec: {
 				ingressClassName: 'nginx',
 				tls: [{ hosts: ['sb.example.com'], secretName: 'wildcard-cert' }],
 				rules: [{ host: 'sb.example.com' }],
 			},
 		});
+		expect(k8sMock.net.readNamespacedIngress).not.toHaveBeenCalled();
+		expect(k8sMock.net.replaceNamespacedIngress).not.toHaveBeenCalled();
+	});
+
+	it('emits an empty TLS entry for the ingress-controller default certificate', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		await client.ensure({
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			host: 'sb.example.com',
+			image: 'kernel-image:v1',
+			port: 2718,
+			namespace: 'kernels',
+			ingressTlsMode: 'default',
+		});
+
+		const ingress = k8sMock.net.createNamespacedIngress.mock.calls[0]?.[0].body;
+		expect(ingress.spec.tls).toEqual([{}]);
+	});
+
+	it('reconciles an existing managed ingress with current annotations and TLS', async () => {
+		k8sMock.net.createNamespacedIngress.mockRejectedValueOnce({ code: 409 });
+		k8sMock.net.readNamespacedIngress.mockResolvedValueOnce({
+			metadata: {
+				name: 'mh-sb',
+				resourceVersion: '7',
+				labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE, 'controller.example/label': 'keep' },
+				annotations: { 'old.example/setting': 'stale' },
+				finalizers: ['controller.example/finalizer'],
+				ownerReferences: [{ apiVersion: 'v1', kind: 'Pod', name: 'owner', uid: 'uid' }],
+			},
+		});
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await client.ensure({
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			host: 'sb.example.com',
+			image: 'kernel-image:v1',
+			port: 2718,
+			namespace: 'kernels',
+			ingressAnnotations: { 'route.openshift.io/termination': 'edge' },
+			ingressTlsMode: 'default',
+		});
+
+		expect(k8sMock.net.readNamespacedIngress).toHaveBeenCalledWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+		});
+		expect(k8sMock.net.replaceNamespacedIngress).toHaveBeenCalledWith({
+			name: 'mh-sb',
+			namespace: 'kernels',
+			body: expect.objectContaining({
+				metadata: expect.objectContaining({
+					resourceVersion: '7',
+					labels: {
+						[MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
+						'controller.example/label': 'keep',
+					},
+					annotations: { 'route.openshift.io/termination': 'edge' },
+					finalizers: ['controller.example/finalizer'],
+				}),
+				spec: expect.objectContaining({ tls: [{}] }),
+			}),
+		});
+	});
+
+	it('removes TLS when reconciling an ingress in disabled mode', async () => {
+		k8sMock.net.createNamespacedIngress.mockRejectedValueOnce({ code: 409 });
+		k8sMock.net.readNamespacedIngress.mockResolvedValueOnce({
+			metadata: {
+				resourceVersion: '8',
+				labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+			},
+		});
+		const client = createK8sClient({ namespace: 'kernels' });
+
+		await client.ensure({
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			host: 'sb.example.com',
+			image: 'kernel-image:v1',
+			port: 2718,
+			namespace: 'kernels',
+			ingressTlsMode: 'disabled',
+		});
+
+		const replacement = k8sMock.net.replaceNamespacedIngress.mock.calls[0]?.[0].body;
+		expect(replacement.spec.tls).toBeUndefined();
+	});
+
+	it.each([
+		['uppercase DNS prefix', 'Example.com/name'],
+		['name longer than 63 characters', `example.com/${'a'.repeat(64)}`],
+		['prefix longer than 253 characters', `${'a'.repeat(254)}/name`],
+		['multiple separators', 'example.com/part/name'],
+	])('rejects an invalid ingress annotation key: %s', async (_label, key) => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: 'sb.example.com',
+				image: 'kernel-image:v1',
+				port: 2718,
+				namespace: 'kernels',
+				ingressAnnotations: { [key]: 'value' },
+			}),
+		).rejects.toThrow(/invalid .*annotation/i);
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+		expect(k8sMock.core.createNamespacedService).not.toHaveBeenCalled();
+		expect(k8sMock.net.createNamespacedIngress).not.toHaveBeenCalled();
+	});
+
+	it('rejects ingress annotations larger than 256 KiB before making API calls', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: 'sb.example.com',
+				image: 'kernel-image:v1',
+				port: 2718,
+				namespace: 'kernels',
+				ingressAnnotations: { name: 'x'.repeat(256 * 1024) },
+			}),
+		).rejects.toThrow(/256 KiB/);
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+	});
+
+	it('omits TLS when ingress TLS is disabled', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		await client.ensure({
+			name: 'mh-sb',
+			sandboxId: SANDBOX_ID,
+			host: 'sb.example.com',
+			image: 'kernel-image:v1',
+			port: 2718,
+			namespace: 'kernels',
+			ingressTlsMode: 'disabled',
+		});
+
+		const ingress = k8sMock.net.createNamespacedIngress.mock.calls[0]?.[0].body;
+		expect(ingress.spec.tls).toBeUndefined();
+	});
+
+	it('rejects secret TLS mode without a secret name', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		await expect(
+			client.ensure({
+				name: 'mh-sb',
+				sandboxId: SANDBOX_ID,
+				host: 'sb.example.com',
+				image: 'kernel-image:v1',
+				port: 2718,
+				namespace: 'kernels',
+				ingressTlsMode: 'secret',
+			}),
+		).rejects.toThrow(/requires a TLS secret name/);
+		expect(k8sMock.core.createNamespacedPod).not.toHaveBeenCalled();
+		expect(k8sMock.core.createNamespacedService).not.toHaveBeenCalled();
 	});
 
 	it('skips ingress creation when no host is configured', async () => {

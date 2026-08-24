@@ -572,7 +572,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				selectorValue: 'kubernetes',
 				supportsComputeProfiles: true,
 				description:
-					'Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class + wildcard-cert TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.',
+					"Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. TLS is optional: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default` and leave the secret unset for the ingress controller's default certificate, or set the mode to `disabled` and leave the secret unset to omit Ingress TLS. The `default` and `disabled` modes cannot be combined with a TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.",
 				vars: [
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE',
@@ -593,6 +593,23 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'Kubernetes ingress class',
 						description: '`ingressClassName` for the per-session Ingress.',
 						example: 'traefik',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS',
+						name: 'Kubernetes ingress annotations',
+						description:
+							'JSON object of string annotations copied to every per-session Ingress. Keys must use Kubernetes annotation syntax, and the combined keys and values cannot exceed 256 KiB.',
+						example: '{"route.openshift.io/termination":"edge"}',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE',
+						name: 'Kubernetes ingress TLS mode',
+						description:
+							'How each per-session Ingress declares TLS: `disabled` omits `spec.tls`, `default` emits `tls: [{}]` for an ingress-controller default certificate, and `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`. When unset, a configured secret selects `secret`; otherwise TLS is disabled.',
+						default: 'secret when TLS secret is set, else disabled',
+						example: 'default',
+						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET',

@@ -315,7 +315,9 @@ export const COMPUTE_WIRING: Record<string, BackendWiring> = {
 			].join('\n'),
 	},
 	kubernetes: {
-		imports: [`import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';`],
+		imports: [
+			`import { KubernetesCompute, parseIngressAnnotations, resolveIngressTlsMode } from '@marimo-hub/compute-kubernetes';`,
+		],
 		rhs: (r) =>
 			[
 				`new KubernetesCompute({`,
@@ -323,6 +325,13 @@ export const COMPUTE_WIRING: Record<string, BackendWiring> = {
 				`\timage: ${env('MARIMOHUB_COMPUTE_IMAGE')},`,
 				`\thostname: ${env('MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME')},`,
 				`\tingressClassName: ${env('MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS')},`,
+				`\tingressAnnotations: parseIngressAnnotations(`,
+				`\t\tprocess.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS,`,
+				`\t),`,
+				`\tingressTlsMode: resolveIngressTlsMode(`,
+				`\t\tprocess.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE,`,
+				`\t\tprocess.env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,`,
+				`\t),`,
 				`\ttlsSecretName: ${env('MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET')},`,
 				`})`,
 			].join('\n'),

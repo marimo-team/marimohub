@@ -14,13 +14,22 @@
  */
 import { Readable, Writable } from 'node:stream';
 import type * as K8s from '@kubernetes/client-node';
-import type { V1Container, V1Ingress, V1Pod, V1Service, V1Status } from '@kubernetes/client-node';
+import type {
+	V1Container,
+	V1Ingress,
+	V1IngressTLS,
+	V1Pod,
+	V1Service,
+	V1Status,
+} from '@kubernetes/client-node';
 import { SandboxId } from '@marimo-hub/core';
 import {
 	defaultImagePullPolicy,
 	MANAGED_BY_LABEL,
 	MANAGED_BY_VALUE,
+	resolveIngressTlsMode,
 	SANDBOX_ID_ANNOTATION,
+	validateIngressAnnotations,
 } from './shared';
 import type {
 	EnsureSandboxOptions,
@@ -104,16 +113,25 @@ function serviceManifest(o: EnsureSandboxOptions): V1Service {
 	};
 }
 
+function ingressTls(o: EnsureSandboxOptions): V1IngressTLS[] | undefined {
+	const mode = resolveIngressTlsMode(o.ingressTlsMode, o.tlsSecretName);
+	if (mode === 'disabled') return undefined;
+	if (mode === 'default') return [{}];
+	if (!o.tlsSecretName) throw new Error('Ingress TLS mode "secret" requires a TLS secret name');
+	return [{ hosts: [o.host], secretName: o.tlsSecretName }];
+}
+
 function ingressManifest(o: EnsureSandboxOptions): V1Ingress {
 	return {
 		metadata: {
 			name: o.name,
 			namespace: o.namespace,
 			labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
+			annotations: validateIngressAnnotations(o.ingressAnnotations),
 		},
 		spec: {
 			ingressClassName: o.ingressClassName,
-			tls: o.tlsSecretName ? [{ hosts: [o.host], secretName: o.tlsSecretName }] : undefined,
+			tls: ingressTls(o),
 			rules: [
 				{
 					host: o.host,
@@ -218,20 +236,51 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 		}
 	}
 
+	async function reconcileIngress(net: K8s.NetworkingV1Api, desired: V1Ingress): Promise<void> {
+		try {
+			await net.createNamespacedIngress({ namespace, body: desired });
+			return;
+		} catch (err) {
+			if (!hasCode(err, 409)) throw err;
+		}
+
+		const metadata = desired.metadata;
+		const name = metadata?.name;
+		if (!metadata || !name) throw new Error('Cannot reconcile an Ingress without a name');
+		const desiredLabels = metadata.labels;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const existing = await net.readNamespacedIngress({ name, namespace });
+			if (existing.metadata?.labels?.[MANAGED_BY_LABEL] !== MANAGED_BY_VALUE) {
+				throw new Error(`Refusing to replace unmanaged Ingress "${name}"`);
+			}
+			const resourceVersion = existing.metadata.resourceVersion;
+			if (!resourceVersion) throw new Error(`Ingress "${name}" has no resourceVersion`);
+			metadata.resourceVersion = resourceVersion;
+			metadata.labels = { ...existing.metadata.labels, ...desiredLabels };
+			metadata.finalizers = existing.metadata.finalizers;
+			metadata.ownerReferences = existing.metadata.ownerReferences;
+			try {
+				await net.replaceNamespacedIngress({ name, namespace, body: desired });
+				return;
+			} catch (err) {
+				if (!hasCode(err, 409) || attempt === 2) throw err;
+			}
+		}
+	}
+
 	return {
 		async ensure(o: EnsureSandboxOptions): Promise<{ createdPod: boolean }> {
+			const pod = podManifest(o);
+			const service = serviceManifest(o);
+			const ingress = o.host ? ingressManifest(o) : undefined;
 			const { core, net } = await apis();
 			// Order-independent: k8s is declarative (a Service's selector / an
 			// Ingress's backend need not pre-exist), so the creates fan out.
 			const [createdPod] = await Promise.all([
-				createTolerant(() => core.createNamespacedPod({ namespace, body: podManifest(o) })),
-				createTolerant(() => core.createNamespacedService({ namespace, body: serviceManifest(o) })),
+				createTolerant(() => core.createNamespacedPod({ namespace, body: pod })),
+				createTolerant(() => core.createNamespacedService({ namespace, body: service })),
 				// No host configured → no Ingress (the URL will be unroutable; documented).
-				o.host
-					? createTolerant(() =>
-							net.createNamespacedIngress({ namespace, body: ingressManifest(o) }),
-						)
-					: undefined,
+				ingress ? reconcileIngress(net, ingress) : undefined,
 			]);
 			return { createdPod };
 		},

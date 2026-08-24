@@ -113,7 +113,17 @@ function sections(sel: WizardSelection): Section[] {
 }
 
 function configuredVars(section: Section, values: Record<string, string>): ConfigVar[] {
-	return section.vars.filter((v) => !v.optIn || Boolean(values[v.id]?.trim()));
+	return section.vars.filter((v) => {
+		if (
+			v.id === 'MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET' &&
+			['default', 'disabled'].includes(
+				values.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE?.trim().toLowerCase(),
+			)
+		) {
+			return false;
+		}
+		return !v.optIn || Boolean(values[v.id]?.trim());
+	});
 }
 
 // --- CONFIGS: .env ---
