@@ -2338,6 +2338,13 @@
 						"repeatable": false
 					},
 					{
+						"name": "sync_mode",
+						"cli_name": "sync-mode",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
 						"name": "tags",
 						"cli_name": "tags",
 						"required": false,
@@ -2809,6 +2816,13 @@
 						"name": "root_path",
 						"cli_name": "root-path",
 						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "sync_mode",
+						"cli_name": "sync-mode",
+						"required": false,
 						"value_type": "string",
 						"repeatable": false
 					}
@@ -3378,7 +3392,7 @@
 						"name": "role",
 						"cli_name": "role",
 						"required": true,
-						"value_type": "object",
+						"value_type": "string",
 						"repeatable": false
 					}
 				]

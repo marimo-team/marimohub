@@ -60,19 +60,23 @@ function optionalObject(value: unknown): JsonObject | undefined {
 	return value as JsonObject;
 }
 
-function resolve(document: JsonObject, value: unknown): JsonObject {
+function resolve(document: JsonObject, value: unknown, seen = new Set<string>()): JsonObject {
 	const candidate = object(value, 'OpenAPI reference');
 	const reference = candidate.$ref;
 	if (typeof reference !== 'string') return candidate;
 	if (!reference.startsWith('#/')) throw new Error(`Unsupported external reference: ${reference}`);
+	if (seen.has(reference)) throw new Error(`Circular OpenAPI reference: ${reference}`);
+	seen.add(reference);
 	let current: unknown = document;
 	for (const part of reference.slice(2).split('/')) {
 		current = object(current, reference)[part.replaceAll('~1', '/').replaceAll('~0', '~')];
 	}
-	return resolve(document, current);
+	return resolve(document, current, seen);
 }
 
-function schemaType(document: JsonObject, value: unknown): { type: string; repeatable: boolean } {
+type SchemaType = { type: string; repeatable: boolean };
+
+function explicitSchemaType(document: JsonObject, value: unknown): SchemaType | undefined {
 	const schema = resolve(document, value);
 	if (schema.type === 'array') {
 		const item = optionalObject(schema.items);
@@ -83,9 +87,24 @@ function schemaType(document: JsonObject, value: unknown): { type: string; repea
 		const type = schema.type.find((item) => item !== 'null');
 		if (typeof type === 'string') return { type, repeatable: false };
 	}
-	if (schema.properties || schema.oneOf || schema.anyOf || schema.allOf) {
+	if (Array.isArray(schema.allOf)) {
+		const branchTypes = schema.allOf
+			.map((branch) => explicitSchemaType(document, branch))
+			.filter((type): type is SchemaType => type !== undefined);
+		return (
+			branchTypes.find((type) => type.type !== 'object') ??
+			branchTypes.find((type) => type.type === 'object') ?? { type: 'object', repeatable: false }
+		);
+	}
+	if (schema.properties || schema.oneOf || schema.anyOf) {
 		return { type: 'object', repeatable: false };
 	}
+	return undefined;
+}
+
+function schemaType(document: JsonObject, value: unknown): SchemaType {
+	const type = explicitSchemaType(document, value);
+	if (type) return type;
 	return { type: 'string', repeatable: false };
 }
 

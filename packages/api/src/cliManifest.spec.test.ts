@@ -103,6 +103,50 @@ describe('CLI manifest', () => {
 		expect(operations.get('projects.update')?.destructive).toBe(false);
 	});
 
+	it('resolves the annotated role reference for member updates as a string', () => {
+		const operation = generateCliManifest(generateOpenApiDocument()).operations.find(
+			(operation) => operation.id === 'projects.members.update',
+		);
+
+		expect(operation?.body?.properties).toContainEqual({
+			name: 'role',
+			cli_name: 'role',
+			required: true,
+			value_type: 'string',
+			repeatable: false,
+		});
+	});
+
+	it('rejects circular OpenAPI references', () => {
+		expect(() =>
+			generateCliManifest({
+				openapi: '3.1.0',
+				info: { title: 'Test', version: '1.0.0' },
+				components: {
+					schemas: {
+						First: { $ref: '#/components/schemas/Second' },
+						Second: { $ref: '#/components/schemas/First' },
+					},
+				},
+				paths: {
+					'/items': {
+						get: {
+							operationId: 'items.list',
+							parameters: [
+								{
+									name: 'cursor',
+									in: 'query',
+									schema: { $ref: '#/components/schemas/First' },
+								},
+							],
+							responses: { 204: { description: 'Items' } },
+						},
+					},
+				},
+			}),
+		).toThrow('Circular OpenAPI reference: #/components/schemas/First');
+	});
+
 	it('reads disruptive behavior from OpenAPI operation metadata', () => {
 		const manifest = generateCliManifest({
 			openapi: '3.1.0',

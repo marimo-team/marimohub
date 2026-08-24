@@ -91,7 +91,7 @@ jobs:
       - name: Install build tools
         shell: bash
         run: |
-          dnf install -y dbus-devel python3-pip
+          dnf install -y python3-pip
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install dist

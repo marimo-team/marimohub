@@ -116,12 +116,6 @@ Standalone release archives also contain completion files and man pages.
 
 ## Upgrade
 
-Use the same tool that installed `mohub`:
-
-```bash
-uv tool upgrade marimohub-cli
-```
-
 Standalone shell and PowerShell installations include `mohub-update`. Homebrew,
 npm, and MSI installations use their package manager.
 

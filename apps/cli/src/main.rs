@@ -71,21 +71,7 @@ fn handle_profile(matches: &ArgMatches) -> Result<(), Error> {
                 .get_one::<String>("base-url")
                 .expect("required by clap");
             let base_url = normalize_base_url(base_url)?;
-            config::update(|config| {
-                config.profiles.insert(
-                    name.clone(),
-                    config::Profile {
-                        base_url: base_url.clone(),
-                    },
-                );
-                if config.current_profile.is_none() {
-                    config.current_profile = Some(name.clone());
-                }
-                Ok(())
-            })?;
-            if let Some(token) = token {
-                config::set_token(name, &token)?;
-            }
+            config::set_profile(name, base_url, token.as_ref())?;
         }
         Some(("use", args)) => {
             let name = args.get_one::<String>("name").expect("required by clap");
@@ -220,8 +206,6 @@ fn upgrade_hint(executable: &Path) -> &'static str {
     };
     if parent.is_some_and(|parent| parent.join(updater).is_file()) {
         "Run `mohub-update` to upgrade."
-    } else if path.contains("/uv/tools/") || path.contains("\\uv\\tools\\") {
-        "Run `uv tool upgrade marimohub-cli` to upgrade."
     } else if path.contains("/Cellar/") || path.contains("\\Homebrew\\") {
         "Run `brew upgrade mohub` to upgrade."
     } else if path.contains("node_modules") {
@@ -582,12 +566,12 @@ mod tests {
     }
 
     #[test]
-    fn update_hint_recognizes_uv_and_homebrew_paths() {
+    fn update_hint_recognizes_homebrew_and_falls_back_for_uv() {
         assert_eq!(
             upgrade_hint(Path::new(
                 "/home/me/.local/share/uv/tools/marimohub-cli/bin/mohub"
             )),
-            "Run `uv tool upgrade marimohub-cli` to upgrade."
+            "Use your package manager to upgrade, or download the release from GitHub."
         );
         assert_eq!(
             upgrade_hint(Path::new("/opt/homebrew/Cellar/mohub/0.3.1/bin/mohub")),

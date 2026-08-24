@@ -34,11 +34,19 @@ pub struct Runtime<'a> {
 fn values(matches: &ArgMatches, id: &str, repeatable: bool) -> Vec<String> {
     if repeatable {
         matches
-            .get_many::<String>(id)
+            .try_get_many::<String>(id)
+            .ok()
+            .flatten()
             .map(|items| items.cloned().collect())
             .unwrap_or_default()
     } else {
-        matches.get_one::<String>(id).cloned().into_iter().collect()
+        matches
+            .try_get_one::<String>(id)
+            .ok()
+            .flatten()
+            .cloned()
+            .into_iter()
+            .collect()
     }
 }
 
@@ -789,6 +797,48 @@ mod tests {
         let value: Value = serde_json::from_slice(&body).expect("JSON body");
         assert_eq!(value["name"], "Analysis");
         assert_eq!(value["tags"], serde_json::json!(["one", "two"]));
+    }
+
+    #[test]
+    fn annotated_scalar_body_flags_remain_strings() {
+        let manifest = crate::manifest::load();
+        let matches = crate::cli::build(&manifest)
+            .try_get_matches_from([
+                "mohub",
+                "projects",
+                "members",
+                "update",
+                "--pid",
+                "proj-7h2k9qm4xz7rp3w8",
+                "--uid",
+                "user-1",
+                "--role",
+                "manager",
+            ])
+            .expect("valid command");
+        let leaf = matches
+            .subcommand_matches("projects")
+            .and_then(|matches| matches.subcommand_matches("members"))
+            .and_then(|matches| matches.subcommand_matches("update"))
+            .expect("project member update matches");
+        let body = request_body(operation(&manifest, "projects.members.update"), leaf)
+            .expect("valid body")
+            .expect("body present");
+
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).expect("JSON body"),
+            serde_json::json!({ "role": "manager" })
+        );
+    }
+
+    #[test]
+    fn values_ignores_ids_missing_from_preflight_matches() {
+        let matches = clap::Command::new("test")
+            .try_get_matches_from(["test"])
+            .expect("valid command");
+
+        assert!(values(&matches, "parameter:cursor", false).is_empty());
+        assert!(values(&matches, "parameter:tag", true).is_empty());
     }
 
     #[test]

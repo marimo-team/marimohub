@@ -234,6 +234,46 @@ fn update_at<T>(
     Ok(result)
 }
 
+pub fn set_profile(
+    name: &str,
+    base_url: String,
+    token: Option<&SecretString>,
+) -> Result<(), Error> {
+    let path = path()?;
+    set_profile_at(&path, name, base_url, token, |token| set_token(name, token))
+}
+
+fn set_profile_at(
+    path: &Path,
+    name: &str,
+    base_url: String,
+    token: Option<&SecretString>,
+    store_credential: impl FnOnce(&SecretString) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let _lock = lock_for(path)?;
+    let mut config = load_from(path)?;
+    let original = config.clone();
+    config
+        .profiles
+        .insert(name.to_owned(), Profile { base_url });
+    if config.current_profile.is_none() {
+        config.current_profile = Some(name.to_owned());
+    }
+    save_to(path, &config)?;
+
+    if let Some(token) = token {
+        if let Err(error) = store_credential(token) {
+            return match save_to(path, &original) {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(Error::Config(format!(
+                    "credential storage failed ({error}); restoring the profile also failed: {rollback}"
+                ))),
+            };
+        }
+    }
+    Ok(())
+}
+
 pub fn remove_profile(name: &str) -> Result<(), Error> {
     let path = path()?;
     remove_profile_from(&path, name, || delete_token(name))
@@ -598,6 +638,40 @@ mod tests {
         }
 
         assert_eq!(load_from(&path).unwrap().profiles.len(), 16);
+    }
+
+    #[test]
+    fn failed_credential_storage_restores_the_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        update_at(&path, |config| {
+            config.current_profile = Some("default".into());
+            config.profiles.insert(
+                "default".into(),
+                Profile {
+                    base_url: "https://old.example.com".into(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+        let token = SecretString::from("new-token".to_owned());
+
+        let result = set_profile_at(
+            &path,
+            "default",
+            "https://new.example.com".into(),
+            Some(&token),
+            |_| Err(Error::Credential("keyring unavailable".into())),
+        );
+
+        assert!(matches!(result, Err(Error::Credential(_))));
+        let config = load_from(&path).unwrap();
+        assert_eq!(config.current_profile.as_deref(), Some("default"));
+        assert_eq!(
+            config.profiles["default"].base_url,
+            "https://old.example.com"
+        );
     }
 
     #[test]
