@@ -76,22 +76,46 @@ Environment.
 
 ## Sign in
 
-Sign in to marimohub in your browser. Open the user menu, select **API tokens**,
-and create a token with an expiry date. The app shows the token one time.
-
 Create a profile for your server:
 
 ```bash
 mohub profile set default --base-url https://hub.example.com
 ```
 
-Run `mohub login` and paste the token at the hidden prompt:
+Run `mohub login`:
 
 ```bash
 mohub login
 ```
 
-For a script, send the token through standard input:
+The CLI starts a temporary loopback server and opens the selected marimohub in
+your browser. Review the account and token lifetime (30 days by default), then
+select **Authorize CLI**. The Hub returns a short-lived, single-use code to the
+loopback server; the CLI exchanges it for a token and stores the token in the
+operating system credential store. The token is never placed in a browser URL.
+
+If a browser is available on the same machine but cannot be opened automatically,
+print the approval URL instead:
+
+```bash
+mohub login --no-browser
+```
+
+The browser must run on the same machine as the CLI because authorization returns
+to a temporary loopback listener. For a remote or fully headless shell, create an
+API token in the Hub and use `mohub login --token-stdin`.
+
+You can also create the default profile and sign in in one command:
+
+```bash
+mohub --base-url https://hub.example.com login
+```
+
+Browser login requires an origin URL without a path prefix. Path-prefixed Hub
+deployments can use the non-interactive token flow below.
+
+For non-interactive automation, create an API token in the Hub and send it
+through standard input:
 
 ```bash
 printf '%s' "$MARIMOHUB_TOKEN" | mohub login --token-stdin

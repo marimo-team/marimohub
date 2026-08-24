@@ -28,7 +28,7 @@ pub enum Error {
     #[error("authentication failed for {server}: {reason}")]
     #[diagnostic(
         code(mohub::authentication),
-        help("Create a token in Account → API tokens, then run `mohub login --token-stdin`.")
+        help("Run `mohub login` again, or use `mohub login --token-stdin` with an API token.")
     )]
     Authentication { server: String, reason: String },
     #[error("operation cancelled")]

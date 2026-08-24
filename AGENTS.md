@@ -114,6 +114,8 @@ ETag compare-and-swap (conditional PUT) with retries.
 These CAS-managed records also have one writer each:
 
 - `IdentityService` owns each identity at `_system/identities/{user-id}.json`.
+- `CliAuthorizationService` owns each short-lived CLI login grant at
+  `_system/cli-authorizations/{authorization-id}.json`.
 - `ProjectAlertStore` owns each project alert configuration at
   `projects/{pid}/alerts.json`.
 - `SessionService` owns each editor claim at

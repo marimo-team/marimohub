@@ -193,13 +193,19 @@ fn profile_command() -> Command {
 
 fn login_command() -> Command {
     Command::new("login")
-        .about("Validate and store a token for the selected profile")
+        .about("Sign in through the Hub UI and store the token securely")
         .arg(
             Arg::new("token-stdin")
                 .long("token-stdin")
                 .action(ArgAction::SetTrue)
                 .conflicts_with_all(["token", "token-file"])
                 .help("Read the token from stdin instead of an argument or file"),
+        )
+        .arg(
+            Arg::new("no-browser")
+                .long("no-browser")
+                .action(ArgAction::SetTrue)
+                .help("Print the sign-in URL for a browser on this machine"),
         )
 }
 

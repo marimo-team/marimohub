@@ -195,4 +195,22 @@ describe('CLI manifest', () => {
 
 		expect(manifest.operations[0]?.destructive).toBe(true);
 	});
+
+	it('omits operations handled by a custom CLI flow', () => {
+		const manifest = generateCliManifest({
+			openapi: '3.1.0',
+			info: { title: 'Test', version: '1.0.0' },
+			paths: {
+				'/token': {
+					post: {
+						operationId: 'auth.cli.exchange',
+						'x-cli-hidden': true,
+						responses: { 200: { description: 'Token' } },
+					},
+				},
+			},
+		});
+
+		expect(manifest.operations).toEqual([]);
+	});
 });

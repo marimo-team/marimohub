@@ -1,14 +1,20 @@
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::process::ExitCode;
-use std::time::Duration;
+use std::process::{Command, ExitCode};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use clap::ArgMatches;
-use inquire::Password;
 use mohub::{cli, client, config, manifest, Error};
 use secrecy::SecretString;
+use sha2::{Digest, Sha256};
 use update_informer::{registry, Check};
+use url::Url;
+
+const CLI_LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 fn write_stdout(arguments: std::fmt::Arguments<'_>) -> Result<(), Error> {
     match io::stdout().lock().write_fmt(arguments) {
@@ -189,6 +195,253 @@ fn user_label(user: &serde_json::Value) -> &str {
         .unwrap_or("unknown user")
 }
 
+fn random_base64url(byte_length: usize) -> Result<String, Error> {
+    let mut bytes = vec![0_u8; byte_length];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        Error::Config(format!("could not generate secure random data: {error}"))
+    })?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn browser_login_origin(base_url: &str) -> Result<Url, Error> {
+    let url = Url::parse(base_url)?;
+    if url.path() != "/" {
+        return Err(Error::Usage(
+            "browser login requires a Hub URL without a path; use `mohub login --token-stdin` for a path-prefixed deployment"
+                .into(),
+        ));
+    }
+    Ok(url)
+}
+
+fn cli_login_url(
+    base_url: &str,
+    callback_uri: &str,
+    state: &str,
+    code_challenge: &str,
+) -> Result<Url, Error> {
+    let mut url = browser_login_origin(base_url)?;
+    url.set_path("/cli/login");
+    url.set_query(None);
+    url.set_fragment(None);
+    url.query_pairs_mut()
+        .append_pair("callback_uri", callback_uri)
+        .append_pair("state", state)
+        .append_pair("code_challenge", code_challenge);
+    Ok(url)
+}
+
+fn open_browser(url: &str) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg(url).status()?;
+    #[cfg(target_os = "windows")]
+    let status = Command::new("explorer.exe").arg(url).status()?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = Command::new("xdg-open").arg(url).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "browser launcher returned a failure status",
+        ))
+    }
+}
+
+fn callback_response(stream: &mut TcpStream, success: bool) -> io::Result<()> {
+    let (status, title, message) = if success {
+        (
+            "200 OK",
+            "CLI connected",
+            "You are signed in. You can close this tab and return to your terminal.",
+        )
+    } else {
+        (
+            "400 Bad Request",
+            "CLI sign-in failed",
+            "Return to your terminal for details, then run mohub login again.",
+        )
+    };
+    let body = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>{title}</title><style>body{{font:16px system-ui;display:grid;min-height:100vh;place-items:center;margin:0;background:#f7f7f8;color:#18181b}}main{{max-width:32rem;padding:2rem;text-align:center}}h1{{font-size:1.4rem}}p{{color:#52525b;line-height:1.5}}</style></head><body><main><h1>{title}</h1><p>{message}</p></main></body></html>"
+    );
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
+    )?;
+    stream.flush()
+}
+
+fn read_callback_request(stream: &mut TcpStream) -> io::Result<String> {
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let mut request = Vec::with_capacity(1024);
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&chunk[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if request.len() >= 8192 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "callback request headers are too large",
+            ));
+        }
+    }
+    String::from_utf8(request)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "callback request is not UTF-8"))
+}
+
+struct AuthorizationCallback {
+    stream: TcpStream,
+    code: String,
+}
+
+struct BrowserCredential {
+    token: SecretString,
+    callback: TcpStream,
+}
+
+fn wait_for_authorization(
+    listener: &TcpListener,
+    expected_state: &str,
+) -> Result<AuthorizationCallback, Error> {
+    listener.set_nonblocking(true)?;
+    let deadline = Instant::now() + CLI_LOGIN_TIMEOUT;
+    while Instant::now() < deadline {
+        let (mut stream, _) = match listener.accept() {
+            Ok(connection) => connection,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let request = match read_callback_request(&mut stream) {
+            Ok(request) => request,
+            Err(_) => {
+                let _ = callback_response(&mut stream, false);
+                continue;
+            }
+        };
+        let Some(request_line) = request.lines().next() else {
+            let _ = callback_response(&mut stream, false);
+            continue;
+        };
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next();
+        let target = parts.next();
+        if method != Some("GET") {
+            let _ = callback_response(&mut stream, false);
+            continue;
+        }
+        let Some(target) = target else {
+            let _ = callback_response(&mut stream, false);
+            continue;
+        };
+        let Ok(url) = Url::parse(&format!("http://127.0.0.1{target}")) else {
+            let _ = callback_response(&mut stream, false);
+            continue;
+        };
+        if url.path() != "/callback"
+            || url
+                .query_pairs()
+                .find(|(name, _)| name == "state")
+                .is_none_or(|(_, state)| state != expected_state)
+        {
+            let _ = callback_response(&mut stream, false);
+            continue;
+        }
+        let parameters = url
+            .query_pairs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if parameters.get("error").map(|value| value.as_ref()) == Some("access_denied") {
+            let _ = callback_response(&mut stream, false);
+            return Err(Error::Cancelled);
+        }
+        let Some(code) = parameters.get("code").filter(|code| !code.is_empty()) else {
+            let _ = callback_response(&mut stream, false);
+            continue;
+        };
+        return Ok(AuthorizationCallback {
+            stream,
+            code: code.to_string(),
+        });
+    }
+    Err(Error::Authentication {
+        server: "the configured server".into(),
+        reason: "browser sign-in timed out".into(),
+    })
+}
+
+fn browser_login(
+    matches: &ArgMatches,
+    base_url: &str,
+    no_browser: bool,
+) -> Result<BrowserCredential, Error> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let callback_uri = format!("http://{}/callback", listener.local_addr()?);
+    let state = random_base64url(24)?;
+    let code_verifier = random_base64url(32)?;
+    let code_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
+    let login_url = cli_login_url(base_url, &callback_uri, &state, &code_challenge)?;
+
+    if no_browser || open_browser(login_url.as_str()).is_err() {
+        eprintln!("Open this URL to sign in:\n\n{login_url}\n");
+    } else {
+        eprintln!("Opening {base_url} in your browser…");
+    }
+    eprintln!("Waiting for approval…");
+
+    let mut callback = wait_for_authorization(&listener, &state)?;
+    let timeout = Duration::from_secs(
+        *matches
+            .get_one::<u64>("timeout")
+            .expect("defaulted by clap"),
+    );
+    match client::exchange_cli_authorization(base_url, timeout, &callback.code, &code_verifier) {
+        Ok(token) => Ok(BrowserCredential {
+            token,
+            callback: callback.stream,
+        }),
+        Err(error) => {
+            let _ = callback_response(&mut callback.stream, false);
+            Err(Error::Authentication {
+                server: server_label(base_url),
+                reason: error.to_string(),
+            })
+        }
+    }
+}
+
+fn selected_login_target(matches: &ArgMatches) -> Result<(String, String), Error> {
+    let config = config::load()?;
+    let name = matches
+        .get_one::<String>("profile-name")
+        .cloned()
+        .or(config.current_profile)
+        .unwrap_or_else(|| "default".into());
+    let override_url = matches
+        .get_one::<String>("base-url")
+        .map(|value| normalize_base_url(value))
+        .transpose()?;
+    let profile_url = config
+        .profiles
+        .get(&name)
+        .map(|profile| normalize_base_url(&profile.base_url))
+        .transpose()?;
+    let base_url = override_url.or(profile_url).ok_or_else(|| {
+        Error::Config(
+            "no server URL; pass --base-url, set MARIMOHUB_URL, or configure a profile".into(),
+        )
+    })?;
+    Ok((name, base_url))
+}
+
 fn upgrade_hint(executable: &Path) -> &'static str {
     let path = executable.to_string_lossy();
     let parent = executable.parent();
@@ -232,32 +485,31 @@ fn handle_login(
     matches: &ArgMatches,
     leaf: &ArgMatches,
 ) -> Result<(), Error> {
-    let (profile, base_url) = selected_profile(matches)?;
-    let token = match supplied_token(leaf)? {
-        Some(token) => token,
-        None if io::stdin().is_terminal() => SecretString::from(
-            Password::new("Token:")
-                .without_confirmation()
-                .prompt()
-                .map_err(|error| Error::Prompt(error.to_string()))?,
-        ),
-        None => {
-            return Err(Error::Usage(
-                "no token supplied; pipe one to `mohub login --token-stdin` or use --token-file"
-                    .into(),
-            ));
-        }
-    };
-    let user = client::current_user(manifest, &auth_runtime(matches, &base_url, &token)).map_err(
-        |error| Error::Authentication {
-            server: server_label(&base_url),
-            reason: error.to_string(),
-        },
-    )?;
-    config::set_profile_token(&profile, &base_url, &token)?;
+    let (profile, base_url) = selected_login_target(matches)?;
+    if let Some(token) = supplied_token(leaf)? {
+        let user = client::current_user(manifest, &auth_runtime(matches, &base_url, &token))
+            .map_err(|error| Error::Authentication {
+                server: server_label(&base_url),
+                reason: error.to_string(),
+            })?;
+        config::set_profile(&profile, base_url.clone(), Some(&token))?;
+        write_stdout(format_args!(
+            "Logged in to {base_url} as {} (profile {profile}).\n",
+            user_label(&user),
+        ))?;
+        return Ok(());
+    }
+
+    browser_login_origin(&base_url)?;
+    config::set_profile(&profile, base_url.clone(), None)?;
+    let mut credential = browser_login(matches, &base_url, leaf.get_flag("no-browser"))?;
+    if let Err(error) = config::set_profile_token(&profile, &base_url, &credential.token) {
+        let _ = callback_response(&mut credential.callback, false);
+        return Err(error);
+    }
+    let _ = callback_response(&mut credential.callback, true);
     write_stdout(format_args!(
-        "Logged in to {base_url} as {} (profile {profile}).\n",
-        user_label(&user),
+        "Logged in to {base_url} (profile {profile}).\n"
     ))?;
     Ok(())
 }
@@ -282,7 +534,7 @@ fn handle_status(manifest: &manifest::Manifest, matches: &ArgMatches) -> Result<
     require_matching_profile_server(matches, &profile, &base_url)?;
     let token = supplied.or(selected.token).ok_or_else(|| {
         Error::Config(format!(
-            "not logged in for profile {profile:?}; run `mohub login --token-stdin`"
+            "not logged in for profile {profile:?}; run `mohub login`"
         ))
     })?;
     let user = client::current_user(manifest, &auth_runtime(matches, &base_url, &token))?;
@@ -552,6 +804,60 @@ mod tests {
 
         assert_eq!(path, ["login"]);
         assert!(leaf.get_flag("token-stdin"));
+    }
+
+    #[test]
+    fn login_supports_a_headless_browser_flow() {
+        let matches = cli::build(&manifest::load())
+            .try_get_matches_from([
+                "mohub",
+                "--base-url",
+                "https://hub.example.com",
+                "login",
+                "--no-browser",
+            ])
+            .expect("valid login command");
+        let (path, leaf) = selected_command(&matches);
+
+        assert_eq!(path, ["login"]);
+        assert!(leaf.get_flag("no-browser"));
+    }
+
+    #[test]
+    fn browser_login_url_rejects_a_hub_base_path() {
+        let result = cli_login_url(
+            "https://example.com/hub",
+            "http://127.0.0.1:49152/callback",
+            &"s".repeat(32),
+            &"c".repeat(43),
+        );
+
+        assert!(matches!(result, Err(Error::Usage(message)) if message.contains("without a path")));
+    }
+
+    #[test]
+    fn loopback_callback_requires_the_expected_state() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind callback");
+        let address = listener.local_addr().expect("callback address");
+        let state = "s".repeat(32);
+        let client_state = state.clone();
+        let browser = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).expect("connect callback");
+            write!(
+                stream,
+                "GET /callback?code=mhub_cli_code&state={client_state} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+            )
+            .expect("write callback");
+            let mut response = String::new();
+            stream.read_to_string(&mut response).expect("read response");
+            assert!(response.starts_with("HTTP/1.1 200 OK"));
+        });
+
+        let mut callback = wait_for_authorization(&listener, &state).expect("valid callback");
+        assert_eq!(callback.code, "mhub_cli_code");
+        callback_response(&mut callback.stream, true).expect("write completion page");
+        drop(callback);
+        browser.join().expect("browser completed");
     }
 
     #[test]

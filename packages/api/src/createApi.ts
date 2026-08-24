@@ -30,6 +30,7 @@ import integrationsApp from './routes/integrations';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
 import tokensApp from './routes/tokens';
+import cliAuthorizationsApp, { cliTokenApp } from './routes/cliAuthorizations';
 import usersApp from './routes/users';
 import { createOidcDiscovery } from './oidcDiscovery';
 import { sandboxProxyMiddleware } from './sandboxProxy';
@@ -224,6 +225,7 @@ export function createApi(rawDeps: ApiDeps) {
 	// response header, and thread it into error envelopes + logs for tracing.
 	app.use(`${API_PREFIX}/*`, requestId());
 	app.use('/api/sync/*', requestId());
+	app.use('/api/cli/*', requestId());
 
 	const observeRejection: MiddlewareHandler<HonoEnv> = async (c, next) => {
 		await next();
@@ -276,6 +278,19 @@ export function createApi(rawDeps: ApiDeps) {
 	);
 	app.use(
 		'/api/sync/*',
+		bodyLimit({
+			maxSize: MAX_REQUEST_BYTES,
+			onError: (c) =>
+				fail(
+					c,
+					'PAYLOAD_TOO_LARGE',
+					`Request body exceeds the ${MAX_REQUEST_BYTES}-byte limit`,
+					413,
+				),
+		}),
+	);
+	app.use(
+		'/api/cli/*',
 		bodyLimit({
 			maxSize: MAX_REQUEST_BYTES,
 			onError: (c) =>
@@ -350,6 +365,8 @@ export function createApi(rawDeps: ApiDeps) {
 	// notebook-scoped bearer token, not the browser cookie, so it lives outside the
 	// `/api/v1/*` auth/CSRF chain.
 	app.route('/api/sync/git/v1', gitSyncApp);
+
+	app.route('/api/cli/v1', cliTokenApp);
 
 	// CSRF defense-in-depth. The session cookie is already SameSite=Lax (so a
 	// browser won't attach it to a cross-site POST/PUT/DELETE), and there is no
@@ -476,6 +493,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, integrationsApp);
 	app.route(API_PREFIX, usersApp);
 	app.route(API_PREFIX, tokensApp);
+	app.route(API_PREFIX, cliAuthorizationsApp);
 
 	// Declare the cookie-session auth scheme the global `security` requirement
 	// (OPENAPI_DOC) points at, so generated clients know the API is authenticated.

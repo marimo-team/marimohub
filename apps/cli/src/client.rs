@@ -545,6 +545,45 @@ pub fn current_user(manifest: &Manifest, runtime: &Runtime<'_>) -> Result<Value,
         .ok_or_else(|| Error::Http("response envelope has no data".into()))
 }
 
+pub fn exchange_cli_authorization(
+    base_url: &str,
+    timeout: Duration,
+    code: &str,
+    code_verifier: &str,
+) -> Result<SecretString, Error> {
+    let url = Url::parse(&format!(
+        "{}/api/cli/v1/token",
+        base_url.trim_end_matches('/')
+    ))?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "code": code,
+        "code_verifier": code_verifier,
+    }))?;
+    let runtime = Runtime {
+        base_url,
+        token: None,
+        timeout,
+        output: "json",
+        raw_envelope: false,
+    };
+    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+    let response = send_once(
+        &agent,
+        &runtime,
+        "POST",
+        &url,
+        &BTreeMap::new(),
+        Some(&body),
+    )?;
+    let envelope = ensure_success(&response)?;
+    let token = envelope
+        .pointer("/data/token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| Error::Http("CLI token exchange returned no token".into()))?;
+    Ok(SecretString::from(token.to_owned()))
+}
+
 pub fn execute(
     manifest: &Manifest,
     runtime: &Runtime<'_>,
@@ -704,6 +743,48 @@ mod tests {
         (format!("http://{address}"), handle)
     }
 
+    fn serve_cli_exchange(body: &str) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let body = body.to_owned();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone test stream"));
+            let mut request = String::new();
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request header");
+                assert!(!line.is_empty(), "request ended before its headers");
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse().expect("numeric content length");
+                    }
+                }
+                request.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut request_body = vec![0; content_length];
+            reader
+                .read_exact(&mut request_body)
+                .expect("read request body");
+            request.push_str(std::str::from_utf8(&request_body).expect("UTF-8 request body"));
+            assert!(request.starts_with("POST /api/cli/v1/token HTTP/1.1"));
+            assert!(!request.to_ascii_lowercase().contains("authorization:"));
+            assert!(request.contains(r#""code":"mhub_cli_code""#));
+            assert!(request.contains(r#""code_verifier":"verifier""#));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("write response");
+        });
+        (format!("http://{address}"), handle)
+    }
+
     #[test]
     fn current_user_validates_the_token_with_me() {
         let (base_url, server) = serve_once(
@@ -742,6 +823,23 @@ mod tests {
         let error = current_user(&crate::manifest::load(), &runtime).expect_err("invalid token");
         server.join().expect("test server");
         assert!(matches!(error, Error::Http(message) if message.contains("HTTP 401 UNAUTHORIZED")));
+    }
+
+    #[test]
+    fn cli_authorization_exchange_returns_the_one_time_token() {
+        let (base_url, server) =
+            serve_cli_exchange(r#"{"success":true,"data":{"token":"mhub_pat_returned"}}"#);
+
+        let token = exchange_cli_authorization(
+            &base_url,
+            Duration::from_secs(1),
+            "mhub_cli_code",
+            "verifier",
+        )
+        .expect("exchange succeeds");
+
+        server.join().expect("test server");
+        assert_eq!(token.expose_secret(), "mhub_pat_returned");
     }
 
     #[test]

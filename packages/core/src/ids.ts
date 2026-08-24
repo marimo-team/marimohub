@@ -14,6 +14,7 @@ export type VersionId = string & { __brand: 'VersionId' };
 export type ProposalId = string & { __brand: 'ProposalId' };
 export type SessionId = string & { __brand: 'SessionId' };
 export type TokenId = string & { __brand: 'TokenId' };
+export type CliAuthorizationId = string & { __brand: 'CliAuthorizationId' };
 export type IntegrationId = string & { __brand: 'IntegrationId' };
 export type AlertDestinationId = string & { __brand: 'AlertDestinationId' };
 
@@ -61,6 +62,8 @@ const nextVersionUlid = monotonicFactory();
 // Token ids are bare ULIDs (no `tok_` prefix): they ride inside the PAT string
 // (`mhub_pat_<tokenId>_<secret>`), where `_` is the field separator.
 const nextTokenUlid = monotonicFactory();
+
+const nextCliAuthorizationUlid = monotonicFactory();
 
 // --- Id namespaces (guard / assert / parse / create) ---
 //
@@ -141,6 +144,11 @@ export const SessionId = defineId<SessionId>(
 	() => `sess-${randomBody()}`,
 );
 export const TokenId = defineId<TokenId>('TokenId', /^[0-9A-Z]{26}$/, () => nextTokenUlid());
+export const CliAuthorizationId = defineId<CliAuthorizationId>(
+	'CliAuthorizationId',
+	/^[0-9A-Z]{26}$/,
+	() => nextCliAuthorizationUlid(),
+);
 export const IntegrationId = defineId<IntegrationId>(
 	'IntegrationId',
 	/^intg-[0-9a-z]{16}$/,
@@ -196,6 +204,7 @@ export const createVersionId = VersionId.create;
 export const createProposalId = ProposalId.create;
 export const createSessionId = SessionId.create;
 export const createTokenId = TokenId.create;
+export const createCliAuthorizationId = CliAuthorizationId.create;
 export const createIntegrationId = IntegrationId.create;
 export const createAlertDestinationId = AlertDestinationId.create;
 

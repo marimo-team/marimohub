@@ -42,33 +42,6 @@ components:
         /api/v1/me/tokens, for CI/CLI/service callers. Acts as the issuing user;
         cannot manage tokens.
   schemas:
-    Me:
-      type: object
-      properties:
-        id:
-          type: string
-        email:
-          type: string
-        name:
-          type:
-            - string
-            - 'null'
-        picture_url:
-          type:
-            - string
-            - 'null'
-          format: uri
-        logout_url:
-          type:
-            - string
-            - 'null'
-        is_super_admin:
-          type: boolean
-      required:
-        - id
-        - email
-        - logout_url
-        - is_super_admin
     ErrorResponse:
       type: object
       properties:
@@ -125,6 +98,33 @@ components:
       required:
         - success
         - error
+    Me:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type:
+            - string
+            - 'null'
+        picture_url:
+          type:
+            - string
+            - 'null'
+          format: uri
+        logout_url:
+          type:
+            - string
+            - 'null'
+        is_super_admin:
+          type: boolean
+      required:
+        - id
+        - email
+        - logout_url
+        - is_super_admin
     DeploymentInfo:
       type: object
       properties:
@@ -2514,6 +2514,108 @@ components:
         - created_at
   parameters: {}
 paths:
+  /api/cli/v1/token:
+    post:
+      operationId: auth.cli.exchange
+      x-cli-hidden: true
+      tags:
+        - Auth
+      summary: Exchange a CLI authorization code
+      description: Public PKCE exchange for the mohub loopback login. The
+        authorization code is single-use, short-lived, and useless without the
+        verifier held by the CLI.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                code_verifier:
+                  type: string
+                  pattern: ^[A-Za-z0-9_-]{43,128}$
+              required:
+                - code
+                - code_verifier
+      responses:
+        '200':
+          description: The new personal access token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      token:
+                        type: string
+                    required:
+                      - token
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/me:
     get:
       operationId: me
@@ -11585,6 +11687,139 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/me/cli-authorizations:
+    post:
+      operationId: auth.cli.approve
+      x-cli-hidden: true
+      tags:
+        - Auth
+      summary: Approve a CLI login
+      description: Creates a short-lived, one-time authorization code bound to the CLI
+        PKCE challenge. Requires a browser session; the personal access token is
+        minted only during exchange.
+      security: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                callback_uri:
+                  type: string
+                  maxLength: 300
+                  format: uri
+                state:
+                  type: string
+                  pattern: ^[A-Za-z0-9_-]{32,128}$
+                code_challenge:
+                  type: string
+                  pattern: ^[A-Za-z0-9_-]{43}$
+                token_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                expires_in_days:
+                  type: integer
+                  minimum: 1
+                  maximum: 3650
+              required:
+                - callback_uri
+                - state
+                - code_challenge
+                - token_name
+                - expires_in_days
+      responses:
+        '201':
+          description: Loopback callback carrying the one-time authorization code
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      redirect_uri:
+                        type: string
+                        format: uri
+                      expires_at:
+                        type: string
+                        format: date-time
+                    required:
+                      - redirect_uri
+                      - expires_at
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
           content:
             application/json:
               schema:
