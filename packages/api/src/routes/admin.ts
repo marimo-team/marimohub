@@ -39,6 +39,7 @@ function adminUser(identity: Identity, superAdmins?: readonly string[]) {
 const listUsers = createRoute({
 	method: 'get',
 	path: '/admin/users',
+	operationId: 'admin.users.list',
 	tags: ['Admin'],
 	summary: 'List all users in the identity directory',
 	description:
@@ -62,6 +63,7 @@ const listUsers = createRoute({
 const getConfig = createRoute({
 	method: 'get',
 	path: '/admin/config',
+	operationId: 'admin.config.get',
 	tags: ['Admin'],
 	summary: "Describe the deployment's configuration",
 	description:
@@ -82,6 +84,8 @@ const getConfig = createRoute({
 const suspendUser = createRoute({
 	method: 'put',
 	path: '/users/{id}/suspension',
+	operationId: 'admin.users.suspend',
+	'x-cli-destructive': true,
 	tags: ['Users', 'Admin'],
 	summary: 'Suspend a user',
 	description:
@@ -102,6 +106,7 @@ const suspendUser = createRoute({
 const unsuspendUser = createRoute({
 	method: 'delete',
 	path: '/users/{id}/suspension',
+	operationId: 'admin.users.unsuspend',
 	tags: ['Users', 'Admin'],
 	summary: 'Reactivate a suspended user',
 	description: 'Restores authentication for a known user. Super-admin only and session-only.',

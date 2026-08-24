@@ -13,6 +13,7 @@ import {
 const resolveUsers = createRoute({
 	method: 'get',
 	path: '/users',
+	operationId: 'users.resolve',
 	tags: ['Users'],
 	summary: 'Resolve user ids to display identities',
 	description:
@@ -43,6 +44,7 @@ const resolveUsers = createRoute({
 const searchUsers = createRoute({
 	method: 'get',
 	path: '/users/search',
+	operationId: 'users.search',
 	tags: ['Users'],
 	summary: 'Search the user directory',
 	description:

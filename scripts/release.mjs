@@ -14,6 +14,7 @@ if (!arg) {
 
 const pkgPath = new URL('../package.json', import.meta.url);
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+const cargoPath = new URL('../apps/cli/Cargo.toml', import.meta.url);
 
 let version = arg;
 if (arg === 'patch' || arg === 'minor' || arg === 'major') {
@@ -40,7 +41,19 @@ run('git', 'checkout', '-b', `release/${version}`, 'origin/main');
 pkg.version = version;
 writeFileSync(pkgPath, `${JSON.stringify(pkg, null, '\t')}\n`);
 
-run('git', 'add', 'package.json');
+const replaceVersion = (path, pattern, replacement, label) => {
+	const current = readFileSync(path, 'utf8');
+	if (!pattern.test(current)) {
+		console.error(`could not find the current ${label} version`);
+		process.exit(1);
+	}
+	writeFileSync(path, current.replace(pattern, replacement));
+};
+
+replaceVersion(cargoPath, /^version = "[^"]+"$/m, `version = "${version}"`, 'Cargo package');
+run('cargo', 'update', '--manifest-path', 'apps/cli/Cargo.toml', '--package', 'mohub');
+
+run('git', 'add', 'package.json', 'apps/cli/Cargo.toml', 'apps/cli/Cargo.lock');
 run('git', 'commit', '-m', `release: ${version}`);
 run('git', 'push', '-u', 'origin', `release/${version}`);
 execFileSync(
@@ -51,7 +64,7 @@ execFileSync(
 		'--title',
 		`release: ${version}`,
 		'--body',
-		`Merging this PR tags \`v${version}\` and publishes the container image and Helm chart to GHCR.`,
+		`Merging this PR tags \`v${version}\` and publishes the container image, Helm chart, and mohub CLI.`,
 	],
 	{ stdio: 'inherit' },
 );

@@ -71,6 +71,7 @@ function auditLogEntry(event: Event) {
 const listGlobalEvents = createRoute({
 	method: 'get',
 	path: '/events',
+	operationId: 'audit.list',
 	tags: ['Audit'],
 	summary: 'List deployment audit events',
 	description:
@@ -93,6 +94,7 @@ const listGlobalEvents = createRoute({
 const listEvents = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/events',
+	operationId: 'projects.audit.list',
 	tags: ['Projects'],
 	summary: "List a project's audit events for one day",
 	description:

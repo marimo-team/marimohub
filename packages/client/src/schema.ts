@@ -12,39 +12,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get current user info */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Current user information */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['Me'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['me'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -64,39 +32,7 @@ export interface paths {
 		 * Get the deployment version
 		 * @description Just the version string. The rest of the build/runtime identity (image, replica, backends, …) is super-admin material on `GET /api/v1/admin/config`.
 		 */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Deployment version information */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['DeploymentInfo'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['version'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -113,39 +49,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get deployment capability flags */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Deployment capability flags */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['Capabilities'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['capabilities'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -162,199 +66,10 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List all projects */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-				};
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description List of projects with notebook summaries, newest first */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['ProjectPage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['projects.list'];
 		put?: never;
 		/** Create a project */
-		post: {
-			parameters: {
-				query?: never;
-				header?: {
-					/** @description Stable client-generated key reused for retries of the same operation. */
-					'idempotency-key'?: string;
-				};
-				path?: never;
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @example Data Science */
-						name: string;
-						/** @example Exploratory analysis notebooks */
-						description: string;
-						/**
-						 * @example [
-						 *       "analytics"
-						 *     ]
-						 */
-						tags?: string[];
-						federation?: components['schemas']['ProjectFederationInput'];
-					};
-				};
-			};
-			responses: {
-				/** @description Project created */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['Project'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['projects.create'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -369,328 +84,15 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get a project */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Project details */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['Project'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['projects.get'];
 		put?: never;
 		post?: never;
 		/** Delete a project */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Project deleted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		delete: operations['projects.delete'];
 		options?: never;
 		head?: never;
 		/** Update a project */
-		patch: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @example ML Pipeline */
-						name?: string;
-						description?: string;
-						tags?: string[];
-						federation?: components['schemas']['ProjectFederationInput'];
-					};
-				};
-			};
-			responses: {
-				/** @description Project updated */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['Project'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		patch: operations['projects.update'];
 		trace?: never;
 	};
 	'/api/v1/projects/{pid}/members': {
@@ -704,226 +106,13 @@ export interface paths {
 		 * List project members
 		 * @description Pending email invites are visible only to project managers (plus the invitee themself); other callers see the id-keyed rows only.
 		 */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Project members */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['ProjectMember'][];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['projects.members.list'];
 		put?: never;
 		/**
 		 * Add a project member
 		 * @description Add a member by user id or email. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.
 		 */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @example user_01HXY00000000000000000000 */
-						user_id?: string;
-						/**
-						 * Format: email
-						 * @example teammate@example.com
-						 */
-						email?: string;
-						role: components['schemas']['AssignableRole'];
-					};
-				};
-			};
-			responses: {
-				/** @description Member added */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['Project'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['projects.members.add'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -939,236 +128,10 @@ export interface paths {
 		};
 		get?: never;
 		/** Change a member's role */
-		put: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					/** @description The member's user id, or the (URL-encoded) email of a pending invite */
-					uid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						role: components['schemas']['AssignableRole'] & unknown;
-					};
-				};
-			};
-			responses: {
-				/** @description Member role updated */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['Project'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		put: operations['projects.members.update'];
 		post?: never;
 		/** Remove a project member */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					/** @description The member's user id, or the (URL-encoded) email of a pending invite */
-					uid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Member removed */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		delete: operations['projects.members.remove'];
 		options?: never;
 		head?: never;
 		patch?: never;
@@ -1182,258 +145,13 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List project alert destinations */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Project alert destinations with secret material redacted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['ProjectAlertDestinationPage'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['alerts.destinations.list'];
 		put?: never;
 		/**
 		 * Create a project alert destination
 		 * @description New destinations subscribe to all 10 project alert kinds when kinds is omitted. They remain disabled until a successful test.
 		 */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json':
-						| {
-								name: string;
-								kinds?: (
-									| 'member.invited'
-									| 'member.added'
-									| 'member.role_changed'
-									| 'member.removed'
-									| 'session.takeover'
-									| 'notebook.deleted'
-									| 'project.deleted'
-									| 'app.start_failed'
-									| 'app.unavailable'
-									| 'sync.failed'
-								)[];
-								/** @enum {string} */
-								type: 'slack';
-								/** Format: uri */
-								webhook_url: string;
-						  }
-						| {
-								name: string;
-								kinds?: (
-									| 'member.invited'
-									| 'member.added'
-									| 'member.role_changed'
-									| 'member.removed'
-									| 'session.takeover'
-									| 'notebook.deleted'
-									| 'project.deleted'
-									| 'app.start_failed'
-									| 'app.unavailable'
-									| 'sync.failed'
-								)[];
-								/** @enum {string} */
-								type: 'webhook';
-								/** Format: uri */
-								url: string;
-								signing_secret: string;
-						  };
-				};
-			};
-			responses: {
-				/** @description Alert destination created */
-				201: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['ProjectAlertDestination'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['alerts.destinations.create'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -1451,255 +169,11 @@ export interface paths {
 		put?: never;
 		post?: never;
 		/** Delete a project alert destination */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					pid: string;
-					aid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Alert destination deleted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		delete: operations['alerts.destinations.delete'];
 		options?: never;
 		head?: never;
 		/** Update a project alert destination */
-		patch: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					pid: string;
-					aid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						name?: string;
-						kinds?: (
-							| 'member.invited'
-							| 'member.added'
-							| 'member.role_changed'
-							| 'member.removed'
-							| 'session.takeover'
-							| 'notebook.deleted'
-							| 'project.deleted'
-							| 'app.start_failed'
-							| 'app.unavailable'
-							| 'sync.failed'
-						)[];
-						enabled?: boolean;
-						/** Format: uri */
-						webhook_url?: string;
-						/** Format: uri */
-						url?: string;
-						signing_secret?: string;
-					};
-				};
-			};
-			responses: {
-				/** @description Alert destination updated */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['ProjectAlertDestination'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		patch: operations['alerts.destinations.update'];
 		trace?: never;
 	};
 	'/api/v1/projects/{pid}/alert-destinations/{aid}/test': {
@@ -1712,131 +186,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Send a test project alert */
-		post: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					pid: string;
-					aid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Test delivered and destination verified */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['ProjectAlertDestination'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['alerts.destinations.test'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -1854,105 +204,7 @@ export interface paths {
 		 * List deployment audit events
 		 * @description Deployment-wide audit trail, newest first. Super-admin only. Date ranges are inclusive and limited to 30 UTC days.
 		 */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-					/** @description UTC calendar date */
-					from?: string;
-					/** @description UTC calendar date */
-					to?: string;
-					event?: string;
-					actor?: string;
-					project_id?: string;
-				};
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Deployment audit events, newest first */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['AuditLogPage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['audit.list'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -1972,100 +224,7 @@ export interface paths {
 		 * List a project's audit events for one day
 		 * @description Catalog mutation audit trail (project/notebook lifecycle, membership changes), one UTC day at a time. Manager-only: events may record member management and deletions.
 		 */
-		get: {
-			parameters: {
-				query?: {
-					/** @description UTC day (defaults to today) */
-					date?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description The day's audit events for this project, in append order */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['AuditEvent'][];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['projects.audit.list'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -2085,86 +244,7 @@ export interface paths {
 		 * List all users in the identity directory
 		 * @description Every user who has signed in at least once, name-sorted. Currently a single page (`next_cursor` is always null). Super-admin only, and session-only: a PAT — even a super admin’s — is rejected with 403.
 		 */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description The user directory, name-sorted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['AdminUserPage'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['admin.users.list'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -2185,195 +265,13 @@ export interface paths {
 		 * Suspend a user
 		 * @description Blocks the user at authentication time, including personal access tokens. Super-admin only and session-only. A super admin cannot suspend their own account.
 		 */
-		put: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					/** @description The user's identity-provider subject id */
-					id: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description The suspended user */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['AdminUser'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		put: operations['admin.users.suspend'];
 		post?: never;
 		/**
 		 * Reactivate a suspended user
 		 * @description Restores authentication for a known user. Super-admin only and session-only.
 		 */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					/** @description The user's identity-provider subject id */
-					id: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description The reactivated user */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['AdminUser'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		delete: operations['admin.users.unsuspend'];
 		options?: never;
 		head?: never;
 		patch?: never;
@@ -2390,86 +288,7 @@ export interface paths {
 		 * Describe the deployment's configuration
 		 * @description Read-only view of every configuration group (storage, compute, auth, …) as resolved from the serving replica's environment at boot; secret values are never included, only whether they are set. Super-admin only, session-only.
 		 */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description The deployment configuration, secrets redacted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['DeploymentConfig'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['admin.config.get'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -2486,232 +305,10 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List notebooks in a project */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description List of notebooks, newest first */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['NotebookPage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['notebooks.list'];
 		put?: never;
 		/** Create a notebook */
-		post: {
-			parameters: {
-				query?: never;
-				header?: {
-					/** @description Stable client-generated key reused for retries of the same operation. */
-					'idempotency-key'?: string;
-				};
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @example Revenue Analysis */
-						title: string;
-						/** @example Monthly revenue breakdown */
-						description: string;
-						/** @example import marimo as mo */
-						code: string;
-						/**
-						 * @example [
-						 *       "finance"
-						 *     ]
-						 */
-						tags?: string[];
-						readme?: string;
-						deps?: string;
-						runtime?: {
-							python_version?: string;
-							marimo_version?: string;
-						};
-						/** @example ghcr.io/orgname/marimo-gpu:latest */
-						base_image?: string;
-						/** @example large */
-						compute_profile?: string;
-					};
-				};
-			};
-			responses: {
-				/** @description Notebook created */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['NotebookMeta'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['notebooks.create'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -2728,155 +325,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Create a git-synced workspace notebook */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @example GitHub app */
-						title: string;
-						/** @example Synced from a git repository */
-						description: string;
-						/**
-						 * @description Git provider id. Recognized repository hosts take precedence over this explicit claim.
-						 * @example github
-						 */
-						provider?: string;
-						/** @example marimo-team/marimohub */
-						repo: string;
-						/** @example main */
-						branch: string;
-						/** @example apps */
-						root_path?: string;
-						/** @example my_app.py */
-						entry_notebook: string;
-						/**
-						 * @example [
-						 *       "git"
-						 *     ]
-						 */
-						tags?: string[];
-						readme?: string;
-						runtime?: {
-							python_version?: string;
-							marimo_version?: string;
-						};
-						base_image?: string;
-						compute_profile?: string;
-						/**
-						 * @default push
-						 * @enum {string}
-						 */
-						sync_mode?: 'push' | 'pull';
-					};
-				};
-			};
-			responses: {
-				/** @description Git-synced notebook created */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['GitNotebookCreateResult'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['notebooks.create-git'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -2893,107 +342,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Rotate a notebook sync token */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Sync token rotated */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['SyncToken'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['notebooks.rotate-sync-token'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -3014,171 +363,7 @@ export interface paths {
 		options?: never;
 		head?: never;
 		/** Update a git-synced notebook source */
-		patch: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @example marimo-team/marimohub */
-						repo: string;
-						/** @example main */
-						branch: string;
-						/** @example apps */
-						root_path: string;
-						/** @example my_app.py */
-						entry_notebook: string;
-						/** @enum {string} */
-						sync_mode?: 'push' | 'pull';
-					};
-				};
-			};
-			responses: {
-				/** @description Git source updated */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: {
-								source: {
-									/** @enum {string} */
-									type: 'git';
-									/**
-									 * @description Detected Git provider id, or null when the repository host is not recognized.
-									 * @example github
-									 */
-									provider: string | null;
-									/**
-									 * @description Normalized repository coordinate: owner/repo or an HTTPS repository URL.
-									 * @example marimo-team/marimohub
-									 */
-									repo: string;
-									/**
-									 * @description Synced repository branch.
-									 * @example main
-									 */
-									branch: string;
-									/**
-									 * @description Repository-relative directory synced into the notebook workspace.
-									 * @example apps
-									 */
-									root_path: string;
-									/**
-									 * @description Path to the entry notebook relative to root_path.
-									 * @example dashboard.py
-									 */
-									entry_notebook: string;
-									pending_config?: components['schemas']['GitSourceConfig'];
-									/** @enum {string} */
-									sync_mode: 'push' | 'pull';
-									current_version_id: string | null;
-									commit: string | null;
-									/**
-									 * Format: date-time
-									 * @example 2025-03-05T14:00:00Z
-									 */
-									last_synced_at: string | null;
-								};
-							};
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		patch: operations['notebooks.update-source'];
 		trace?: never;
 	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/source/drift': {
@@ -3192,107 +377,7 @@ export interface paths {
 		 * Compare a git-synced notebook against its branch head
 		 * @description Resolves the configured branch head via the server-side provider credential and reports whether the notebook is behind it. Stateless — nothing is stored. Requires a provider listed in `capabilities.source_control.sync_providers`.
 		 */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Drift between the synced commit and the branch head */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['SourceDrift'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['notebooks.source.drift'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -3314,116 +399,7 @@ export interface paths {
 		 * Pull the branch head into a git-synced notebook
 		 * @description Server-initiated sync: fetches the configured repository tree at the branch head and ingests it exactly like a pushed archive. A no-op when already at the head. Requires a provider listed in `capabilities.source_control.sync_providers`.
 		 */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Sync outcome */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['SourceSyncResult'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['notebooks.source.sync'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -3438,334 +414,15 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get notebook metadata */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Notebook detail */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['NotebookDetail'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['notebooks.get'];
 		put?: never;
 		post?: never;
 		/** Delete a notebook (soft-delete) */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Notebook deleted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		delete: operations['notebooks.delete'];
 		options?: never;
 		head?: never;
 		/** Update a notebook */
-		patch: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						title?: string;
-						description?: string;
-						code?: string;
-						tags?: string[];
-						readme?: string;
-						deps?: string;
-						/** @example Add regional breakdown */
-						message?: string;
-						base_image?: string | null;
-						compute_profile?: string | null;
-					};
-				};
-			};
-			responses: {
-				/** @description Notebook updated */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['NotebookMeta'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		patch: operations['notebooks.update'];
 		trace?: never;
 	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/content': {
@@ -3776,100 +433,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get notebook code */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Notebook source code */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: {
-								code: string;
-							};
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['notebooks.content'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -3886,110 +450,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List notebook versions */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description List of versions, newest first */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['NotebookVersionPage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['notebooks.versions.list'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -4006,102 +467,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get a specific version */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-					vid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Version details with code */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: {
-								version: components['schemas']['NotebookVersion'];
-								code: string;
-							};
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['notebooks.versions.get'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -4121,94 +487,7 @@ export interface paths {
 		 * Latest HTML snapshot of the notebook's outputs
 		 * @description Serves the newest version's HTML snapshot (captured best-effort at session teardown) raw — the static outputs shown to viewers under MARIMOHUB_VIEWER_MODE=static. `X-Marimohub-Version-Id` / `X-Marimohub-Captured-At` identify the snapshot. 404 with code `NO_HTML_SNAPSHOT` when no version has one.
 		 */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description The HTML snapshot, served sandboxed (CSP forces an opaque origin) */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'text/html': string;
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['notebooks.html'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -4228,95 +507,7 @@ export interface paths {
 		 * One version's HTML snapshot of the notebook's outputs
 		 * @description Serves the HTML snapshot captured for this specific version, raw. 404 with code `NO_HTML_SNAPSHOT` when the version captured none.
 		 */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-					vid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description The HTML snapshot, served sandboxed (CSP forces an opaque origin) */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'text/html': string;
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['notebooks.versions.html'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -4335,108 +526,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Restore a version as a new save */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-					vid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Version restored as a new save; returns the updated notebook */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['NotebookMeta'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['notebooks.versions.restore'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -4453,108 +543,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Duplicate a notebook */
-		post: {
-			parameters: {
-				query?: never;
-				header?: {
-					/** @description Stable client-generated key reused for retries of the same operation. */
-					'idempotency-key'?: string;
-				};
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @example Revenue Analysis (copy) */
-						title?: string;
-					};
-				};
-			};
-			responses: {
-				/** @description Notebook duplicated; returns the new notebook */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['NotebookMeta'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['notebooks.duplicate'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -4589,109 +578,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List active sessions for a project */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Active sessions for the project, newest first */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['SessionPage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['sessions.list'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -4708,191 +595,11 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get a session (status + kernel URL) */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-					sid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Session */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['Session'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['sessions.get'];
 		put?: never;
 		post?: never;
 		/** Terminate a session and destroy sandbox */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-					sid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Session terminated */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		delete: operations['sessions.terminate'];
 		options?: never;
 		head?: never;
 		patch?: never;
@@ -4906,98 +613,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Inspect persistent editor ownership */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Persistent editor ownership and current activity */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['EditorSessionState'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['sessions.editor.get'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -5016,127 +632,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Gracefully take over an exclusive editor session */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': components['schemas']['EditorTakeoverBody'];
-				};
-			};
-			responses: {
-				/** @description The prior editor was saved and stopped */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['sessions.editor.takeover'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -5156,135 +652,7 @@ export interface paths {
 		 * Create a session and provision a sandbox
 		 * @description Create or reuse a notebook sandbox. Edit-session reuse follows the configured editor sandbox-sharing policy. App-session reuse is shared per notebook.
 		 */
-		post: {
-			parameters: {
-				query?: never;
-				header?: {
-					/** @description Stable client-generated key reused for retries of the same operation. */
-					'idempotency-key'?: string;
-				};
-				path: {
-					pid: string;
-					nid: string;
-				};
-				cookie?: never;
-			};
-			/** @description Optional; omit for an edit session. */
-			requestBody?: {
-				content: {
-					'application/json': components['schemas']['SessionCreateBody'];
-				};
-			};
-			responses: {
-				/** @description Session created or reused */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['SessionCreateResult'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Conflict */
-				409: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['sessions.create'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -5301,99 +669,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Update session heartbeat */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					nid: string;
-					sid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Heartbeat updated */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['Session'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['sessions.heartbeat'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -5408,86 +684,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List available integration kinds (schemas drive the config forms) */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Registered integration kinds */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationKind'][];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.kinds.list'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -5504,223 +701,10 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List a project's integrations */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Integration instances (no config) */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationPage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.list'];
 		put?: never;
 		/** Create an integration (manager only) */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						kind: string;
-						/** @example prod */
-						name: string;
-						config: {
-							[key: string]: unknown;
-						};
-						change_note?: string;
-					};
-				};
-			};
-			responses: {
-				/** @description Integration created (config redacted) */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationDetail'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.project.create'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -5735,321 +719,15 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get an integration with its redacted config */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Integration detail (config redacted) */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationDetail'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.get'];
 		put?: never;
 		post?: never;
 		/** Delete an integration and its version history (manager only) */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Integration deleted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		delete: operations['integrations.project.delete'];
 		options?: never;
 		head?: never;
 		/** Update an integration (manager only); a config change appends a version */
-		patch: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						name?: string;
-						enabled?: boolean;
-						config?: {
-							[key: string]: unknown;
-						};
-						change_note?: string;
-					};
-				};
-			};
-			responses: {
-				/** @description Integration updated (config redacted) */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationDetail'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		patch: operations['integrations.project.update'];
 		trace?: never;
 	};
 	'/api/v1/projects/{pid}/integrations/{iid}/versions': {
@@ -6060,110 +738,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List an integration's config versions (metadata only) */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Version history, newest first */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationVersionPage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.versions'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -6182,101 +757,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Copy an integration from another project (manager of both projects) */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': components['schemas']['IntegrationCopyRequest'];
-				};
-			};
-			responses: {
-				/** @description Integration copied (inline secrets re-encrypted; external references preserved) */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationDetail'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.project.copy'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -6293,112 +774,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Probe connectivity for an unsaved config or a stored instance (manager only) */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': components['schemas']['IntegrationTestRequest'];
-				};
-			};
-			responses: {
-				/** @description Probe outcome (never secret material) */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationTestResult'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.project.test'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -6415,101 +791,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Evaluate SQL readiness for an unsaved integration config (manager only) */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': components['schemas']['IntegrationQueryReadinessRequest'];
-				};
-			};
-			responses: {
-				/** @description All SQL readiness checks */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationQueryReadinessCheck'][];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.project.query-readiness'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -6527,98 +809,7 @@ export interface paths {
 		 * Whether this integration instance can be browsed (editor or above)
 		 * @description Browse routes resolve the id against the project tier first, then the inherited org tier; a shadowed org instance reads as absent. All browse operations are strictly read-only against the upstream.
 		 */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Instance browse capability */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationBrowseCapability'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.get'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -6635,124 +826,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List catalog namespaces (editor or above) */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-					fresh?: 'true' | 'false';
-					/** @description Namespace parts joined by U+001F (percent-encoded as %1F). */
-					parent?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Namespaces, with upstream pagination passed through */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationBrowseNamespacePage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.namespaces'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -6769,124 +843,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List tables in a namespace (editor or above) */
-		get: {
-			parameters: {
-				query: {
-					limit?: number;
-					cursor?: string;
-					fresh?: 'true' | 'false';
-					/** @description Namespace parts joined by U+001F (percent-encoded as %1F). */
-					namespace: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Table names, with upstream pagination passed through */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationBrowseTablePage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.tables'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -6903,114 +860,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get a table's schema (editor or above) */
-		get: {
-			parameters: {
-				query: {
-					/** @description Namespace parts joined by U+001F (percent-encoded as %1F). */
-					namespace: string;
-					table: string;
-					fresh?: 'true' | 'false';
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Column names, types, and partitioning */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationTableSchema'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.schema'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -7032,118 +882,7 @@ export interface paths {
 		 * Preview a table's rows (editor or above)
 		 * @description Runs a bounded read-only scan. HTTP-native integrations execute through the guarded browse probe; other integrations use a fresh, isolated preview sandbox.
 		 */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						namespace: string[];
-						table: string;
-						/** @default 20 */
-						limit?: number;
-					};
-				};
-			};
-			responses: {
-				/** @description Column names and a bounded row sample */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationTablePreview'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.project.browse.preview'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -7163,115 +902,7 @@ export interface paths {
 		 * Run SQL against one integration (manager or above)
 		 * @description SQL execution gated by deployment configuration. Each request uses a fresh isolated worker with hard execution, row, and byte limits.
 		 */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						sql: string;
-					};
-				};
-			};
-			responses: {
-				/** @description Bounded query result */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationDataQueryResult'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.project.browse.query'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -7286,112 +917,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get bounded SQL completion schema (manager or above) */
-		get: {
-			parameters: {
-				query?: {
-					focus_namespace?: string;
-					focus_table?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Bounded table and column schema for SQL tools */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationQuerySchema'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.query-schema'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -7410,120 +936,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Generate or revise SQL with managed AI (manager or above) */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @enum {string} */
-						mode: 'generate' | 'revise';
-						instruction: string;
-						sql?: string;
-					};
-				};
-			};
-			responses: {
-				/** @description Generated DuckDB SQL */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: {
-								sql: string;
-							};
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.project.browse.generate-query'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -7538,116 +951,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List object-store buckets (editor or above) */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-					fresh?: 'true' | 'false';
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Buckets visible through the integration */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: {
-								items: components['schemas']['IntegrationObjectBucket'][];
-								next_cursor: string | null;
-							};
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.object-buckets'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -7664,118 +968,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List direct object-store children (editor or above) */
-		get: {
-			parameters: {
-				query: {
-					limit?: number;
-					cursor?: string;
-					fresh?: 'true' | 'false';
-					bucket: string;
-					prefix?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Direct prefixes and objects */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: {
-								items: components['schemas']['IntegrationObjectEntry'][];
-								next_cursor: string | null;
-							};
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.objects'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -7792,125 +985,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Run a bounded object-key search (editor or above) */
-		get: {
-			parameters: {
-				query: {
-					limit?: number;
-					cursor?: string;
-					bucket: string;
-					prefix?: string;
-					query: string;
-					formats?: string;
-					modified_after?: string;
-					modified_before?: string;
-					min_size?: number | null;
-					max_size?: number | null;
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Bounded object-key search results */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: {
-								items: components['schemas']['IntegrationObjectEntry'][];
-								next_cursor: string | null;
-								scanned: number;
-								complete: boolean;
-							};
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.search-objects'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -7927,113 +1002,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Read object metadata and tags (editor or above) */
-		get: {
-			parameters: {
-				query: {
-					bucket: string;
-					key: string;
-					version_id?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Object metadata */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationObjectDetail'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.object-head'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -8050,119 +1019,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List object versions and delete markers (editor or above) */
-		get: {
-			parameters: {
-				query: {
-					limit?: number;
-					cursor?: string;
-					fresh?: 'true' | 'false';
-					bucket: string;
-					key: string;
-					version_id?: string;
-				};
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Object versions and delete markers */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: {
-								items: components['schemas']['IntegrationObjectVersion'][];
-								next_cursor: string | null;
-							};
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.object-versions'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -8181,121 +1038,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Preview bounded object content (editor or above) */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @example analytics-lake */
-						bucket: string;
-						/** @example events/2026/part-001.jsonl */
-						key: string;
-						version_id?: string;
-						/** @default 20 */
-						limit?: number;
-					};
-				};
-			};
-			responses: {
-				/** @description Bounded object preview */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationObjectPreview'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.project.browse.preview-object'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -8313,140 +1056,7 @@ export interface paths {
 		 * Stream object content (editor or above)
 		 * @description Streams the object bytes raw — the target of the `content_url` embedded in preview responses. `inline=true` serves a sandboxed inline rendering (CSP forces an opaque origin); otherwise the response is a download (`Content-Disposition: attachment`). Supports single-part `Range` requests and an `etag` precondition (412 on mismatch).
 		 */
-		get: {
-			parameters: {
-				query: {
-					bucket: string;
-					key: string;
-					version_id?: string;
-					inline?: 'true' | 'false';
-					etag?: string;
-				};
-				header?: {
-					range?: string;
-				};
-				path: {
-					pid: string;
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description The object bytes, streamed */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/octet-stream': string;
-					};
-				};
-				/** @description The requested byte range (`Content-Range` identifies it) */
-				206: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/octet-stream': string;
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Range not satisfiable */
-				416: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.project.browse.object-content'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -8463,210 +1073,10 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List org-wide integrations (super admin only) */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-				};
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Org integration instances (no config) */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationPage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.org.list'];
 		put?: never;
 		/** Create an org-wide integration (super admin only) */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						kind: string;
-						/** @example prod */
-						name: string;
-						config: {
-							[key: string]: unknown;
-						};
-						change_note?: string;
-					};
-				};
-			};
-			responses: {
-				/** @description Integration created (config redacted) */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationDetail'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.org.create'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -8681,318 +1091,15 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Get an org-wide integration with its redacted config (super admin only) */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Integration detail (config redacted) */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationDetail'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.org.get'];
 		put?: never;
 		post?: never;
 		/** Delete an org-wide integration and its version history (super admin only) */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Integration deleted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		delete: operations['integrations.org.delete'];
 		options?: never;
 		head?: never;
 		/** Update an org-wide integration (super admin only) */
-		patch: {
-			parameters: {
-				query?: never;
-				header?: {
-					'if-match'?: string;
-				};
-				path: {
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						name?: string;
-						enabled?: boolean;
-						config?: {
-							[key: string]: unknown;
-						};
-						change_note?: string;
-					};
-				};
-			};
-			responses: {
-				/** @description Integration updated (config redacted) */
-				200: {
-					headers: {
-						/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
-						ETag: string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationDetail'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Precondition failed (If-Match did not match the current version) */
-				412: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		patch: operations['integrations.org.update'];
 		trace?: never;
 	};
 	'/api/v1/org/integrations/{iid}/versions': {
@@ -9003,109 +1110,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List an org-wide integration's config versions (super admin only) */
-		get: {
-			parameters: {
-				query?: {
-					limit?: number;
-					cursor?: string;
-				};
-				header?: never;
-				path: {
-					iid: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Version history, newest first */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationVersionPage'];
-						};
-					};
-				};
-				/** @description Bad request */
-				400: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['integrations.org.versions'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -9124,110 +1129,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Probe connectivity for an unsaved or stored org config (super admin only) */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': components['schemas']['IntegrationTestRequest'];
-				};
-			};
-			responses: {
-				/** @description Probe outcome (never secret material) */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationTestResult'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.org.test'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -9244,99 +1146,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Evaluate SQL readiness for an unsaved org config (super admin only) */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': components['schemas']['IntegrationQueryReadinessRequest'];
-				};
-			};
-			responses: {
-				/** @description All SQL readiness checks */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['IntegrationQueryReadinessCheck'][];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['integrations.org.query-readiness'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -9354,60 +1164,7 @@ export interface paths {
 		 * Search the user directory
 		 * @description Case-insensitive substring search over email, name, and id, for the add-member picker. Only users who have signed in at least once are in the directory. Under MARIMOHUB_DEFAULT_ROLE=none the caller must own or belong to at least one project — a signed-in account with no involvement cannot enumerate the directory; with a default role set, every authenticated user may search.
 		 */
-		get: {
-			parameters: {
-				query: {
-					q: string;
-					limit?: number;
-				};
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Matching users, name-sorted */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['User'][];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['users.search'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -9427,44 +1184,7 @@ export interface paths {
 		 * Resolve user ids to display identities
 		 * @description Batch-resolve opaque user ids (the auth `sub` stored as a notebook `author` or session `user_id`) into `{ id, email, name, picture_url }`. Ids with no recorded identity are omitted from the result map.
 		 */
-		get: {
-			parameters: {
-				query?: {
-					/** @description Comma-separated user ids. */
-					ids?: string;
-				};
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Map of user id → resolved identity (unknown ids omitted) */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: {
-								[key: string]: components['schemas']['User'];
-							};
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['users.resolve'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -9484,194 +1204,13 @@ export interface paths {
 		 * List the caller's personal access tokens
 		 * @description Metadata only — the secret is never retrievable after creation.
 		 */
-		get: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Tokens, newest first */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['ApiToken'][];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		get: operations['auth.tokens.list'];
 		put?: never;
 		/**
 		 * Create a personal access token
 		 * @description Mint a machine credential that acts as the calling user (CI, scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The plaintext token is returned once, in this response, and never again. Requires session (SSO) auth — a token cannot mint tokens.
 		 */
-		post: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path?: never;
-				cookie?: never;
-			};
-			requestBody: {
-				content: {
-					'application/json': {
-						/** @example ci-deploy */
-						name: string;
-						/**
-						 * @description Days until expiry; omit for a non-expiring token.
-						 * @example 90
-						 */
-						expires_in_days?: number;
-					};
-				};
-			};
-			responses: {
-				/** @description The new token — copy it now; it is never shown again */
-				201: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': {
-							/** @enum {boolean} */
-							success: true;
-							data: components['schemas']['ApiTokenCreated'];
-						};
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Resource limit reached */
-				429: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		post: operations['auth.tokens.create'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -9692,93 +1231,7 @@ export interface paths {
 		 * Revoke a personal access token
 		 * @description Deletes the token; API requests using it fail within the verification-cache TTL (~30 seconds) on other replicas, immediately on this one.
 		 */
-		delete: {
-			parameters: {
-				query?: never;
-				header?: never;
-				path: {
-					tokenId: string;
-				};
-				cookie?: never;
-			};
-			requestBody?: never;
-			responses: {
-				/** @description Token revoked */
-				200: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['SuccessResponse'];
-					};
-				};
-				/** @description Authentication required */
-				401: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Access forbidden */
-				403: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Not found */
-				404: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Request body too large */
-				413: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Validation error */
-				422: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Internal server error */
-				500: {
-					headers: {
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-				/** @description Service unavailable */
-				503: {
-					headers: {
-						/** @description Seconds to wait before retrying. */
-						'Retry-After': string;
-						[name: string]: unknown;
-					};
-					content: {
-						'application/json': components['schemas']['ErrorResponse'];
-					};
-				};
-			};
-		};
+		delete: operations['auth.tokens.revoke'];
 		options?: never;
 		head?: never;
 		patch?: never;
@@ -10866,6 +2319,4057 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+	me: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Current user information */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Me'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	version: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Deployment version information */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['DeploymentInfo'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	capabilities: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Deployment capability flags */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Capabilities'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description List of projects with notebook summaries, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ProjectPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.create': {
+		parameters: {
+			query?: never;
+			header?: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key'?: string;
+			};
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example Data Science */
+					name: string;
+					/** @example Exploratory analysis notebooks */
+					description: string;
+					/**
+					 * @example [
+					 *       "analytics"
+					 *     ]
+					 */
+					tags?: string[];
+					federation?: components['schemas']['ProjectFederationInput'];
+				};
+			};
+		};
+		responses: {
+			/** @description Project created */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Project'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Project details */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Project'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.delete': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Project deleted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.update': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example ML Pipeline */
+					name?: string;
+					description?: string;
+					tags?: string[];
+					federation?: components['schemas']['ProjectFederationInput'];
+				};
+			};
+		};
+		responses: {
+			/** @description Project updated */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Project'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.members.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Project members */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ProjectMember'][];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.members.add': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example user_01HXY00000000000000000000 */
+					user_id?: string;
+					/**
+					 * Format: email
+					 * @example teammate@example.com
+					 */
+					email?: string;
+					role: components['schemas']['AssignableRole'];
+				};
+			};
+		};
+		responses: {
+			/** @description Member added */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Project'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.members.update': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				/** @description The member's user id, or the (URL-encoded) email of a pending invite */
+				uid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					role: components['schemas']['AssignableRole'] & unknown;
+				};
+			};
+		};
+		responses: {
+			/** @description Member role updated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Project'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.members.remove': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				/** @description The member's user id, or the (URL-encoded) email of a pending invite */
+				uid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Member removed */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'alerts.destinations.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Project alert destinations with secret material redacted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ProjectAlertDestinationPage'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'alerts.destinations.create': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json':
+					| {
+							name: string;
+							kinds?: (
+								| 'member.invited'
+								| 'member.added'
+								| 'member.role_changed'
+								| 'member.removed'
+								| 'session.takeover'
+								| 'notebook.deleted'
+								| 'project.deleted'
+								| 'app.start_failed'
+								| 'app.unavailable'
+								| 'sync.failed'
+							)[];
+							/** @enum {string} */
+							type: 'slack';
+							/** Format: uri */
+							webhook_url: string;
+					  }
+					| {
+							name: string;
+							kinds?: (
+								| 'member.invited'
+								| 'member.added'
+								| 'member.role_changed'
+								| 'member.removed'
+								| 'session.takeover'
+								| 'notebook.deleted'
+								| 'project.deleted'
+								| 'app.start_failed'
+								| 'app.unavailable'
+								| 'sync.failed'
+							)[];
+							/** @enum {string} */
+							type: 'webhook';
+							/** Format: uri */
+							url: string;
+							signing_secret: string;
+					  };
+			};
+		};
+		responses: {
+			/** @description Alert destination created */
+			201: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ProjectAlertDestination'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'alerts.destinations.delete': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+				aid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Alert destination deleted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'alerts.destinations.update': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+				aid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					name?: string;
+					kinds?: (
+						| 'member.invited'
+						| 'member.added'
+						| 'member.role_changed'
+						| 'member.removed'
+						| 'session.takeover'
+						| 'notebook.deleted'
+						| 'project.deleted'
+						| 'app.start_failed'
+						| 'app.unavailable'
+						| 'sync.failed'
+					)[];
+					enabled?: boolean;
+					/** Format: uri */
+					webhook_url?: string;
+					/** Format: uri */
+					url?: string;
+					signing_secret?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Alert destination updated */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ProjectAlertDestination'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'alerts.destinations.test': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+				aid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Test delivered and destination verified */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ProjectAlertDestination'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'audit.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+				/** @description UTC calendar date */
+				from?: string;
+				/** @description UTC calendar date */
+				to?: string;
+				event?: string;
+				actor?: string;
+				project_id?: string;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Deployment audit events, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['AuditLogPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.audit.list': {
+		parameters: {
+			query?: {
+				/** @description UTC day (defaults to today) */
+				date?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description The day's audit events for this project, in append order */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['AuditEvent'][];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.users.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description The user directory, name-sorted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['AdminUserPage'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.users.suspend': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description The user's identity-provider subject id */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description The suspended user */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['AdminUser'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.users.unsuspend': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				/** @description The user's identity-provider subject id */
+				id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description The reactivated user */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['AdminUser'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.config.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description The deployment configuration, secrets redacted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['DeploymentConfig'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description List of notebooks, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.create': {
+		parameters: {
+			query?: never;
+			header?: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key'?: string;
+			};
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example Revenue Analysis */
+					title: string;
+					/** @example Monthly revenue breakdown */
+					description: string;
+					/** @example import marimo as mo */
+					code: string;
+					/**
+					 * @example [
+					 *       "finance"
+					 *     ]
+					 */
+					tags?: string[];
+					readme?: string;
+					deps?: string;
+					runtime?: {
+						python_version?: string;
+						marimo_version?: string;
+					};
+					/** @example ghcr.io/orgname/marimo-gpu:latest */
+					base_image?: string;
+					/** @example large */
+					compute_profile?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Notebook created */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookMeta'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.create-git': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example GitHub app */
+					title: string;
+					/** @example Synced from a git repository */
+					description: string;
+					/**
+					 * @description Git provider id. Recognized repository hosts take precedence over this explicit claim.
+					 * @example github
+					 */
+					provider?: string;
+					/** @example marimo-team/marimohub */
+					repo: string;
+					/** @example main */
+					branch: string;
+					/** @example apps */
+					root_path?: string;
+					/** @example my_app.py */
+					entry_notebook: string;
+					/**
+					 * @example [
+					 *       "git"
+					 *     ]
+					 */
+					tags?: string[];
+					readme?: string;
+					runtime?: {
+						python_version?: string;
+						marimo_version?: string;
+					};
+					base_image?: string;
+					compute_profile?: string;
+					/**
+					 * @default push
+					 * @enum {string}
+					 */
+					sync_mode?: 'push' | 'pull';
+				};
+			};
+		};
+		responses: {
+			/** @description Git-synced notebook created */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['GitNotebookCreateResult'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.rotate-sync-token': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Sync token rotated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['SyncToken'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.update-source': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example marimo-team/marimohub */
+					repo: string;
+					/** @example main */
+					branch: string;
+					/** @example apps */
+					root_path: string;
+					/** @example my_app.py */
+					entry_notebook: string;
+					/** @enum {string} */
+					sync_mode?: 'push' | 'pull';
+				};
+			};
+		};
+		responses: {
+			/** @description Git source updated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							source: {
+								/** @enum {string} */
+								type: 'git';
+								/**
+								 * @description Detected Git provider id, or null when the repository host is not recognized.
+								 * @example github
+								 */
+								provider: string | null;
+								/**
+								 * @description Normalized repository coordinate: owner/repo or an HTTPS repository URL.
+								 * @example marimo-team/marimohub
+								 */
+								repo: string;
+								/**
+								 * @description Synced repository branch.
+								 * @example main
+								 */
+								branch: string;
+								/**
+								 * @description Repository-relative directory synced into the notebook workspace.
+								 * @example apps
+								 */
+								root_path: string;
+								/**
+								 * @description Path to the entry notebook relative to root_path.
+								 * @example dashboard.py
+								 */
+								entry_notebook: string;
+								pending_config?: components['schemas']['GitSourceConfig'];
+								/** @enum {string} */
+								sync_mode: 'push' | 'pull';
+								current_version_id: string | null;
+								commit: string | null;
+								/**
+								 * Format: date-time
+								 * @example 2025-03-05T14:00:00Z
+								 */
+								last_synced_at: string | null;
+							};
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.source.drift': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Drift between the synced commit and the branch head */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['SourceDrift'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.source.sync': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Sync outcome */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['SourceSyncResult'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Notebook detail */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookDetail'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.delete': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Notebook deleted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.update': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					title?: string;
+					description?: string;
+					code?: string;
+					tags?: string[];
+					readme?: string;
+					deps?: string;
+					/** @example Add regional breakdown */
+					message?: string;
+					base_image?: string | null;
+					compute_profile?: string | null;
+				};
+			};
+		};
+		responses: {
+			/** @description Notebook updated */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookMeta'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.content': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Notebook source code */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							code: string;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.versions.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description List of versions, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookVersionPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.versions.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				vid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Version details with code */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							version: components['schemas']['NotebookVersion'];
+							code: string;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.html': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description The HTML snapshot, served sandboxed (CSP forces an opaque origin) */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'text/html': string;
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.versions.html': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				vid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description The HTML snapshot, served sandboxed (CSP forces an opaque origin) */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'text/html': string;
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.versions.restore': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				vid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Version restored as a new save; returns the updated notebook */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookMeta'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.duplicate': {
+		parameters: {
+			query?: never;
+			header?: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key'?: string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example Revenue Analysis (copy) */
+					title?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Notebook duplicated; returns the new notebook */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookMeta'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	openNotebookChangeRequest: {
 		parameters: {
 			query?: never;
@@ -10937,6 +6441,4587 @@ export interface operations {
 			};
 			/** @description Conflict */
 			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Active sessions for the project, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['SessionPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Session */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Session'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.terminate': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Session terminated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.editor.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Persistent editor ownership and current activity */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['EditorSessionState'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.editor.takeover': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['EditorTakeoverBody'];
+			};
+		};
+		responses: {
+			/** @description The prior editor was saved and stopped */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.create': {
+		parameters: {
+			query?: never;
+			header?: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key'?: string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		/** @description Optional; omit for an edit session. */
+		requestBody?: {
+			content: {
+				'application/json': components['schemas']['SessionCreateBody'];
+			};
+		};
+		responses: {
+			/** @description Session created or reused */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['SessionCreateResult'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'sessions.heartbeat': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				sid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Heartbeat updated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Session'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.kinds.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Registered integration kinds */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationKind'][];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Integration instances (no config) */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.create': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					kind: string;
+					/** @example prod */
+					name: string;
+					config: {
+						[key: string]: unknown;
+					};
+					change_note?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Integration created (config redacted) */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationDetail'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Integration detail (config redacted) */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationDetail'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.delete': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Integration deleted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.update': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					name?: string;
+					enabled?: boolean;
+					config?: {
+						[key: string]: unknown;
+					};
+					change_note?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Integration updated (config redacted) */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationDetail'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.versions': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Version history, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationVersionPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.copy': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['IntegrationCopyRequest'];
+			};
+		};
+		responses: {
+			/** @description Integration copied (inline secrets re-encrypted; external references preserved) */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationDetail'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.test': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['IntegrationTestRequest'];
+			};
+		};
+		responses: {
+			/** @description Probe outcome (never secret material) */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationTestResult'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.query-readiness': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['IntegrationQueryReadinessRequest'];
+			};
+		};
+		responses: {
+			/** @description All SQL readiness checks */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationQueryReadinessCheck'][];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Instance browse capability */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationBrowseCapability'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.namespaces': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+				fresh?: 'true' | 'false';
+				/** @description Namespace parts joined by U+001F (percent-encoded as %1F). */
+				parent?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Namespaces, with upstream pagination passed through */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationBrowseNamespacePage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.tables': {
+		parameters: {
+			query: {
+				limit?: number;
+				cursor?: string;
+				fresh?: 'true' | 'false';
+				/** @description Namespace parts joined by U+001F (percent-encoded as %1F). */
+				namespace: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Table names, with upstream pagination passed through */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationBrowseTablePage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.schema': {
+		parameters: {
+			query: {
+				/** @description Namespace parts joined by U+001F (percent-encoded as %1F). */
+				namespace: string;
+				table: string;
+				fresh?: 'true' | 'false';
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Column names, types, and partitioning */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationTableSchema'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.preview': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					namespace: string[];
+					table: string;
+					/** @default 20 */
+					limit?: number;
+				};
+			};
+		};
+		responses: {
+			/** @description Column names and a bounded row sample */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationTablePreview'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.query': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					sql: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Bounded query result */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationDataQueryResult'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.query-schema': {
+		parameters: {
+			query?: {
+				focus_namespace?: string;
+				focus_table?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Bounded table and column schema for SQL tools */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationQuerySchema'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.generate-query': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @enum {string} */
+					mode: 'generate' | 'revise';
+					instruction: string;
+					sql?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Generated DuckDB SQL */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							sql: string;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.object-buckets': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+				fresh?: 'true' | 'false';
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Buckets visible through the integration */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							items: components['schemas']['IntegrationObjectBucket'][];
+							next_cursor: string | null;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.objects': {
+		parameters: {
+			query: {
+				limit?: number;
+				cursor?: string;
+				fresh?: 'true' | 'false';
+				bucket: string;
+				prefix?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Direct prefixes and objects */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							items: components['schemas']['IntegrationObjectEntry'][];
+							next_cursor: string | null;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.search-objects': {
+		parameters: {
+			query: {
+				limit?: number;
+				cursor?: string;
+				bucket: string;
+				prefix?: string;
+				query: string;
+				formats?: string;
+				modified_after?: string;
+				modified_before?: string;
+				min_size?: number | null;
+				max_size?: number | null;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Bounded object-key search results */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							items: components['schemas']['IntegrationObjectEntry'][];
+							next_cursor: string | null;
+							scanned: number;
+							complete: boolean;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.object-head': {
+		parameters: {
+			query: {
+				bucket: string;
+				key: string;
+				version_id?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Object metadata */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationObjectDetail'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.object-versions': {
+		parameters: {
+			query: {
+				limit?: number;
+				cursor?: string;
+				fresh?: 'true' | 'false';
+				bucket: string;
+				key: string;
+				version_id?: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Object versions and delete markers */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							items: components['schemas']['IntegrationObjectVersion'][];
+							next_cursor: string | null;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.preview-object': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example analytics-lake */
+					bucket: string;
+					/** @example events/2026/part-001.jsonl */
+					key: string;
+					version_id?: string;
+					/** @default 20 */
+					limit?: number;
+				};
+			};
+		};
+		responses: {
+			/** @description Bounded object preview */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationObjectPreview'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.project.browse.object-content': {
+		parameters: {
+			query: {
+				bucket: string;
+				key: string;
+				version_id?: string;
+				inline?: 'true' | 'false';
+				etag?: string;
+			};
+			header?: {
+				range?: string;
+			};
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description The object bytes, streamed */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/octet-stream': string;
+				};
+			};
+			/** @description The requested byte range (`Content-Range` identifies it) */
+			206: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/octet-stream': string;
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Range not satisfiable */
+			416: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.org.list': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Org integration instances (no config) */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.org.create': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					kind: string;
+					/** @example prod */
+					name: string;
+					config: {
+						[key: string]: unknown;
+					};
+					change_note?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Integration created (config redacted) */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationDetail'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.org.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Integration detail (config redacted) */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationDetail'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.org.delete': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Integration deleted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.org.update': {
+		parameters: {
+			query?: never;
+			header?: {
+				'if-match'?: string;
+			};
+			path: {
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					name?: string;
+					enabled?: boolean;
+					config?: {
+						[key: string]: unknown;
+					};
+					change_note?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Integration updated (config redacted) */
+			200: {
+				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationDetail'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.org.versions': {
+		parameters: {
+			query?: {
+				limit?: number;
+				cursor?: string;
+			};
+			header?: never;
+			path: {
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Version history, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationVersionPage'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.org.test': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['IntegrationTestRequest'];
+			};
+		};
+		responses: {
+			/** @description Probe outcome (never secret material) */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationTestResult'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'integrations.org.query-readiness': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['IntegrationQueryReadinessRequest'];
+			};
+		};
+		responses: {
+			/** @description All SQL readiness checks */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['IntegrationQueryReadinessCheck'][];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'users.search': {
+		parameters: {
+			query: {
+				q: string;
+				limit?: number;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Matching users, name-sorted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['User'][];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'users.resolve': {
+		parameters: {
+			query?: {
+				/** @description Comma-separated user ids. */
+				ids?: string;
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Map of user id → resolved identity (unknown ids omitted) */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							[key: string]: components['schemas']['User'];
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'auth.tokens.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Tokens, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ApiToken'][];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'auth.tokens.create': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example ci-deploy */
+					name: string;
+					/**
+					 * @description Days until expiry; omit for a non-expiring token.
+					 * @example 90
+					 */
+					expires_in_days?: number;
+				};
+			};
+		};
+		responses: {
+			/** @description The new token — copy it now; it is never shown again */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ApiTokenCreated'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'auth.tokens.revoke': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				tokenId: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Token revoked */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};

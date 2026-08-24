@@ -234,6 +234,7 @@ const CopyIntegrationBody = z
 const listKinds = createRoute({
 	method: 'get',
 	path: '/integrations/kinds',
+	operationId: 'integrations.kinds.list',
 	tags: ['Integrations'],
 	summary: 'List available integration kinds (schemas drive the config forms)',
 	responses: {
@@ -248,6 +249,7 @@ const listKinds = createRoute({
 const listIntegrations = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations',
+	operationId: 'integrations.project.list',
 	tags: ['Integrations'],
 	summary: "List a project's integrations",
 	request: { params: ProjectIdParam, query: PaginationQuery },
@@ -267,6 +269,7 @@ const listIntegrations = createRoute({
 const createIntegration = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations',
+	operationId: 'integrations.project.create',
 	tags: ['Integrations'],
 	summary: 'Create an integration (manager only)',
 	request: { params: ProjectIdParam, body: jsonBody(CreateIntegrationBody) },
@@ -283,6 +286,7 @@ const createIntegration = createRoute({
 const getIntegration = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}',
+	operationId: 'integrations.project.get',
 	tags: ['Integrations'],
 	summary: 'Get an integration with its redacted config',
 	request: { params: IntegrationIdParam },
@@ -300,6 +304,7 @@ const getIntegration = createRoute({
 const updateIntegration = createRoute({
 	method: 'patch',
 	path: '/projects/{pid}/integrations/{iid}',
+	operationId: 'integrations.project.update',
 	tags: ['Integrations'],
 	summary: 'Update an integration (manager only); a config change appends a version',
 	request: {
@@ -321,6 +326,7 @@ const updateIntegration = createRoute({
 const deleteIntegration = createRoute({
 	method: 'delete',
 	path: '/projects/{pid}/integrations/{iid}',
+	operationId: 'integrations.project.delete',
 	tags: ['Integrations'],
 	summary: 'Delete an integration and its version history (manager only)',
 	request: { params: IntegrationIdParam, headers: IfMatchHeader },
@@ -334,6 +340,7 @@ const deleteIntegration = createRoute({
 const listIntegrationVersions = createRoute({
 	method: 'get',
 	path: '/projects/{pid}/integrations/{iid}/versions',
+	operationId: 'integrations.project.versions',
 	tags: ['Integrations'],
 	summary: "List an integration's config versions (metadata only)",
 	request: { params: IntegrationIdParam, query: PaginationQuery },
@@ -353,6 +360,7 @@ const listIntegrationVersions = createRoute({
 const copyIntegration = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/copy',
+	operationId: 'integrations.project.copy',
 	tags: ['Integrations'],
 	summary: 'Copy an integration from another project (manager of both projects)',
 	request: { params: ProjectIdParam, body: jsonBody(CopyIntegrationBody) },
@@ -369,6 +377,7 @@ const copyIntegration = createRoute({
 const testIntegration = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/test',
+	operationId: 'integrations.project.test',
 	tags: ['Integrations'],
 	summary: 'Probe connectivity for an unsaved config or a stored instance (manager only)',
 	request: { params: ProjectIdParam, body: jsonBody(TestIntegrationBody) },
@@ -385,6 +394,7 @@ const testIntegration = createRoute({
 const queryReadiness = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/integrations/query-readiness',
+	operationId: 'integrations.project.query-readiness',
 	tags: ['Integrations'],
 	summary: 'Evaluate SQL readiness for an unsaved integration config (manager only)',
 	request: { params: ProjectIdParam, body: jsonBody(QueryReadinessBody) },
@@ -404,6 +414,7 @@ const queryReadiness = createRoute({
 const listOrgIntegrations = createRoute({
 	method: 'get',
 	path: '/org/integrations',
+	operationId: 'integrations.org.list',
 	tags: ['Integrations'],
 	summary: 'List org-wide integrations (super admin only)',
 	request: { query: PaginationQuery },
@@ -423,6 +434,7 @@ const listOrgIntegrations = createRoute({
 const createOrgIntegration = createRoute({
 	method: 'post',
 	path: '/org/integrations',
+	operationId: 'integrations.org.create',
 	tags: ['Integrations'],
 	summary: 'Create an org-wide integration (super admin only)',
 	request: { body: jsonBody(CreateIntegrationBody) },
@@ -439,6 +451,7 @@ const createOrgIntegration = createRoute({
 const getOrgIntegration = createRoute({
 	method: 'get',
 	path: '/org/integrations/{iid}',
+	operationId: 'integrations.org.get',
 	tags: ['Integrations'],
 	summary: 'Get an org-wide integration with its redacted config (super admin only)',
 	request: { params: OrgIntegrationIdParam },
@@ -456,6 +469,7 @@ const getOrgIntegration = createRoute({
 const updateOrgIntegration = createRoute({
 	method: 'patch',
 	path: '/org/integrations/{iid}',
+	operationId: 'integrations.org.update',
 	tags: ['Integrations'],
 	summary: 'Update an org-wide integration (super admin only)',
 	request: {
@@ -477,6 +491,7 @@ const updateOrgIntegration = createRoute({
 const deleteOrgIntegration = createRoute({
 	method: 'delete',
 	path: '/org/integrations/{iid}',
+	operationId: 'integrations.org.delete',
 	tags: ['Integrations'],
 	summary: 'Delete an org-wide integration and its version history (super admin only)',
 	request: { params: OrgIntegrationIdParam, headers: IfMatchHeader },
@@ -490,6 +505,7 @@ const deleteOrgIntegration = createRoute({
 const listOrgIntegrationVersions = createRoute({
 	method: 'get',
 	path: '/org/integrations/{iid}/versions',
+	operationId: 'integrations.org.versions',
 	tags: ['Integrations'],
 	summary: "List an org-wide integration's config versions (super admin only)",
 	request: { params: OrgIntegrationIdParam, query: PaginationQuery },
@@ -509,6 +525,7 @@ const listOrgIntegrationVersions = createRoute({
 const testOrgIntegration = createRoute({
 	method: 'post',
 	path: '/org/integrations/test',
+	operationId: 'integrations.org.test',
 	tags: ['Integrations'],
 	summary: 'Probe connectivity for an unsaved or stored org config (super admin only)',
 	request: { body: jsonBody(TestIntegrationBody) },
@@ -525,6 +542,7 @@ const testOrgIntegration = createRoute({
 const queryOrgReadiness = createRoute({
 	method: 'post',
 	path: '/org/integrations/query-readiness',
+	operationId: 'integrations.org.query-readiness',
 	tags: ['Integrations'],
 	summary: 'Evaluate SQL readiness for an unsaved org config (super admin only)',
 	request: { body: jsonBody(QueryReadinessBody) },
