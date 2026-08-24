@@ -76,11 +76,19 @@ function resolve(document: JsonObject, value: unknown, seen = new Set<string>())
 
 type SchemaType = { type: string; repeatable: boolean };
 
-function explicitSchemaType(document: JsonObject, value: unknown): SchemaType | undefined {
-	const schema = resolve(document, value);
+function explicitSchemaType(
+	document: JsonObject,
+	value: unknown,
+	seen = new Set<string>(),
+): SchemaType | undefined {
+	const references = new Set(seen);
+	const schema = resolve(document, value, references);
 	if (schema.type === 'array') {
 		const item = optionalObject(schema.items);
-		return { type: item ? schemaType(document, item).type : 'string', repeatable: true };
+		return {
+			type: item ? schemaType(document, item, references).type : 'string',
+			repeatable: true,
+		};
 	}
 	if (typeof schema.type === 'string') return { type: schema.type, repeatable: false };
 	if (Array.isArray(schema.type)) {
@@ -89,7 +97,7 @@ function explicitSchemaType(document: JsonObject, value: unknown): SchemaType | 
 	}
 	if (Array.isArray(schema.allOf)) {
 		const branchTypes = schema.allOf
-			.map((branch) => explicitSchemaType(document, branch))
+			.map((branch) => explicitSchemaType(document, branch, references))
 			.filter((type): type is SchemaType => type !== undefined);
 		return (
 			branchTypes.find((type) => type.type !== 'object') ??
@@ -102,8 +110,8 @@ function explicitSchemaType(document: JsonObject, value: unknown): SchemaType | 
 	return undefined;
 }
 
-function schemaType(document: JsonObject, value: unknown): SchemaType {
-	const type = explicitSchemaType(document, value);
+function schemaType(document: JsonObject, value: unknown, seen = new Set<string>()): SchemaType {
+	const type = explicitSchemaType(document, value, seen);
 	if (type) return type;
 	return { type: 'string', repeatable: false };
 }

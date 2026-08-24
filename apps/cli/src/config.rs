@@ -33,6 +33,13 @@ pub struct Profile {
     pub base_url: String,
 }
 
+#[derive(Debug)]
+pub struct ProfileWithToken {
+    pub name: String,
+    pub profile: Profile,
+    pub token: Option<SecretString>,
+}
+
 #[cfg(any(target_os = "linux", test))]
 #[derive(Default, Deserialize, Serialize)]
 struct FileCredentials {
@@ -148,7 +155,9 @@ pub fn path() -> Result<PathBuf, Error> {
 }
 
 pub fn load() -> Result<Config, Error> {
-    load_from(&path()?)
+    let path = path()?;
+    let _lock = lock_for(&path)?;
+    load_from(&path)
 }
 
 fn load_from(path: &Path) -> Result<Config, Error> {
@@ -240,7 +249,15 @@ pub fn set_profile(
     token: Option<&SecretString>,
 ) -> Result<(), Error> {
     let path = path()?;
-    set_profile_at(&path, name, base_url, token, |token| set_token(name, token))
+    set_profile_at(
+        &path,
+        name,
+        base_url,
+        token,
+        get_credential,
+        set_credential,
+        delete_credential,
+    )
 }
 
 fn set_profile_at(
@@ -248,11 +265,37 @@ fn set_profile_at(
     name: &str,
     base_url: String,
     token: Option<&SecretString>,
-    store_credential: impl FnOnce(&SecretString) -> Result<(), Error>,
+    mut load_credential: impl FnMut(&str) -> Result<Option<SecretString>, Error>,
+    mut store_credential: impl FnMut(&str, &SecretString) -> Result<(), Error>,
+    mut remove_credential: impl FnMut(&str) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let _lock = lock_for(path)?;
     let mut config = load_from(path)?;
-    let original = config.clone();
+    let old_base_url = config
+        .profiles
+        .get(name)
+        .map(|profile| profile.base_url.clone());
+    let account = credential_account(name, &base_url);
+    let old_account = old_base_url
+        .as_deref()
+        .map(|old_base_url| credential_account(name, old_base_url));
+    let url_changed = old_base_url.as_deref() != Some(base_url.as_str());
+
+    if let Some(old_account) = old_account.as_deref() {
+        if load_credential(old_account)?.is_none() {
+            if let Some(legacy) = load_credential(name)? {
+                store_credential(old_account, &legacy)?;
+            }
+        }
+    }
+
+    if let Some(token) = token {
+        store_credential(&account, token)?;
+    } else if url_changed {
+        remove_credential(&account)?;
+    }
+    remove_credential(name)?;
+
     config
         .profiles
         .insert(name.to_owned(), Profile { base_url });
@@ -261,14 +304,9 @@ fn set_profile_at(
     }
     save_to(path, &config)?;
 
-    if let Some(token) = token {
-        if let Err(error) = store_credential(token) {
-            return match save_to(path, &original) {
-                Ok(()) => Err(error),
-                Err(rollback) => Err(Error::Config(format!(
-                    "credential storage failed ({error}); restoring the profile also failed: {rollback}"
-                ))),
-            };
+    if let Some(old_account) = old_account {
+        if old_account != account {
+            remove_credential(&old_account)?;
         }
     }
     Ok(())
@@ -276,17 +314,22 @@ fn set_profile_at(
 
 pub fn remove_profile(name: &str) -> Result<(), Error> {
     let path = path()?;
-    remove_profile_from(&path, name, || delete_token(name))
+    remove_profile_from(&path, name, delete_credential)
 }
 
 fn remove_profile_from(
     path: &Path,
     name: &str,
-    remove_credential: impl FnOnce() -> Result<(), Error>,
+    mut remove_credential: impl FnMut(&str) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let _lock = lock_for(path)?;
     let mut config = load_from(path)?;
     let original = config.clone();
+    let profile = config
+        .profiles
+        .get(name)
+        .cloned()
+        .ok_or_else(|| Error::Config(format!("profile {name:?} does not exist")))?;
     if config.profiles.remove(name).is_none() {
         return Err(Error::Config(format!("profile {name:?} does not exist")));
     }
@@ -294,28 +337,34 @@ fn remove_profile_from(
         config.current_profile = None;
     }
     save_to(path, &config)?;
-    if let Err(error) = remove_credential() {
+    let removal = remove_credential(&credential_account(name, &profile.base_url))
+        .and_then(|()| remove_credential(name));
+    if let Err(error) = removal {
         return match save_to(path, &original) {
             Ok(()) => Err(error),
             Err(rollback) => Err(Error::Config(format!(
-				"credential removal failed ({error}); restoring the profile also failed: {rollback}"
-			))),
+                "credential removal failed ({error}); restoring the profile also failed: {rollback}"
+            ))),
         };
     }
     Ok(())
 }
 
-fn keyring(profile: &str) -> Result<Entry, Error> {
-    Entry::new(KEYRING_SERVICE, profile).map_err(|error| Error::Credential(error.to_string()))
+fn credential_account(profile: &str, base_url: &str) -> String {
+    format!("v1:{}:{profile}{base_url}", profile.len())
 }
 
-pub fn get_token(profile: &str) -> Result<Option<SecretString>, Error> {
+fn keyring(account: &str) -> Result<Entry, Error> {
+    Entry::new(KEYRING_SERVICE, account).map_err(|error| Error::Credential(error.to_string()))
+}
+
+fn get_credential(account: &str) -> Result<Option<SecretString>, Error> {
     #[cfg(target_os = "linux")]
     let _operation_lock = credential_operation_lock()?;
     #[cfg(target_os = "linux")]
     {
-        let file = get_file_credential(profile)?;
-        return resolve_file_credential(file, || match keyring(profile)?.get_password() {
+        let file = get_file_credential(account)?;
+        return resolve_file_credential(file, || match keyring(account)?.get_password() {
             Ok(token) => Ok(Some(token)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(
@@ -329,11 +378,64 @@ pub fn get_token(profile: &str) -> Result<Option<SecretString>, Error> {
     }
 
     #[cfg(not(target_os = "linux"))]
-    match keyring(profile)?.get_password() {
+    match keyring(account)?.get_password() {
         Ok(token) => Ok(Some(SecretString::from(token))),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(Error::Credential(error.to_string())),
     }
+}
+
+fn get_profile_credential(profile: &str, base_url: &str) -> Result<Option<SecretString>, Error> {
+    match get_credential(&credential_account(profile, base_url))? {
+        Some(token) => Ok(Some(token)),
+        None => get_credential(profile),
+    }
+}
+
+pub fn load_profile_with_token(name: Option<&str>) -> Result<ProfileWithToken, Error> {
+    let path = path()?;
+    load_optional_profile_with_token_at(&path, name, get_profile_credential)?.ok_or_else(|| {
+        Error::Config(
+            "no profile selected; create one with `mohub profile set NAME --base-url URL`".into(),
+        )
+    })
+}
+
+pub fn load_optional_profile_with_token(
+    name: Option<&str>,
+) -> Result<Option<ProfileWithToken>, Error> {
+    let path = path()?;
+    load_optional_profile_with_token_at(&path, name, get_profile_credential)
+}
+
+pub fn load_optional_profile_without_token(
+    name: Option<&str>,
+) -> Result<Option<ProfileWithToken>, Error> {
+    let path = path()?;
+    load_optional_profile_with_token_at(&path, name, |_, _| Ok(None))
+}
+
+fn load_optional_profile_with_token_at(
+    path: &Path,
+    name: Option<&str>,
+    get_token: impl FnOnce(&str, &str) -> Result<Option<SecretString>, Error>,
+) -> Result<Option<ProfileWithToken>, Error> {
+    let _lock = lock_for(path)?;
+    let config = load_from(path)?;
+    let Some(name) = name.map(str::to_owned).or(config.current_profile) else {
+        return Ok(None);
+    };
+    let profile = config
+        .profiles
+        .get(&name)
+        .cloned()
+        .ok_or_else(|| Error::Config(format!("profile {name:?} does not exist")))?;
+    let token = get_token(&name, &profile.base_url)?;
+    Ok(Some(ProfileWithToken {
+        name,
+        profile,
+        token,
+    }))
 }
 
 pub fn read_token(mut reader: impl Read) -> Result<SecretString, Error> {
@@ -348,30 +450,82 @@ pub fn read_token(mut reader: impl Read) -> Result<SecretString, Error> {
     Ok(SecretString::from(token.to_owned()))
 }
 
-pub fn set_token(profile: &str, token: &SecretString) -> Result<(), Error> {
+fn set_credential(account: &str, token: &SecretString) -> Result<(), Error> {
     #[cfg(target_os = "linux")]
     {
-        return set_token_linux(profile, token);
+        return set_token_linux(account, token);
     }
 
     #[cfg(not(target_os = "linux"))]
-    match keyring(profile)?.set_password(token.expose_secret()) {
+    match keyring(account)?.set_password(token.expose_secret()) {
         Ok(()) => Ok(()),
         Err(error) => Err(Error::Credential(error.to_string())),
     }
 }
 
-pub fn delete_token(profile: &str) -> Result<(), Error> {
+fn delete_credential(account: &str) -> Result<(), Error> {
     #[cfg(target_os = "linux")]
     {
-        return delete_token_linux(profile);
+        return delete_token_linux(account);
     }
 
     #[cfg(not(target_os = "linux"))]
-    match keyring(profile)?.delete_credential() {
+    match keyring(account)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(Error::Credential(error.to_string())),
     }
+}
+
+pub fn set_profile_token(profile: &str, base_url: &str, token: &SecretString) -> Result<(), Error> {
+    let path = path()?;
+    set_profile_token_at(
+        &path,
+        profile,
+        base_url,
+        token,
+        set_credential,
+        delete_credential,
+    )
+}
+
+fn set_profile_token_at(
+    path: &Path,
+    profile: &str,
+    base_url: &str,
+    token: &SecretString,
+    mut store_credential: impl FnMut(&str, &SecretString) -> Result<(), Error>,
+    mut remove_credential: impl FnMut(&str) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let _lock = lock_for(path)?;
+    let config = load_from(path)?;
+    let configured = config
+        .profiles
+        .get(profile)
+        .ok_or_else(|| Error::Config(format!("profile {profile:?} does not exist")))?;
+    if configured.base_url != base_url {
+        return Err(Error::Config(format!(
+            "profile {profile:?} changed while authentication was in progress"
+        )));
+    }
+    store_credential(&credential_account(profile, base_url), token)?;
+    remove_credential(profile)
+}
+
+pub fn delete_profile_token(profile: &str, base_url: &str) -> Result<(), Error> {
+    let path = path()?;
+    let _lock = lock_for(&path)?;
+    let config = load_from(&path)?;
+    let configured = config
+        .profiles
+        .get(profile)
+        .ok_or_else(|| Error::Config(format!("profile {profile:?} does not exist")))?;
+    if configured.base_url != base_url {
+        return Err(Error::Config(format!(
+            "profile {profile:?} changed while logout was in progress"
+        )));
+    }
+    delete_credential(&credential_account(profile, base_url))?;
+    delete_credential(profile)
 }
 
 #[cfg(target_os = "linux")]
@@ -662,7 +816,9 @@ mod tests {
             "default",
             "https://new.example.com".into(),
             Some(&token),
-            |_| Err(Error::Credential("keyring unavailable".into())),
+            |_| Ok(None),
+            |_, _| Err(Error::Credential("keyring unavailable".into())),
+            |_| Ok(()),
         );
 
         assert!(matches!(result, Err(Error::Credential(_))));
@@ -675,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_credential_removal_restores_the_profile() {
+    fn failed_credential_cleanup_restores_the_profile() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.json");
         update_at(&path, |config| {
@@ -691,7 +847,7 @@ mod tests {
         .unwrap();
 
         let credential = RefCell::new(FileCredential::Token("current-token".into()));
-        let result = remove_profile_from(&path, "default", || {
+        let result = remove_profile_from(&path, "default", |_| {
             let current = credential.borrow().clone();
             delete_linux_credential(
                 current,
@@ -712,5 +868,194 @@ mod tests {
             credential.into_inner(),
             FileCredential::Token("current-token".into())
         );
+    }
+
+    #[test]
+    fn changing_a_profile_url_without_a_token_clears_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        update_at(&path, |config| {
+            config.profiles.insert(
+                "default".into(),
+                Profile {
+                    base_url: "https://old.example.com".into(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+        let credentials = RefCell::new(BTreeMap::from([(
+            credential_account("default", "https://old.example.com"),
+            "old-token".to_owned(),
+        )]));
+
+        set_profile_at(
+            &path,
+            "default",
+            "https://new.example.com".into(),
+            None,
+            |account| {
+                Ok(credentials
+                    .borrow()
+                    .get(account)
+                    .cloned()
+                    .map(SecretString::from))
+            },
+            |account, token| {
+                credentials
+                    .borrow_mut()
+                    .insert(account.to_owned(), token.expose_secret().to_owned());
+                Ok(())
+            },
+            |account| {
+                credentials.borrow_mut().remove(account);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_from(&path).unwrap().profiles["default"].base_url,
+            "https://new.example.com"
+        );
+        assert!(credentials.borrow().is_empty());
+    }
+
+    #[test]
+    fn setting_the_same_profile_url_without_a_token_preserves_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let base_url = "https://hub.example.com";
+        update_at(&path, |config| {
+            config.profiles.insert(
+                "default".into(),
+                Profile {
+                    base_url: base_url.into(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+        let account = credential_account("default", base_url);
+        let credentials = RefCell::new(BTreeMap::from([(
+            account.clone(),
+            "current-token".to_owned(),
+        )]));
+
+        set_profile_at(
+            &path,
+            "default",
+            base_url.into(),
+            None,
+            |account| {
+                Ok(credentials
+                    .borrow()
+                    .get(account)
+                    .cloned()
+                    .map(SecretString::from))
+            },
+            |account, token| {
+                credentials
+                    .borrow_mut()
+                    .insert(account.to_owned(), token.expose_secret().to_owned());
+                Ok(())
+            },
+            |account| {
+                credentials.borrow_mut().remove(account);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            credentials.borrow().get(&account).map(String::as_str),
+            Some("current-token")
+        );
+    }
+
+    #[test]
+    fn profile_update_stages_the_new_token_before_publishing_the_url() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        update_at(&path, |config| {
+            config.profiles.insert(
+                "default".into(),
+                Profile {
+                    base_url: "https://old.example.com".into(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+        let token = SecretString::from("new-token".to_owned());
+        let old_account = credential_account("default", "https://old.example.com");
+        let new_account = credential_account("default", "https://new.example.com");
+
+        set_profile_at(
+            &path,
+            "default",
+            "https://new.example.com".into(),
+            Some(&token),
+            |_| Ok(None),
+            |account, _| {
+                assert_eq!(account, new_account);
+                assert_eq!(
+                    load_from(&path).unwrap().profiles["default"].base_url,
+                    "https://old.example.com"
+                );
+                Ok(())
+            },
+            |account| {
+                if account == old_account {
+                    assert_eq!(
+                        load_from(&path).unwrap().profiles["default"].base_url,
+                        "https://new.example.com"
+                    );
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_from(&path).unwrap().profiles["default"].base_url,
+            "https://new.example.com"
+        );
+    }
+
+    #[test]
+    fn login_rejects_a_profile_url_changed_during_validation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        update_at(&path, |config| {
+            config.profiles.insert(
+                "default".into(),
+                Profile {
+                    base_url: "https://new.example.com".into(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+        let token = SecretString::from("new-token".to_owned());
+        let credential_changed = Cell::new(false);
+
+        let result = set_profile_token_at(
+            &path,
+            "default",
+            "https://old.example.com",
+            &token,
+            |_, _| {
+                credential_changed.set(true);
+                Ok(())
+            },
+            |_| {
+                credential_changed.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Err(Error::Config(_))));
+        assert!(!credential_changed.get());
     }
 }

@@ -158,15 +158,24 @@ fn selected_profile(matches: &ArgMatches) -> Result<(String, String), Error> {
         .get(&name)
         .ok_or_else(|| Error::Config(format!("profile {name:?} does not exist")))?;
     let profile_url = normalize_base_url(&profile.base_url)?;
+    require_matching_profile_server(matches, &name, &profile_url)?;
+    Ok((name, profile_url))
+}
+
+fn require_matching_profile_server(
+    matches: &ArgMatches,
+    name: &str,
+    profile_url: &str,
+) -> Result<(), Error> {
     if !matching_server(
         matches.get_one::<String>("base-url").map(String::as_str),
-        Some(&profile_url),
+        Some(profile_url),
     )? {
         return Err(Error::Usage(format!(
 			"server override does not match profile {name:?}; update the profile or select a matching one"
 		)));
     }
-    Ok((name, profile_url))
+    Ok(())
 }
 
 fn auth_runtime<'a>(
@@ -261,7 +270,7 @@ fn handle_login(
             reason: error.to_string(),
         },
     )?;
-    config::set_token(&profile, &token)?;
+    config::set_profile_token(&profile, &base_url, &token)?;
     write_stdout(format_args!(
         "Logged in to {base_url} as {} (profile {profile}).\n",
         user_label(&user),
@@ -270,16 +279,28 @@ fn handle_login(
 }
 
 fn handle_status(manifest: &manifest::Manifest, matches: &ArgMatches) -> Result<(), Error> {
-    let (profile, base_url) = selected_profile(matches)?;
     let supplied = supplied_token(matches)?;
-    let token = match supplied {
-        Some(token) => token,
-        None => config::get_token(&profile)?.ok_or_else(|| {
-            Error::Config(format!(
-                "not logged in for profile {profile:?}; run `mohub login --token-stdin`"
-            ))
-        })?,
+    let profile_name = matches
+        .get_one::<String>("profile-name")
+        .map(String::as_str);
+    let selected = if supplied.is_some() {
+        config::load_optional_profile_without_token(profile_name)?.ok_or_else(|| {
+            Error::Config(
+                "no profile selected; create one with `mohub profile set NAME --base-url URL`"
+                    .into(),
+            )
+        })?
+    } else {
+        config::load_profile_with_token(profile_name)?
     };
+    let profile = selected.name;
+    let base_url = normalize_base_url(&selected.profile.base_url)?;
+    require_matching_profile_server(matches, &profile, &base_url)?;
+    let token = supplied.or(selected.token).ok_or_else(|| {
+        Error::Config(format!(
+            "not logged in for profile {profile:?}; run `mohub login --token-stdin`"
+        ))
+    })?;
     let user = client::current_user(manifest, &auth_runtime(matches, &base_url, &token))?;
     write_stdout(format_args!(
         "Authenticated to {base_url} as {} (profile {profile}).\n",
@@ -289,33 +310,30 @@ fn handle_status(manifest: &manifest::Manifest, matches: &ArgMatches) -> Result<
 }
 
 fn handle_logout(matches: &ArgMatches) -> Result<(), Error> {
-    let (profile, _) = selected_profile(matches)?;
-    config::delete_token(&profile)?;
+    let (profile, base_url) = selected_profile(matches)?;
+    config::delete_profile_token(&profile, &base_url)?;
     write_stdout(format_args!("Logged out of profile {profile}.\n"))?;
     Ok(())
 }
 
 fn resolve_runtime(matches: &ArgMatches) -> Result<(String, Option<SecretString>), Error> {
-    let config = config::load()?;
-    let profile_name = matches
-        .get_one::<String>("profile-name")
-        .cloned()
-        .or(config.current_profile.clone());
-    let profile = profile_name
-        .as_ref()
-        .and_then(|name| config.profiles.get(name));
-    if let Some(name) = &profile_name {
-        if profile.is_none() {
-            return Err(Error::Config(format!("profile {name:?} does not exist")));
-        }
-    }
     let supplied_token = supplied_token(matches)?;
+    let profile_name_argument = matches
+        .get_one::<String>("profile-name")
+        .map(String::as_str);
+    let selected = if supplied_token.is_some() {
+        config::load_optional_profile_without_token(profile_name_argument)?
+    } else {
+        config::load_optional_profile_with_token(profile_name_argument)?
+    };
+    let profile_name = selected.as_ref().map(|selected| selected.name.clone());
     let override_url = matches
         .get_one::<String>("base-url")
         .map(|value| normalize_base_url(value))
         .transpose()?;
-    let profile_url = profile
-        .map(|profile| normalize_base_url(&profile.base_url))
+    let profile_url = selected
+        .as_ref()
+        .map(|selected| normalize_base_url(&selected.profile.base_url))
         .transpose()?;
     let base_url = override_url
         .clone()
@@ -332,7 +350,7 @@ fn resolve_runtime(matches: &ArgMatches) -> Result<(String, Option<SecretString>
             name,
             override_url.as_deref(),
             profile_url.as_deref(),
-            config::get_token(name)?,
+            selected.and_then(|selected| selected.token),
         )?
     } else {
         None

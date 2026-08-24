@@ -147,6 +147,37 @@ describe('CLI manifest', () => {
 		).toThrow('Circular OpenAPI reference: #/components/schemas/First');
 	});
 
+	it('rejects schemas that reference themselves through allOf', () => {
+		expect(() =>
+			generateCliManifest({
+				openapi: '3.1.0',
+				info: { title: 'Test', version: '1.0.0' },
+				components: {
+					schemas: {
+						Recursive: {
+							allOf: [{ $ref: '#/components/schemas/Recursive' }],
+						},
+					},
+				},
+				paths: {
+					'/items': {
+						get: {
+							operationId: 'items.list',
+							parameters: [
+								{
+									name: 'filter',
+									in: 'query',
+									schema: { $ref: '#/components/schemas/Recursive' },
+								},
+							],
+							responses: { 204: { description: 'Items' } },
+						},
+					},
+				},
+			}),
+		).toThrow('Circular OpenAPI reference: #/components/schemas/Recursive');
+	});
+
 	it('reads disruptive behavior from OpenAPI operation metadata', () => {
 		const manifest = generateCliManifest({
 			openapi: '3.1.0',
