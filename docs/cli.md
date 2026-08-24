@@ -29,28 +29,44 @@ If you do not use `uv`, download the standalone archive. Extract it and put
 ### GitHub Actions
 
 Use [`setup-marimohub-cli`](https://github.com/marimo-team/setup-marimohub-cli)
-to install a pinned CLI version in a workflow:
+to install a pinned CLI version and synchronize a git-backed notebook after a
+push:
 
 ```yaml
-- uses: marimo-team/setup-marimohub-cli@05c7d2bf3eb69f735ee6b56c7af9cfd10fe6678e # v1.0.0
-  with:
-    version: '0.3.6'
-```
+name: Sync marimohub notebook
 
-The CLI reads automation credentials from `MARIMOHUB_URL` and
-`MARIMOHUB_TOKEN`. Store the token as a GitHub Actions secret.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-To synchronize a git-backed notebook after a push, configure
-`MARIMOHUB_PROJECT_ID` and `MARIMOHUB_NOTEBOOK_ID` as repository variables and
-run:
+permissions:
+  contents: read
 
-```yaml
-- name: Sync notebook
-  run: >-
-    mohub notebooks source sync
-    --pid "$MARIMOHUB_PROJECT_ID"
-    --nid "$MARIMOHUB_NOTEBOOK_ID"
-    --yes
+concurrency:
+  group: marimohub-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      MARIMOHUB_URL: ${{ vars.MARIMOHUB_URL }}
+      MARIMOHUB_TOKEN: ${{ secrets.MARIMOHUB_TOKEN }}
+      MARIMOHUB_NO_UPDATE_CHECK: '1'
+      MARIMOHUB_PROJECT_ID: ${{ vars.MARIMOHUB_PROJECT_ID }}
+      MARIMOHUB_NOTEBOOK_ID: ${{ vars.MARIMOHUB_NOTEBOOK_ID }}
+    steps:
+      - uses: marimo-team/setup-marimohub-cli@05c7d2bf3eb69f735ee6b56c7af9cfd10fe6678e # v1.0.0
+        with:
+          version: '0.3.6'
+
+      - name: Sync notebook
+        run: >-
+          mohub notebooks source sync
+          --pid "$MARIMOHUB_PROJECT_ID"
+          --nid "$MARIMOHUB_NOTEBOOK_ID"
+          --yes
 ```
 
 Synchronization is server-initiated, so the job does not need to check out the
