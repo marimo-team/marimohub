@@ -133,6 +133,13 @@ describe('config -> code generators', () => {
 		);
 		expect(env).not.toContain('MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET');
 	});
+
+	it('uses runtime ingress validators in generated kubernetes library wiring', () => {
+		const library = generateLibrary(CASES['azure + kubernetes + oidc']);
+		expect(library).toContain('parseIngressAnnotations(');
+		expect(library).toContain('resolveIngressTlsMode(');
+		expect(library).not.toContain('JSON.parse(');
+	});
 });
 
 describe('validateSelection', () => {

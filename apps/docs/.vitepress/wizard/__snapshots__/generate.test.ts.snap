@@ -133,7 +133,7 @@ exports[`config -> code generators > azure + kubernetes + oidc > library 1`] = `
 "import { createApi } from '@marimo-hub/api';
 import { createServices } from '@marimo-hub/core';
 import { AzureStorage } from '@marimo-hub/storage-azure';
-import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
+import { KubernetesCompute, parseIngressAnnotations, resolveIngressTlsMode } from '@marimo-hub/compute-kubernetes';
 import { createOidcAuth } from '@marimo-hub/auth-oidc';
 
 const bucket = new AzureStorage(
@@ -153,14 +153,13 @@ const compute = new KubernetesCompute({
 	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
 	hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
 	ingressClassName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
-	ingressAnnotations: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS
-		? JSON.parse(process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS)
-		: undefined,
-	ingressTlsMode: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE as
-		| 'disabled'
-		| 'default'
-		| 'secret'
-		| undefined,
+	ingressAnnotations: parseIngressAnnotations(
+		process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS,
+	),
+	ingressTlsMode: resolveIngressTlsMode(
+		process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE,
+		process.env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
+	),
 	tlsSecretName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
 });
 
@@ -783,7 +782,7 @@ exports[`config -> code generators > gcs + kubernetes + oidc, persist workspace 
 "import { createApi } from '@marimo-hub/api';
 import { createServices } from '@marimo-hub/core';
 import { GcsStorage } from '@marimo-hub/storage-gcs';
-import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
+import { KubernetesCompute, parseIngressAnnotations, resolveIngressTlsMode } from '@marimo-hub/compute-kubernetes';
 import { createOidcAuth } from '@marimo-hub/auth-oidc';
 
 const bucket = new GcsStorage({
@@ -797,14 +796,13 @@ const compute = new KubernetesCompute({
 	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
 	hostname: process.env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
 	ingressClassName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
-	ingressAnnotations: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS
-		? JSON.parse(process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS)
-		: undefined,
-	ingressTlsMode: process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE as
-		| 'disabled'
-		| 'default'
-		| 'secret'
-		| undefined,
+	ingressAnnotations: parseIngressAnnotations(
+		process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS,
+	),
+	ingressTlsMode: resolveIngressTlsMode(
+		process.env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE,
+		process.env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
+	),
 	tlsSecretName: process.env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET,
 });
 

@@ -27,7 +27,9 @@ import {
 	defaultImagePullPolicy,
 	MANAGED_BY_LABEL,
 	MANAGED_BY_VALUE,
+	resolveIngressTlsMode,
 	SANDBOX_ID_ANNOTATION,
+	validateIngressAnnotations,
 } from './shared';
 import type {
 	EnsureSandboxOptions,
@@ -112,7 +114,7 @@ function serviceManifest(o: EnsureSandboxOptions): V1Service {
 }
 
 function ingressTls(o: EnsureSandboxOptions): V1IngressTLS[] | undefined {
-	const mode = o.ingressTlsMode ?? (o.tlsSecretName ? 'secret' : 'disabled');
+	const mode = resolveIngressTlsMode(o.ingressTlsMode, o.tlsSecretName);
 	if (mode === 'disabled') return undefined;
 	if (mode === 'default') return [{}];
 	if (!o.tlsSecretName) throw new Error('Ingress TLS mode "secret" requires a TLS secret name');
@@ -125,7 +127,7 @@ function ingressManifest(o: EnsureSandboxOptions): V1Ingress {
 			name: o.name,
 			namespace: o.namespace,
 			labels: { [MANAGED_BY_LABEL]: MANAGED_BY_VALUE },
-			annotations: o.ingressAnnotations,
+			annotations: validateIngressAnnotations(o.ingressAnnotations),
 		},
 		spec: {
 			ingressClassName: o.ingressClassName,
@@ -234,6 +236,38 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 		}
 	}
 
+	async function reconcileIngress(net: K8s.NetworkingV1Api, desired: V1Ingress): Promise<void> {
+		try {
+			await net.createNamespacedIngress({ namespace, body: desired });
+			return;
+		} catch (err) {
+			if (!hasCode(err, 409)) throw err;
+		}
+
+		const metadata = desired.metadata;
+		const name = metadata?.name;
+		if (!metadata || !name) throw new Error('Cannot reconcile an Ingress without a name');
+		const desiredLabels = metadata.labels;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const existing = await net.readNamespacedIngress({ name, namespace });
+			if (existing.metadata?.labels?.[MANAGED_BY_LABEL] !== MANAGED_BY_VALUE) {
+				throw new Error(`Refusing to replace unmanaged Ingress "${name}"`);
+			}
+			const resourceVersion = existing.metadata.resourceVersion;
+			if (!resourceVersion) throw new Error(`Ingress "${name}" has no resourceVersion`);
+			metadata.resourceVersion = resourceVersion;
+			metadata.labels = { ...existing.metadata.labels, ...desiredLabels };
+			metadata.finalizers = existing.metadata.finalizers;
+			metadata.ownerReferences = existing.metadata.ownerReferences;
+			try {
+				await net.replaceNamespacedIngress({ name, namespace, body: desired });
+				return;
+			} catch (err) {
+				if (!hasCode(err, 409) || attempt === 2) throw err;
+			}
+		}
+	}
+
 	return {
 		async ensure(o: EnsureSandboxOptions): Promise<{ createdPod: boolean }> {
 			const pod = podManifest(o);
@@ -246,9 +280,7 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 				createTolerant(() => core.createNamespacedPod({ namespace, body: pod })),
 				createTolerant(() => core.createNamespacedService({ namespace, body: service })),
 				// No host configured → no Ingress (the URL will be unroutable; documented).
-				ingress
-					? createTolerant(() => net.createNamespacedIngress({ namespace, body: ingress }))
-					: undefined,
+				ingress ? reconcileIngress(net, ingress) : undefined,
 			]);
 			return { createdPod };
 		},

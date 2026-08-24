@@ -7,7 +7,11 @@ import { createWandbCompute } from '@marimo-hub/compute-coreweave/wandb';
 import { DockerCompute } from '@marimo-hub/compute-container/docker';
 import { PodmanCompute } from '@marimo-hub/compute-container/podman';
 import { E2bCompute } from '@marimo-hub/compute-e2b';
-import { KubernetesCompute } from '@marimo-hub/compute-kubernetes';
+import {
+	KubernetesCompute,
+	parseIngressAnnotations,
+	resolveIngressTlsMode,
+} from '@marimo-hub/compute-kubernetes';
 import { parseBool, parseEnum, parseIntEnv, parseList, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
@@ -69,50 +73,29 @@ const computeVar = (env: Env, key: string, backend: string) =>
 		docs: 'docs/configuration.md#compute',
 	});
 
-function parseStringMapEnv(env: Env, key: string): Record<string, string> | undefined {
-	const raw = env[key];
-	if (raw === undefined || raw.trim() === '') return undefined;
-	let parsed: unknown;
+function kubernetesIngressAnnotations(env: Env, key: string): Record<string, string> | undefined {
 	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		throw new ConfigError(`Invalid ${key} (expected a JSON object with string values)`, {
+		return parseIngressAnnotations(env[key]);
+	} catch (cause) {
+		const detail = cause instanceof Error ? cause.message : 'invalid annotations';
+		throw new ConfigError(`Invalid ${key} (${detail})`, {
 			variable: key,
 		});
 	}
-	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-		throw new ConfigError(`Invalid ${key} (expected a JSON object with string values)`, {
-			variable: key,
-		});
-	}
-	const entries = Object.entries(parsed);
-	if (entries.some(([annotation, value]) => annotation === '' || typeof value !== 'string')) {
-		throw new ConfigError(
-			`Invalid ${key} (annotation names must be non-empty and values must be strings)`,
-			{ variable: key },
-		);
-	}
-	return entries.length === 0 ? undefined : Object.fromEntries(entries);
 }
 
 function kubernetesIngressTlsMode(env: Env): 'disabled' | 'default' | 'secret' {
 	const key = 'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE';
-	const mode = parseEnum(env, key, { allowed: ['disabled', 'default', 'secret'] });
-	const secret = env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET;
-	if (mode === undefined) return secret ? 'secret' : 'disabled';
-	if (mode === 'secret' && !secret) {
-		throw new ConfigError(`${key}=secret requires MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`, {
+	try {
+		return resolveIngressTlsMode(env[key], env.MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET);
+	} catch (cause) {
+		const detail = cause instanceof Error ? cause.message : 'invalid TLS settings';
+		throw new ConfigError(`Invalid ${key} (${detail})`, {
 			variable: key,
-			remediation: 'Set the TLS secret name or choose default/disabled.',
+			remediation:
+				'Use secret with a TLS secret name, or remove the secret when using default/disabled.',
 		});
 	}
-	if (mode !== 'secret' && secret) {
-		throw new ConfigError(`${key}=${mode} conflicts with MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`, {
-			variable: key,
-			remediation: 'Remove the TLS secret or set the mode to secret.',
-		});
-	}
-	return mode;
 }
 
 export interface ComputeOptions {
@@ -373,7 +356,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				hostname: env.MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME,
 				hostnameTemplate: env.MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE,
 				ingressClassName: env.MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS,
-				ingressAnnotations: parseStringMapEnv(
+				ingressAnnotations: kubernetesIngressAnnotations(
 					env,
 					'MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS',
 				),

@@ -39,7 +39,8 @@ cluster.
    ```
 
    On OpenShift, you can use the default ingress certificate instead of a named
-   secret:
+   secret. Remove or comment out `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` from
+   the block above, then add:
 
    ```bash
    MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=default
