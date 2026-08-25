@@ -3,7 +3,8 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer};
 
 use crate::Error;
 
@@ -26,8 +27,58 @@ pub struct DeploymentNotebook {
     pub description: Option<String>,
     pub tags: Option<Vec<String>>,
     pub readme: Option<String>,
-    pub base_image: Option<String>,
-    pub compute_profile: Option<String>,
+    pub base_image: Option<DeploymentOverride>,
+    pub compute_profile: Option<DeploymentOverride>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeploymentOverride {
+    Name(String),
+    Clear,
+}
+
+impl<'de> Deserialize<'de> for DeploymentOverride {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct OverrideVisitor;
+
+        impl Visitor<'_> for OverrideVisitor {
+            type Value = DeploymentOverride;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a name or false to clear the override")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(DeploymentOverride::Name(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(DeploymentOverride::Name(value))
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if value {
+                    Err(E::invalid_value(de::Unexpected::Bool(value), &self))
+                } else {
+                    Ok(DeploymentOverride::Clear)
+                }
+            }
+        }
+
+        deserializer.deserialize_any(OverrideVisitor)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,8 +91,8 @@ struct RawConfig {
     description: Option<String>,
     tags: Option<Vec<String>>,
     readme_path: Option<PathBuf>,
-    base_image: Option<String>,
-    compute_profile: Option<String>,
+    base_image: Option<DeploymentOverride>,
+    compute_profile: Option<DeploymentOverride>,
     #[serde(default)]
     notebooks: BTreeMap<String, RawNotebook>,
 }
@@ -55,8 +106,8 @@ struct RawNotebook {
     description: Option<String>,
     tags: Option<Vec<String>>,
     readme_path: Option<PathBuf>,
-    base_image: Option<String>,
-    compute_profile: Option<String>,
+    base_image: Option<DeploymentOverride>,
+    compute_profile: Option<DeploymentOverride>,
 }
 
 fn config_error(path: &Path, message: impl std::fmt::Display) -> Error {
@@ -141,6 +192,14 @@ fn require_nonempty(path: &Path, field: &str, value: String) -> Result<String, E
         Err(config_error(path, format!("{field} cannot be empty")))
     } else {
         Ok(value)
+    }
+}
+
+fn reject_empty(path: &Path, field: &str, value: Option<&str>) -> Result<(), Error> {
+    if value == Some("") {
+        Err(config_error(path, format!("{field} cannot be empty")))
+    } else {
+        Ok(())
     }
 }
 
@@ -303,6 +362,7 @@ fn resolve_selected(
         ));
     }
     let is_single = raw_notebooks.len() == 1;
+    let mut notebook_ids = BTreeMap::new();
     for (name, notebook) in &raw_notebooks {
         if name.trim().is_empty() {
             return Err(config_error(&path, "notebook names cannot be empty"));
@@ -319,6 +379,27 @@ fn resolve_selected(
                 &path,
                 format!("{} cannot be empty", field("notebook_id")),
             ));
+        }
+        if let Some(existing_name) = notebook_ids.insert(notebook.notebook_id.as_str(), name) {
+            return Err(config_error(
+                &path,
+                format!(
+                    "{} duplicates notebooks.{existing_name}.notebook_id ({})",
+                    field("notebook_id"),
+                    notebook.notebook_id,
+                ),
+            ));
+        }
+        reject_empty(&path, &field("title"), notebook.title.as_deref())?;
+        for (field_name, value) in [
+            ("base_image", notebook.base_image.as_ref()),
+            ("compute_profile", notebook.compute_profile.as_ref()),
+        ] {
+            let value = match value {
+                Some(DeploymentOverride::Name(value)) => Some(value.as_str()),
+                Some(DeploymentOverride::Clear) | None => None,
+            };
+            reject_empty(&path, &field(field_name), value)?;
         }
         if notebook
             .path
@@ -490,6 +571,35 @@ path = "app.py"
     }
 
     #[test]
+    fn pyproject_named_notebooks_use_the_tool_namespace() {
+        let temp = TempDir::new().unwrap();
+        write(&temp.path().join("alpha.py"), "alpha = 1");
+        write(&temp.path().join("zebra.py"), "zebra = 1");
+        write(
+            &temp.path().join(PYPROJECT_FILE),
+            r#"[tool.marimohub]
+project_id = "proj-7h2k9qm4xz7rp3w8"
+
+[tool.marimohub.notebooks.alpha]
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+path = "alpha.py"
+
+[tool.marimohub.notebooks.zebra]
+notebook_id = "nb-8h2k9qm4xz7rp3w8"
+path = "zebra.py"
+"#,
+        );
+        let path = temp.path().join(PYPROJECT_FILE).canonicalize().unwrap();
+
+        let config = resolve(path.clone(), parse_raw(&path).unwrap()).unwrap();
+
+        assert_eq!(
+            config.notebooks.keys().collect::<Vec<_>>(),
+            ["alpha", "zebra"]
+        );
+    }
+
+    #[test]
     fn standalone_wins_over_a_colocated_pyproject() {
         let temp = TempDir::new().unwrap();
         write(&temp.path().join(CONFIG_FILE), &notebook_config("app.py"));
@@ -625,6 +735,81 @@ path = "zebra.py"
     }
 
     #[test]
+    fn empty_server_constrained_values_are_rejected_before_file_reads() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join(CONFIG_FILE);
+        let cases = [
+            ("title", "title = \"\""),
+            ("base_image", "base_image = \"\""),
+            ("compute_profile", "compute_profile = \"\""),
+        ];
+
+        for (field, assignment) in cases {
+            write(
+                &config_path,
+                &format!(
+                    r#"project_id = "proj-7h2k9qm4xz7rp3w8"
+[notebooks.app]
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+path = "missing.py"
+{assignment}
+"#,
+                ),
+            );
+            let path = config_path.canonicalize().unwrap();
+
+            let error = resolve(path.clone(), parse_raw(&path).unwrap()).unwrap_err();
+
+            assert!(error
+                .to_string()
+                .contains(&format!("notebooks.app.{field} cannot be empty")));
+            assert!(!error.to_string().contains("could not inspect notebook"));
+        }
+
+        write(&temp.path().join("app.py"), "print(1)");
+        write(
+            &config_path,
+            r#"project_id = "proj-7h2k9qm4xz7rp3w8"
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+path = "app.py"
+description = ""
+"#,
+        );
+        let path = config_path.canonicalize().unwrap();
+        let config = resolve(path.clone(), parse_raw(&path).unwrap()).unwrap();
+        assert_eq!(
+            config.notebooks["notebook"].description.as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn duplicate_notebook_ids_are_rejected_before_selection_and_file_reads() {
+        let temp = TempDir::new().unwrap();
+        write(
+            &temp.path().join(CONFIG_FILE),
+            r#"project_id = "proj-7h2k9qm4xz7rp3w8"
+[notebooks.alpha]
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+path = "missing-alpha.py"
+[notebooks.zebra]
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+path = "missing-zebra.py"
+"#,
+        );
+        let path = temp.path().join(CONFIG_FILE).canonicalize().unwrap();
+
+        let error = resolve_selected(path.clone(), parse_raw(&path).unwrap(), &["zebra".into()])
+            .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains(
+            "notebooks.zebra.notebook_id duplicates notebooks.alpha.notebook_id (nb-7h2k9qm4xz7rp3w8)"
+        ));
+        assert!(!message.contains("could not inspect notebook"));
+    }
+
+    #[test]
     fn flat_and_named_notebook_forms_cannot_be_mixed() {
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join(CONFIG_FILE);
@@ -751,8 +936,58 @@ compute_profile = "large"
             Some(["one".into(), "two".into()].as_slice())
         );
         assert_eq!(notebook.readme.as_deref(), Some("Notebook docs"));
-        assert_eq!(notebook.base_image.as_deref(), Some("image"));
-        assert_eq!(notebook.compute_profile.as_deref(), Some("large"));
+        assert_eq!(
+            notebook.base_image,
+            Some(DeploymentOverride::Name("image".into()))
+        );
+        assert_eq!(
+            notebook.compute_profile,
+            Some(DeploymentOverride::Name("large".into()))
+        );
+    }
+
+    #[test]
+    fn false_clears_overrides_and_default_remains_a_literal_name() {
+        let temp = TempDir::new().unwrap();
+        write(&temp.path().join("app.py"), "print(1)");
+        write(
+            &temp.path().join(CONFIG_FILE),
+            r#"project_id = "proj-7h2k9qm4xz7rp3w8"
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+path = "app.py"
+base_image = "default"
+compute_profile = false
+"#,
+        );
+        let path = temp.path().join(CONFIG_FILE).canonicalize().unwrap();
+
+        let config = resolve(path.clone(), parse_raw(&path).unwrap()).unwrap();
+        let notebook = &config.notebooks["notebook"];
+        assert_eq!(
+            notebook.base_image,
+            Some(DeploymentOverride::Name("default".into()))
+        );
+        assert_eq!(notebook.compute_profile, Some(DeploymentOverride::Clear));
+    }
+
+    #[test]
+    fn true_is_not_a_valid_override_value() {
+        let temp = TempDir::new().unwrap();
+        write(&temp.path().join("app.py"), "print(1)");
+        write(
+            &temp.path().join(CONFIG_FILE),
+            r#"project_id = "proj-7h2k9qm4xz7rp3w8"
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+path = "app.py"
+base_image = true
+"#,
+        );
+        let path = temp.path().join(CONFIG_FILE).canonicalize().unwrap();
+
+        let error = parse_raw(&path).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("a name or false to clear the override"));
     }
 
     #[test]

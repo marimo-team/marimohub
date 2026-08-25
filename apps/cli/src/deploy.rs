@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::client::{self, NotebookDeploymentState, Runtime};
-use crate::deploy_config::{self, DeploymentConfig, DeploymentNotebook};
+use crate::deploy_config::{self, DeploymentConfig, DeploymentNotebook, DeploymentOverride};
 use crate::Error;
 
 pub struct DeployOptions {
@@ -94,18 +94,20 @@ fn add_string_change(
 fn add_optional_string_change(
     patch: &mut BTreeMap<String, Value>,
     field: &str,
-    desired: Option<&String>,
+    desired: Option<&DeploymentOverride>,
     current: Option<&str>,
 ) {
     let Some(desired) = desired else {
         return;
     };
-    if desired == "default" {
-        if current.is_some() {
+    match desired {
+        DeploymentOverride::Clear if current.is_some() => {
             patch.insert(field.to_owned(), Value::Null);
         }
-    } else if current != Some(desired) {
-        patch.insert(field.to_owned(), Value::String(desired.clone()));
+        DeploymentOverride::Name(name) if current != Some(name) => {
+            patch.insert(field.to_owned(), Value::String(name.clone()));
+        }
+        DeploymentOverride::Clear | DeploymentOverride::Name(_) => {}
     }
 }
 
@@ -281,8 +283,8 @@ mod tests {
             description: None,
             tags: Some(vec!["production".into()]),
             readme: None,
-            base_image: Some("default".into()),
-            compute_profile: Some("large".into()),
+            base_image: Some(DeploymentOverride::Clear),
+            compute_profile: Some(DeploymentOverride::Name("large".into())),
         }
     }
 
@@ -330,12 +332,12 @@ mod tests {
     }
 
     #[test]
-    fn a_default_value_is_unchanged_when_remote_already_uses_the_default() {
+    fn a_clear_value_is_unchanged_without_a_remote_override() {
         let mut local = local();
         local.code = "print('old')".into();
         local.title = None;
         local.tags = None;
-        local.compute_profile = Some("default".into());
+        local.compute_profile = Some(DeploymentOverride::Clear);
         let mut remote = remote();
         remote.base_image = None;
 
@@ -396,15 +398,15 @@ mod tests {
     }
 
     #[test]
-    fn default_clears_both_remote_overrides() {
+    fn false_clears_both_remote_overrides() {
         let mut remote = remote();
         remote.compute_profile = Some("large".into());
         let mut local = local();
         local.code = remote.code.clone();
         local.title = None;
         local.tags = None;
-        local.base_image = Some("default".into());
-        local.compute_profile = Some("default".into());
+        local.base_image = Some(DeploymentOverride::Clear);
+        local.compute_profile = Some(DeploymentOverride::Clear);
 
         let plan = plan_notebook("app", &local, remote, None).unwrap();
         assert_eq!(plan.changes, ["base_image", "compute_profile"]);
@@ -413,17 +415,17 @@ mod tests {
     }
 
     #[test]
-    fn only_lowercase_default_is_the_clear_sentinel() {
+    fn default_is_a_literal_override_name() {
         let remote = remote();
         let mut local = local();
         local.code = remote.code.clone();
         local.title = None;
         local.tags = None;
-        local.base_image = Some("Default".into());
+        local.base_image = Some(DeploymentOverride::Name("default".into()));
         local.compute_profile = None;
 
         let plan = plan_notebook("app", &local, remote, None).unwrap();
-        assert_eq!(plan.patch["base_image"], "Default");
+        assert_eq!(plan.patch["base_image"], "default");
     }
 
     #[test]

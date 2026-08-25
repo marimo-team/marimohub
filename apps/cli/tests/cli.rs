@@ -222,6 +222,29 @@ fn notebooks_help_distinguishes_deploy_from_update() {
 }
 
 #[test]
+fn deploy_rejects_raw_envelope_before_reading_configuration() {
+    let temp = TempDir::new().unwrap();
+    let missing_config = temp.path().join("missing.toml");
+
+    cargo_bin_cmd!("mohub")
+        .args([
+            "notebooks",
+            "deploy",
+            "--raw-envelope",
+            "--config",
+            &missing_config.display().to_string(),
+        ])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "--raw-envelope cannot be combined with notebooks deploy",
+        ))
+        .stderr(predicate::str::contains("could not resolve configuration").not())
+        .stderr(predicate::str::contains("no server URL").not());
+}
+
+#[test]
 fn deploy_updates_changed_code_with_the_preflight_etag() {
     let (_temp, config) = deploy_fixture(
         "notebook_id = \"nb-7h2k9qm4xz7rp3w8\"\npath = \"app.py\"\ntitle = \"New\"\n",
@@ -553,11 +576,15 @@ fn malformed_content_stops_before_any_patch() {
 #[test]
 fn metadata_only_update_omits_code_and_message() {
     let (_temp, config) = deploy_fixture(
-        "notebook_id = \"nb-7h2k9qm4xz7rp3w8\"\npath = \"app.py\"\ntitle = \"New\"\n",
+        "notebook_id = \"nb-7h2k9qm4xz7rp3w8\"\npath = \"app.py\"\ntitle = \"New\"\nbase_image = false\n",
         &[("app.py", "print('same')")],
     );
     let (base_url, server) = serve_sequence(vec![
-        StubResponse::json(200, local_detail("Old", "local")).with_header("ETag", "\"etag-1\""),
+        StubResponse::json(
+            200,
+            r#"{"success":true,"data":{"meta":{"title":"Old","description":"D","tags":[],"base_image":"custom"},"readme":null,"source":{"type":"local"}}}"#,
+        )
+        .with_header("ETag", "\"etag-1\""),
         StubResponse::json(200, r#"{"success":true,"data":{"code":"print('same')"}}"#),
         StubResponse::json(200, r#"{"success":true,"data":{}}"#),
     ]);
@@ -579,12 +606,14 @@ fn metadata_only_update_omits_code_and_message() {
         .success()
         .stdout(predicate::str::contains(
             r#""changes": [
+        "base_image",
         "title"
       ]"#,
         ));
 
     let requests = server.join().unwrap();
     assert!(requests[2].starts_with("PATCH "));
+    assert!(requests[2].contains(r#""base_image":null"#));
     assert!(requests[2].contains(r#""title":"New""#));
     assert!(!requests[2].contains(r#""code""#));
     assert!(!requests[2].contains(r#""message""#));

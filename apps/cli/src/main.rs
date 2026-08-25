@@ -649,6 +649,11 @@ fn run_command(
         return handle_logout(matches);
     }
     if path == ["notebooks", "deploy"] {
+        if matches.get_flag("raw-envelope") {
+            return Err(Error::Usage(
+                "--raw-envelope cannot be combined with notebooks deploy".into(),
+            ));
+        }
         let prepared = deploy::prepare(deploy::DeployOptions {
             config: leaf
                 .get_one::<String>("deploy-config")

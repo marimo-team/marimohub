@@ -187,7 +187,7 @@ notebook_id = "nb-7h2k9qm4xz7rp3w8"
 `path` and `readme_path` are relative to the configuration file. Without `path`, a single-notebook
 configuration uses the only immediate `.py` file. Zero or multiple matches produce an error.
 
-Use named tables for multiple notebooks:
+For multiple notebooks in `marimohub.toml`, use named tables:
 
 ```toml
 project_id = "proj-7h2k9qm4xz7rp3w8"
@@ -201,9 +201,13 @@ notebook_id = "nb-8h2k9qm4xz7rp3w8"
 path = "notebooks/inventory.py"
 ```
 
+In `pyproject.toml`, nest these tables under `[tool.marimohub]`. For example, use
+`[tool.marimohub.notebooks.revenue]` instead of `[notebooks.revenue]`.
+
 Every named table in a multi-notebook configuration requires `path`. Optional fields are `title`,
 `description`, `tags`, `readme_path`, `base_image`, and `compute_profile`. Omitted fields preserve
-their remote values. The value `default` clears a `base_image` or `compute_profile` override.
+their remote values. Set `base_image` or `compute_profile` to `false` to clear an override. String
+values are literal names, including `"default"`. Override names and `title` cannot be empty.
 
 Preview or deploy notebooks:
 
