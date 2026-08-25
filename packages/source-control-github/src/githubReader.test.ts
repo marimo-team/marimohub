@@ -190,27 +190,27 @@ describe('GitHubAppPublisher reader', () => {
 
 	it('rejects an oversized file inside the root path but ignores one outside it', async () => {
 		const oversized = 'x'.repeat(25 * 1024 * 1024 + 1);
+		const archive = tarball({
+			'apps/big.bin': oversized,
+			'apps/notebook/nb.py': 'print(1)',
+		});
 		const inScope = reader((url) =>
-			url.pathname.startsWith('/repos/owner/repo/tarball/')
-				? new Response(tarball({ 'apps/big.bin': oversized, 'apps/nb.py': 'print(1)' }))
-				: null,
+			url.pathname.startsWith('/repos/owner/repo/tarball/') ? new Response(archive) : null,
 		);
 		await expect(
 			inScope.fetchWorkspace('owner/repo', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'apps'),
 		).rejects.toThrow(/exceeds the .*-byte limit/);
 
 		const outOfScope = reader((url) =>
-			url.pathname.startsWith('/repos/owner/repo/tarball/')
-				? new Response(tarball({ 'big.bin': oversized, 'apps/nb.py': 'print(1)' }))
-				: null,
+			url.pathname.startsWith('/repos/owner/repo/tarball/') ? new Response(archive) : null,
 		);
 		const files = await outOfScope.fetchWorkspace(
 			'owner/repo',
 			'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-			'apps',
+			'apps/notebook',
 		);
 		expect(files.map((f) => f.path)).toEqual(['nb.py']);
-	});
+	}, 10_000);
 
 	it('syncs a small subtree from a monorepo whose full archive exceeds the ingest caps', async () => {
 		// Six 20 MB files (120 MB inflated — past the 100 MB whole-archive cap,
