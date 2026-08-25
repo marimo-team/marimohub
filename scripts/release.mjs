@@ -5,6 +5,10 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const run = (cmd, ...args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
+const fail = (message) => {
+	console.error(message);
+	process.exit(1);
+};
 
 const arg = process.argv[2];
 if (!arg) {
@@ -30,32 +34,71 @@ if (arg === 'patch' || arg === 'minor' || arg === 'major') {
 	process.exit(1);
 }
 
+// Everything below and up to the checkout is read-only, so a failed
+// precondition leaves the repository untouched.
+const missing = ['git', 'gh', 'cargo'].filter((tool) => {
+	try {
+		execFileSync(tool, ['--version'], { stdio: 'ignore' });
+		return false;
+	} catch {
+		return true;
+	}
+});
+if (missing.length > 0) {
+	fail(`missing required tools: ${missing.join(', ')} (cargo: https://rustup.rs)`);
+}
+try {
+	execFileSync('gh', ['auth', 'status'], { stdio: 'ignore' });
+} catch {
+	fail("gh is not authenticated — run 'gh auth login'");
+}
+
 if (run('git', 'status', '--porcelain') !== '') {
 	console.error('working tree is not clean — commit or stash first');
 	process.exit(1);
 }
 
+const cargoPattern = /^version = "[^"]+"$/m;
+if (!cargoPattern.test(readFileSync(cargoPath, 'utf8'))) {
+	fail('could not find the current Cargo package version');
+}
+
+const branch = `release/${version}`;
+const tag = `v${version}`;
 run('git', 'fetch', 'origin', 'main');
-run('git', 'checkout', '-b', `release/${version}`, 'origin/main');
+const localRefExists = (ref) => {
+	try {
+		run('git', 'show-ref', '--verify', '--quiet', ref);
+		return true;
+	} catch {
+		return false;
+	}
+};
+const remoteRefExists = (ref) => run('git', 'ls-remote', 'origin', ref) !== '';
+if (localRefExists(`refs/tags/${tag}`) || remoteRefExists(`refs/tags/${tag}`)) {
+	fail(`tag ${tag} already exists`);
+}
+if (localRefExists(`refs/heads/${branch}`)) {
+	fail(`local branch ${branch} already exists — delete it with 'git branch -D ${branch}'`);
+}
+if (remoteRefExists(`refs/heads/${branch}`)) {
+	fail(`remote branch origin/${branch} already exists`);
+}
+
+run('git', 'checkout', '-b', branch, 'origin/main');
 
 pkg.version = version;
 writeFileSync(pkgPath, `${JSON.stringify(pkg, null, '\t')}\n`);
 
-const replaceVersion = (path, pattern, replacement, label) => {
-	const current = readFileSync(path, 'utf8');
-	if (!pattern.test(current)) {
-		console.error(`could not find the current ${label} version`);
-		process.exit(1);
-	}
-	writeFileSync(path, current.replace(pattern, replacement));
-};
-
-replaceVersion(cargoPath, /^version = "[^"]+"$/m, `version = "${version}"`, 'Cargo package');
+writeFileSync(
+	cargoPath,
+	readFileSync(cargoPath, 'utf8').replace(cargoPattern, `version = "${version}"`),
+);
 run('cargo', 'update', '--manifest-path', 'apps/cli/Cargo.toml', '--package', 'mohub');
 
 run('git', 'add', 'package.json', 'apps/cli/Cargo.toml', 'apps/cli/Cargo.lock');
 run('git', 'commit', '-m', `release: ${version}`);
-run('git', 'push', '-u', 'origin', `release/${version}`);
+run('git', 'push', '-u', 'origin', branch);
 execFileSync(
 	'gh',
 	[
@@ -64,7 +107,7 @@ execFileSync(
 		'--title',
 		`release: ${version}`,
 		'--body',
-		`Merging this PR tags \`v${version}\` and publishes the container image, Helm chart, and mohub CLI.`,
+		`Merging this PR tags \`${tag}\` and publishes the container image, Helm chart, and mohub CLI.`,
 	],
 	{ stdio: 'inherit' },
 );
