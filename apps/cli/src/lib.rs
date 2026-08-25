@@ -1,6 +1,8 @@
 pub mod cli;
 pub mod client;
 pub mod config;
+pub mod deploy;
+pub mod deploy_config;
 pub mod manifest;
 
 use std::io;
@@ -34,6 +36,9 @@ pub enum Error {
     #[error("operation cancelled")]
     #[diagnostic(code(mohub::cancelled))]
     Cancelled,
+    #[error("deployment failed: {0}")]
+    #[diagnostic(code(mohub::deployment))]
+    Deployment(String),
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]

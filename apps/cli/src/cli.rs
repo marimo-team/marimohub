@@ -210,6 +210,37 @@ fn login_command() -> Command {
         )
 }
 
+fn deploy_command() -> Command {
+    Command::new("deploy")
+        .about("Deploy local notebooks declared in marimohub.toml or pyproject.toml")
+        .arg(
+            Arg::new("deploy-config")
+                .long("config")
+                .value_name("PATH")
+                .value_hint(ValueHint::FilePath)
+                .help("Configuration file; defaults to discovery from the current directory"),
+        )
+        .arg(
+            Arg::new("deploy-notebook")
+                .long("notebook")
+                .value_name("NAME")
+                .action(ArgAction::Append)
+                .help("Deploy only this named notebook; may be repeated"),
+        )
+        .arg(
+            Arg::new("deploy-dry-run")
+                .long("dry-run")
+                .action(ArgAction::SetTrue)
+                .help("Plan changes without updating notebooks"),
+        )
+        .arg(
+            Arg::new("deploy-message")
+                .long("message")
+                .value_name("TEXT")
+                .help("Version message for notebooks whose code changes"),
+        )
+}
+
 pub fn build(manifest: &Manifest) -> Command {
     let mut root = Node::default();
     for operation in &manifest.operations {
@@ -307,7 +338,15 @@ pub fn build(manifest: &Manifest) -> Command {
         );
 
     for (name, node) in &root.children {
-        command = command.subcommand(command_from_node(name, node));
+        let mut child = command_from_node(name, node);
+        if *name == "notebooks" {
+            assert!(
+                !node.children.contains_key("deploy"),
+                "generated API manifest now defines notebooks deploy"
+            );
+            child = child.subcommand(deploy_command());
+        }
+        command = command.subcommand(child);
     }
     command
 }
@@ -356,5 +395,16 @@ mod tests {
 
             assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
         }
+    }
+
+    #[test]
+    fn notebooks_help_contains_direct_update_and_manifest_deploy() {
+        let command = build(&crate::manifest::load());
+        let notebooks = command
+            .find_subcommand("notebooks")
+            .expect("notebooks command");
+
+        assert!(notebooks.find_subcommand("update").is_some());
+        assert!(notebooks.find_subcommand("deploy").is_some());
     }
 }
