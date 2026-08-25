@@ -16,7 +16,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `username` | string | Yes |  |  |
 | `password` 🔒 | string | Yes |  | Password for the database user |
 | `ssl.mode` | `disable`, `prefer`, `require`, `verify-ca`, `verify-full` |  | `verify-full` | libpq sslmode; `verify-full` checks the CA chain and the hostname |
-| `ambient_env` | boolean |  | `false` | Also export PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and PGSSLMODE so marimo's data-source discovery offers this connection. Only one integration per session can claim them. |
+| `ambient_env` | boolean |  | `true` | Automatically offer this connection in marimo's data-source discovery by exporting PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and PGSSLMODE. If multiple integrations request the same variables, one is discovered and every connection remains available through its notebook snippet. |
 
 **`ssl.mode: verify-ca`**
 

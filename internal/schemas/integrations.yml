@@ -754,7 +754,8 @@ paths:
           description: Accepted.
   /kinds/pyspark/config:
     summary: PySpark (Spark Connect)
-    description: Remote PySpark DataFrame sessions over Spark Connect.
+    description: Remote PySpark sessions that appear automatically in marimo
+      data-source discovery.
     x-kind-schema-version: 1
     x-category: engine
     x-brand-color: '#E25A1C'
@@ -943,8 +944,8 @@ paths:
           description: Accepted.
   /kinds/trino/config:
     summary: Trino
-    description: Trino DBAPI and SQLAlchemy connection with authentication and
-      session options.
+    description: Trino DBAPI and SQLAlchemy connections, with automatic marimo
+      discovery when compatible.
     x-kind-schema-version: 1
     x-category: engine
     x-brand-color: '#DD00A1'
@@ -3728,10 +3729,12 @@ components:
           discriminator:
             propertyName: mode
         ambient_env:
-          default: false
-          description: Also export MYSQL_HOST, MYSQL_TCP_PORT, MYSQL_DATABASE, MYSQL_USER,
-            and MYSQL_PASSWORD so marimo's data-source discovery offers this
-            connection. Only one integration per session can claim them.
+          default: true
+          description: Automatically offer this connection in marimo's data-source
+            discovery by exporting MYSQL_HOST, MYSQL_TCP_PORT, MYSQL_DATABASE,
+            MYSQL_USER, and MYSQL_PASSWORD. If multiple integrations request the
+            same variables, one is discovered and every connection remains
+            available through its notebook snippet.
           type: boolean
       required:
         - host
@@ -3797,10 +3800,12 @@ components:
           discriminator:
             propertyName: mode
         ambient_env:
-          default: false
-          description: Also export MYSQL_HOST, MYSQL_TCP_PORT, MYSQL_DATABASE, MYSQL_USER,
-            and MYSQL_PASSWORD so marimo's data-source discovery offers this
-            connection. Only one integration per session can claim them.
+          default: true
+          description: Automatically offer this connection in marimo's data-source
+            discovery by exporting MYSQL_HOST, MYSQL_TCP_PORT, MYSQL_DATABASE,
+            MYSQL_USER, and MYSQL_PASSWORD. If multiple integrations request the
+            same variables, one is discovered and every connection remains
+            available through its notebook snippet.
           type: boolean
       required:
         - host
@@ -3901,10 +3906,12 @@ components:
           discriminator:
             propertyName: mode
         ambient_env:
-          default: false
-          description: Also export PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and
-            PGSSLMODE so marimo's data-source discovery offers this connection.
-            Only one integration per session can claim them.
+          default: true
+          description: Automatically offer this connection in marimo's data-source
+            discovery by exporting PGHOST, PGPORT, PGDATABASE, PGUSER,
+            PGPASSWORD, and PGSSLMODE. If multiple integrations request the same
+            variables, one is discovered and every connection remains available
+            through its notebook snippet.
           type: boolean
       required:
         - host
@@ -4002,10 +4009,12 @@ components:
           discriminator:
             propertyName: mode
         ambient_env:
-          default: false
-          description: Also export PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, and
-            PGSSLMODE so marimo's data-source discovery offers this connection.
-            Only one integration per session can claim them.
+          default: true
+          description: Automatically offer this connection in marimo's data-source
+            discovery by exporting PGHOST, PGPORT, PGDATABASE, PGUSER,
+            PGPASSWORD, and PGSSLMODE. If multiple integrations request the same
+            variables, one is discovered and every connection remains available
+            through its notebook snippet.
           type: boolean
       required:
         - host
@@ -4139,9 +4148,11 @@ components:
             additionalProperties: false
           x-unique-by: name
         ambient_env:
-          default: false
-          description: Also export SPARK_REMOTE so marimo's data-source discovery offers
-            this connection. Only one integration per session can claim them.
+          default: true
+          description: Automatically offer this connection in marimo's data-source
+            discovery by exporting SPARK_REMOTE. If multiple integrations
+            request the same variables, one is discovered and every connection
+            remains available through its notebook snippet.
           type: boolean
       required:
         - host
@@ -4274,9 +4285,11 @@ components:
             additionalProperties: false
           x-unique-by: name
         ambient_env:
-          default: false
-          description: Also export SPARK_REMOTE so marimo's data-source discovery offers
-            this connection. Only one integration per session can claim them.
+          default: true
+          description: Automatically offer this connection in marimo's data-source
+            discovery by exporting SPARK_REMOTE. If multiple integrations
+            request the same variables, one is discovered and every connection
+            remains available through its notebook snippet.
           type: boolean
       required:
         - host
@@ -5019,6 +5032,7 @@ components:
           discriminator:
             propertyName: verification
         default_catalog:
+          description: Default catalog; required for automatic marimo data-source discovery
           type: string
           pattern: ^[A-Za-z0-9_.-]+$
         default_schema:
@@ -5136,10 +5150,12 @@ components:
         legacy_prepared_statements:
           type: boolean
         ambient_env:
-          default: false
-          description: Also export TRINO_HOST, TRINO_PORT, TRINO_USER, TRINO_CATALOG, and
-            TRINO_PASSWORD so marimo's data-source discovery offers this
-            connection. Only one integration per session can claim them.
+          default: true
+          description: Automatically offer this connection in marimo's data-source
+            discovery by exporting TRINO_HOST, TRINO_PORT, TRINO_USER,
+            TRINO_CATALOG, and TRINO_PASSWORD. If multiple integrations request
+            the same variables, one is discovered and every connection remains
+            available through its notebook snippet.
           type: boolean
       required:
         - host
@@ -5352,6 +5368,7 @@ components:
           discriminator:
             propertyName: verification
         default_catalog:
+          description: Default catalog; required for automatic marimo data-source discovery
           type: string
           pattern: ^[A-Za-z0-9_.-]+$
         default_schema:
@@ -5469,10 +5486,12 @@ components:
         legacy_prepared_statements:
           type: boolean
         ambient_env:
-          default: false
-          description: Also export TRINO_HOST, TRINO_PORT, TRINO_USER, TRINO_CATALOG, and
-            TRINO_PASSWORD so marimo's data-source discovery offers this
-            connection. Only one integration per session can claim them.
+          default: true
+          description: Automatically offer this connection in marimo's data-source
+            discovery by exporting TRINO_HOST, TRINO_PORT, TRINO_USER,
+            TRINO_CATALOG, and TRINO_PASSWORD. If multiple integrations request
+            the same variables, one is discovered and every connection remains
+            available through its notebook snippet.
           type: boolean
       required:
         - host

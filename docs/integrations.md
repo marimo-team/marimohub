@@ -302,10 +302,10 @@ the `ambient_env` switch. There are two reasons to do that:
   `AWS_ACCESS_KEY_ID`, `wandb` expects `WANDB_API_KEY`. These default **on**;
   Weights & Biases and Hugging Face have no other channel, so they always set
   them.
-- **Databases and engines** already hand notebook code an explicit URL, so they
-  default **off**. Turning `ambient_env` on publishes the names marimo's
-  data-source discovery scans for, which makes the integration show up as a
-  one-click connection in the notebook's data-source panel with no code to copy.
+- **Databases and engines** also hand notebook code an explicit URL or
+  descriptor, but their discovery variables default **on**. This makes a
+  compatible integration show up as a one-click connection in marimo's
+  data-source panel with no code to copy.
 
 | Kind             | What marimo looks for                                                                             |
 | ---------------- | ------------------------------------------------------------------------------------------------- |
@@ -317,16 +317,17 @@ the `ambient_env` switch. There are two reasons to do that:
 | Iceberg catalogs | the rendered `.pyiceberg.yaml`, found through `PYICEBERG_HOME`. Always set                        |
 
 Because these names are process-wide, only one integration per session can claim
-a given variable. Two that set the same name to different values fail the session
-with an error naming both — see the [failure model](#failure-model). That is also
-why the database kinds default off: a project with a prod and a staging
-PostgreSQL is ordinary, and only one of them can own `PGHOST`. When
+a discovery contract. When multiple integrations request the same names, the
+first by integration name is discovered. The others remain available through
+their namespaced variables and notebook snippets. The session manifest and
+provisioning log contain a warning naming the selected and skipped integrations.
+When
 [workload identity federation](./workload-identity-federation.md) is enabled it
 injects `AWS_*` for the session's own bucket, and hub-injected variables win over
 integrations.
 
-Two combinations are refused at save time rather than rendered, because the
-connection marimo would build is weaker than the one you configured:
+Two combinations fall back to the namespaced connection instead of advertising a
+connection that is weaker than the one you configured:
 
 - **MySQL with TLS on.** The discovered connection is a PyMySQL URL with no TLS
   arguments, and PyMySQL reads none from the environment, so it would be a
@@ -335,6 +336,7 @@ connection marimo would build is weaker than the one you configured:
   cannot express JWT, OAuth2, Kerberos, or certificate authentication, so the
   suggested connection could not authenticate.
 
+These fallbacks do not block session creation and emit a provisioning warning.
 PostgreSQL has no such caveat: libpq reads `PGSSLMODE` and `PGSSLROOTCERT` for
 any parameter the caller leaves unset, so a discovered connection verifies
 exactly like the rendered URL.
@@ -374,9 +376,10 @@ point it elsewhere:
 
 Set one or the other, not both.
 
-Turn on `ambient_env` to also export `PGHOST`, `PGUSER`, `PGDATABASE`,
-`PGPORT`, `PGPASSWORD`, and the TLS pair, which is what makes this connection
+By default, `ambient_env` also exports `PGHOST`, `PGUSER`, `PGDATABASE`,
+`PGPORT`, `PGPASSWORD`, and the TLS pair, which makes this connection
 [discoverable in the notebook](#vendor-standard-variables-and-one-click-connections).
+Turn it off to expose only the namespaced connection.
 
 <!--@include: ./partials/integrations/postgres.md-->
 
@@ -393,9 +396,10 @@ intermediate MySQL modes are deliberately absent — they are spelled with
 boolean-ish URL arguments whose meaning depends on how a driver version coerces
 the string `"false"`, so the choice here is verified TLS or none.
 
-`ambient_env` exports the `MYSQL_*` names for
-[discovery](#vendor-standard-variables-and-one-click-connections), and is
-available only on a connection with TLS disabled — see the caveat there.
+`ambient_env` requests the `MYSQL_*` names for
+[discovery](#vendor-standard-variables-and-one-click-connections). They are
+emitted only when TLS is disabled; otherwise the namespaced TLS connection stays
+available and the provisioning log explains the fallback.
 
 <!--@include: ./partials/integrations/mysql.md-->
 
@@ -579,9 +583,12 @@ JWT, OAuth2, client certificates, Kerberos, GSSAPI, TLS verification, headers,
 extra credentials, roles, session properties, spooling, retries, timeouts,
 isolation, and compatibility options.
 
-`ambient_env` exports `TRINO_HOST`, `TRINO_USER`, `TRINO_CATALOG`, and the rest
-for [discovery](#vendor-standard-variables-and-one-click-connections). It needs
-a default catalog, and an authentication mode discovery can express.
+By default, `ambient_env` exports `TRINO_HOST`, `TRINO_USER`, `TRINO_CATALOG`,
+and the rest for
+[discovery](#vendor-standard-variables-and-one-click-connections). It needs a
+default catalog, system TLS verification, and an authentication mode discovery
+can express. Other configurations keep the namespaced connection and emit a
+provisioning warning.
 
 <!--@include: ./partials/integrations/trino.md-->
 
@@ -596,7 +603,7 @@ settings from the JSON descriptor before calling `getOrCreate()`. This
 integration targets Spark Connect. Provisioning a classic Spark driver or
 cluster remains the compute backend's responsibility.
 
-`ambient_env` also exports the same string as `SPARK_REMOTE`, which
+By default, `ambient_env` also exports the same string as `SPARK_REMOTE`, which
 `SparkSession.builder` reads on its own and marimo
 [discovers](#vendor-standard-variables-and-one-click-connections) — so
 `getOrCreate()` needs no arguments at all.
@@ -786,6 +793,11 @@ never return a resolved value. See
 
 Integration rendering fails closed. A secret-source or configuration error
 stops session creation without disclosing secret values or locators.
+
+Automatic data-source discovery is best effort. An incompatible discovery
+contract or a second integration claiming the same standard variables falls
+back to namespaced variables and a notebook snippet instead of failing the
+session. The session manifest and provisioning log record the fallback.
 
 Saving a reference does not fetch its value. **Test connection** resolves the
 current draft for supported kinds. **Environment variables** has no connection

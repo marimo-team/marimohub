@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { ValidationError } from '../../../errors';
 import { defineIntegration } from '../sdk';
 import {
 	caFields,
@@ -61,21 +60,11 @@ export const mysql = defineIntegration({
 		...SQL_CONNECTION_HINTS,
 		ssl: { group: 'Connection', order: 4 },
 		'ssl.ca_bundle': { widget: 'textarea' },
-		ambient_env: { group: 'Discovery', order: 60, widget: 'toggle', advanced: true },
+		ambient_env: { group: 'Discovery', order: 60, widget: 'toggle' },
 	},
 
 	validate(config) {
 		if (config.ssl.mode === 'verify_identity') validateCaFields(config.ssl, 'ssl');
-		// Unlike libpq, PyMySQL takes no TLS settings from the environment, and the
-		// connection marimo builds from MYSQL_* passes none — so exporting them for a
-		// TLS-required server would hand notebook code an unencrypted path to it.
-		if (config.ambient_env && config.ssl.mode !== 'disabled') {
-			throw new ValidationError(
-				'ambient_env would expose this connection to marimo as a plaintext one, because ' +
-					'the PyMySQL connection it builds carries no TLS settings. Connect through ' +
-					'MARIMOHUB_MYSQL_<NAME>_URL instead, which does.',
-			);
-		}
 	},
 
 	render({ config, instanceName }) {
@@ -99,15 +88,23 @@ export const mysql = defineIntegration({
 			instanceName,
 			url,
 			config,
-			ambient: config.ambient_env
-				? {
-						MYSQL_HOST: config.host,
-						MYSQL_TCP_PORT: String(config.port),
-						MYSQL_DATABASE: config.database,
-						MYSQL_USER: config.username,
-						MYSQL_PASSWORD: config.password,
-					}
-				: {},
+			discovery:
+				config.ambient_env && config.ssl.mode === 'disabled'
+					? {
+							MYSQL_HOST: config.host,
+							MYSQL_TCP_PORT: String(config.port),
+							MYSQL_DATABASE: config.database,
+							MYSQL_USER: config.username,
+							MYSQL_PASSWORD: config.password,
+						}
+					: {},
+			warnings:
+				config.ambient_env && config.ssl.mode !== 'disabled'
+					? [
+							`Integration "${instanceName}" is available through its notebook snippet, but not ` +
+								'automatic data-source discovery because marimo cannot carry its MySQL TLS settings.',
+						]
+					: [],
 			descriptor: {
 				ssl: { mode: config.ssl.mode, ...(caPath ? { ca_path: caPath } : {}) },
 			},

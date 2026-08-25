@@ -237,16 +237,17 @@ export const AMBIENT_ENV_DESCRIPTION =
  * The same switch for a kind whose client takes an explicit URL: the standard
  * names are what marimo's data-source discovery scans for, so setting them is
  * what turns an integration into a one-click connection in the notebook UI.
- * Off by default — the names are process-wide, and a project with a prod and a
- * staging instance of one kind is ordinary.
+ * The bundler chooses one connection when multiple instances request the same
+ * names; every instance remains available through its namespaced variables.
  */
 export const discoveryEnvField = (names: string) =>
 	z
 		.boolean()
-		.default(false)
+		.default(true)
 		.describe(
-			`Also export ${names} so marimo's data-source discovery offers this connection. ` +
-				'Only one integration per session can claim them.',
+			`Automatically offer this connection in marimo's data-source discovery by exporting ${names}. ` +
+				'If multiple integrations request the same variables, one is discovered and every connection ' +
+				'remains available through its notebook snippet.',
 		);
 
 type FieldValue = string | number | boolean | undefined;
@@ -266,6 +267,9 @@ export interface ConnectionRender {
 	files?: { path: string; content: string }[];
 	/** Vendor-standard names this instance claims in addition to its own. */
 	ambient?: Record<string, string | undefined>;
+	/** Vendor-standard names used only for marimo data-source discovery. */
+	discovery?: Record<string, string | undefined>;
+	warnings?: string[];
 	manifestExtra?: Record<string, unknown>;
 }
 
@@ -294,9 +298,16 @@ export function renderConnection(spec: ConnectionRender): RenderOutput {
 		(entry): entry is [string, string] => entry[1] !== undefined,
 	);
 	for (const [name, value] of ambient) env[name] = value;
+	const discovery = Object.fromEntries(
+		Object.entries(spec.discovery ?? {}).filter(
+			(entry): entry is [string, string] => entry[1] !== undefined,
+		),
+	);
 
 	return {
 		env,
+		...(Object.keys(discovery).length > 0 ? { discoveryEnv: discovery } : {}),
+		...(spec.warnings && spec.warnings.length > 0 ? { warnings: spec.warnings } : {}),
 		files: [
 			...(spec.files ?? []),
 			{
@@ -335,8 +346,9 @@ export function renderSqlConnection(options: {
 	};
 	/** Fields beyond the shared set, e.g. a TLS mode the driver reads separately. */
 	fields?: Record<string, FieldValue>;
-	/** Driver-standard names this instance claims, for marimo's discovery. */
-	ambient?: Record<string, string | undefined>;
+	/** Driver-standard names this instance claims for marimo's discovery. */
+	discovery?: Record<string, string | undefined>;
+	warnings?: string[];
 	descriptor?: Record<string, unknown>;
 	files?: { path: string; content: string }[];
 }): RenderOutput {
@@ -355,7 +367,8 @@ export function renderSqlConnection(options: {
 			...options.fields,
 		},
 		secretFields: ['URL', 'PASSWORD'],
-		ambient: options.ambient,
+		discovery: options.discovery,
+		warnings: options.warnings,
 		descriptor: options.descriptor,
 		files: options.files,
 		manifestExtra: { host: config.host, database: config.database },

@@ -13,7 +13,6 @@ import {
 	Folder,
 	HardDrive,
 	Link2,
-	NotebookPen,
 	Search,
 	X,
 } from 'lucide-react';
@@ -45,7 +44,7 @@ import type {
 	IntegrationObjectEntry,
 	IntegrationObjectPreview,
 } from '@/types';
-import { useSeededNotebook } from './notebookSeed';
+import { OpenInNotebookButton } from './NotebookActions';
 import { TabularPreviewGrid } from './TabularPreviewGrid';
 
 type ObjectCapability = NonNullable<IntegrationBrowseCapability['surfaces']['objects']>;
@@ -729,7 +728,6 @@ function ObjectDetail({
 		versionsAvailable,
 	);
 	const preview = useObjectPreview(projectId, integration.id);
-	const seededNotebook = useSeededNotebook(projectId);
 	if (!detail.data) {
 		return detail.error ? (
 			<p className="text-destructive">
@@ -752,16 +750,6 @@ function ObjectDetail({
 		versionId,
 		etag: detail.data.etag,
 	});
-	const openInNotebook = async () => {
-		if (!detail.data.snippet) return;
-		const title = `explore_${safeNotebookTitle(objectKey)}`;
-		await seededNotebook.create({
-			title,
-			heading: displayLocation,
-			description: `Explore ${displayLocation} via the ${integration.name} integration`,
-			snippet: detail.data.snippet,
-		});
-	};
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="flex flex-col gap-2.5">
@@ -775,14 +763,15 @@ function ObjectDetail({
 				</div>
 				<div className="flex flex-wrap items-center gap-2">
 					{detail.data.snippet && (
-						<Button
-							variant="primary"
-							isDisabled={seededNotebook.isPending}
-							onPress={() => void openInNotebook()}
-						>
-							<NotebookPen className="size-4" aria-hidden />
-							{seededNotebook.isPending ? 'Creating notebook…' : 'Open in notebook'}
-						</Button>
+						<OpenInNotebookButton
+							projectId={projectId}
+							notebook={{
+								title: `explore_${safeNotebookTitle(objectKey)}`,
+								heading: displayLocation,
+								description: `Explore ${displayLocation} via the ${integration.name} integration`,
+								snippet: detail.data.snippet,
+							}}
+						/>
 					)}
 					{downloadAvailable && (
 						<a

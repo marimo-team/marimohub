@@ -51,6 +51,26 @@ const azureObjectKind: IntegrationKind = {
 	title: 'Azure Blob',
 };
 
+const pysparkKind: IntegrationKind = {
+	...icebergKind,
+	kind: 'pyspark',
+	title: 'PySpark (Spark Connect)',
+	description: 'Remote PySpark DataFrame sessions over Spark Connect.',
+	category: 'engine',
+	brand: { icon: 'apachespark', color: '#E25A1C' },
+	supports_test: false,
+	supports_browse: false,
+	browse_surfaces: [],
+	requirements: ['pyspark[connect]>=4.2'],
+};
+
+const sparkEntry: IntegrationEntry = {
+	...lakeEntry,
+	id: 'intg_spark',
+	kind: 'pyspark',
+	name: 'analytics-prod',
+};
+
 const SNIPPET = 'from pyiceberg.catalog import load_catalog\n\ncatalog = load_catalog("lake")';
 
 function ok(data: unknown) {
@@ -262,7 +282,7 @@ function makeFetch({
 				},
 			});
 		}
-		if (url.includes(`/api/v1/projects/${PID}/integrations/${IID}/browse`)) {
+		if (url.includes(`/api/v1/projects/${PID}/integrations/${entry.id}/browse`)) {
 			if (objectFailures.capability) return failed(objectFailures.capability);
 			if (kind.browse_surfaces.includes('objects')) {
 				return ok({
@@ -356,6 +376,34 @@ afterEach(() => {
 });
 
 describe('DataBrowserPage', () => {
+	it('shows PySpark connection info and opens its session snippet in a notebook', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = setup(`/projects/${PID}/data/${sparkEntry.id}`, {
+			kind: pysparkKind,
+			entry: sparkEntry,
+		});
+
+		expect(await screen.findByTestId('browse-integration')).toHaveTextContent('analytics-prod');
+		expect(
+			screen.getByText(/cannot inspect its catalogs without opening a Spark session/),
+		).toBeInTheDocument();
+		expect(screen.getByText('pyspark[connect]>=4.2')).toBeInTheDocument();
+		expect(screen.getByText(/SparkSession\.builder\.remote/)).toBeInTheDocument();
+
+		await user.click(screen.getByRole('button', { name: 'Create PySpark Notebook' }));
+
+		await waitFor(() => {
+			expect(screen.getByTestId('location').textContent).toContain(
+				`/projects/${PID}/notebooks/nb_1`,
+			);
+		});
+		const post = fetchImpl.mock.calls.find(([, init]) => init?.method === 'POST');
+		const body = JSON.parse(String(post?.[1]?.body)) as { title: string; code: string };
+		expect(body.title).toBe('connect_analytics_prod');
+		expect(body.code).toContain('.joinpath("pyspark", "analytics-prod.json")');
+		expect(body.code).toContain('builder.getOrCreate()');
+	});
+
 	it('shows a disabled Query control with the server blocker reason', async () => {
 		setup(`/projects/${PID}/data/${IID}`, {
 			role: 'manager',
@@ -484,7 +532,7 @@ describe('DataBrowserPage', () => {
 		const user = userEvent.setup();
 		const fetchImpl = setup(`/projects/${PID}/data/${IID}?ns=sales&table=orders`);
 
-		await user.click(await screen.findByRole('button', { name: /Open in notebook/ }));
+		await user.click(await screen.findByRole('button', { name: /Open in Notebook/ }));
 
 		await waitFor(() => {
 			expect(screen.getByTestId('location').textContent).toContain(
@@ -1164,7 +1212,7 @@ describe('DataBrowserPage', () => {
 			`/projects/${PID}/data/${IID}?surface=objects&bucket=lake&key=events.jsonl`,
 			{ kind: objectKind, entry: { ...lakeEntry, kind: 's3' } },
 		);
-		await user.click(await screen.findByRole('button', { name: 'Open in notebook' }));
+		await user.click(await screen.findByRole('button', { name: 'Open in Notebook' }));
 		await waitFor(() =>
 			expect(screen.getByTestId('location')).toHaveTextContent(`/projects/${PID}/notebooks/nb_1`),
 		);
@@ -1191,8 +1239,8 @@ describe('DataBrowserPage', () => {
 			},
 		);
 
-		await user.click(await screen.findByRole('button', { name: 'Open in notebook' }));
-		const pending = await screen.findByRole('button', { name: 'Creating notebook…' });
+		await user.click(await screen.findByRole('button', { name: 'Open in Notebook' }));
+		const pending = await screen.findByRole('button', { name: 'Creating Notebook…' });
 		expect(pending).toBeDisabled();
 		await user.click(pending);
 		expect(
@@ -1213,9 +1261,9 @@ describe('DataBrowserPage', () => {
 			entry: { ...lakeEntry, kind: 's3' },
 			notebookFailure: 'Notebook creation failed.',
 		});
-		await user.click(await screen.findByRole('button', { name: 'Open in notebook' }));
+		await user.click(await screen.findByRole('button', { name: 'Open in Notebook' }));
 		await waitFor(() =>
-			expect(screen.getByRole('button', { name: 'Open in notebook' })).toBeEnabled(),
+			expect(screen.getByRole('button', { name: 'Open in Notebook' })).toBeEnabled(),
 		);
 		expect(screen.getByTestId('location')).toHaveTextContent('key=events.jsonl');
 		expect(screen.getByText('s3://lake/events.jsonl')).toBeInTheDocument();
@@ -1314,6 +1362,6 @@ describe('DataBrowserPage', () => {
 		setup(`/projects/${PID}/data/intg_ghost?ns=sales&table=orders`);
 
 		expect(await screen.findByTestId('browse-integration')).toBeInTheDocument();
-		expect(await screen.findByText('Select a table')).toBeInTheDocument();
+		expect(await screen.findByText('Select an Integration')).toBeInTheDocument();
 	});
 });

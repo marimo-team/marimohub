@@ -77,7 +77,11 @@ const trinoConfig = z.strictObject({
 	user: z.string().min(1).optional().describe('Query user; defaults to the signed-in user'),
 	auth: authSchema,
 	tls: tlsSchema,
-	default_catalog: z.string().regex(IDENTIFIER_REGEX).optional(),
+	default_catalog: z
+		.string()
+		.regex(IDENTIFIER_REGEX)
+		.optional()
+		.describe('Default catalog; required for automatic marimo data-source discovery'),
 	default_schema: z.string().regex(IDENTIFIER_REGEX).optional(),
 	source: z.string().min(1).optional(),
 	session_properties: z.record(z.string(), z.string()).default({}),
@@ -121,10 +125,54 @@ const trinoConfig = z.strictObject({
 	),
 });
 
+function trinoDiscoveryReason(config: z.infer<typeof trinoConfig>): string | undefined {
+	if (!config.default_catalog) return 'marimo requires a default catalog';
+	if (
+		config.auth.method !== 'basic' &&
+		!(config.auth.method === 'none' && config.http_scheme === 'http')
+	) {
+		return 'marimo supports only Basic authentication over HTTPS or no authentication over HTTP';
+	}
+	if (config.tls.verification !== 'system') {
+		return 'marimo cannot carry custom Trino TLS verification settings';
+	}
+	if (
+		config.auth.method === 'basic' &&
+		config.user !== undefined &&
+		config.user !== config.auth.username
+	) {
+		return 'marimo must use the same Trino query user and Basic-auth username';
+	}
+	const unsupportedOptions = [
+		[config.source !== undefined, 'source'],
+		[Object.keys(config.session_properties).length > 0, 'session properties'],
+		[Object.keys(config.roles).length > 0, 'roles'],
+		[config.client_tags.length > 0, 'client tags'],
+		[config.http_headers.length > 0, 'HTTP headers'],
+		[config.extra_credentials.length > 0, 'extra credentials'],
+		[config.timezone !== undefined, 'timezone'],
+		[config.encoding !== undefined, 'encoding'],
+		[config.max_attempts !== undefined, 'maximum attempts'],
+		[config.request_timeout_seconds !== undefined, 'request timeout'],
+		[config.heartbeat_interval_seconds !== undefined, 'heartbeat interval'],
+		[config.isolation_level !== 'AUTOCOMMIT', 'isolation level'],
+		[config.legacy_primitive_types, 'legacy primitive types'],
+		[config.legacy_prepared_statements !== undefined, 'legacy prepared statements'],
+	] as const;
+	const unsupported = unsupportedOptions
+		.filter(([configured]) => configured)
+		.map(([, name]) => name);
+	if (unsupported.length > 0) {
+		return `marimo cannot carry the configured Trino ${unsupported.join(', ')}`;
+	}
+	return undefined;
+}
+
 export const trino = defineIntegration({
 	kind: 'trino',
 	title: 'Trino',
-	description: 'Trino DBAPI and SQLAlchemy connection with authentication and session options.',
+	description:
+		'Trino DBAPI and SQLAlchemy connections, with automatic marimo discovery when compatible.',
 	category: 'engine',
 	brand: { icon: 'trino', color: '#DD00A1' },
 	schemaVersion: 1,
@@ -151,7 +199,7 @@ export const trino = defineIntegration({
 		'auth.krb5_config': { widget: 'textarea' },
 		tls: { group: 'TLS', order: 15, advanced: true },
 		'tls.ca_bundle': { widget: 'textarea' },
-		default_catalog: { group: 'Defaults', order: 20, advanced: true },
+		default_catalog: { group: 'Defaults', order: 20 },
 		default_schema: { group: 'Defaults', order: 21, advanced: true },
 		source: { group: 'Session', order: 30, advanced: true },
 		session_properties: { group: 'Session', order: 31, advanced: true, widget: 'kv-pairs' },
@@ -179,7 +227,7 @@ export const trino = defineIntegration({
 			advanced: true,
 			widget: 'toggle',
 		},
-		ambient_env: { group: 'Discovery', order: 60, widget: 'toggle', advanced: true },
+		ambient_env: { group: 'Discovery', order: 60, widget: 'toggle' },
 	},
 
 	validate(config) {
@@ -225,51 +273,6 @@ export const trino = defineIntegration({
 				'spooling encoding',
 			);
 		}
-		if (config.ambient_env) {
-			if (!config.default_catalog) {
-				throw new ValidationError(
-					'marimo discovers a Trino connection only when a catalog is set, so ambient_env ' +
-						'requires default_catalog.',
-				);
-			}
-			// The connection marimo builds from TRINO_* uses Basic auth over HTTPS when
-			// it sees a password and plain HTTP otherwise. Any other combination here
-			// would advertise a connection that cannot authenticate or cannot reach the
-			// coordinator, so it is refused rather than rendered.
-			const discoverable =
-				config.auth.method === 'basic' ||
-				(config.auth.method === 'none' && config.http_scheme === 'http');
-			if (!discoverable) {
-				throw new ValidationError(
-					'marimo discovers Trino as Basic auth over HTTPS, or no auth over HTTP. This ' +
-						'authentication mode cannot be expressed that way — leave ambient_env off and ' +
-						'connect through MARIMOHUB_TRINO_<NAME>_URL.',
-				);
-			}
-			// Nothing carries this deployment's trust material into the discovered
-			// connection: a private CA would fail to verify there, and a disabled
-			// check would silently become an enabled one.
-			if (config.tls.verification !== 'system') {
-				throw new ValidationError(
-					'marimo discovers Trino with the runtime default TLS verification, so a custom ' +
-						'CA or disabled verification cannot be carried over. Leave ambient_env off ' +
-						'and connect through MARIMOHUB_TRINO_<NAME>_URL.',
-				);
-			}
-			// marimo uses TRINO_USER for both the query user and the Basic credential,
-			// so the two have to be the same name for the discovered connection to
-			// authenticate at all.
-			if (
-				config.auth.method === 'basic' &&
-				config.user !== undefined &&
-				config.user !== config.auth.username
-			) {
-				throw new ValidationError(
-					'marimo authenticates the discovered connection as TRINO_USER, so ambient_env ' +
-						'needs the query user and the Basic username to match (or no query user).',
-				);
-			}
-		}
 	},
 
 	render({ config, instanceName, principal }) {
@@ -301,6 +304,7 @@ export const trino = defineIntegration({
 			extraCredentials,
 		});
 		const configPath = `${INTEGRATIONS_DIR}/trino/${instanceName}.json`;
+		const discoveryReason = config.ambient_env ? trinoDiscoveryReason(config) : undefined;
 		Object.assign(env, {
 			[`${prefix}_URL`]: url,
 			[`${prefix}_CONFIG`]: configPath,
@@ -312,16 +316,6 @@ export const trino = defineIntegration({
 				? {
 						[`${prefix}_AUTH_USER`]: config.auth.username,
 						[`${prefix}_PASSWORD`]: config.auth.password,
-					}
-				: {}),
-			...(config.ambient_env
-				? {
-						TRINO_HOST: config.host,
-						TRINO_PORT: String(config.port),
-						TRINO_USER: user,
-						TRINO_CATALOG: config.default_catalog ?? '',
-						...(config.default_schema ? { TRINO_SCHEMA: config.default_schema } : {}),
-						...(config.auth.method === 'basic' ? { TRINO_PASSWORD: config.auth.password } : {}),
 					}
 				: {}),
 		});
@@ -370,6 +364,24 @@ export const trino = defineIntegration({
 
 		return {
 			env,
+			...(config.ambient_env && discoveryReason === undefined
+				? {
+						discoveryEnv: {
+							TRINO_HOST: config.host,
+							TRINO_PORT: String(config.port),
+							TRINO_USER: user,
+							TRINO_CATALOG: config.default_catalog!,
+							...(config.default_schema ? { TRINO_SCHEMA: config.default_schema } : {}),
+							...(config.auth.method === 'basic' ? { TRINO_PASSWORD: config.auth.password } : {}),
+						},
+					}
+				: {}),
+			warnings: discoveryReason
+				? [
+						`Integration "${instanceName}" is available through its notebook snippet, but not ` +
+							`automatic data-source discovery because ${discoveryReason}.`,
+					]
+				: [],
 			files,
 			manifestExtra: { host: config.host, auth_method: config.auth.method },
 		};

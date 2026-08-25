@@ -65,6 +65,7 @@ export function bundleIntegrations(
 	// collision error instead of having its value silently overwritten.
 	const vars: Record<string, string> = { [INTEGRATIONS_DIR_ENV]: INTEGRATIONS_DIR };
 	const varOwner = new Map<string, string>([[INTEGRATIONS_DIR_ENV, BUNDLER]]);
+	const warnings = rendered.flatMap((item) => item.output.warnings ?? []);
 
 	for (const item of rendered) {
 		for (const file of item.output.files ?? []) {
@@ -85,12 +86,7 @@ export function bundleIntegrations(
 			}
 		}
 		for (const [key, value] of Object.entries(item.output.env ?? {})) {
-			assertValidEnvName(key, item.name);
-			if (hasControlCharacter(value)) {
-				throw new ValidationError(
-					`Integration "${item.name}" emitted an environment value containing a control character.`,
-				);
-			}
+			assertValidEnvValue(key, value, item.name);
 			const owner = varOwner.get(key);
 			// An identical value from two instances is tolerated (e.g. a shared
 			// tool var like PYICEBERG_HOME); a differing one is ambiguous.
@@ -99,6 +95,29 @@ export function bundleIntegrations(
 					`Integrations "${owner}" and "${item.name}" set the same environment variable to different values.`,
 				);
 			}
+			varOwner.set(key, item.name);
+			vars[key] = value;
+		}
+	}
+
+	for (const item of [...rendered].sort((a, b) => a.name.localeCompare(b.name))) {
+		const discovery = Object.entries(item.output.discoveryEnv ?? {});
+		for (const [key, value] of discovery) assertValidEnvValue(key, value, item.name);
+		const conflicts = discovery.flatMap(([key]) => {
+			const owner = varOwner.get(key);
+			return owner ? [{ key, owner }] : [];
+		});
+		if (conflicts.length > 0) {
+			const owners = [...new Set(conflicts.map(({ owner }) => owner))];
+			const names = conflicts.map(({ key }) => key).join(', ');
+			warnings.push(
+				`Integration "${item.name}" is available through its notebook snippet, but not automatic ` +
+					`data-source discovery because ${owners.map((owner) => `"${owner}"`).join(', ')} already ` +
+					`claims ${names}.`,
+			);
+			continue;
+		}
+		for (const [key, value] of discovery) {
 			varOwner.set(key, item.name);
 			vars[key] = value;
 		}
@@ -112,6 +131,7 @@ export function bundleIntegrations(
 
 	const manifest = {
 		session_id: sessionId,
+		...(warnings.length > 0 ? { warnings } : {}),
 		integrations: rendered.map((item) => ({
 			name: item.name,
 			kind: item.kind,
@@ -131,7 +151,17 @@ export function bundleIntegrations(
 		files,
 		vars,
 		attachments: rendered.map(({ id, name, kind, version }) => ({ id, name, kind, version })),
+		warnings,
 	};
+}
+
+function assertValidEnvValue(key: string, value: string, instance: string): void {
+	assertValidEnvName(key, instance);
+	if (hasControlCharacter(value)) {
+		throw new ValidationError(
+			`Integration "${instance}" emitted an environment value containing a control character.`,
+		);
+	}
 }
 
 /**

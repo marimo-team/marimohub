@@ -16,7 +16,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `user` | string |  |  | Query user; defaults to the signed-in user |
 | `auth.method` | `none`, `basic`, `jwt`, `oauth2`, `certificate`, `kerberos`, `gssapi` | Yes |  |  |
 | `tls.verification` | `system`, `disabled`, `custom_ca` |  | `system` |  |
-| `default_catalog` | string |  |  |  |
+| `default_catalog` | string |  |  | Default catalog; required for automatic marimo data-source discovery |
 | `default_schema` | string |  |  |  |
 | `source` | string |  |  |  |
 | `session_properties` | map&lt;string, string&gt; |  |  |  |
@@ -38,7 +38,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `isolation_level` | `AUTOCOMMIT`, `READ_UNCOMMITTED`, `READ_COMMITTED`, `REPEATABLE_READ`, `SERIALIZABLE` |  | `AUTOCOMMIT` |  |
 | `legacy_primitive_types` | boolean |  | `false` |  |
 | `legacy_prepared_statements` | boolean |  |  |  |
-| `ambient_env` | boolean |  | `false` | Also export TRINO_HOST, TRINO_PORT, TRINO_USER, TRINO_CATALOG, and TRINO_PASSWORD so marimo's data-source discovery offers this connection. Only one integration per session can claim them. |
+| `ambient_env` | boolean |  | `true` | Automatically offer this connection in marimo's data-source discovery by exporting TRINO_HOST, TRINO_PORT, TRINO_USER, TRINO_CATALOG, and TRINO_PASSWORD. If multiple integrations request the same variables, one is discovered and every connection remains available through its notebook snippet. |
 
 **`auth.method: basic`**
 

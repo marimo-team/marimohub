@@ -130,7 +130,7 @@ export const postgres = defineIntegration({
 		...SQL_CONNECTION_HINTS,
 		ssl: { group: 'Connection', order: 4 },
 		'ssl.ca_bundle': { widget: 'textarea' },
-		ambient_env: { group: 'Discovery', order: 60, widget: 'toggle', advanced: true },
+		ambient_env: { group: 'Discovery', order: 60, widget: 'toggle' },
 	},
 
 	validate(config) {
@@ -194,22 +194,20 @@ export const postgres = defineIntegration({
 				[`MARIMOHUB_PG_${seg}_DATABASE`]: config.database,
 				[`MARIMOHUB_PG_${seg}_USER`]: config.username,
 				[`MARIMOHUB_PG_${seg}_PASSWORD`]: config.password,
-				// marimo's discovery builds its connection from PGHOST/PGUSER/PGDATABASE
-				// and never sets an sslmode, so PGSSLMODE and PGSSLROOTCERT are what
-				// keep that connection as verified as the URL above — libpq reads them
-				// for any parameter the caller left unspecified.
-				...(config.ambient_env
-					? {
-							PGHOST: config.host,
-							PGPORT: String(config.port),
-							PGDATABASE: config.database,
-							PGUSER: config.username,
-							PGPASSWORD: config.password,
-							PGSSLMODE: config.ssl.mode,
-							...(caPath ? { PGSSLROOTCERT: caPath } : {}),
-						}
-					: {}),
 			},
+			// libpq reads these TLS variables for parameters marimo's discovered
+			// connection leaves unspecified, preserving the configured verification.
+			discoveryEnv: config.ambient_env
+				? {
+						PGHOST: config.host,
+						PGPORT: String(config.port),
+						PGDATABASE: config.database,
+						PGUSER: config.username,
+						PGPASSWORD: config.password,
+						PGSSLMODE: config.ssl.mode,
+						...(caPath ? { PGSSLROOTCERT: caPath } : {}),
+					}
+				: {},
 			files,
 			manifestExtra: { host: config.host, database: config.database },
 		};

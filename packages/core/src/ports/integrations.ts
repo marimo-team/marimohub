@@ -313,4 +313,6 @@ export interface SessionRender {
 	vars: Record<string, string>;
 	/** Version pins persisted on the session record. */
 	attachments: IntegrationVersionPin[];
+	/** User-safe notices about best-effort integration features. */
+	warnings: string[];
 }

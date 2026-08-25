@@ -67,10 +67,21 @@ const pysparkConfig = z.strictObject({
 	ambient_env: discoveryEnvField('SPARK_REMOTE'),
 });
 
+function pysparkDiscoveryReason(config: z.infer<typeof pysparkConfig>): string | undefined {
+	if (config.app_name) return 'marimo cannot carry the configured Spark application name';
+	if (Object.keys(config.spark_config).length > 0) {
+		return 'marimo cannot carry the configured Spark session properties';
+	}
+	if (config.secret_spark_config.length > 0) {
+		return 'marimo cannot carry the configured secret Spark session properties';
+	}
+	return undefined;
+}
+
 export const pyspark = defineIntegration({
 	kind: 'pyspark',
 	title: 'PySpark (Spark Connect)',
-	description: 'Remote PySpark DataFrame sessions over Spark Connect.',
+	description: 'Remote PySpark sessions that appear automatically in marimo data-source discovery.',
 	category: 'engine',
 	brand: { icon: 'apachespark', color: '#E25A1C' },
 	schemaVersion: 1,
@@ -92,7 +103,7 @@ export const pyspark = defineIntegration({
 		spark_config: { group: 'Spark config', order: 60, advanced: true, widget: 'kv-pairs' },
 		secret_spark_config: { group: 'Spark config', order: 61, advanced: true },
 		'secret_spark_config.*.value': { widget: 'password' },
-		ambient_env: { group: 'Discovery', order: 70, widget: 'toggle', advanced: true },
+		ambient_env: { group: 'Discovery', order: 70, widget: 'toggle' },
 	},
 
 	validate(config) {
@@ -144,16 +155,23 @@ export const pyspark = defineIntegration({
 			...config.spark_config,
 			...Object.fromEntries(config.secret_spark_config.map(({ name, value }) => [name, value])),
 		};
+		const discoveryReason = config.ambient_env ? pysparkDiscoveryReason(config) : undefined;
 
 		return {
 			env: {
 				[`${prefix}_REMOTE`]: remote,
 				[`${prefix}_CONFIG`]: configPath,
 				...(config.auth.method === 'token' ? { [`${prefix}_TOKEN`]: config.auth.token } : {}),
-				// The same string: SPARK_REMOTE is what `SparkSession.builder` reads on
-				// its own, so this needs no separate contract.
-				...(config.ambient_env ? { SPARK_REMOTE: remote } : {}),
 			},
+			...(config.ambient_env && discoveryReason === undefined
+				? { discoveryEnv: { SPARK_REMOTE: remote } }
+				: {}),
+			warnings: discoveryReason
+				? [
+						`Integration "${instanceName}" is available through its notebook snippet, but not ` +
+							`automatic data-source discovery because ${discoveryReason}.`,
+					]
+				: [],
 			files: [
 				{
 					path: `pyspark/${instanceName}.json`,
