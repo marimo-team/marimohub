@@ -205,6 +205,7 @@ fn login_command() -> Command {
             Arg::new("no-browser")
                 .long("no-browser")
                 .action(ArgAction::SetTrue)
+                .conflicts_with_all(["token-stdin", "token", "token-file"])
                 .help("Print the sign-in URL for a browser on this machine"),
         )
 }
@@ -332,5 +333,26 @@ mod tests {
             .unwrap();
 
         assert_eq!(body.get_long(), Some("body-body"));
+    }
+
+    #[test]
+    fn login_rejects_no_browser_with_token_supply_flags() {
+        for arguments in [
+            vec!["mohub", "login", "--no-browser", "--token-stdin"],
+            vec!["mohub", "login", "--no-browser", "--token", "secret"],
+            vec![
+                "mohub",
+                "login",
+                "--no-browser",
+                "--token-file",
+                "token.txt",
+            ],
+        ] {
+            let error = build(&crate::manifest::load())
+                .try_get_matches_from(arguments)
+                .expect_err("token supply flags must conflict with --no-browser");
+
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
     }
 }

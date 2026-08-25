@@ -491,32 +491,68 @@ fn delete_credential(account: &str) -> Result<(), Error> {
     }
 }
 
-pub fn set_profile_token(profile: &str, base_url: &str, token: &SecretString) -> Result<(), Error> {
+pub fn complete_browser_login(
+    profile: &str,
+    base_url: &str,
+    expected_base_url: Option<&str>,
+    token: &SecretString,
+) -> Result<(), Error> {
     let path = path()?;
-    set_profile_token_at(&path, profile, base_url, token, set_credential)
+    complete_browser_login_at(
+        &path,
+        profile,
+        base_url,
+        expected_base_url,
+        token,
+        set_credential,
+        delete_credential,
+    )
 }
 
-fn set_profile_token_at(
+fn complete_browser_login_at(
     path: &Path,
     profile: &str,
     base_url: &str,
+    expected_base_url: Option<&str>,
     token: &SecretString,
     mut store_credential: impl FnMut(&str, &SecretString) -> Result<(), Error>,
+    mut remove_credential: impl FnMut(&str) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let _lock = lock_for(path)?;
-    let config = load_from(path)?;
-    let configured = config
+    let mut config = load_from(path)?;
+    let configured_base_url = config
         .profiles
         .get(profile)
-        .ok_or_else(|| Error::Config(format!("profile {profile:?} does not exist")))?;
-    let configured_base_url = normalize_base_url(&configured.base_url)?;
-    let base_url = normalize_base_url(base_url)?;
-    if configured_base_url != base_url {
+        .map(|profile| normalize_base_url(&profile.base_url))
+        .transpose()?;
+    let expected_base_url = expected_base_url.map(normalize_base_url).transpose()?;
+    if configured_base_url != expected_base_url {
         return Err(Error::Config(format!(
             "profile {profile:?} changed while authentication was in progress"
         )));
     }
-    store_credential(&credential_account(profile, &base_url), token)
+
+    let base_url = normalize_base_url(base_url)?;
+    let account = credential_account(profile, &base_url);
+    store_credential(&account, token)?;
+    config.profiles.insert(
+        profile.to_owned(),
+        Profile {
+            base_url: base_url.clone(),
+        },
+    );
+    if config.current_profile.is_none() {
+        config.current_profile = Some(profile.to_owned());
+    }
+    save_to(path, &config)?;
+
+    if let Some(previous_base_url) = configured_base_url {
+        let previous_account = credential_account(profile, &previous_base_url);
+        if previous_account != account {
+            remove_credential(&previous_account)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn delete_profile_token(profile: &str, base_url: &str) -> Result<(), Error> {
@@ -1033,14 +1069,47 @@ mod tests {
     }
 
     #[test]
-    fn login_rejects_a_profile_url_changed_during_validation() {
+    fn browser_login_creates_the_profile_only_when_completed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let token = SecretString::from("new-token".to_owned());
+        let stored_account = RefCell::new(None);
+
+        complete_browser_login_at(
+            &path,
+            "default",
+            "https://hub.example.com",
+            None,
+            &token,
+            |account, _| {
+                stored_account.replace(Some(account.to_owned()));
+                Ok(())
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        let config = load_from(&path).unwrap();
+        assert_eq!(config.current_profile.as_deref(), Some("default"));
+        assert_eq!(
+            config.profiles["default"].base_url,
+            "https://hub.example.com"
+        );
+        assert_eq!(
+            stored_account.into_inner(),
+            Some(credential_account("default", "https://hub.example.com"))
+        );
+    }
+
+    #[test]
+    fn browser_login_rejects_a_profile_changed_during_authentication() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.json");
         update_at(&path, |config| {
             config.profiles.insert(
                 "default".into(),
                 Profile {
-                    base_url: "https://new.example.com".into(),
+                    base_url: "https://changed.example.com".into(),
                 },
             );
             Ok(())
@@ -1049,12 +1118,17 @@ mod tests {
         let token = SecretString::from("new-token".to_owned());
         let credential_changed = Cell::new(false);
 
-        let result = set_profile_token_at(
+        let result = complete_browser_login_at(
             &path,
             "default",
-            "https://old.example.com",
+            "https://new.example.com",
+            Some("https://old.example.com"),
             &token,
             |_, _| {
+                credential_changed.set(true);
+                Ok(())
+            },
+            |_| {
                 credential_changed.set(true);
                 Ok(())
             },
@@ -1062,41 +1136,62 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Config(_))));
         assert!(!credential_changed.get());
+        assert_eq!(
+            load_from(&path).unwrap().profiles["default"].base_url,
+            "https://changed.example.com"
+        );
     }
 
     #[test]
-    fn login_accepts_a_canonical_match_for_a_stored_trailing_slash() {
+    fn browser_login_replaces_the_previous_profile_after_authentication() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.json");
         update_at(&path, |config| {
             config.profiles.insert(
                 "default".into(),
                 Profile {
-                    base_url: "https://hub.example.com/".into(),
+                    base_url: "https://old.example.com/".into(),
                 },
             );
             Ok(())
         })
         .unwrap();
+        let old_account = credential_account("default", "https://old.example.com");
+        let new_account = credential_account("default", "https://new.example.com");
+        let credentials = RefCell::new(BTreeMap::from([(
+            old_account.clone(),
+            "old-token".to_owned(),
+        )]));
         let token = SecretString::from("new-token".to_owned());
-        let stored_account = RefCell::new(None);
 
-        set_profile_token_at(
+        complete_browser_login_at(
             &path,
             "default",
-            "https://hub.example.com",
+            "https://new.example.com",
+            Some("https://old.example.com"),
             &token,
-            |account, _| {
-                stored_account.replace(Some(account.to_owned()));
+            |account, token| {
+                credentials
+                    .borrow_mut()
+                    .insert(account.to_owned(), token.expose_secret().to_owned());
+                Ok(())
+            },
+            |account| {
+                credentials.borrow_mut().remove(account);
                 Ok(())
             },
         )
         .unwrap();
 
         assert_eq!(
-            stored_account.into_inner(),
-            Some(credential_account("default", "https://hub.example.com"))
+            load_from(&path).unwrap().profiles["default"].base_url,
+            "https://new.example.com"
         );
+        assert_eq!(
+            credentials.borrow().get(&new_account).map(String::as_str),
+            Some("new-token")
+        );
+        assert!(!credentials.borrow().contains_key(&old_account));
     }
 
     #[test]

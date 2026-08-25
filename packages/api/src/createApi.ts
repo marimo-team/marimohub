@@ -257,6 +257,7 @@ export function createApi(rawDeps: ApiDeps) {
 	};
 	app.use(`${API_PREFIX}/*`, observeRejection);
 	app.use('/api/sync/*', observeRejection);
+	app.use('/api/cli/*', observeRejection);
 
 	// Body-size cap: the API buffers request bodies in full (Hono parses JSON in
 	// memory), so an unbounded POST could OOM the service. Reject anything past

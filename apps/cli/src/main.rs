@@ -418,7 +418,7 @@ fn browser_login(
     }
 }
 
-fn selected_login_target(matches: &ArgMatches) -> Result<(String, String), Error> {
+fn selected_login_target(matches: &ArgMatches) -> Result<(String, String, Option<String>), Error> {
     let config = config::load()?;
     let name = matches
         .get_one::<String>("profile-name")
@@ -434,12 +434,14 @@ fn selected_login_target(matches: &ArgMatches) -> Result<(String, String), Error
         .get(&name)
         .map(|profile| normalize_base_url(&profile.base_url))
         .transpose()?;
-    let base_url = override_url.or(profile_url).ok_or_else(|| {
-        Error::Config(
-            "no server URL; pass --base-url, set MARIMOHUB_URL, or configure a profile".into(),
-        )
-    })?;
-    Ok((name, base_url))
+    let base_url = override_url
+        .or_else(|| profile_url.clone())
+        .ok_or_else(|| {
+            Error::Config(
+                "no server URL; pass --base-url, set MARIMOHUB_URL, or configure a profile".into(),
+            )
+        })?;
+    Ok((name, base_url, profile_url))
 }
 
 fn upgrade_hint(executable: &Path) -> &'static str {
@@ -485,7 +487,7 @@ fn handle_login(
     matches: &ArgMatches,
     leaf: &ArgMatches,
 ) -> Result<(), Error> {
-    let (profile, base_url) = selected_login_target(matches)?;
+    let (profile, base_url, expected_base_url) = selected_login_target(matches)?;
     if let Some(token) = supplied_token(leaf)? {
         let user = client::current_user(manifest, &auth_runtime(matches, &base_url, &token))
             .map_err(|error| Error::Authentication {
@@ -501,9 +503,13 @@ fn handle_login(
     }
 
     browser_login_origin(&base_url)?;
-    config::set_profile(&profile, base_url.clone(), None)?;
     let mut credential = browser_login(matches, &base_url, leaf.get_flag("no-browser"))?;
-    if let Err(error) = config::set_profile_token(&profile, &base_url, &credential.token) {
+    if let Err(error) = config::complete_browser_login(
+        &profile,
+        &base_url,
+        expected_base_url.as_deref(),
+        &credential.token,
+    ) {
         let _ = callback_response(&mut credential.callback, false);
         return Err(error);
     }

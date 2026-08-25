@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR } from '@marimo-hub/core/testing';
 import { composeAuthenticators } from '@marimo-hub/core';
@@ -111,6 +111,33 @@ describe('CLI authorization routes', () => {
 				body: JSON.stringify({ code, code_verifier: VERIFIER }),
 			}),
 		).toHaveProperty('status', 200);
+	});
+
+	it('rate-limits exchanges before reading authorization storage', async () => {
+		const realNow = Date.now();
+		vi.useFakeTimers({ now: realNow + 61_000 });
+		try {
+			const deps = makeTestDeps(bucket);
+			const exchange = vi.spyOn(deps.services.cliAuthorizations, 'exchange');
+			const limitedApi = createApi(deps);
+			const exchangeRequest = () =>
+				limitedApi.request('/api/cli/v1/token', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ code: 'missing', code_verifier: VERIFIER }),
+				});
+
+			for (let attempt = 0; attempt < 60; attempt += 1) {
+				await expectError(await exchangeRequest(), 400, 'BAD_REQUEST');
+			}
+			const response = await exchangeRequest();
+			await expectError(response, 429, 'RESOURCE_EXHAUSTED');
+			expect(response.headers.get('Retry-After')).toBe('5');
+			expect(exchange).toHaveBeenCalledTimes(60);
+		} finally {
+			vi.setSystemTime(realNow);
+			vi.useRealTimers();
+		}
 	});
 
 	it('requires a session to approve and never accepts a PAT there', async () => {

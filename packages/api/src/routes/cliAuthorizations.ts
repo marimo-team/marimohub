@@ -1,5 +1,9 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { BadRequestError } from '@marimo-hub/core';
+import {
+	BadRequestError,
+	createSlidingWindowBudget,
+	ResourceExhaustedError,
+} from '@marimo-hub/core';
 import { appendAudit } from '../log';
 import {
 	assertSessionAuthenticated,
@@ -27,6 +31,19 @@ const ExchangeBodySchema = z.object({
 	code: z.string().min(1).max(100),
 	code_verifier: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/),
 });
+
+const EXCHANGE_LIMIT = 60;
+const EXCHANGE_WINDOW_MS = 60_000;
+const exchangeBudget = createSlidingWindowBudget<'deployment'>({
+	limit: EXCHANGE_LIMIT,
+	windowMs: EXCHANGE_WINDOW_MS,
+});
+
+function assertExchangeAllowed(): void {
+	if (!exchangeBudget.consume('deployment')) {
+		throw new ResourceExhaustedError('Too many CLI token exchanges; try again later.');
+	}
+}
 
 function loopbackCallback(raw: string): URL {
 	const url = new URL(raw);
@@ -129,9 +146,12 @@ export const cliTokenApp = createApp();
 
 cliTokenApp.openapi(exchangeAuthorization, async (c) => {
 	const body = c.req.valid('json');
-	const { token, record } = await c
-		.get('deps')
-		.services.cliAuthorizations.exchange(body.code, body.code_verifier);
+	const deps = c.get('deps');
+	assertExchangeAllowed();
+	const { token, record } = await deps.services.cliAuthorizations.exchange(
+		body.code,
+		body.code_verifier,
+	);
 	await appendAudit(
 		{
 			requestId: c.get('requestId'),
@@ -141,7 +161,7 @@ cliTokenApp.openapi(exchangeAuthorization, async (c) => {
 		},
 		'token.create',
 		() =>
-			c.get('deps').services.events.append({
+			deps.services.events.append({
 				event: 'token.create',
 				actor: record.user_id,
 				token_id: record.id,
