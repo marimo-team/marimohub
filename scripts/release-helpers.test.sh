@@ -98,7 +98,8 @@ printf '%s\n' \
 	'    if [[ -n "${MOCK_ASSET_STATE:-}" ]]; then' \
 	'      mkdir -p "$MOCK_ASSET_STATE"' \
 	'      asset_path="${asset%%#*}"' \
-	'      read -r digest _ < <(shasum -a 256 "$asset_path")' \
+	'      digest_output=$(shasum -a 256 "$asset_path")' \
+	'      digest="${digest_output%% *}"' \
 	'      next_id=$(( $(find "$MOCK_ASSET_STATE" -type f | wc -l) + 1 ))' \
 	'      printf "%s\tsha256:%s\n" "$(basename "$asset_path")" "$digest" > "$MOCK_ASSET_STATE/new-$next_id"' \
 	'    fi' \

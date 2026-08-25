@@ -23,7 +23,7 @@ Idempotency-Key: 8f3c1e2a-...
   A hit replays it. See `IdempotencyService` (core) and `idempotentCreate` (api).
 - **External delivery mechanics** — deterministic checks run first. The server then admits a refundable test-budget entry before it stores a separate delivery claim.
   If claim storage fails or another request owns the claim, the server refunds the budget entry.
-  Only the claim owner keeps the budget charge and sends the message.
+  Only the claim owner keeps the budget charge and attempts delivery.
   A completed test stores its response under the result scope.
   A concurrent or uncertain request cannot send the message again with the same key.
 - **Retention** — pruned after 24h by the maintenance cron, so replay is

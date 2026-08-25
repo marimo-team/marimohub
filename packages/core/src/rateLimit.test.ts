@@ -23,13 +23,13 @@ describe('createSlidingWindowBudget', () => {
 
 	it('refunds only the admission that owns the token', () => {
 		const budget = createSlidingWindowBudget<string>({ limit: 2, windowMs: 1_000 });
-		const first = budget.admit('user');
+		const first = budget.admit('user', 0);
 		expect(first).not.toBeNull();
-		expect(budget.admit('user')).not.toBeNull();
+		expect(budget.admit('user', 500)).not.toBeNull();
 
 		first?.refund();
-		expect(budget.consume('user')).toBe(true);
-		expect(budget.consume('user')).toBe(false);
+		expect(budget.consume('user', 1_000)).toBe(true);
+		expect(budget.consume('user', 1_000)).toBe(false);
 	});
 
 	it('tracks each key independently', () => {
