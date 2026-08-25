@@ -1208,8 +1208,11 @@ app.openapi(browseCapability, async (c) => {
 		logEvent({
 			level: 'warn',
 			event: 'integration_query_unavailable',
+			request_id: c.get('requestId') ?? null,
 			project_id: pid,
 			integration_id: iid,
+			integration_kind: capability.integration_kind,
+			surface: 'query',
 			reason: querySurface.reason ?? 'No reason provided.',
 		});
 	}
@@ -1247,6 +1250,7 @@ app.openapi(browseNamespaces, async (c) => {
 	const request = {
 		limit,
 		query_user: user.email,
+		signal: c.req.raw.signal,
 		...(cursor !== undefined ? { cursor } : {}),
 		...(parent !== undefined ? { parent: splitNamespace(parent) } : {}),
 	};
@@ -1276,6 +1280,7 @@ app.openapi(browseTables, async (c) => {
 	const request = {
 		limit,
 		query_user: user.email,
+		signal: c.req.raw.signal,
 		...(cursor !== undefined ? { cursor } : {}),
 	};
 	const data = await browseEndpoint({

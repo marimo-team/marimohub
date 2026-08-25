@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { HTTPException } from 'hono/http-exception';
 import {
 	ConflictError,
+	createIntegrationId,
 	createNotebookId,
 	createProjectId,
 	createServices,
@@ -77,6 +78,41 @@ describe('createApi onError mapping', () => {
 		expect(log).toHaveBeenCalledOnce();
 		expect(log.mock.calls[0]?.[0]).toContain('request_error');
 		expect(log.mock.calls[0]?.[0]).not.toContain('do-not-return');
+	});
+
+	it('logs integration resource context and a safe transport cause for a browse failure', async () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const { app } = createTestApi();
+		const pid = createProjectId();
+		const iid = createIntegrationId();
+		app.get('/api/v1/projects/:pid/integrations/:iid/_unavailable', () => {
+			const cause = Object.assign(new Error('Integration transport failure'), {
+				name: 'IntegrationTransportError',
+				code: 'ECONNREFUSED',
+			});
+			throw new UnavailableError('The integration target refused the connection.', { cause });
+		});
+
+		const res = await app.request(`/api/v1/projects/${pid}/integrations/${iid}/_unavailable`, {
+			headers: { 'X-Request-Id': 'browse-request-1' },
+		});
+
+		expect(res.status).toBe(503);
+		expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+			event: 'request_error',
+			request_id: 'browse-request-1',
+			project_id: pid,
+			integration_id: iid,
+			error: {
+				name: 'UnavailableError',
+				message: 'The integration target refused the connection.',
+				cause: {
+					name: 'IntegrationTransportError',
+					message: 'Integration transport failure',
+					code: 'ECONNREFUSED',
+				},
+			},
+		});
 	});
 });
 

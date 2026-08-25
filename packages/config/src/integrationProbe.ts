@@ -10,7 +10,15 @@ import { request as httpsRequest } from 'node:https';
 import { BlockList, connect as netConnect, isIP } from 'node:net';
 import type { TcpSocketConnectOpts } from 'node:net';
 import { connect as tlsConnect } from 'node:tls';
-import { createSlidingWindowBudget, parseHttpUrl, withDeadline } from '@marimo-hub/core';
+import {
+	createSlidingWindowBudget,
+	DomainError,
+	parseHttpUrl,
+	ResourceExhaustedError,
+	UnavailableError,
+	ValidationError,
+	withDeadline,
+} from '@marimo-hub/core';
 import type {
 	IntegrationProbe,
 	ProbeConnectRequest,
@@ -151,16 +159,23 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 			});
 			const remainingMs = deadline - Date.now();
 			if (remainingMs <= 0) throw timedOut();
-			const response = await transport({
-				url: target,
-				method: init.method ?? 'GET',
-				headers: init.headers ?? {},
-				body: init.body,
-				pinned,
-				timeoutMs: remainingMs,
-				maxResponseBytes,
-				signal: init.signal,
-			});
+			let response: Awaited<ReturnType<ProbeTransport>>;
+			try {
+				response = await transport({
+					url: target,
+					method: init.method ?? 'GET',
+					headers: init.headers ?? {},
+					body: init.body,
+					pinned,
+					timeoutMs: remainingMs,
+					maxResponseBytes,
+					signal: init.signal,
+				});
+			} catch (err) {
+				if (init.signal?.aborted) throw aborted();
+				if (err instanceof DomainError) throw err;
+				throw transportFailure(err);
+			}
 			return {
 				ok: response.status >= 200 && response.status < 300,
 				status: response.status,
@@ -179,7 +194,7 @@ export function createGuardedProbe(options: GuardedProbeOptions = {}): Integrati
 
 function consumeProbeBudget(budget: ReturnType<typeof createSlidingWindowBudget<'probe'>>): void {
 	if (!budget.consume('probe')) {
-		throw new Error('Too many connection tests — try again in a minute.');
+		throw new ResourceExhaustedError('Too many integration requests — try again in a minute.');
 	}
 }
 
@@ -282,11 +297,13 @@ const nodeConnectionTransport: ProbeConnectionTransport = (request) =>
 function parseTarget(url: string): URL {
 	const parsed = parseHttpUrl(url);
 	if (parsed.ok) return parsed.url;
-	if (parsed.issue === 'protocol') throw new Error('Only http(s) URLs can be tested.');
-	if (parsed.issue === 'credentials') {
-		throw new Error('URLs with embedded credentials cannot be tested.');
+	if (parsed.issue === 'protocol') {
+		throw new ValidationError('Integration request URLs must use http(s).');
 	}
-	throw new Error('Invalid URL.');
+	if (parsed.issue === 'credentials') {
+		throw new ValidationError('Integration request URLs cannot contain embedded credentials.');
+	}
+	throw new ValidationError('Invalid integration request URL.');
 }
 
 /** Resolves once and rejects the target if any returned address is forbidden. */
@@ -304,10 +321,14 @@ async function resolveAndValidate(
 	let addresses: { address: string; family: number }[];
 	try {
 		addresses = await lookup(bare, { all: true, verbatim: true });
-	} catch {
-		throw new Error(`Could not resolve "${hostname}".`);
+	} catch (err) {
+		throw new UnavailableError('The integration target could not be resolved.', {
+			cause: safeTransportCause(err),
+		});
 	}
-	if (addresses.length === 0) throw new Error(`Could not resolve "${hostname}".`);
+	if (addresses.length === 0) {
+		throw new UnavailableError('The integration target could not be resolved.');
+	}
 	if (!allowPrivate && addresses.some((a) => isForbiddenAddress(a.address))) {
 		throw forbidden(hostname);
 	}
@@ -315,18 +336,48 @@ async function resolveAndValidate(
 }
 
 function timedOut(): Error {
-	return new Error('Connection test timed out.');
+	return new UnavailableError('The integration request timed out.');
 }
 
 function aborted(): Error {
 	return Object.assign(new Error('Connection test aborted.'), { name: 'AbortError' });
 }
 
-function forbidden(hostname: string): Error {
-	return new Error(
-		`"${hostname}" resolves to a private or reserved address, which cannot be tested ` +
-			'from this deployment.',
+function forbidden(_hostname: string): Error {
+	return new UnavailableError(
+		'The integration target resolves to a private or reserved address. Set ' +
+			'MARIMOHUB_INTEGRATIONS_PROBE=private for trusted private-network services.',
 	);
+}
+
+function safeTransportCode(err: unknown, depth = 3): string | undefined {
+	if (!(err instanceof Error) || depth < 0) return undefined;
+	const code = (err as Error & { code?: unknown }).code;
+	if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) return code;
+	const cause = (err as Error & { cause?: unknown }).cause;
+	return cause === undefined ? undefined : safeTransportCode(cause, depth - 1);
+}
+
+function safeTransportCause(err: unknown): Error {
+	const cause = new Error('Integration transport failure');
+	cause.name = 'IntegrationTransportError';
+	const code = safeTransportCode(err);
+	return code ? Object.assign(cause, { code }) : cause;
+}
+
+function transportFailure(err: unknown): UnavailableError {
+	const code = safeTransportCode(err);
+	const message =
+		code === 'ECONNREFUSED'
+			? 'The integration target refused the connection.'
+			: code === 'ECONNRESET'
+				? 'The integration target reset the connection.'
+				: code === 'ETIMEDOUT' || code === 'ABORT_ERR' || code === 'UND_ERR_CONNECT_TIMEOUT'
+					? 'The integration request timed out.'
+					: code && /(?:CERT|TLS|SSL|SELF_SIGNED|VERIFY)/.test(code)
+						? "The integration target's TLS certificate could not be verified."
+						: 'The integration request could not connect to its target.';
+	return new UnavailableError(message, { cause: safeTransportCause(err) });
 }
 
 function isForbiddenAddress(address: string): boolean {

@@ -460,8 +460,11 @@ describe('Data browser routes', () => {
 		expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
 			level: 'warn',
 			event: 'integration_query_unavailable',
+			request_id: expect.any(String),
 			project_id: pid,
 			integration_id: created.id,
+			integration_kind: 'browsy',
+			surface: 'query',
 			reason: 'guarded catalog and object-store HTTP brokering is not available in DuckDB-Wasm',
 		});
 	});

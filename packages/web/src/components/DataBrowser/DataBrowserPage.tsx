@@ -49,6 +49,7 @@ import {
 import { formatRelative } from '@/lib/time';
 import { errorMessage } from '@/lib/errors';
 import { cn } from '@/lib/utils';
+import { ApiRequestError } from '@/api/client';
 import type { IntegrationEntry, IntegrationKind } from '@/types';
 import { useSeededNotebook } from './notebookSeed';
 import { ObjectBrowser } from './ObjectBrowser';
@@ -505,7 +506,12 @@ function LoadState({ depth, error, hint }: { depth: number; error?: unknown; hin
 		>
 			{error ? (
 				<span className="text-destructive">
-					{error instanceof Error ? error.message : 'Request failed'}
+					<span className="block">{errorMessage(error)}</span>
+					{error instanceof ApiRequestError && error.requestId ? (
+						<span className="mt-0.5 block font-mono text-[0.6875rem] text-muted-foreground">
+							Reference: {error.requestId}
+						</span>
+					) : null}
 				</span>
 			) : hint ? (
 				<span>{hint}</span>

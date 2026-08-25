@@ -41,6 +41,27 @@ describe('trino browse', () => {
 		expect(calls[0].init?.headers).toMatchObject({ 'X-Trino-User': 'alice@example.com' });
 	});
 
+	it('preserves explicitly configured protocol headers', async () => {
+		const { probe, calls } = queuedProbe([{ columns: [{ name: 'Catalog' }], data: [] }]);
+		await browse.listNamespaces(
+			config({
+				http_headers: [
+					{ name: 'accept', value: 'application/vnd.example+json' },
+					{ name: 'content-type', value: 'text/plain; charset=us-ascii' },
+				],
+			}),
+			probe,
+			{ limit: 10 },
+		);
+
+		expect(calls[0].init?.headers).toMatchObject({
+			accept: 'application/vnd.example+json',
+			'content-type': 'text/plain; charset=us-ascii',
+		});
+		expect(calls[0].init?.headers).not.toHaveProperty('Accept');
+		expect(calls[0].init?.headers).not.toHaveProperty('Content-Type');
+	});
+
 	it('lists catalogs and follows same-coordinator statement pages', async () => {
 		const { probe, calls } = queuedProbe([
 			{
@@ -61,7 +82,9 @@ describe('trino browse', () => {
 			init: { method: 'POST', body: 'SHOW CATALOGS' },
 		});
 		expect(calls[0].init?.headers).toMatchObject({
+			Accept: 'application/json',
 			Authorization: expect.stringMatching(/^Basic /),
+			'Content-Type': 'text/plain; charset=utf-8',
 			'X-Trino-User': 'alice',
 		});
 		expect(calls[1].url).toBe('https://trino.example.com/v1/statement/q1/1');

@@ -1796,7 +1796,7 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		id: IntegrationId,
 		namespace: string[],
 		table: string,
-		request?: Pick<TablePreviewRequest, 'query_user'>,
+		request?: Pick<TablePreviewRequest, 'query_user' | 'signal'>,
 	): Promise<TableSchema> {
 		return this.withBrowseScope(projectId, id, (scope) =>
 			this.store.browseTableSchema(scope, id, namespace, table, request),

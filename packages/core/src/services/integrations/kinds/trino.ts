@@ -589,6 +589,11 @@ function trinoHeaders(
 	queryUser: string | undefined,
 ): Record<string, string> {
 	const headers = Object.fromEntries(config.http_headers.map(({ name, value }) => [name, value]));
+	const customHeaderNames = new Set(Object.keys(headers).map((name) => name.toLowerCase()));
+	if (!customHeaderNames.has('accept')) headers.Accept = 'application/json';
+	if (!customHeaderNames.has('content-type')) {
+		headers['Content-Type'] = 'text/plain; charset=utf-8';
+	}
 	const user = config.user ?? (config.auth.method === 'basic' ? config.auth.username : queryUser);
 	if (!user) throw new ValidationError('Trino hub browsing requires a query user.');
 	headers['X-Trino-User'] = user;
