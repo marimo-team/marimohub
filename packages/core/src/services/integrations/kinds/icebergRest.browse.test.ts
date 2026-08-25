@@ -294,6 +294,7 @@ describe('iceberg_rest browse operations', () => {
 	it('reports a non-JSON config response before requesting catalog routes', async () => {
 		const requested: string[] = [];
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: (url) => {
 				requested.push(url);
 				return Promise.resolve({

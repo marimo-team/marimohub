@@ -430,7 +430,7 @@ describe('createGuardedProbe policy', () => {
 		await expect(probe.fetch('http://10.0.0.5/')).resolves.toMatchObject({ ok: true });
 	});
 
-	it('classifies transport failures without retaining raw transport text', async () => {
+	it('classifies and sanitizes transport failures before logging', async () => {
 		const transport = vi.fn(() =>
 			Promise.reject(
 				Object.assign(new Error('connect ECONNREFUSED https://user:secret@example.test'), {
@@ -451,8 +451,13 @@ describe('createGuardedProbe policy', () => {
 				code: 'ECONNREFUSED',
 			},
 		});
-		expect(String(error)).not.toContain('secret');
-		expect(String((error as Error).cause)).not.toContain('secret');
+		const typedError = error as Error;
+		const cause = typedError.cause as Error;
+		const diagnostic = [typedError.message, typedError.stack, cause.message, cause.stack].join(
+			'\n',
+		);
+		expect(diagnostic).not.toContain('secret');
+		expect(diagnostic).not.toContain('user:');
 	});
 });
 

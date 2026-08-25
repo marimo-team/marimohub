@@ -80,7 +80,7 @@ describe('createApi onError mapping', () => {
 		expect(log.mock.calls[0]?.[0]).not.toContain('do-not-return');
 	});
 
-	it('logs integration resource context and a safe transport cause for a browse failure', async () => {
+	it('logs integration resource context and trusted transport metadata for a browse failure', async () => {
 		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		const { app } = createTestApi();
 		const pid = createProjectId();

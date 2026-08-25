@@ -304,6 +304,7 @@ describe('defineIntegration browse guard', () => {
 
 	it('passes a safe probe availability error through untouched', async () => {
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: () =>
 				Promise.reject(new UnavailableError('The integration target could not be resolved.')),
 		};

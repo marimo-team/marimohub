@@ -1250,7 +1250,6 @@ app.openapi(browseNamespaces, async (c) => {
 	const request = {
 		limit,
 		query_user: user.email,
-		signal: c.req.raw.signal,
 		...(cursor !== undefined ? { cursor } : {}),
 		...(parent !== undefined ? { parent: splitNamespace(parent) } : {}),
 	};
@@ -1280,7 +1279,6 @@ app.openapi(browseTables, async (c) => {
 	const request = {
 		limit,
 		query_user: user.email,
-		signal: c.req.raw.signal,
 		...(cursor !== undefined ? { cursor } : {}),
 	};
 	const data = await browseEndpoint({
@@ -1319,7 +1317,6 @@ app.openapi(browseTableSchema, async (c) => {
 		load: () =>
 			integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table, {
 				query_user: user.email,
-				signal: c.req.raw.signal,
 			}),
 	});
 	return c.json({ success: true, data }, 200);
