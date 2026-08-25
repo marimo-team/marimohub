@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
-import { ACTOR } from '@marimo-hub/core/testing';
+import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { composeAuthenticators, createCliAuthorizationId } from '@marimo-hub/core';
 import { createApi, generateOpenApiDocument } from '../createApi';
 import {
@@ -44,6 +44,23 @@ describe('CLI authorization routes', () => {
 		);
 	}
 
+	async function requestDevice() {
+		return expectOk<{
+			device_code: string;
+			user_code: string;
+			verification_uri: string;
+			verification_uri_complete: string;
+			expires_in: number;
+			interval: number;
+		}>(
+			await app.request('/api/cli/v1/device-authorizations', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ code_challenge: CHALLENGE }),
+			}),
+		);
+	}
+
 	it('approves in the browser and exchanges through the public PKCE endpoint', async () => {
 		const approved = await approve();
 		const redirect = new URL(approved.redirect_uri);
@@ -73,6 +90,120 @@ describe('CLI authorization routes', () => {
 		expect(me.id).toBe(ACTOR);
 	});
 
+	it('approves a device login from any browser and returns the PAT through polling', async () => {
+		const device = await requestDevice();
+		expect(device.device_code).toMatch(/^mhub_cli_/);
+		expect(device.user_code).toMatch(/^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/);
+		expect(device.verification_uri).toBe('http://localhost/cli/device');
+		expect(new URL(device.verification_uri_complete).searchParams.get('user_code')).toBe(
+			device.user_code,
+		);
+		expect(device).toMatchObject({ expires_in: 600, interval: 5 });
+
+		const pendingResponse = await app.request('/api/cli/v1/device-token', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ device_code: device.device_code, code_verifier: VERIFIER }),
+		});
+		expect(await expectOk<{ status: string }>(pendingResponse, 202)).toEqual({
+			status: 'authorization_pending',
+		});
+		expect(pendingResponse.headers.get('Cache-Control')).toBe('no-store');
+
+		const approvalResponse = await request('POST', '/me/cli-device-authorizations', {
+			user_code: device.user_code.toLowerCase(),
+			token_name: 'remote mohub CLI',
+			expires_in_days: 7,
+		});
+		await expectOk(approvalResponse);
+		expect(approvalResponse.headers.get('Cache-Control')).toBe('no-store');
+
+		const tokenResponse = await app.request('/api/cli/v1/device-token', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ device_code: device.device_code, code_verifier: VERIFIER }),
+		});
+		const exchanged = await expectOk<{ token: string }>(tokenResponse);
+		expect(exchanged.token).toMatch(/^mhub_pat_/);
+		expect(tokenResponse.headers.get('Cache-Control')).toBe('no-store');
+
+		await expectError(
+			await app.request('/api/cli/v1/device-token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ device_code: device.device_code, code_verifier: VERIFIER }),
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+	});
+
+	it('marks device authorization instructions as non-cacheable', async () => {
+		const response = await app.request('/api/cli/v1/device-authorizations', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ code_challenge: CHALLENGE }),
+		});
+
+		await expectOk(response);
+		expect(response.headers.get('Cache-Control')).toBe('no-store');
+		expect(response.headers.get('Pragma')).toBe('no-cache');
+	});
+
+	it('does not disclose device grant state without its PKCE verifier', async () => {
+		const device = await requestDevice();
+
+		await expectError(
+			await app.request('/api/cli/v1/device-token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					device_code: device.device_code,
+					code_verifier: 'x'.repeat(64),
+				}),
+			}),
+			400,
+			'BAD_REQUEST',
+		);
+	});
+
+	it('bounds device polling and user-code guesses independently', async () => {
+		const device = await requestDevice();
+		const poll = () =>
+			app.request('/api/cli/v1/device-token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ device_code: device.device_code, code_verifier: VERIFIER }),
+			});
+		for (let attempt = 0; attempt < 15; attempt += 1) {
+			await expectOk(await poll(), 202);
+		}
+		await expectError(await poll(), 429, 'RESOURCE_EXHAUSTED');
+
+		const guesser = createTestApi({ bucket, userId: uid('device-code-guesser') });
+		await guesser.request('GET', '/me');
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			await expectError(
+				await guesser.request('POST', '/me/cli-device-authorizations', {
+					user_code: 'BBBB-BBBB',
+					token_name: 'remote CLI',
+					expires_in_days: 30,
+				}),
+				400,
+				'BAD_REQUEST',
+			);
+		}
+		await expectError(
+			await guesser.request('POST', '/me/cli-device-authorizations', {
+				user_code: 'BBBB-BBBB',
+				token_name: 'remote CLI',
+				expires_in_days: 30,
+			}),
+			429,
+			'RESOURCE_EXHAUSTED',
+		);
+	});
+
 	it('marks approval redirects as non-cacheable', async () => {
 		const response = await request('POST', '/me/cli-authorizations', {
 			callback_uri: CALLBACK,
@@ -99,6 +230,49 @@ describe('CLI authorization routes', () => {
 				state: STATE,
 				code_challenge: CHALLENGE,
 				token_name: 'mohub CLI',
+				expires_in_days: 30,
+				...overrides,
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+	});
+
+	it.each([
+		{
+			path: '/api/cli/v1/device-authorizations',
+			body: { code_challenge: 'short' },
+		},
+		{
+			path: '/api/cli/v1/device-token',
+			body: { device_code: '', code_verifier: VERIFIER },
+		},
+		{
+			path: '/api/cli/v1/device-token',
+			body: { device_code: 'mhub_cli_invalid', code_verifier: 'short' },
+		},
+	])('rejects invalid public device input: %#', async ({ path, body }) => {
+		await expectError(
+			await app.request(path, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(body),
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+	});
+
+	it.each([
+		{ user_code: 'short' },
+		{ token_name: ' ' },
+		{ expires_in_days: 0 },
+		{ expires_in_days: 3651 },
+	])('rejects invalid device approval input: %#', async (overrides) => {
+		await expectError(
+			await request('POST', '/me/cli-device-authorizations', {
+				user_code: 'BBBB-BBBB',
+				token_name: 'remote CLI',
 				expires_in_days: 30,
 				...overrides,
 			}),
@@ -165,6 +339,19 @@ describe('CLI authorization routes', () => {
 			401,
 			'UNAUTHORIZED',
 		);
+		await expectError(
+			await deny.request('/api/v1/me/cli-device-authorizations', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					user_code: 'BBBB-BBBB',
+					token_name: 'remote CLI',
+					expires_in_days: 30,
+				}),
+			}),
+			401,
+			'UNAUTHORIZED',
+		);
 
 		const created = await expectOk<{ token: string }>(
 			await request('POST', '/me/tokens', { name: 'existing' }),
@@ -195,6 +382,24 @@ describe('CLI authorization routes', () => {
 			403,
 			'FORBIDDEN',
 		);
+
+		const device = await requestDevice();
+		await expectError(
+			await patApp.request('/api/v1/me/cli-device-authorizations', {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					authorization: `Bearer ${created.token}`,
+				},
+				body: JSON.stringify({
+					user_code: device.user_code,
+					token_name: 'remote CLI',
+					expires_in_days: 30,
+				}),
+			}),
+			403,
+			'FORBIDDEN',
+		);
 	});
 
 	it('documents browser approval as session-only and PKCE exchange as public', () => {
@@ -205,6 +410,11 @@ describe('CLI authorization routes', () => {
 		).paths;
 		expect(paths['/api/v1/me/cli-authorizations'].post.security).toEqual([{ cookieAuth: [] }]);
 		expect(paths['/api/cli/v1/token'].post.security).toEqual([]);
+		expect(paths['/api/v1/me/cli-device-authorizations'].post.security).toEqual([
+			{ cookieAuth: [] },
+		]);
+		expect(paths['/api/cli/v1/device-authorizations'].post.security).toEqual([]);
+		expect(paths['/api/cli/v1/device-token'].post.security).toEqual([]);
 	});
 
 	it('records the exchanged PAT in the token list and audit log', async () => {
@@ -229,6 +439,28 @@ describe('CLI authorization routes', () => {
 				expect.objectContaining({ event: 'token.create', actor: ACTOR, token_name: 'mohub CLI' }),
 			]),
 		);
+	});
+
+	it('limits public device authorization creation', async () => {
+		const realNow = Date.now();
+		vi.useFakeTimers({ now: realNow + 61_000 });
+		try {
+			const start = () =>
+				app.request('/api/cli/v1/device-authorizations', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ code_challenge: CHALLENGE }),
+				});
+			for (let attempt = 0; attempt < 30; attempt += 1) {
+				await expectOk(await start());
+			}
+			const limited = await start();
+			await expectError(limited, 429, 'RESOURCE_EXHAUSTED');
+			expect(limited.headers.get('Retry-After')).toBe('5');
+		} finally {
+			vi.setSystemTime(realNow);
+			vi.useRealTimers();
+		}
 	});
 
 	it('isolates authorization attempts while retaining a global storage cap', async () => {

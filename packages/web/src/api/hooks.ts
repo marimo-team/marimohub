@@ -123,6 +123,14 @@ export function useApproveCliAuthorization() {
 	);
 }
 
+export function useApproveCliDeviceAuthorization() {
+	return useApiMutation(
+		(body: { user_code: string; token_name: string; expires_in_days: number }) =>
+			apiData(apiClient.POST('/api/v1/me/cli-device-authorizations', { body })),
+		() => [userKeys.tokens()],
+	);
+}
+
 // System
 
 /** Deployment metadata for the footer info popover. */

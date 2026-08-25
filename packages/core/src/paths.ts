@@ -201,6 +201,8 @@ export const paths = {
 	tokensPrefix: '_system/tokens/',
 	cliAuthorization: (id: CliAuthorizationId) => `_system/cli-authorizations/${id}.json`,
 	cliAuthorizationsPrefix: '_system/cli-authorizations/',
+	cliDeviceUserCode: (code: string) => `_system/cli-device-user-codes/${code}.json`,
+	cliDeviceUserCodesPrefix: '_system/cli-device-user-codes/',
 	eventsPrefix: '_system/events/',
 	eventsForDate: (date: string) => `_system/events/${date}/`,
 	event: (date: string, id: string) => `_system/events/${date}/${id}.json`,

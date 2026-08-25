@@ -202,11 +202,12 @@ fn login_command() -> Command {
                 .help("Read the token from stdin instead of an argument or file"),
         )
         .arg(
-            Arg::new("no-browser")
-                .long("no-browser")
+            Arg::new("device-code")
+                .long("device-code")
+                .visible_alias("no-browser")
                 .action(ArgAction::SetTrue)
                 .conflicts_with_all(["token-stdin", "token", "token-file"])
-                .help("Print the sign-in URL for a browser on this machine"),
+                .help("Sign in from a browser on another device using a short code"),
         )
 }
 
@@ -377,9 +378,9 @@ mod tests {
     }
 
     #[test]
-    fn login_rejects_no_browser_with_token_supply_flags() {
+    fn login_rejects_device_code_with_token_supply_flags() {
         for arguments in [
-            vec!["mohub", "login", "--no-browser", "--token-stdin"],
+            vec!["mohub", "login", "--device-code", "--token-stdin"],
             vec!["mohub", "login", "--no-browser", "--token", "secret"],
             vec![
                 "mohub",
@@ -391,7 +392,7 @@ mod tests {
         ] {
             let error = build(&crate::manifest::load())
                 .try_get_matches_from(arguments)
-                .expect_err("token supply flags must conflict with --no-browser");
+                .expect_err("token supply flags must conflict with device login");
 
             assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
         }

@@ -9,10 +9,10 @@ Personal access tokens (PATs) let CI jobs, scripts, and the CLI call the
 created it: it inherits their project memberships and roles unchanged, and it
 works on every deployment — there is nothing to configure.
 
-For an interactive CLI, run `mohub login`. The browser approval flow creates a
-token with a 30-day lifetime by default and lets you choose a different lifetime
-before approving. Manual token creation is intended for automation and other
-clients that cannot use the browser flow.
+For an interactive CLI, run `mohub login`. For a remote CLI, run
+`mohub login --device-code`. Both commands create a 30-day token by default. You
+can select a different lifetime in the approval page. Use manual tokens for
+non-interactive automation.
 
 ## Create a token
 
