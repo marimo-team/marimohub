@@ -1269,6 +1269,7 @@ export interface components {
 					| 'SYNC_NOT_CONFIGURED'
 					| 'NOT_INITIALIZED'
 					| 'SERVICE_UNAVAILABLE'
+					| 'PYTHON_ENV_SETUP_FAILED'
 					| 'RESOURCE_EXHAUSTED'
 					| 'UNAUTHORIZED'
 					| 'USER_SUSPENDED'

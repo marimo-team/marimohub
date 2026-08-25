@@ -68,6 +68,7 @@ import type {
 } from '@marimo-hub/core';
 import type {
 	CreateSandboxOptions,
+	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
 	ExposePortOptions,
@@ -254,7 +255,10 @@ export interface CoreWeaveSandbox {
 	/** Block until the sandbox reaches `running`; see `BOOT_POLL_INTERVAL_MS`. */
 	wait(options?: { intervalMs?: number }): Promise<unknown>;
 	readonly commands: {
-		run(command: readonly string[], options?: { cwd?: string }): Promise<ProcessResult>;
+		run(
+			command: readonly string[],
+			options?: { cwd?: string; timeoutMs?: number },
+		): Promise<ProcessResult>;
 		start(command: readonly string[], options?: { cwd?: string }): Promise<CommandProcess>;
 	};
 	readonly files: {
@@ -462,10 +466,12 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		return withEnvPrefix(this.takeBootstrap(cmd), this.env, this.envDefaults);
 	}
 
-	async exec(cmd: string): Promise<ExecResult> {
+	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		const sandbox = await this.ensure();
 		this.execCount++;
-		const res = await sandbox.commands.run(['sh', '-lc', this.withEnv(cmd)]);
+		const res = await sandbox.commands.run(['sh', '-lc', this.withEnv(cmd)], {
+			timeoutMs: options?.timeout,
+		});
 		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 

@@ -29,6 +29,7 @@ import { SandboxId, Seconds } from '@marimo-hub/core';
 import type {
 	ActiveSandbox,
 	CreateSandboxOptions,
+	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
 	ExposePortOptions,
@@ -72,7 +73,7 @@ export interface E2bSandboxHandle {
 	commands: {
 		run(
 			cmd: string,
-			options?: { cwd?: string; envs?: Record<string, string> },
+			options?: { cwd?: string; envs?: Record<string, string>; timeoutMs?: number },
 		): Promise<E2bExecResult>;
 		runBackground(
 			cmd: string,
@@ -194,11 +195,14 @@ class E2bSandboxInstance implements SandboxInstance {
 		return promise;
 	}
 
-	async exec(cmd: string): Promise<ExecResult> {
+	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		const sb = await this.ensure();
 		// Forced vars ride the SDK's per-command `envs`; defaults can't (that channel
 		// always overwrites), so they go in as a guarded shell prefix instead.
-		const res = await sb.commands.run(this.withDefaults(cmd), { envs: this.env });
+		const res = await sb.commands.run(this.withDefaults(cmd), {
+			envs: this.env,
+			timeoutMs: options?.timeout,
+		});
 		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 

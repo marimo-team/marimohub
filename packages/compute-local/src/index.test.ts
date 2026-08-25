@@ -167,7 +167,11 @@ describe('uv-script-pins setup execution', () => {
 		'uv-script-pins',
 	).setup.join(' && ');
 
-	async function runSetup(extraEnv: Record<string, string>) {
+	async function runSetup(
+		extraEnv: Record<string, string>,
+		pyproject?: string,
+		parserExit?: number,
+	) {
 		const dir = await mkdtemp(path.join(os.tmpdir(), 'marimohub-uvstub-'));
 		const workdir = path.join(dir, 'work');
 		const logFile = path.join(dir, 'uv.log');
@@ -177,8 +181,15 @@ describe('uv-script-pins setup execution', () => {
 			'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$UV_LOG"\nif [ "$1" = venv ]; then mkdir -p "$2"; fi\n',
 			{ mode: 0o755 },
 		);
+		if (parserExit !== undefined) {
+			await writeFile(path.join(dir, 'python3'), `#!/bin/sh\nexit ${parserExit}\n`, {
+				mode: 0o755,
+			});
+		}
+		if (pyproject !== undefined) await writeFile(path.join(workdir, 'pyproject.toml'), pyproject);
 		const env: NodeJS.ProcessEnv = {
 			...process.env,
+			MARIMO_VERSION: '0.0-test',
 			PATH: `${dir}:${process.env.PATH}`,
 			UV_LOG: logFile,
 		};
@@ -213,6 +224,10 @@ describe('uv-script-pins setup execution', () => {
 		} finally {
 			await rm(envDir, { recursive: true, force: true });
 		}
+	});
+
+	it('propagates a pyproject.toml parser failure before starting uv', async () => {
+		await expect(runSetup({}, '[project]\ndependencies = [', 1)).rejects.toBeDefined();
 	});
 });
 

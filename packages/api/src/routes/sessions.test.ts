@@ -7,7 +7,7 @@ import {
 	Millis,
 	paths,
 } from '@marimo-hub/core';
-import type { NotebookId, ProjectId, Session, SessionId } from '@marimo-hub/core';
+import type { NotebookId, ProjectId, SandboxInstance, Session, SessionId } from '@marimo-hub/core';
 import {
 	ACTOR,
 	fakeComputeFrom,
@@ -186,7 +186,7 @@ describe('Session routes', () => {
 			const synced = await createSyncedNotebook(INLINE_CODE);
 			const { sb, post } = await startSessionApi(synced);
 			await expectOk<ApiSession>(await post());
-			const cmd = sb.calls.startProcess[0].cmd;
+			const cmd = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			expect(cmd).toContain("uv export --script 'apps/dash.py'");
 			expect(cmd).toContain('uv pip install');
 			// The repo pyproject layer still applies underneath the pins.
@@ -197,8 +197,8 @@ describe('Session routes', () => {
 			const synced = await createSyncedNotebook('import marimo');
 			const { sb, post } = await startSessionApi(synced);
 			await expectOk<ApiSession>(await post());
-			expect(sb.calls.startProcess[0].cmd).toContain('uv sync --inexact');
-			expect(sb.calls.startProcess[0].cmd).not.toContain('uv export');
+			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+			expect(setup).not.toContain('uv export');
 		});
 
 		it('ignores inline metadata in a local notebook (deps live in pyproject.toml)', async () => {
@@ -210,8 +210,8 @@ describe('Session routes', () => {
 			);
 			const { sb, post } = await startSessionApi(local.id as NotebookId);
 			await expectOk<ApiSession>(await post());
-			expect(sb.calls.startProcess[0].cmd).toContain('uv sync --inexact');
-			expect(sb.calls.startProcess[0].cmd).not.toContain('uv export');
+			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+			expect(setup).not.toContain('uv export');
 		});
 
 		it('does not re-read the entry file when reusing an existing session', async () => {
@@ -232,8 +232,8 @@ describe('Session routes', () => {
 			await bucket.delete(entryKey);
 			const { sb, post } = await startSessionApi(synced);
 			await expectOk<ApiSession>(await post());
-			expect(sb.calls.startProcess[0].cmd).toContain('uv sync --inexact');
-			expect(sb.calls.startProcess[0].cmd).not.toContain('uv export');
+			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
+			expect(setup).not.toContain('uv export');
 		});
 
 		it('rejects an unsynced notebook before reading any entry file', async () => {
@@ -1950,6 +1950,45 @@ describe('Session routes', () => {
 		expect(calls.destroy).toBeGreaterThanOrEqual(1);
 		const all = await createServices(bucket).sessions.listSessions(nid);
 		expect(all.every((s) => s.status === 'failed')).toBe(true);
+	});
+
+	it('POST /sessions: Python setup failure is specific and stored on the session', async () => {
+		const { instance: base, calls } = makeFakeSandbox();
+		const instance: SandboxInstance = {
+			...base,
+			async exec(command) {
+				if (!command.includes('uv sync')) return base.exec(command);
+				calls.exec.push(command);
+				return {
+					success: false,
+					stdout: '',
+					stderr: 'failed to remove directory: Permission denied',
+					error: { code: 'COMMAND_FAILED' },
+				};
+			},
+		};
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(instance),
+		}).request;
+
+		const error = await expectError(
+			await api('POST', sessionsPath()),
+			503,
+			'PYTHON_ENV_SETUP_FAILED',
+		);
+		expect(error.message).toContain('does not allow replacing');
+		const all = await createServices(bucket).sessions.listSessions(nid);
+		expect(all).toHaveLength(1);
+		expect(all[0]).toMatchObject({
+			status: 'failed',
+			error: {
+				code: 'PYTHON_ENV_SETUP_FAILED',
+				message: expect.stringContaining('does not allow replacing'),
+			},
+		});
+		expect(calls.startProcess).toHaveLength(0);
 	});
 
 	describe('viewer mode', () => {

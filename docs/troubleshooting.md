@@ -121,6 +121,16 @@ provide, or the namespace may lack sufficient quota. Check the Pod's
 out-of-memory during dependency installation, use a larger compute profile and
 start a new session.
 
+### Session fails with `PYTHON_ENV_SETUP_FAILED`
+
+The sandbox started, but uv could not prepare the notebook's Python environment.
+The error identifies permissions, an invalid `pyproject.toml`, a missing Python
+interpreter, or incompatible dependencies. uv can replace the whole environment
+to change Python versions.
+
+If the error identifies permissions, make the sandbox user own the parent of
+`UV_PROJECT_ENVIRONMENT`.
+
 ### Session fails with a uv resolver error
 
 When a git-synced notebook contains [PEP 723](https://peps.python.org/pep-0723/)

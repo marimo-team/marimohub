@@ -1,4 +1,4 @@
-# Popular libraries pre-installed into the image's project env (/opt/venv) at build
+# Popular libraries pre-installed into the image's project environment at build
 # time. marimo itself is added separately, pinned to $MARIMO_VERSION, by the
 # Dockerfile. Edit this list to change what's pre-installed.
 [project]

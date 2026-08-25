@@ -17,6 +17,7 @@ export const DOMAIN_ERROR_CODES = [
 	'SYNC_NOT_CONFIGURED',
 	'NOT_INITIALIZED',
 	'SERVICE_UNAVAILABLE',
+	'PYTHON_ENV_SETUP_FAILED',
 	'RESOURCE_EXHAUSTED',
 ] as const;
 
@@ -160,6 +161,15 @@ export class UnavailableError extends DomainError {
 	constructor(message = 'Service unavailable', options?: ErrorOptions) {
 		super(message, options);
 		this.name = 'UnavailableError';
+	}
+}
+
+export class PythonEnvironmentSetupError extends DomainError {
+	readonly code = 'PYTHON_ENV_SETUP_FAILED';
+	readonly status = 503;
+	constructor(message = 'Failed to prepare the notebook Python environment') {
+		super(message);
+		this.name = 'PythonEnvironmentSetupError';
 	}
 }
 

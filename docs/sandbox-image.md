@@ -59,6 +59,10 @@ uv sync --inexact --no-compile-bytecode   # add the notebook's deps to the base 
 uv run --no-sync marimo edit notebook.py --headless --no-token --host 0.0.0.0 --port 2718
 ```
 
+Before `uv sync`, marimohub records the pinned marimo version from
+`MARIMO_VERSION` or the installed package. If uv replaces the environment to
+change Python versions, marimohub reinstalls that version before the kernel starts.
+
 If a git-synced notebook's entry file contains
 [PEP 723](https://peps.python.org/pep-0723/) inline metadata, marimohub runs three
 more setup commands. These commands run after the project sync and install the
@@ -70,10 +74,10 @@ uv export --script notebook.py --format requirements-txt --no-hashes -o "${UV_PR
 uv pip install --python "${UV_PROJECT_ENVIRONMENT:-.venv}" --no-build -r "${UV_PROJECT_ENVIRONMENT:-.venv}/marimohub-script-requirements.txt"
 ```
 
-A failed project sync does not stop the session. In contrast, a failure in these
-three commands stops the session, so marimohub never ignores inline dependencies.
-If the metadata pins `marimo`, it replaces the image's version for that sandbox.
-The replacement can be incompatible with a frontend served through `--asset-url`.
+A setup failure stops the session with `PYTHON_ENV_SETUP_FAILED` before the kernel
+starts. A `marimo` pin in the metadata replaces the image version for that
+sandbox. This version can be incompatible with a frontend served through
+`--asset-url`.
 
 So your image must provide:
 
@@ -85,10 +89,10 @@ So your image must provide:
 3. **A POSIX shell (`sh`) + coreutils** — `base64`, `mkdir`, `rm`, `cat`, `true`.
    marimohub transfers notebook files and probes reachability with these.
 4. **`git`** — only if notebooks use git checkouts, but cheap to include.
-5. **A writable working directory** (`/workspace`) **and a writable
-   `UV_PROJECT_ENVIRONMENT`**, so `uv sync --inexact` can add a notebook's extra
-   deps. If your image's non-root user can't write `/workspace`, set
-   `MARIMOHUB_COMPUTE_WORKDIR` to a directory it can.
+5. **A writable working directory** (`/workspace`) and a writable parent for
+   `UV_PROJECT_ENVIRONMENT`. uv can replace the whole environment to change
+   Python versions. If the user cannot write to `/workspace`, set
+   `MARIMOHUB_COMPUTE_WORKDIR` to a writable directory.
 6. **PyPI egress at runtime** for notebooks that use libraries beyond the
    pre-installed base.
 
@@ -118,7 +122,7 @@ bump it deliberately. Encode the Python + marimo version in the image tag (e.g.
 The [`examples/sandbox-image/`](https://github.com/marimo-team/marimohub/tree/main/examples/sandbox-image)
 directory is a ready-to-fork starting point. marimo is pinned via the
 `MARIMO_VERSION` build arg and installed alongside the libraries in
-`warm/pyproject.toml` into `/opt/venv`:
+`warm/pyproject.toml` into `/opt/marimohub/venv`:
 
 ```dockerfile
 FROM python:3.13-slim
@@ -127,15 +131,15 @@ ENV MARIMO_VERSION=${MARIMO_VERSION}
 COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /usr/local/bin/
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-ENV UV_PROJECT_ENVIRONMENT=/opt/venv UV_LINK_MODE=copy
+ENV UV_PROJECT_ENVIRONMENT=/opt/marimohub/venv UV_LINK_MODE=copy
 # Skip marimo's PyPI version ping, and continuously snapshot the notebook to
 # __marimo__/notebook.html so the host captures it on teardown.
 ENV MARIMO_SKIP_UPDATE_CHECK=1 _MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD=[html]
 RUN useradd -m appuser && mkdir -p /workspace && chown -R appuser:appuser /workspace
 COPY warm/pyproject.toml /tmp/base/pyproject.toml
 RUN cd /tmp/base && uv add --compile-bytecode "marimo[recommended]==${MARIMO_VERSION}" \
- && uv cache clean && rm -rf /tmp/base && chown -R appuser:appuser /opt/venv
-ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH
+ && uv cache clean && rm -rf /tmp/base && chown -R appuser:appuser /opt/marimohub
+ENV VIRTUAL_ENV=/opt/marimohub/venv PATH=/opt/marimohub/venv/bin:$PATH
 USER appuser
 WORKDIR /workspace
 ```

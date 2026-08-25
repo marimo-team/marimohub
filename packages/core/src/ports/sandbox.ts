@@ -121,6 +121,10 @@ export interface ExecStreamOptions {
 	timeout?: number;
 }
 
+export interface ExecOptions {
+	timeout?: number;
+}
+
 /** One file to write into a sandbox. `Uint8Array` content is written verbatim. */
 export interface SandboxFileWrite {
 	path: string;
@@ -142,7 +146,7 @@ export interface SandboxInstance {
 	 * the same resolution at the cost of a command round-trip.
 	 */
 	ready?(): Promise<void>;
-	exec(cmd: string): Promise<ExecResult>;
+	exec(cmd: string, options?: ExecOptions): Promise<ExecResult>;
 	execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream>;
 	readFile(path: string): Promise<ReadFileResult>;
 	/**

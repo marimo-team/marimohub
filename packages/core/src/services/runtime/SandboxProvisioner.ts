@@ -1,9 +1,10 @@
 import { all, allSettled } from 'better-all';
+import { withDeadline } from '../../async';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import type { SessionMode } from '../../constants';
 import { Millis } from '../../duration';
-import { UnavailableError } from '../../errors';
+import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
@@ -11,6 +12,7 @@ import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import type {
 	ComputeResources,
+	ExecResult,
 	SandboxUserHome,
 	SandboxInstance,
 	SandboxProcess,
@@ -21,6 +23,7 @@ import type { Timings } from '../../timing';
 import { captureFilesystemSnapshot, createOrRestoreSandbox } from '../content/filesystemSnapshots';
 import { buildMarimoLaunch } from './marimoLaunch';
 import type { MarimoLaunchStrategyName } from './marimoLaunch';
+import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
 import type { WorkspaceRestoreStats } from './sandboxFiles';
@@ -40,6 +43,23 @@ export const DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS = Millis.minutes(2);
  * `/workspace`, so writes there fail with a permission/file-IO error.
  */
 const DEFAULT_WORKDIR = '/workspace';
+
+function pythonEnvironmentSetupFailure(result: ExecResult): PythonEnvironmentSetupError {
+	const output = `${result.stdout}\n${result.stderr}`;
+	let reason = 'uv exited unsuccessfully';
+	if (/permission denied/i.test(output)) {
+		reason = 'the sandbox image does not allow replacing its Python environment';
+	} else if (/TOMLDecodeError/i.test(output)) {
+		reason = 'pyproject.toml could not be parsed';
+	} else if (/no (virtual environment|interpreter)|python installation not found/i.test(output)) {
+		reason = 'uv could not find or create the required Python environment';
+	} else if (/no solution found|resolution failed|requirements are unsatisfiable/i.test(output)) {
+		reason = 'the notebook dependency constraints could not be resolved';
+	}
+	return new PythonEnvironmentSetupError(
+		`Failed to prepare the notebook Python environment: ${reason}`,
+	);
+}
 
 export interface BucketConfig {
 	/** Storage bucket name, or a provider-managed bucket handle when `endpoint` is omitted. */
@@ -122,9 +142,8 @@ export interface ProvisionOptions {
 	/** Per-source launch strategy (see launchStrategy.ts). Defaults to the project-managed env. */
 	launchStrategy?: MarimoLaunchStrategyName;
 	/**
-	 * How long to wait for the marimo kernel to bind its port before failing the
-	 * provision. Covers setup too (a cold env may install/build first). Defaults
-	 * to `DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS`.
+	 * How long Python-environment setup and the kernel-port wait may take in total
+	 * before failing the provision. Defaults to `DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS`.
 	 */
 	startupTimeoutMs?: Millis;
 	/**
@@ -491,19 +510,43 @@ export class SandboxProvisioner {
 			options.launchStrategy,
 		);
 		const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS;
+		const startupStart = Date.now();
+		if (launch.setup.length > 0) {
+			const command = `cd ${shellQuote(mountPath)} && ${launch.setup.join(' && ')}`;
+			const setupTimeoutMs =
+				startupTimeoutMs === 0 ? 0 : Math.max(0, startupTimeoutMs - (Date.now() - startupStart));
+			try {
+				const setup = await sw.time('setup', () => {
+					const pending = sandbox.exec(command, { timeout: setupTimeoutMs });
+					return startupTimeoutMs === 0
+						? pending
+						: withDeadline(pending, {
+								timeoutMs: setupTimeoutMs,
+								timeoutError: () =>
+									new PythonEnvironmentSetupError(
+										`Failed to prepare the notebook Python environment within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`,
+									),
+							});
+				});
+				if (!setup.success) throw pythonEnvironmentSetupFailure(setup);
+			} catch (error) {
+				if (error instanceof PythonEnvironmentSetupError) throw error;
+				throw provisionFailure('preparing the notebook Python environment', error);
+			}
+		}
 		let process: SandboxProcess | undefined;
 		let portWaitStart: number | undefined;
 		try {
-			// Setup rides the kernel command instead of spending its own exec, and
-			// failures still surface through the process log read below. `&&` so a
-			// failed setup never leaves marimo running against a half-built env;
-			// marimoLaunch decides what is fatal.
-			const command = [...launch.setup, launch.start].join(' && ');
-			const proc = await sw.time('start', () => sandbox.startProcess(command, { cwd: mountPath }));
+			const proc = await sw.time('start', () =>
+				sandbox.startProcess(launch.start, { cwd: mountPath }),
+			);
 			process = proc;
 			portWaitStart = Date.now();
-			// Covers setup as well, so a slow kernel env (install/build) shows up here.
-			await sw.time('waitport', () => proc.waitForPort(MARIMO_PORT, { timeout: startupTimeoutMs }));
+			const portWaitTimeoutMs =
+				startupTimeoutMs === 0 ? 0 : Math.max(0, startupTimeoutMs - (portWaitStart - startupStart));
+			await sw.time('waitport', () =>
+				proc.waitForPort(MARIMO_PORT, { timeout: portWaitTimeoutMs }),
+			);
 		} catch (err) {
 			// Surface the kernel's own output so a startup crash isn't an opaque
 			// "exited before ready". Best-effort.
@@ -533,7 +576,7 @@ export class SandboxProvisioner {
 			const attribution = err instanceof Error ? err.message.split('\n', 1)[0] : '';
 			const crashed = /before port \d+/.test(attribution);
 			const timedOut =
-				!crashed && portWaitStart !== undefined && Date.now() - portWaitStart >= startupTimeoutMs;
+				!crashed && portWaitStart !== undefined && Date.now() - startupStart >= startupTimeoutMs;
 			const step = timedOut
 				? `starting the marimo kernel: not ready within the ${Math.round(startupTimeoutMs / 1000)}s startup timeout (MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS)`
 				: 'starting the marimo kernel';

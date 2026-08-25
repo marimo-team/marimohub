@@ -25,8 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 # UV_COMPILE_BYTECODE here — bytecode is a build-time CLI flag below; the
 # provisioner passes `--no-compile-bytecode` on the startup sync, which uv rejects
 # if this env is also set. UV_LINK_MODE is left unset (default: hardlink); the
-# `uv cache clean` below still yields a self-contained /opt/venv.
-ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+# `uv cache clean` below still yields a self-contained environment.
+ENV UV_PROJECT_ENVIRONMENT=/opt/marimohub/venv
 
 # marimo kernel config baked into the image. SKIP_UPDATE_CHECK: no PyPI version
 # ping on startup. AUTO_DOWNLOAD=[html]: continuously snapshot the notebook to
@@ -40,25 +40,27 @@ RUN useradd -m appuser \
  && chown -R appuser:appuser /workspace
 
 # Pre-install marimo (pinned) + the popular libraries in warm/pyproject.toml into
-# /opt/venv with bytecode compiled (fast imports), so the base-case kernel needs no
-# install. Cache is dropped to keep the image lean (the env is self-contained);
-# appuser owns /opt/venv so the startup `uv sync --inexact` can add extra deps.
+# the project environment with bytecode compiled (fast imports), so the base-case
+# kernel needs no install. Cache is dropped to keep the image lean (the env is
+# self-contained); appuser owns its parent so uv can replace the environment for
+# another Python version.
 COPY warm/pyproject.toml /tmp/base/pyproject.toml
 RUN cd /tmp/base \
  && uv add --compile-bytecode "marimo[recommended]==${MARIMO_VERSION}" \
  && uv cache clean \
  && rm -rf /tmp/base \
- && chown -R appuser:appuser /opt/venv
+ && chown -R appuser:appuser /opt/marimohub
 
 # Pre-compile the stdlib to bytecode: the slim base ships it uncompiled, so the
 # kernel otherwise pays lazy .pyc compilation on first import (uv's
 # --compile-bytecode covers installed packages, not the interpreter's stdlib).
 RUN python3 -m compileall -j 0 -q /usr/local/lib/python3.13 || true
 
-# Activate /opt/venv so marimo runs straight from it even for a notebook with no
-# pyproject.toml (where `uv run --no-sync` would otherwise ignore the env).
-ENV VIRTUAL_ENV=/opt/venv \
-    PATH=/opt/venv/bin:$PATH
+# Activate the project environment so marimo runs straight from it even for a
+# notebook with no pyproject.toml (where `uv run --no-sync` would otherwise
+# ignore the env).
+ENV VIRTUAL_ENV=/opt/marimohub/venv \
+    PATH=/opt/marimohub/venv/bin:$PATH
 
 USER appuser
 WORKDIR /workspace

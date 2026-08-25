@@ -102,7 +102,7 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).toContain('--host 0.0.0.0');
 		});
 
-		it('honors a resolved launch strategy, setup layers ordered before the kernel', async () => {
+		it('runs resolved launch setup before starting the kernel', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
@@ -116,16 +116,18 @@ describe('SandboxProvisioner', () => {
 				launchStrategy: 'uv-script-pins',
 			});
 
-			// Pins apply last so they win: pyproject → export → install → kernel.
-			const cmd = calls.startProcess[0].cmd;
+			// Pins apply last within the checked setup command, before marimo starts.
+			const cmd = calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			const order = [
 				cmd.indexOf('uv sync --inexact'),
+				cmd.indexOf('marimo==$MARIMOHUB_MARIMO_VERSION'),
 				cmd.indexOf("uv export --script 'apps/dash.py'"),
-				cmd.indexOf('uv pip install'),
-				cmd.indexOf('marimo edit'),
+				cmd.lastIndexOf('uv pip install'),
 			];
 			expect(Math.min(...order)).toBeGreaterThanOrEqual(0);
 			expect(order).toEqual([...order].sort((a, b) => a - b));
+			expect(calls.startProcess[0].cmd).toContain("marimo edit 'apps/dash.py'");
+			expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 		});
 
 		it('defaults to the project-managed env when no launch strategy is given', async () => {
@@ -140,10 +142,10 @@ describe('SandboxProvisioner', () => {
 				bucket: bucketConfig,
 			});
 
-			const cmd = calls.startProcess[0].cmd;
+			const cmd = calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			expect(cmd).toContain('uv sync --inexact');
 			expect(cmd).not.toContain('uv export');
-			expect(cmd).not.toContain('uv pip install');
+			expect(cmd).not.toContain('marimohub-script-requirements.txt');
 		});
 
 		it('accepts sessionEnv as a promise, injecting it once resolved', async () => {
@@ -254,7 +256,7 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).toContain(`--asset-url="${assetUrl}"`);
 		});
 
-		it('waits for the kernel port with the configured startup timeout (default 2 minutes)', async () => {
+		it('gives the remaining startup timeout to the kernel port wait', async () => {
 			const defaulted = makeFakeSandbox();
 			await new SandboxProvisioner(fakeComputeFrom(defaulted.instance)).provision({
 				sandboxId,
@@ -263,7 +265,10 @@ describe('SandboxProvisioner', () => {
 				hostname: 'localhost',
 				bucket: bucketConfig,
 			});
-			expect(defaulted.calls.waitForPortOptions).toEqual([{ timeout: 120_000 }]);
+			expect(defaulted.calls.waitForPortOptions).toHaveLength(1);
+			const defaultTimeout = defaulted.calls.waitForPortOptions[0]!.timeout;
+			expect(defaultTimeout).toBeGreaterThan(119_000);
+			expect(defaultTimeout).toBeLessThanOrEqual(120_000);
 
 			const configured = makeFakeSandbox();
 			await new SandboxProvisioner(fakeComputeFrom(configured.instance)).provision({
@@ -274,7 +279,17 @@ describe('SandboxProvisioner', () => {
 				bucket: bucketConfig,
 				startupTimeoutMs: Millis.seconds(300),
 			});
-			expect(configured.calls.waitForPortOptions).toEqual([{ timeout: 300_000 }]);
+			expect(configured.calls.waitForPortOptions).toHaveLength(1);
+			const configuredTimeout = configured.calls.waitForPortOptions[0]!.timeout;
+			expect(configuredTimeout).toBeGreaterThan(299_000);
+			expect(configuredTimeout).toBeLessThanOrEqual(300_000);
+			const setupIndex = configured.calls.exec.findIndex((command) =>
+				command.includes('uv sync --inexact'),
+			);
+			expect(setupIndex).toBeGreaterThanOrEqual(0);
+			const setupTimeout = configured.calls.execOptions[setupIndex]?.timeout;
+			expect(setupTimeout).toBeGreaterThan(299_000);
+			expect(setupTimeout).toBeLessThanOrEqual(300_000);
 		});
 
 		it('names the startup timeout (and the config var) when the port wait consumes the full window', async () => {
@@ -518,11 +533,9 @@ describe('SandboxProvisioner', () => {
 		});
 
 		// A command round-trip is the dominant unit of startup cost on a remote
-		// backend (~220ms each on CoreWeave), so these lock in the count. Each was a
-		// measured regression: a duplicate mkdir, a reachability no-op, and a setup
-		// exec that the kernel command can carry itself.
+		// backend (~220ms each on CoreWeave), so these lock in the count.
 		describe('command round-trips', () => {
-			it('a copy-path provision spends no exec at all', async () => {
+			it('a copy-path provision spends one checked setup exec', async () => {
 				const { instance, calls } = makeFakeSandbox({ failMount: true });
 				const bucketHandle = new MemoryBucket();
 				const nb = paths.project(projectId).notebook(notebookId);
@@ -540,9 +553,9 @@ describe('SandboxProvisioner', () => {
 					bucketHandle,
 				});
 
-				// writeFiles creates parents, ready() replaces the exec('true') probe,
-				// and setup rides the kernel command.
-				expect(calls.exec).toEqual([]);
+				// writeFiles creates parents and ready() replaces the reachability exec.
+				expect(calls.exec).toHaveLength(1);
+				expect(calls.exec[0]).toContain('uv sync');
 				expect(calls.startProcess).toHaveLength(1);
 			});
 
@@ -573,7 +586,7 @@ describe('SandboxProvisioner', () => {
 				expect(withoutReady.calls.exec).toContain('true');
 			});
 
-			it('carries launch setup on the kernel command instead of a separate exec', async () => {
+			it('checks launch setup before starting the kernel process', async () => {
 				const { instance, calls } = makeFakeSandbox();
 				instance.ready = async () => {};
 
@@ -585,14 +598,79 @@ describe('SandboxProvisioner', () => {
 					bucket: bucketConfig,
 				});
 
-				expect(calls.exec).toEqual([]);
-				// `uv sync` (setup) and `marimo edit` (start) travel together, joined by
-				// `&&` so a failed setup cannot leave marimo on a half-built env.
-				const cmd = calls.startProcess[0].cmd;
-				expect(cmd).toContain('uv sync');
-				expect(cmd).toContain('marimo edit');
-				expect(cmd).toMatch(/uv sync[\s\S]*&&[\s\S]*marimo edit/);
+				expect(calls.exec).toHaveLength(1);
+				expect(calls.exec[0]).toContain('uv sync');
+				expect(calls.startProcess[0].cmd).toContain('marimo edit');
+				expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 			});
+		});
+
+		it('reports a checked setup failure without starting the kernel', async () => {
+			const { instance: base, calls } = makeFakeSandbox();
+			const instance: SandboxInstance = {
+				...base,
+				async exec(command) {
+					if (!command.includes('uv sync')) return base.exec(command);
+					calls.exec.push(command);
+					return {
+						success: false,
+						stdout: '',
+						stderr: 'failed to remove directory: Permission denied',
+						error: { code: 'COMMAND_FAILED' },
+					};
+				},
+			};
+
+			const failure = await new SandboxProvisioner(fakeComputeFrom(instance))
+				.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				})
+				.catch((error: unknown) => error);
+
+			expect(failure).toMatchObject({
+				name: 'PythonEnvironmentSetupError',
+				code: 'PYTHON_ENV_SETUP_FAILED',
+				status: 503,
+			});
+			expect((failure as Error).message).toContain('does not allow replacing');
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
+		});
+
+		it('classifies a malformed pyproject as a checked setup failure', async () => {
+			const { instance: base, calls } = makeFakeSandbox();
+			const instance: SandboxInstance = {
+				...base,
+				async exec(command) {
+					if (!command.includes('uv sync')) return base.exec(command);
+					calls.exec.push(command);
+					return {
+						success: false,
+						stdout: '',
+						stderr: 'tomllib.TOMLDecodeError: Invalid value (at end of document)',
+						error: { code: 'COMMAND_FAILED' },
+					};
+				},
+			};
+
+			const failure = await new SandboxProvisioner(fakeComputeFrom(instance))
+				.provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+				})
+				.catch((error: unknown) => error);
+
+			expect(failure).toMatchObject({ code: 'PYTHON_ENV_SETUP_FAILED', status: 503 });
+			expect((failure as Error).message).toContain('pyproject.toml could not be parsed');
+			expect(calls.startProcess).toHaveLength(0);
+			expect(calls.destroy).toBe(1);
 		});
 
 		it('mount failure without a bucket handle rejects instead of starting an empty workspace', async () => {

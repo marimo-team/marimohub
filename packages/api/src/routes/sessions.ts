@@ -1462,6 +1462,7 @@ app.openapi(createSession, async (c) => {
 		// markFailed no-ops if a concurrent stop already made it terminal.
 		if (session) {
 			const safeError = toSessionError(err);
+			observer.tag('provision_error_code', safeError.code);
 			const failed = await sessions
 				.markFailedWithOutcome(pid, session.session_id, safeError)
 				.catch(() => null);

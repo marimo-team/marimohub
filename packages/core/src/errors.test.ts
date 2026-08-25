@@ -8,6 +8,7 @@ import {
 	NotInitializedError,
 	PreconditionFailedError,
 	ProposalRetryRequiredError,
+	PythonEnvironmentSetupError,
 	ResourceExhaustedError,
 	UnavailableError,
 	ValidationError,
@@ -35,6 +36,12 @@ const CASES = [
 	{ Err: ForbiddenError, status: 403, name: 'ForbiddenError', def: 'Forbidden' },
 	{ Err: NotInitializedError, status: 409, name: 'NotInitializedError', def: 'Not initialized' },
 	{ Err: UnavailableError, status: 503, name: 'UnavailableError', def: 'Service unavailable' },
+	{
+		Err: PythonEnvironmentSetupError,
+		status: 503,
+		name: 'PythonEnvironmentSetupError',
+		def: 'Failed to prepare the notebook Python environment',
+	},
 	{
 		Err: ResourceExhaustedError,
 		status: 429,

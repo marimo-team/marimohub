@@ -7,9 +7,8 @@
 # cache hit, `--convert` opens non-marimo files, and a bare `docker run` works.
 #
 # The launch flow mirrors the active strategy in
-# packages/core/src/services/marimoLaunch.ts (`uv-sync-edit`):
-#   [ -s pyproject.toml ] && uv sync || true
-#   uv run --with marimo marimo edit notebook.py --convert --headless --no-token …
+# packages/core/src/services/runtime/marimoLaunch.ts (`uv-sync-edit`): checked
+# `uv sync`, followed by `uv run --no-sync marimo edit`.
 #
 # Usage:  acceptance-test.sh [IMAGE_TAG] [CONTEXT_DIR]
 #   IMAGE_TAG    tag to build/test          (default: marimo-sandbox:acceptance)
@@ -96,12 +95,33 @@ dependencies = ["polars", "narwhals"]
 TOML
 }
 
+provision_python314_notebook() { # $1 = container id
+	docker exec -i "$1" sh -lc 'cd /workspace && cat > notebook.py' <<'PY'
+# /// script
+# requires-python = ">=3.14"
+# dependencies = ["click"]
+# ///
+
+import marimo
+PY
+	docker exec -i "$1" sh -lc 'cd /workspace && cat > pyproject.toml' <<'TOML'
+[project]
+name = "python-314-notebook"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = ["requests"]
+TOML
+}
+
 # Start marimo via the active `uv-sync-edit` launch flow (mirrors marimoLaunch.ts),
 # detached, logging to /tmp/m.log.
 launch_kernel() { # $1 = container id
+	docker exec "$1" sh -lc '
+		cd /workspace
+		[ ! -s pyproject.toml ] || uv sync --inexact --no-compile-bytecode --no-build
+	'
 	docker exec -d "$1" sh -lc '
 		cd /workspace
-		[ -s pyproject.toml ] && uv sync --inexact || true
 		uv run --no-sync marimo edit notebook.py \
 			--convert --headless --no-token --host 0.0.0.0 --port 2718 >/tmp/m.log 2>&1
 	'
@@ -152,6 +172,29 @@ mv="$(docker run --rm "$IMAGE" sh -lc 'printf %s "$MARIMO_VERSION"')"
 got="$(docker run --rm "$IMAGE" sh -lc 'cd /workspace && uv run --no-sync python -c "import marimo; print(marimo.__version__)" 2>/dev/null | tail -1')"
 [ "$got" = "$mv" ] || fail "pre-installed marimo is ${got:-none}, expected pinned $mv"
 ok "marimo pinned to $mv (pre-installed; launch never upgrades it)"
+
+# --- 2c. a notebook may replace the warm env with a newer Python ------------
+echo "==> 2c. Python-version replacement"
+cid="$(run_detached "$IMAGE" sleep infinity)"
+provision_python314_notebook "$cid"
+docker exec "$cid" sh -lc '
+	set -e
+	cd /workspace
+	marimohub_marimo_version="${MARIMO_VERSION:-$(python3 -c "import importlib.metadata as m;print(m.version(\"marimo\"))")}"
+	uv sync --inexact --no-compile-bytecode --no-build
+	installed_marimo="$(uv run --no-sync python -c "import importlib.metadata as m;print(m.version(\"marimo\"))" 2>/dev/null || true)"
+	[ "$installed_marimo" = "$marimohub_marimo_version" ] || \
+		uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-build \
+			"marimo==$marimohub_marimo_version"
+	uv export --script notebook.py --format requirements-txt --no-hashes \
+		-o "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"
+	uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-build \
+		-r "$UV_PROJECT_ENVIRONMENT/marimohub-script-requirements.txt"
+	uv run --no-sync python -c \
+		"import click,marimo,os,sys; assert sys.version_info[:2] >= (3,14); assert marimo.__version__ == os.environ[\"MARIMO_VERSION\"]"
+' || fail "uv could not replace the warm environment with Python 3.14"
+ok "Python 3.14 replaces the warm environment and starts with script pins"
+docker rm -f "$cid" >/dev/null 2>&1
 
 # --- 3. provisioner flow: kernel serves HTTP 200 on 2718 ---------------------
 echo "==> 3. Kernel serves via the uv-sync-edit launch flow"
