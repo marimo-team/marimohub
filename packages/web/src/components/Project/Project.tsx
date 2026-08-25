@@ -177,6 +177,8 @@ export function Project() {
 	const updateProject = useUpdateProject();
 	const deleteProject = useDeleteProject();
 	const { data: capabilities } = useCapabilitiesQuery();
+	const canManage = canManageProject(project.your_role);
+	const canOperateSource = project.your_role !== null && project.your_role !== 'viewer';
 	const sandboxImages = capabilities?.sandbox_images ?? [];
 	const offersImageChoice = sandboxImages.length > 1;
 	const computeProfiles = capabilities?.compute_profiles ?? [];
@@ -196,8 +198,7 @@ export function Project() {
 
 	const dataBrowserAvailable =
 		(capabilities?.data_browser?.available ?? false) && project.your_role !== 'viewer';
-	const projectAlertsAvailable =
-		(capabilities?.project_alerts?.available ?? false) && canManageProject(project.your_role);
+	const projectAlertsAvailable = (capabilities?.project_alerts?.available ?? false) && canManage;
 	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
 	const { data: projectIntegrations } = useIntegrationsQuery({ pid: pid! }, dataBrowserAvailable);
 	const browsableKinds = new Set(
@@ -543,21 +544,23 @@ export function Project() {
 							<Plus className="size-4" />
 							New Notebook
 						</Button>
-						<DropdownMenu
-							label="More create options"
-							icon={<ChevronDown className="size-4" />}
-							triggerClassName="size-9 rounded-md border border-input bg-background hover:border-primary hover:text-primary"
-							options={[
-								{
-									id: 'synced',
-									label: 'Sync from git repo',
-									icon: <GitBranch className="size-4" />,
-								},
-							]}
-							onAction={(key) => {
-								if (key === 'synced') syncedCreateModal.open();
-							}}
-						/>
+						{canManage ? (
+							<DropdownMenu
+								label="More create options"
+								icon={<ChevronDown className="size-4" />}
+								triggerClassName="size-9 rounded-md border border-input bg-background hover:border-primary hover:text-primary"
+								options={[
+									{
+										id: 'synced',
+										label: 'Sync from git repo',
+										icon: <GitBranch className="size-4" />,
+									},
+								]}
+								onAction={(key) => {
+									if (key === 'synced') syncedCreateModal.open();
+								}}
+							/>
+						) : null}
 					</div>
 				}
 			>
@@ -897,12 +900,14 @@ export function Project() {
 				/>
 			)}
 
-			<SyncedNotebookDialog
-				isOpen={syncedCreateModal.isOpen}
-				onClose={syncedCreateModal.close}
-				projectId={pid!}
-				onCreated={handleSyncedCreated}
-			/>
+			{canManage ? (
+				<SyncedNotebookDialog
+					isOpen={syncedCreateModal.isOpen}
+					onClose={syncedCreateModal.close}
+					projectId={pid!}
+					onCreated={handleSyncedCreated}
+				/>
+			) : null}
 
 			{syncSettings.target && (
 				<SyncSettingsDialog
@@ -912,7 +917,8 @@ export function Project() {
 					notebookId={syncSettings.target.notebookId}
 					title={syncSettings.target.title}
 					syncUrl={syncUrl(pid!, syncSettings.target.notebookId)}
-					canEdit={project.your_role !== 'viewer'}
+					canManage={canManage}
+					canOperate={canOperateSource}
 					initialToken={syncSettings.target.token}
 				/>
 			)}

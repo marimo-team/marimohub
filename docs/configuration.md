@@ -201,7 +201,7 @@ E2B sandboxes (e2b.dev). The `e2b` SDK is an optional, bring-your-own dependency
 
 `MARIMOHUB_COMPUTE_BACKEND=kubernetes`
 
-Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. Exposed kernels require TLS by default: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, or set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default` for the ingress controller's default certificate. Plaintext exposure requires an explicit `disabled` mode and an `http://` hostname template. TLS modes cannot be combined with a TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.
+Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. Exposed kernels require TLS by default: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, or set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default` for the ingress controller's default certificate. Plaintext exposure requires an explicit `disabled` mode and an `http://` hostname template. A TLS secret requires `secret` mode; `controller-default` and `disabled` cannot be combined with one. marimohub runs in-cluster with RBAC on pods/services/ingresses.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
@@ -210,7 +210,7 @@ Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kube
 | `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_CLASS` | `ingressClassName` for the per-session Ingress. | — | — | `traefik` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_ANNOTATIONS` | JSON object of string annotations copied to every per-session Ingress. Keys must use Kubernetes annotation syntax, and the combined keys and values cannot exceed 256 KiB. | — | — | `{"route.openshift.io/termination":"edge"}` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE` | How each per-session Ingress declares TLS: `controller-default` emits `tls: [{}]` for an ingress-controller default certificate, `secret` uses `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET`, and `disabled` explicitly opts into plaintext and requires an `http://` hostname template. The legacy `default` value remains an alias for `controller-default`. When unset, a configured secret selects `secret`; otherwise the controller default is used. | — | `secret when TLS secret is set, else controller-default` | `controller-default` |
-| `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` | TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress. | — | — | `marimo-kernels-wildcard-tls` |
+| `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` | TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress. Requires `secret` mode; when the mode is unset, providing this secret selects `secret` automatically. | — | — | `marimo-kernels-wildcard-tls` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_SERVICE_ACCOUNT` | ServiceAccount the kernel Pod runs as. Omit for the namespace default. | — | — | `marimo-kernel` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET` | `imagePullSecrets` name for pulling a private kernel image. | — | — | `regcred` |
 | `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_POLICY` | Kernel-container `imagePullPolicy`: `Always`, `IfNotPresent`, or `Never`. Defaults like Kubernetes: `Always` for a `:latest`/untagged image, `IfNotPresent` for a pinned tag or digest. Pin the image to skip the per-start registry round-trip. | — | `Always for :latest, else IfNotPresent` | `Always` |
@@ -510,6 +510,9 @@ kind lists the packages to add to the notebook.
 Integrations are enabled by default. Set `MARIMOHUB_INTEGRATIONS=off` to
 disable the management routes and session injection. The feature requires only
 the deployment bucket.
+
+Before upgrading, replace the former `true` and `none` aliases with `on`
+and `off`. Those aliases are no longer accepted.
 
 Secret fields use inline encryption or an external resolver. A rendering error
 blocks session creation. Disable or override the integration to restore access.

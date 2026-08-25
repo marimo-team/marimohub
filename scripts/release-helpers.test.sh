@@ -38,7 +38,23 @@ make_source() {
 	done
 }
 
-bash -n "$repo_root/scripts/retry.sh" "$repo_root/scripts/stage-cli-release-assets.sh"
+bash -n "$repo_root/scripts/retry.sh"
+bash -n "$repo_root/scripts/stage-cli-release-assets.sh"
+bash -n "$repo_root/scripts/verify-release-tag.sh"
+
+verification_bin="$temporary/verification-bin"
+mkdir "$verification_bin"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$MOCK_RELEASE_SHA"\n' >"$verification_bin/gh"
+chmod +x "$verification_bin/gh"
+expected_release_sha="0123456789abcdef0123456789abcdef01234567"
+GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
+	PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/verify-release-tag.sh" v1.2.3 "$expected_release_sha"
+if GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="${expected_release_sha%?}8" \
+	PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/verify-release-tag.sh" v1.2.3 "$expected_release_sha" >/dev/null 2>&1; then
+	fail 'moved release tag was accepted'
+fi
 
 make_source "$temporary/success"
 "$repo_root/scripts/stage-cli-release-assets.sh" \

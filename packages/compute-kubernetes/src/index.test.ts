@@ -165,6 +165,19 @@ describe('KubernetesCompute', () => {
 				hostnameTemplate: 'http://{id}.{host}',
 			}),
 		).not.toThrow();
+		expect(() =>
+			makeCompute(world, {
+				...baseConfig,
+				hostnameTemplate: 'HTTPS://{id}.{host}',
+			}),
+		).not.toThrow();
+		expect(() =>
+			makeCompute(world, {
+				...baseConfig,
+				ingressTlsMode: 'disabled',
+				hostnameTemplate: 'HTTP://{id}.{host}',
+			}),
+		).not.toThrow();
 	});
 
 	describe('exec()', () => {

@@ -572,7 +572,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				selectorValue: 'kubernetes',
 				supportsComputeProfiles: true,
 				description:
-					"Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. Exposed kernels require TLS by default: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, or set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default` for the ingress controller's default certificate. Plaintext exposure requires an explicit `disabled` mode and an `http://` hostname template. TLS modes cannot be combined with a TLS secret. marimohub runs in-cluster with RBAC on pods/services/ingresses.",
+					"Native Kubernetes: one keep-alive Pod + Service + Ingress per session via `@kubernetes/client-node`. The kernel is reached directly at its `{id}.{host}` Ingress host, so set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` and provide an ingress class. Exposed kernels require TLS by default: set `MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET` for a named wildcard certificate, or set `MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE=controller-default` for the ingress controller's default certificate. Plaintext exposure requires an explicit `disabled` mode and an `http://` hostname template. A TLS secret requires `secret` mode; `controller-default` and `disabled` cannot be combined with one. marimohub runs in-cluster with RBAC on pods/services/ingresses.",
 				vars: [
 					{
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_NAMESPACE',
@@ -614,7 +614,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET',
 						name: 'Kubernetes TLS secret',
 						description:
-							'TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress.',
+							'TLS secret (typically a `*.{host}` wildcard cert) for the per-session Ingress. Requires `secret` mode; when the mode is unset, providing this secret selects `secret` automatically.',
 						example: 'marimo-kernels-wildcard-tls',
 						optIn: true,
 					},
@@ -1507,6 +1507,9 @@ kind lists the packages to add to the notebook.
 Integrations are enabled by default. Set \`MARIMOHUB_INTEGRATIONS=off\` to
 disable the management routes and session injection. The feature requires only
 the deployment bucket.
+
+Before upgrading, replace the former \`true\` and \`none\` aliases with \`on\`
+and \`off\`. Those aliases are no longer accepted.
 
 Secret fields use inline encryption or an external resolver. A rendering error
 blocks session creation. Disable or override the integration to restore access.

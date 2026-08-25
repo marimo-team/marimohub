@@ -5,7 +5,7 @@ import {
 	UnavailableError,
 	assertVersionMatch,
 } from '@marimo-hub/core';
-import type { ProjectAlertDispatcher } from '@marimo-hub/core';
+import type { ProjectAlertDispatcher, UserId } from '@marimo-hub/core';
 import { uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
@@ -49,6 +49,30 @@ describe('project alert destination routes', () => {
 		);
 		pid = project.id;
 	});
+
+	async function createLocalDestination(
+		userId: UserId,
+		localDispatcher: ProjectAlertDispatcher = dispatcher,
+	) {
+		const api = createTestApi({
+			bucket,
+			userId,
+			deps: { projectAlerts: { store, dispatcher: localDispatcher, maxDestinations: 10 } },
+		});
+		const project = await expectOk<{ id: string }>(
+			await api.request('POST', '/projects', { name: `Alerts ${userId}`, description: '' }),
+			201,
+		);
+		const destination = await expectOk<any>(
+			await api.request('POST', `/projects/${project.id}/alert-destinations`, {
+				name: 'Slack',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/local',
+			}),
+			201,
+		);
+		return { ...api, pid: project.id, destination };
+	}
 
 	it('creates disabled redacted destinations with all kinds selected by default', async () => {
 		const destination = await expectOk<any>(
@@ -183,6 +207,176 @@ describe('project alert destination routes', () => {
 		expect(replay).toEqual(first);
 		expect(replayResponse.headers.get('etag')).toBe(firstResponse.headers.get('etag'));
 		expect(dispatcher.test).toHaveBeenCalledOnce();
+	});
+
+	it('allows only one concurrent delivery for the same idempotency key', async () => {
+		let releaseTest!: () => void;
+		const testGate = new Promise<void>((resolve) => {
+			releaseTest = resolve;
+		});
+		const test = vi.fn<ProjectAlertDispatcher['test']>(
+			async (projectId, destinationId, expectedVersion) => {
+				await testGate;
+				const [resolved] = await store.resolve(projectId, { id: destinationId });
+				if (!resolved) throw new Error('Alert destination not found');
+				assertVersionMatch(resolved.updated_at, expectedVersion);
+				return store.markVerified(projectId, destinationId, resolved.updated_at);
+			},
+		);
+		const localDispatcher: ProjectAlertDispatcher = {
+			deliver: vi.fn(async () => 'delivered' as const),
+			test,
+		};
+		const local = await createLocalDestination(uid('alert_concurrent_test'), localDispatcher);
+		const path = `/projects/${local.pid}/alert-destinations/${local.destination.id}/test`;
+		const headers = alertTestHeaders(local.destination.updated_at, 'concurrent-delivery');
+
+		const firstResponse = local.request('POST', path, undefined, headers);
+		await vi.waitFor(() => expect(test).toHaveBeenCalledOnce());
+		await expectError(await local.request('POST', path, undefined, headers), 409, 'CONFLICT');
+		releaseTest();
+		const first = await expectOk<any>(await firstResponse);
+		const replay = await expectOk<any>(await local.request('POST', path, undefined, headers));
+
+		expect(replay).toEqual(first);
+		expect(test).toHaveBeenCalledOnce();
+	});
+
+	it('does not redeliver when persisting the completed result fails', async () => {
+		const local = await createLocalDestination(uid('alert_result_failure'));
+		const record = vi
+			.spyOn(local.deps.services.idempotency, 'record')
+			.mockRejectedValueOnce(new Error('result storage unavailable'));
+		const path = `/projects/${local.pid}/alert-destinations/${local.destination.id}/test`;
+		const headers = alertTestHeaders(local.destination.updated_at, 'result-record-failure');
+
+		await expectError(await local.request('POST', path, undefined, headers), 500, 'INTERNAL_ERROR');
+		await expectError(await local.request('POST', path, undefined, headers), 409, 'CONFLICT');
+
+		expect(record).toHaveBeenCalledOnce();
+		expect(dispatcher.test).toHaveBeenCalledOnce();
+	});
+
+	it('records the completed result when best-effort success auditing fails', async () => {
+		const local = await createLocalDestination(uid('alert_audit_failure'));
+		const append = vi
+			.spyOn(local.deps.services.events, 'append')
+			.mockRejectedValueOnce(new Error('audit storage unavailable'));
+		const path = `/projects/${local.pid}/alert-destinations/${local.destination.id}/test`;
+		const headers = alertTestHeaders(local.destination.updated_at, 'success-audit-failure');
+
+		const first = await expectOk<any>(await local.request('POST', path, undefined, headers));
+		const replay = await expectOk<any>(await local.request('POST', path, undefined, headers));
+
+		expect(replay).toEqual(first);
+		expect(append).toHaveBeenCalledOnce();
+		expect(dispatcher.test).toHaveBeenCalledOnce();
+	});
+
+	it('scopes an idempotency key to one project destination', async () => {
+		const resourceUser = uid('alert_resource_scope');
+		const local = createTestApi({
+			bucket,
+			userId: resourceUser,
+			deps: { projectAlerts: { store, dispatcher, maxDestinations: 10 } },
+		}).request;
+		const project = await expectOk<{ id: string }>(
+			await local('POST', '/projects', { name: 'Resource scope', description: '' }),
+			201,
+		);
+		const first = await expectOk<any>(
+			await local('POST', `/projects/${project.id}/alert-destinations`, {
+				name: 'First',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/first',
+			}),
+			201,
+		);
+		const second = await expectOk<any>(
+			await local('POST', `/projects/${project.id}/alert-destinations`, {
+				name: 'Second',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/second',
+			}),
+			201,
+		);
+		const idempotencyKey = 'same-key-for-two-destinations';
+
+		const testedFirst = await expectOk<any>(
+			await local(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${first.id}/test`,
+				undefined,
+				alertTestHeaders(first.updated_at, idempotencyKey),
+			),
+		);
+		const testedSecond = await expectOk<any>(
+			await local(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${second.id}/test`,
+				undefined,
+				alertTestHeaders(second.updated_at, idempotencyKey),
+			),
+		);
+
+		expect(testedFirst.id).toBe(first.id);
+		expect(testedSecond.id).toBe(second.id);
+		expect(dispatcher.test).toHaveBeenCalledTimes(2);
+	});
+
+	it('gives different delivery dedupe keys to different users reusing one client key', async () => {
+		const firstUser = uid('alert_test_first_manager');
+		const secondUser = uid('alert_test_second_manager');
+		const firstManager = createTestApi({
+			bucket,
+			userId: firstUser,
+			deps: { projectAlerts: { store, dispatcher, maxDestinations: 10 } },
+		}).request;
+		const secondManager = createTestApi({
+			bucket,
+			userId: secondUser,
+			deps: { projectAlerts: { store, dispatcher, maxDestinations: 10 } },
+		}).request;
+		const project = await expectOk<{ id: string }>(
+			await firstManager('POST', '/projects', { name: 'User scope', description: '' }),
+			201,
+		);
+		await expectOk(
+			await firstManager('POST', `/projects/${project.id}/members`, {
+				user_id: secondUser,
+				role: 'manager',
+			}),
+			201,
+		);
+		const destination = await expectOk<any>(
+			await firstManager('POST', `/projects/${project.id}/alert-destinations`, {
+				name: 'Shared',
+				type: 'slack',
+				webhook_url: 'https://hooks.slack.com/services/shared',
+			}),
+			201,
+		);
+		const idempotencyKey = 'same-key-for-two-users';
+		const tested = await expectOk<any>(
+			await firstManager(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+				undefined,
+				alertTestHeaders(destination.updated_at, idempotencyKey),
+			),
+		);
+		await expectOk(
+			await secondManager(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+				undefined,
+				alertTestHeaders(tested.updated_at, idempotencyKey),
+			),
+		);
+
+		const testCalls = vi.mocked(dispatcher.test).mock.calls;
+		expect(testCalls).toHaveLength(2);
+		expect(testCalls[0]?.[3].dedupe_key).not.toBe(testCalls[1]?.[3].dedupe_key);
 	});
 
 	it('rejects a stale test precondition', async () => {
@@ -434,21 +628,40 @@ describe('project alert destination routes', () => {
 			201,
 		);
 
-		for (let attempt = 0; attempt < 2; attempt++) {
-			await expectError(
-				await local(
-					'POST',
-					`/projects/${pid}/alert-destinations/${destination.id}/test`,
-					undefined,
-					alertTestHeaders(destination.updated_at, idempotencyKey),
-				),
-				503,
-				'SERVICE_UNAVAILABLE',
-			);
-		}
+		const path = `/projects/${pid}/alert-destinations/${destination.id}/test`;
+		await expectError(
+			await local(
+				'POST',
+				path,
+				undefined,
+				alertTestHeaders(destination.updated_at, idempotencyKey),
+			),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		await expectError(
+			await local(
+				'POST',
+				path,
+				undefined,
+				alertTestHeaders(destination.updated_at, idempotencyKey),
+			),
+			409,
+			'CONFLICT',
+		);
+		await expectError(
+			await local(
+				'POST',
+				path,
+				undefined,
+				alertTestHeaders(destination.updated_at, 'new-key-after-failure'),
+			),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
 		const testCalls = vi.mocked(failingDispatcher.test).mock.calls;
 		expect(testCalls).toHaveLength(2);
-		expect(testCalls[0]?.[3].dedupe_key).toBe(testCalls[1]?.[3].dedupe_key);
+		expect(testCalls[0]?.[3].dedupe_key).not.toBe(testCalls[1]?.[3].dedupe_key);
 		expect(testCalls[0]?.[3].dedupe_key).not.toContain(idempotencyKey);
 		expect((await store.list(pid as never))[0]).toMatchObject({
 			verified_at: null,

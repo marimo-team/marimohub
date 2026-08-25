@@ -240,6 +240,7 @@ describe('makeCompute fail-fast', () => {
 				makeCompute({
 					MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
 					MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'disabled',
+					MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'http://{id}.{host}',
 				}),
 			),
 		).toMatchObject({ ingressTlsMode: 'disabled', tlsSecretName: undefined });
@@ -260,21 +261,25 @@ describe('makeCompute fail-fast', () => {
 	});
 
 	it('requires URL schemes that match the kubernetes ingress TLS mode', () => {
-		expect(() =>
+		const disabledError = getConfigError(() =>
 			makeCompute({
 				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
 				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.com',
 				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'disabled',
 			}),
-		).toThrow(/requires an http:\/\//);
-		expect(() =>
+		);
+		expect(disabledError.message).toMatch(/requires an http:\/\//);
+		expect(disabledError.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE');
+		const enabledError = getConfigError(() =>
 			makeCompute({
 				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
 				MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'kernels.example.com',
 				MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'http://{id}.{host}',
 				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'controller-default',
 			}),
-		).toThrow(/require an https:\/\//);
+		);
+		expect(enabledError.message).toMatch(/requires an https:\/\//);
+		expect(enabledError.opts.variable).toBe('MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE');
 		expect(
 			configOf(
 				makeCompute({
@@ -285,6 +290,19 @@ describe('makeCompute fail-fast', () => {
 				}),
 			),
 		).toMatchObject({ ingressTlsMode: 'disabled' });
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'HTTPS://{id}.{host}',
+			}),
+		).not.toThrow();
+		expect(() =>
+			makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: 'kubernetes',
+				MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'HTTP://{id}.{host}',
+				MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'disabled',
+			}),
+		).not.toThrow();
 	});
 
 	it.each([

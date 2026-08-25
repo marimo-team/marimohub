@@ -1,6 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	AlertDestinationId,
+	ConflictError,
 	notificationRouter,
 	NotFoundError,
 	PROJECT_ALERT_KINDS,
@@ -10,7 +11,6 @@ import {
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import type { UserId } from '@marimo-hub/core';
-import { idempotentCreate } from '../idempotency';
 import { appendAudit } from '../log';
 import {
 	assertProjectRole,
@@ -186,7 +186,7 @@ const testDestination = createRoute({
 	tags: ['Alerts'],
 	summary: 'Send a test project alert',
 	description:
-		'Sends a real external message. Reuse the required Idempotency-Key when retrying the same test.',
+		'Sends a real external message. A completed Idempotency-Key replays its result. A concurrent, failed, or ambiguous attempt returns 409 without redelivery; use a new key to start another test.',
 	'x-cli-destructive': true,
 	request: {
 		params: AlertDestinationIdParam,
@@ -216,8 +216,14 @@ function assertTestBudget(userId: string): void {
 	}
 }
 
-async function alertTestDeliveryId(idempotencyKey: string): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(idempotencyKey));
+async function alertTestDeliveryId(
+	userId: UserId,
+	projectId: string,
+	destinationId: string,
+	idempotencyKey: string,
+): Promise<string> {
+	const operation = JSON.stringify([userId, projectId, destinationId, idempotencyKey]);
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(operation));
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
@@ -323,51 +329,64 @@ app.openapi(testDestination, async (c) => {
 		'manager',
 		deps.policy,
 	);
-	const destination = await idempotentCreate(
-		c,
-		'POST /projects/{pid}/alert-destinations/{aid}/test',
-		async () => {
-			assertTestBudget(user.id);
-			const [notification] = notificationRouter.render({
-				kind: 'alert.test',
-				project,
-				destinationId: aid,
-				actor: user,
-				testId: await alertTestDeliveryId(idempotencyKey),
-			});
-			if (!notification) throw new Error('Test alert renderer returned no notification');
-			try {
-				const result = await alerts.dispatcher.test(pid, aid, ifMatchToken(c), notification);
-				await audit(
-					deps,
-					{
-						requestId: c.get('requestId'),
-						method: c.req.method,
-						path: c.req.path,
-						userId: user.id,
-					},
-					'project_alert.test',
-					{ project_id: pid, alert_destination_id: aid, outcome: 'success' },
-				);
-				return result;
-			} catch (error) {
-				await audit(
-					deps,
-					{
-						requestId: c.get('requestId'),
-						method: c.req.method,
-						path: c.req.path,
-						userId: user.id,
-					},
-					'project_alert.test',
-					{ project_id: pid, alert_destination_id: aid, outcome: 'failure' },
-				);
-				throw error;
-			}
-		},
+	const routeId = `POST /projects/${pid}/alert-destinations/${aid}/test`;
+	const resultScope = `${user.id}:${routeId}`;
+	const respond = (data: unknown) => {
+		const destination = data as z.infer<typeof AlertDestinationResponseSchema>;
+		c.header('ETag', etagFor(destination.updated_at));
+		return c.json({ success: true, data: destination }, 200);
+	};
+	let completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
+	if (completed) return respond(completed.data);
+	const ownsDelivery = await deps.services.idempotency.reserve(
+		`${resultScope}:external-delivery`,
+		idempotencyKey,
 	);
-	c.header('ETag', etagFor(destination.updated_at));
-	return c.json({ success: true, data: destination }, 200);
+	if (!ownsDelivery) {
+		completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
+		if (completed) return respond(completed.data);
+		throw new ConflictError('Alert test outcome is pending or unknown for this Idempotency-Key');
+	}
+
+	assertTestBudget(user.id);
+	const [notification] = notificationRouter.render({
+		kind: 'alert.test',
+		project,
+		destinationId: aid,
+		actor: user,
+		testId: await alertTestDeliveryId(user.id, pid, aid, idempotencyKey),
+	});
+	if (!notification) throw new Error('Test alert renderer returned no notification');
+	let destination: z.infer<typeof AlertDestinationResponseSchema>;
+	try {
+		destination = await alerts.dispatcher.test(pid, aid, ifMatchToken(c), notification);
+	} catch (error) {
+		await audit(
+			deps,
+			{
+				requestId: c.get('requestId'),
+				method: c.req.method,
+				path: c.req.path,
+				userId: user.id,
+			},
+			'project_alert.test',
+			{ project_id: pid, alert_destination_id: aid, outcome: 'failure' },
+		);
+		throw error;
+	}
+	await deps.services.idempotency.record(resultScope, idempotencyKey, destination);
+	await audit(
+		deps,
+		{
+			requestId: c.get('requestId'),
+			method: c.req.method,
+			path: c.req.path,
+			userId: user.id,
+		},
+		'project_alert.test',
+		{ project_id: pid, alert_destination_id: aid, outcome: 'success' },
+	);
+	return respond(destination);
 });
 
 export default app;

@@ -76,7 +76,9 @@ export function ProjectAlertsDialog({
 	const update = useUpdateProjectAlert(projectId);
 	const remove = useDeleteProjectAlert(projectId);
 	const test = useTestProjectAlert(projectId);
-	const testKeys = useRef(new Map<string, string>());
+	const testKeys = useRef(
+		new Map<string, { destinationVersion: string; idempotencyKey: string }>(),
+	);
 	const confirmDelete = useDialogTarget<ProjectAlertDestination>();
 	const [editor, setEditor] = useState<EditorState | null>(null);
 	const pending = create.isPending || update.isPending;
@@ -303,9 +305,15 @@ export function ProjectAlertsDialog({
 								<Button
 									size="sm"
 									onPress={() => {
+										const retry = testKeys.current.get(destination.id);
 										const idempotencyKey =
-											testKeys.current.get(destination.id) ?? crypto.randomUUID();
-										testKeys.current.set(destination.id, idempotencyKey);
+											retry?.destinationVersion === destination.updated_at
+												? retry.idempotencyKey
+												: crypto.randomUUID();
+										testKeys.current.set(destination.id, {
+											destinationVersion: destination.updated_at,
+											idempotencyKey,
+										});
 										test.mutate(
 											{
 												id: destination.id,
@@ -314,7 +322,11 @@ export function ProjectAlertsDialog({
 											},
 											{
 												onSuccess: () => {
-													testKeys.current.delete(destination.id);
+													if (
+														testKeys.current.get(destination.id)?.idempotencyKey === idempotencyKey
+													) {
+														testKeys.current.delete(destination.id);
+													}
 													toast.success('Test alert delivered.');
 												},
 												onError: toastError,

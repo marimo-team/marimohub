@@ -90,6 +90,19 @@ export function resolveIngressTlsMode(
 	return resolved as ResolvedIngressTlsMode;
 }
 
+export function validateIngressTlsHostnameTemplate(
+	template: string,
+	tlsMode: ResolvedIngressTlsMode,
+): void {
+	const scheme = /^([a-z][a-z\d+.-]*):\/\//i.exec(template)?.[1]?.toLowerCase();
+	if (tlsMode === 'disabled' && scheme !== 'http') {
+		throw new Error('Disabled Kubernetes ingress TLS requires an http:// hostname template');
+	}
+	if (tlsMode !== 'disabled' && scheme !== 'https') {
+		throw new Error('Kubernetes ingress TLS requires an https:// hostname template');
+	}
+}
+
 /**
  * Tag-sensitive pull-policy default, mirroring Kubernetes' own: `Always` for a
  * mutable `:latest`/untagged image (correctness — a cached stale image would

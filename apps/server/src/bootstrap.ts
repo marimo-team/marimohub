@@ -151,7 +151,8 @@ export async function bootstrap(
 		...(overrides.hostname ? { hostname: overrides.hostname } : {}),
 	};
 	const server = serveFn(serverOptions, (info) => {
-		console.log(`[marimohub] server listening on :${info.port}`);
+		const address = info.address.includes(':') ? `[${info.address}]` : info.address;
+		console.log(`[marimohub] server listening on http://${address}:${info.port}`);
 	});
 
 	// In `proxy` exposure mode, forward `…/proxy/<token>/` WebSocket upgrades to the

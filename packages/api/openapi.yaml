@@ -4201,8 +4201,9 @@ paths:
       tags:
         - Alerts
       summary: Send a test project alert
-      description: Sends a real external message. Reuse the required Idempotency-Key
-        when retrying the same test.
+      description: Sends a real external message. A completed Idempotency-Key replays
+        its result. A concurrent, failed, or ambiguous attempt returns 409
+        without redelivery; use a new key to start another test.
       x-cli-destructive: true
       parameters:
         - schema:

@@ -174,9 +174,12 @@ describe('validateSelection', () => {
 				...selection,
 				values: { MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'disabled' },
 			}),
-		).toEqual([
-			expect.objectContaining({ level: 'danger', title: expect.stringMatching(/plaintext/i) }),
-		]);
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ level: 'danger', title: expect.stringMatching(/plaintext/i) }),
+				expect.objectContaining({ level: 'danger', title: expect.stringMatching(/scheme/i) }),
+			]),
+		);
 		expect(
 			validateSelection({
 				...selection,
@@ -188,5 +191,35 @@ describe('validateSelection', () => {
 		).toEqual([
 			expect.objectContaining({ level: 'danger', title: expect.stringMatching(/conflict/i) }),
 		]);
+	});
+
+	it('flags incomplete or invalid kubernetes TLS configurations', () => {
+		const selection = CASES['azure + kubernetes + oidc'];
+		expect(
+			validateSelection({
+				...selection,
+				values: { MARIMOHUB_COMPUTE_KUBERNETES_TLS_SECRET: 'wildcard-cert' },
+			}),
+		).toEqual([]);
+		for (const [values, title] of [
+			[{ MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'secret' }, /secret is missing/i],
+			[{ MARIMOHUB_COMPUTE_KUBERNETES_INGRESS_TLS_MODE: 'invalid' }, /mode is invalid/i],
+			[
+				{ MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'http://{id}.{host}' },
+				/scheme conflicts/i,
+			],
+		] as const) {
+			expect(validateSelection({ ...selection, values })).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ level: 'danger', title: expect.stringMatching(title) }),
+				]),
+			);
+		}
+		expect(
+			validateSelection({
+				...selection,
+				values: { MARIMOHUB_COMPUTE_KUBERNETES_HOSTNAME_TEMPLATE: 'HTTPS://{id}.{host}' },
+			}),
+		).toEqual([]);
 	});
 });

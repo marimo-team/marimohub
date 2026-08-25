@@ -54,7 +54,7 @@ import {
 import { Millis } from '@marimo-hub/core';
 import type { SandboxId, Timings } from '@marimo-hub/core';
 import { createK8sClient } from './client';
-import { resolveIngressTlsMode } from './shared';
+import { resolveIngressTlsMode, validateIngressTlsHostnameTemplate } from './shared';
 import type { K8sClient, K8sExecResult, K8sPodPhaseInfo, KubernetesConfig } from './shared';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports';
 export * from './shared';
@@ -581,12 +581,7 @@ export class KubernetesCompute implements SandboxProvider {
 	) {
 		const template = config.hostnameTemplate ?? 'https://{id}.{host}';
 		const tlsMode = resolveIngressTlsMode(config.ingressTlsMode, config.tlsSecretName);
-		if (config.hostname && tlsMode === 'disabled' && !template.startsWith('http://')) {
-			throw new Error('Disabled Kubernetes ingress TLS requires an http:// hostname template');
-		}
-		if (config.hostname && tlsMode !== 'disabled' && !template.startsWith('https://')) {
-			throw new Error('Kubernetes ingress TLS requires an https:// hostname template');
-		}
+		validateIngressTlsHostnameTemplate(template, tlsMode);
 		this.client = client;
 	}
 

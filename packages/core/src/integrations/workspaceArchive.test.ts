@@ -36,7 +36,8 @@ function setZipOriginalSizes(archive: Uint8Array, sizes: number[]): Uint8Array {
 			centralEntry += 1;
 		}
 	}
-	if (localEntry !== sizes.length || centralEntry !== sizes.length)
+	if (localEntry !== sizes.length) throw new Error('ZIP has fewer local entries than expected');
+	if (centralEntry !== sizes.length)
 		throw new Error('ZIP has fewer central-directory entries than expected');
 	return patched;
 }

@@ -3,13 +3,8 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
+import { devApiTarget, envPort } from './devProxy';
 
-function envPort(value: string | undefined, fallback: number): number {
-	const port = Number(value);
-	return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : fallback;
-}
-
-const apiPort = envPort(process.env.PORT, 3000);
 const webPort = envPort(process.env.WEB_PORT, 5175);
 
 // React SPA. The Cloudflare vite-plugin is intentionally absent — the SPA is a
@@ -35,7 +30,7 @@ export default defineConfig({
 		// server can reach the /api/* surface during development.
 		proxy: {
 			'/api': {
-				target: `http://localhost:${apiPort}`,
+				target: devApiTarget(process.env),
 				// Rewriting Host would make it differ from Origin and trip the CSRF guard.
 				changeOrigin: false,
 			},
@@ -49,7 +44,7 @@ export default defineConfig({
 		tasks: {
 			dev: {
 				command: 'vp dev',
-				untrackedEnv: ['PORT', 'WEB_PORT'],
+				untrackedEnv: ['DEV_HOST', 'PORT', 'WEB_PORT'],
 			},
 			build: { command: 'vp build', output: ['dist/**'] },
 		},

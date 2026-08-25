@@ -17,6 +17,39 @@ describe('IdempotencyService', () => {
 		expect(await svc.lookup('u1:POST /projects', 'k1')).toEqual({ data: { id: 'proj-1' } });
 	});
 
+	it('atomically reserves only the first use of a scope and key', async () => {
+		const svc = new IdempotencyService(new MemoryBucket());
+
+		const claims = await Promise.all(
+			Array.from({ length: 5 }, () => svc.reserve('u1:external-delivery', 'k1')),
+		);
+
+		expect(claims.filter(Boolean)).toHaveLength(1);
+		expect(await svc.reserve('u1:external-delivery', 'k1')).toBe(false);
+		expect(await svc.reserve('u1:external-delivery', 'k2')).toBe(true);
+		expect(await svc.reserve('u2:external-delivery', 'k1')).toBe(true);
+	});
+
+	it('fails before reserving when storage cannot create the claim', async () => {
+		const bucket = new MemoryBucket();
+		const boom = new Error('put boom');
+		vi.spyOn(bucket, 'put').mockRejectedValueOnce(boom);
+		const svc = new IdempotencyService(bucket);
+
+		await expect(svc.reserve('u1:external-delivery', 'k1')).rejects.toBe(boom);
+		expect(await svc.lookup('u1:external-delivery', 'k1')).toBeNull();
+	});
+
+	it('does not reclaim a corrupt reservation', async () => {
+		const bucket = new MemoryBucket();
+		const svc = new IdempotencyService(bucket);
+		expect(await svc.reserve('u1:external-delivery', 'k1')).toBe(true);
+		const { objects } = await bucket.list({ prefix: paths.idempotencyPrefix });
+		await bucket.put(objects[0].key, '{not-json');
+
+		expect(await svc.reserve('u1:external-delivery', 'k1')).toBe(false);
+	});
+
 	it('scopes by (scope, key): a different key or scope misses', async () => {
 		const svc = new IdempotencyService(new MemoryBucket());
 		await svc.record('u1:POST /projects', 'k1', { id: 'proj-1' });

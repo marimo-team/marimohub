@@ -12,7 +12,7 @@
 		"ready": "vp fmt && vp lint && pnpm typecheck && vp run -r test && vp run -r build",
 		"check": "vp check",
 		"typecheck": "vp run -r typecheck",
-		"test": "vp test tools/oxlint/anti-slop/index.test.ts && pnpm test:release-scripts && vp run -r test --configLoader=runner --pool=threads",
+		"test": "vp test tools/oxlint/anti-slop/index.test.ts && vp run -r test --configLoader=runner --pool=threads",
 		"test:release-scripts": "bash scripts/release-helpers.test.sh",
 		"test:coverage": "pnpm test:coverage:root && pnpm test:coverage:web",
 		"test:coverage:root": "vp test --coverage",

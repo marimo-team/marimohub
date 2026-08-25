@@ -38,10 +38,12 @@ configured flags.
 
 API clients follow the same create, test, then enable sequence. Save the `ETag` returned by
 create and send it as `If-Match` when testing or updating the destination. A test sends a real
-external message and requires an `Idempotency-Key`; reuse the same key when retrying a request
-whose outcome is unknown. A successful replay returns the original redacted destination without
-sending another message. Use the returned `ETag` when enabling the verified destination. The CLI
-also treats a test as a confirming operation and requires `--yes` in non-interactive use.
+external message and requires an `Idempotency-Key`. Reusing a key from a completed test returns
+the original redacted destination without sending another message. A concurrent, failed, or
+ambiguous attempt returns `409 CONFLICT` on reuse because the server reserves the key before
+delivery. Use a new key only when deliberately starting another test. Use the returned `ETag`
+when enabling the verified destination. The CLI also treats a test as a confirming operation and
+requires `--yes` in non-interactive use.
 
 ## Alert catalog
 
@@ -65,8 +67,8 @@ app stops do not create it.
 ## Delivery and payloads
 
 Slack gets one attempt. A generic webhook gets one retry after a transport failure, HTTP 408,
-HTTP 429, or a 5xx response. A `Retry-After` value on a 429 delays that retry by 1–60 seconds;
-other retries are immediate. Other 4xx responses are not retried. Webhooks receive the same
+HTTP 429, or a 5xx response. A 429 delays that retry by 1–60 seconds; a `Retry-After` value is
+clamped to that range. Other retries are immediate. Other 4xx responses are not retried. Webhooks receive the same
 `schema_version: 1` notification envelope documented in
 [Notifications](./notifications.md). Only the destination's selected kinds are sent. Error
 events contain a sanitized error code, not provider messages, URLs, credentials, or secrets.
@@ -88,8 +90,9 @@ and increment `project_alert.rate_limited`; another project's budget is unaffect
 All endpoints must use HTTPS and cannot contain user information. Before every request, the
 Node transport resolves the hostname, rejects any private, loopback, link-local, reserved,
 metadata, or CGNAT address, and pins the connection to the validated DNS answers. Redirects are
-not followed. Requests have a 10-second deadline and a 16 KiB response cap. Destination tests
-are limited to 10 per user per minute.
+not followed. Requests have a 10-second deadline and a 16 KiB response cap. Each user can
+attempt 10 destination tests in a rolling minute. Further attempts return
+`429 RESOURCE_EXHAUSTED` without sending a message.
 
 Managers are trusted to disclose project metadata to destinations they configure. URLs and
 HMAC secrets are encrypted in `projects/{pid}/alerts.json` with path-bound AES-256-GCM under

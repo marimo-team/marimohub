@@ -689,7 +689,7 @@ mod tests {
     #[test]
     fn embedded_manifest_covers_the_api() {
         let manifest = manifest::load();
-        assert_eq!(manifest.operations.len(), 86);
+        assert_eq!(manifest.operations.len(), 79);
         assert_eq!(manifest.api_version, "1.0.0");
         assert_eq!(
             manifest
@@ -697,7 +697,7 @@ mod tests {
                 .iter()
                 .filter(|operation| operation.paginated)
                 .count(),
-            17
+			16
         );
         assert_eq!(
             manifest

@@ -64,6 +64,7 @@ jobs:
             exit 1
           fi
           echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
 
       - name: Checkout recovery workflow
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -73,19 +74,20 @@ jobs:
       - name: Checkout release source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ steps.source.outputs.sha }}
           path: release-source
           fetch-depth: 0
 
       - name: Verify release commit
         env:
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_SHA=$(git -C release-source rev-parse HEAD)
-          if [[ "$TAG_SHA" != "$SOURCE_SHA" ]]; then
-            echo "::error::Run $SOURCE_RUN_ID built $SOURCE_SHA, but $RELEASE_TAG now points to $TAG_SHA"
+          CHECKOUT_SHA=$(git -C release-source rev-parse HEAD)
+          if [[ "$CHECKOUT_SHA" != "$SOURCE_SHA" ]]; then
+            echo "::error::Release source checkout is $CHECKOUT_SHA, not $SOURCE_SHA"
             exit 1
           fi
+          scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -102,6 +104,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for attempt in 1 2 3 4; do
+            scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
             if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
               echo "Release $RELEASE_TAG already exists; keeping its release notes."
               break
@@ -117,13 +120,17 @@ jobs:
             fi
             sleep $((2 ** attempt))
           done
+          scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
 
       - name: Attach validated CLI artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          scripts/retry.sh gh release upload "$RELEASE_TAG"
-          release-assets/* --clobber
+        run: |
+          scripts/retry.sh bash -c '
+            scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+            scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
+          '
 
       - name: Create checksums and dependency SBOM
         env:
@@ -143,6 +150,10 @@ jobs:
       - name: Attach release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          scripts/retry.sh gh release upload "$RELEASE_TAG"
-          release-assets/mohub.cdx.json release-assets/SHA256SUMS --clobber
+        run: |
+          scripts/retry.sh bash -c '
+            scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
+            gh release upload "$RELEASE_TAG" \
+              release-assets/mohub.cdx.json release-assets/SHA256SUMS --clobber
+            scripts/verify-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA"
+          '
