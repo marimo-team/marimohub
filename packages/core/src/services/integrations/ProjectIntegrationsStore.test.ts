@@ -58,7 +58,10 @@ const echoKind = defineIntegration({
 	},
 });
 
-const stubProbe = { fetch: () => Promise.reject(new Error('no network in tests')) };
+const stubProbe = {
+	fetch: () => Promise.reject(new Error('no network in tests')),
+	connect: () => Promise.reject(new Error('no network in tests')),
+};
 
 function makeStore(bucket: MemoryBucket, withCodec = true, resolvers: SecretResolver[] = []) {
 	const registry = new IntegrationRegistry();

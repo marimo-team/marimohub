@@ -13,6 +13,7 @@ function result(meta: string[], data: unknown[][]) {
 function fakeProbe(body: unknown) {
 	const calls: { url: string; init?: ProbeRequestInit }[] = [];
 	const probe: IntegrationProbe = {
+		connect: () => Promise.reject(new Error('unused')),
 		fetch: async (url, init) => {
 			calls.push({ url, init });
 			return { ok: true, status: 200, json: async () => body };
@@ -24,6 +25,7 @@ function fakeProbe(body: unknown) {
 function queuedProbe(bodies: unknown[]) {
 	let index = 0;
 	const probe: IntegrationProbe = {
+		connect: () => Promise.reject(new Error('unused')),
 		fetch: async () => ({ ok: true, status: 200, json: async () => bodies[index++] }),
 	};
 	return probe;

@@ -179,6 +179,14 @@ export interface BrowseCapabilityResult {
 /** The only network path allowed to integration probes; implementations enforce egress policy. */
 export interface IntegrationProbe {
 	fetch(url: string, init?: ProbeRequestInit): Promise<ProbeResponse>;
+	connect(request: ProbeConnectRequest): Promise<void>;
+}
+
+export interface ProbeConnectRequest {
+	hostname: string;
+	port: number;
+	tls: boolean;
+	signal?: AbortSignal;
 }
 
 export interface ProbeRequestInit {

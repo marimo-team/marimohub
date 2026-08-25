@@ -763,7 +763,7 @@ paths:
       - auth.token
       - metadata.*.value
       - secret_spark_config.*.value
-    x-supports-test: false
+    x-supports-test: true
     x-requirements:
       - pyspark[connect]>=4.2
     x-env:

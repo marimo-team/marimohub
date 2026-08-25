@@ -3,7 +3,7 @@ import type { IntegrationProbe } from '@marimo-hub/core';
 import { sendNotificationRequest } from './notificationTransport';
 
 function probe(fetch: IntegrationProbe['fetch']): IntegrationProbe {
-	return { fetch };
+	return { fetch, connect: () => Promise.reject(new Error('unused')) };
 }
 
 afterEach(() => {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ValidationError } from '../../../errors';
 import { INTEGRATIONS_DIR } from '../bundle';
-import { defineIntegration, envSegment, HOSTNAME_REGEX } from '../sdk';
+import { defineIntegration, envSegment, HOSTNAME_REGEX, probeErrorDetails } from '../sdk';
 import { zSecret } from '../secretFields';
 import { discoveryEnvField } from './common';
 
@@ -119,6 +119,27 @@ export const pyspark = defineIntegration({
 			if (secretNames.has(key)) {
 				throw new ValidationError(`Spark configuration "${key}" is configured twice.`);
 			}
+		}
+	},
+
+	async testConnection(config, probe) {
+		const startedAt = performance.now();
+		const latency = () => Math.round(performance.now() - startedAt);
+		try {
+			await probe.connect({
+				hostname: config.host,
+				port: config.port,
+				tls: config.use_ssl,
+			});
+			return {
+				ok: true,
+				latency_ms: latency(),
+				details: config.use_ssl
+					? 'endpoint reachable over TLS; Spark authentication not verified'
+					: 'endpoint reachable; Spark authentication not verified',
+			};
+		} catch (error) {
+			return { ok: false, latency_ms: latency(), details: probeErrorDetails(error, false) };
 		}
 	},
 

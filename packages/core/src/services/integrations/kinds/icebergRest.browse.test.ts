@@ -22,6 +22,7 @@ function fakeCatalog(routes: Record<string, unknown>, requested: string[] = []):
 	const respond = (ok: boolean, status: number, body: unknown) =>
 		Promise.resolve({ ok, status, json: () => Promise.resolve(body) });
 	return {
+		connect: () => Promise.reject(new Error('unused')),
 		fetch: (url, init) => {
 			requested.push(url);
 			const target = new URL(url);
@@ -292,6 +293,7 @@ describe('iceberg_rest browse operations', () => {
 
 	it('replaces a transport throw with a generic failure', async () => {
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: () => Promise.reject(new Error('socket hang up for Bearer tok-123')),
 		};
 		await expect(browse.listNamespaces(config(), probe, { limit: 10 })).rejects.toThrow(
@@ -328,6 +330,7 @@ describe('iceberg_rest browse unhappy paths', () => {
 	it('oauth2: exchanges the client secret for a token and sends it as the bearer', async () => {
 		const requested: { url: string; auth?: string; body?: string }[] = [];
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: (url, init) => {
 				requested.push({ url, auth: init?.headers?.Authorization, body: init?.body });
 				if (url.includes('idp.internal/token')) {
@@ -353,6 +356,7 @@ describe('iceberg_rest browse unhappy paths', () => {
 
 	it('oauth2: a failing token endpoint surfaces as unavailable, without the secret', async () => {
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: (url) =>
 				url.includes('idp.internal/token')
 					? respond(false, 500, null)
@@ -366,6 +370,7 @@ describe('iceberg_rest browse unhappy paths', () => {
 
 	it('a truncated or non-JSON listing response is refused, not misread as empty', async () => {
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: (url) =>
 				url.includes('/v1/config')
 					? respond(true, 200, CONFIG_RESPONSE)

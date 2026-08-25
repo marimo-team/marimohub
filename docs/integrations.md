@@ -601,6 +601,9 @@ cluster remains the compute backend's responsibility.
 [discovers](#vendor-standard-variables-and-one-click-connections) — so
 `getOrCreate()` needs no arguments at all.
 
+**Test** verifies DNS, TCP reachability, and the TLS handshake when enabled. It
+does not create a Spark session or validate authentication and Spark configuration.
+
 <!--@include: ./partials/integrations/pyspark.md-->
 
 ## Databricks SQL

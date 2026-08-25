@@ -1,9 +1,11 @@
 import type * as dnsPromises from 'node:dns/promises';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
+import { createServer as createTcpServer } from 'node:net';
+import type { Server as TcpServer, Socket } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
-import type { ProbeTransportRequest } from './integrationProbe';
+import type { ProbeConnectionTransportRequest, ProbeTransportRequest } from './integrationProbe';
 
 type PinnedAddress = { address: string; family: number };
 type Lookup = (
@@ -39,6 +41,15 @@ function stubTransport(status = 200, body = '{}') {
 	return { transport, calls };
 }
 
+function stubConnectionTransport() {
+	const calls: ProbeConnectionTransportRequest[] = [];
+	const connectionTransport = vi.fn((request: ProbeConnectionTransportRequest) => {
+		calls.push(request);
+		return Promise.resolve();
+	});
+	return { connectionTransport, calls };
+}
+
 afterEach(() => {
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
@@ -47,6 +58,112 @@ afterEach(() => {
 });
 
 describe('createGuardedProbe policy', () => {
+	it('validates and pins TCP/TLS targets before connecting', async () => {
+		const { connectionTransport, calls } = stubConnectionTransport();
+		const probe = createGuardedProbe({ connectionTransport });
+
+		await probe.connect({ hostname: '93.184.216.34', port: 15002, tls: true });
+
+		expect(calls[0]).toMatchObject({
+			hostname: '93.184.216.34',
+			port: 15002,
+			tls: true,
+			pinned: [{ address: '93.184.216.34', family: 4 }],
+		});
+		expect(calls[0].timeoutMs).toBeGreaterThan(0);
+	});
+
+	it('applies the private-address policy to socket probes', async () => {
+		const { connectionTransport } = stubConnectionTransport();
+		const probe = createGuardedProbe({ connectionTransport });
+
+		await expect(probe.connect({ hostname: '127.0.0.1', port: 15002, tls: false })).rejects.toThrow(
+			/private or reserved/,
+		);
+		expect(connectionTransport).not.toHaveBeenCalled();
+	});
+
+	it('rejects a socket hostname when any DNS answer is private', async () => {
+		dns.answers.set('mixed-socket.example.test', [
+			{ address: '93.184.216.34', family: 4 },
+			{ address: '10.0.0.8', family: 4 },
+		]);
+		const { connectionTransport } = stubConnectionTransport();
+		const probe = createGuardedProbe({ connectionTransport });
+
+		await expect(
+			probe.connect({ hostname: 'mixed-socket.example.test', port: 15002, tls: true }),
+		).rejects.toThrow(/private or reserved/);
+		expect(connectionTransport).not.toHaveBeenCalled();
+	});
+
+	it('passes every validated DNS answer and the caller signal to the socket transport', async () => {
+		dns.answers.set('spark.example.test', [
+			{ address: '93.184.216.34', family: 4 },
+			{ address: '2606:4700:4700::1111', family: 6 },
+		]);
+		const { connectionTransport, calls } = stubConnectionTransport();
+		const probe = createGuardedProbe({ connectionTransport });
+		const controller = new AbortController();
+
+		await probe.connect({
+			hostname: 'spark.example.test',
+			port: 15002,
+			tls: true,
+			signal: controller.signal,
+		});
+
+		expect(calls[0].pinned).toEqual([
+			{ address: '93.184.216.34', family: 4 },
+			{ address: '2606:4700:4700::1111', family: 6 },
+		]);
+		expect(calls[0].signal).toBe(controller.signal);
+	});
+
+	it('normalizes a bracketed IPv6 socket target after validating it', async () => {
+		const { connectionTransport, calls } = stubConnectionTransport();
+		const probe = createGuardedProbe({ connectionTransport });
+
+		await probe.connect({ hostname: '[2606:4700:4700::1111]', port: 15002, tls: true });
+
+		expect(calls[0]).toMatchObject({
+			hostname: '2606:4700:4700::1111',
+			pinned: [{ address: '2606:4700:4700::1111', family: 6 }],
+		});
+	});
+
+	it.each([0, -1, 65_536, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+		'rejects invalid socket port %s before resolving or connecting',
+		async (port) => {
+			const { connectionTransport } = stubConnectionTransport();
+			const probe = createGuardedProbe({ connectionTransport });
+
+			await expect(probe.connect({ hostname: 'example.com', port, tls: false })).rejects.toThrow(
+				/Invalid port/,
+			);
+			expect(connectionTransport).not.toHaveBeenCalled();
+		},
+	);
+
+	it('rejects an empty socket hostname before resolving or connecting', async () => {
+		const { connectionTransport } = stubConnectionTransport();
+		const probe = createGuardedProbe({ connectionTransport });
+
+		await expect(probe.connect({ hostname: '', port: 15002, tls: false })).rejects.toThrow(
+			/Invalid hostname/,
+		);
+		expect(connectionTransport).not.toHaveBeenCalled();
+	});
+
+	it('does not hide a socket transport failure', async () => {
+		const connectionTransport = vi.fn(() => Promise.reject(new Error('dial failed')));
+		const probe = createGuardedProbe({ connectionTransport });
+
+		await expect(
+			probe.connect({ hostname: '93.184.216.34', port: 15002, tls: false }),
+		).rejects.toThrow('dial failed');
+	});
+
 	it('rejects non-http schemes, embedded credentials, and malformed URLs', async () => {
 		const probe = createGuardedProbe();
 		await expect(probe.fetch('ftp://example.com')).rejects.toThrow(/http\(s\)/);
@@ -196,6 +313,23 @@ describe('createGuardedProbe policy', () => {
 		await expect(second.fetch('http://10.0.0.5/')).resolves.toMatchObject({ ok: true });
 	});
 
+	it('shares one rate-limit budget between HTTP and socket probes', async () => {
+		const { transport } = stubTransport();
+		const { connectionTransport } = stubConnectionTransport();
+		const probe = createGuardedProbe({
+			transport,
+			connectionTransport,
+			allowPrivate: true,
+			maxProbesPerMinute: 1,
+		});
+
+		await probe.fetch('http://10.0.0.5/');
+		await expect(probe.connect({ hostname: '10.0.0.5', port: 15002, tls: false })).rejects.toThrow(
+			/Too many/,
+		);
+		expect(connectionTransport).not.toHaveBeenCalled();
+	});
+
 	it('spends ONE deadline across resolution and transport', async () => {
 		dns.delayMs = 60;
 		const { transport, calls } = stubTransport();
@@ -216,6 +350,58 @@ describe('createGuardedProbe policy', () => {
 		expect(transport).not.toHaveBeenCalled();
 	});
 
+	it('subtracts socket DNS time from the connection transport deadline', async () => {
+		dns.delayMs = 60;
+		const { connectionTransport, calls } = stubConnectionTransport();
+		const probe = createGuardedProbe({
+			connectionTransport,
+			allowPrivate: true,
+			timeoutMs: 200,
+		});
+
+		await probe.connect({ hostname: 'localhost', port: 15002, tls: false });
+
+		expect(calls[0].timeoutMs).toBeLessThanOrEqual(150);
+		expect(calls[0].timeoutMs).toBeGreaterThan(0);
+	});
+
+	it('does not open a socket when DNS exhausts the connection deadline', async () => {
+		dns.delayMs = 200;
+		const { connectionTransport } = stubConnectionTransport();
+		const probe = createGuardedProbe({
+			connectionTransport,
+			allowPrivate: true,
+			timeoutMs: 30,
+		});
+
+		await expect(probe.connect({ hostname: 'localhost', port: 15002, tls: false })).rejects.toThrow(
+			/timed out/,
+		);
+		expect(connectionTransport).not.toHaveBeenCalled();
+	});
+
+	it('stops socket DNS resolution when the caller aborts', async () => {
+		dns.delayMs = 200;
+		const { connectionTransport } = stubConnectionTransport();
+		const probe = createGuardedProbe({
+			connectionTransport,
+			allowPrivate: true,
+			timeoutMs: 1_000,
+		});
+		const controller = new AbortController();
+		const pending = probe.connect({
+			hostname: 'localhost',
+			port: 15002,
+			tls: false,
+			signal: controller.signal,
+		});
+
+		controller.abort();
+
+		await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+		expect(connectionTransport).not.toHaveBeenCalled();
+	});
+
 	it('restores probe budget after the sliding window expires', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2025-01-01T00:00:00Z'));
@@ -226,6 +412,89 @@ describe('createGuardedProbe policy', () => {
 
 		vi.advanceTimersByTime(60_001);
 		await expect(probe.fetch('http://10.0.0.5/')).resolves.toMatchObject({ ok: true });
+	});
+});
+
+describe('createGuardedProbe node socket transport', () => {
+	let server: TcpServer | undefined;
+	const sockets = new Set<Socket>();
+
+	afterEach(async () => {
+		for (const socket of sockets) socket.destroy();
+		sockets.clear();
+		await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+		server = undefined;
+	});
+
+	function tcpServer(onConnection?: () => void): TcpServer {
+		return createTcpServer((socket) => {
+			sockets.add(socket);
+			socket.once('close', () => sockets.delete(socket));
+			onConnection?.();
+		});
+	}
+
+	it('connects to a validated, pinned TCP endpoint', async () => {
+		server = tcpServer();
+		await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+		const address = server.address();
+		if (address === null || typeof address === 'string') throw new Error('no port');
+		const probe = createGuardedProbe({ allowPrivate: true });
+
+		await expect(
+			probe.connect({ hostname: 'localhost', port: address.port, tls: false }),
+		).resolves.toBeUndefined();
+	});
+
+	it('times out when a TLS endpoint never completes its handshake', async () => {
+		server = tcpServer();
+		await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+		const address = server.address();
+		if (address === null || typeof address === 'string') throw new Error('no port');
+		const probe = createGuardedProbe({ allowPrivate: true, timeoutMs: 25 });
+
+		await expect(
+			probe.connect({ hostname: 'localhost', port: address.port, tls: true }),
+		).rejects.toThrow(/timed out/);
+	});
+
+	it('aborts an in-progress TLS handshake when the caller cancels', async () => {
+		let connected!: () => void;
+		const accepted = new Promise<void>((resolve) => {
+			connected = resolve;
+		});
+		server = tcpServer(connected);
+		await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+		const address = server.address();
+		if (address === null || typeof address === 'string') throw new Error('no port');
+		const probe = createGuardedProbe({ allowPrivate: true, timeoutMs: 1_000 });
+		const controller = new AbortController();
+		const pending = probe.connect({
+			hostname: 'localhost',
+			port: address.port,
+			tls: true,
+			signal: controller.signal,
+		});
+		await accepted;
+
+		controller.abort();
+
+		await expect(pending).rejects.toMatchObject({
+			name: 'AbortError',
+			message: 'Connection test aborted.',
+		});
+	});
+
+	it('rejects when the peer closes before the TLS handshake', async () => {
+		server = createTcpServer((socket) => socket.destroy());
+		await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+		const address = server.address();
+		if (address === null || typeof address === 'string') throw new Error('no port');
+		const probe = createGuardedProbe({ allowPrivate: true });
+
+		await expect(
+			probe.connect({ hostname: 'localhost', port: address.port, tls: true }),
+		).rejects.toThrow();
 	});
 });
 

@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
 import { ValidationError } from '../../../errors';
 import { createIntegrationId, createProjectId, createSessionId, UserId } from '../../../ids';
-import type { IntegrationProbe, ProbeRequestInit } from '../../../ports/integrations';
+import type {
+	IntegrationProbe,
+	ProbeConnectRequest,
+	ProbeRequestInit,
+} from '../../../ports/integrations';
 import { bundleIntegrations, INTEGRATIONS_DIR } from '../bundle';
 import { SECRET_MARK } from '../secretFields';
 import type { IntegrationDefinition, RenderInput } from '../sdk';
@@ -1961,6 +1965,7 @@ describe('connection kinds (golden)', () => {
 	])('huggingface: probes %s at %s', async (endpoint, expected) => {
 		const calls: string[] = [];
 		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
 			fetch: (url) => {
 				calls.push(url);
 				return Promise.resolve({ ok: true, status: 200, json: async () => ({ name: 'ada' }) });
@@ -2521,13 +2526,18 @@ describe('testConnection goes through the injected probe only', () => {
 
 	function recordingProbe(respond: (url: string) => unknown) {
 		const calls: { url: string; init?: ProbeRequestInit }[] = [];
+		const connections: ProbeConnectRequest[] = [];
 		const probe: IntegrationProbe = {
+			connect: (request) => {
+				connections.push(request);
+				return Promise.resolve();
+			},
 			fetch: (url, init) => {
 				calls.push({ url, init });
 				return Promise.resolve({ ok: true, status: 200, json: async () => respond(url) });
 			},
 		};
-		return { probe, calls };
+		return { probe, calls, connections };
 	}
 
 	it('never touches ambient fetch (the SSRF boundary is the probe)', async () => {
@@ -2558,6 +2568,58 @@ describe('testConnection goes through the injected probe only', () => {
 			Uint8Array.from(atob(auth.replace('Basic ', '')), (c) => c.charCodeAt(0)),
 		);
 		expect(decoded).toBe('césar:pässwörd');
+	});
+
+	it('pyspark: probes only TCP/TLS reachability and reports the authentication limitation', async () => {
+		const { probe, calls, connections } = recordingProbe(() => ({}));
+		const config = pyspark.configSchema.parse(FIXTURES.pyspark);
+
+		const result = await pyspark.testConnection?.(config, probe);
+
+		expect(result).toMatchObject({
+			ok: true,
+			details: 'endpoint reachable over TLS; Spark authentication not verified',
+		});
+		expect(connections).toEqual([{ hostname: 'spark.internal', port: 15002, tls: true }]);
+		expect(calls).toHaveLength(0);
+	});
+
+	it('pyspark: reports plaintext reachability without claiming TLS or authentication', async () => {
+		const { probe, calls, connections } = recordingProbe(() => ({}));
+		const config = pyspark.configSchema.parse({
+			host: 'spark.internal',
+			port: 15003,
+			use_ssl: false,
+			auth: { method: 'none' },
+		});
+
+		const result = await pyspark.testConnection?.(config, probe);
+
+		expect(result).toMatchObject({
+			ok: true,
+			details: 'endpoint reachable; Spark authentication not verified',
+			latency_ms: expect.any(Number),
+		});
+		expect(connections).toEqual([{ hostname: 'spark.internal', port: 15003, tls: false }]);
+		expect(calls).toHaveLength(0);
+	});
+
+	it('pyspark: returns a failed test result when the socket probe rejects', async () => {
+		const fetch = vi.fn<IntegrationProbe['fetch']>();
+		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('connect ECONNREFUSED')),
+			fetch,
+		};
+		const config = pyspark.configSchema.parse(FIXTURES.pyspark);
+
+		const result = await pyspark.testConnection?.(config, probe);
+
+		expect(result).toMatchObject({
+			ok: false,
+			details: 'connect ECONNREFUSED',
+			latency_ms: expect.any(Number),
+		});
+		expect(fetch).not.toHaveBeenCalled();
 	});
 
 	it('iceberg_rest: oauth2 token dance rides the probe, then hits /v1/config', async () => {
@@ -2614,6 +2676,7 @@ describe('testConnection goes through the injected probe only', () => {
 			const secrets = secretValuesOf(config, registry.secretPathsOf(def.kind));
 			expect(secrets.length, `${def.kind} fixture must configure a secret`).toBeGreaterThan(0);
 			const probe: IntegrationProbe = {
+				connect: () => Promise.reject(new Error(`transport failed with ${secrets.join(' ')}`)),
 				fetch: () => Promise.reject(new Error(`transport failed with ${secrets.join(' ')}`)),
 			};
 			const result = await def.testConnection(config, probe);
