@@ -19,8 +19,11 @@ GET /api/v1/projects/{pid}/notebooks/{nid} the response property `data/source/on
 PATCH /api/v1/projects/{pid}/notebooks/{nid}/source the response property `data/source/provider` became nullable for the status `200`
 
 GET /api/v1/projects/{pid}/alert-destinations the `data` response's property `type` changed from `array<any>` to `object` for status `200`
+POST /api/v1/projects/{pid}/alert-destinations removed `subschema #1, subschema #2` from the request body `oneOf` list
 POST /api/v1/projects/{pid}/alert-destinations added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `201`
+PATCH /api/v1/projects/{pid}/alert-destinations/{aid} the request body was restructured into a oneOf, so a payload that was previously valid may no longer be accepted
 PATCH /api/v1/projects/{pid}/alert-destinations/{aid} added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `200`
+POST /api/v1/projects/{pid}/alert-destinations/{aid}/test added the new required `header` request parameter `idempotency-key`
 POST /api/v1/projects/{pid}/alert-destinations/{aid}/test added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `200`
 GET /api/v1/projects/{pid}/integrations/{iid}/browse removed the required property `data/metadata` from the response with the `200` status
 GET /api/v1/projects/{pid}/integrations/{iid}/browse removed the required property `data/preview` from the response with the `200` status
@@ -30,6 +33,9 @@ POST /api/v1/projects/{pid}/integrations/{iid}/browse/objects/preview added `sub
 POST /api/v1/projects/{pid}/notebooks/git removed the enum value `github` of the request property `provider`
 POST /api/v1/projects/{pid}/notebooks/git removed the enum value `gitlab` of the request property `provider`
 POST /api/v1/projects/{pid}/notebooks/git the `provider` request property's minLength was increased from `0` to `1`
+
+DELETE /api/v1/users/{id}/suspension `api path removed without deprecation`
+PUT /api/v1/users/{id}/suspension `api path removed without deprecation`
 
 `sync_mode` now accepts pull sources. Pull creation omits the push-only token
 and URL. Existing push responses still contain both fields.

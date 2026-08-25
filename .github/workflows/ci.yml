@@ -45,7 +45,7 @@ jobs:
       - run: vp run -r typecheck
       - run: vp run audit:prod
       - name: Test release shell helpers
-        run: pnpm test:release-scripts
+        run: vp run test:release-scripts
       # The full tree includes build tooling that runs with repository write access.
       - name: Audit all dependencies (non-blocking)
         continue-on-error: true
