@@ -710,7 +710,7 @@ describe('project alert destination routes', () => {
 		const test = vi.fn(async () => {
 			throw new UnavailableError('Alert destination test failed');
 		});
-		const limiter = createTestApi({
+		const limiterApi = createTestApi({
 			bucket: limiterBucket,
 			userId: limiterUser,
 			deps: {
@@ -720,7 +720,8 @@ describe('project alert destination routes', () => {
 					maxDestinations: 10,
 				},
 			},
-		}).request;
+		});
+		const limiter = limiterApi.request;
 		const project = await expectOk<{ id: string }>(
 			await limiter('POST', '/projects', { name: 'Rate limit', description: '' }),
 			201,
@@ -733,6 +734,20 @@ describe('project alert destination routes', () => {
 			}),
 			201,
 		);
+		const reserve = vi
+			.spyOn(limiterApi.deps.services.idempotency, 'reserve')
+			.mockRejectedValueOnce(new Error('reservation storage unavailable'));
+		await expectError(
+			await limiter(
+				'POST',
+				`/projects/${project.id}/alert-destinations/${destination.id}/test`,
+				undefined,
+				alertTestHeaders(destination.updated_at, 'reservation-storage-failure'),
+			),
+			500,
+			'INTERNAL_ERROR',
+		);
+		expect(test).not.toHaveBeenCalled();
 		for (let attempt = 0; attempt < 10; attempt++) {
 			await expectError(
 				await limiter(
@@ -758,6 +773,7 @@ describe('project alert destination routes', () => {
 				'RESOURCE_EXHAUSTED',
 			);
 			expect(test).toHaveBeenCalledTimes(10);
+			expect(reserve).toHaveBeenCalledTimes(11);
 
 			now.mockReturnValue(startedAt + 60_001);
 			await expectError(
@@ -771,6 +787,7 @@ describe('project alert destination routes', () => {
 				'SERVICE_UNAVAILABLE',
 			);
 			expect(test).toHaveBeenCalledTimes(11);
+			expect(reserve).toHaveBeenCalledTimes(12);
 		} finally {
 			now.mockRestore();
 		}

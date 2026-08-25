@@ -30,29 +30,6 @@ describe('IdempotencyService', () => {
 		expect(await svc.reserve('u2:external-delivery', 'k1')).toBe(true);
 	});
 
-	it('releases an unused reservation for another attempt', async () => {
-		const svc = new IdempotencyService(new MemoryBucket());
-
-		expect(await svc.reserve('u1:external-delivery', 'k1')).toBe(true);
-		await svc.releaseReservation('u1:external-delivery', 'k1');
-
-		expect(await svc.reserve('u1:external-delivery', 'k1')).toBe(true);
-	});
-
-	it('does not release completed results or another scope', async () => {
-		const svc = new IdempotencyService(new MemoryBucket());
-		await svc.record('u1:POST /projects', 'completed', { id: 'proj-1' });
-		expect(await svc.reserve('u1:external-delivery', 'reserved')).toBe(true);
-
-		await svc.releaseReservation('u1:POST /projects', 'completed');
-		await svc.releaseReservation('u2:external-delivery', 'reserved');
-
-		expect(await svc.lookup('u1:POST /projects', 'completed')).toEqual({
-			data: { id: 'proj-1' },
-		});
-		expect(await svc.reserve('u1:external-delivery', 'reserved')).toBe(false);
-	});
-
 	it('fails before reserving when storage cannot create the claim', async () => {
 		const bucket = new MemoryBucket();
 		const boom = new Error('put boom');

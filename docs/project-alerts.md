@@ -41,10 +41,11 @@ create and send it as `If-Match` when testing or updating the destination. A tes
 external message and requires an `Idempotency-Key`. Reusing a key from a completed test returns
 the original redacted destination without sending another message. A pre-delivery rejection does
 not consume the key. The same key remains valid after a `429 RESOURCE_EXHAUSTED` window ends.
-The server reserves the key immediately before delivery. If delivery fails or its outcome is
-uncertain, reuse returns `409 CONFLICT` without another message. If you start another test, use a
-new key. When you enable the verified destination, use the returned `ETag`. The CLI also
-treats a test as a confirming operation and requires `--yes` in non-interactive use.
+Only the request that reserves delivery consumes the test budget; storage failures and concurrent
+requests using the same key do not. If delivery fails or its outcome is uncertain, reuse returns
+`409 CONFLICT` without another message. If you start another test, use a new key. When you enable
+the verified destination, use the returned `ETag`. The CLI also treats a test as a confirming
+operation and requires `--yes` in non-interactive use.
 
 ## Alert catalog
 

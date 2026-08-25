@@ -21,9 +21,9 @@ Idempotency-Key: 8f3c1e2a-...
 - **Mechanics** — the first response's `data` is stored at
   `_system/idempotency/{sha256(user:route\nkey)}.json` with create-if-absent.
   A hit replays it. See `IdempotencyService` (core) and `idempotentCreate` (api).
-- **External delivery mechanics** — the alert test stores a separate claim before it sends the message.
-  Deterministic checks run before the claim. If rate-limit admission fails after claiming, the
-  server releases the unused claim before returning the error.
+- **External delivery mechanics** — deterministic checks run first. The server then admits a refundable test-budget entry before it stores a separate delivery claim.
+  If claim storage fails or another request owns the claim, the server refunds the budget entry.
+  Only the claim owner keeps the budget charge and sends the message.
   A completed test stores its response under the result scope.
   A concurrent or uncertain request cannot send the message again with the same key.
 - **Retention** — pruned after 24h by the maintenance cron, so replay is

@@ -211,10 +211,12 @@ function requireProjectAlerts(deps: ApiDeps): NonNullable<ApiDeps['projectAlerts
 
 const testBudget = createSlidingWindowBudget<string>({ limit: 10, windowMs: 60_000 });
 
-function assertTestBudget(userId: string): void {
-	if (!testBudget.consume(userId)) {
+function admitTestBudget(userId: string) {
+	const admission = testBudget.admit(userId);
+	if (!admission) {
 		throw new ResourceExhaustedError('Too many alert tests; try again in a minute');
 	}
+	return admission;
 }
 
 async function alertTestDeliveryId(
@@ -357,17 +359,19 @@ app.openapi(testDestination, async (c) => {
 	});
 	if (!notification) throw new Error('Test alert renderer returned no notification');
 
-	const ownsDelivery = await deps.services.idempotency.reserve(deliveryScope, idempotencyKey);
+	const budgetAdmission = admitTestBudget(user.id);
+	let ownsDelivery: boolean;
+	try {
+		ownsDelivery = await deps.services.idempotency.reserve(deliveryScope, idempotencyKey);
+	} catch (error) {
+		budgetAdmission.refund();
+		throw error;
+	}
 	if (!ownsDelivery) {
+		budgetAdmission.refund();
 		completed = await deps.services.idempotency.lookup(resultScope, idempotencyKey);
 		if (completed) return respond(completed.data);
 		throw new ConflictError('Alert test outcome is pending or unknown for this Idempotency-Key');
-	}
-	try {
-		assertTestBudget(user.id);
-	} catch (error) {
-		await deps.services.idempotency.releaseReservation(deliveryScope, idempotencyKey);
-		throw error;
 	}
 	let destination: z.infer<typeof AlertDestinationResponseSchema>;
 	try {

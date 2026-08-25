@@ -48,7 +48,13 @@ mkdir "$verification_bin"
 printf '%s\n' \
 	'#!/usr/bin/env bash' \
 	'printf "%s\n" "$*" >> "${MOCK_GH_LOG:-/dev/null}"' \
-	'if [[ "$1" == "api" ]]; then' \
+	'if [[ "$1" == "api" && "$2" == repos/*/commits/* ]]; then' \
+	'  verify_attempt=1' \
+	'  if [[ -n "${MOCK_VERIFY_STATE:-}" ]]; then' \
+	'    [[ ! -f "$MOCK_VERIFY_STATE" ]] || read -r verify_attempt < "$MOCK_VERIFY_STATE"' \
+	'    printf "%s\n" "$((verify_attempt + 1))" > "$MOCK_VERIFY_STATE"' \
+	'  fi' \
+	'  if [[ "$verify_attempt" == "${MOCK_VERIFY_ERROR_CALL:-0}" ]]; then exit 8; fi' \
 	'  if [[ -n "${MOCK_TAG_MOVED_STATE:-}" && -f "$MOCK_TAG_MOVED_STATE" ]]; then' \
 	'    printf "%s\n" "$MOCK_MOVED_RELEASE_SHA"' \
 	'  else' \
@@ -56,40 +62,49 @@ printf '%s\n' \
 	'  fi' \
 	'  exit 0' \
 	'fi' \
-	'if [[ "$1" == "release" && "$2" == "upload" ]]; then' \
-	'  status="${MOCK_UPLOAD_EXIT:-0}"' \
-	'  uploaded=0' \
-	'  for asset in "${@:4}"; do' \
-	'    [[ "$asset" != "--clobber" ]] || break' \
-	'    ((uploaded += 1))' \
-	'    if ((uploaded > ${MOCK_UPLOAD_LIMIT:-999})); then break; fi' \
-	'    if [[ -n "${MOCK_ASSET_STATE:-}" ]]; then' \
-	'      mkdir -p "$MOCK_ASSET_STATE"' \
-	'      asset_path="${asset%%#*}"' \
-	'      touch "$MOCK_ASSET_STATE/$(basename "$asset_path")"' \
-	'    fi' \
-	'  done' \
-	'  [[ -z "${MOCK_TAG_MOVED_STATE:-}" ]] || touch "$MOCK_TAG_MOVED_STATE"' \
-	'  exit "$status"' \
+	'if [[ "$1" == "api" && "$2" == repos/*/releases/tags/* ]]; then' \
+	'  printf "%s\n" "${MOCK_RELEASE_ID:-42}"' \
+	'  exit 0' \
 	'fi' \
-	'if [[ "$1" == "release" && "$2" == "view" ]]; then' \
+	'if [[ "$1" == "api" && "$2" == "--paginate" ]]; then' \
 	'  if [[ -n "${MOCK_ASSET_STATE:-}" && -d "$MOCK_ASSET_STATE" ]]; then' \
-	'    find "$MOCK_ASSET_STATE" -type f -exec basename {} \;' \
+	'    for asset_record in "$MOCK_ASSET_STATE"/*; do' \
+	'      [[ -f "$asset_record" ]] || continue' \
+	'      printf "%s\t%s\n" "$(basename "$asset_record")" "$(<"$asset_record")"' \
+	'    done' \
+	'  fi' \
+	'  if [[ "${MOCK_MOVE_AFTER_ASSET_LIST:-0}" == 1 && -n "${MOCK_TAG_MOVED_STATE:-}" ]]; then' \
+	'    touch "$MOCK_TAG_MOVED_STATE"' \
 	'  fi' \
 	'  exit 0' \
 	'fi' \
-	'if [[ "$1" == "release" && "$2" == "delete-asset" ]]; then' \
+	'if [[ "$1" == "api" && "$2" == "--method" && "$3" == "DELETE" ]]; then' \
 	'  delete_attempt=1' \
 	'  if [[ -n "${MOCK_DELETE_STATE:-}" ]]; then' \
 	'    [[ ! -f "$MOCK_DELETE_STATE" ]] || read -r delete_attempt < "$MOCK_DELETE_STATE"' \
 	'    printf "%s\n" "$((delete_attempt + 1))" > "$MOCK_DELETE_STATE"' \
 	'  fi' \
 	'  if ((delete_attempt <= ${MOCK_DELETE_FAILURES:-0})); then exit 9; fi' \
-	'  if [[ -n "${MOCK_ASSET_STATE:-}" ]]; then' \
-	'    rm -f "$MOCK_ASSET_STATE/$4"' \
-	'    rmdir "$MOCK_ASSET_STATE" 2>/dev/null || true' \
-	'  fi' \
+	'  asset_id="${4##*/}"' \
+	'  [[ -z "${MOCK_ASSET_STATE:-}" ]] || rm -f "$MOCK_ASSET_STATE/$asset_id"' \
 	'  exit 0' \
+	'fi' \
+	'if [[ "$1" == "release" && "$2" == "upload" ]]; then' \
+	'  status="${MOCK_UPLOAD_EXIT:-0}"' \
+	'  uploaded=0' \
+	'  for asset in "${@:4}"; do' \
+	'    ((uploaded += 1))' \
+	'    if ((uploaded > ${MOCK_UPLOAD_LIMIT:-999})); then break; fi' \
+	'    if [[ -n "${MOCK_ASSET_STATE:-}" ]]; then' \
+	'      mkdir -p "$MOCK_ASSET_STATE"' \
+	'      asset_path="${asset%%#*}"' \
+	'      read -r digest _ < <(shasum -a 256 "$asset_path")' \
+	'      next_id=$(( $(find "$MOCK_ASSET_STATE" -type f | wc -l) + 1 ))' \
+	'      printf "%s\tsha256:%s\n" "$(basename "$asset_path")" "$digest" > "$MOCK_ASSET_STATE/new-$next_id"' \
+	'    fi' \
+	'  done' \
+	'  [[ -z "${MOCK_TAG_MOVED_STATE:-}" ]] || touch "$MOCK_TAG_MOVED_STATE"' \
+	'  exit "$status"' \
 	'fi' \
 	'exit 2' >"$verification_bin/gh"
 chmod +x "$verification_bin/gh"
@@ -102,6 +117,13 @@ if GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="${expected_release_
 	"$repo_root/scripts/verify-release-tag.sh" v1.2.3 "$expected_release_sha" >/dev/null 2>&1; then
 	fail 'moved release tag was accepted'
 fi
+set +e
+GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
+	MOCK_VERIFY_ERROR_CALL=1 PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/verify-release-tag.sh" v1.2.3 "$expected_release_sha" >/dev/null 2>&1
+verification_error_status=$?
+set -e
+[[ "$verification_error_status" == 2 ]] || fail 'verification API error was not distinguished'
 
 upload_asset="$temporary/mohub-test.tar.gz"
 upload_log="$temporary/upload-gh.log"
@@ -109,7 +131,8 @@ touch "$upload_asset"
 GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
 	MOCK_GH_LOG="$upload_log" PATH="$verification_bin:$PATH" \
 	"$repo_root/scripts/upload-release-assets.sh" v1.2.3 "$expected_release_sha" "$upload_asset"
-[[ "$(grep -c '^api ' "$upload_log")" == 2 ]] || fail 'upload did not validate before and after'
+[[ "$(grep -c '^api repos/.*/commits/' "$upload_log")" == 2 ]] || \
+	fail 'upload did not validate before and after'
 [[ "$(grep -c '^release upload ' "$upload_log")" == 1 ]] || fail 'asset was not uploaded once'
 
 : >"$upload_log"
@@ -121,13 +144,71 @@ GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha"
 failed_upload_status=$?
 set -e
 [[ "$failed_upload_status" == 9 ]] || fail 'failed release upload status was not preserved'
-[[ "$(grep -c '^api ' "$upload_log")" == 2 ]] || fail 'failed upload skipped post-validation'
+[[ "$(grep -c '^api repos/.*/commits/' "$upload_log")" == 2 ]] || \
+	fail 'failed upload skipped post-validation'
 [[ "$(grep -c '^release upload ' "$upload_log")" == 1 ]] || fail 'failed upload count changed'
 
 : >"$upload_log"
 moved_tag_state="$temporary/moved-tag"
 uploaded_asset_state="$temporary/uploaded-asset"
 delete_state="$temporary/delete-attempts"
+verify_state="$temporary/verify-attempts"
+set +e
+GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
+	MOCK_VERIFY_ERROR_CALL=2 MOCK_VERIFY_STATE="$verify_state" \
+	MOCK_ASSET_STATE="$uploaded_asset_state" MOCK_GH_LOG="$upload_log" \
+	PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/upload-release-assets.sh" \
+	v1.2.3 "$expected_release_sha" "$upload_asset" >/dev/null 2>&1
+transient_verification_status=$?
+set -e
+[[ "$transient_verification_status" == 2 ]] || \
+	fail 'transient post-upload verification error was not preserved'
+[[ -f "$uploaded_asset_state/new-1" ]] || \
+	fail 'transient verification error removed the uploaded asset'
+[[ "$(grep -c '^api --method DELETE ' "$upload_log" || true)" == 0 ]] || \
+	fail 'transient verification error triggered asset cleanup'
+
+: >"$upload_log"
+rm -rf "$uploaded_asset_state"
+rm -f "$moved_tag_state" "$verify_state"
+mkdir "$uploaded_asset_state"
+printf '%s\tsha256:%s\n' "$(basename "$upload_asset")" \
+	"$(sha256_file "$upload_asset")" >"$uploaded_asset_state/existing-77"
+set +e
+GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
+	MOCK_MOVED_RELEASE_SHA="${expected_release_sha%?}8" \
+	MOCK_TAG_MOVED_STATE="$moved_tag_state" MOCK_MOVE_AFTER_ASSET_LIST=1 \
+	MOCK_ASSET_STATE="$uploaded_asset_state" MOCK_GH_LOG="$upload_log" \
+	PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/upload-release-assets.sh" \
+	v1.2.3 "$expected_release_sha" "$upload_asset" >/dev/null 2>&1
+existing_asset_status=$?
+set -e
+[[ "$existing_asset_status" == 1 ]] || fail 'moved tag was accepted for an existing asset'
+[[ -f "$uploaded_asset_state/existing-77" ]] || fail 'existing release asset was removed'
+[[ "$(grep -c '^release upload ' "$upload_log" || true)" == 0 ]] || \
+	fail 'existing release asset was uploaded again'
+[[ "$(grep -c '^api --method DELETE ' "$upload_log" || true)" == 0 ]] || \
+	fail 'existing release asset was selected for cleanup'
+
+: >"$upload_log"
+rm -f "$moved_tag_state"
+printf '%s\tsha256:%064d\n' "$(basename "$upload_asset")" 0 \
+	>"$uploaded_asset_state/existing-77"
+if GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
+	MOCK_ASSET_STATE="$uploaded_asset_state" MOCK_GH_LOG="$upload_log" \
+	PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/upload-release-assets.sh" \
+	v1.2.3 "$expected_release_sha" "$upload_asset" >/dev/null 2>&1; then
+	fail 'existing release asset with different contents was accepted'
+fi
+[[ "$(grep -c '^release upload ' "$upload_log" || true)" == 0 ]] || \
+	fail 'existing release asset with different contents was overwritten'
+
+: >"$upload_log"
+rm -rf "$uploaded_asset_state"
+rm -f "$moved_tag_state" "$delete_state"
 if GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
 	MOCK_MOVED_RELEASE_SHA="${expected_release_sha%?}8" \
 	MOCK_TAG_MOVED_STATE="$moved_tag_state" MOCK_ASSET_STATE="$uploaded_asset_state" \
@@ -137,13 +218,16 @@ if GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_s
 	v1.2.3 "$expected_release_sha" "$upload_asset" >/dev/null 2>&1; then
 	fail 'upload succeeded after the release tag moved'
 fi
-[[ ! -e "$uploaded_asset_state" ]] || fail 'asset remained attached after the release tag moved'
-[[ "$(grep -c '^api ' "$upload_log")" == 2 ]] || fail 'moved tag was not validated after upload'
+[[ -z "$(find "$uploaded_asset_state" -type f -print -quit)" ]] || \
+	fail 'asset remained attached after the release tag moved'
+[[ "$(grep -c '^api repos/.*/commits/' "$upload_log")" == 2 ]] || \
+	fail 'moved tag was not validated after upload'
 [[ "$(grep -c '^release upload ' "$upload_log")" == 1 ]] || fail 'moved-tag asset was not uploaded once'
-[[ "$(grep -c "^release delete-asset v1.2.3 $(basename "$upload_asset") --yes$" "$upload_log")" == 2 ]] || \
+[[ "$(grep -c '^api --method DELETE repos/.*/releases/assets/new-1$' "$upload_log")" == 2 ]] || \
 	fail 'moved-tag asset cleanup was not retried'
 
 : >"$upload_log"
+rm -rf "$uploaded_asset_state"
 rm -f "$moved_tag_state" "$delete_state"
 partial_asset="$temporary/mohub-partial.zip"
 touch "$partial_asset"
@@ -158,13 +242,42 @@ GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha"
 partial_upload_status=$?
 set -e
 [[ "$partial_upload_status" == 9 ]] || fail 'partial upload status was not preserved'
-[[ ! -e "$uploaded_asset_state" ]] || fail 'partial upload remained after the release tag moved'
-[[ "$(grep -c '^api ' "$upload_log")" == 2 ]] || fail 'partial upload skipped post-validation'
-[[ "$(grep -c '^release view ' "$upload_log")" == 1 ]] || fail 'partial upload assets were not listed'
-[[ "$(grep -c '^release delete-asset ' "$upload_log")" == 1 ]] || \
+[[ -z "$(find "$uploaded_asset_state" -type f -print -quit)" ]] || \
+	fail 'partial upload remained after the release tag moved'
+[[ "$(grep -c '^api repos/.*/commits/' "$upload_log")" == 2 ]] || \
+	fail 'partial upload skipped post-validation'
+[[ "$(grep -c '^api --paginate repos/.*/releases/42/assets ' "$upload_log")" == 2 ]] || \
+	fail 'partial upload assets were not listed before and after upload'
+[[ "$(grep -c '^api --method DELETE ' "$upload_log")" == 1 ]] || \
 	fail 'partial upload cleanup did not target only the attached asset'
-grep -q "^release delete-asset v1.2.3 $(basename "$upload_asset") --yes$" "$upload_log" || \
+grep -q '^api --method DELETE repos/.*/releases/assets/new-1$' "$upload_log" || \
 	fail 'partially uploaded asset was not removed'
+
+: >"$upload_log"
+rm -rf "$uploaded_asset_state"
+rm -f "$moved_tag_state"
+set +e
+GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
+	MOCK_ASSET_STATE="$uploaded_asset_state" MOCK_UPLOAD_EXIT=9 MOCK_UPLOAD_LIMIT=1 \
+	MOCK_GH_LOG="$upload_log" PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/upload-release-assets.sh" v1.2.3 "$expected_release_sha" \
+	"$upload_asset" "$partial_asset" >/dev/null 2>&1
+resumable_upload_status=$?
+set -e
+[[ "$resumable_upload_status" == 9 ]] || fail 'resumable partial upload status changed'
+[[ "$(find "$uploaded_asset_state" -type f | wc -l | tr -d ' ')" == 1 ]] || \
+	fail 'resumable partial upload did not retain its completed asset'
+
+: >"$upload_log"
+GITHUB_REPOSITORY=marimo-team/marimohub MOCK_RELEASE_SHA="$expected_release_sha" \
+	MOCK_ASSET_STATE="$uploaded_asset_state" MOCK_GH_LOG="$upload_log" \
+	PATH="$verification_bin:$PATH" \
+	"$repo_root/scripts/upload-release-assets.sh" v1.2.3 "$expected_release_sha" \
+	"$upload_asset" "$partial_asset"
+[[ "$(find "$uploaded_asset_state" -type f | wc -l | tr -d ' ')" == 2 ]] || \
+	fail 'partial upload retry did not attach the missing asset'
+grep -q "^release upload v1.2.3 $partial_asset$" "$upload_log" || \
+	fail 'partial upload retry did not skip the existing asset'
 
 make_source "$temporary/success"
 "$repo_root/scripts/stage-cli-release-assets.sh" \

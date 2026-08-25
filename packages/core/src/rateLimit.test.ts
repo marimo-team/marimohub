@@ -9,6 +9,29 @@ describe('createSlidingWindowBudget', () => {
 		expect(budget.consume('user')).toBe(false);
 	});
 
+	it('restores capacity when an admission is refunded', () => {
+		const budget = createSlidingWindowBudget<string>({ limit: 1, windowMs: 1_000 });
+		const admission = budget.admit('user');
+		expect(admission).not.toBeNull();
+		expect(budget.consume('user')).toBe(false);
+
+		admission?.refund();
+		expect(budget.consume('user')).toBe(true);
+		admission?.refund();
+		expect(budget.consume('user')).toBe(false);
+	});
+
+	it('refunds only the admission that owns the token', () => {
+		const budget = createSlidingWindowBudget<string>({ limit: 2, windowMs: 1_000 });
+		const first = budget.admit('user');
+		expect(first).not.toBeNull();
+		expect(budget.admit('user')).not.toBeNull();
+
+		first?.refund();
+		expect(budget.consume('user')).toBe(true);
+		expect(budget.consume('user')).toBe(false);
+	});
+
 	it('tracks each key independently', () => {
 		const budget = createSlidingWindowBudget<string>({ limit: 1, windowMs: 1_000 });
 		expect(budget.consume('alice')).toBe(true);

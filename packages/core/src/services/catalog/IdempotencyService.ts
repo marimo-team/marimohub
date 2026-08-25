@@ -55,15 +55,6 @@ export class IdempotencyService {
 		}
 	}
 
-	/** Release a claim before its protected side effect starts. */
-	async releaseReservation(scope: string, key: string): Promise<void> {
-		const objectKey = paths.idempotencyKey(await digestKey(scope, key));
-		const obj = await this.bucket.get(objectKey);
-		if (!obj) return;
-		const record = await readStored(IdempotencyRecordSchema, obj, objectKey);
-		if (record.scope === scope && record.data === null) await this.bucket.delete(objectKey);
-	}
-
 	/** The recorded `data` for a prior `(scope, key)`, or null if this is a first use. */
 	async lookup(scope: string, key: string): Promise<{ data: unknown } | null> {
 		const objectKey = paths.idempotencyKey(await digestKey(scope, key));
