@@ -57,15 +57,27 @@ function addExecSocketListener(
 	event: 'close' | 'error',
 	listener: (value?: unknown) => void,
 ): void {
-	if (socket.addEventListener) {
-		socket.addEventListener(event, listener);
-		return;
-	}
 	if (socket.on) {
 		socket.on(event, listener);
 		return;
 	}
+	if (socket.addEventListener) {
+		socket.addEventListener(event, listener);
+		return;
+	}
 	throw new Error('exec WebSocket does not support event listeners');
+}
+
+function execSocketError(value: unknown): Error {
+	if (value instanceof Error) return value;
+	if (typeof value === 'object' && value !== null) {
+		const event = value as { error?: unknown; message?: unknown };
+		if (event.error instanceof Error) return event.error;
+		if (typeof event.message === 'string' && event.message) return new Error(event.message);
+		if (typeof event.error === 'string' && event.error) return new Error(event.error);
+		return new Error('exec WebSocket error');
+	}
+	return new Error(String(value));
 }
 
 /** True when an error is a k8s API error with the given HTTP status code. */
@@ -409,7 +421,7 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 					if (settled) return;
 					settled = true;
 					clearTimeout(timer);
-					reject(error instanceof Error ? error : new Error(String(error)));
+					reject(execSocketError(error));
 				};
 				const timer =
 					options?.timeout !== undefined && options.timeout > 0

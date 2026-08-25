@@ -552,6 +552,41 @@ describe('createK8sClient', () => {
 		]);
 	});
 
+	it('preserves exec socket errors when both listener APIs are available', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		const socket = Object.assign(new EventEmitter(), {
+			addEventListener: vi.fn(),
+			close: vi.fn(),
+		});
+		k8sMock.exec.mockImplementationOnce(async () => {
+			setTimeout(() => socket.emit('error', new Error('socket connection failed')), 0);
+			return socket;
+		});
+
+		await expect(client.exec('pod-1', ['sh', '-lc', 'cmd'])).rejects.toThrow(
+			'socket connection failed',
+		);
+		expect(socket.addEventListener).not.toHaveBeenCalled();
+	});
+
+	it('unwraps errors from EventTarget exec sockets', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		const socket = Object.assign(new EventTarget(), { close: vi.fn() });
+		k8sMock.exec.mockImplementationOnce(async () => {
+			setTimeout(() => {
+				const event = Object.assign(new Event('error'), {
+					error: new Error('native socket failed'),
+				});
+				socket.dispatchEvent(event);
+			}, 0);
+			return socket;
+		});
+
+		await expect(client.exec('pod-1', ['sh', '-lc', 'cmd'])).rejects.toThrow(
+			'native socket failed',
+		);
+	});
+
 	it('closes the exec WebSocket when the command times out', async () => {
 		const client = createK8sClient({ namespace: 'kernels' });
 		const socket = Object.assign(new EventTarget(), { close: vi.fn() });
