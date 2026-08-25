@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { NotFoundError, ValidationError } from '../../errors';
+import { NotFoundError, UnavailableError, ValidationError } from '../../errors';
 import type { IntegrationProbe } from '../../ports/integrations';
 import { trino } from './kinds/trino';
 import {
@@ -299,6 +299,17 @@ describe('defineIntegration browse guard', () => {
 	it('passes a clean DomainError through untouched', async () => {
 		await expect(browsy.browse!.getTableSchema(config, unusedProbe(), [], 't')).rejects.toThrow(
 			'The catalog reports no such namespace or table.',
+		);
+	});
+
+	it('passes a safe probe availability error through untouched', async () => {
+		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
+			fetch: () =>
+				Promise.reject(new UnavailableError('The integration target could not be resolved.')),
+		};
+		await expect(browsy.browse!.listNamespaces(config, probe, { limit: 10 })).rejects.toThrow(
+			'The integration target could not be resolved.',
 		);
 	});
 

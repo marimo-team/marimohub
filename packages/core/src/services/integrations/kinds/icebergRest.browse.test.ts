@@ -291,6 +291,26 @@ describe('iceberg_rest browse operations', () => {
 		);
 	});
 
+	it('reports a non-JSON config response before requesting catalog routes', async () => {
+		const requested: string[] = [];
+		const probe: IntegrationProbe = {
+			connect: () => Promise.reject(new Error('unused')),
+			fetch: (url) => {
+				requested.push(url);
+				return Promise.resolve({
+					ok: true,
+					status: 200,
+					json: () => Promise.resolve(undefined),
+				});
+			},
+		};
+
+		await expect(browse.listNamespaces(config(), probe, { limit: 10 })).rejects.toThrow(
+			'The catalog config response was not JSON or exceeded the size limit.',
+		);
+		expect(requested).toHaveLength(1);
+	});
+
 	it('replaces a transport throw with a generic failure', async () => {
 		const probe: IntegrationProbe = {
 			connect: () => Promise.reject(new Error('unused')),

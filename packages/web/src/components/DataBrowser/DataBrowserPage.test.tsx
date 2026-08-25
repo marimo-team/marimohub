@@ -229,7 +229,11 @@ function makeFetch({
 				return new Response(
 					JSON.stringify({
 						success: false,
-						error: { code: 'SERVICE_UNAVAILABLE', message: 'The catalog answered HTTP 503.' },
+						error: {
+							code: 'SERVICE_UNAVAILABLE',
+							message: 'The catalog answered HTTP 503.',
+							request_id: 'browse-req-123',
+						},
 					}),
 					{ status: 503, headers: { 'Content-Type': 'application/json' } },
 				);
@@ -1308,6 +1312,7 @@ describe('DataBrowserPage', () => {
 		setup(`/projects/${PID}/data/${IID}`, { namespacesDown: true });
 
 		expect(await screen.findByText('The catalog answered HTTP 503.')).toBeInTheDocument();
+		expect(screen.getByText('Reference: browse-req-123')).toBeInTheDocument();
 	});
 
 	it('an unknown integration id in the URL falls back to the empty detail pane', async () => {

@@ -1208,8 +1208,11 @@ app.openapi(browseCapability, async (c) => {
 		logEvent({
 			level: 'warn',
 			event: 'integration_query_unavailable',
+			request_id: c.get('requestId') ?? null,
 			project_id: pid,
 			integration_id: iid,
+			integration_kind: capability.integration_kind,
+			surface: 'query',
 			reason: querySurface.reason ?? 'No reason provided.',
 		});
 	}
@@ -1314,7 +1317,6 @@ app.openapi(browseTableSchema, async (c) => {
 		load: () =>
 			integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table, {
 				query_user: user.email,
-				signal: c.req.raw.signal,
 			}),
 	});
 	return c.json({ success: true, data }, 200);

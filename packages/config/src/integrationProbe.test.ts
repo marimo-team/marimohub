@@ -4,6 +4,7 @@ import type { Server } from 'node:http';
 import { createServer as createTcpServer } from 'node:net';
 import type { Server as TcpServer, Socket } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ResourceExhaustedError, UnavailableError, ValidationError } from '@marimo-hub/core';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 import type { ProbeConnectionTransportRequest, ProbeTransportRequest } from './integrationProbe';
 
@@ -166,10 +167,12 @@ describe('createGuardedProbe policy', () => {
 
 	it('rejects non-http schemes, embedded credentials, and malformed URLs', async () => {
 		const probe = createGuardedProbe();
-		await expect(probe.fetch('ftp://example.com')).rejects.toThrow(/http\(s\)/);
-		await expect(probe.fetch('file:///etc/passwd')).rejects.toThrow(/http\(s\)/);
-		await expect(probe.fetch('https://user:pw@example.com')).rejects.toThrow(/credentials/);
-		await expect(probe.fetch('not a url')).rejects.toThrow(/Invalid URL/);
+		await expect(probe.fetch('ftp://example.com')).rejects.toBeInstanceOf(ValidationError);
+		await expect(probe.fetch('file:///etc/passwd')).rejects.toBeInstanceOf(ValidationError);
+		await expect(probe.fetch('https://user:pw@example.com')).rejects.toBeInstanceOf(
+			ValidationError,
+		);
+		await expect(probe.fetch('not a url')).rejects.toBeInstanceOf(ValidationError);
 	});
 
 	it('blocks loopback, private, link-local/metadata, CGNAT, and IPv6 special ranges', async () => {
@@ -259,6 +262,16 @@ describe('createGuardedProbe policy', () => {
 		expect(transport).not.toHaveBeenCalled();
 	});
 
+	it('explains how to allow a trusted private-network target', async () => {
+		const { transport } = stubTransport();
+		const probe = createGuardedProbe({ transport });
+
+		await expect(probe.fetch('http://10.0.0.5/')).rejects.toMatchObject({
+			name: 'UnavailableError',
+			message: expect.stringContaining('MARIMOHUB_INTEGRATIONS_PROBE=private'),
+		});
+	});
+
 	it('PINS the socket to the validated addresses (DNS cannot rebind mid-request)', async () => {
 		const { transport, calls } = stubTransport();
 		const probe = createGuardedProbe({ transport });
@@ -305,7 +318,7 @@ describe('createGuardedProbe policy', () => {
 		const probe = createGuardedProbe({ transport, allowPrivate: true, maxProbesPerMinute: 2 });
 		await probe.fetch('http://10.0.0.5/');
 		await probe.fetch('http://10.0.0.5/');
-		await expect(probe.fetch('http://10.0.0.5/')).rejects.toThrow(/Too many/);
+		await expect(probe.fetch('http://10.0.0.5/')).rejects.toBeInstanceOf(ResourceExhaustedError);
 
 		// The budget belongs to the instance, not the module: `createFromEnv` builds
 		// exactly one probe per process, which is what makes it the process cap.
@@ -346,7 +359,10 @@ describe('createGuardedProbe policy', () => {
 		dns.delayMs = 200;
 		const { transport } = stubTransport();
 		const probe = createGuardedProbe({ transport, allowPrivate: true, timeoutMs: 30 });
-		await expect(probe.fetch('http://localhost:9/')).rejects.toThrow(/timed out/);
+		await expect(probe.fetch('http://localhost:9/')).rejects.toMatchObject({
+			name: 'UnavailableError',
+			message: 'The integration request timed out.',
+		});
 		expect(transport).not.toHaveBeenCalled();
 	});
 
@@ -408,10 +424,40 @@ describe('createGuardedProbe policy', () => {
 		const { transport } = stubTransport();
 		const probe = createGuardedProbe({ transport, allowPrivate: true, maxProbesPerMinute: 1 });
 		await probe.fetch('http://10.0.0.5/');
-		await expect(probe.fetch('http://10.0.0.5/')).rejects.toThrow(/Too many/);
+		await expect(probe.fetch('http://10.0.0.5/')).rejects.toBeInstanceOf(ResourceExhaustedError);
 
 		vi.advanceTimersByTime(60_001);
 		await expect(probe.fetch('http://10.0.0.5/')).resolves.toMatchObject({ ok: true });
+	});
+
+	it('classifies and sanitizes transport failures before logging', async () => {
+		const transport = vi.fn(() =>
+			Promise.reject(
+				Object.assign(new Error('connect ECONNREFUSED https://user:secret@example.test'), {
+					code: 'ECONNREFUSED',
+				}),
+			),
+		);
+		const probe = createGuardedProbe({ transport });
+
+		const error = await probe.fetch('https://93.184.216.34/').catch((err: unknown) => err);
+
+		expect(error).toBeInstanceOf(UnavailableError);
+		expect(error).toMatchObject({
+			message: 'The integration target refused the connection.',
+			cause: {
+				name: 'IntegrationTransportError',
+				message: 'Integration transport failure',
+				code: 'ECONNREFUSED',
+			},
+		});
+		const typedError = error as Error;
+		const cause = typedError.cause as Error;
+		const diagnostic = [typedError.message, typedError.stack, cause.message, cause.stack].join(
+			'\n',
+		);
+		expect(diagnostic).not.toContain('secret');
+		expect(diagnostic).not.toContain('user:');
 	});
 });
 

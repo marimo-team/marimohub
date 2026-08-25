@@ -884,6 +884,11 @@ async function openCatalog(
 		throw new UnavailableError(`The catalog config endpoint answered HTTP ${res.status}.`);
 	}
 	const body = asRecord(await res.json());
+	if (!body) {
+		throw new UnavailableError(
+			'The catalog config response was not JSON or exceeded the size limit.',
+		);
+	}
 	const overrides = asRecord(body?.overrides);
 	const defaults = asRecord(body?.defaults);
 	const prefix = [overrides?.prefix, defaults?.prefix].find(

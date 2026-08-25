@@ -33,6 +33,10 @@ afterEach(() => vi.restoreAllMocks());
 /** U+001F, the separator multi-part namespaces use in query params. */
 const SEP = String.fromCharCode(0x1f);
 
+let namespaceSignal: AbortSignal | undefined;
+let tableSignal: AbortSignal | undefined;
+let schemaSignal: AbortSignal | undefined;
+
 /** Browsable test kind; ops are network-free, so no probe traffic in tests. */
 const browsyKind = defineIntegration({
 	kind: 'browsy',
@@ -62,6 +66,7 @@ const browsyKind = defineIntegration({
 			config.mode === 'open' ? { ok: true } : { ok: false, reason: 'sandbox only' },
 		// Echo the inputs so route tests can assert round-trips.
 		listNamespaces: async (config, _probe, request) => {
+			namespaceSignal = request.signal;
 			if (config.token === 'many-namespaces') {
 				return {
 					items: request.parent
@@ -90,6 +95,7 @@ const browsyKind = defineIntegration({
 			};
 		},
 		listTables: async (config, _probe, namespace, request) => {
+			tableSignal = request.signal;
 			// Simulated outage, so route tests can exercise the failure path.
 			if (namespace[0] === 'boom') throw new UnavailableError('The catalog answered HTTP 503.');
 			if (config.token === 'schema-work-limit' && namespace[0]?.startsWith('ns-')) {
@@ -110,9 +116,10 @@ const browsyKind = defineIntegration({
 			if (namespace[0]?.startsWith('ns-')) return { items: [], next_cursor: null };
 			return { items: [namespace.join('|')], next_cursor: null };
 		},
-		getTableSchema: async (_config, _probe, _namespace, table) => ({
-			columns: [{ name: `${table}_id`, type: 'long', nullable: false }],
-		}),
+		getTableSchema: async (_config, _probe, _namespace, table, request) => {
+			schemaSignal = request?.signal;
+			return { columns: [{ name: `${table}_id`, type: 'long', nullable: false }] };
+		},
 		previewRows: async (_config, _probe, namespace, table, request) => ({
 			columns: ['qualified', 'limit'],
 			rows: [[`${namespace.join('.')}.${table}`, request.limit]],
@@ -347,6 +354,9 @@ describe('Data browser routes', () => {
 	beforeEach(async () => {
 		clearObjectCredentialCacheForTests();
 		clearIntegrationBrowseStateForTests();
+		namespaceSignal = undefined;
+		tableSignal = undefined;
+		schemaSignal = undefined;
 		bucket = await createInitializedBucket();
 		deps = browserDeps(bucket);
 		request = createTestApi({ bucket, userId: ACTOR, deps }).request;
@@ -460,8 +470,11 @@ describe('Data browser routes', () => {
 		expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
 			level: 'warn',
 			event: 'integration_query_unavailable',
+			request_id: expect.any(String),
 			project_id: pid,
 			integration_id: created.id,
+			integration_kind: 'browsy',
+			surface: 'query',
 			reason: 'guarded catalog and object-store HTTP brokering is not available in DuckDB-Wasm',
 		});
 	});
@@ -1592,6 +1605,20 @@ describe('Data browser routes', () => {
 			columns: [{ name: 'orders_id', type: 'long', nullable: false }],
 			snippet: 'load lake:sales.orders',
 		});
+	});
+
+	it('does not bind shared metadata loads to one caller signal', async () => {
+		const pid = await createProject();
+		const created = await createBrowsable(pid);
+		const base = `/projects/${pid}/integrations/${created.id}/browse`;
+
+		await expectOk(await request('GET', `${base}/namespaces`));
+		await expectOk(await request('GET', `${base}/tables?namespace=sales`));
+		await expectOk(await request('GET', `${base}/schema?namespace=sales&table=orders`));
+
+		expect(namespaceSignal).toBeUndefined();
+		expect(tableSignal).toBeUndefined();
+		expect(schemaSignal).toBeUndefined();
 	});
 
 	it('422s an instance whose kind cannot browse, with the reason on the capability', async () => {

@@ -7,6 +7,7 @@ import { routePath } from 'hono/route';
 import {
 	DomainError,
 	ensureInitialized,
+	IntegrationId,
 	isPatRequest,
 	MAX_REQUEST_BYTES,
 	NotebookId,
@@ -95,13 +96,14 @@ async function rejectionDetails(response: Response): Promise<{ code: string; mes
 	};
 }
 
-function rejectionResourceContext(path: string) {
-	const match = /\/projects\/([^/]+)(?:\/notebooks\/([^/]+))?/.exec(path);
-	const projectId = match?.[1];
-	const notebookId = match?.[2];
+function requestResourceContext(path: string) {
+	const projectId = /\/projects\/([^/]+)/.exec(path)?.[1];
+	const notebookId = /\/projects\/[^/]+\/notebooks\/([^/]+)/.exec(path)?.[1];
+	const integrationId = /\/projects\/[^/]+\/integrations\/([^/]+)/.exec(path)?.[1];
 	return {
 		...(ProjectId.is(projectId) ? { project_id: projectId } : {}),
 		...(NotebookId.is(notebookId) ? { notebook_id: notebookId } : {}),
+		...(IntegrationId.is(integrationId) ? { integration_id: integrationId } : {}),
 	};
 }
 
@@ -187,6 +189,7 @@ export function createApi(rawDeps: ApiDeps) {
 					path: c.req.path,
 					user: c.get('user')?.id ?? null,
 					status: res.status,
+					...requestResourceContext(c.req.path),
 					error: errorMetadata(err),
 				});
 				return fail(c, code, internalErrorMessage(c.get('requestId')), res.status);
@@ -203,6 +206,7 @@ export function createApi(rawDeps: ApiDeps) {
 					path: c.req.path,
 					user: c.get('user')?.id ?? null,
 					status: err.status,
+					...requestResourceContext(c.req.path),
 					error: describeError(err),
 				});
 			}
@@ -216,6 +220,7 @@ export function createApi(rawDeps: ApiDeps) {
 			path: c.req.path,
 			user: c.get('user')?.id ?? null,
 			status: 500,
+			...requestResourceContext(c.req.path),
 			error: describeError(err),
 		});
 		return fail(c, 'INTERNAL_ERROR', internalErrorMessage(c.get('requestId')), 500);
@@ -252,7 +257,7 @@ export function createApi(rawDeps: ApiDeps) {
 			message: rejection.message,
 			request_id: c.get('requestId') ?? null,
 			user: c.get('user')?.id ?? null,
-			...rejectionResourceContext(c.req.path),
+			...requestResourceContext(c.req.path),
 		});
 	};
 	app.use(`${API_PREFIX}/*`, observeRejection);
