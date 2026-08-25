@@ -163,6 +163,91 @@ terminal colors. Progress and update notices use standard error.
 The CLI skips its daily release check when standard error is not a terminal, including in CI. Use
 `--no-update-check` or `MARIMOHUB_NO_UPDATE_CHECK=true` to disable it explicitly.
 
+## Deploy notebooks from configuration
+
+`mohub notebooks deploy` updates existing local-source notebooks from repository files. Before it
+writes, the command compares each notebook, skips unchanged entries, and captures ETags to reject
+concurrent updates.
+
+For one `.py` file in the configuration directory, `marimohub.toml` needs two fields:
+
+```toml
+project_id = "proj-7h2k9qm4xz7rp3w8"
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+```
+
+Alternatively, put these fields under `[tool.marimohub]` in `pyproject.toml`:
+
+```toml
+[tool.marimohub]
+project_id = "proj-7h2k9qm4xz7rp3w8"
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+```
+
+`path` and `readme_path` are relative to the configuration file. Without `path`, a single-notebook
+configuration uses the only immediate `.py` file. Zero or multiple matches produce an error.
+
+Use named tables for multiple notebooks:
+
+```toml
+project_id = "proj-7h2k9qm4xz7rp3w8"
+
+[notebooks.revenue]
+notebook_id = "nb-7h2k9qm4xz7rp3w8"
+path = "notebooks/revenue.py"
+
+[notebooks.inventory]
+notebook_id = "nb-8h2k9qm4xz7rp3w8"
+path = "notebooks/inventory.py"
+```
+
+Every named table in a multi-notebook configuration requires `path`. Optional fields are `title`,
+`description`, `tags`, `readme_path`, `base_image`, and `compute_profile`. Omitted fields preserve
+their remote values. The value `default` clears a `base_image` or `compute_profile` override.
+
+Preview or deploy notebooks:
+
+```bash
+mohub notebooks deploy --dry-run
+mohub notebooks deploy
+mohub notebooks deploy --notebook revenue
+mohub notebooks deploy --notebook revenue --notebook inventory
+```
+
+Use `--message` to set the immutable version message for code changes. Otherwise, the message is
+`Deploy <path>`.
+
+The CLI resolves configuration in this order:
+
+1. `--config PATH`.
+2. `MARIMOHUB_CONFIG`.
+3. The nearest ancestor with `marimohub.toml` or a `[tool.marimohub]` section.
+
+At the same directory level, `marimohub.toml` takes precedence over `pyproject.toml`.
+
+The command prints one aggregate result. Each entry includes its action and changed field names.
+Actions are `planned`, `updated`, or `unchanged`. Output excludes notebook and readme text.
+
+The configuration cannot contain server URLs or credentials. Each declaration must identify an
+existing local-source notebook. This command does not create or delete notebooks, upload
+dependencies, or update git-backed sources. For git-backed workspaces, use the
+[source sync workflow](./syncing.md).
+
+In CI, set the Hub URL and token through the environment. Replace `<CLI_VERSION>` with a CLI version
+that contains this command.
+
+```yaml
+- uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+- uses: marimo-team/setup-marimohub-cli@15f7152034cdf6728c02be77d39526360ce60ec2 # v1.0.1
+  with:
+    version: '<CLI_VERSION>'
+- name: Deploy notebooks
+  env:
+    MARIMOHUB_URL: ${{ vars.MARIMOHUB_URL }}
+    MARIMOHUB_TOKEN: ${{ secrets.MARIMOHUB_TOKEN }}
+  run: mohub notebooks deploy
+```
+
 ## Profiles
 
 Use profiles to connect to more than one marimohub deployment:

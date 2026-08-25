@@ -23,6 +23,19 @@ struct HttpResponse {
     body: Vec<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotebookDeploymentState {
+    pub title: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub readme: Option<String>,
+    pub base_image: Option<String>,
+    pub compute_profile: Option<String>,
+    pub source_type: String,
+    pub code: String,
+    pub etag: String,
+}
+
 pub struct Runtime<'a> {
     pub base_url: &'a str,
     pub token: Option<&'a SecretString>,
@@ -288,8 +301,28 @@ fn send(
     let retryable = operation.method == "GET"
         || operation.method == "HEAD"
         || headers.contains_key("Idempotency-Key");
+    send_with_retry(
+        agent,
+        runtime,
+        &operation.method,
+        url,
+        headers,
+        body,
+        retryable,
+    )
+}
+
+fn send_with_retry(
+    agent: &ureq::Agent,
+    runtime: &Runtime<'_>,
+    method: &str,
+    url: &Url,
+    headers: &BTreeMap<String, String>,
+    body: Option<&[u8]>,
+    retryable: bool,
+) -> Result<HttpResponse, Error> {
     for attempt in 0..3 {
-        match send_once(agent, runtime, &operation.method, url, headers, body) {
+        match send_once(agent, runtime, method, url, headers, body) {
             Ok(response)
                 if retryable && attempt < 2 && matches!(response.status, 500 | 502 | 503 | 504) => {
             }
@@ -436,6 +469,10 @@ fn write_json(value: &Value, mode: &str) -> Result<(), Error> {
     normalize_stdout_result(write_json_to(&mut writer, value, mode))
 }
 
+pub fn write_output(value: &Value, mode: &str) -> Result<(), Error> {
+    write_json(value, mode)
+}
+
 fn output_rows(value: &Value) -> Vec<&Value> {
     value
         .as_array()
@@ -543,6 +580,116 @@ pub fn current_user(manifest: &Manifest, runtime: &Runtime<'_>) -> Result<Value,
         .get("data")
         .cloned()
         .ok_or_else(|| Error::Http("response envelope has no data".into()))
+}
+
+fn notebook_url(runtime: &Runtime<'_>, project_id: &str, notebook_id: &str) -> Result<Url, Error> {
+    Url::parse(&format!(
+        "{}/api/v1/projects/{}/notebooks/{}",
+        runtime.base_url.trim_end_matches('/'),
+        urlencoding::encode(project_id),
+        urlencoding::encode(notebook_id),
+    ))
+    .map_err(Into::into)
+}
+
+fn required_string(value: &Value, pointer: &str, label: &str) -> Result<String, Error> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| Error::Http(format!("notebook response has no valid {label}")))
+}
+
+fn optional_string(value: &Value, pointer: &str, label: &str) -> Result<Option<String>, Error> {
+    match value.pointer(pointer) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(Error::Http(format!(
+            "notebook response has no valid {label}"
+        ))),
+    }
+}
+
+pub fn notebook_deployment_state(
+    runtime: &Runtime<'_>,
+    project_id: &str,
+    notebook_id: &str,
+) -> Result<NotebookDeploymentState, Error> {
+    let agent = ureq::AgentBuilder::new().timeout(runtime.timeout).build();
+    let url = notebook_url(runtime, project_id, notebook_id)?;
+    let detail_response =
+        send_with_retry(&agent, runtime, "GET", &url, &BTreeMap::new(), None, true)?;
+    let detail = ensure_success(&detail_response)?;
+    let etag = detail_response
+        .headers
+        .get("etag")
+        .cloned()
+        .ok_or_else(|| Error::Http("notebook detail response did not return an ETag".into()))?;
+    let data = detail
+        .get("data")
+        .ok_or_else(|| Error::Http("notebook detail response has no data".into()))?;
+    let tags = data
+        .pointer("/meta/tags")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::Http("notebook response has no valid tags".into()))?
+        .iter()
+        .map(|tag| {
+            tag.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| Error::Http("notebook response has no valid tags".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let content_url = Url::parse(&format!("{}/content", url.as_str().trim_end_matches('/')))?;
+    let content_response = send_with_retry(
+        &agent,
+        runtime,
+        "GET",
+        &content_url,
+        &BTreeMap::new(),
+        None,
+        true,
+    )?;
+    let content = ensure_success(&content_response)?;
+
+    Ok(NotebookDeploymentState {
+        title: required_string(data, "/meta/title", "title")?,
+        description: required_string(data, "/meta/description", "description")?,
+        tags,
+        readme: optional_string(data, "/readme", "readme")?,
+        base_image: optional_string(data, "/meta/base_image", "base_image")?,
+        compute_profile: optional_string(data, "/meta/compute_profile", "compute_profile")?,
+        source_type: required_string(data, "/source/type", "source type")?,
+        code: required_string(&content, "/data/code", "code")?,
+        etag,
+    })
+}
+
+pub fn update_notebook_deployment(
+    runtime: &Runtime<'_>,
+    project_id: &str,
+    notebook_id: &str,
+    etag: &str,
+    body: &Value,
+) -> Result<Value, Error> {
+    let agent = ureq::AgentBuilder::new().timeout(runtime.timeout).build();
+    let url = notebook_url(runtime, project_id, notebook_id)?;
+    let headers = BTreeMap::from([("If-Match".to_owned(), etag.to_owned())]);
+    let bytes = serde_json::to_vec(body)?;
+    let response = send_with_retry(
+        &agent,
+        runtime,
+        "PATCH",
+        &url,
+        &headers,
+        Some(&bytes),
+        false,
+    )?;
+    let envelope = ensure_success(&response)?;
+    envelope
+        .get("data")
+        .cloned()
+        .ok_or_else(|| Error::Http("notebook update response has no data".into()))
 }
 
 pub fn exchange_cli_authorization(

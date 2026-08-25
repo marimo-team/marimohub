@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use clap::ArgMatches;
-use mohub::{cli, client, config, manifest, Error};
+use mohub::{cli, client, config, deploy, manifest, Error};
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use update_informer::{registry, Check};
@@ -647,6 +647,34 @@ fn run_command(
     }
     if path.first().map(String::as_str) == Some("logout") {
         return handle_logout(matches);
+    }
+    if path == ["notebooks", "deploy"] {
+        let prepared = deploy::prepare(deploy::DeployOptions {
+            config: leaf
+                .get_one::<String>("deploy-config")
+                .map(std::path::PathBuf::from),
+            notebooks: leaf
+                .get_many::<String>("deploy-notebook")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+            dry_run: leaf.get_flag("deploy-dry-run"),
+            message: leaf.get_one::<String>("deploy-message").cloned(),
+        })?;
+        let (base_url, token) = resolve_runtime(matches)?;
+        let runtime = client::Runtime {
+            base_url: &base_url,
+            token: token.as_ref(),
+            timeout: Duration::from_secs(
+                *matches
+                    .get_one::<u64>("timeout")
+                    .expect("defaulted by clap"),
+            ),
+            output: matches
+                .get_one::<String>("output")
+                .expect("defaulted by clap"),
+            raw_envelope: matches.get_flag("raw-envelope"),
+        };
+        return deploy::execute(&runtime, prepared);
     }
     let operation = manifest
         .operations
