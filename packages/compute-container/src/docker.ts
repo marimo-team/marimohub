@@ -7,7 +7,10 @@ export interface DockerRunResult {
 }
 
 export interface DockerRunner {
-	run(args: string[], options?: { stdin?: string | Uint8Array }): Promise<DockerRunResult>;
+	run(
+		args: string[],
+		options?: { stdin?: string | Uint8Array; timeout?: number },
+	): Promise<DockerRunResult>;
 }
 
 export interface DockerConfig {

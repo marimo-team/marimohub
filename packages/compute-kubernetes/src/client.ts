@@ -34,6 +34,7 @@ import {
 import type {
 	EnsureSandboxOptions,
 	K8sClient,
+	K8sExecOptions,
 	K8sExecResult,
 	K8sPodPhaseInfo,
 	K8sSandboxInfo,
@@ -44,6 +45,12 @@ import type {
 const SANDBOX_NAME_LABEL = 'marimohub.io/sandbox-name';
 /** The single container name in each kernel Pod (the exec target). */
 const CONTAINER_NAME = 'marimo';
+
+interface ExecSocket {
+	on(event: 'close', listener: () => void): void;
+	on(event: 'error', listener: (error: unknown) => void): void;
+	terminate(): void;
+}
 
 /** True when an error is a k8s API error with the given HTTP status code. */
 function hasCode(err: unknown, code: number): boolean {
@@ -362,6 +369,7 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 			name: string,
 			command: string[],
 			stdin?: string | Uint8Array,
+			options?: K8sExecOptions,
 		): Promise<K8sExecResult> {
 			const { exec } = await apis();
 			const out = collector();
@@ -373,6 +381,29 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 
 			return new Promise<K8sExecResult>((resolve, reject) => {
 				let status: V1Status | undefined;
+				let settled = false;
+				let socket: ExecSocket | undefined;
+				const finish = (result: K8sExecResult) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					resolve(result);
+				};
+				const fail = (error: unknown) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					reject(error instanceof Error ? error : new Error(String(error)));
+				};
+				const timer =
+					options?.timeout !== undefined && options.timeout > 0
+						? setTimeout(() => {
+								stdinStream?.destroy();
+								fail(new Error(`command timed out after ${options.timeout}ms`));
+								socket?.terminate();
+							}, options.timeout)
+						: undefined;
+				timer?.unref();
 				exec
 					.exec(
 						namespace,
@@ -387,17 +418,22 @@ export function createK8sClient(config: KubernetesConfig): K8sClient {
 							status = s;
 						},
 					)
-					.then((socket) => {
-						socket.on('close', () =>
-							resolve({
+					.then((connectedSocket: ExecSocket) => {
+						socket = connectedSocket;
+						if (settled) {
+							connectedSocket.terminate();
+							return;
+						}
+						connectedSocket.on('close', () =>
+							finish({
 								stdout: out.text(),
 								stderr: errc.text(),
 								exitCode: exitCodeFromStatus(status),
 							}),
 						);
-						socket.on('error', reject);
+						connectedSocket.on('error', fail);
 					})
-					.catch(reject);
+					.catch(fail);
 			});
 		},
 

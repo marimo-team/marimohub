@@ -20,6 +20,7 @@ import type {
 	ActiveSandbox,
 	ComputeResources,
 	CreateSandboxOptions,
+	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
 	ExposePortOptions,
@@ -44,6 +45,16 @@ const KERNEL_PORT = 2718;
 const NAME_PREFIX = 'marimohub-sbx-';
 const DEFAULT_LABEL_KEY = 'marimohub.sandbox';
 const DEFAULT_IMAGE = 'ghcr.io/marimo-team/marimo:latest';
+const EXEC_TIMEOUT_GRACE_MS = 100;
+const EXEC_TIMEOUT_SUPERVISOR = `import os, signal, subprocess, sys
+process = subprocess.Popen(['sh', '-lc', sys.argv[2]], start_new_session=True)
+try:
+	code = process.wait(timeout=float(sys.argv[1]) / 1000)
+except subprocess.TimeoutExpired:
+	os.killpg(process.pid, signal.SIGKILL)
+	process.wait()
+	code = 124
+sys.exit(code)`;
 
 export interface ContainerRunResult {
 	stdout: string;
@@ -56,7 +67,10 @@ export interface ContainerRunResult {
  * hermetic while production spawns the selected engine binary on PATH.
  */
 export interface ContainerRunner {
-	run(args: string[], options?: { stdin?: string | Uint8Array }): Promise<ContainerRunResult>;
+	run(
+		args: string[],
+		options?: { stdin?: string | Uint8Array; timeout?: number },
+	): Promise<ContainerRunResult>;
 }
 
 export function spawnContainerRunner(bin: string): ContainerRunner {
@@ -66,12 +80,31 @@ export function spawnContainerRunner(bin: string): ContainerRunner {
 				const child = spawn(bin, args);
 				let stdout = '';
 				let stderr = '';
+				let timedOut = false;
+				const timer =
+					options?.timeout !== undefined && options.timeout > 0
+						? setTimeout(() => {
+								timedOut = true;
+								child.kill('SIGKILL');
+							}, options.timeout)
+						: undefined;
+				timer?.unref();
 				child.stdout?.on('data', (d) => (stdout += d.toString()));
 				child.stderr?.on('data', (d) => (stderr += d.toString()));
-				child.on('error', (err) =>
-					resolve({ stdout, stderr: stderr + String(err), exitCode: 127 }),
-				);
-				child.on('close', (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
+				child.on('error', (err) => {
+					clearTimeout(timer);
+					resolve({ stdout, stderr: stderr + String(err), exitCode: 127 });
+				});
+				child.on('close', (code) => {
+					clearTimeout(timer);
+					resolve({
+						stdout,
+						stderr: timedOut
+							? [stderr, `command timed out after ${options?.timeout}ms`].filter(Boolean).join('\n')
+							: stderr,
+						exitCode: timedOut ? 124 : (code ?? 1),
+					});
+				});
 				if (options?.stdin !== undefined) {
 					child.stdin?.end(options.stdin);
 				} else {
@@ -162,13 +195,31 @@ class ContainerSandboxInstance implements SandboxInstance {
 		return withEnvPrefix(cmd, this.env, this.envDefaults);
 	}
 
-	private async dexec(cmd: string, flags: string[] = []): Promise<ContainerRunResult> {
+	private async dexec(
+		cmd: string,
+		flags: string[] = [],
+		options?: ExecOptions,
+	): Promise<ContainerRunResult> {
 		await this.ensure();
-		return this.runner.run(['exec', ...flags, this.name, 'sh', '-lc', this.withEnv(cmd)]);
+		const command =
+			options?.timeout !== undefined && options.timeout > 0
+				? [
+						'python3',
+						'-c',
+						EXEC_TIMEOUT_SUPERVISOR,
+						String(
+							Math.max(1, options.timeout - Math.min(EXEC_TIMEOUT_GRACE_MS, options.timeout / 10)),
+						),
+						this.withEnv(cmd),
+					]
+				: ['sh', '-lc', this.withEnv(cmd)];
+		return this.runner.run(['exec', ...flags, this.name, ...command], {
+			timeout: options?.timeout,
+		});
 	}
 
-	async exec(cmd: string): Promise<ExecResult> {
-		const res = await this.dexec(cmd);
+	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
+		const res = await this.dexec(cmd, [], options);
 		return execResult(res.exitCode === 0, res.stdout, res.stderr);
 	}
 

@@ -552,6 +552,17 @@ describe('createK8sClient', () => {
 		]);
 	});
 
+	it('terminates the exec WebSocket when the command times out', async () => {
+		const client = createK8sClient({ namespace: 'kernels' });
+		const socket = Object.assign(new EventEmitter(), { terminate: vi.fn() });
+		k8sMock.exec.mockResolvedValueOnce(socket);
+
+		await expect(
+			client.exec('pod-1', ['sh', '-lc', 'uv sync'], undefined, { timeout: 10 }),
+		).rejects.toThrow('command timed out after 10ms');
+		expect(socket.terminate).toHaveBeenCalledOnce();
+	});
+
 	it('rethrows a 403 RBAC-forbidden pod create (only 409 is tolerated)', async () => {
 		k8sMock.core.createNamespacedPod.mockRejectedValueOnce({ code: 403 });
 		const client = createK8sClient({ namespace: 'kernels' });

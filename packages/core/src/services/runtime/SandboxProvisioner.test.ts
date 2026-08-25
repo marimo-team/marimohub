@@ -270,26 +270,38 @@ describe('SandboxProvisioner', () => {
 			expect(defaultTimeout).toBeGreaterThan(119_000);
 			expect(defaultTimeout).toBeLessThanOrEqual(120_000);
 
-			const configured = makeFakeSandbox();
-			await new SandboxProvisioner(fakeComputeFrom(configured.instance)).provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
-				startupTimeoutMs: Millis.seconds(300),
-			});
-			expect(configured.calls.waitForPortOptions).toHaveLength(1);
-			const configuredTimeout = configured.calls.waitForPortOptions[0]!.timeout;
-			expect(configuredTimeout).toBeGreaterThan(299_000);
-			expect(configuredTimeout).toBeLessThanOrEqual(300_000);
-			const setupIndex = configured.calls.exec.findIndex((command) =>
-				command.includes('uv sync --inexact'),
-			);
-			expect(setupIndex).toBeGreaterThanOrEqual(0);
-			const setupTimeout = configured.calls.execOptions[setupIndex]?.timeout;
-			expect(setupTimeout).toBeGreaterThan(299_000);
-			expect(setupTimeout).toBeLessThanOrEqual(300_000);
+			vi.useFakeTimers();
+			try {
+				const configured = makeFakeSandbox();
+				const exec = configured.instance.exec.bind(configured.instance);
+				configured.instance.exec = async (command, options) => {
+					const result = await exec(command, options);
+					if (command.includes('uv sync --inexact')) {
+						await new Promise((resolve) => setTimeout(resolve, 30_000));
+					}
+					return result;
+				};
+
+				const provision = new SandboxProvisioner(fakeComputeFrom(configured.instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					startupTimeoutMs: Millis.seconds(300),
+				});
+				await vi.advanceTimersByTimeAsync(30_000);
+				await provision;
+
+				const setupIndex = configured.calls.exec.findIndex((command) =>
+					command.includes('uv sync --inexact'),
+				);
+				expect(setupIndex).toBeGreaterThanOrEqual(0);
+				expect(configured.calls.execOptions[setupIndex]?.timeout).toBe(300_000);
+				expect(configured.calls.waitForPortOptions).toEqual([{ timeout: 270_000 }]);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it('names the startup timeout (and the config var) when the port wait consumes the full window', async () => {
@@ -589,6 +601,18 @@ describe('SandboxProvisioner', () => {
 			it('checks launch setup before starting the kernel process', async () => {
 				const { instance, calls } = makeFakeSandbox();
 				instance.ready = async () => {};
+				const exec = instance.exec.bind(instance);
+				const startProcess = instance.startProcess.bind(instance);
+				let setupComplete = false;
+				instance.exec = async (command, options) => {
+					const result = await exec(command, options);
+					if (command.includes('uv sync')) setupComplete = true;
+					return result;
+				};
+				instance.startProcess = async (command, options) => {
+					expect(setupComplete).toBe(true);
+					return startProcess(command, options);
+				};
 
 				await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
 					sandboxId,
@@ -641,7 +665,18 @@ describe('SandboxProvisioner', () => {
 			expect(calls.destroy).toBe(1);
 		});
 
-		it('classifies a malformed pyproject as a checked setup failure', async () => {
+		it.each([
+			[
+				'a malformed pyproject',
+				'tomllib.TOMLDecodeError: Invalid value (at end of document)',
+				'pyproject.toml could not be parsed',
+			],
+			[
+				'a missing TOML parser',
+				"ModuleNotFoundError: No module named 'tomllib'",
+				'sandbox Python does not include the tomllib parser',
+			],
+		])('classifies %s as a checked setup failure', async (_case, stderr, expectedMessage) => {
 			const { instance: base, calls } = makeFakeSandbox();
 			const instance: SandboxInstance = {
 				...base,
@@ -651,7 +686,7 @@ describe('SandboxProvisioner', () => {
 					return {
 						success: false,
 						stdout: '',
-						stderr: 'tomllib.TOMLDecodeError: Invalid value (at end of document)',
+						stderr,
 						error: { code: 'COMMAND_FAILED' },
 					};
 				},
@@ -668,7 +703,7 @@ describe('SandboxProvisioner', () => {
 				.catch((error: unknown) => error);
 
 			expect(failure).toMatchObject({ code: 'PYTHON_ENV_SETUP_FAILED', status: 503 });
-			expect((failure as Error).message).toContain('pyproject.toml could not be parsed');
+			expect((failure as Error).message).toContain(expectedMessage);
 			expect(calls.startProcess).toHaveLength(0);
 			expect(calls.destroy).toBe(1);
 		});

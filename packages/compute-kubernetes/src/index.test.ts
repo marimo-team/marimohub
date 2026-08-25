@@ -21,6 +21,7 @@ import {
 import type {
 	EnsureSandboxOptions,
 	K8sClient,
+	K8sExecOptions,
 	K8sExecResult,
 	K8sPodPhaseInfo,
 	KubernetesConfig,
@@ -65,7 +66,12 @@ function makeWorld(opts?: {
 }) {
 	const ensured: EnsureSandboxOptions[] = [];
 	const deleted: string[] = [];
-	const execCalls: { name: string; command: string[]; stdin?: string | Uint8Array }[] = [];
+	const execCalls: {
+		name: string;
+		command: string[];
+		stdin?: string | Uint8Array;
+		options?: K8sExecOptions;
+	}[] = [];
 	const pods = new Map<string, { sandboxId: SandboxId; phase: string }>();
 
 	const client: K8sClient = {
@@ -81,8 +87,8 @@ function makeWorld(opts?: {
 		},
 		getSchedulingFailure: async () => opts?.schedulingFailure,
 		getImagePullMessage: async () => opts?.imagePullMessage,
-		exec: async (name, command, stdin) => {
-			execCalls.push({ name, command, stdin });
+		exec: async (name, command, stdin, options) => {
+			execCalls.push({ name, command, stdin, options });
 			return opts?.execImpl?.(command, stdin) ?? { stdout: '', stderr: '', exitCode: 0 };
 		},
 		delete: async (name) => {
@@ -153,6 +159,21 @@ describe('KubernetesCompute', () => {
 			});
 			const result = await makeCompute(world).create(SANDBOX_ID).exec('bad');
 			expectExecResult(result, { success: false, stderr: 'boom' });
+		});
+
+		it('passes the exec timeout to the Kubernetes client', async () => {
+			const world = makeWorld();
+
+			await makeCompute(world).create(SANDBOX_ID).exec('uv sync', { timeout: 300_000 });
+
+			expect(world.execCalls.at(-1)?.options).toEqual({ timeout: 300_000 });
+			expect(world.execCalls.at(-1)?.command).toEqual([
+				'python3',
+				'-c',
+				expect.stringContaining('os.killpg(process.pid, signal.SIGKILL)'),
+				'299900',
+				'uv sync',
+			]);
 		});
 	});
 

@@ -86,14 +86,22 @@ describe('buildMarimoLaunch', () => {
 
 	it('restores the image marimo pin if project sync replaced the environment', () => {
 		const [capture, , ensure] = buildMarimoLaunch(BASE).setup;
-		expect(capture).toContain('MARIMOHUB_MARIMO_VERSION=');
-		expect(capture).toContain('MARIMO_VERSION');
+		expect(capture).toContain("${MARIMO_VERSION:-$(python3 -c 'import importlib.metadata as m;");
+		expect(capture).toContain('m.distributions()');
 		expect(ensure).toContain('uv pip install');
 		expect(ensure).toContain('marimo==$MARIMOHUB_MARIMO_VERSION');
 	});
 
+	it('continues without restoring marimo when the image provides no version', () => {
+		const [capture, , ensure] = buildMarimoLaunch(BASE).setup;
+		expect(capture).toContain('), ""))');
+		expect(ensure).toContain('[ -z "$MARIMOHUB_MARIMO_VERSION" ] ||');
+	});
+
 	it('reserves exit code 2 for no dependencies and propagates TOML parse failures', () => {
 		const [, pyproject] = buildMarimoLaunch(BASE).setup;
+		expect(pyproject).toContain('import pathlib,sys,tomllib');
+		expect(pyproject).not.toContain("find_spec('tomllib')");
 		expect(pyproject).toContain('else 2');
 		expect(pyproject).toContain('elif [ "$status" -eq 2 ]');
 		expect(pyproject).toContain('else exit "$status"');

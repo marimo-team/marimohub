@@ -124,9 +124,9 @@ start a new session.
 ### Session fails with `PYTHON_ENV_SETUP_FAILED`
 
 The sandbox started, but uv could not prepare the notebook's Python environment.
-The error identifies permissions, an invalid `pyproject.toml`, a missing Python
-interpreter, or incompatible dependencies. uv can replace the whole environment
-to change Python versions.
+The error identifies permissions, an invalid `pyproject.toml`, a missing TOML
+parser or Python interpreter, or incompatible dependencies. uv can replace the
+whole environment to change Python versions.
 
 If the error identifies permissions, make the sandbox user own the parent of
 `UV_PROJECT_ENVIRONMENT`.
@@ -174,6 +174,7 @@ Every API error returns `{ "success": false, "error": { "code", "message" } }`.
 | `RESOURCE_EXHAUSTED`               | 429       | Per-user concurrent-session cap hit — free one or retry.                   |
 | `PAYLOAD_TOO_LARGE`                | 413       | Request body exceeds the limit.                                            |
 | `SERVICE_UNAVAILABLE`              | 503       | A compute/storage dependency is down — transient.                          |
+| `PYTHON_ENV_SETUP_FAILED`          | 503       | Notebook Python setup failed — fix the reported environment error.         |
 | `INTERNAL_ERROR`                   | 500       | Unexpected; check `level: error` logs (the cause is logged, not returned). |
 
 ## Still stuck?

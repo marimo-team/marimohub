@@ -35,6 +35,7 @@ import { Utf8TailBuffer } from '@marimo-hub/compute-commons/node';
 import type { SandboxId } from '@marimo-hub/core';
 import type {
 	ActiveSandbox,
+	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
 	ExposePortOptions,
@@ -304,18 +305,39 @@ class LocalSandboxInstance implements SandboxInstance {
 		return child;
 	}
 
-	async exec(cmd: string): Promise<ExecResult> {
+	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
 		await this.ensureRoot();
 		return new Promise((resolve) => {
 			const child = this.trackChild(this.spawnShell(this.rewriteCmd(cmd), { detached: true }));
 			const { stdout, stderr } = captureOutput(child);
+			let timedOut = false;
+			const timer =
+				options?.timeout !== undefined && options.timeout > 0
+					? setTimeout(
+							() => {
+								timedOut = true;
+								killProcessGroup(child, 'SIGKILL');
+							},
+							Math.max(1, options.timeout - Math.min(100, options.timeout / 10)),
+						)
+					: undefined;
+			timer?.unref();
 			child.on('error', (err) => {
+				clearTimeout(timer);
 				resolve(
 					execResult(false, stdout.toString(), stderr.toString() + String(err), 'SPAWN_FAILED'),
 				);
 			});
 			child.on('close', (code) => {
-				resolve(execResult(code === 0, stdout.toString(), stderr.toString()));
+				clearTimeout(timer);
+				const timeoutMessage = timedOut ? `command timed out after ${options?.timeout}ms` : '';
+				resolve(
+					execResult(
+						!timedOut && code === 0,
+						stdout.toString(),
+						[stderr.toString(), timeoutMessage].filter(Boolean).join('\n'),
+					),
+				);
 			});
 		});
 	}

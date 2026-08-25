@@ -51,6 +51,8 @@ function pythonEnvironmentSetupFailure(result: ExecResult): PythonEnvironmentSet
 		reason = 'the sandbox image does not allow replacing its Python environment';
 	} else if (/TOMLDecodeError/i.test(output)) {
 		reason = 'pyproject.toml could not be parsed';
+	} else if (/No module named ['"]tomllib['"]/i.test(output)) {
+		reason = 'the sandbox Python does not include the tomllib parser';
 	} else if (/no (virtual environment|interpreter)|python installation not found/i.test(output)) {
 		reason = 'uv could not find or create the required Python environment';
 	} else if (/no solution found|resolution failed|requirements are unsatisfiable/i.test(output)) {

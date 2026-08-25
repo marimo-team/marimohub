@@ -7,7 +7,10 @@ export interface PodmanRunResult {
 }
 
 export interface PodmanRunner {
-	run(args: string[], options?: { stdin?: string | Uint8Array }): Promise<PodmanRunResult>;
+	run(
+		args: string[],
+		options?: { stdin?: string | Uint8Array; timeout?: number },
+	): Promise<PodmanRunResult>;
 }
 
 export interface PodmanConfig {

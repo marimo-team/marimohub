@@ -210,6 +210,10 @@ export interface K8sSandboxInfo {
 	createdAt?: string;
 }
 
+export interface K8sExecOptions {
+	timeout?: number;
+}
+
 /**
  * The slice of the cluster API this adapter uses. Declaring it as an interface
  * (rather than depending on `@kubernetes/client-node` directly) is the injection
@@ -232,7 +236,12 @@ export interface K8sClient {
 	 */
 	getImagePullMessage(name: string, uid?: string): Promise<string | undefined>;
 	/** Run a command in the Pod; `stdin` is piped to the process when provided. */
-	exec(name: string, command: string[], stdin?: string | Uint8Array): Promise<K8sExecResult>;
+	exec(
+		name: string,
+		command: string[],
+		stdin?: string | Uint8Array,
+		options?: K8sExecOptions,
+	): Promise<K8sExecResult>;
 	/** Delete the Pod + Service + Ingress for a session. Idempotent (tolerates 404). */
 	delete(name: string): Promise<void>;
 	/** List sandboxes THIS deployment owns (label-scoped), for the reconciler. */

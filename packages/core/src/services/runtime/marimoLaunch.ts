@@ -80,7 +80,7 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 // stall the launch. The image must NOT set UV_COMPILE_BYTECODE (it would
 // conflict with --no-compile-bytecode). A failure is fatal: the provisioner
 // reports it as PYTHON_ENV_SETUP_FAILED before starting the kernel.
-const PYPROJECT_LAYER_SETUP = `{ status=0; python3 -c "import importlib.util,pathlib,sys;sys.exit(2) if importlib.util.find_spec('tomllib') is None else None;import tomllib;path=pathlib.Path('pyproject.toml');data=tomllib.loads(path.read_text()) if path.exists() else {};sys.exit(0 if data.get('project',{}).get('dependencies') else 2)" || status=$?; if [ "$status" -eq 0 ]; then uv sync --inexact --no-compile-bytecode --no-build; elif [ "$status" -eq 2 ]; then if ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then rm -f pyproject.toml && uv init --bare --no-package --vcs none --name notebook --description "Built in marimohub"; fi; else exit "$status"; fi; }`;
+const PYPROJECT_LAYER_SETUP = `{ status=0; python3 -c "import pathlib,sys,tomllib;path=pathlib.Path('pyproject.toml');data=tomllib.loads(path.read_text()) if path.exists() else {};sys.exit(0 if data.get('project',{}).get('dependencies') else 2)" || status=$?; if [ "$status" -eq 0 ]; then uv sync --inexact --no-compile-bytecode --no-build; elif [ "$status" -eq 2 ]; then if ! grep -q '^\\[project\\]' pyproject.toml 2>/dev/null; then rm -f pyproject.toml && uv init --bare --no-package --vcs none --name notebook --description "Built in marimohub"; fi; else exit "$status"; fi; }`;
 
 // The env the kernel's `uv run --no-sync` will use — uv resolves the project
 // env as UV_PROJECT_ENVIRONMENT, else `.venv` in the project dir. Deliberately
@@ -94,8 +94,8 @@ const PIN_ENV = `"${PIN_ENV_EXPANSION}"`;
 // uv replaces the whole environment when requires-python selects another
 // interpreter. Capture the image's marimo pin before sync, then restore it only
 // if the resulting environment no longer contains that version.
-const CAPTURE_MARIMO_VERSION = `MARIMOHUB_MARIMO_VERSION="\${MARIMO_VERSION:-$(python3 -c 'import importlib.metadata as m;print(m.version("marimo"))')}"`;
-const ENSURE_MARIMO = `{ [ "$(uv run --no-sync python -c 'import importlib.metadata as m;print(m.version("marimo"))' 2>/dev/null)" = "$MARIMOHUB_MARIMO_VERSION" ] || uv pip install --python ${PIN_ENV} --no-build "marimo==$MARIMOHUB_MARIMO_VERSION"; }`;
+const CAPTURE_MARIMO_VERSION = `MARIMOHUB_MARIMO_VERSION="\${MARIMO_VERSION:-$(python3 -c 'import importlib.metadata as m;print(next((d.version for d in m.distributions() if (d.metadata["Name"] or "").lower() == "marimo"), ""))')}"`;
+const ENSURE_MARIMO = `{ [ -z "$MARIMOHUB_MARIMO_VERSION" ] || [ "$(uv run --no-sync python -c 'import importlib.metadata as m;print(m.version("marimo"))' 2>/dev/null)" = "$MARIMOHUB_MARIMO_VERSION" ] || uv pip install --python ${PIN_ENV} --no-build "marimo==$MARIMOHUB_MARIMO_VERSION"; }`;
 
 // Inside the pin env: per-sandbox on every backend (a container's env dies
 // with it; a local sandbox's .venv is removed with its root), so nothing

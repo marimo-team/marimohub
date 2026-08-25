@@ -167,11 +167,7 @@ describe('uv-script-pins setup execution', () => {
 		'uv-script-pins',
 	).setup.join(' && ');
 
-	async function runSetup(
-		extraEnv: Record<string, string>,
-		pyproject?: string,
-		parserExit?: number,
-	) {
+	async function runSetup(extraEnv: NodeJS.ProcessEnv, pyproject?: string, parserExit?: number) {
 		const dir = await mkdtemp(path.join(os.tmpdir(), 'marimohub-uvstub-'));
 		const workdir = path.join(dir, 'work');
 		const logFile = path.join(dir, 'uv.log');
@@ -181,11 +177,11 @@ describe('uv-script-pins setup execution', () => {
 			'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$UV_LOG"\nif [ "$1" = venv ]; then mkdir -p "$2"; fi\n',
 			{ mode: 0o755 },
 		);
-		if (parserExit !== undefined) {
-			await writeFile(path.join(dir, 'python3'), `#!/bin/sh\nexit ${parserExit}\n`, {
-				mode: 0o755,
-			});
-		}
+		await writeFile(
+			path.join(dir, 'python3'),
+			`#!/bin/sh\ncase "$2" in\n*importlib.metadata*) printf '\\n';;\n*) exit ${parserExit ?? 2};;\nesac\n`,
+			{ mode: 0o755 },
+		);
 		if (pyproject !== undefined) await writeFile(path.join(workdir, 'pyproject.toml'), pyproject);
 		const env: NodeJS.ProcessEnv = {
 			...process.env,
@@ -226,7 +222,13 @@ describe('uv-script-pins setup execution', () => {
 		}
 	});
 
-	it('propagates a pyproject.toml parser failure before starting uv', async () => {
+	it('continues when neither MARIMO_VERSION nor installed marimo metadata provides a pin', async () => {
+		const { log } = await runSetup({ MARIMO_VERSION: undefined });
+		expect(log).not.toContain('marimo==');
+		expect(log).toContain('export --script app.py');
+	});
+
+	it('propagates a missing or failed TOML parser before starting uv', async () => {
 		await expect(runSetup({}, '[project]\ndependencies = [', 1)).rejects.toBeDefined();
 	});
 });
@@ -244,6 +246,23 @@ describe('rewriteWorkspace (pure)', () => {
 });
 
 describe('LocalCompute file ops', () => {
+	it('kills the command process group when exec times out', async () => {
+		const sb = newSandbox();
+		const result = await sb.exec('mkdir -p /workspace; sleep 0.15; touch /workspace/late.txt', {
+			timeout: 20,
+		});
+
+		expect(result).toMatchObject({
+			success: false,
+			stderr: expect.stringContaining('command timed out after 20ms'),
+		});
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expectFileResult(await sb.readFile('/workspace/late.txt'), {
+			success: false,
+			error: { code: 'NOT_FOUND' },
+		});
+	});
+
 	it('places sandboxes beneath the configured root', async () => {
 		const root = await mkdtemp(path.join(os.tmpdir(), 'marimohub-local-root-'));
 		const local = new LocalCompute({ root });
