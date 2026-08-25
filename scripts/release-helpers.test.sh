@@ -346,7 +346,21 @@ printf '{"name":"release-test","version":"1.2.3"}\n' >"$release_repo/package.jso
 printf '[package]\nname = "mohub"\nversion = "1.2.3"\n' >"$release_repo/apps/cli/Cargo.toml"
 touch "$release_repo/apps/cli/Cargo.lock"
 printf "setup:\n  version: '1.2.3'\n" >"$release_repo/docs/cli.md"
-for command in git cargo gh; do
+printf '%s\n' \
+	'#!/usr/bin/env bash' \
+	'root="$(cd "$(dirname "$0")/.." && pwd)"' \
+	'if [[ "$1" == "show" ]]; then' \
+	'  case "$2" in' \
+	'    origin/main:package.json) cat "$root/package.json" ;;' \
+	'    origin/main:apps/cli/Cargo.toml) cat "$root/apps/cli/Cargo.toml" ;;' \
+	'    origin/main:docs/cli.md) cat "$root/docs/cli.md" ;;' \
+	'    *) exit 2 ;;' \
+	'  esac' \
+	'  exit 0' \
+	'fi' \
+	'[[ "$1" != "show-ref" ]]' >"$release_repo/bin/git"
+chmod +x "$release_repo/bin/git"
+for command in cargo gh; do
 	printf '#!/usr/bin/env bash\nexit 0\n' >"$release_repo/bin/$command"
 	chmod +x "$release_repo/bin/$command"
 done
