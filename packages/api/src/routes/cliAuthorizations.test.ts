@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR } from '@marimo-hub/core/testing';
-import { composeAuthenticators } from '@marimo-hub/core';
+import { composeAuthenticators, createCliAuthorizationId } from '@marimo-hub/core';
 import { createApi, generateOpenApiDocument } from '../createApi';
 import {
 	createInitializedBucket,
@@ -113,33 +113,6 @@ describe('CLI authorization routes', () => {
 		).toHaveProperty('status', 200);
 	});
 
-	it('rate-limits exchanges before reading authorization storage', async () => {
-		const realNow = Date.now();
-		vi.useFakeTimers({ now: realNow + 61_000 });
-		try {
-			const deps = makeTestDeps(bucket);
-			const exchange = vi.spyOn(deps.services.cliAuthorizations, 'exchange');
-			const limitedApi = createApi(deps);
-			const exchangeRequest = () =>
-				limitedApi.request('/api/cli/v1/token', {
-					method: 'POST',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ code: 'missing', code_verifier: VERIFIER }),
-				});
-
-			for (let attempt = 0; attempt < 60; attempt += 1) {
-				await expectError(await exchangeRequest(), 400, 'BAD_REQUEST');
-			}
-			const response = await exchangeRequest();
-			await expectError(response, 429, 'RESOURCE_EXHAUSTED');
-			expect(response.headers.get('Retry-After')).toBe('5');
-			expect(exchange).toHaveBeenCalledTimes(60);
-		} finally {
-			vi.setSystemTime(realNow);
-			vi.useRealTimers();
-		}
-	});
-
 	it('requires a session to approve and never accepts a PAT there', async () => {
 		const deny = createApi(makeTestDeps(bucket));
 		await expectError(
@@ -221,6 +194,55 @@ describe('CLI authorization routes', () => {
 				expect.objectContaining({ event: 'token.create', actor: ACTOR, token_name: 'mohub CLI' }),
 			]),
 		);
+	});
+
+	it('isolates authorization attempts while retaining a global storage cap', async () => {
+		const realNow = Date.now();
+		vi.useFakeTimers({ now: realNow + 61_000 });
+		try {
+			const approved = await approve();
+			const validCode = new URL(approved.redirect_uri).searchParams.get('code')!;
+			const deps = makeTestDeps(bucket);
+			const exchange = vi.spyOn(deps.services.cliAuthorizations, 'exchange');
+			const limitedApi = createApi(deps);
+			const exchangeRequest = (code: string) =>
+				limitedApi.request('/api/cli/v1/token', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ code, code_verifier: VERIFIER }),
+				});
+			const randomCode = () => `mhub_cli_${createCliAuthorizationId()}_${'x'.repeat(32)}`;
+			const targetedId = createCliAuthorizationId();
+
+			for (let attempt = 0; attempt < 5; attempt += 1) {
+				const secret = String(attempt).padStart(32, 'x');
+				await expectError(
+					await exchangeRequest(`mhub_cli_${targetedId}_${secret}`),
+					400,
+					'BAD_REQUEST',
+				);
+			}
+			const targetedResponse = await exchangeRequest(`mhub_cli_${targetedId}_${'y'.repeat(32)}`);
+			await expectError(targetedResponse, 429, 'RESOURCE_EXHAUSTED');
+			expect(targetedResponse.headers.get('Retry-After')).toBe('5');
+			expect(exchange).toHaveBeenCalledTimes(5);
+
+			for (let attempt = 0; attempt < 60; attempt += 1) {
+				await expectError(await exchangeRequest(randomCode()), 400, 'BAD_REQUEST');
+			}
+			await expectOk(await exchangeRequest(validCode));
+
+			for (let attempt = 66; attempt < 600; attempt += 1) {
+				await expectError(await exchangeRequest(randomCode()), 400, 'BAD_REQUEST');
+			}
+			const globalResponse = await exchangeRequest(randomCode());
+			await expectError(globalResponse, 429, 'RESOURCE_EXHAUSTED');
+			expect(globalResponse.headers.get('Retry-After')).toBe('5');
+			expect(exchange).toHaveBeenCalledTimes(600);
+		} finally {
+			vi.setSystemTime(realNow);
+			vi.useRealTimers();
+		}
 	});
 });
 

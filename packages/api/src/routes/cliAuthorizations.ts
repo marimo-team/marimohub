@@ -32,15 +32,26 @@ const ExchangeBodySchema = z.object({
 	code_verifier: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/),
 });
 
-const EXCHANGE_LIMIT = 60;
+const AUTHORIZATION_EXCHANGE_LIMIT = 5;
+const GLOBAL_EXCHANGE_LIMIT = 600;
 const EXCHANGE_WINDOW_MS = 60_000;
-const exchangeBudget = createSlidingWindowBudget<'deployment'>({
-	limit: EXCHANGE_LIMIT,
+const AUTHORIZATION_CODE_RE = /^mhub_cli_([0-9A-Z]{26})_[0-9a-z]{32}$/;
+const authorizationExchangeBudget = createSlidingWindowBudget<string>({
+	limit: AUTHORIZATION_EXCHANGE_LIMIT,
+	windowMs: EXCHANGE_WINDOW_MS,
+});
+const globalExchangeBudget = createSlidingWindowBudget<'deployment'>({
+	limit: GLOBAL_EXCHANGE_LIMIT,
 	windowMs: EXCHANGE_WINDOW_MS,
 });
 
-function assertExchangeAllowed(): void {
-	if (!exchangeBudget.consume('deployment')) {
+function assertExchangeAllowed(code: string): void {
+	const authorizationId = AUTHORIZATION_CODE_RE.exec(code)?.[1];
+	if (authorizationId === undefined) return;
+	if (!authorizationExchangeBudget.consume(authorizationId)) {
+		throw new ResourceExhaustedError('Too many attempts for this CLI authorization code.');
+	}
+	if (!globalExchangeBudget.consume('deployment')) {
 		throw new ResourceExhaustedError('Too many CLI token exchanges; try again later.');
 	}
 }
@@ -147,7 +158,7 @@ export const cliTokenApp = createApp();
 cliTokenApp.openapi(exchangeAuthorization, async (c) => {
 	const body = c.req.valid('json');
 	const deps = c.get('deps');
-	assertExchangeAllowed();
+	assertExchangeAllowed(body.code);
 	const { token, record } = await deps.services.cliAuthorizations.exchange(
 		body.code,
 		body.code_verifier,
