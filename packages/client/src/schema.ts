@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+	'/api/cli/v1/token': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Exchange a CLI authorization code
+		 * @description Public PKCE exchange for the mohub loopback login. The authorization code is single-use, short-lived, and useless without the verifier held by the CLI.
+		 */
+		post: operations['auth.cli.exchange'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/me': {
 		parameters: {
 			query?: never;
@@ -1237,19 +1257,30 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/me/cli-authorizations': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Approve a CLI login
+		 * @description Creates a short-lived, one-time authorization code bound to the CLI PKCE challenge. Requires a browser session; the personal access token is minted only during exchange.
+		 */
+		post: operations['auth.cli.approve'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 }
 export type webhooks = Record<string, never>;
 export interface components {
 	schemas: {
-		Me: {
-			id: string;
-			email: string;
-			name?: string | null;
-			/** Format: uri */
-			picture_url?: string | null;
-			logout_url: string | null;
-			is_super_admin: boolean;
-		};
 		ErrorResponse: {
 			/** @enum {boolean} */
 			success: false;
@@ -1284,6 +1315,15 @@ export interface components {
 				}[];
 				request_id?: string;
 			};
+		};
+		Me: {
+			id: string;
+			email: string;
+			name?: string | null;
+			/** Format: uri */
+			picture_url?: string | null;
+			logout_url: string | null;
+			is_super_admin: boolean;
 		};
 		DeploymentInfo: {
 			version: string;
@@ -2319,6 +2359,97 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+	'auth.cli.exchange': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					code: string;
+					code_verifier: string;
+				};
+			};
+		};
+		responses: {
+			/** @description The new personal access token */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							token: string;
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	me: {
 		parameters: {
 			query?: never;
@@ -11041,6 +11172,122 @@ export interface operations {
 			/** @description Validation error */
 			422: {
 				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'auth.cli.approve': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** Format: uri */
+					callback_uri: string;
+					state: string;
+					code_challenge: string;
+					token_name: string;
+					expires_in_days: number;
+				};
+			};
+		};
+		responses: {
+			/** @description Loopback callback carrying the one-time authorization code */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** Format: uri */
+							redirect_uri: string;
+							/** Format: date-time */
+							expires_at: string;
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
 					[name: string]: unknown;
 				};
 				content: {

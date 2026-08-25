@@ -9,6 +9,11 @@ Personal access tokens (PATs) let CI jobs, scripts, and the CLI call the
 created it: it inherits their project memberships and roles unchanged, and it
 works on every deployment — there is nothing to configure.
 
+For an interactive CLI, run `mohub login`. The browser approval flow creates a
+token with a 30-day lifetime by default and lets you choose a different lifetime
+before approving. Manual token creation is intended for automation and other
+clients that cannot use the browser flow.
+
 ## Create a token
 
 In the app, open the user menu (top right) → **API tokens** → **Create a

@@ -151,6 +151,36 @@ describe('createApi rejected request observability', () => {
 		});
 	});
 
+	it('observes rejected public CLI token exchanges', async () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		const { app } = createTestApi({ deps: { metrics } });
+
+		const res = await app.request('/api/cli/v1/token', {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				'X-Request-Id': 'rejected-cli-exchange',
+			},
+			body: JSON.stringify({ code: 'c'.repeat(32), code_verifier: 'v'.repeat(64) }),
+		});
+
+		expect(res.status).toBe(400);
+		expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+			level: 'warn',
+			event: 'request_rejected',
+			route: '/api/cli/v1/token',
+			method: 'POST',
+			status: 400,
+			code: 'BAD_REQUEST',
+			request_id: 'rejected-cli-exchange',
+		});
+		expect(metrics.increment).toHaveBeenCalledWith('requests.rejected', 1, {
+			route: '/api/cli/v1/token',
+			code: 'BAD_REQUEST',
+		});
+	});
+
 	it('observes request-schema 422 responses returned without throwing', async () => {
 		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		const metrics = { increment: vi.fn(), gauge: vi.fn() };

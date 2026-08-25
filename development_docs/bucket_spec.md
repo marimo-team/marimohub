@@ -101,6 +101,8 @@ s3-bucket/
 │   │   └── {user-id}.json                  ← user display identity (mutable, CAS-managed)
 │   ├── tokens/
 │   │   └── {token-id}.json                 ← personal access token record (mutable, last-writer-wins)
+│   ├── cli-authorizations/
+│   │   └── {authorization-id}.json         ← short-lived PKCE login grant (CAS-claimed)
 │   ├── integrations/                       ← organization-wide integrations (§4.12)
 │   │   ├── _names/
 │   │   │   └── {name}.json                 ← name claim (CAS, app-claim pattern)
@@ -184,6 +186,7 @@ selected version and cannot write changes back.
 | `_system/editors/{pid}/{nid}.json`                                        | JSON     | Per-notebook persistent-editor claim. Records the shared/exclusive mode, names the only session allowed to save, and records idempotent takeover phases. All writes go through `SessionService`. See §4.8.2.                                                                                                                                                                                                                                                                                           |
 | `_system/identities/{user-id}.json`                                       | JSON     | User display identity (`{ id, email, name, picture_url?, suspended_at? }`). Owned and CAS-updated by `IdentityService`. Resolves opaque `author`/`user_id` IDs to a person and gates suspended users at authentication time.                                                                                                                                                                                                                                                                           |
 | `_system/tokens/{token-id}.json`                                          | JSON     | Personal access token record (`{ id, user_id, name, hash, … }`) keyed by the ULID embedded in the presented `mhub_pat_` bearer, so verification is a single GET. Stores only the SHA-256 of the secret. Mutable, last-writer-wins (coarse `last_used_at` refresh); revocation deletes the object. See §4.11.                                                                                                                                                                                           |
+| `_system/cli-authorizations/{authorization-id}.json`                      | JSON     | Ten-minute browser-to-CLI PKCE grant. Stores hashes/challenges, never a PAT or plaintext authorization secret. `CliAuthorizationService` CAS-claims it before minting one token, then deletes it. See §4.11.1.                                                                                                                                                                                                                                                                                         |
 | `_system/events/{YYYY-MM-DD}/{event-id}.json`                             | JSON     | Structured event log. One immutable object per event, keyed by a monotonic ULID under a per-day prefix. Primary audit trail.                                                                                                                                                                                                                                                                                                                                                                           |
 | `_system/idempotency/{digest}.json`                                       | JSON     | Recorded `POST`-create response for an `Idempotency-Key`, keyed by `sha256(user:route\nkey)`. Replayed on retry; pruned after 24h. See [`idempotency.md`](./idempotency.md).                                                                                                                                                                                                                                                                                                                           |
 | `_system/reconcile/orphans/{sandbox-id}.json`                             | JSON     | First-seen Unix timestamp for an active sandbox that has no session record and no provider creation time. The reconciler creates and deletes these markers.                                                                                                                                                                                                                                                                                                                                            |
@@ -563,6 +566,20 @@ A personal access token record — the machine-credential counterpart of a sessi
 
 **Mutability & write semantics.** Creation is a plain PUT to a fresh, unique token-id key. The only rewrite is the `last_used_at` refresh, and it is **conditional** — an `If-Match` on the ETag read at load time — so a token revoked (deleted) between load and the touch is not resurrected by a stale write; the touch is also coalesced to once per UTC day, keeping the request hot path read-only. Revocation is a plain DELETE. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag.
 
+### 4.11.1 `_system/cli-authorizations/{authorization-id}.json`
+
+An approved CLI login grant binds the signed-in user, requested PAT lifetime,
+and PKCE S256 challenge to a one-time `mhub_cli_…` authorization code. The
+stored record contains only the code's SHA-256 hash. It expires after ten
+minutes.
+
+`CliAuthorizationService` is the only writer. Exchange verifies both the code
+secret and the CLI-held verifier, then changes `pending` to `claimed` with an
+ETag compare-and-swap before minting the PAT. A competing or replayed exchange
+cannot mint another token. Successful exchanges delete the claimed record;
+each new approval also prunes at most 100 expired or abandoned records from the
+oldest page, keeping request-path cleanup bounded.
+
 ### 4.12 `projects/{pid}/integrations/{iid}/…`
 
 A project integration instance — a named, versioned configuration of a code-registered _kind_ (`postgres`, `iceberg_rest`, …) rendered into every session's sandbox as env vars + files. Two records:
@@ -914,7 +931,7 @@ Schema migrations are a first-class concern because there is no database to run 
 | `_system/events/**`                          | Never migrated — event records are immutable history. New event shapes get a bumped `schema_version` field. Consumers must handle multiple versions.                                                                                                                              |
 | `catalog.json`                               | Migrated in place during the first write after a deployment that changes the catalog version. Its strict `version` value is not forward-tolerant.                                                                                                                                 |
 
-> **No `schema_version` by design:** mutable operational records — sessions (`_system/sessions/**`), identities (`_system/identities/**`), tokens (`_system/tokens/**`), and `fs_snapshot.json` — carry no `schema_version`. They are rewritten on every write or reaped shortly after creation, so they never need a migration; a shape change is absorbed with optional fields + defaults on read. API response bodies are likewise unversioned per-object — the contract is versioned at the route level (`/api/v1`).
+> **No `schema_version` by design:** mutable operational records — sessions (`_system/sessions/**`), identities (`_system/identities/**`), tokens (`_system/tokens/**`), CLI authorizations (`_system/cli-authorizations/**`), and `fs_snapshot.json` — carry no `schema_version`. They are rewritten on every write or reaped shortly after creation, so they never need a migration; a shape change is absorbed with optional fields + defaults on read. API response bodies are likewise unversioned per-object — the contract is versioned at the route level (`/api/v1`).
 
 ### Migration job pseudocode
 

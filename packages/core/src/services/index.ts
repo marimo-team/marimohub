@@ -15,12 +15,14 @@ import { NotebookProposalService } from './content/NotebookProposalService';
 import { ProjectService } from './content/ProjectService';
 import { SessionService } from './runtime/SessionService';
 import { TokenService } from './tokens/TokenService';
+import { CliAuthorizationService } from './tokens/CliAuthorizationService';
 
 export { CatalogService } from './catalog/CatalogService';
 export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
 export { IdempotencyService } from './catalog/IdempotencyService';
 export { SyncedNotebookService } from './content/SyncedNotebookService';
 export { IdentityService } from './identity/IdentityService';
+export { CliAuthorizationService } from './tokens/CliAuthorizationService';
 export { MaintenanceService } from './catalog/MaintenanceService';
 export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/MaintenanceService';
 export { MaintenanceLock } from './catalog/MaintenanceLock';
@@ -399,6 +401,10 @@ export function createServices(
 		list: user,
 		revoke: (userId, tokenId) => ({ ...user(userId), 'marimohub.token_id': tokenId }),
 	});
+	const cliAuthorizations = wrap(
+		'CliAuthorizationService',
+		new CliAuthorizationService(bucket, tokens),
+	);
 	const maintenance = wrap('MaintenanceService', new MaintenanceService(bucket, metrics));
 	const idempotency = wrap('IdempotencyService', new IdempotencyService(bucket), {
 		lookup: scope,
@@ -413,6 +419,7 @@ export function createServices(
 		sessions,
 		identities,
 		tokens,
+		cliAuthorizations,
 		maintenance,
 		idempotency,
 	};

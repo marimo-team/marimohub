@@ -234,6 +234,7 @@ export function generateCliManifest(documentValue: Record<string, unknown>): Cli
 			const operationValue = pathItem[method];
 			if (!operationValue) continue;
 			const operation = object(operationValue, `${method.toUpperCase()} ${path}`);
+			if (operation['x-cli-hidden'] === true) continue;
 			if (typeof operation.operationId !== 'string') {
 				throw new TypeError(`${method.toUpperCase()} ${path} has no operationId`);
 			}

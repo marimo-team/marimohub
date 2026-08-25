@@ -110,6 +110,19 @@ export function useRevokeApiToken() {
 	);
 }
 
+export function useApproveCliAuthorization() {
+	return useApiMutation(
+		(body: {
+			callback_uri: string;
+			state: string;
+			code_challenge: string;
+			token_name: string;
+			expires_in_days: number;
+		}) => apiData(apiClient.POST('/api/v1/me/cli-authorizations', { body })),
+		() => [userKeys.tokens()],
+	);
+}
+
 // System
 
 /** Deployment metadata for the footer info popover. */

@@ -1,4 +1,5 @@
 import type {
+	CliAuthorizationId,
 	IntegrationId,
 	NotebookId,
 	ProposalId,
@@ -198,6 +199,8 @@ export const paths = {
 	// the presented token so verification is a single GET (no index object).
 	token: (tokenId: TokenId) => `_system/tokens/${tokenId}.json`,
 	tokensPrefix: '_system/tokens/',
+	cliAuthorization: (id: CliAuthorizationId) => `_system/cli-authorizations/${id}.json`,
+	cliAuthorizationsPrefix: '_system/cli-authorizations/',
 	eventsPrefix: '_system/events/',
 	eventsForDate: (date: string) => `_system/events/${date}/`,
 	event: (date: string, id: string) => `_system/events/${date}/${id}.json`,
